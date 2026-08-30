@@ -1,18 +1,10 @@
-//! A single playing DirectSound voice: a wave read at a pitch-scaled rate,
-//! shaped by an [`Envelope`], and panned into left/right accumulators.
+//! DirectSound voice playback and stereo accumulation.
 //!
-//! Behavioural port of one `struct SoundChannel` (`m4a_internal.h:130`) as
-//! rendered by `SoundMainRAM`'s interpolating inner loop (`m4a_1.s:396`..
-//! `:437`). The hardware packs four `s8` output samples per word with a rotate
-//! trick and lets adjacent lanes carry into one another; here each output
-//! sample accumulates independently into an `i32` `(no-verbatim)` — the
-//! packed cross-lane carry bleed is a deferred hardware quirk. Compressed
-//! (`TONEDATA_TYPE_CMP`) and reversed (`TONEDATA_TYPE_REV`) voices remain out
-//! of scope; a fixed-rate (`TONEDATA_TYPE_FIX`) voice is modelled by forcing
-//! its phase step to exactly [`pitch::FRAC_ONE`] (see [`Self::render`]),
-//! which — since the step then carries no fractional remainder — also
-//! reproduces upstream's dedicated FIX loop reading raw, un-interpolated
-//! samples `(no-verbatim)`.
+//! `SoundMainRAM` mixes four packed sample lanes and permits carry between
+//! adjacent lanes (`m4a_1.s:396..437`). This native mixer accumulates each
+//! output sample independently in an `i32`, so it does not reproduce that
+//! cross-lane bleed. Fixed-rate voices advance by exactly one source sample,
+//! which also preserves their raw, un-interpolated playback.
 
 use std::sync::Arc;
 
@@ -20,75 +12,214 @@ use crate::envelope::{Adsr, Envelope};
 use crate::pitch::{self, FRAC_MASK};
 use crate::sample::WaveData;
 
-/// One stereo output sample as signed pre-clip accumulators (`left`, `right`).
+const MASTER_VOLUME_BITS: u32 = 4;
+const SAMPLE_GAIN_BITS: u32 = 8;
+const CHANNEL_VOLUME_BITS: u32 = 14;
+const CENTRED_RIGHT_PAN: i32 = 128;
+const CENTRED_LEFT_PAN: i32 = 127;
+const MIDI_KEY_COUNT: i32 = 256;
+
+/// Signed pre-clip accumulators for one `(left, right)` output sample.
 pub type StereoAcc = (i32, i32);
+
+#[derive(Clone, Copy, Debug)]
+struct SourcePosition {
+    sample_index: usize,
+    fractional_phase: u32,
+}
+
+impl SourcePosition {
+    fn start() -> Self {
+        Self {
+            sample_index: 0,
+            fractional_phase: 0,
+        }
+    }
+
+    fn normalize(&mut self, wave: &WaveData) -> bool {
+        if self.sample_index < wave.len() {
+            return true;
+        }
+        if !wave.is_looping() {
+            return false;
+        }
+
+        let loop_start = wave.loop_start();
+        let loop_len = wave.len() - loop_start;
+        self.sample_index = loop_start + (self.sample_index - loop_start) % loop_len;
+        true
+    }
+
+    fn interpolated_sample(&self, wave: &WaveData) -> i32 {
+        let samples = wave.samples();
+        let current = i32::from(samples[self.sample_index]);
+        let next_index = self.sample_index + 1;
+        let next = if next_index < samples.len() {
+            samples[next_index]
+        } else if wave.is_looping() {
+            samples[wave.loop_start()]
+        } else {
+            samples[self.sample_index]
+        };
+        // `SoundMainRAM` multiplies and arithmetically shifts the signed delta
+        // before adding the current sample (`m4a_1.s:396..407`).
+        let weighted_delta = (i64::from(self.fractional_phase)
+            * i64::from(i32::from(next) - current))
+            >> pitch::FRAC_BITS;
+        current + i32::try_from(weighted_delta).unwrap_or(0)
+    }
+
+    fn advance_wrapping(&mut self, phase_step: u32) {
+        // `SoundMainRAM` advances its 32-bit phase with wrapping addition
+        // (`m4a_1.s:413..418`).
+        self.fractional_phase = self.fractional_phase.wrapping_add(phase_step);
+        self.sample_index +=
+            usize::try_from(self.fractional_phase >> pitch::FRAC_BITS).unwrap_or(0);
+        self.fractional_phase &= FRAC_MASK;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Gate {
+    Tied,
+    TicksRemaining(u16),
+    Expired,
+}
+
+impl Gate {
+    fn new(gate_time: u16) -> Self {
+        if gate_time == 0 {
+            Self::Tied
+        } else {
+            Self::TicksRemaining(gate_time)
+        }
+    }
+
+    fn tick(&mut self) -> bool {
+        match *self {
+            Self::TicksRemaining(1) => {
+                *self = Self::Expired;
+                true
+            }
+            Self::TicksRemaining(remaining) => {
+                *self = Self::TicksRemaining(remaining - 1);
+                false
+            }
+            Self::Tied | Self::Expired => false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PlaybackRate {
+    PitchScaled,
+    Fixed,
+}
+
+impl PlaybackRate {
+    fn phase_step(self, frequency: u32) -> u32 {
+        match self {
+            Self::PitchScaled => pitch::phase_step(frequency),
+            Self::Fixed => pitch::FRAC_ONE,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ChannelVolume {
+    right: u8,
+    left: u8,
+    velocity: u8,
+    rhythm_pan: i8,
+}
+
+impl ChannelVolume {
+    fn new(right: u8, left: u8, velocity: u8) -> Self {
+        Self {
+            right,
+            left,
+            velocity,
+            rhythm_pan: 0,
+        }
+    }
+
+    fn update_from_track(&mut self, track_right: u8, track_left: u8) {
+        let (pan_right, pan_left) = pan_terms(self.rhythm_pan);
+        self.right = channel_volume(track_right, pan_right, self.velocity);
+        self.left = channel_volume(track_left, pan_left, self.velocity);
+    }
+
+    fn frame_gain(self, master_volume: u8, envelope_volume: u8) -> StereoGain {
+        let effective_volume =
+            ((u32::from(master_volume) + 1) * u32::from(envelope_volume)) >> MASTER_VOLUME_BITS;
+        StereoGain {
+            right: i32::try_from((u32::from(self.right) * effective_volume) >> SAMPLE_GAIN_BITS)
+                .unwrap_or(i32::MAX),
+            left: i32::try_from((u32::from(self.left) * effective_volume) >> SAMPLE_GAIN_BITS)
+                .unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StereoGain {
+    right: i32,
+    left: i32,
+}
+
+impl StereoGain {
+    fn silent() -> Self {
+        Self { right: 0, left: 0 }
+    }
+
+    fn accumulate(self, sample: i32, output: &mut StereoAcc) {
+        output.0 += (self.left * sample) >> SAMPLE_GAIN_BITS;
+        output.1 += (self.right * sample) >> SAMPLE_GAIN_BITS;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VoiceIdentity {
+    track: usize,
+    played_key: u8,
+    pitch_key: u8,
+    note_on_ordinal: u64,
+    priority: u8,
+}
+
+impl VoiceIdentity {
+    fn new(track: usize, played_key: u8) -> Self {
+        Self {
+            track,
+            played_key,
+            pitch_key: played_key,
+            note_on_ordinal: 0,
+            priority: 0,
+        }
+    }
+}
 
 /// A live voice owned by the mixer.
 #[derive(Clone, Debug)]
 pub struct Voice {
     wave: Arc<WaveData>,
     envelope: Envelope,
-    /// Base right/left channel volume from `ChnVolSetAsm` (`m4a_1.s:1508`),
-    /// before the envelope scales it per frame.
-    base_right: u8,
-    base_left: u8,
-    /// The note's velocity (`SoundChannel::velocity`), retained so a mid-note
-    /// track volume change can re-run `ChnVolSetAsm` against this channel.
-    velocity: u8,
-    /// Per-frame envelope-scaled right/left gain (`envelopeVolumeRight/Left`).
-    env_right: i32,
-    env_left: i32,
-    /// Voice frequency (`MidiKeyToFreq` output); scaled by `DIV_FREQ` per
-    /// output sample to get the `.23` phase step.
+    channel_volume: ChannelVolume,
+    frame_gain: StereoGain,
     frequency: u32,
-    /// Integer source-sample read index.
-    index: usize,
-    /// `.23` fractional read position within the current source sample.
-    frac: u32,
-    /// Note-off countdown in sequencer ticks; `0` means tied (never
-    /// auto-releases).
-    gate_time: u16,
-    /// The track command's MIDI key, for tie/end-of-tie matching. This is
-    /// always the *played* key, even for a rhythm indirection — matching
-    /// `ply_endtie`'s match against the track's own key, not any per-channel
-    /// translated one.
-    midi_key: u8,
-    /// The key fed to `MidiKeyToFreq` when pitch is recomputed
-    /// (`o_SoundChannel_key`, "midi key as it was translated into final
-    /// pitch" — `m4a_internal.h:149`). Equal to [`Self::midi_key`] for a
-    /// plain or key-split note; a rhythm indirection substitutes its child's
-    /// own base key instead (`ply_note`, `m4a_1.s:1594`).
-    pitch_key: u8,
-    /// `ChnVolSetAsm`'s rhythm-pan override, folded into the pan term on
-    /// every volume re-run; `0` outside rhythm (`m4a_1.s:1505`..`:1512`).
-    rhythm_pan: i8,
-    /// `TONEDATA_TYPE_FIX`: forces [`Self::render`]'s phase step to exactly
-    /// [`pitch::FRAC_ONE`], ignoring [`Self::frequency`] entirely.
-    fixed_rate: bool,
-    /// Owning track index, so per-track note-off can find its voices.
-    track: usize,
-    /// Monotonic note-on ordinal stamped by the mixer when the voice starts,
-    /// shared across DirectSound and CGB voices. `ply_note` prepends every new
-    /// channel — either kind — at the head of the track's one channel chain
-    /// (`m4a_1.s:1719`), so a higher ordinal is strictly newer; `ply_endtie`
-    /// releases the newest match by walking from the head (`m4a_1.s:1819`).
-    seq: u64,
-    /// The note's effective priority (`SoundChannel::priority`): the song
-    /// header's priority plus the owning track's `PRIO`, saturated at `0xFF`
-    /// (`m4a_1.s:1628`..`:1633`), stamped onto the channel when the note is
-    /// allocated (`m4a_1.s:1744`..`:1745`). [`crate::mixer::Mixer`]'s
-    /// note-on channel search reads it to pick a victim.
-    priority: u8,
+    source_position: SourcePosition,
+    gate: Gate,
+    playback_rate: PlaybackRate,
+    identity: VoiceIdentity,
 }
 
 impl Voice {
-    /// Start a voice for `wave` at `frequency`, with base stereo volume
-    /// `(right, left)` and an ADSR envelope. `velocity` is the note's velocity
-    /// (kept for mid-note volume re-runs). `gate_time` is the note-off delay in
-    /// ticks (`0` = tied). `echo_volume`/`echo_length` drive the pseudo-echo
-    /// tail (both `0` for a plain note).
+    /// Start a voice. A zero `gate_time` creates a tied note.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a voice starts from one decoded note and its instrument state"
+    )]
     pub fn new(
         wave: Arc<WaveData>,
         adsr: Adsr,
@@ -105,281 +236,170 @@ impl Voice {
         Self {
             wave,
             envelope: Envelope::new(adsr, echo_volume, echo_length),
-            base_right: right,
-            base_left: left,
-            velocity,
-            env_right: 0,
-            env_left: 0,
+            channel_volume: ChannelVolume::new(right, left, velocity),
+            frame_gain: StereoGain::silent(),
             frequency,
-            index: 0,
-            frac: 0,
-            gate_time,
-            midi_key,
-            pitch_key: midi_key,
-            rhythm_pan: 0,
-            fixed_rate: false,
-            track,
-            seq: 0,
-            priority: 0,
+            source_position: SourcePosition::start(),
+            gate: Gate::new(gate_time),
+            playback_rate: PlaybackRate::PitchScaled,
+            identity: VoiceIdentity::new(track, midi_key),
         }
     }
 
-    /// Stamp this voice's effective note-on priority (see [`Self::priority`]).
-    /// Chained onto [`Self::new`] so the many call sites that do not care
-    /// need not thread another constructor parameter.
     #[must_use]
     pub(crate) fn with_priority(mut self, priority: u8) -> Self {
-        self.priority = priority;
+        self.identity.priority = priority;
         self
     }
 
-    /// This voice's effective note-on priority (higher outranks lower).
     #[must_use]
     pub(crate) fn priority(&self) -> u8 {
-        self.priority
+        self.identity.priority
     }
 
-    /// Override the key used for pitch resolution independently of
-    /// [`Self::midi_key`] — a rhythm indirection's child base key
-    /// (`ply_note`, `m4a_1.s:1594`). Chained onto [`Self::new`] so ordinary
-    /// (non-rhythm) notes need not thread an extra constructor parameter.
     #[must_use]
     pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
-        self.pitch_key = pitch_key;
+        // `ply_note` pitches a rhythm voice from its child key, while
+        // `ply_endtie` matches the played track key (`m4a_1.s:1594,1819`).
+        self.identity.pitch_key = pitch_key;
         self
     }
 
-    /// Set the rhythm-pan override folded into every subsequent
-    /// [`Self::set_track_volume`] re-run (`0` outside rhythm).
     #[must_use]
     pub(crate) fn with_rhythm_pan(mut self, rhythm_pan: i8) -> Self {
-        self.rhythm_pan = rhythm_pan;
+        self.channel_volume.rhythm_pan = rhythm_pan;
         self
     }
 
-    /// Mark this voice fixed-rate (`TONEDATA_TYPE_FIX`): see [`Self::render`].
     #[must_use]
     pub(crate) fn fixed_rate(mut self, fixed_rate: bool) -> Self {
-        self.fixed_rate = fixed_rate;
+        self.playback_rate = if fixed_rate {
+            PlaybackRate::Fixed
+        } else {
+            PlaybackRate::PitchScaled
+        };
         self
     }
 
-    /// Stamp this voice's shared note-on ordinal (see [`Self::seq`]). Called by
-    /// the mixer as it accepts the voice, so the counter lives on the owner
-    /// rather than in global state.
     pub(crate) fn set_seq(&mut self, seq: u64) {
-        self.seq = seq;
+        self.identity.note_on_ordinal = seq;
     }
 
-    /// This voice's shared note-on ordinal (higher is newer).
     #[must_use]
     pub(crate) fn seq(&self) -> u64 {
-        self.seq
+        self.identity.note_on_ordinal
     }
 
-    /// Whether the voice is still producing sound.
+    /// Return whether the voice can still produce sound.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.envelope.is_active()
     }
 
-    /// The owning track index.
+    /// Return the owning track index.
     #[must_use]
     pub fn track(&self) -> usize {
-        self.track
+        self.identity.track
     }
 
-    /// The MIDI key this voice was started on.
+    /// Return the played MIDI key used for tie matching.
     #[must_use]
     pub fn midi_key(&self) -> u8 {
-        self.midi_key
+        self.identity.played_key
     }
 
-    /// The current integer source-sample read index (for inspection/testing).
+    /// Return the current source-sample index.
     #[must_use]
     pub fn source_index(&self) -> usize {
-        self.index
+        self.source_position.sample_index
     }
 
-    /// Whether the note has already been released.
+    /// Return whether note-off has been requested.
     #[must_use]
     pub fn is_stopping(&self) -> bool {
         self.envelope.is_stopping()
     }
 
-    /// Tick the note-off gate down by one sequencer tick, releasing the
-    /// envelope when a non-tied gate reaches zero (`m4a_1.s:1196`).
+    /// Advance the note-off gate by one sequencer tick.
     pub fn tick_gate(&mut self) {
-        if self.gate_time > 0 {
-            self.gate_time -= 1;
-            if self.gate_time == 0 {
-                self.envelope.note_off();
-            }
+        if self.gate.tick() {
+            self.envelope.note_off();
         }
     }
 
-    /// Force note-off (tie termination / explicit stop).
+    /// Request note-off immediately.
     pub fn note_off(&mut self) {
         self.envelope.note_off();
     }
 
-    /// Re-run `ChnVolSetAsm` (`m4a_1.s:1508`) against this live channel from
-    /// updated track `volMR`/`volML`, folding in the channel's own retained
-    /// velocity and rhythm-pan override. Applied when the owning track's
-    /// volume/pan changes mid-note (`MPT_FLG_VOLCHG`).
+    /// Update base channel volumes from the owning track.
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
-        let (pan_right, pan_left) = pan_terms(self.rhythm_pan);
-        self.base_right = channel_volume(vol_mr, pan_right, self.velocity);
-        self.base_left = channel_volume(vol_ml, pan_left, self.velocity);
+        self.channel_volume.update_from_track(vol_mr, vol_ml);
     }
 
-    /// Recompute this live channel's playback frequency from updated track
-    /// `keyM`/`pitM`, mirroring `MidiKeyToFreq(wav, (key + keyM).max(0), pitM)`
-    /// in `MPlayMain`'s per-tick pitch re-run (`m4a_1.s:1446`). Uses the
-    /// channel's stored pitch key exactly as [`note_on`](crate::sequencer)
-    /// did for the initial pitch — the played key, or a rhythm child's own
-    /// base key — so a mid-note bend tracks the same math. A no-op frequency
-    /// wise for a [`Self::fixed_rate`] voice, since [`Self::render`] never
-    /// reads [`Self::frequency`] for one (matching upstream, which still
-    /// recomputes and stores it for a FIX channel even though the FIX mixer
-    /// branch never consults it).
+    /// Update the stored frequency from track pitch. Fixed-rate playback keeps
+    /// advancing one source sample regardless of this value.
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
-        let note_key = u8::try_from((i32::from(self.pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
+        let translated_key = (i32::from(self.identity.pitch_key) + key_m).max(0) % MIDI_KEY_COUNT;
+        let note_key = u8::try_from(translated_key).unwrap_or(0);
         self.frequency = pitch::midi_key_to_freq(self.wave.freq(), note_key, pit_m);
     }
 
-    /// The current effective playback frequency (for inspection/testing).
+    /// Return the stored playback frequency.
     #[must_use]
     pub fn frequency(&self) -> u32 {
         self.frequency
     }
 
-    /// The current base right/left channel volumes (for inspection/testing).
+    /// Return the base `(right, left)` channel volumes.
     #[must_use]
     pub fn base_volume(&self) -> (u8, u8) {
-        (self.base_right, self.base_left)
+        (self.channel_volume.right, self.channel_volume.left)
     }
 
-    /// Advance the envelope one frame and recompute the frame's stereo gains.
-    ///
-    /// `master_volume` is the global `0..=15` mix level; upstream forms the
-    /// effective volume as `((masterVolume + 1) * envelopeVolume) >> 4`
-    /// (`m4a_1.s:265`) then scales the base channel volumes by it.
+    /// Advance the envelope and prepare stereo gain for one render frame.
     pub fn begin_frame(&mut self, master_volume: u8) {
         self.envelope.step();
-        let effective = ((u32::from(master_volume) + 1) * u32::from(self.envelope.volume())) >> 4;
-        self.env_right =
-            i32::try_from((u32::from(self.base_right) * effective) >> 8).unwrap_or(i32::MAX);
-        self.env_left =
-            i32::try_from((u32::from(self.base_left) * effective) >> 8).unwrap_or(i32::MAX);
+        self.frame_gain = self
+            .channel_volume
+            .frame_gain(master_volume, self.envelope.volume());
     }
 
-    /// Render this voice's contribution across a frame, accumulating into
-    /// `acc` (one entry per output sample). [`Self::begin_frame`] must have run
-    /// for this frame first.
+    /// Accumulate this voice into one frame after [`Self::begin_frame`].
     pub fn render(&mut self, acc: &mut [StereoAcc]) {
-        // A fixed-rate voice's step carries no fractional remainder (`frac`
-        // stays `0` every sample), so the shared interpolating loop below
-        // naturally degenerates to reading each raw source sample once with
-        // no blend — exactly upstream's dedicated FIX loop's behaviour,
-        // reached without a second code path `(no-verbatim)`.
-        let step = if self.fixed_rate {
-            pitch::FRAC_ONE
-        } else {
-            pitch::phase_step(self.frequency)
-        };
-        // Cheap Arc clone so the immutable sample borrow does not clash with
-        // the `&mut self` cursor/envelope updates below.
-        let wave = Arc::clone(&self.wave);
-        let samples = wave.samples();
-        let len = samples.len();
-        if len == 0 {
+        let phase_step = self.playback_rate.phase_step(self.frequency);
+        if self.wave.is_empty() {
             self.envelope.note_off();
             return;
         }
 
-        for slot in acc.iter_mut() {
+        for output in acc.iter_mut() {
             if !self.envelope.is_active() {
                 break;
             }
-            if !self.wrap_or_end(&wave, len) {
+            if !self.source_position.normalize(&self.wave) {
+                self.envelope.retire();
                 break;
             }
 
-            let s0 = i32::from(samples[self.index]);
-            let s1 = i32::from(self.next_sample(&wave, len));
-            // `s0 + ((frac * (s1 - s0)) >> 23)` with an arithmetic shift
-            // (`add lr, r0, lr, asr 23`). The shifted term is bounded by the
-            // inter-sample delta (`< 256`), so it always fits an `i32`.
-            let frac_delta = (i64::from(self.frac) * i64::from(s1 - s0)) >> pitch::FRAC_BITS;
-            let interp = s0 + i32::try_from(frac_delta).unwrap_or(0);
-
-            slot.1 += (self.env_right * interp) >> 8;
-            slot.0 += (self.env_left * interp) >> 8;
-
-            // The hardware phase accumulator wraps mod 2^32 (`add r9,r9,r4`);
-            // `step` (a `wrapping_mul` result) can land near `u32::MAX`, so a
-            // checked add would overflow-panic in debug builds.
-            self.frac = self.frac.wrapping_add(step);
-            self.index += usize::try_from(self.frac >> pitch::FRAC_BITS).unwrap_or(0);
-            self.frac &= FRAC_MASK;
-        }
-    }
-
-    /// Keep `index` in range: wrap looping voices back into their loop region,
-    /// retire one-shot voices past their end. Returns `false` if the voice has
-    /// ended and rendering should stop.
-    fn wrap_or_end(&mut self, wave: &WaveData, len: usize) -> bool {
-        if self.index < len {
-            return true;
-        }
-        if wave.is_looping() {
-            let loop_start = wave.loop_start().min(len - 1);
-            let loop_len = len - loop_start;
-            self.index = loop_start + (self.index - loop_start) % loop_len;
-            true
-        } else {
-            self.envelope.retire();
-            false
-        }
-    }
-
-    /// The sample following `index`, honouring loop wrap-around at the end.
-    fn next_sample(&self, wave: &WaveData, len: usize) -> i8 {
-        let samples = wave.samples();
-        let next = self.index + 1;
-        if next < len {
-            samples[next]
-        } else if wave.is_looping() {
-            samples[wave.loop_start().min(len - 1)]
-        } else {
-            samples[self.index]
+            let sample = self.source_position.interpolated_sample(&self.wave);
+            self.frame_gain.accumulate(sample, output);
+            self.source_position.advance_wrapping(phase_step);
         }
     }
 }
 
-/// `ChnVolSetAsm`: fold a per-side base volume with the pan term and velocity,
-/// clamped to `255` (`m4a_1.s:1508`). `pan_term` is `0x80` for the right
-/// channel, `0x7F` for the left (rhythm pan is `0` for this slice). Shared by
-/// the sequencer's note-on path and [`Voice::set_track_volume`].
 #[must_use]
 pub(crate) fn channel_volume(vol_side: u8, pan_term: u32, velocity: u8) -> u8 {
-    let scaled = (u32::from(vol_side) * (pan_term * u32::from(velocity))) >> 14;
-    u8::try_from(scaled.min(255)).unwrap_or(255)
+    let scaled = (u32::from(vol_side) * (pan_term * u32::from(velocity))) >> CHANNEL_VOLUME_BITS;
+    u8::try_from(scaled.min(u32::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
-/// `ChnVolSetAsm`'s per-side pan terms, folding in a rhythm-pan override:
-/// `0x80 + rhythmPan` for the right channel, `0x7F - rhythmPan` for the left
-/// (`m4a_1.s:1505`..`:1512`). `rhythm_pan` is `0` for every non-rhythm note,
-/// which reproduces the plain `0x80`/`0x7F` terms exactly.
 #[must_use]
 pub(crate) fn pan_terms(rhythm_pan: i8) -> (u32, u32) {
-    let rp = i32::from(rhythm_pan);
-    // `rp` is bounded to `-128..=127`, so `0x80 + rp` and `0x7F - rp` both
-    // land in `0..=255` -- never negative, so the `unwrap_or(0)` fallback is
-    // unreachable in practice, just a defensive floor.
-    let right = u32::try_from(0x80 + rp).unwrap_or(0);
-    let left = u32::try_from(0x7F - rp).unwrap_or(0);
+    let pan = i32::from(rhythm_pan);
+    let right = u32::try_from(CENTRED_RIGHT_PAN + pan).unwrap_or(0);
+    let left = u32::try_from(CENTRED_LEFT_PAN - pan).unwrap_or(0);
     (right, left)
 }
 
@@ -387,291 +407,268 @@ pub(crate) fn pan_terms(rhythm_pan: i8) -> (u32, u32) {
 mod tests {
     use super::*;
 
+    const FULL_SCALE_FRAME_GAIN: i32 = 254;
+    const TEST_VELOCITY: u8 = 127;
+    const TEST_KEY: u8 = 60;
+
     fn wave(freq: u32, data: Vec<i8>) -> Arc<WaveData> {
         Arc::new(WaveData::one_shot(freq, data))
     }
 
-    /// A voice whose phase step is exactly one source sample per output sample.
-    /// A step of ~1 source sample per output sample (not exactly integral,
-    /// because `DIV_FREQ` does not divide `2^23`).
-    fn unity_freq() -> u32 {
+    fn approximately_unity_frequency() -> u32 {
         (1 << pitch::FRAC_BITS) / pitch::DIV_FREQ
+    }
+
+    fn voice(wave: Arc<WaveData>, frequency: u32, right: u8, left: u8, gate_time: u16) -> Voice {
+        Voice::new(
+            wave,
+            Adsr::flat(),
+            frequency,
+            right,
+            left,
+            TEST_VELOCITY,
+            gate_time,
+            TEST_KEY,
+            0,
+            0,
+            0,
+        )
     }
 
     #[test]
     fn flat_envelope_applies_gain_exactly_on_a_constant_wave() {
-        // A constant wave removes interpolation, isolating the gain path:
-        // eff = 16*0xFF>>4 = 0xFF, env = 0xFF*0xFF>>8 = 254, contribution
-        // = 254*50>>8, on every output sample.
-        let w = wave(0, vec![50; 16]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let constant_sample = 50;
+        let mut voice = voice(
+            wave(0, vec![constant_sample; 16]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         );
         let mut acc = vec![(0, 0); 8];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        let expected = (254 * 50) >> 8;
-        for slot in &acc {
-            assert_eq!(*slot, (expected, expected));
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        let expected = (FULL_SCALE_FRAME_GAIN * i32::from(constant_sample)) >> SAMPLE_GAIN_BITS;
+        for output in &acc {
+            assert_eq!(*output, (expected, expected));
         }
     }
 
     #[test]
-    fn frac0_first_output_is_the_raw_first_sample() {
-        // At frac 0 there is no interpolation, so output 0 is exact.
-        let w = wave(0, vec![-100, 0, 0, 0]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+    fn zero_fraction_first_output_is_the_raw_first_sample() {
+        let first_sample = -100;
+        let mut voice = voice(
+            wave(0, vec![first_sample, 0, 0, 0]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         );
         let mut acc = vec![(0, 0); 1];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        assert_eq!(acc[0].0, (254 * -100) >> 8);
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert_eq!(
+            acc[0].0,
+            (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
+        );
     }
 
     #[test]
     fn faster_frequency_advances_further_through_the_wave() {
-        let w = wave(0, vec![0; 512]);
-        let mut slow = Voice::new(
-            w.clone(),
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
-            0,
-        );
-        let mut fast = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq() * 2,
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
-            0,
-        );
+        let wave = wave(0, vec![0; 512]);
+        let unity_frequency = approximately_unity_frequency();
+        let mut slow = voice(wave.clone(), unity_frequency, u8::MAX, u8::MAX, 0);
+        let mut fast = voice(wave, unity_frequency * 2, u8::MAX, u8::MAX, 0);
         let mut acc = vec![(0, 0); 100];
         slow.begin_frame(15);
         slow.render(&mut acc);
         fast.begin_frame(15);
         fast.render(&mut acc);
-        // ~100 vs ~200 source samples consumed.
         assert!((95..=105).contains(&slow.source_index()));
         assert!((195..=205).contains(&fast.source_index()));
     }
 
     #[test]
     fn half_frequency_interpolates_between_samples() {
-        // Half the unity step -> a fractional midpoint between samples.
-        let w = wave(0, vec![0, 100, 0, 0]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq() / 2,
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let mut voice = voice(
+            wave(0, vec![0, 100, 0, 0]),
+            approximately_unity_frequency() / 2,
+            u8::MAX,
+            u8::MAX,
             0,
         );
         let mut acc = vec![(0, 0); 2];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        // First output at frac 0 -> sample[0] = 0.
+        voice.begin_frame(15);
+        voice.render(&mut acc);
         assert_eq!(acc[0].0, 0);
-        // Second output at frac 0.5 between 0 and 100 -> ~50.
-        let interp = acc[1].0 * 256 / 254;
-        assert!((48..=52).contains(&interp), "midpoint interp was {interp}");
+        let interpolated_sample = acc[1].0 * 256 / FULL_SCALE_FRAME_GAIN;
+        assert!(
+            (48..=52).contains(&interpolated_sample),
+            "midpoint interpolation was {interpolated_sample}"
+        );
     }
 
     #[test]
     fn one_shot_voice_retires_at_end_of_wave() {
-        let w = wave(0, vec![10, 20]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let first_sample = 10;
+        let mut voice = voice(
+            wave(0, vec![first_sample, 20]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         );
         let mut acc = vec![(0, 0); 8];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        assert!(!v.is_active());
-        // First output (frac 0) is the raw first sample; once the two-sample
-        // wave is exhausted the voice retires and later slots stay silent.
-        assert_eq!(acc[0].0, (254 * 10) >> 8);
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert!(!voice.is_active());
+        assert_eq!(
+            acc[0].0,
+            (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
+        );
         assert_eq!(acc[7], (0, 0));
     }
 
     #[test]
     fn looping_voice_wraps_and_keeps_playing() {
-        // A single-sample loop region (`5`) so wrap-around output is exact
-        // regardless of the fractional phase.
-        let w = Arc::new(WaveData::looping(0, 1, vec![99, 5]));
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
-            0,
-        );
+        let first_sample = 99;
+        let loop_sample = 5;
+        let wave = Arc::new(WaveData::looping(0, 1, vec![first_sample, loop_sample]));
+        let mut voice = voice(wave, approximately_unity_frequency(), u8::MAX, u8::MAX, 0);
         let mut acc = vec![(0, 0); 32];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        // First output (frac 0) is sample 0; the tail settles on the looped 5.
-        assert_eq!(acc[0].0, (254 * 99) >> 8);
-        assert_eq!(acc[31].0, (254 * 5) >> 8);
-        // A looping voice never retires on its own.
-        assert!(v.is_active());
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert_eq!(
+            acc[0].0,
+            (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
+        );
+        assert_eq!(
+            acc[31].0,
+            (FULL_SCALE_FRAME_GAIN * i32::from(loop_sample)) >> SAMPLE_GAIN_BITS
+        );
+        assert!(voice.is_active());
     }
 
     #[test]
     fn panned_voice_splits_left_and_right() {
-        let w = wave(0, vec![100, 0, 0, 0]);
-        // Hard-right base volume: right 0xFF, left 0.
-        let mut v = Voice::new(w, Adsr::flat(), unity_freq(), 0xFF, 0, 127, 0, 60, 0, 0, 0);
+        let first_sample = 100;
+        let mut voice = voice(
+            wave(0, vec![first_sample, 0, 0, 0]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            0,
+            0,
+        );
         let mut acc = vec![(0, 0); 1];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        assert_eq!(acc[0].0, 0); // left silent
-        assert_eq!(acc[0].1, (254 * 100) >> 8); // right full
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert_eq!(acc[0].0, 0);
+        assert_eq!(
+            acc[0].1,
+            (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
+        );
     }
 
     #[test]
     fn near_max_phase_step_wraps_without_panicking() {
-        // `frequency == u32::MAX` makes `phase_step = 627 * u32::MAX (mod 2^32)`
-        // land in the top of the `u32` range, so the phase accumulator crosses
-        // `2^32` within a couple of output samples. The hardware `add r9,r9,r4`
-        // wraps; a checked `frac += step` would overflow-panic in debug. A
-        // looping wave keeps the voice alive across the whole render.
-        let w = Arc::new(WaveData::looping(0, 0, vec![10, -10, 10, -10]));
-        let mut v = Voice::new(w, Adsr::flat(), u32::MAX, 0xFF, 0xFF, 127, 0, 60, 0, 0, 0);
+        let wave = Arc::new(WaveData::looping(0, 0, vec![10, -10, 10, -10]));
+        let mut voice = voice(wave, u32::MAX, u8::MAX, u8::MAX, 0);
         let mut acc = vec![(0, 0); 8];
-        v.begin_frame(15);
-        v.render(&mut acc); // must not panic
-        assert!(v.is_active());
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert!(voice.is_active());
     }
 
     #[test]
     fn set_track_volume_rewrites_base_from_velocity() {
-        // Re-running `ChnVolSetAsm` against a live channel with new track
-        // volMR/volML changes the base volumes, folding in the stored velocity.
-        let w = wave(0, vec![50; 16]);
-        let mut v = Voice::new(w, Adsr::flat(), unity_freq(), 0, 0, 127, 0, 60, 0, 0, 0);
-        v.set_track_volume(0x40, 0x40);
-        let (right, left) = v.base_volume();
-        assert_eq!(right, channel_volume(0x40, 0x80, 127));
-        assert_eq!(left, channel_volume(0x40, 0x7F, 127));
+        let track_volume = 0x40;
+        let mut voice = voice(
+            wave(0, vec![50; 16]),
+            approximately_unity_frequency(),
+            0,
+            0,
+            0,
+        );
+        voice.set_track_volume(track_volume, track_volume);
+        let (right, left) = voice.base_volume();
+        assert_eq!(
+            right,
+            channel_volume(track_volume, CENTRED_RIGHT_PAN as u32, TEST_VELOCITY)
+        );
+        assert_eq!(
+            left,
+            channel_volume(track_volume, CENTRED_LEFT_PAN as u32, TEST_VELOCITY)
+        );
         assert!(right > 0 && left > 0);
     }
 
     #[test]
     fn set_track_pitch_recomputes_frequency_from_stored_key() {
-        // A positive key/fine offset raises the played frequency, matching a
-        // fresh `MidiKeyToFreq(wav, key + keyM, pitM)` on the channel's key.
-        let w = wave(1 << 20, vec![50; 16]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let wave_frequency = 1 << 20;
+        let mut voice = voice(
+            wave(wave_frequency, vec![50; 16]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         );
-        v.set_track_pitch(0, 0);
-        assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 60, 0));
-        v.set_track_pitch(12, 0); // one octave up doubles the frequency
-        assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 72, 0));
+        voice.set_track_pitch(0, 0);
+        assert_eq!(
+            voice.frequency(),
+            pitch::midi_key_to_freq(wave_frequency, TEST_KEY, 0)
+        );
+        let one_octave = 12_u8;
+        voice.set_track_pitch(i32::from(one_octave), 0);
+        assert_eq!(
+            voice.frequency(),
+            pitch::midi_key_to_freq(wave_frequency, TEST_KEY + one_octave, 0)
+        );
     }
 
     #[test]
     fn with_pitch_key_overrides_the_base_used_for_mid_note_bend() {
-        // A rhythm child's own base key (72) differs from the played key
-        // (60, `midi_key`) used for tie matching. A mid-note pitch re-run
-        // must recompute frequency from the CHILD's base key, not the played
-        // key -- exactly `o_SoundChannel_key` vs `o_SoundChannel_midiKey`
-        // (`m4a_internal.h:149`).
-        let w = wave(1 << 20, vec![50; 16]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let wave_frequency = 1 << 20;
+        let rhythm_child_key = 72;
+        let mut voice = voice(
+            wave(wave_frequency, vec![50; 16]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         )
-        .with_pitch_key(72);
-        assert_eq!(v.midi_key(), 60, "EOT identity stays the played key");
-        v.set_track_pitch(0, 0);
-        assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 72, 0));
+        .with_pitch_key(rhythm_child_key);
+        assert_eq!(
+            voice.midi_key(),
+            TEST_KEY,
+            "tie identity stays the played key"
+        );
+        voice.set_track_pitch(0, 0);
+        assert_eq!(
+            voice.frequency(),
+            pitch::midi_key_to_freq(wave_frequency, rhythm_child_key, 0)
+        );
     }
 
     #[test]
     fn with_rhythm_pan_shifts_the_stereo_split_on_volume_reruns() {
-        // A hard-right rhythm-pan override (child pan_sweep -> +63) must skew
-        // ChnVolSetAsm's pan terms even though the track itself is centred.
-        let w = wave(0, vec![50; 16]);
-        let mut v = Voice::new(w, Adsr::flat(), unity_freq(), 0, 0, 127, 0, 60, 0, 0, 0)
-            .with_rhythm_pan(63);
-        v.set_track_volume(0x40, 0x40);
-        let (right, left) = v.base_volume();
-        let (pan_r, pan_l) = pan_terms(63);
-        assert_eq!(right, channel_volume(0x40, pan_r, 127));
-        assert_eq!(left, channel_volume(0x40, pan_l, 127));
+        let rhythm_pan = 63;
+        let track_volume = 0x40;
+        let mut voice = voice(
+            wave(0, vec![50; 16]),
+            approximately_unity_frequency(),
+            0,
+            0,
+            0,
+        )
+        .with_rhythm_pan(rhythm_pan);
+        voice.set_track_volume(track_volume, track_volume);
+        let (right, left) = voice.base_volume();
+        let (pan_right, pan_left) = pan_terms(rhythm_pan);
+        assert_eq!(
+            right,
+            channel_volume(track_volume, pan_right, TEST_VELOCITY)
+        );
+        assert_eq!(left, channel_volume(track_volume, pan_left, TEST_VELOCITY));
         assert!(
             right > left,
             "a positive rhythm pan should favour the right channel"
@@ -680,45 +677,18 @@ mod tests {
 
     #[test]
     fn pan_terms_reduces_to_the_plain_split_when_rhythm_pan_is_zero() {
-        assert_eq!(pan_terms(0), (0x80, 0x7F));
+        assert_eq!(
+            pan_terms(0),
+            (CENTRED_RIGHT_PAN as u32, CENTRED_LEFT_PAN as u32)
+        );
     }
 
     #[test]
     fn fixed_rate_voice_consumes_one_source_sample_per_output_sample() {
-        // A FIX voice's playback rate must not depend on `frequency` at all:
-        // both a "slow" and a "fast" frequency consume exactly the same
-        // number of source samples once `.fixed_rate(true)` is set, unlike
-        // the ordinary (non-fixed) case `faster_frequency_advances_further`
-        // already pins as differing.
-        let w = wave(0, vec![0; 512]);
-        let mut slow = Voice::new(
-            w.clone(),
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
-            0,
-        )
-        .fixed_rate(true);
-        let mut fast = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq() * 5,
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
-            0,
-        )
-        .fixed_rate(true);
+        let wave = wave(0, vec![0; 512]);
+        let unity_frequency = approximately_unity_frequency();
+        let mut slow = voice(wave.clone(), unity_frequency, u8::MAX, u8::MAX, 0).fixed_rate(true);
+        let mut fast = voice(wave, unity_frequency * 5, u8::MAX, u8::MAX, 0).fixed_rate(true);
         let mut acc = vec![(0, 0); 100];
         slow.begin_frame(15);
         slow.render(&mut acc);
@@ -730,36 +700,26 @@ mod tests {
 
     #[test]
     fn fixed_rate_voice_ignores_a_mid_note_bend() {
-        // BEND/KEYSH re-runs `set_track_pitch`, which still updates the
-        // stored `frequency` field (matching upstream, which recomputes and
-        // stores it unconditionally) -- but a FIX voice's actual playback
-        // rate must not move, since `render` never reads `frequency` for one.
-        let w = wave(0, vec![0; 512]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let mut voice = voice(
+            wave(0, vec![0; 512]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             0,
         )
         .fixed_rate(true);
         let mut acc = vec![(0, 0); 50];
-        v.begin_frame(15);
-        v.render(&mut acc);
-        let unbent_index = v.source_index();
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        let unbent_index = voice.source_index();
 
-        v.set_track_pitch(48, 0); // a large upward bend
+        let large_upward_bend = 48;
+        voice.set_track_pitch(large_upward_bend, 0);
         let mut acc2 = vec![(0, 0); 50];
-        v.begin_frame(15);
-        v.render(&mut acc2);
+        voice.begin_frame(15);
+        voice.render(&mut acc2);
         assert_eq!(
-            v.source_index(),
+            voice.source_index(),
             unbent_index * 2,
             "playback rate must stay exactly one sample per output sample after the bend"
         );
@@ -767,55 +727,39 @@ mod tests {
 
     #[test]
     fn fixed_rate_voice_reads_raw_samples_with_no_interpolation() {
-        // At a step of exactly FRAC_ONE the fractional phase never
-        // accumulates, so every output sample is the raw source sample, not
-        // a blend -- contrast with `half_frequency_interpolates_between_samples`.
-        let w = wave(0, vec![0, 100, 0, 0]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq() / 2,
-            0xFF,
-            0xFF,
-            127,
-            0,
-            60,
-            0,
-            0,
+        let second_sample = 100;
+        let mut voice = voice(
+            wave(0, vec![0, second_sample, 0, 0]),
+            approximately_unity_frequency() / 2,
+            u8::MAX,
+            u8::MAX,
             0,
         )
         .fixed_rate(true);
         let mut acc = vec![(0, 0); 2];
-        v.begin_frame(15);
-        v.render(&mut acc);
+        voice.begin_frame(15);
+        voice.render(&mut acc);
         assert_eq!(acc[0].0, 0);
         assert_eq!(
             acc[1].0,
-            (254 * 100) >> 8,
+            (FULL_SCALE_FRAME_GAIN * i32::from(second_sample)) >> SAMPLE_GAIN_BITS,
             "sample 1 exactly, no blend toward sample 2"
         );
     }
 
     #[test]
     fn gate_expiry_releases_the_envelope() {
-        let w = wave(0, vec![50, 50, 50, 50]);
-        let mut v = Voice::new(
-            w,
-            Adsr::flat(),
-            unity_freq(),
-            0xFF,
-            0xFF,
-            127,
+        let mut voice = voice(
+            wave(0, vec![50, 50, 50, 50]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
             2,
-            60,
-            0,
-            0,
-            0,
         );
-        assert!(!v.is_stopping());
-        v.tick_gate();
-        assert!(!v.is_stopping());
-        v.tick_gate(); // gate hits 0 -> note-off
-        assert!(v.is_stopping());
+        assert!(!voice.is_stopping());
+        voice.tick_gate();
+        assert!(!voice.is_stopping());
+        voice.tick_gate();
+        assert!(voice.is_stopping());
     }
 }
