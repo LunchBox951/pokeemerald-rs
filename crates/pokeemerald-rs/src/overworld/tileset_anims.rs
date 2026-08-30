@@ -6,14 +6,10 @@
 //! effects for unbundled tilesets remain outside this module with their assets.
 //!
 //! `tick` is the elapsed primary-animation counter, not the number of frames
-//! since the current room loaded. Only a fresh load and a warp reset it to zero
-//! (`flow/overworld_phase/connections.rs:307,439`), matching the upstream
-//! `InitTilesetAnimations` call sites (`pokeemerald/src/overworld.c:529,1867,
-//! 1942,2039`). Crossing a seamless map connection replaces the scene and map
-//! but deliberately leaves the counter running
-//! (`flow/overworld_phase/connections.rs:570-579`), so the primary animation
-//! continues uninterrupted; callers must not reset it on a crossing. No region
-//! fires at tick zero, so the base tiles remain unchanged.
+//! since the current room loaded; its reset and preservation lifecycle is
+//! owned by the overworld phase (`flow/overworld_phase.rs`, `OverworldPhase`),
+//! so callers must not reset it themselves. No region fires at tick zero, so
+//! the base tiles remain unchanged.
 //! After the first dispatch, each frame stays latched until that region fires
 //! again. General's complete cadence repeats every 128 ticks once every region
 //! has fired; the last first dispatch occurs at tick 16.
@@ -243,7 +239,7 @@ fn latched_frame(
         return None;
     }
     let last_fire = fire_phase + fire_interval * ((tick - fire_phase) / fire_interval);
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "frame_count is a small static table length"
     )]
