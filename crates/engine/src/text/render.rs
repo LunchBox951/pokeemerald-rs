@@ -1,10 +1,13 @@
 //! Converts decoded text tokens into frame-driven glyph and control events.
 //!
 //! [`Printer`] owns its glyph source and render state. The caller supplies
-//! [`PrinterInput`] and calls [`Printer::tick`] once per frame. Formatting,
-//! audio, and window-buffer controls are consumed without applying effects.
-//! Placeholders, dynamic tokens, and keypad icons are skipped because this
-//! renderer has no expansion context or corresponding glyphs.
+//! [`PrinterInput`] and calls [`Printer::tick`] once per frame.
+//!
+//! # Deliberately out of scope
+//!
+//! Formatting, audio, and window-buffer controls are consumed without applying
+//! effects. Placeholders, dynamic tokens, and keypad icons are skipped because
+//! this renderer has no expansion context or corresponding glyphs.
 
 use assets::fonts::{FontId, Glyph, GlyphSource};
 
@@ -60,7 +63,7 @@ impl TextSpeed {
         self.frames_per_char().saturating_sub(1)
     }
 
-    fn scroll_pixels_this_frame(self, pixels_remaining: i32) -> i32 {
+    fn scroll_px_per_frame(self, pixels_remaining: i32) -> i32 {
         match self {
             Self::Slow => pixels_remaining.min(1),
             Self::Mid => pixels_remaining.min(2),
@@ -268,7 +271,7 @@ impl<S: GlyphSource> Printer<S> {
             }
             PrinterState::Scrolling { pixels_remaining } => {
                 if pixels_remaining > 0 {
-                    let dy = self.speed.scroll_pixels_this_frame(pixels_remaining);
+                    let dy = self.speed.scroll_px_per_frame(pixels_remaining);
                     self.state = PrinterState::Scrolling {
                         pixels_remaining: pixels_remaining - dy,
                     };
@@ -1147,8 +1150,8 @@ mod tests {
         assert_eq!(TextSpeed::Mid.frames_per_char(), 4);
         assert_eq!(TextSpeed::Fast.frames_per_char(), 1);
         assert_eq!(TextSpeed::Instant.frames_per_char(), 0);
-        assert_eq!(TextSpeed::Slow.scroll_pixels_this_frame(16), 1);
-        assert_eq!(TextSpeed::Mid.scroll_pixels_this_frame(16), 2);
-        assert_eq!(TextSpeed::Fast.scroll_pixels_this_frame(16), 4);
+        assert_eq!(TextSpeed::Slow.scroll_px_per_frame(16), 1);
+        assert_eq!(TextSpeed::Mid.scroll_px_per_frame(16), 2);
+        assert_eq!(TextSpeed::Fast.scroll_px_per_frame(16), 4);
     }
 }
