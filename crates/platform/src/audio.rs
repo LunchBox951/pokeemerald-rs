@@ -1,14 +1,14 @@
-//! Audio output device (S-1): opens the default output device — or a
+//! Audio output device: opens the default output device — or a
 //! headless-friendly null backend for tests/CI, since CI runners have no
 //! audio device — and streams PCM pulled from a [`crate::ring`] ring buffer
-//! that the future `audio` crate (M4A sequence engine, S-3) fills from its
-//! own thread.
+//! that its caller fills with the `audio` crate's rendered M4A output (in
+//! practice the integration crate's frame-driven music player).
 //!
-//! `cpal` is owner-approved for exactly this crate and exactly this use
-//! (Discussion #78): open the default output device, one stream, a
-//! ring-buffer callback. No decoding, no effects — see [`Resampler`] below
-//! for the one deliberate exception (bridging a sample-rate mismatch is
-//! format adaptation, not an effect).
+//! `cpal` is owner-approved for exactly this crate and exactly this use:
+//! open the default output device, one stream, a ring-buffer callback. No
+//! decoding, no effects — see [`Resampler`] below for the one deliberate
+//! exception (bridging a sample-rate mismatch is format adaptation, not an
+//! effect).
 //!
 //! ## Design
 //!
@@ -16,25 +16,25 @@
 //!   samples (cpal's most portable format, and natural headroom for
 //!   downstream mixing). If the device's negotiated stream format is `i16`
 //!   instead (common on Linux/ALSA), the device callback converts on the
-//!   way out; the ring buffer and the `audio` crate's producer API never
-//!   need to know.
+//!   way out; the ring buffer and its producers never need to know.
 //! - **Sample rate**: [`AudioOutput::M4A_MIXER_RATE`] (13379 Hz, the rate
 //!   upstream's M4A engine actually renders PCM at — see the const's docs) is
 //!   always the ring buffer's nominal rate; the `audio` crate renders at this
 //!   rate unconditionally. Real output devices are 44.1/48 kHz and virtually
 //!   never advertise 13379 Hz, so a [`crate::resample::Resampler`] linearly
 //!   interpolating from nominal to the device's actual rate inside the
-//!   callback (see [`Source::Resampled`]) is the common path. Direct 1:1
-//!   streaming (see [`Source::Direct`]) only happens when a device supports
+//!   callback (see `Source::Resampled`) is the common path. Direct 1:1
+//!   streaming (see `Source::Direct`) only happens when a device supports
 //!   13379 Hz exactly, or for the null backend.
 //! - **Channels**: fixed at [`AudioOutput::CHANNELS`] (stereo), matching the
 //!   GBA's Direct Sound A/B stereo output. A device with no stereo output
 //!   config at all is out of scope and reported as
 //!   [`PlatformError::UnsupportedAudioConfig`].
-//! - **Underruns**: [`Source::fill`] always fills its output buffer
+//! - **Underruns**: `Source::fill` always fills its output buffer
 //!   completely; any shortfall is silence, counted via
 //!   [`crate::ring::Consumer::fill`]'s single-lock bulk drain (see
-//!   `crate::ring` and `crate::resample`) for later use by V-5 audio checks.
+//!   `crate::ring` and `crate::resample`) so audio-health checks can
+//!   observe shortfalls.
 //! - **Stream health**: underruns cover the producer-outran-consumer case,
 //!   but a `cpal` stream can also fail asynchronously (device disconnect,
 //!   driver error) on its own callback thread. Those are counted separately
@@ -84,8 +84,7 @@ enum Backend {
 }
 
 /// An owned audio-output subsystem: opens (at most) one output stream and
-/// exposes a [`Producer`] handle the future `audio` crate fills from another
-/// thread.
+/// exposes a [`Producer`] handle its caller fills with rendered PCM.
 ///
 /// No global state: every [`AudioOutput`] owns its own device/stream (or
 /// null stand-in) and ring buffer. Dropping it tears the backend down
@@ -110,8 +109,8 @@ pub struct AudioOutput {
 
 impl AudioOutput {
     /// The rate upstream's M4A engine actually renders PCM at — the nominal
-    /// producer contract for the ring buffer and the future `audio` crate
-    /// (S-3), which render against exactly this rate.
+    /// producer contract for the ring buffer and the `audio` crate, which
+    /// renders at exactly this rate.
     ///
     /// Derived from `pokeemerald/src/m4a.c`: `m4aSoundInit` selects
     /// `SOUND_MODE_FREQ_13379` (m4a.c:79), and `SoundInit` calls
@@ -268,8 +267,8 @@ impl AudioOutput {
         self.channels
     }
 
-    /// A cloneable producer handle for the future `audio` crate to fill
-    /// from another thread. See [`crate::ring::Producer`].
+    /// A cloneable producer handle for filling the ring buffer with
+    /// rendered PCM. See [`crate::ring::Producer`].
     #[must_use]
     pub fn producer(&self) -> Producer {
         self.producer.clone()

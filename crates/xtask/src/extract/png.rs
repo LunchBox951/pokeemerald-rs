@@ -56,7 +56,7 @@ pub enum PngError {
     /// The 8-byte PNG signature didn't match.
     BadSignature,
     /// A chunk's declared length ran past the end of the file, or a
-    /// required chunk (`IHDR`, `IDAT`) was missing.
+    /// required chunk (`IHDR`, `IDAT`, or `IEND`) was missing.
     Truncated,
     /// `IHDR` described a combination of colour type / bit depth /
     /// compression / filter / interlace method this decoder does not
@@ -169,6 +169,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 
 fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
     let mut chunks = Vec::new();
+    let mut saw_iend = false;
     while !rest.is_empty() {
         if rest.len() < 8 {
             return Err(PngError::Truncated);
@@ -195,8 +196,12 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
         chunks.push(Chunk { kind, data });
         rest = &rest[crc_end..];
         if is_end {
+            saw_iend = true;
             break;
         }
+    }
+    if !saw_iend {
+        return Err(PngError::Truncated);
     }
     Ok(chunks)
 }
@@ -590,6 +595,20 @@ mod tests {
     fn rejects_bad_signature() {
         let err = decode(&[0u8; 16]).unwrap_err();
         assert_eq!(err, PngError::BadSignature);
+    }
+
+    #[test]
+    fn rejects_missing_iend() {
+        // IEND is mandatory (RFC 2083 §11.2.5) but has empty data, so it's
+        // always the trailing 12 bytes (4-byte length + 4-byte type + 4-byte
+        // CRC) `indexed_png_from_raw` appends -- strip exactly those to
+        // simulate a stream truncated right after the last IDAT's CRC
+        // (issue #450).
+        let mut png = tiny_indexed_png(8, 1, 1, &[0]);
+        png.truncate(png.len() - 12);
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(err, PngError::Truncated);
     }
 
     #[test]
