@@ -185,8 +185,11 @@ impl Sweep {
         }
         self.ticks_until_step = self.period_ticks;
         if self.shift == 0 {
-            // This API keeps zero shift as a no-op. mGBA still performs its
-            // overflow calculation without writing the result (audio.c:965-987).
+            // Known divergence: mGBA still computes the shift-0 doubling and
+            // disables the channel when that reaches 2048; only the write-back
+            // is gated on a non-zero shift (mgba/src/gb/audio.c:975..:986).
+            // Returning early instead means a shift-0 upward sweep never
+            // retires a high-frequency channel-1 note here.
             return SweepResult::Unchanged;
         }
 
