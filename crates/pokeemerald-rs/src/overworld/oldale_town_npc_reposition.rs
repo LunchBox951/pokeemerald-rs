@@ -154,6 +154,10 @@ mod tests {
         event_with_local_id(&OLDALE_TOWN_OBJECT_EVENTS, local_id)
     }
 
+    fn local_ids(events: &[ObjectEvent]) -> Vec<u8> {
+        events.iter().map(|event| event.local_id).collect()
+    }
+
     fn placement(event: ObjectEvent) -> ObjectPlacement {
         ObjectPlacement {
             x: event.x,
@@ -162,11 +166,14 @@ mod tests {
         }
     }
 
+    /// Declaration order is player-visible: `visible_object_events` keeps it
+    /// and `super::npc`'s OAM entries are built in that order, so a generated
+    /// table that reorders the same local ids is drift too.
     #[test]
-    fn replacement_table_has_every_generated_object_event() {
+    fn replacement_table_has_every_generated_object_event_in_order() {
         assert_eq!(
-            OLDALE_TOWN_OBJECT_EVENTS.len(),
-            generated_object_events().len()
+            local_ids(&OLDALE_TOWN_OBJECT_EVENTS),
+            local_ids(generated_object_events())
         );
     }
 
