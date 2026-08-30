@@ -538,10 +538,10 @@ mod tests {
         ]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
 
-        let TickEvent::Glyph(a) = printer.tick(PrinterInput::none()) else {
-            panic!("expected 'A' on frame 0")
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the first glyph on frame 0")
         };
-        assert_eq!((a.x, a.y), (0, 0));
+        assert_eq!((first.x, first.y), (0, 0));
 
         for frame in 1..=6 {
             assert_eq!(
@@ -551,10 +551,10 @@ mod tests {
             );
         }
 
-        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
-            panic!("expected 'B' on frame 7")
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the second glyph on frame 7")
         };
-        assert_eq!((b.x, b.y), (0, 16));
+        assert_eq!((second.x, second.y), (0, 16));
     }
 
     #[test]
@@ -714,10 +714,13 @@ mod tests {
                 "resume frame {frame} should be idle"
             );
         }
-        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
+        let TickEvent::Glyph(first_glyph_on_new_page) = printer.tick(PrinterInput::none()) else {
             panic!("expected the new page's glyph on frame 10")
         };
-        assert_eq!((b.x, b.y), (0, 0));
+        assert_eq!(
+            (first_glyph_on_new_page.x, first_glyph_on_new_page.y),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -864,7 +867,11 @@ mod tests {
         let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
             panic!("expected the restarted stream's second glyph")
         };
-        assert_eq!((second.x, second.y), (9, 1), "advanced by 'A''s 6px width");
+        assert_eq!(
+            (second.x, second.y),
+            (3 + i32::from(NORMAL_A_ADVANCE_WIDTH), 1),
+            "advanced by the first glyph's width"
+        );
         assert!(matches!(
             printer.tick(PrinterInput::none()),
             TickEvent::Finished
@@ -938,7 +945,7 @@ mod tests {
 
         assert!(
             matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)),
-            "'A' reveals before the pause"
+            "the first glyph reveals before the pause"
         );
 
         let mut paused_ticks = 0;
@@ -955,10 +962,14 @@ mod tests {
             "pause duration must include the control code's frame"
         );
 
-        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
-            panic!("expected 'B' to resume the tick after PauseFinished")
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the second glyph the tick after PauseFinished")
         };
-        assert_eq!((b.x, b.y), (6, 1), "advanced past 'A''s 6px width");
+        assert_eq!(
+            (second.x, second.y),
+            (i32::from(NORMAL_A_ADVANCE_WIDTH), 1),
+            "advanced past the first glyph"
+        );
     }
 
     #[test]
@@ -1011,7 +1022,7 @@ mod tests {
         };
         assert!(
             matches!(opted_out_printer.tick(held_a), TickEvent::Glyph(_)),
-            "'A' reveals on frame 0 regardless"
+            "the first glyph reveals on frame 0 regardless"
         );
         for frame in 1..=3 {
             assert_eq!(
@@ -1022,7 +1033,7 @@ mod tests {
         }
         assert!(
             matches!(opted_out_printer.tick(held_a), TickEvent::Glyph(_)),
-            "'B' still waits out the full MID delay"
+            "the second glyph still waits out the full MID delay"
         );
 
         let intro_sheet = synthetic_sheet(&pixels, FontId::Normal);
@@ -1035,7 +1046,7 @@ mod tests {
                 intro_printer.tick(PrinterInput::none()),
                 TickEvent::Glyph(_)
             ),
-            "'A' still reveals on frame 0"
+            "the first glyph still reveals on frame 0"
         );
         assert_eq!(intro_printer.tick(held_a), TickEvent::Idle);
         assert!(
@@ -1043,11 +1054,11 @@ mod tests {
                 intro_printer.tick(PrinterInput::none()),
                 TickEvent::Glyph(_)
             ),
-            "'B' reveals early once the speed-up latches"
+            "the second glyph reveals early once the speed-up latches"
         );
         assert!(
             matches!(intro_printer.tick(held_a), TickEvent::Glyph(_)),
-            "'C' reveals immediately: held A alone, once already sped up"
+            "the third glyph reveals immediately while A remains held"
         );
     }
 
