@@ -70,7 +70,8 @@ fn spec(name: ScenarioName) -> ScenarioSpec {
     }
 }
 
-/// A scenario setup or execution failure.
+/// A scenario setup or execution failure. Every `frame` field below is a
+/// zero-based index into the scenario's frames, not a one-based frame number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScenarioError {
     /// App creation failed.
