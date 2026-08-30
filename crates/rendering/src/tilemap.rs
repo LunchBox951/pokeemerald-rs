@@ -7,6 +7,9 @@
 use crate::error::RenderError;
 
 /// A decoded 16-bit regular-background screen entry.
+///
+/// Bits 0–9 select the tile, bit 10 flips it horizontally, bit 11 flips it
+/// vertically, and bits 12–15 select the 4bpp palette bank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ScreenEntry {
     tile_index: u16,
@@ -207,24 +210,29 @@ mod tests {
 
     #[test]
     fn screen_entry_decodes_each_bitfield() {
-        let tile_index = 0x0234;
-        let palette_bank = 1;
-        let raw = tile_index | (u16::from(palette_bank) << ScreenEntry::PALETTE_BANK_SHIFT);
-        let entry = ScreenEntry::from_raw(raw);
-        assert_eq!(entry.tile_index(), tile_index);
-        assert!(!entry.h_flip());
-        assert!(!entry.v_flip());
-        assert_eq!(entry.palette_bank(), palette_bank);
+        let tile = ScreenEntry::from_raw(0x03FF);
+        assert_eq!(tile.tile_index(), 0x03FF);
+        assert!(!tile.h_flip());
+        assert!(!tile.v_flip());
+        assert_eq!(tile.palette_bank(), 0);
 
-        let palette_bank = ScreenEntry::PALETTE_BANK_MASK;
-        let raw = ScreenEntry::HORIZONTAL_FLIP_FLAG
-            | ScreenEntry::VERTICAL_FLIP_FLAG
-            | (u16::from(palette_bank) << ScreenEntry::PALETTE_BANK_SHIFT);
-        let entry = ScreenEntry::from_raw(raw);
-        assert_eq!(entry.tile_index(), 0);
-        assert!(entry.h_flip());
-        assert!(entry.v_flip());
-        assert_eq!(entry.palette_bank(), palette_bank);
+        let horizontal_flip = ScreenEntry::from_raw(0x0400);
+        assert_eq!(horizontal_flip.tile_index(), 0);
+        assert!(horizontal_flip.h_flip());
+        assert!(!horizontal_flip.v_flip());
+        assert_eq!(horizontal_flip.palette_bank(), 0);
+
+        let vertical_flip = ScreenEntry::from_raw(0x0800);
+        assert_eq!(vertical_flip.tile_index(), 0);
+        assert!(!vertical_flip.h_flip());
+        assert!(vertical_flip.v_flip());
+        assert_eq!(vertical_flip.palette_bank(), 0);
+
+        let palette = ScreenEntry::from_raw(0xF000);
+        assert_eq!(palette.tile_index(), 0);
+        assert!(!palette.h_flip());
+        assert!(!palette.v_flip());
+        assert_eq!(palette.palette_bank(), 0x0F);
     }
 
     #[test]
