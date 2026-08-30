@@ -737,9 +737,13 @@ mod tests {
         assert_eq!(char_to_byte('>'), Some(0x86));
         assert_eq!(char_to_byte('À'), Some(0x01));
         assert_eq!(char_to_byte('ü'), Some(0xF6));
+        // Both apostrophes share 0xB4 upstream; decode canonicalises to '’'.
+        assert_eq!(char_to_byte('’'), Some(0xB4));
+        assert_eq!(char_to_byte('\''), Some(0xB4));
         assert_eq!(byte_to_char(0xBB), Some('A'));
         assert_eq!(byte_to_char(0xD5), Some('a'));
         assert_eq!(byte_to_char(0xA1), Some('0'));
+        assert_eq!(byte_to_char(0xB4), Some('’'));
         assert_eq!(byte_to_char(0x00), Some(' '));
     }
 
@@ -756,6 +760,11 @@ mod tests {
         check_run('0', '9', 0xA1);
     }
 
+    /// Pins each control byte to its upstream `characters.h` value.
+    ///
+    /// Tests that build byte sequences out of these constants cannot catch a
+    /// drifted constant, because their input and their expectation move
+    /// together. These literals are the independent anchor.
     #[test]
     fn control_code_constants_match_upstream() {
         assert_eq!(EOS, 0xFF);
@@ -764,7 +773,40 @@ mod tests {
         assert_eq!(EXT_CTRL_CODE_BEGIN, 0xFC);
         assert_eq!(CHAR_PROMPT_CLEAR, 0xFB);
         assert_eq!(CHAR_PROMPT_SCROLL, 0xFA);
+        assert_eq!(CHAR_EXTRA_SYMBOL, 0xF9);
+        assert_eq!(CHAR_KEYPAD_ICON, 0xF8);
         assert_eq!(CHAR_DYNAMIC, 0xF7);
+        assert_eq!(CHAR_BARD_WORD_DELIMIT, 0x37);
+        // charmap.txt spells the player's name as `PLAYER = FD 01`.
+        assert_eq!(PLACEHOLDER_PLAYER, 0x01);
+    }
+
+    /// Pins each extended-control subcode to its upstream `characters.h` value.
+    ///
+    /// [`ext_ctrl_code_arg_lengths_match_upstream`] asks these same constants
+    /// for an argument count, so it agrees with itself whichever number a
+    /// constant holds. These literals pin the numbers themselves.
+    #[test]
+    fn ext_ctrl_code_subcodes_match_upstream() {
+        assert_eq!(EXT_CTRL_CODE_COLOR, 0x01);
+        assert_eq!(EXT_CTRL_CODE_HIGHLIGHT, 0x02);
+        assert_eq!(EXT_CTRL_CODE_SHADOW, 0x03);
+        assert_eq!(EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW, 0x04);
+        assert_eq!(EXT_CTRL_CODE_PALETTE, 0x05);
+        assert_eq!(EXT_CTRL_CODE_FONT, 0x06);
+        assert_eq!(EXT_CTRL_CODE_RESET_FONT, 0x07);
+        assert_eq!(EXT_CTRL_CODE_PAUSE, 0x08);
+        assert_eq!(EXT_CTRL_CODE_PLAY_BGM, 0x0B);
+        assert_eq!(EXT_CTRL_CODE_ESCAPE, 0x0C);
+        assert_eq!(EXT_CTRL_CODE_SHIFT_RIGHT, 0x0D);
+        assert_eq!(EXT_CTRL_CODE_SHIFT_DOWN, 0x0E);
+        assert_eq!(EXT_CTRL_CODE_PLAY_SE, 0x10);
+        assert_eq!(EXT_CTRL_CODE_CLEAR, 0x11);
+        assert_eq!(EXT_CTRL_CODE_SKIP, 0x12);
+        assert_eq!(EXT_CTRL_CODE_CLEAR_TO, 0x13);
+        assert_eq!(EXT_CTRL_CODE_MIN_LETTER_SPACING, 0x14);
+        assert_eq!(EXT_CTRL_CODE_JPN, 0x15);
+        assert_eq!(EXT_CTRL_CODE_ENG, 0x16);
     }
 
     #[test]
@@ -1004,6 +1046,47 @@ mod tests {
         assert_eq!(byte_from_symbol(Symbol::RightArrow), 0x7C);
         assert_eq!(byte_from_symbol(Symbol::SuperE), 0x84);
         assert_eq!(byte_from_symbol(Symbol::SuperRe), 0xA0);
+    }
+
+    /// Requires [`SYMBOLS`] to list every [`Symbol`] variant.
+    ///
+    /// `byte_from_symbol` matches on the variant, so the compiler assigns every
+    /// new tile a byte; `symbol_from_byte` instead searches [`SYMBOLS`], which
+    /// nothing forces a new tile to join. A tile in one and not the other
+    /// encodes to a byte that decodes back as [`TextError::UnknownByte`].
+    ///
+    /// The match below is exhaustive over [`Symbol`], so a new variant stops
+    /// this test compiling. Counting it in `SYMBOL_VARIANT_COUNT` then fails
+    /// the assertion until the variant also joins [`SYMBOLS`].
+    #[test]
+    fn symbols_list_covers_every_symbol_variant() {
+        const SYMBOL_VARIANT_COUNT: usize = 16;
+
+        for &sym in SYMBOLS {
+            match sym {
+                Symbol::Lv
+                | Symbol::Pk
+                | Symbol::Mn
+                | Symbol::Pokeblock1
+                | Symbol::Pokeblock2
+                | Symbol::Pokeblock3
+                | Symbol::Pokeblock4
+                | Symbol::Pokeblock5
+                | Symbol::Spacer
+                | Symbol::UpArrow
+                | Symbol::DownArrow
+                | Symbol::LeftArrow
+                | Symbol::RightArrow
+                | Symbol::SuperEr
+                | Symbol::SuperE
+                | Symbol::SuperRe => {}
+            }
+        }
+        assert_eq!(
+            SYMBOLS.len(),
+            SYMBOL_VARIANT_COUNT,
+            "every Symbol variant must be listed in SYMBOLS so that it decodes"
+        );
     }
 
     #[test]
