@@ -1,315 +1,110 @@
-//! Error types for the `battle` crate.
-//!
-//! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library
-//! crates. Lookups that fail inside the underlying `assets` tables surface
-//! here as [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`],
-//! so `battle` callers depend only on this crate's error type.
+//! Failures reported by battle data, construction, and turn operations.
 
 use assets::trainers::{AiFlags, TrainerId};
 use assets::{MoveId, SpeciesId};
 use std::error::Error;
 use std::fmt;
 
-/// An error produced while constructing or querying `battle`-crate data.
+/// A failure reported by the `battle` crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BattleError {
-    /// A stat-stage offset fell outside the upstream range
-    /// `MIN_STAT_STAGE..=MAX_STAT_STAGE` (`-6..=+6`,
-    /// `pokeemerald/include/constants/pokemon.h`).
-    ///
-    /// Carries the offending offset.
-    ///
-    /// [`StatStage`]: crate::stat_stage::StatStage
+    /// A stat-stage offset was outside `-6..=6`.
     StatStageOutOfRange(i8),
 
-    /// A raw `NATURE_*` id did not correspond to any modelled
+    /// A raw nature ID was outside the range recognized by
     /// [`Nature`](crate::nature::Nature).
-    ///
-    /// Carries the offending id. Upstream defines ids `0..NUM_NATURES`
-    /// (`0..25`, `pokeemerald/include/constants/pokemon.h`).
     UnknownNature(u8),
 
-    /// A [`SpeciesId`] fell outside the extracted `gSpeciesInfo` range
-    /// (see [`crate::dex::Dex::species`]).
-    ///
-    /// Carries the offending id.
+    /// A [`SpeciesId`] was outside the extracted species table.
     UnknownSpecies(SpeciesId),
 
-    /// A [`MoveId`] fell outside the extracted `gBattleMoves` range
-    /// (see [`crate::dex::Dex::move_data`]).
-    ///
-    /// Carries the offending id.
+    /// A [`MoveId`] was outside the extracted move table.
     UnknownMove(MoveId),
 
-    /// A move's [`assets::MoveType`] was [`assets::MoveType::Mystery`]
-    /// (`TYPE_MYSTERY`, the sole `???`-typed move, `MOVE_CURSE`).
-    ///
-    /// [`crate::hit`]'s single-hit resolution only handles the seventeen
-    /// combat [`assets::Type`]s; Curse's dual (Ghost/non-Ghost) targeting and
-    /// 0-power self/foe status effect are move-effect breadth beyond this
-    /// slice -- not modelled yet, deferred, still in v1 scope.
-    ///
-    /// Carries the offending move id.
+    /// A move had no combat [`assets::Type`].
     UnsupportedMoveType(MoveId),
 
-    /// A move slot index passed to [`crate::battle::Battle::take_turn`] was
-    /// outside the mon's actual move list (`0..moves.len()`, at most
-    /// `MAX_MON_MOVES = 4`, `pokeemerald/include/constants/global.h:82`).
-    ///
-    /// Carries the offending index.
+    /// A move slot index was outside the battler's move list.
     InvalidMoveSlot(usize),
 
-    /// A moveset handed to [`crate::pokemon::BattlePokemon::new`] was empty
-    /// or longer than `MAX_MON_MOVES` (`4`,
-    /// `pokeemerald/include/constants/global.h:82`).
-    ///
-    /// Upstream cannot represent either: `struct BattlePokemon` has exactly
-    /// four `moves` slots, and a battler with none of them filled never
-    /// reaches the battle engine. Enforcing it here is what makes the wild
-    /// opponent's move-choice rejection loop
-    /// ([`crate::battle::Battle::take_turn`], `MOD(Random(), MAX_MON_MOVES)`
-    /// retried while the slot is `MOVE_NONE`) provably terminate.
-    ///
-    /// Carries the offending move count.
+    /// A moveset was empty or exceeded [`crate::pokemon::MAX_MON_MOVES`].
     InvalidMoveCount(usize),
 
-    /// A moveset handed to [`crate::pokemon::BattlePokemon::new`] contained
-    /// [`crate::pokemon::MOVE_NONE`], the *empty slot* placeholder
-    /// (`pokeemerald/include/constants/moves.h:4`).
-    ///
-    /// A `MOVE_NONE` slot is never a legal selection upstream —
-    /// `CheckMoveLimitations` flags it (`MOVE_LIMITATION_ZEROMOVE`,
-    /// `src/battle_util.c:1098`) and the wild opponent's rejection loop
-    /// retries past it (`src/battle_controller_opponent.c:1599`-`:1601`) — so
-    /// a *known* move is never the placeholder. Rejecting it here is what
-    /// keeps that rejection loop from accepting a slot the game would have
-    /// redrawn.
-    ///
-    /// Carries the offending slot index.
+    /// A moveset contained the empty-slot placeholder
+    /// [`crate::pokemon::MOVE_NONE`].
     PlaceholderMove(usize),
 
-    /// A level handed to [`crate::pokemon::BattlePokemon::new`] was outside
-    /// `MIN_LEVEL..=MAX_LEVEL` (`1..=100`,
-    /// `pokeemerald/include/constants/pokemon.h:145`-`:146`).
-    ///
-    /// Carries the offending level.
+    /// A Pokémon level was outside
+    /// [`crate::pokemon::MIN_LEVEL`]`..=`[`crate::pokemon::MAX_LEVEL`].
     InvalidLevel(u8),
 
-    /// An individual value handed to [`crate::pokemon::BattlePokemon::new`]
-    /// exceeded `MAX_IV_MASK` (`31`,
-    /// `pokeemerald/include/constants/pokemon.h:201`) — upstream stores each
-    /// IV in a five-bit field, so a larger one cannot exist there.
-    ///
-    /// (Pokémon *individual values*, the Gen-3 stat rolls — nothing
-    /// cryptographic. See [`crate::pokemon::Ivs`].)
-    ///
-    /// Carries the offending value.
+    /// A Pokémon individual value exceeded [`crate::pokemon::MAX_IV`].
     InvalidIv(u8),
 
-    /// The *player's* chosen move slot has no PP remaining.
-    ///
-    /// Upstream's selection menu cannot offer a spent slot
-    /// (`MOVE_LIMITATION_PP`, `CheckMoveLimitations`,
-    /// `pokeemerald/src/battle_util.c:1104`), so this is a caller bug, not a
-    /// battle event: [`crate::battle::Battle::take_turn`] rejects it ahead
-    /// of the turn's first draw, leaving the battle and the shared RNG
-    /// stream untouched. [`crate::pokemon::BattlePokemon::deduct_pp`]
-    /// reports it for the same caller-boundary reason.
-    ///
-    /// A spent slot on the *wild* side is not an error at all: upstream's
-    /// rejection loop ignores PP, and the picked move then fails at
-    /// `Cmd_attackcanceler` — the first command of the hit script — which
-    /// jumps to `BattleScript_NoPPForMove`
-    /// (`battle_script_commands.c:934`-`:939`): no RNG draw, no damage, no
-    /// deduction, surfaced as [`crate::battle::BattleEvent::FailedNoPp`].
-    /// When every wild slot is spent, upstream instead forces Struggle
-    /// (`AreAllMovesUnusable`, `battle_util.c:1125`), which this slice
-    /// cannot execute — that case surfaces as
-    /// [`BattleError::UnsupportedMoveEffect`] carrying Struggle, at the
-    /// moment the fallback would act. See [`crate::battle::TurnError`] for
-    /// the full breakdown.
-    ///
-    /// Carries the offending index.
+    /// A caller tried to spend PP from a move slot with none remaining.
+    /// [`crate::battle::Battle::take_turn`] rejects a player's spent slot
+    /// before the turn mutates state or consumes randomness; an opponent's
+    /// spent slot instead produces [`crate::battle::BattleEvent::FailedNoPp`].
     NoPpRemaining(usize),
 
-    /// [`crate::hit::resolve_hit`] was asked to execute a `0`-power move.
-    ///
-    /// This slice's move execution only covers the damaging (`EFFECT_HIT`-
-    /// shaped) path (`(behavioral-fidelity)`'s "as far as the first-
-    /// encounter species need"); status moves and 0-power secondary-effect
-    /// moves are not modelled, so attempting one is reported rather than
-    /// silently applying `CalculateBaseDamage`'s "moves always do at least 1
-    /// damage" floor to a move that should not deal damage at all.
-    ///
-    /// Carries the offending move id.
+    /// A damaging-move pipeline received a move with zero power.
     NonDamagingMove(MoveId),
 
-    /// A move's `EFFECT_*` battle-effect script is not the ordinary
-    /// hit-shaped one this slice reproduces (see
-    /// [`crate::hit::is_ordinary_hit_effect`]).
-    ///
-    /// The damage pipeline in [`crate::hit::resolve_hit`] is
-    /// `BattleScript_EffectHit` step for step
-    /// (`pokeemerald/data/battle_scripts_1.s:21`). A move whose effect runs a
-    /// *different* script computes its damage differently and consumes a
-    /// different number of RNG draws — Sonic Boom's flat 20
-    /// (`EFFECT_SONICBOOM`, `:151`), a multi-hit move's 2..5 hits
-    /// (`EFFECT_MULTI_HIT`, `:50`), an OHKO move (`:59`), Counter (`:110`),
-    /// a fixed-level hit (`EFFECT_LEVEL_DAMAGE`, `:108`), and so on. Running
-    /// those through the ordinary formula would be silently wrong in both
-    /// damage and RNG position, so they are rejected instead
-    /// `(behavioral-fidelity)`; implementing them is deferred move-effect
-    /// breadth.
-    ///
-    /// Carries the offending move id.
+    /// A move's battle effect was not supported by the selected execution
+    /// pipeline.
     UnsupportedMoveEffect(MoveId),
 
-    /// [`crate::secondary`]'s post-damage hook rolled its
-    /// `Cmd_seteffectwithchance` chance **and it landed** on a
-    /// `MOVE_EFFECT_*` byte whose infliction this crate does not yet apply
-    /// — the fail-closed stub the shared hook dispatches to (issue #321).
-    ///
-    /// Deliberately distinct from [`Self::UnsupportedMoveEffect`], which is
-    /// a *pre-turn* refusal made before anything is drawn. This one is
-    /// reported **after** the draw upstream would also have made, because
-    /// the move's whole damage half already ran: the stream is correct, the
-    /// caller simply cannot be told what the secondary did. No move
-    /// [`crate::battle::ensure_executable`] admits can reach it, so in
-    /// production it is unreachable by construction — it exists so that a
-    /// future pipeline which admits a `setmoveeffect` script without porting
-    /// the infliction fails loudly instead of silently dropping the effect.
-    ///
-    /// Carries the offending move id.
+    /// A move produced a secondary effect that the post-damage hook could
+    /// not apply. The hook reports this only after the effect-chance draw and
+    /// preceding damage have occurred.
     UnportedSecondaryEffect(MoveId),
 
-    /// A species handed to [`crate::pokemon::BattlePokemon::new`] was a
-    /// reserved placeholder id: [`crate::pokemon::SPECIES_NONE`], the *empty
-    /// slot* placeholder (`pokeemerald/include/constants/species.h:4`), or
-    /// the old-Unown compatibility range
+    /// A species was an empty or compatibility placeholder:
+    /// [`crate::pokemon::SPECIES_NONE`] or
     /// [`crate::pokemon::SPECIES_OLD_UNOWN_B`]`..=`
-    /// [`crate::pokemon::SPECIES_OLD_UNOWN_Z`] (`:257`-`:281`).
-    ///
-    /// Those `gSpeciesInfo` rows exist — slot 0 all zeroes, the old-Unown
-    /// slots the leftover `OLD_UNOWN_SPECIES_INFO` dummy — but no upstream
-    /// path ever builds a mon from them, and constructing a battler over one
-    /// would turn dummy stats into a fightable battler. Rejected for the
-    /// same reason as [`Self::PlaceholderMove`]: addressable is not the same
-    /// as real.
+    /// [`crate::pokemon::SPECIES_OLD_UNOWN_Z`].
     PlaceholderSpecies,
 
-    /// A battler handed to [`crate::battle::Battle::new`] was already
-    /// fainted (`0` HP, reachable through
-    /// [`crate::pokemon::BattlePokemon::apply_damage`]).
-    ///
-    /// Upstream never starts a wild battle with a fainted participant — the
-    /// player's first non-fainted party mon is sent out and a wild mon is
-    /// created at full HP — and [`crate::battle::Battle::take_turn`] assumes
-    /// live battlers (it checks HP only *after* a hit). Rejected before the
-    /// battle-start draw, so a refused configuration consumes no RNG.
-    ///
-    /// Carries `true` if the offending battler was the player's.
+    /// A battle was constructed with an already-fainted participant.
+    /// The payload is `true` for the player's battler.
     FaintedBattler(bool),
 
-    /// [`crate::battle::Battle::take_turn`] was called after the battle
-    /// already reached a terminal outcome (victory, defeat, or a successful
-    /// run).
+    /// A turn was requested after the battle reached a terminal outcome.
     BattleAlreadyOver,
 
-    /// [`crate::battle::PlayerAction::Run`] was chosen in a battle
-    /// constructed with `first_battle = true`
-    /// ([`crate::battle::Battle::new`]).
-    ///
-    /// Upstream's `IsRunningFromBattleImpossible` returns
-    /// `BATTLE_RUN_FORBIDDEN` unconditionally under `BATTLE_TYPE_FIRST_BATTLE`
-    /// (`pokeemerald/src/battle_main.c:4078`-`:4082`, the "You mustn't run
-    /// away from Prof. Birch's Pokémon!" / `B_MSG_DONT_LEAVE_BIRCH` message)
-    /// — checked at action-*selection* time (`:4339`-`:4344`), before Run
-    /// ever becomes a chosen action for the turn, so upstream just re-prompts
-    /// the player's menu rather than starting a turn. That is exactly the
-    /// shape of the other pre-draw player-input rejections above
-    /// ([`Self::InvalidMoveSlot`] and friends): the battle and the shared RNG
-    /// stream are left exactly as they were.
+    /// A caller tried to run from the first battle. The selection is rejected
+    /// before turn state or randomness changes, matching the upstream action
+    /// gate (`pokeemerald/src/battle_main.c:4078`-`:4082`, `:4339`-`:4344`).
     RunForbidden,
 
-    /// [`crate::battle::PlayerAction::Run`] was chosen in a
-    /// `BATTLE_TYPE_TRAINER` battle ([`crate::battle::Battle::new_trainer`],
-    /// issue #237).
-    ///
-    /// A *different* upstream gate from [`Self::RunForbidden`], with a
-    /// different message, which is why it is a distinct variant rather than
-    /// a shared one: `HandleTurnActionSelectionState` tests
-    /// `gBattleTypeFlags & BATTLE_TYPE_TRAINER` **before**
-    /// `IsRunningFromBattleImpossible` is called at all
-    /// (`pokeemerald/src/battle_main.c:4331`-`:4337`) and runs
-    /// `BattleScript_PrintCantRunFromTrainer`
-    /// (`data/battle_scripts_1.s:3071`-`:3073`), printing
-    /// `STRINGID_NORUNNINGFROMTRAINERS` — "No! There's no running / from a
-    /// TRAINER battle!" (`src/battle_message.c:330`) — and re-prompting the
-    /// action menu. Like every other pre-draw player-input rejection, it
-    /// leaves the battle and the shared RNG stream exactly as they were.
+    /// A caller tried to run from a trainer battle. The selection is rejected
+    /// before turn state or randomness changes.
     NoRunningFromTrainer,
 
-    /// A trainer id was outside the extracted `gTrainers` range
-    /// (`0..`[`assets::trainers::TRAINERS_COUNT`]).
+    /// A trainer ID was outside the extracted trainer table.
     UnknownTrainer(TrainerId),
 
-    /// A trainer party mon knows a move whose `EFFECT_*` the trainer AI
-    /// cannot score (issue #237).
-    ///
-    /// Deliberately distinct from [`Self::UnsupportedMoveEffect`], and
-    /// strictly narrower: that one means the *turn engine* cannot execute
-    /// the move, while this one means the engine could execute it fine but
-    /// `crate::battle::trainer_ai` does not model the `AI_CheckBadMove` /
-    /// `AI_CheckViability` branch its effect takes — several of which draw,
-    /// so admitting one would silently desynchronise the shared RNG stream.
-    /// Reported by [`crate::battle::Battle::new_trainer`] before any draw.
+    /// A trainer knew a move that the turn engine could execute but the
+    /// trainer AI could not score. Trainer-battle construction rejects it
+    /// before consuming randomness.
     UnscoreableMoveEffect(MoveId),
 
-    /// A trainer's `gTrainers[].aiFlags` set an `AI_SCRIPT_*` bit
-    /// `crate::battle::trainer_ai` does not run (issue #237).
-    ///
-    /// Carries **only the unmodelled bits**, so the error names exactly what
-    /// would have to be added. Reported by
-    /// [`crate::battle::Battle::new_trainer`] before any draw.
+    /// A trainer selected unsupported AI scripts. The payload contains only
+    /// the unsupported flag bits.
     UnsupportedAiFlags(AiFlags),
 
-    /// [`crate::battle::Battle::take_turn`] was called while a level-up move
-    /// is still waiting on a player decision (issue #304).
-    ///
-    /// Upstream cannot reach action selection in this state at all: the
-    /// yes/no box and the summary screen `Cmd_yesnoboxlearnmove` opens
-    /// (`src/battle_script_commands.c:5394`-`:5497`) are *inside*
-    /// `BattleScript_LevelUp`'s script, which runs to completion before the
-    /// next turn's `HandleTurnActionSelectionState`. Answering
-    /// ([`crate::battle::Battle::resolve_move_learn`]) is what clears it.
-    /// Like every other pre-turn rejection this leaves the battle and the
-    /// shared RNG stream exactly as they were.
+    /// A turn was requested while a level-up move awaited a learn decision.
+    /// The pending move ID is returned without changing battle state.
     MoveLearnPending(MoveId),
 
-    /// [`crate::battle::Battle::resolve_move_learn`] was called with no
-    /// prompt outstanding — a caller answering a question nobody asked.
+    /// A move-learn decision was submitted without a pending prompt.
     NoMoveLearnPending,
 
-    /// A [`crate::pokemon::MoveLearnDecision::Replace`] named a slot holding
-    /// an HM move, which upstream refuses to overwrite: `IsHMMove2`
-    /// (`src/pokemon.c:6574`, over the eight-field-move `sHMMoves` list at
-    /// `:2108`) makes `Cmd_yesnoboxlearnmove` print
-    /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopen the move list instead
-    /// (`src/battle_script_commands.c:5468`-`:5472`). Nothing is mutated and
-    /// the prompt stays outstanding, so the caller can re-ask and answer
-    /// with a different slot (or decline) — the same recoverable shape as
-    /// [`BattleError::InvalidMoveSlot`], distinct because this refusal is a
-    /// real upstream message rather than a caller bug.
-    ///
-    /// Carries the HM move in the refused slot.
+    /// A move-learn decision tried to replace an HM move. The pending prompt
+    /// remains unchanged so the caller can choose another slot or decline.
     HmMoveCantBeForgotten(MoveId),
 
-    /// [`crate::battle::Battle::new_trainer`] was handed an empty party.
-    ///
-    /// Unreachable upstream: `CreateNPCTrainerParty` returns
-    /// `gTrainers[].partySize`, and only `TRAINER_NONE` has a size of `0` —
-    /// a battle against it cannot be started. Rejected here rather than
-    /// panicking on the missing lead.
+    /// A trainer battle was constructed with an empty opponent party.
     EmptyTrainerParty(TrainerId),
 }
 
@@ -323,7 +118,7 @@ impl fmt::Display for BattleError {
             Self::UnknownSpecies(id) => write!(f, "unknown species id `{}`", id.0),
             Self::UnknownMove(id) => write!(f, "unknown move id `{}`", id.0),
             Self::UnsupportedMoveType(id) => {
-                write!(f, "move `{}` has an unsupported (???) type", id.0)
+                write!(f, "move `{}` has no supported combat type", id.0)
             }
             Self::InvalidMoveSlot(index) => write!(f, "invalid move slot index `{index}`"),
             Self::InvalidMoveCount(count) => {
@@ -336,16 +131,14 @@ impl fmt::Display for BattleError {
             Self::InvalidIv(value) => write!(f, "individual value `{value}` outside 0..=31"),
             Self::NoPpRemaining(index) => write!(f, "move slot `{index}` has no PP remaining"),
             Self::NonDamagingMove(id) => {
-                write!(f, "move `{}` is a non-damaging move (unsupported)", id.0)
+                write!(f, "move `{}` has no base damage", id.0)
             }
-            Self::UnsupportedMoveEffect(id) => write!(
-                f,
-                "move `{}` has a battle effect this slice does not model",
-                id.0
-            ),
+            Self::UnsupportedMoveEffect(id) => {
+                write!(f, "move `{}` has an unsupported battle effect", id.0)
+            }
             Self::UnportedSecondaryEffect(id) => write!(
                 f,
-                "move `{}` rolled a secondary effect this slice cannot inflict",
+                "move `{}` produced an unsupported secondary effect",
                 id.0
             ),
             Self::PlaceholderSpecies => {
@@ -360,13 +153,10 @@ impl fmt::Display for BattleError {
             }
             Self::BattleAlreadyOver => write!(f, "the battle has already ended"),
             Self::RunForbidden => {
-                write!(
-                    f,
-                    "running is forbidden this battle (BATTLE_TYPE_FIRST_BATTLE)"
-                )
+                write!(f, "running is forbidden in the first battle")
             }
             Self::NoRunningFromTrainer => {
-                write!(f, "there is no running from a TRAINER battle")
+                write!(f, "running is forbidden in trainer battles")
             }
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{}`", id.0),
             Self::UnscoreableMoveEffect(id) => write!(
@@ -376,7 +166,7 @@ impl fmt::Display for BattleError {
             ),
             Self::UnsupportedAiFlags(flags) => write!(
                 f,
-                "trainer AI flags `{:#x}` include scripts this slice does not run",
+                "trainer AI flags `{:#x}` include unsupported scripts",
                 flags.bits()
             ),
             Self::MoveLearnPending(id) => write!(

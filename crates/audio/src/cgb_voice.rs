@@ -507,8 +507,12 @@ impl CgbVoice {
     /// hardware's own 128 Hz cadence, which does not line up with render
     /// buffer boundaries — see [`Self::render`]'s `sweep_ticks` parameter
     /// and [`crate::psg::FrameSequencer128Hz`] (issue #381).
-    pub fn begin_frame(&mut self, master_volume: u8) {
-        self.envelope.step();
+    ///
+    /// `extra_envelope_iteration` is [`crate::mixer::Mixer`]'s shared
+    /// [`crate::cgb_envelope::CgbEnvelopeCadence`], forwarded straight to
+    /// [`CgbEnvelope::step_frame`] (issue #453).
+    pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
+        self.envelope.step_frame(extra_envelope_iteration);
         // Scale the envelope's coarse level up to the same rough `0..=255`
         // range `Voice::begin_frame` mixes at, so a CGB channel's loudness is
         // comparable to a DirectSound one at the same nominal volume. The wave
@@ -590,6 +594,13 @@ impl CgbVoice {
             _ => None,
         }
     }
+
+    /// This voice's current coarse `0..=31` envelope volume. Test-only
+    /// introspection for pinning the 15-frame envelope cadence, here and
+    /// from the mixer's own frame-level tests (issue #453).
+    pub(crate) fn envelope_volume(&self) -> u8 {
+        self.envelope.volume()
+    }
 }
 
 #[cfg(test)]
@@ -658,7 +669,7 @@ mod tests {
             0,
         );
         let mut acc = vec![(0i32, 0i32); 8];
-        voice.begin_frame(15);
+        voice.begin_frame(15, false);
         voice.render(&mut acc, &[]);
         assert!(
             acc.iter().any(|&(l, r)| l != 0 || r != 0),
@@ -708,7 +719,7 @@ mod tests {
             );
             assert!(!dead.is_active(), "overflowing sweep note is born dead");
             let mut acc = vec![(0i32, 0i32); 8];
-            dead.begin_frame(15);
+            dead.begin_frame(15, false);
             dead.render(&mut acc, &[]);
             assert!(
                 acc.iter().all(|&(l, r)| l == 0 && r == 0),
@@ -793,9 +804,9 @@ mod tests {
         );
         let mut acc_a = vec![(0i32, 0i32); 16];
         let mut acc_b = vec![(0i32, 0i32); 16];
-        square.begin_frame(15);
+        square.begin_frame(15, false);
         square.render(&mut acc_a, &[]);
-        expected.begin_frame(15);
+        expected.begin_frame(15, false);
         expected.render(&mut acc_b, &[]);
         assert_eq!(acc_a, acc_b);
     }
@@ -844,9 +855,9 @@ mod tests {
             128,
             3,
         );
-        voice.begin_frame(15);
+        voice.begin_frame(15, false);
         voice.note_off();
-        voice.begin_frame(15);
+        voice.begin_frame(15, false);
         assert!(
             voice.is_active(),
             "a nonzero echo_volume must hold the channel in its pseudo-echo tail"
@@ -961,9 +972,9 @@ mod tests {
         );
         let mut acc_fixed = vec![(0i32, 0i32); 2048];
         let mut acc_plain = vec![(0i32, 0i32); 2048];
-        fixed.begin_frame(15);
+        fixed.begin_frame(15, false);
         fixed.render(&mut acc_fixed, &[]);
-        plain.begin_frame(15);
+        plain.begin_frame(15, false);
         plain.render(&mut acc_plain, &[]);
         assert_ne!(
             acc_fixed, acc_plain,
@@ -1018,9 +1029,9 @@ mod tests {
 
         let mut acc_direct = vec![(0i32, 0i32); 2048];
         let mut acc_retuned = vec![(0i32, 0i32); 2048];
-        direct.begin_frame(15);
+        direct.begin_frame(15, false);
         direct.render(&mut acc_direct, &[]);
-        retuned.begin_frame(15);
+        retuned.begin_frame(15, false);
         retuned.render(&mut acc_retuned, &[]);
         assert_eq!(acc_direct, acc_retuned);
     }
@@ -1064,7 +1075,7 @@ mod tests {
     /// sit *within* that buffer — not how many render calls a test makes.
     fn sweep_frequency_after(sweep_byte: u8, len: usize, schedule: &[usize]) -> u16 {
         let mut voice = low_freq_sweep_voice(sweep_byte);
-        voice.begin_frame(15);
+        voice.begin_frame(15, false);
         let ticks: Vec<usize> = schedule.iter().copied().filter(|&t| t < len).collect();
         let mut acc = vec![(0i32, 0i32); len];
         voice.render(&mut acc, &ticks);
@@ -1147,14 +1158,14 @@ mod tests {
         let make_voice = || low_freq_sweep_voice(0x11); // period 1, add, shift 1
 
         let mut whole_voice = make_voice();
-        whole_voice.begin_frame(15);
+        whole_voice.begin_frame(15, false);
         let mut whole_clock = FrameSequencer128Hz::default();
         let whole_ticks = whole_clock.advance(600);
         let mut whole_acc = vec![(0i32, 0i32); 600];
         whole_voice.render(&mut whole_acc, &whole_ticks);
 
         let mut split_voice = make_voice();
-        split_voice.begin_frame(15);
+        split_voice.begin_frame(15, false);
         let mut split_clock = FrameSequencer128Hz::default();
         let first_ticks = split_clock.advance(300);
         let mut first_half = vec![(0i32, 0i32); 300];
@@ -1204,7 +1215,7 @@ mod tests {
             voice.is_active(),
             "not born dead: the trigger check alone doesn't overflow"
         );
-        voice.begin_frame(15);
+        voice.begin_frame(15, false);
 
         let mut clock = FrameSequencer128Hz::default();
         let ticks = clock.advance(300);

@@ -1,93 +1,55 @@
-//! [`AudioError`]: the audio-pack schemas' error type.
-//!
-//! A dedicated enum, kept separate from [`crate::error::AssetError`] for the
-//! same reason [`crate::pack::PackError`] is: it needs owned `String`
-//! payloads (an unrecognized voicegroup-entry kind's context, an invalid
-//! UTF-8 id) that would break the `const fn`-initializer tables elsewhere in
-//! this crate if folded into `AssetError` — see `crate::error`'s module docs
-//! for the full explanation, and `crate::pack::PackError`'s docs for the
-//! prior instance of this exact split.
+//! Failures from constructing or decoding audio-pack schema values.
 
 use std::fmt;
 
-/// An error produced while decoding a [`super::song::Song`],
-/// [`super::voicegroup::VoiceGroup`], or [`super::sample::Sample`] from
-/// encoded bytes.
+/// An audio-pack schema construction or decoding failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioError {
-    /// The buffer ended before the format's shape said it should — either
-    /// truncated input or a length field that overran the actual data.
+    /// The payload is incomplete or structurally malformed.
     Truncated,
-    /// A length-prefixed string field's bytes were not valid UTF-8.
+    /// A length-prefixed string is not valid UTF-8.
     InvalidString,
-    /// A pack id (a [`super::sample::SampleId`] or a
-    /// [`super::voicegroup::VoiceGroupId`]) was longer than the `u16` length
-    /// prefix written in front of it can describe. Carries the offending
-    /// length in bytes.
+    /// An id's byte length exceeds its `u16` wire prefix. The value is that length.
     IdTooLong(usize),
-    /// A sample's `kind` tag byte was not one of the two this format
-    /// defines (0 = `DirectSound`, 1 = programmable wave). Carries the
-    /// offending byte.
+    /// A sample kind tag does not identify a [`super::sample::Sample`] variant.
+    /// The value is the unrecognized tag.
     UnknownSampleKind(u8),
-    /// A voicegroup slot's `kind` tag byte was not one of the eight this
-    /// format defines. Carries the offending byte.
+    /// A voice kind tag does not identify a [`super::voicegroup::VoiceEntry`] variant.
+    /// The value is the unrecognized tag.
     UnknownVoiceKind(u8),
-    /// A `DirectSound` voice's `mode` tag byte was not one of the three this
-    /// format defines (0 = resampled, 1 = fixed-rate, 2 = reverse). Carries
-    /// the offending byte.
+    /// A `DirectSound` mode tag does not identify a [`super::voicegroup::DirectSoundMode`].
+    /// The value is the unrecognized tag.
     UnknownDirectSoundMode(u8),
-    /// A song event's tag byte was not one of the ones this format defines.
-    /// Carries the offending byte.
+    /// A song event tag does not identify a [`super::song::SongEvent`] variant.
+    /// The value is the unrecognized tag.
     UnknownSongEvent(u8),
-    /// A [`super::voicegroup::VoiceGroup`] was built ([`super::voicegroup::VoiceGroup::new`])
-    /// or decoded with more than [`super::voicegroup::VOICE_SLOT_COUNT`]
-    /// slots. Carries the slot count found.
+    /// A voicegroup exceeds [`super::voicegroup::VOICE_SLOT_COUNT`] slots. The value is
+    /// the slot count.
     TooManyVoiceSlots(usize),
-    /// A [`super::voicegroup::KeySplitVoice`] was built
-    /// ([`super::voicegroup::KeySplitVoice::new`]) or decoded with a table
-    /// longer than [`super::voicegroup::VOICE_SLOT_COUNT`] entries. Carries
-    /// the table length found.
+    /// A key-split table exceeds [`super::voicegroup::VOICE_SLOT_COUNT`] entries. The
+    /// value is the table length.
     KeySplitTableTooLong(usize),
-    /// A [`super::song::Song`] was built ([`super::song::Song::new`]) with
-    /// more tracks than the encoding's `u8` track count can describe.
-    /// Carries the track count found.
+    /// A song has more tracks than its `u8` wire count can encode. The value is the
+    /// track count.
     TooManyTracks(usize),
-    /// A [`super::song::Song`] track was built with more events than the
-    /// encoding's `u32` per-track event count can describe. Carries the
-    /// event count found.
+    /// A song track has more events than its `u32` wire count can encode. The value is
+    /// the event count.
     TooManyEvents(usize),
-    /// A [`super::sample::DirectSoundSample`] was built
-    /// ([`super::sample::DirectSoundSample::new`]) with more samples than the
-    /// encoding's `u32` length field can describe. Carries the sample count
-    /// found.
+    /// A `DirectSound` sample has more values than its `u32` wire length can encode. The
+    /// value is the sample count.
     SampleTooLong(usize),
-    /// A [`super::sample::DirectSoundSample`] was built
-    /// ([`super::sample::DirectSoundSample::new`]) or decoded with a `Some`
-    /// loop start at or past its PCM payload's length — upstream's mixer
-    /// computes the loop region's length as `size - loopStart`
-    /// (`pokeemerald/src/m4a_1.s`), so a looping region must be nonempty:
-    /// `loop_start < sample_count`. Carries the offending loop start and the
-    /// sample count it was checked against.
+    /// A loop start is not before the end of its PCM payload.
+    ///
+    /// Upstream computes the loop length as `size - loopStart`, so a valid
+    /// loop must contain at least one sample (`pokeemerald/src/m4a_1.s`).
     LoopStartOutOfRange { loop_start: u32, sample_count: u32 },
-    /// A [`super::voicegroup::DirectSoundVoice`]'s pan override was
-    /// `Some(0)`, which the wire format cannot distinguish from `None` (the
-    /// `0` byte is the no-override sentinel, mirroring upstream's own `0`
-    /// vs `0x80 | pan` operand encoding — see
-    /// [`super::voicegroup::DirectSoundVoice::pan`]). Rejected at
-    /// [`super::voicegroup::VoiceGroup::new`] so the value cannot silently
-    /// decay to `None` across a round trip.
+    /// A zero pan override cannot round-trip because zero encodes no override.
     PanOverrideZero,
-    /// A MEMACC song event's operation byte was not one this format
-    /// defines ([`super::song::MemAccOp`] `0..=5` for
-    /// [`super::song::SongEvent::MemAcc`],
-    /// [`super::song::MemAccCondition`] `6..=17` for
-    /// [`super::song::SongEvent::MemAccBranch`]). Carries the offending
-    /// byte.
+    /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
+    /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
-    /// Decoding finished with unread bytes still in the buffer — a corrupt
-    /// payload, or one written by a newer producer whose extra fields this
-    /// reader would otherwise silently ignore. Carries the number of
-    /// trailing bytes.
+    /// A decoded value did not consume the complete payload. The value is the number
+    /// of trailing bytes.
     TrailingBytes(usize),
 }
 
