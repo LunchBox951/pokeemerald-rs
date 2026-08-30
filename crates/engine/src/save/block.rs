@@ -27,6 +27,9 @@ const VARS_OFFSET: usize = 0x139C;
 const OBJECT_EVENTS_OFFSET: usize = 0xA30;
 const OBJECT_EVENT_LEN: usize = 0x24;
 const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
+// Reset clears every slot, then local initialization spawns the player before
+// map objects; first-inactive allocation therefore assigns slot 0
+// (event_object_movement.c:1199-1204,1358-1375; overworld.c:2163-2177).
 const PLAYER_OBJECT_EVENT_INDEX: usize = 0;
 const PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET: usize = OBJECT_EVENTS_OFFSET
     + PLAYER_OBJECT_EVENT_INDEX * OBJECT_EVENT_LEN
