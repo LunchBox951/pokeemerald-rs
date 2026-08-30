@@ -1,44 +1,30 @@
-//! A parser for upstream's JASC-PAL palette files
-//! (`pokeemerald/data/tilesets/**/palettes/*.pal`,
-//! `pokeemerald/graphics/**/*.pal`) — Paint Shop Pro's plain-text palette
-//! format, and genuinely trivial, as the issue anticipated: a fixed
-//! 3-line header followed by one `"R G B"` line per colour, each channel
-//! `0..=255`.
-//!
-//! Example (`pokeemerald/data/tilesets/primary/general/palettes/00.pal`):
-//!
-//! ```text
-//! JASC-PAL
-//! 0100
-//! 16
-//! 24 41 82
-//! 255 255 255
-//! ...
-//! ```
-//!
-//! Colours decode to GBA-native BGR555 (the packed `u16` format the real
-//! console/`.gbapal` files use: bits 0-4 red, 5-9 green, 10-14 blue, top
-//! bit unused), via [`to_gba555`] — an 8-bit channel maps to 5 bits by
-//! taking its top 5 bits (`channel >> 3`), matching upstream's own
-//! `gbagfx` palette conversion.
+//! JASC-PAL parsing and GBA-native BGR555 conversion via
+//! [`Rgb888::to_gba555`].
 
 use std::fmt;
+
+const JASC_PAL_MAGIC: &str = "JASC-PAL";
+const JASC_PAL_VERSION: &str = "0100";
+const RGB_CHANNEL_MIN: u16 = u8::MIN as u16;
+const RGB_CHANNEL_MAX: u16 = u8::MAX as u16;
+const BGR555_CHANNEL_BITS: u32 = 5;
+const RGB888_TO_BGR555_SHIFT: u32 = u8::BITS - BGR555_CHANNEL_BITS;
+const BGR555_GREEN_SHIFT: u32 = BGR555_CHANNEL_BITS;
+const BGR555_BLUE_SHIFT: u32 = BGR555_CHANNEL_BITS * 2;
 
 /// An error produced while parsing a JASC-PAL file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JascPalError {
-    /// The first line was not exactly `JASC-PAL`.
+    /// The magic header is missing or invalid.
     BadMagic,
-    /// The second line was not exactly `0100` (the only version upstream's
-    /// files use).
+    /// The palette version is unsupported.
     UnsupportedVersion,
-    /// The third line (colour count) was missing or not a valid integer.
+    /// The declared color count is missing or invalid.
     BadColorCount,
-    /// Fewer colour lines were present than the header's count declared.
+    /// The file contains fewer colors than it declares.
     TooFewColors { expected: usize, found: usize },
-    /// A colour line was not exactly three whitespace-separated `0..=255`
-    /// integers. Carries the offending line (1-based, counting from the
-    /// first colour line).
+    /// A color entry is not three RGB channels in the supported range. The
+    /// contained index is one-based within the color entries.
     BadColorLine(usize),
 }
 
@@ -61,71 +47,85 @@ impl fmt::Display for JascPalError {
 
 impl std::error::Error for JascPalError {}
 
-/// One decoded colour: 8-bit-per-channel RGB, exactly as written in the
-/// `.pal` file.
+/// An eight-bit-per-channel RGB color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb888 {
-    /// Red, `0..=255`.
+    /// Red channel.
     pub r: u8,
-    /// Green, `0..=255`.
+    /// Green channel.
     pub g: u8,
-    /// Blue, `0..=255`.
+    /// Blue channel.
     pub b: u8,
 }
 
 impl Rgb888 {
-    /// Convert to GBA-native packed BGR555 (see the module docs).
+    /// Packs this color as GBA-native BGR555.
     #[must_use]
     pub const fn to_gba555(self) -> u16 {
-        let r = (self.r >> 3) as u16;
-        let g = (self.g >> 3) as u16;
-        let b = (self.b >> 3) as u16;
-        r | (g << 5) | (b << 10)
+        let red = (self.r >> RGB888_TO_BGR555_SHIFT) as u16;
+        let green = (self.g >> RGB888_TO_BGR555_SHIFT) as u16;
+        let blue = (self.b >> RGB888_TO_BGR555_SHIFT) as u16;
+
+        red | (green << BGR555_GREEN_SHIFT) | (blue << BGR555_BLUE_SHIFT)
     }
 }
 
-/// Parse a JASC-PAL file's text into its colours.
+/// Parses the colors declared by a JASC-PAL palette.
 ///
-/// Accepts either `\n` or `\r\n` line endings (upstream's files use `\r\n`).
+/// Both LF and CRLF line endings are accepted.
 ///
 /// # Errors
 ///
-/// See [`JascPalError`]'s variants.
+/// Returns [`JascPalError`] when the header, count, or a declared color is
+/// invalid.
 pub fn parse(text: &str) -> Result<Vec<Rgb888>, JascPalError> {
     let mut lines = text.lines();
 
-    if lines.next().map(str::trim) != Some("JASC-PAL") {
+    if lines.next().map(str::trim) != Some(JASC_PAL_MAGIC) {
         return Err(JascPalError::BadMagic);
     }
-    if lines.next().map(str::trim) != Some("0100") {
+    if lines.next().map(str::trim) != Some(JASC_PAL_VERSION) {
         return Err(JascPalError::UnsupportedVersion);
     }
-    let count: usize = lines
+    let declared_color_count: usize = lines
         .next()
-        .and_then(|l| l.trim().parse().ok())
+        .and_then(|line| line.trim().parse().ok())
         .ok_or(JascPalError::BadColorCount)?;
 
-    let mut colors = Vec::with_capacity(count);
-    for (i, line) in lines.by_ref().take(count).enumerate() {
-        let mut parts = line.split_whitespace();
-        let (Some(r), Some(g), Some(b), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            return Err(JascPalError::BadColorLine(i + 1));
-        };
-        let (Ok(r), Ok(g), Ok(b)) = (r.parse::<u8>(), g.parse::<u8>(), b.parse::<u8>()) else {
-            return Err(JascPalError::BadColorLine(i + 1));
-        };
-        colors.push(Rgb888 { r, g, b });
+    let mut colors = Vec::with_capacity(declared_color_count);
+    for (color_index, line) in lines.by_ref().take(declared_color_count).enumerate() {
+        let color = parse_color(line).ok_or(JascPalError::BadColorLine(color_index + 1))?;
+        colors.push(color);
     }
 
-    if colors.len() != count {
+    if colors.len() != declared_color_count {
         return Err(JascPalError::TooFewColors {
-            expected: count,
+            expected: declared_color_count,
             found: colors.len(),
         });
     }
     Ok(colors)
+}
+
+fn parse_color(line: &str) -> Option<Rgb888> {
+    let mut channels = line.split_whitespace();
+    let red = parse_channel(channels.next()?)?;
+    let green = parse_channel(channels.next()?)?;
+    let blue = parse_channel(channels.next()?)?;
+
+    channels.next().is_none().then_some(Rgb888 {
+        r: red,
+        g: green,
+        b: blue,
+    })
+}
+
+fn parse_channel(text: &str) -> Option<u8> {
+    let channel = text.parse::<u16>().ok()?;
+    if !(RGB_CHANNEL_MIN..=RGB_CHANNEL_MAX).contains(&channel) {
+        return None;
+    }
+    u8::try_from(channel).ok()
 }
 
 #[cfg(test)]
@@ -180,6 +180,12 @@ mod tests {
     }
 
     #[test]
+    fn rejects_color_channel_above_rgb888_range() {
+        let err = parse("JASC-PAL\r\n0100\r\n1\r\n256 0 0\r\n").unwrap_err();
+        assert_eq!(err, JascPalError::BadColorLine(1));
+    }
+
+    #[test]
     fn white_converts_to_max_gba555() {
         assert_eq!(
             Rgb888 {
@@ -199,15 +205,14 @@ mod tests {
 
     #[test]
     fn upstream_first_color_converts_as_expected() {
-        // 24 41 82 -> channels >> 3 = (3, 5, 10).
+        const EXPECTED_BGR555: u16 = 0b0_01010_00101_00011;
+
         let packed = Rgb888 {
             r: 24,
             g: 41,
             b: 82,
         }
         .to_gba555();
-        assert_eq!(packed & 0x1F, 3);
-        assert_eq!((packed >> 5) & 0x1F, 5);
-        assert_eq!((packed >> 10) & 0x1F, 10);
+        assert_eq!(packed, EXPECTED_BGR555);
     }
 }
