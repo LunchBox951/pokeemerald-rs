@@ -843,10 +843,10 @@ mod tests {
         is_scoreable_effect, EFFECT_HIT,
     };
     use crate::battle::opponent_ai::EnemyAction;
-    use crate::damage::BattleRng;
     use crate::dex::Dex;
     use crate::error::BattleError;
     use crate::pokemon::{BattlePokemon, Ivs};
+    use crate::script_rng::SequenceRng;
     use assets::trainers::AiFlags;
     use assets::{MoveId, SpeciesId};
 
@@ -864,29 +864,6 @@ mod tests {
         AiFlags::CHECK_BAD_MOVE
             .union(AiFlags::TRY_TO_FAINT)
             .union(AiFlags::CHECK_VIABILITY)
-    }
-
-    struct SequenceRng {
-        values: Vec<u16>,
-        index: usize,
-    }
-    impl SequenceRng {
-        fn new(values: impl IntoIterator<Item = u16>) -> Self {
-            Self {
-                values: values.into_iter().collect(),
-                index: 0,
-            }
-        }
-    }
-    impl BattleRng for SequenceRng {
-        fn next_u16(&mut self) -> u16 {
-            let v = *self
-                .values
-                .get(self.index)
-                .expect("SequenceRng exhausted -- the AI drew more than the test allows");
-            self.index += 1;
-            v
-        }
     }
 
     fn mon(species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
@@ -947,7 +924,7 @@ mod tests {
                 .unwrap(),
             EnemyAction::Struggle
         );
-        assert_eq!(rng.index, 0, "AreAllMovesUnusable draws nothing");
+        assert_eq!(rng.draws(), 0, "AreAllMovesUnusable draws nothing");
     }
 
     /// The opening turn of the real Route 103 fight, player-picked-Torchic
@@ -974,7 +951,7 @@ mod tests {
         let action =
             choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
                 .unwrap();
-        assert_eq!(rng.index, 6, "4 setup + 1 AI_CV_AttackDown + 1 tie-break");
+        assert_eq!(rng.draws(), 6, "4 setup + 1 AI_CV_AttackDown + 1 tie-break");
         // Growl took -2, so Tackle (still 100) is the sole best move and the
         // tie-break is taken modulo 1.
         assert_eq!(action, EnemyAction::Move(0));
@@ -991,7 +968,11 @@ mod tests {
         let action =
             choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
                 .unwrap();
-        assert_eq!(rng.index, 5, "4 setup + 0 AI_CV_DefenseDown + 1 tie-break");
+        assert_eq!(
+            rng.draws(),
+            5,
+            "4 setup + 0 AI_CV_DefenseDown + 1 tie-break"
+        );
         // Nothing moved either score, so both slots tie at 100 and the
         // tie-break picks among two: `0 % 2 == 0`.
         assert_eq!(action, EnemyAction::Move(0));
@@ -1048,7 +1029,7 @@ mod tests {
             choose_trainer_action(&Dex::new(), &enemy, &player, flags, 0, &mut rng).unwrap(),
             EnemyAction::Move(1)
         );
-        assert_eq!(rng.index, 6);
+        assert_eq!(rng.draws(), 6);
 
         // Turn 2 (`battleTurnCounter == 1`): `if_not_equal 0` ends the
         // script before its roll, so only setup + tie-break remain.
@@ -1057,7 +1038,7 @@ mod tests {
             choose_trainer_action(&Dex::new(), &enemy, &player, flags, 1, &mut rng).unwrap(),
             EnemyAction::Move(0)
         );
-        assert_eq!(rng.index, 5);
+        assert_eq!(rng.draws(), 5);
     }
 
     #[test]
@@ -1075,7 +1056,7 @@ mod tests {
             EnemyAction::Move(1),
             "the spent slot scores 0, so the surviving slot is the only candidate"
         );
-        assert_eq!(rng.index, 6);
+        assert_eq!(rng.draws(), 6);
     }
 
     /// `AI_CalcDmg` calls the *same* `CalculateBaseDamage` the real damage

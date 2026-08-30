@@ -321,13 +321,17 @@ impl<'a> BorderGrid<'a> {
     /// The decoded border cell covering world position `(x, y)`, per
     /// upstream `GetBorderBlockAt`'s `((x + 1) & 1) + (((y + 1) & 1) << 1)`
     /// indexing into the fixed [`BORDER_WIDTH`] x [`BORDER_HEIGHT`] block.
+    /// The additions wrap before masking, so this holds for every `i32`
+    /// coordinate (including the extremes) without overflow: `& 1` only
+    /// ever observes bit 0, which wrapping addition preserves identically
+    /// to non-overflowing addition.
     // `& 1` (and the subsequent `<< 1` of another `& 1`) always yields a
     // small non-negative value (`0..=3` overall) regardless of `x`/`y`'s
     // sign, so the `i32 -> usize` cast never loses information.
     #[allow(clippy::cast_sign_loss)]
     #[must_use]
     pub fn cell_at(&self, x: i32, y: i32) -> MetatileCell {
-        let index = (((x + 1) & 1) + (((y + 1) & 1) << 1)) as usize;
+        let index = ((x.wrapping_add(1) & 1) + ((y.wrapping_add(1) & 1) << 1)) as usize;
         let offset = index * 2;
         let raw = u16::from_le_bytes([self.bytes[offset], self.bytes[offset + 1]]);
         MetatileCell::from_raw(raw)
@@ -4102,6 +4106,33 @@ mod tests {
         assert_eq!(grid.cell_at(1, 0), cells[2]);
         assert_eq!(grid.cell_at(0, 1), cells[1]);
         assert_eq!(grid.cell_at(1, 1), cells[0]);
+    }
+
+    #[test]
+    fn border_grid_cell_at_does_not_overflow_at_extreme_coordinates() {
+        // Same setup as `border_grid_indexes_by_parity_like_upstream`: the
+        // parity index must keep matching `((x+1)&1) + (((y+1)&1)<<1)` at
+        // i32::MIN/MAX, which requires wrapping (not panicking) on the
+        // internal `+ 1`. `i32::MIN` is even (parity of 0), `i32::MAX` is
+        // odd (parity of 1), so each extreme stands in for the small
+        // coordinate of matching parity.
+        let raws: [u16; 4] = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mut bytes = Vec::new();
+        for raw in raws {
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+        let grid = BorderGrid::new(&bytes).unwrap();
+        let cells: Vec<_> = grid.cells().collect();
+
+        // i32::MIN behaves like x/y = 0 (even); i32::MAX behaves like x/y = 1 (odd).
+        assert_eq!(grid.cell_at(i32::MIN, i32::MIN), cells[3]); // like (0, 0)
+        assert_eq!(grid.cell_at(i32::MAX, i32::MAX), cells[0]); // like (1, 1)
+        assert_eq!(grid.cell_at(i32::MIN, i32::MAX), cells[1]); // like (0, 1)
+        assert_eq!(grid.cell_at(i32::MAX, i32::MIN), cells[2]); // like (1, 0)
+        assert_eq!(grid.cell_at(i32::MAX, 0), cells[2]); // x extreme only, like (1, 0)
+        assert_eq!(grid.cell_at(0, i32::MAX), cells[1]); // y extreme only, like (0, 1)
+        assert_eq!(grid.cell_at(i32::MIN, 0), cells[3]); // x extreme only, like (0, 0)
+        assert_eq!(grid.cell_at(0, i32::MIN), cells[3]); // y extreme only, like (0, 0)
     }
 
     #[test]
