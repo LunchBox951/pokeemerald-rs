@@ -3,8 +3,7 @@ use std::ops::Range;
 use super::{
     compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon, hp_hidden_by_load,
     merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs, zero_ev_max_hp, PartyError,
-    ABILITY_SLOT_SHIFT, ATTACK_PP_OFFSET, GROWTH_EXPERIENCE, GROWTH_FRIENDSHIP, GROWTH_PP_BONUSES,
-    GROWTH_SPECIES, IS_EGG_BIT, IV_FIELD_MASK, IV_FIELD_WIDTH, MAIL_NONE, MISC_IV_WORD,
+    MAIL_NONE,
 };
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
@@ -22,7 +21,19 @@ const PECK: assets::MoveId = assets::MoveId(64);
 const FIXTURE_PERSONALITY: u32 = 0x1234_ABCD;
 const FIXTURE_ORIGINAL_TRAINER_ID: u32 = 0x89AB_CDEF;
 
-const GROWTH_HELD_ITEM: Range<usize> = 2..4;
+const EXPECTED_GROWTH_SPECIES: Range<usize> = 0..2;
+const EXPECTED_GROWTH_HELD_ITEM: Range<usize> = 2..4;
+const EXPECTED_GROWTH_EXPERIENCE: Range<usize> = 4..8;
+const EXPECTED_GROWTH_PP_BONUSES: usize = 8;
+const EXPECTED_GROWTH_FRIENDSHIP: usize = 9;
+const EXPECTED_ATTACK_PP_OFFSET: usize = 8;
+const EXPECTED_MISC_IV_WORD: Range<usize> = 4..8;
+
+const EXPECTED_IV_FIELD_WIDTH: usize = 5;
+const EXPECTED_IV_FIELD_MASK: u32 = 0x1F;
+const EXPECTED_IS_EGG_BIT: u32 = 1 << 30;
+const EXPECTED_ABILITY_SLOT_SHIFT: usize = 31;
+
 const HP_EV_INDEX: usize = 0;
 const ATTACK_EV_INDEX: usize = 1;
 const DEFENSE_EV_INDEX: usize = 2;
@@ -69,13 +80,28 @@ fn ivs_pack_into_five_bit_fields_in_declaration_order() {
         sp_defense: 6,
     };
     let word = pack_ivs(ivs);
-    assert_eq!(word & IV_FIELD_MASK, 1);
-    assert_eq!((word >> IV_FIELD_WIDTH) & IV_FIELD_MASK, 2);
-    assert_eq!((word >> (2 * IV_FIELD_WIDTH)) & IV_FIELD_MASK, 3);
-    assert_eq!((word >> (3 * IV_FIELD_WIDTH)) & IV_FIELD_MASK, 4);
-    assert_eq!((word >> (4 * IV_FIELD_WIDTH)) & IV_FIELD_MASK, 5);
-    assert_eq!((word >> (5 * IV_FIELD_WIDTH)) & IV_FIELD_MASK, 6);
-    assert_eq!(word >> (6 * IV_FIELD_WIDTH), 0);
+    assert_eq!(word & EXPECTED_IV_FIELD_MASK, 1);
+    assert_eq!(
+        (word >> EXPECTED_IV_FIELD_WIDTH) & EXPECTED_IV_FIELD_MASK,
+        2
+    );
+    assert_eq!(
+        (word >> (2 * EXPECTED_IV_FIELD_WIDTH)) & EXPECTED_IV_FIELD_MASK,
+        3
+    );
+    assert_eq!(
+        (word >> (3 * EXPECTED_IV_FIELD_WIDTH)) & EXPECTED_IV_FIELD_MASK,
+        4
+    );
+    assert_eq!(
+        (word >> (4 * EXPECTED_IV_FIELD_WIDTH)) & EXPECTED_IV_FIELD_MASK,
+        5
+    );
+    assert_eq!(
+        (word >> (5 * EXPECTED_IV_FIELD_WIDTH)) & EXPECTED_IV_FIELD_MASK,
+        6
+    );
+    assert_eq!(word >> (6 * EXPECTED_IV_FIELD_WIDTH), 0);
     assert_eq!(unpack_ivs(word), ivs);
 }
 
@@ -253,7 +279,7 @@ fn the_egg_and_ability_bits_do_not_leak_into_the_ivs() {
         sp_attack: 31,
         sp_defense: 31,
     };
-    let egg_and_ability_bits = IS_EGG_BIT | (1 << ABILITY_SLOT_SHIFT);
+    let egg_and_ability_bits = EXPECTED_IS_EGG_BIT | (1 << EXPECTED_ABILITY_SLOT_SHIFT);
     assert_eq!(unpack_ivs(pack_ivs(ivs) | egg_and_ability_bits), ivs);
 }
 
@@ -373,7 +399,7 @@ fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
     let treecko = dex.species(mon.species()).unwrap();
     let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
     let mut substructures = saved.box_data.substructures().unwrap();
-    substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&level_13.to_le_bytes());
+    substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_13.to_le_bytes());
     saved.box_data.set_substructures(&substructures);
 
     let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
@@ -390,7 +416,7 @@ fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
     let torchic = dex.species(mon.species()).unwrap();
     let level_16 = assets::experience_for_level(torchic.growth_rate, 16).unwrap();
     let mut substructures = saved.box_data.substructures().unwrap();
-    substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&level_16.to_le_bytes());
+    substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_16.to_le_bytes());
     saved.box_data.set_substructures(&substructures);
 
     let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
@@ -424,12 +450,20 @@ fn save_fields_are_encoded_at_their_layout_offsets() {
 
     let substructures = saved.box_data.substructures().unwrap();
     assert_eq!(
-        u16::from_le_bytes(substructures.growth[GROWTH_SPECIES].try_into().unwrap()),
+        u16::from_le_bytes(
+            substructures.growth[EXPECTED_GROWTH_SPECIES]
+                .try_into()
+                .unwrap()
+        ),
         mon.species().0
     );
     let treecko = dex.species(mon.species()).unwrap();
     assert_eq!(
-        u32::from_le_bytes(substructures.growth[GROWTH_EXPERIENCE].try_into().unwrap()),
+        u32::from_le_bytes(
+            substructures.growth[EXPECTED_GROWTH_EXPERIENCE]
+                .try_into()
+                .unwrap()
+        ),
         mon.experience(),
         "the growth word holds the mon's own accumulated experience"
     );
@@ -439,7 +473,7 @@ fn save_fields_are_encoded_at_their_layout_offsets() {
         "a freshly built mon begins at its level's growth threshold"
     );
     assert_eq!(
-        substructures.growth[GROWTH_FRIENDSHIP],
+        substructures.growth[EXPECTED_GROWTH_FRIENDSHIP],
         treecko.base_friendship
     );
     assert_eq!(
@@ -455,7 +489,10 @@ fn save_fields_are_encoded_at_their_layout_offsets() {
         ),
         mon.moves()[0].move_id.0
     );
-    assert_eq!(substructures.attacks[ATTACK_PP_OFFSET], mon.moves()[0].pp);
+    assert_eq!(
+        substructures.attacks[EXPECTED_ATTACK_PP_OFFSET],
+        mon.moves()[0].pp
+    );
 }
 
 #[test]
@@ -508,7 +545,7 @@ fn pp_ups_survive_the_round_trip_byte_for_byte() {
 
     let saved = to_save_pokemon(&dex, &mon);
     assert_eq!(
-        saved.box_data.substructures().unwrap().growth[GROWTH_PP_BONUSES],
+        saved.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_PP_BONUSES],
         bonuses.bits(),
         "the growth substructure stores ppBonuses itself"
     );
@@ -529,7 +566,7 @@ fn pp_ups_survive_the_round_trip_byte_for_byte() {
 
     let resaved = to_save_pokemon(&dex, &restored);
     assert_eq!(
-        resaved.box_data.substructures().unwrap().growth[GROWTH_PP_BONUSES],
+        resaved.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_PP_BONUSES],
         bonuses.bits(),
         "re-serialising must emit the identical byte, not zero"
     );
@@ -565,7 +602,7 @@ fn pp_bonus_bits_for_unknown_slots_are_not_stripped() {
             .box_data
             .substructures()
             .unwrap()
-            .growth[GROWTH_PP_BONUSES],
+            .growth[EXPECTED_GROWTH_PP_BONUSES],
         0b1111_1111
     );
 }
@@ -663,8 +700,9 @@ fn stored_record_with_retained_fields() -> Pokemon {
     let mut record = to_save_pokemon(&Dex::new(), &treecko_fixture());
 
     let mut substructures = record.box_data.substructures().unwrap();
-    substructures.growth[GROWTH_HELD_ITEM].copy_from_slice(&RETAINED_HELD_ITEM.to_le_bytes());
-    substructures.growth[GROWTH_FRIENDSHIP] = RETAINED_FRIENDSHIP;
+    substructures.growth[EXPECTED_GROWTH_HELD_ITEM]
+        .copy_from_slice(&RETAINED_HELD_ITEM.to_le_bytes());
+    substructures.growth[EXPECTED_GROWTH_FRIENDSHIP] = RETAINED_FRIENDSHIP;
     substructures.evs_and_condition = RETAINED_EVS_AND_CONDITION;
     substructures.misc[MISC_POKERUS] = RETAINED_POKERUS;
     substructures.misc[MISC_MET_LOCATION] = RETAINED_MET_LOCATION;
@@ -713,15 +751,15 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
         .substructures()
         .expect("the merge must leave the checksum valid");
     assert_eq!(
-        &after.growth[GROWTH_HELD_ITEM], &before.growth[GROWTH_HELD_ITEM],
+        &after.growth[EXPECTED_GROWTH_HELD_ITEM], &before.growth[EXPECTED_GROWTH_HELD_ITEM],
         "heldItem is the save's"
     );
     assert_eq!(
-        after.growth[GROWTH_FRIENDSHIP], RETAINED_FRIENDSHIP,
+        after.growth[EXPECTED_GROWTH_FRIENDSHIP], RETAINED_FRIENDSHIP,
         "accumulated friendship is the save's, not the species' base value"
     );
     assert_ne!(
-        after.growth[GROWTH_FRIENDSHIP],
+        after.growth[EXPECTED_GROWTH_FRIENDSHIP],
         dex.species(lead.species()).unwrap().base_friendship,
         "fixture sanity: a re-derived friendship would differ from this"
     );
@@ -802,7 +840,7 @@ fn sub_level_experience_does_not_flatten_the_retained_stat_block() {
     assert_ne!(
         lead.experience(),
         u32::from_le_bytes(
-            stored.box_data.substructures().unwrap().growth[GROWTH_EXPERIENCE]
+            stored.box_data.substructures().unwrap().growth[EXPECTED_GROWTH_EXPERIENCE]
                 .try_into()
                 .unwrap()
         ),
@@ -817,7 +855,7 @@ fn sub_level_experience_does_not_flatten_the_retained_stat_block() {
     );
     let after = merged.box_data.substructures().unwrap();
     assert_eq!(
-        u32::from_le_bytes(after.growth[GROWTH_EXPERIENCE].try_into().unwrap()),
+        u32::from_le_bytes(after.growth[EXPECTED_GROWTH_EXPERIENCE].try_into().unwrap()),
         lead.experience(),
         "the awarded experience is saved"
     );
@@ -889,7 +927,7 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     let after = merged.box_data.substructures().unwrap();
 
     assert_eq!(
-        u32::from_le_bytes(after.growth[GROWTH_EXPERIENCE].try_into().unwrap()),
+        u32::from_le_bytes(after.growth[EXPECTED_GROWTH_EXPERIENCE].try_into().unwrap()),
         lead.experience(),
         "the growth word carries the experience the battle awarded"
     );
@@ -957,8 +995,8 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
         "moves and per-slot PP, slot for slot"
     );
     assert_ne!(
-        &after.attacks[ATTACK_PP_OFFSET..],
-        &stored.box_data.substructures().unwrap().attacks[ATTACK_PP_OFFSET..],
+        &after.attacks[EXPECTED_ATTACK_PP_OFFSET..],
+        &stored.box_data.substructures().unwrap().attacks[EXPECTED_ATTACK_PP_OFFSET..],
         "fixture sanity: the spent PP is real"
     );
 
@@ -1027,8 +1065,13 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     let dex = Dex::new();
     let mut stored = stored_record_with_retained_fields();
     let mut substructures = stored.box_data.substructures().unwrap();
-    let iv_word = u32::from_le_bytes(substructures.misc[MISC_IV_WORD].try_into().unwrap());
-    substructures.misc[MISC_IV_WORD].copy_from_slice(&(iv_word | IS_EGG_BIT).to_le_bytes());
+    let iv_word = u32::from_le_bytes(
+        substructures.misc[EXPECTED_MISC_IV_WORD]
+            .try_into()
+            .unwrap(),
+    );
+    substructures.misc[EXPECTED_MISC_IV_WORD]
+        .copy_from_slice(&(iv_word | EXPECTED_IS_EGG_BIT).to_le_bytes());
     stored.box_data.set_substructures(&substructures);
 
     let lead = from_save_pokemon(&dex, &stored)
@@ -1042,13 +1085,13 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     );
 
     let merged_word = u32::from_le_bytes(
-        merged.box_data.substructures().unwrap().misc[MISC_IV_WORD]
+        merged.box_data.substructures().unwrap().misc[EXPECTED_MISC_IV_WORD]
             .try_into()
             .unwrap(),
     );
     assert_eq!(
-        merged_word & IS_EGG_BIT,
-        IS_EGG_BIT,
+        merged_word & EXPECTED_IS_EGG_BIT,
+        EXPECTED_IS_EGG_BIT,
         "the egg bit this port does not model stays exactly as it was"
     );
     assert_eq!(merged_word >> 31, 1, "abilityNum is the battler's");
@@ -1316,7 +1359,7 @@ fn an_inconsistent_level_byte_still_saves_a_full_health_ev_trained_lead_at_full(
 
     let level_14 = assets::experience_for_level(treecko.growth_rate, 14).unwrap();
     let mut substructures = stored.box_data.substructures().unwrap();
-    substructures.growth[GROWTH_EXPERIENCE].copy_from_slice(&level_14.to_le_bytes());
+    substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_14.to_le_bytes());
     stored.box_data.set_substructures(&substructures);
 
     let lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
