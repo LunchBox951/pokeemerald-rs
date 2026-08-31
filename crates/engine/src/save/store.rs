@@ -65,7 +65,7 @@ const ERASED_FLASH_BYTE: u8 = u8::MAX;
 pub enum SaveStatus {
     /// Neither slot contains a signed sector.
     Empty,
-    /// The selected slot is intact.
+    /// At least one slot is intact and the other is intact or empty.
     Ok,
     /// Neither slot is intact and at least one is non-empty.
     Corrupt,
@@ -436,7 +436,8 @@ impl SaveStore {
         copied
     }
 
-    /// Loads the best available state and reports the selected slot's health.
+    /// Validates both slots and loads payloads selected by the resolved
+    /// counter's parity.
     ///
     /// The resolved counter's parity selects the slot to copy, even if a
     /// checksum-valid payload has a corrupt footer counter that makes this
