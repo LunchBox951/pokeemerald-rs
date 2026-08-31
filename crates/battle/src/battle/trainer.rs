@@ -560,33 +560,13 @@ mod tests {
         roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerPartyMon,
         DEFAULT_MONEY_VALUE, SHINY_ODDS,
     };
-    use crate::damage::BattleRng;
     use crate::dex::Dex;
+    use crate::script_rng::SequenceRng;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
 
     /// `TRAINER_MAY_ROUTE_103_MUDKIP` (`include/constants/opponents.h:533`).
     const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
-
-    struct SequenceRng {
-        values: Vec<u16>,
-        index: usize,
-    }
-    impl SequenceRng {
-        fn new(values: impl IntoIterator<Item = u16>) -> Self {
-            Self {
-                values: values.into_iter().collect(),
-                index: 0,
-            }
-        }
-    }
-    impl BattleRng for SequenceRng {
-        fn next_u16(&mut self) -> u16 {
-            let v = self.values[self.index];
-            self.index += 1;
-            v
-        }
-    }
 
     #[test]
     fn a_zero_iv_party_entry_really_means_all_zero_ivs() {
@@ -618,7 +598,7 @@ mod tests {
             (plain >> 16) as u16,
         ]);
         assert_eq!(roll_non_shiny_ot_id(PERSONALITY, &mut rng), plain);
-        assert_eq!(rng.index, 4, "two Random32 draws: one rejected, one kept");
+        assert_eq!(rng.draws(), 4, "two Random32 draws: one rejected, one kept");
     }
 
     #[test]
@@ -637,7 +617,8 @@ mod tests {
         )
         .expect("Treecko/Pound are dex-resident");
         assert_eq!(
-            rng.index, 2,
+            rng.draws(),
+            2,
             "personality and IVs are fixed; only the OT id draws"
         );
         assert_eq!(mon.personality(), 0x1234_5678);
@@ -660,7 +641,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, crate::error::BattleError::InvalidLevel(0));
-        assert_eq!(rng.index, 0, "validation runs ahead of the OT-id loop");
+        assert_eq!(rng.draws(), 0, "validation runs ahead of the OT-id loop");
     }
 
     #[test]
@@ -747,7 +728,11 @@ mod tests {
             &mut rng,
         )
         .expect("Treecko/Harden is a valid pairing -- only the turn engine refuses it");
-        assert_eq!(rng.index, 2, "the leak: draws are spent before the screen");
+        assert_eq!(
+            rng.draws(),
+            2,
+            "the leak: draws are spent before the screen"
+        );
         let player = crate::pokemon::BattlePokemon::new(
             &Dex::new(),
             SpeciesId(277),

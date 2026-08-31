@@ -1,280 +1,141 @@
-//! Error types for the `assets` crate.
+//! Errors for statically defined game data and decoded asset bytes.
 //!
-//! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library crates.
-//!
-//! **[`pack::PackError`](crate::pack::PackError) is a deliberate second
-//! enum**, not folded into [`AssetError`]. Several tables in this crate
-//! (`items::i`, and others alongside it) build their entries in `const fn`
-//! initializers that pattern-match a `Result<_, AssetError>` and `panic!`
-//! on `Err` (a transcription-error guard, evaluated at compile time). That
-//! requires the compiler to const-evaluate dropping the unmatched `Err`
-//! branch, which is only possible if every field `AssetError` can hold has
-//! a trivial (or `const`) destructor. A pack-loading error needs to carry
-//! owned, dynamic data — a [`PathBuf`](std::path::PathBuf) for "which file
-//! was missing", a `String` for "which runtime-supplied asset id wasn't
-//! found" — and both types have non-`const` destructors, so adding them to
-//! `AssetError` breaks every one of those `const fn` tables (`error[E0493]`).
-//! Keeping pack errors in their own type sidesteps that entirely, at the
-//! cost of two error enums instead of one.
+//! [`AssetError`] payloads do not require [`Drop`], so constant table
+//! initializers can reject invalid data during compilation. Runtime pack
+//! failures may require owned paths or messages and therefore remain in
+//! [`PackError`](crate::pack::PackError).
 
 use std::error::Error;
 use std::fmt;
 
 use crate::map_layouts::BORDER_CELLS;
 
-/// An error produced while accessing or decoding extracted game data.
+/// A typed asset lookup or validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
-    /// A raw type identifier did not correspond to any battle [`Type`].
-    ///
-    /// Carries the offending id. Upstream defines ids `0..=17` (with `9`,
-    /// `TYPE_MYSTERY`, reserved for the non-combat "???" type); anything else
-    /// is unknown.
-    ///
-    /// [`Type`]: crate::type_chart::Type
+    /// The contained battle type identifier does not name a modelled combat
+    /// [`Type`](crate::type_chart::Type).
     UnknownType(u8),
 
-    /// A [`SpeciesId`] fell outside the extracted `gSpeciesInfo` range.
-    ///
-    /// Carries the offending id. Valid ids are `0..`[`SpeciesTable::LEN`]
-    /// (`0` is the reserved `SPECIES_NONE` slot).
-    ///
-    /// [`SpeciesId`]: crate::species::SpeciesId
-    /// [`SpeciesTable::LEN`]: crate::species::SpeciesTable::LEN
+    /// The contained [`SpeciesId`](crate::species::SpeciesId) is outside an
+    /// asset table's species range.
     UnknownSpecies(u16),
 
-    /// A raw move id fell outside the `gBattleMoves` table.
-    ///
-    /// Carries the offending id. Upstream defines ids `0..MOVES_COUNT`
-    /// (`0..355`); anything else has no battle-data entry.
-    ///
-    /// [`MoveId`]: crate::battle_moves::MoveId
+    /// The contained [`MoveId`](crate::battle_moves::MoveId) is outside the
+    /// queried move table.
     UnknownMove(u16),
 
-    /// A raw `EVO_*` method id did not correspond to any modelled
-    /// [`EvoMethod`].
-    ///
-    /// Carries the offending id. Upstream defines methods `1..=15`
-    /// (`constants/pokemon.h`); `0` is the empty `{0, 0, 0}` filler slot and
-    /// anything else is unknown.
-    ///
-    /// [`EvoMethod`]: crate::evolution::EvoMethod
+    /// The contained evolution-method identifier does not name a modelled
+    /// [`EvoMethod`](crate::evolution::EvoMethod).
     UnknownEvolutionMethod(u16),
 
-    /// An [`ItemId`] fell outside the extracted `gItems` range.
-    ///
-    /// Carries the offending id. Valid ids are `0..`[`ItemTable::len`]
-    /// (`0..377`); anything else has no item-data entry.
-    ///
-    /// [`ItemId`]: crate::items::ItemId
-    /// [`ItemTable::len`]: crate::items::ItemTable::len
+    /// The contained [`ItemId`](crate::items::ItemId) is outside the item
+    /// table.
     UnknownItem(u16),
 
-    /// A raw `pocket` byte did not correspond to any [`Pocket`].
-    ///
-    /// Carries the offending id. Upstream defines `POCKET_*` values `0..=5`.
-    ///
-    /// [`Pocket`]: crate::items::Pocket
+    /// The contained identifier does not name a [`Pocket`](crate::items::Pocket).
     UnknownItemPocket(u8),
 
-    /// A raw `battleUsage` byte did not correspond to any [`BattleUsage`].
-    ///
-    /// Carries the offending id. Upstream defines `0` and `ITEM_B_USE_*`
-    /// (`1..=2`); anything else is unknown.
-    ///
-    /// [`BattleUsage`]: crate::items::BattleUsage
+    /// The contained identifier does not name a
+    /// [`BattleUsage`](crate::items::BattleUsage).
     UnknownItemBattleUsage(u8),
 
-    /// A TM/HM slot index fell outside the ordered TM/HM list.
-    ///
-    /// Carries the offending index. Valid indices are
-    /// `0..`[`TmHmLearnsets::SLOT_COUNT`] (`0..58`): TM01..TM50 then HM01..HM08.
-    ///
-    /// [`TmHmLearnsets::SLOT_COUNT`]: crate::tmhm_learnsets::TmHmLearnsets::SLOT_COUNT
+    /// The contained index is outside the ordered TM/HM slot list.
     UnknownTmHmSlot(usize),
 
-    /// A [`SpeciesId`] has no egg-move group in `gEggMoves`.
-    ///
-    /// Carries the queried species id. Only breeding base-forms appear in
-    /// `gEggMoves`; every other species (including `SPECIES_NONE`) is absent.
-    ///
-    /// [`SpeciesId`]: crate::species::SpeciesId
+    /// The contained [`SpeciesId`](crate::species::SpeciesId) is valid but has
+    /// no egg-move group.
     NoEggMoves(u16),
 
-    /// An [`AbilityId`] fell outside the extracted `gAbilityNames` /
-    /// `gAbilityDescriptions` range.
-    ///
-    /// Carries the offending id. Valid ids are `0..`[`Abilities::LEN`]
-    /// (`0..78`); `0` is the reserved `ABILITY_NONE` slot.
-    ///
-    /// [`AbilityId`]: crate::species::AbilityId
-    /// [`Abilities::LEN`]: crate::abilities::Abilities::LEN
+    /// The contained [`AbilityId`](crate::species::AbilityId) is outside the
+    /// ability tables.
     UnknownAbility(u16),
 
-    /// A level passed to an experience-curve lookup exceeded upstream
-    /// `MAX_LEVEL`.
-    ///
-    /// Carries the offending level. Valid levels are `0..=`[`MAX_LEVEL`].
-    ///
-    /// [`MAX_LEVEL`]: crate::experience::MAX_LEVEL
+    /// The contained level exceeds [`MAX_LEVEL`](crate::experience::MAX_LEVEL).
     InvalidLevel(u8),
 
-    /// A [`MapId`] name or [`WildEncounterHeader`] label did not match any
-    /// entry in `gWildMonHeaders`.
-    ///
-    /// Carries the offending name/label.
-    ///
-    /// [`MapId`]: crate::wild_encounters::MapId
-    /// [`WildEncounterHeader`]: crate::wild_encounters::WildEncounterHeader
+    /// The contained map name or label does not identify a
+    /// [`WildEncounterHeader`](crate::wild_encounters::WildEncounterHeader).
     UnknownMap(&'static str),
 
-    /// A [`TrainerId`] fell outside the extracted `gTrainers` range.
-    ///
-    /// Carries the offending id. Valid ids are `0..`[`TrainerTable::LEN`]
-    /// (`0..855`; `0` is `TRAINER_NONE`).
-    ///
-    /// [`TrainerId`]: crate::trainers::TrainerId
-    /// [`TrainerTable::LEN`]: crate::trainers::TrainerTable::LEN
+    /// The contained [`TrainerId`](crate::trainers::TrainerId) is outside the
+    /// trainer table.
     UnknownTrainer(u16),
 
-    /// A [`LayoutId`] did not match any entry in `gMapLayouts`.
-    ///
-    /// Carries the offending `LAYOUT_*` name.
-    ///
-    /// [`LayoutId`]: crate::map_layouts::LayoutId
+    /// The contained [`LayoutId`](crate::map_layouts::LayoutId) does not
+    /// identify a map layout.
     UnknownLayout(&'static str),
 
-    /// A caller-supplied `map.bin`-shaped buffer was too short for its
-    /// [`MapLayout`]'s `width * height`.
+    /// A layout grid buffer is shorter than its layout requires.
     ///
-    /// Carries the offending layout's `LAYOUT_*` name, the minimum expected
-    /// length (`width * height * 2`), and the buffer's actual length.
-    /// Grid bytes are never embedded in this crate (Discussion #71 policy
-    /// A) — they arrive from the local extract pack (issue #81) and are
-    /// validated by [`LayoutGrid::new`] at the point the caller hands them
-    /// in.
-    ///
-    /// [`MapLayout`]: crate::map_layouts::MapLayout
-    /// [`LayoutGrid::new`]: crate::map_layouts::LayoutGrid::new
+    /// Contains the layout name, minimum byte length, and actual byte length.
     LayoutGridTooShort(&'static str, usize, usize),
 
-    /// A caller-supplied `border.bin`-shaped buffer was not exactly
-    /// [`BORDER_CELLS`] `* 2` bytes.
+    /// A layout border buffer is not exactly [`BORDER_CELLS`] times two bytes.
     ///
-    /// Carries the buffer's actual length. Every upstream `border.bin` is
-    /// exactly 8 bytes; see [`BorderGrid::new`].
-    ///
-    /// [`BORDER_CELLS`]: crate::map_layouts::BORDER_CELLS
-    /// [`BorderGrid::new`]: crate::map_layouts::BorderGrid::new
+    /// Contains the actual byte length.
     LayoutBorderWrongSize(usize),
 
-    /// A [`MapId`] did not match any entry in the extracted map-header
-    /// table.
-    ///
-    /// Carries the offending `MAP_*` name. Distinct from [`AssetError::UnknownMap`]
-    /// (which is specifically about `gWildMonHeaders` lookups) so the two
-    /// tables' misses stay independently traceable.
-    ///
-    /// [`MapId`]: crate::wild_encounters::MapId
+    /// The contained [`MapId`](crate::wild_encounters::MapId) does not
+    /// identify a map header.
     UnknownMapHeader(&'static str),
 
-    /// A raw `WEATHER_*` id did not correspond to any modelled
+    /// The contained identifier does not name a
     /// [`Weather`](crate::map_headers::Weather).
-    ///
-    /// Carries the offending id.
     UnknownWeather(u8),
 
-    /// A raw `MAP_TYPE_*` id did not correspond to any modelled
+    /// The contained identifier does not name a
     /// [`MapType`](crate::map_headers::MapType).
-    ///
-    /// Carries the offending id.
     UnknownMapType(u8),
 
-    /// A raw `MAP_BATTLE_SCENE_*` id did not correspond to any modelled
+    /// The contained identifier does not name a
     /// [`BattleScene`](crate::map_headers::BattleScene).
-    ///
-    /// Carries the offending id.
     UnknownBattleScene(u8),
 
-    /// A raw `CONNECTION_*` id did not correspond to any modelled
+    /// The contained identifier does not name a map-connection
     /// [`Direction`](crate::map_headers::Direction).
-    ///
-    /// Carries the offending id.
     UnknownConnectionDirection(u8),
 
-    /// A [`MapId`] did not match any entry in the extracted map-events
-    /// table.
-    ///
-    /// Carries the offending `MAP_*` name. Distinct from
-    /// [`AssetError::UnknownMapHeader`] (which is specifically about the
-    /// header/connections table) so the two tables' misses stay
-    /// independently traceable.
-    ///
-    /// [`MapId`]: crate::wild_encounters::MapId
+    /// The contained [`MapId`](crate::wild_encounters::MapId) does not
+    /// identify a map-events entry.
     UnknownMapEvents(&'static str),
 
-    /// A raw `MOVEMENT_TYPE_*` id did not correspond to any modelled
+    /// The contained identifier does not name a
     /// [`MovementType`](crate::map_events::MovementType).
-    ///
-    /// Carries the offending id. Upstream defines ids `0..=0x50` (81
-    /// values, `constants/event_object_movement.h`).
     UnknownMovementType(u8),
 
-    /// A raw `TRAINER_TYPE_*` id did not correspond to any modelled
+    /// The contained identifier does not name a
     /// [`TrainerType`](crate::map_events::TrainerType).
-    ///
-    /// Carries the offending id. Upstream defines ids `0..=3`
-    /// (`constants/trainer_types.h`).
     UnknownTrainerType(u8),
 
-    /// A raw `BG_EVENT_PLAYER_FACING_*` id did not correspond to any
-    /// modelled [`FacingDirection`](crate::map_events::FacingDirection).
-    ///
-    /// Carries the offending id. Upstream defines ids `0..=4`
-    /// (`constants/event_bg.h`).
+    /// The contained identifier does not name a
+    /// [`FacingDirection`](crate::map_events::FacingDirection).
     UnknownFacingDirection(u8),
 
-    /// A raw `COORD_EVENT_WEATHER_*` id did not correspond to any modelled
+    /// The contained coordinate-event weather identifier does not name a
     /// [`CoordWeather`](crate::map_events::CoordWeather).
-    ///
-    /// Carries the offending id. Upstream defines this as a distinct,
-    /// smaller numbering from `WEATHER_*` (`constants/weather.h`) — see the
-    /// `map_events` module docs.
     UnknownCoordWeather(u8),
 
-    /// A raw metatile-attribute layer-type value (bits 12-15 of a
-    /// `metatile_attributes.bin` entry) did not correspond to any modelled
+    /// The contained metatile layer value does not name a
     /// [`MetatileLayerType`](crate::metatile_attributes::MetatileLayerType).
-    ///
-    /// Carries the offending value. Upstream defines `METATILE_LAYER_TYPE_*`
-    /// values `0..=2`; anything else has no modelled meaning (see
-    /// `crate::metatile_attributes`'s module docs).
     UnknownMetatileLayerType(u8),
 
-    /// A caller-supplied font glyph-sheet image wasn't exactly
-    /// [`SHEET_WIDTH`](crate::fonts::SHEET_WIDTH) x
-    /// [`SHEET_HEIGHT`](crate::fonts::SHEET_HEIGHT) pixels.
+    /// A font glyph sheet has dimensions other than
+    /// [`SHEET_WIDTH`](crate::fonts::SHEET_WIDTH) by
+    /// [`SHEET_HEIGHT`](crate::fonts::SHEET_HEIGHT).
     ///
-    /// Carries the offending font's asset-pack name
-    /// ([`FontId::pack_name`](crate::fonts::FontId::pack_name)) and the
-    /// image's actual width/height. Every real upstream Latin font sheet is
-    /// exactly that shape; see [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    /// Contains the font's asset-pack name, actual width, and actual height.
     FontSheetWrongShape(&'static str, u32, u32),
 
-    /// A caller-supplied font glyph-sheet image's pixel buffer didn't contain
-    /// exactly one palette index per pixel.
+    /// A font glyph sheet's pixel count does not match its dimensions.
     ///
-    /// Carries the offending font's asset-pack name, the expected pixel
-    /// count, and the actual pixel count. See
-    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    /// Contains the font's asset-pack name, expected count, and actual count.
     FontSheetWrongPixelCount(&'static str, usize, usize),
 
-    /// A caller-supplied font glyph-sheet image contained a palette index
-    /// outside the four-colour `0..=3` range.
+    /// A font glyph sheet contains a palette index outside its four colours.
     ///
-    /// Carries the offending font's asset-pack name, the pixel's row-major
-    /// index, and the invalid palette index. See
-    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    /// Contains the font's asset-pack name, row-major pixel index, and invalid
+    /// palette index.
     FontSheetInvalidPixel(&'static str, usize, u8),
 }
 
