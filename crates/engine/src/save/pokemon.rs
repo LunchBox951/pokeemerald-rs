@@ -1,69 +1,76 @@
-//! Party Pokémon save values and secure substructure serialization (S-5).
-//!
-//! Emerald stores each party member as an 80-byte `BoxPokemon` followed by
-//! 20 bytes of party-only status and stats. The boxed value's final 48 bytes
-//! contain four encrypted 12-byte substructures. Their physical order is
-//! selected by `personality % 24`, while callers consume them in the logical
-//! growth/attacks/EVs/misc order.
-//!
-//! This module owns only that serialization boundary. Battle calculations
-//! and the complete `GetMonData`/`SetMonData` surface remain deferred; the
-//! field-by-field bridge between these bytes and a battle-ready mon lives
-//! outside this crate, in `pokeemerald_rs::party` (I-6, issue #232), since
-//! `battle` and `engine` do not depend on each other.
-
-/// The serialized length of Emerald's `struct BoxPokemon`.
+//! Boxed and party Pokémon serialization.
+/// Serialized byte length of a boxed Pokémon.
 pub const BOX_POKEMON_LEN: usize = 80;
-/// The serialized length of Emerald's `struct Pokemon`.
+/// Serialized byte length of a party Pokémon.
 pub const POKEMON_LEN: usize = 100;
-/// The length of one decrypted Pokémon substructure.
+/// The serialized length of one decrypted Pokémon substructure.
 pub const SUBSTRUCTURE_LEN: usize = 12;
-/// The length of the encrypted secure region in a boxed Pokémon.
-pub const SECURE_REGION_LEN: usize = SUBSTRUCTURE_LEN * 4;
-
+const SUBSTRUCTURE_COUNT: usize = 4;
+const PERSONALITY_ORDER_COUNT: usize = 24;
+/// Serialized byte length of the encrypted secure region.
+pub const SECURE_REGION_LEN: usize = SUBSTRUCTURE_LEN * SUBSTRUCTURE_COUNT;
 const PERSONALITY_OFFSET: usize = 0;
 const OT_ID_OFFSET: usize = 4;
 const CHECKSUM_OFFSET: usize = 28;
 const SECURE_OFFSET: usize = 32;
 
-// For each `personality % 24`, maps logical substructure index
-// (growth/attacks/EVs/misc) to its physical slot in the secure region.
-const SUBSTRUCTURE_ORDERS: [[usize; 4]; 24] = [
-    [0, 1, 2, 3],
-    [0, 1, 3, 2],
-    [0, 2, 1, 3],
-    [0, 3, 1, 2],
-    [0, 2, 3, 1],
-    [0, 3, 2, 1],
-    [1, 0, 2, 3],
-    [1, 0, 3, 2],
-    [2, 0, 1, 3],
-    [3, 0, 1, 2],
-    [2, 0, 3, 1],
-    [3, 0, 2, 1],
-    [1, 2, 0, 3],
-    [1, 3, 0, 2],
-    [2, 1, 0, 3],
-    [3, 1, 0, 2],
-    [2, 3, 0, 1],
-    [3, 2, 0, 1],
-    [1, 2, 3, 0],
-    [1, 3, 2, 0],
-    [2, 1, 3, 0],
-    [3, 1, 2, 0],
-    [2, 3, 1, 0],
-    [3, 2, 1, 0],
+const PARTY_STATUS_OFFSET: usize = 80;
+const PARTY_LEVEL_OFFSET: usize = 84;
+const PARTY_MAIL_OFFSET: usize = 85;
+const PARTY_HP_OFFSET: usize = 86;
+const PARTY_MAX_HP_OFFSET: usize = 88;
+const PARTY_ATTACK_OFFSET: usize = 90;
+const PARTY_DEFENSE_OFFSET: usize = 92;
+const PARTY_SPEED_OFFSET: usize = 94;
+const PARTY_SPECIAL_ATTACK_OFFSET: usize = 96;
+const PARTY_SPECIAL_DEFENSE_OFFSET: usize = 98;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubstructureKind {
+    Growth,
+    Attacks,
+    EvsAndCondition,
+    Misc,
+}
+
+use SubstructureKind::{Attacks, EvsAndCondition, Growth, Misc};
+
+// GetSubstruct (src/pokemon.c:3607-3632) is the authority for these physical orders.
+const SUBSTRUCTURE_ORDERS: [[SubstructureKind; SUBSTRUCTURE_COUNT]; PERSONALITY_ORDER_COUNT] = [
+    [Growth, Attacks, EvsAndCondition, Misc],
+    [Growth, Attacks, Misc, EvsAndCondition],
+    [Growth, EvsAndCondition, Attacks, Misc],
+    [Growth, EvsAndCondition, Misc, Attacks],
+    [Growth, Misc, Attacks, EvsAndCondition],
+    [Growth, Misc, EvsAndCondition, Attacks],
+    [Attacks, Growth, EvsAndCondition, Misc],
+    [Attacks, Growth, Misc, EvsAndCondition],
+    [Attacks, EvsAndCondition, Growth, Misc],
+    [Attacks, EvsAndCondition, Misc, Growth],
+    [Attacks, Misc, Growth, EvsAndCondition],
+    [Attacks, Misc, EvsAndCondition, Growth],
+    [EvsAndCondition, Growth, Attacks, Misc],
+    [EvsAndCondition, Growth, Misc, Attacks],
+    [EvsAndCondition, Attacks, Growth, Misc],
+    [EvsAndCondition, Attacks, Misc, Growth],
+    [EvsAndCondition, Misc, Growth, Attacks],
+    [EvsAndCondition, Misc, Attacks, Growth],
+    [Misc, Growth, Attacks, EvsAndCondition],
+    [Misc, Growth, EvsAndCondition, Attacks],
+    [Misc, Attacks, Growth, EvsAndCondition],
+    [Misc, Attacks, EvsAndCondition, Growth],
+    [Misc, EvsAndCondition, Growth, Attacks],
+    [Misc, EvsAndCondition, Attacks, Growth],
 ];
 
-/// A failure while decoding a boxed Pokémon's secure region.
+/// A boxed Pokémon serialization error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PokemonError {
-    /// The checksum stored in the boxed header did not match the wrapping
-    /// sum of the decrypted secure region's little-endian `u16` words.
+    /// The decrypted secure region does not match its stored checksum.
     ChecksumMismatch {
-        /// The checksum stored in the boxed Pokémon.
+        /// The stored checksum.
         stored: u16,
-        /// The checksum calculated from the decrypted substructures.
+        /// The checksum calculated from the decrypted bytes.
         calculated: u16,
     },
 }
@@ -82,9 +89,7 @@ impl std::fmt::Display for PokemonError {
 impl std::error::Error for PokemonError {}
 
 /// The four decrypted 12-byte substructures in logical order.
-///
-/// The bytes retain the complete upstream bit layout without prematurely
-/// exposing battle-facing field APIs.
+/// Raw bytes preserve fields that this serialization boundary does not model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PokemonSubstructures {
     /// Growth data: species, held item, experience, PP bonuses, friendship.
@@ -98,30 +103,35 @@ pub struct PokemonSubstructures {
 }
 
 impl PokemonSubstructures {
-    fn get(&self, index: usize) -> &[u8; SUBSTRUCTURE_LEN] {
-        match index {
-            0 => &self.growth,
-            1 => &self.attacks,
-            2 => &self.evs_and_condition,
-            3 => &self.misc,
-            _ => unreachable!("logical substructure index is always 0..4"),
+    fn get(&self, kind: SubstructureKind) -> &[u8; SUBSTRUCTURE_LEN] {
+        match kind {
+            Growth => &self.growth,
+            Attacks => &self.attacks,
+            EvsAndCondition => &self.evs_and_condition,
+            Misc => &self.misc,
         }
     }
 
-    fn from_logical(logical: [[u8; SUBSTRUCTURE_LEN]; 4]) -> Self {
-        let [growth, attacks, evs_and_condition, misc] = logical;
-        Self {
-            growth,
-            attacks,
-            evs_and_condition,
-            misc,
+    fn get_mut(&mut self, kind: SubstructureKind) -> &mut [u8; SUBSTRUCTURE_LEN] {
+        match kind {
+            Growth => &mut self.growth,
+            Attacks => &mut self.attacks,
+            EvsAndCondition => &mut self.evs_and_condition,
+            Misc => &mut self.misc,
         }
     }
 
     fn checksum(&self) -> u16 {
-        (0..4).fold(0u16, |sum, logical_index| {
-            self.get(logical_index)
-                .chunks_exact(2)
+        [
+            &self.growth,
+            &self.attacks,
+            &self.evs_and_condition,
+            &self.misc,
+        ]
+        .into_iter()
+        .fold(0u16, |sum, substructure| {
+            substructure
+                .chunks_exact(std::mem::size_of::<u16>())
                 .fold(sum, |subtotal, word| {
                     subtotal.wrapping_add(u16::from_le_bytes([word[0], word[1]]))
                 })
@@ -129,11 +139,9 @@ impl PokemonSubstructures {
     }
 }
 
-/// Emerald's exact 80-byte boxed Pokémon value.
-///
-/// Header bytes not yet exposed as typed fields are retained verbatim.
-/// The encrypted secure region is private and can only be decoded or
-/// replaced through checksum-aware methods.
+/// An exact 80-byte boxed Pokémon value.
+/// Unmodeled header bytes round-trip unchanged. Logical substructures are
+/// decoded and replaced only through checksum-aware methods.
 #[repr(C, align(4))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoxPokemon {
@@ -147,77 +155,62 @@ impl Default for BoxPokemon {
 }
 
 impl BoxPokemon {
-    /// Create a zero-filled boxed Pokémon with the supplied encryption
-    /// identity and a valid empty secure region.
+    /// Creates an empty value with the supplied personality and original-trainer ID.
     #[must_use]
     pub fn new(personality: u32, ot_id: u32) -> Self {
         let mut value = Self {
             bytes: [0; BOX_POKEMON_LEN],
         };
-        value.bytes[PERSONALITY_OFFSET..PERSONALITY_OFFSET + 4]
-            .copy_from_slice(&personality.to_le_bytes());
-        value.bytes[OT_ID_OFFSET..OT_ID_OFFSET + 4].copy_from_slice(&ot_id.to_le_bytes());
+        write_u32(&mut value.bytes, PERSONALITY_OFFSET, personality);
+        write_u32(&mut value.bytes, OT_ID_OFFSET, ot_id);
         value.set_substructures(&PokemonSubstructures::default());
         value
     }
 
-    /// Wrap a raw 80-byte value without validating its secure checksum.
-    ///
-    /// This preserves corrupt or not-yet-understood party data byte-for-byte;
-    /// validation occurs only when [`BoxPokemon::substructures`] is called.
+    /// Wraps raw bytes without validating the secure checksum.
+    /// Invalid bytes remain available for round-tripping. Validation occurs
+    /// when [`BoxPokemon::substructures`] decrypts them.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; BOX_POKEMON_LEN]) -> Self {
         Self { bytes }
     }
 
-    /// Return the exact serialized boxed Pokémon bytes.
+    /// Returns the exact serialized bytes.
     #[must_use]
     pub const fn to_bytes(self) -> [u8; BOX_POKEMON_LEN] {
         self.bytes
     }
 
-    /// The personality value that selects substructure order.
+    /// Returns the personality that selects the physical substructure order.
     #[must_use]
     pub fn personality(&self) -> u32 {
-        u32::from_le_bytes([
-            self.bytes[PERSONALITY_OFFSET],
-            self.bytes[PERSONALITY_OFFSET + 1],
-            self.bytes[PERSONALITY_OFFSET + 2],
-            self.bytes[PERSONALITY_OFFSET + 3],
-        ])
+        read_u32(&self.bytes, PERSONALITY_OFFSET)
     }
 
-    /// The original-trainer id used with personality as the XOR key.
+    /// Returns the original-trainer ID used in the secure-region XOR key.
     #[must_use]
     pub fn ot_id(&self) -> u32 {
-        u32::from_le_bytes([
-            self.bytes[OT_ID_OFFSET],
-            self.bytes[OT_ID_OFFSET + 1],
-            self.bytes[OT_ID_OFFSET + 2],
-            self.bytes[OT_ID_OFFSET + 3],
-        ])
+        read_u32(&self.bytes, OT_ID_OFFSET)
     }
 
-    /// The stored checksum over the decrypted secure region.
+    /// Returns the stored checksum for the decrypted secure region.
     #[must_use]
     pub fn checksum(&self) -> u16 {
-        u16::from_le_bytes([self.bytes[CHECKSUM_OFFSET], self.bytes[CHECKSUM_OFFSET + 1]])
+        read_u16(&self.bytes, CHECKSUM_OFFSET)
     }
 
-    /// Decode the secure region into logical substructure order.
+    /// Decrypts and returns the substructures in logical order.
     ///
     /// # Errors
     ///
     /// Returns [`PokemonError::ChecksumMismatch`] when the decrypted bytes
     /// do not match the checksum stored in the boxed header.
     pub fn substructures(&self) -> Result<PokemonSubstructures, PokemonError> {
-        let physical = self.decrypted_physical();
-        let order = self.substructure_order();
-        let mut logical = [[0u8; SUBSTRUCTURE_LEN]; 4];
-        for logical_index in 0..4 {
-            logical[logical_index] = physical[order[logical_index]];
+        let physical = self.decrypted_physical_substructures();
+        let mut substructures = PokemonSubstructures::default();
+        for (source, kind) in physical.into_iter().zip(self.physical_substructure_order()) {
+            *substructures.get_mut(*kind) = source;
         }
-        let substructures = PokemonSubstructures::from_logical(logical);
         let calculated = substructures.checksum();
         let stored = self.checksum();
         if calculated != stored {
@@ -226,13 +219,11 @@ impl BoxPokemon {
         Ok(substructures)
     }
 
-    /// Replace the logical substructures, updating physical order,
-    /// encryption, and checksum.
+    /// Replaces, reorders, encrypts, and checksums the logical substructures.
     pub fn set_substructures(&mut self, substructures: &PokemonSubstructures) {
-        let order = self.substructure_order();
-        let mut physical = [[0u8; SUBSTRUCTURE_LEN]; 4];
-        for logical_index in 0..4 {
-            physical[order[logical_index]] = *substructures.get(logical_index);
+        let mut physical = [[0u8; SUBSTRUCTURE_LEN]; SUBSTRUCTURE_COUNT];
+        for (destination, kind) in physical.iter_mut().zip(self.physical_substructure_order()) {
+            *destination = *substructures.get(*kind);
         }
 
         let mut secure = [0u8; SECURE_REGION_LEN];
@@ -242,25 +233,26 @@ impl BoxPokemon {
         {
             destination.copy_from_slice(source);
         }
-        xor_words(&mut secure, self.personality() ^ self.ot_id());
+        xor_secure_region(&mut secure, self.personality() ^ self.ot_id());
 
-        self.bytes[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 2]
-            .copy_from_slice(&substructures.checksum().to_le_bytes());
+        write_u16(&mut self.bytes, CHECKSUM_OFFSET, substructures.checksum());
         self.bytes[SECURE_OFFSET..SECURE_OFFSET + SECURE_REGION_LEN].copy_from_slice(&secure);
     }
 
-    fn substructure_order(&self) -> &'static [usize; 4] {
-        let index = usize::try_from(self.personality() % 24)
-            .expect("personality modulo 24 always fits usize");
+    fn physical_substructure_order(&self) -> &'static [SubstructureKind; SUBSTRUCTURE_COUNT] {
+        let order_count =
+            u32::try_from(SUBSTRUCTURE_ORDERS.len()).expect("substructure order count fits u32");
+        let index = usize::try_from(self.personality() % order_count)
+            .expect("substructure order index fits usize");
         &SUBSTRUCTURE_ORDERS[index]
     }
 
-    fn decrypted_physical(&self) -> [[u8; SUBSTRUCTURE_LEN]; 4] {
+    fn decrypted_physical_substructures(&self) -> [[u8; SUBSTRUCTURE_LEN]; SUBSTRUCTURE_COUNT] {
         let mut secure = [0u8; SECURE_REGION_LEN];
         secure.copy_from_slice(&self.bytes[SECURE_OFFSET..SECURE_OFFSET + SECURE_REGION_LEN]);
-        xor_words(&mut secure, self.personality() ^ self.ot_id());
+        xor_secure_region(&mut secure, self.personality() ^ self.ot_id());
 
-        let mut physical = [[0u8; SUBSTRUCTURE_LEN]; 4];
+        let mut physical = [[0u8; SUBSTRUCTURE_LEN]; SUBSTRUCTURE_COUNT];
         for (destination, source) in physical
             .iter_mut()
             .zip(secure.chunks_exact(SUBSTRUCTURE_LEN))
@@ -271,17 +263,17 @@ impl BoxPokemon {
     }
 }
 
-/// Emerald's exact 100-byte party Pokémon value.
+/// An exact 100-byte party Pokémon value.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Pokemon {
-    /// The boxed Pokémon header and encrypted substructures.
+    /// Boxed data.
     pub box_data: BoxPokemon,
-    /// Non-volatile status condition bits.
+    /// Non-volatile status-condition bits.
     pub status: u32,
-    /// Current level.
+    /// Level.
     pub level: u8,
-    /// Party mail slot.
+    /// Mail slot.
     pub mail: u8,
     /// Current HP.
     pub hp: u16,
@@ -300,50 +292,49 @@ pub struct Pokemon {
 }
 
 impl Pokemon {
-    /// Decode the exact 100-byte party layout without validating the boxed
-    /// secure region.
+    /// Decodes party bytes without validating the boxed secure region.
     #[must_use]
     pub fn from_bytes(bytes: [u8; POKEMON_LEN]) -> Self {
         let mut boxed = [0u8; BOX_POKEMON_LEN];
         boxed.copy_from_slice(&bytes[..BOX_POKEMON_LEN]);
         Self {
             box_data: BoxPokemon::from_bytes(boxed),
-            status: read_u32(&bytes, 80),
-            level: bytes[84],
-            mail: bytes[85],
-            hp: read_u16(&bytes, 86),
-            max_hp: read_u16(&bytes, 88),
-            attack: read_u16(&bytes, 90),
-            defense: read_u16(&bytes, 92),
-            speed: read_u16(&bytes, 94),
-            special_attack: read_u16(&bytes, 96),
-            special_defense: read_u16(&bytes, 98),
+            status: read_u32(&bytes, PARTY_STATUS_OFFSET),
+            level: bytes[PARTY_LEVEL_OFFSET],
+            mail: bytes[PARTY_MAIL_OFFSET],
+            hp: read_u16(&bytes, PARTY_HP_OFFSET),
+            max_hp: read_u16(&bytes, PARTY_MAX_HP_OFFSET),
+            attack: read_u16(&bytes, PARTY_ATTACK_OFFSET),
+            defense: read_u16(&bytes, PARTY_DEFENSE_OFFSET),
+            speed: read_u16(&bytes, PARTY_SPEED_OFFSET),
+            special_attack: read_u16(&bytes, PARTY_SPECIAL_ATTACK_OFFSET),
+            special_defense: read_u16(&bytes, PARTY_SPECIAL_DEFENSE_OFFSET),
         }
     }
 
-    /// Encode the exact 100-byte party layout.
+    /// Returns the exact serialized party bytes.
     #[must_use]
     pub fn to_bytes(self) -> [u8; POKEMON_LEN] {
         let mut out = [0u8; POKEMON_LEN];
         out[..BOX_POKEMON_LEN].copy_from_slice(&self.box_data.to_bytes());
-        out[80..84].copy_from_slice(&self.status.to_le_bytes());
-        out[84] = self.level;
-        out[85] = self.mail;
-        out[86..88].copy_from_slice(&self.hp.to_le_bytes());
-        out[88..90].copy_from_slice(&self.max_hp.to_le_bytes());
-        out[90..92].copy_from_slice(&self.attack.to_le_bytes());
-        out[92..94].copy_from_slice(&self.defense.to_le_bytes());
-        out[94..96].copy_from_slice(&self.speed.to_le_bytes());
-        out[96..98].copy_from_slice(&self.special_attack.to_le_bytes());
-        out[98..100].copy_from_slice(&self.special_defense.to_le_bytes());
+        write_u32(&mut out, PARTY_STATUS_OFFSET, self.status);
+        out[PARTY_LEVEL_OFFSET] = self.level;
+        out[PARTY_MAIL_OFFSET] = self.mail;
+        write_u16(&mut out, PARTY_HP_OFFSET, self.hp);
+        write_u16(&mut out, PARTY_MAX_HP_OFFSET, self.max_hp);
+        write_u16(&mut out, PARTY_ATTACK_OFFSET, self.attack);
+        write_u16(&mut out, PARTY_DEFENSE_OFFSET, self.defense);
+        write_u16(&mut out, PARTY_SPEED_OFFSET, self.speed);
+        write_u16(&mut out, PARTY_SPECIAL_ATTACK_OFFSET, self.special_attack);
+        write_u16(&mut out, PARTY_SPECIAL_DEFENSE_OFFSET, self.special_defense);
         out
     }
 }
 
-fn xor_words(bytes: &mut [u8; SECURE_REGION_LEN], key: u32) {
-    for word in bytes.chunks_exact_mut(4) {
-        let decoded = u32::from_le_bytes([word[0], word[1], word[2], word[3]]) ^ key;
-        word.copy_from_slice(&decoded.to_le_bytes());
+fn xor_secure_region(bytes: &mut [u8; SECURE_REGION_LEN], key: u32) {
+    for word in bytes.chunks_exact_mut(std::mem::size_of::<u32>()) {
+        let transformed = read_u32(word, 0) ^ key;
+        write_u32(word, 0, transformed);
     }
 }
 
@@ -360,11 +351,20 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     ])
 }
 
+fn write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + std::mem::size_of::<u16>()].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + std::mem::size_of::<u32>()].copy_from_slice(&value.to_le_bytes());
+}
+
 const _: () = assert!(std::mem::size_of::<BoxPokemon>() == BOX_POKEMON_LEN);
 const _: () = assert!(std::mem::align_of::<BoxPokemon>() == 4);
 const _: () = assert!(std::mem::size_of::<Pokemon>() == POKEMON_LEN);
 const _: () = assert!(std::mem::align_of::<Pokemon>() == 4);
 const _: () = assert!(std::mem::size_of::<PokemonSubstructures>() == SECURE_REGION_LEN);
+const _: () = assert!(PARTY_SPECIAL_DEFENSE_OFFSET + std::mem::size_of::<u16>() == POKEMON_LEN);
 
 #[cfg(test)]
 mod tests {
@@ -423,20 +423,20 @@ mod tests {
     #[test]
     fn every_personality_permutation_uses_the_expected_physical_order() {
         let logical = distinct_substructures();
-        for (personality, order) in SUBSTRUCTURE_ORDERS.iter().enumerate() {
+        for (personality, physical_order) in SUBSTRUCTURE_ORDERS.iter().enumerate() {
             let personality = u32::try_from(personality).unwrap();
-            // Equal ids make the XOR key zero, isolating physical order.
-            let mut boxed = BoxPokemon::new(personality, personality);
+            let zero_xor_ot_id = personality;
+            let mut boxed = BoxPokemon::new(personality, zero_xor_ot_id);
             boxed.set_substructures(&logical);
             let bytes = boxed.to_bytes();
             let secure = &bytes[SECURE_OFFSET..SECURE_OFFSET + SECURE_REGION_LEN];
 
-            for (logical_index, &physical_index) in order.iter().enumerate() {
+            for (physical_index, kind) in physical_order.iter().enumerate() {
                 let start = physical_index * SUBSTRUCTURE_LEN;
                 assert_eq!(
                     &secure[start..start + SUBSTRUCTURE_LEN],
-                    logical.get(logical_index),
-                    "personality permutation {personality}, logical {logical_index}"
+                    logical.get(*kind),
+                    "personality permutation {personality}, physical slot {physical_index}"
                 );
             }
             assert_eq!(boxed.substructures().unwrap(), logical);
@@ -467,18 +467,19 @@ mod tests {
 
     #[test]
     fn checksum_is_wrapping_sum_of_decrypted_little_endian_words() {
-        let mut logical_bytes = [0u8; SECURE_REGION_LEN];
-        for (index, byte) in logical_bytes.iter_mut().enumerate() {
+        let mut substructures = PokemonSubstructures::default();
+        for (index, byte) in [
+            &mut substructures.growth,
+            &mut substructures.attacks,
+            &mut substructures.evs_and_condition,
+            &mut substructures.misc,
+        ]
+        .into_iter()
+        .flatten()
+        .enumerate()
+        {
             *byte = u8::try_from(index).unwrap();
         }
-        let mut logical = [[0u8; SUBSTRUCTURE_LEN]; 4];
-        for (destination, source) in logical
-            .iter_mut()
-            .zip(logical_bytes.chunks_exact(SUBSTRUCTURE_LEN))
-        {
-            destination.copy_from_slice(source);
-        }
-        let substructures = PokemonSubstructures::from_logical(logical);
         let mut boxed = BoxPokemon::new(5, 0xA5A5_5A5A);
         boxed.set_substructures(&substructures);
 

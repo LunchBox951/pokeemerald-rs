@@ -1,28 +1,11 @@
-//! The battle crate's typed data facade (S-6): species base stats, move
-//! data, and the type-effectiveness chart.
-//!
-//! All three tables are already extracted upstream data living in `assets`
-//! ([`assets::SpeciesTable`], [`assets::MoveTable`], [`assets::TypeChart`])
-//! `(no-verbatim)` — this slice does not re-port them. [`Dex`] is a thin
-//! owned bundle over the three so battle-formula callers have one type to
-//! construct and pass around instead of three `(oop-boundaries)`. It adds no
-//! new data of its own; for the data this slice *does* add — nature
-//! modifiers and stat-stage multipliers, which had no upstream home in
-//! `assets` yet — see [`crate::nature`] and [`crate::stat_stage`].
-//!
-//! Errors from the underlying tables are converted to
-//! [`crate::error::BattleError`] at this boundary (the crate's own concrete
-//! error enum), so `battle` callers are not coupled to the `assets` crate's
-//! error type `(oop-boundaries)`.
+//! Typed access to the extracted species, move, and type-effectiveness data.
 
 use assets::{BaseStats, Effectiveness, MoveData, MoveId, MoveTable, SpeciesId};
 use assets::{SpeciesTable, Type, TypeChart};
 
 use crate::error::BattleError;
 
-/// Owned, read-only typed access to species base stats, move data, and the
-/// type-effectiveness chart `(oop-boundaries)`. Holds no mutable state;
-/// construct once with [`Dex::new`] and share it.
+/// Owned, read-only battle data tables.
 #[derive(Debug, Clone)]
 pub struct Dex {
     species_table: SpeciesTable,
@@ -31,7 +14,7 @@ pub struct Dex {
 }
 
 impl Dex {
-    /// Build the dex over the extracted upstream data.
+    /// Creates a dex over the extracted data.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -41,32 +24,32 @@ impl Dex {
         }
     }
 
-    /// The base stats for `species`.
+    /// Returns the base stats for `species`.
     ///
     /// # Errors
     ///
     /// Returns [`BattleError::UnknownSpecies`] if `species` is outside the
-    /// extracted range. See [`SpeciesTable::base_stats`].
+    /// extracted table.
     pub fn species(&self, species: SpeciesId) -> Result<&BaseStats, BattleError> {
         self.species_table
             .base_stats(species)
             .map_err(|_| BattleError::UnknownSpecies(species))
     }
 
-    /// The battle data for `mv`.
+    /// Returns the battle data for `move_id`.
     ///
     /// # Errors
     ///
-    /// Returns [`BattleError::UnknownMove`] if `mv` is outside `gBattleMoves`.
-    /// See [`MoveTable::get`].
-    pub fn move_data(&self, mv: MoveId) -> Result<&MoveData, BattleError> {
+    /// Returns [`BattleError::UnknownMove`] if `move_id` is outside the
+    /// extracted table.
+    pub fn move_data(&self, move_id: MoveId) -> Result<&MoveData, BattleError> {
         self.move_table
-            .get(mv)
-            .map_err(|_| BattleError::UnknownMove(mv))
+            .get(move_id)
+            .map_err(|_| BattleError::UnknownMove(move_id))
     }
 
-    /// The effectiveness of an `attacker`-type move against a `defender`
-    /// type.
+    /// Returns the effectiveness of an `attacker`-type move against a
+    /// `defender` type.
     #[must_use]
     pub fn effectiveness(&self, attacker: Type, defender: Type) -> Effectiveness {
         self.type_chart.multiplier(attacker, defender)
@@ -85,10 +68,14 @@ mod tests {
     use crate::error::BattleError;
     use assets::{Effectiveness, MoveId, SpeciesId, SpeciesTable, Type};
 
+    const BULBASAUR: SpeciesId = SpeciesId(1);
+    const POUND: MoveId = MoveId(1);
+    const UNKNOWN_MOVE: MoveId = MoveId(60_000);
+
     #[test]
-    fn species_forwards_to_the_species_table() {
+    fn species_returns_base_stats() {
         let dex = Dex::new();
-        let bulbasaur = dex.species(SpeciesId(1)).unwrap();
+        let bulbasaur = dex.species(BULBASAUR).unwrap();
         assert_eq!(bulbasaur.hp, 45);
         assert_eq!(bulbasaur.types, [Type::Grass, Type::Poison]);
     }
@@ -101,10 +88,9 @@ mod tests {
     }
 
     #[test]
-    fn move_data_forwards_to_the_move_table() {
+    fn move_data_returns_battle_properties() {
         let dex = Dex::new();
-        // MOVE_POUND (1): 40 power, Normal type, 100 accuracy, 35 PP.
-        let pound = dex.move_data(MoveId(1)).unwrap();
+        let pound = dex.move_data(POUND).unwrap();
         assert_eq!(pound.power, 40);
         assert_eq!(pound.accuracy, 100);
         assert_eq!(pound.pp, 35);
@@ -113,8 +99,10 @@ mod tests {
     #[test]
     fn move_data_reports_out_of_range_ids() {
         let dex = Dex::new();
-        let bad = MoveId(60_000);
-        assert_eq!(dex.move_data(bad), Err(BattleError::UnknownMove(bad)));
+        assert_eq!(
+            dex.move_data(UNKNOWN_MOVE),
+            Err(BattleError::UnknownMove(UNKNOWN_MOVE))
+        );
     }
 
     #[test]
@@ -131,10 +119,9 @@ mod tests {
     }
 
     #[test]
-    fn default_matches_new() {
-        // Both build over the same static data; spot-check they agree.
-        let a = Dex::default();
-        let b = Dex::new();
-        assert_eq!(a.species(SpeciesId(1)), b.species(SpeciesId(1)));
+    fn default_constructs_the_same_data() {
+        let default_dex = Dex::default();
+        let new_dex = Dex::new();
+        assert_eq!(default_dex.species(BULBASAUR), new_dex.species(BULBASAUR));
     }
 }
