@@ -29,4 +29,4 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 | Format | `cargo fmt --check` |
 | Ledger | `python3 scripts/ledger.py verify` |
 
-Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Read a diff against its stated outcome before accepting it; passing gates prove it runs, not that it belongs. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) owns the iterate-then-gate workflow and the `VERSION` bump. Read a diff against its stated outcome before accepting it; passing gates prove it runs, not that it belongs. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.
