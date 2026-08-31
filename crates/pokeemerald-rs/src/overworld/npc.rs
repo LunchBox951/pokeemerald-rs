@@ -577,7 +577,7 @@ fn wrap_oam_y(y: i32) -> u8 {
 /// The screen position an object event standing at `npc` (map tile
 /// coordinates) draws at, given `player`'s current tile `player_pos` and
 /// this frame's shared [`super::viewport::camera_lag_px`] `camera_lag` --
-/// module docs' generalization of [`avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y`
+/// a generalization of [`avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y`
 /// to a stationary object whose map position differs from the player's own,
 /// glued to the same camera lag the BG scroll applies mid-step.
 /// `camera_lag == (0, 0)` at rest, reducing to plain map-relative placement.

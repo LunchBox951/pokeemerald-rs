@@ -42,7 +42,7 @@
 //!
 //! The player's own OBJ sprite is drawn at a **fixed** screen position
 //! every frame (`(avatar::PLAYER_OBJ_X`, `avatar::PLAYER_OBJ_Y)`) -- see
-//! [`avatar`]'s module docs for the upstream derivation
+//! [`avatar::PLAYER_OBJ_X`] for the upstream derivation
 //! (`SetSpritePosToMapCoords`'s `mapX - gSaveBlock1Ptr->pos.x == 0`
 //! identity for the player's own object event). It is the **BG scroll**
 //! that moves, smoothly, during an ordinary walk step: [`viewport`] derives

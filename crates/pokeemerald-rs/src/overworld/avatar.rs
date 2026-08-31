@@ -8,19 +8,6 @@
 //! The `sAnim_Go*` sequences there retain their command cursor across steps
 //! and alternate forward feet. [`PlayerState`] exposes only the current step's
 //! progress, so this renderer always uses the first forward-foot frame.
-//!
-//! # The player OBJ's fixed screen position
-//!
-//! `SetSpritePosToMapCoords` (`src/event_object_movement.c`) computes
-//! `*destX = ((mapX - gSaveBlock1Ptr->pos.x) << 4) + dx`. Upstream keeps the
-//! player's own object event in lock-step with `gSaveBlock1Ptr->pos`, so that
-//! difference is always zero: the player's OBJ never moves during ordinary
-//! walking, and the background scrolls instead ([`super::viewport`]). Only
-//! `dx`/`dy`, the camera-pan term nothing this port sets away from 0 yet,
-//! would move it. [`PLAYER_OBJ_X`]/[`PLAYER_OBJ_Y`] are that constant, taken
-//! from the same screen-center metatile [`super::viewport`] anchors on and
-//! offset up one metatile so the 32px-tall sprite's lower half covers the tile
-//! the player stands on rather than its head.
 
 use assets::{ImageRef, PaletteRef};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
@@ -90,11 +77,16 @@ pub(super) fn priority_for_elevation(elevation: u8) -> u8 {
         .unwrap_or(PLAYER_OBJ_PRIORITY)
 }
 
+/// Upstream's `SetSpritePosToMapCoords` keeps the player's own object event at
+/// `mapX - gSaveBlock1Ptr->pos.x == 0`, so the OBJ stays put and the BG scrolls
+/// ([`super::viewport`]).
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the visible-screen coordinate is positive and fits u16"
 )]
 pub(super) const PLAYER_OBJ_X: u16 = (PLAYER_VIEW_COL * METATILE_PX) as u16;
+/// One metatile above the viewport anchor, so the 32px sprite's lower half
+/// covers the tile the player stands on rather than its head.
 #[expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
