@@ -37,7 +37,7 @@ const FALSE_SWIPE: MoveId = MoveId(206);
 const PURSUIT: MoveId = MoveId(228);
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
-const PICKUP: AbilityId = AbilityId(47);
+const THICK_FAT: AbilityId = AbilityId(47);
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -82,7 +82,7 @@ const TACKLE_DAMAGE: u32 = 4;
 const TACKLE_CRITICAL_DAMAGE: u32 = 8;
 const MODEST_WATER_GUN_DAMAGE: u32 = 10;
 const STRUGGLE_DAMAGE_TO_GASTLY: u32 = 6;
-const PICKUP_MARILL_TACKLE_DAMAGE: u32 = 3;
+const THICK_FAT_MARILL_TACKLE_DAMAGE: u32 = 3;
 const HUGE_POWER_MARILL_TACKLE_DAMAGE: u32 = 5;
 const PURE_POWER_MEDITITE_TACKLE_DAMAGE: u32 = 6;
 const HUGE_POWER_BEFORE_STAGE_DAMAGE: u32 = 8;
@@ -453,20 +453,20 @@ fn armor_abilities_skip_the_critical_draw_and_prevent_critical_hits() {
 fn huge_power_in_ability_slot_two_doubles_a_physical_hit() {
     let dex = Dex::new();
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
-    let pickup = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![TACKLE])
+    let thick_fat = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![TACKLE])
         .unwrap()
         .with_ability_slot(0);
     let huge_power = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![TACKLE])
         .unwrap()
         .with_ability_slot(1);
-    assert_eq!(pickup.ability(), PICKUP);
+    assert_eq!(thick_fat.ability(), THICK_FAT);
     assert_eq!(huge_power.ability(), HUGE_POWER);
 
-    let mut pickup_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let mut thick_fat_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
     assert_eq!(
-        resolve_hit(&dex, TACKLE, &pickup, &defender, false, &mut pickup_rng,).unwrap(),
+        resolve_hit(&dex, TACKLE, &thick_fat, &defender, false, &mut thick_fat_rng,).unwrap(),
         HitOutcome::Hit {
-            damage: PICKUP_MARILL_TACKLE_DAMAGE,
+            damage: THICK_FAT_MARILL_TACKLE_DAMAGE,
             is_critical: false,
         }
     );
@@ -512,16 +512,16 @@ fn pure_power_doubles_a_physical_hit() {
 fn huge_power_never_touches_a_special_move() {
     let dex = Dex::new();
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
-    let pickup = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![WATER_GUN])
+    let thick_fat = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![WATER_GUN])
         .unwrap()
         .with_ability_slot(0);
     let huge_power = BattlePokemon::new(&dex, MARILL, 5, MAX_IVS, 0, vec![WATER_GUN])
         .unwrap()
         .with_ability_slot(1);
 
-    let mut pickup_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
-    let pickup_outcome =
-        resolve_hit(&dex, WATER_GUN, &pickup, &defender, false, &mut pickup_rng).unwrap();
+    let mut thick_fat_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let thick_fat_outcome =
+        resolve_hit(&dex, WATER_GUN, &thick_fat, &defender, false, &mut thick_fat_rng).unwrap();
     let mut huge_power_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
     let huge_power_outcome = resolve_hit(
         &dex,
@@ -533,7 +533,7 @@ fn huge_power_never_touches_a_special_move() {
     )
     .unwrap();
 
-    assert_eq!(pickup_outcome, huge_power_outcome);
+    assert_eq!(thick_fat_outcome, huge_power_outcome);
 }
 
 #[test]
