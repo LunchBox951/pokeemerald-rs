@@ -92,9 +92,9 @@
 //!   own `gTileset_General`+`gTileset_Petalburg` pair (already extracted,
 //!   above), so no sixth tileset is needed.
 //!
-//! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets —
-//!   see [`fonts`]'s module docs for the sheet shape and what is
-//!   deliberately not extracted.
+//! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets
+//!   under `graphics/fonts/` (pack ids below; non-Latin sheets stay
+//!   unextracted, see "What is not extracted").
 //!
 //! - **Text window frames** (S-4, issue #114): every file under
 //!   `graphics/text_window/` — see [`text_window`]'s module docs for the
