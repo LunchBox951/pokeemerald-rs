@@ -53,6 +53,8 @@ const PRESS_START_BASE_TILE: u16 = 0;
 )]
 const COPYRIGHT_BASE_TILE: u16 =
     PRESS_START_BASE_TILE + NUM_PRESS_START_FRAMES as u16 * PRESS_START_FRAME_TILES;
+const _: () = assert!(VERSION_RIGHT_TILE > VERSION_LEFT_TILE);
+const _: () = assert!(COPYRIGHT_BASE_TILE > PRESS_START_BASE_TILE);
 // The 8bpp banner reads palette indices directly, leaving bank 1 as the first
 // non-overlapping bank for the 4bpp sprites.
 const SPRITE_4BPP_BANK: u8 = 1;
