@@ -1,71 +1,61 @@
-//! Turn order between two battlers (S-6): `GetWhoStrikesFirst`.
-//!
-//! Ports `GetWhoStrikesFirst` (`pokeemerald/src/battle_main.c:4595`) as used
-//! by `SetActionsAndBattlersTurnOrder` (`:4756`) for a single wild battle's
-//! two battlers. Upstream's full function also folds in weather-linked
-//! ability speed doubling (Swift Swim/Chlorophyll), badge boosts, Macho
-//! Brace, paralysis, and Quick Claw — all out of scope this slice
-//! (abilities/items/status not modelled); callers pass each battler's
-//! already-final effective speed (see
-//! [`crate::pokemon::BattlePokemon::effective_speed`]).
-//!
-//! The important behavioural-fidelity detail is *when* the RNG is drawn: C's
-//! `&&` short-circuits, so `speedBattler1 == speedBattler2 && Random() & 1`
-//! only calls `Random()` when the speeds are **exactly equal** — a
-//! priority-mismatch or unequal-speed resolution draws nothing
-//! `(behavioral-fidelity)`.
+//! Priority, effective-Speed, and tie-break ordering for two battlers.
+
+use std::cmp::Ordering;
 
 use crate::damage::BattleRng;
 
-/// Who acts first between an "attacker" and a "defender" battler — really
-/// just battle-order labels, not moving/target roles.
+const TIE_BREAK_BIT_MASK: u16 = 1;
+
+/// Which of two battlers acts first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Order {
-    /// The first battler (`battler1`) acts first.
+    /// The attacker acts first.
     AttackerFirst,
-    /// The second battler (`battler2`) acts first.
+    /// The defender acts first.
     DefenderFirst,
 }
 
-/// `GetWhoStrikesFirst(battler1, battler2, ignoreChosenMoves=FALSE)`
-/// (`pokeemerald/src/battle_main.c:4595`), reduced to priority + effective
-/// speed (see the module docs for what upstream folds in that this omits).
+/// Resolves chosen-move priority before effective Speed.
 ///
-/// `attacker_priority`/`defender_priority` are the chosen moves'
-/// `gBattleMoves[].priority` (`-6..=+5`, [`assets::MoveData::priority`]).
+/// An exact priority and Speed tie consumes one RNG value. Every other result
+/// consumes none, matching `GetWhoStrikesFirst`'s short-circuited tie draw
+/// (`pokeemerald/src/battle_main.c:4595`).
 #[must_use]
 pub fn resolve_order(
     attacker_priority: i8,
     defender_priority: i8,
-    attacker_speed: u32,
-    defender_speed: u32,
+    attacker_effective_speed: u32,
+    defender_effective_speed: u32,
     rng: &mut impl BattleRng,
 ) -> Order {
-    if attacker_priority != defender_priority {
-        return if defender_priority > attacker_priority {
-            Order::DefenderFirst
-        } else {
-            Order::AttackerFirst
-        };
+    match attacker_priority.cmp(&defender_priority) {
+        Ordering::Greater => return Order::AttackerFirst,
+        Ordering::Less => return Order::DefenderFirst,
+        Ordering::Equal => {}
     }
-    if attacker_speed == defender_speed {
-        return if rng.next_u16() & 1 != 0 {
-            Order::DefenderFirst
-        } else {
-            Order::AttackerFirst
-        };
-    }
-    if defender_speed > attacker_speed {
-        Order::DefenderFirst
-    } else {
-        Order::AttackerFirst
+
+    match attacker_effective_speed.cmp(&defender_effective_speed) {
+        Ordering::Greater => Order::AttackerFirst,
+        Ordering::Less => Order::DefenderFirst,
+        Ordering::Equal => {
+            if rng.next_u16() & TIE_BREAK_BIT_MASK == 0 {
+                Order::AttackerFirst
+            } else {
+                Order::DefenderFirst
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_order, Order};
+    use super::{resolve_order, Order, TIE_BREAK_BIT_MASK};
     use crate::damage::BattleRng;
+
+    const ORDINARY_PRIORITY: i8 = 0;
+    const INCREASED_PRIORITY: i8 = 1;
+    const SLOW_SPEED: u32 = 10;
+    const FAST_SPEED: u32 = 200;
 
     struct FixedRng(u16);
     impl BattleRng for FixedRng {
@@ -88,13 +78,29 @@ mod tests {
     #[test]
     fn higher_priority_wins_regardless_of_speed_and_draws_no_rng() {
         let mut rng = CountingRng { value: 0, draws: 0 };
-        // Defender has +1 priority but is much slower.
-        assert_eq!(resolve_order(0, 1, 200, 10, &mut rng), Order::DefenderFirst);
+        assert_eq!(
+            resolve_order(
+                ORDINARY_PRIORITY,
+                INCREASED_PRIORITY,
+                FAST_SPEED,
+                SLOW_SPEED,
+                &mut rng
+            ),
+            Order::DefenderFirst
+        );
         assert_eq!(rng.draws, 0);
 
         let mut rng = CountingRng { value: 0, draws: 0 };
-        // Attacker has +1 priority but is much slower.
-        assert_eq!(resolve_order(1, 0, 10, 200, &mut rng), Order::AttackerFirst);
+        assert_eq!(
+            resolve_order(
+                INCREASED_PRIORITY,
+                ORDINARY_PRIORITY,
+                SLOW_SPEED,
+                FAST_SPEED,
+                &mut rng
+            ),
+            Order::AttackerFirst
+        );
         assert_eq!(rng.draws, 0);
     }
 
@@ -103,7 +109,7 @@ mod tests {
         let mut rng = CountingRng { value: 0, draws: 0 };
         assert_eq!(
             resolve_order(-1, -6, 100, 100, &mut rng),
-            Order::AttackerFirst // -1 > -6
+            Order::AttackerFirst
         );
         assert_eq!(rng.draws, 0);
     }
@@ -127,13 +133,13 @@ mod tests {
 
     #[test]
     fn equal_priority_and_speed_draws_exactly_one_bit() {
-        let mut rng = FixedRng(0); // even -> bit 0 clear -> attacker first
+        let mut rng = FixedRng(0);
         assert_eq!(
             resolve_order(0, 0, 100, 100, &mut rng),
             Order::AttackerFirst
         );
 
-        let mut rng = FixedRng(1); // odd -> bit 0 set -> defender first
+        let mut rng = FixedRng(TIE_BREAK_BIT_MASK);
         assert_eq!(
             resolve_order(0, 0, 100, 100, &mut rng),
             Order::DefenderFirst
@@ -146,8 +152,12 @@ mod tests {
 
     #[test]
     fn nonzero_matching_priority_still_falls_through_to_speed() {
-        // Both selected a +2 priority move: same code path as priority 0.
+        const SHARED_PRIORITY: i8 = 2;
+
         let mut rng = FixedRng(0);
-        assert_eq!(resolve_order(2, 2, 50, 100, &mut rng), Order::DefenderFirst);
+        assert_eq!(
+            resolve_order(SHARED_PRIORITY, SHARED_PRIORITY, 50, 100, &mut rng),
+            Order::DefenderFirst
+        );
     }
 }
