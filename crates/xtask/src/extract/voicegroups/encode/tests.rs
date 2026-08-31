@@ -263,3 +263,32 @@ fn rhythm_encodes_its_tag_and_children_id() {
 fn empty_encodes_only_its_tag() {
     assert_single_slot_encoding(VoiceSlot::Empty, vec![VoiceSlotTag::Empty.byte()]);
 }
+
+#[test]
+fn a_multi_slot_group_writes_the_count_then_each_slot_in_order() {
+    let sample_id = "s";
+    let group = ResolvedVoiceGroup {
+        label: "demo".to_owned(),
+        slots: vec![
+            VoiceSlot::Empty,
+            VoiceSlot::DirectSound {
+                base_key: 60,
+                pan: None,
+                sample_id: sample_id.to_owned(),
+                envelope: envelope(0, 0, 0, 0),
+                mode: DirectSoundMode::Fixed,
+            },
+            VoiceSlot::Empty,
+        ],
+    };
+
+    let mut expected = vec![3, VoiceSlotTag::Empty.byte()];
+    expected.push(VoiceSlotTag::DirectSound.byte());
+    expected.push(60);
+    expected.push(0);
+    push_id(&mut expected, sample_id);
+    expected.extend_from_slice(&[0, 0, 0, 0]);
+    expected.push(DirectSoundModeTag::from(DirectSoundMode::Fixed).byte());
+    expected.push(VoiceSlotTag::Empty.byte());
+    assert_eq!(encode_voice_group(&group), expected);
+}
