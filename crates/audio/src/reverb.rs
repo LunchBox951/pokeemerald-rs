@@ -101,7 +101,7 @@ mod tests {
             .iter()
             .map(|&(left, _)| f64::from(left) * f64::from(left))
             .sum();
-        #[allow(
+        #[expect(
             clippy::cast_precision_loss,
             reason = "test vectors contain at most a few reverb rings"
         )]
@@ -114,17 +114,17 @@ mod tests {
 
         (0..DELAY_SAMPLES)
             .map(|index| {
-                #[allow(
+                #[expect(
                     clippy::cast_precision_loss,
                     reason = "a reverb-ring index is exactly representable as f64"
                 )]
                 let index = index as f64;
-                #[allow(
+                #[expect(
                     clippy::cast_precision_loss,
                     reason = "the small integer period is exactly representable as f64"
                 )]
                 let phase = TAU * index / period as f64;
-                #[allow(
+                #[expect(
                     clippy::cast_possible_truncation,
                     reason = "the bounded synthetic amplitude fits i32"
                 )]
