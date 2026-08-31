@@ -97,8 +97,8 @@
 //!   unextracted, see "What is not extracted").
 //!
 //! - **Text window frames** (S-4, issue #114): every file under
-//!   `graphics/text_window/` — see [`text_window`]'s module docs for the
-//!   manifest and the image/palette pairing validation.
+//!   `graphics/text_window/` ([`text_window`]'s manifest names each stem;
+//!   extraction rejects an image without its palette and vice versa).
 //!
 //! - **Main menu background palette** (I-3, issue #216): just
 //!   `graphics/interface/main_menu_bg.pal`, as `interface/palette/main_menu_bg`
