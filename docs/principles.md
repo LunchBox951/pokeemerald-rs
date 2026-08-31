@@ -34,7 +34,7 @@ mGBA pixel math varies by build. The oracle is stock desktop mGBA using 32-bit `
 
 **6. Object-oriented boundaries (`oop-boundaries`).** Model each subsystem as a type that owns its state and exposes methods. Use traits for polymorphism and explicit module boundaries. Avoid global mutable state. A hand-authored file over roughly 600 lines is a design smell; generated and data-shaped files require separate judgment.
 
-**7. Self-explanatory code (`self-explanatory-code`).** Comments explain what the code cannot. Make code carry its mechanics through clear names and structure. Move a comment's meaning into names, structure, or tests; what none of those can hold, such as a safety rationale or an upstream-owned contract, a comment states in one or two lines; a `// SAFETY:` block and the derivation principle 2 places beside its implementation take the length they need. Never narrate mechanics, restate names, or retain implementation history.
+**7. Self-explanatory code (`self-explanatory-code`).** Comments explain what the code cannot. Make code carry its mechanics through clear names and structure. Move a comment's meaning into names, structure, or tests; what none of those can hold, such as an upstream-owned contract, a comment states in one or two lines; a `// SAFETY:` block and the derivation principle 2 places beside its implementation take the length they need. Never narrate mechanics, restate names, or retain implementation history.
 
 ## Working here
 

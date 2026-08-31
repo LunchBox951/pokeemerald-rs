@@ -1,13 +1,7 @@
 //! Player-avatar sprite packing and per-frame OAM selection.
 //!
-//! A walking sheet is nine 16x32 frames side by side, upstream's
-//! `overworld_frame(<pic>, 2, 4, n)` layout in
-//! `src/data/object_events/object_event_pic_tables.h`; the `FRAME_*` constants
-//! below index it per `src/data/object_events/object_event_anims.h`.
-//!
-//! The `sAnim_Go*` sequences there retain their command cursor across steps
-//! and alternate forward feet. [`PlayerState`] exposes only the current step's
-//! progress, so this renderer always uses the first forward-foot frame.
+//! Nine 16x32 frames per sheet, upstream's `overworld_frame(<pic>, 2, 4, n)`
+//! in `object_event_pic_tables.h`; `FRAME_*` follow `object_event_anims.h`.
 
 use assets::{ImageRef, PaletteRef};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
@@ -34,6 +28,8 @@ pub(super) const FRAME_BLOCK_TILES: u16 = NUM_WALK_FRAMES as u16 * FRAME_TILES;
 pub(super) const FRAME_SOUTH_STAND: u16 = 0;
 pub(super) const FRAME_NORTH_STAND: u16 = 1;
 pub(super) const FRAME_WEST_STAND: u16 = 2;
+/// Upstream's `sAnim_Go*` alternate the forward foot across steps
+/// ([`PlayerState`] has no step parity); this port always shows the first.
 const FRAME_SOUTH_STEP: u16 = 3;
 const FRAME_NORTH_STEP: u16 = 5;
 const FRAME_WEST_STEP: u16 = 7;
@@ -78,8 +74,7 @@ pub(super) fn priority_for_elevation(elevation: u8) -> u8 {
 }
 
 /// Upstream's `SetSpritePosToMapCoords` keeps the player's own object event at
-/// `mapX - gSaveBlock1Ptr->pos.x == 0`, so the OBJ stays put and the BG scrolls
-/// ([`super::viewport`]).
+/// `mapX - gSaveBlock1Ptr->pos.x == 0`: the OBJ stays put, the BG scrolls.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the visible-screen coordinate is positive and fits u16"

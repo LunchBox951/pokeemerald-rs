@@ -91,7 +91,7 @@
 //!   to upstream whenever the middle layer is opaque, and an honest "shows
 //!   nothing" rather than a fabricated pixel in the rare case it isn't.
 //! - **No left/right foot alternation across steps.** See
-//!   [`avatar`]'s module docs.
+//!   `avatar::FRAME_SOUTH_STEP`.
 //! - **No sub-scanline vertical centering tie-break claim.** [`VIEW_ROWS`]
 //!   (10 metatiles) is even, so there is no single upstream-verified
 //!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
