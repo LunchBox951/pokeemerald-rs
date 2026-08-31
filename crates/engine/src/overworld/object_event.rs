@@ -38,13 +38,8 @@ const SPAWN_MAX_X_OFFSET: i32 = 10;
 const SPAWN_MIN_Y_OFFSET: i32 = -7;
 const SPAWN_MAX_Y_OFFSET: i32 = 9;
 
-/// Returns whether an object lies in the asymmetric spawn window around the player.
-///
-/// `TrySpawnObjectEvents` derives these relative bounds from the padded backup-layout coordinates
-/// in `event_object_movement.c:1645-1673`. They are also the rendering safety boundary: with the
-/// full camera lag, admitted object sprites have unwrapped screen `y` positions from -64 through
-/// 224. The current 32-pixel sprite height reaches the 256-pixel OAM wrap point with no headroom,
-/// so taller object sprites must revisit this window.
+/// Returns whether an object lies in upstream `TrySpawnObjectEvents`'s asymmetric
+/// spawn window; admitted 32-pixel sprites reach the 256-pixel OAM wrap with no headroom.
 #[must_use]
 pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
     let x_offset = i32::from(event.x) - player_position.0;
