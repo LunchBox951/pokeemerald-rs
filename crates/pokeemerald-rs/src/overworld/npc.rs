@@ -410,6 +410,7 @@ mod tests {
     const RAISED_PRIORITY: u8 = 1;
     const HIDE_BRENDAN_BEDROOM_RIVAL: u16 = 0x2F8;
     const NON_RIVAL_GFX_ID: u16 = 1;
+    const EXPECTED_WALK_FRAMES_PER_TILE: u8 = 16;
 
     fn object(
         graphics_id: &'static str,
@@ -762,6 +763,14 @@ mod tests {
     }
 
     #[test]
+    fn camera_placement_uses_the_upstream_walk_duration() {
+        assert_eq!(
+            engine::overworld::WALK_FRAMES_PER_TILE,
+            EXPECTED_WALK_FRAMES_PER_TILE
+        );
+    }
+
+    #[test]
     fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
         const CANDIDATE_ROW_RADIUS: i32 = 32;
         const EXPECTED_ADMITTED_ROWS: usize = 17;
@@ -1070,8 +1079,8 @@ mod tests {
 
     #[test]
     fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a_step() {
-        let midpoint_ticks = engine::overworld::WALK_FRAMES_PER_TILE / 2;
-        let remaining_transit_ticks = engine::overworld::WALK_FRAMES_PER_TILE - midpoint_ticks - 1;
+        let midpoint_ticks = EXPECTED_WALK_FRAMES_PER_TILE / 2;
+        let remaining_transit_ticks = EXPECTED_WALK_FRAMES_PER_TILE - midpoint_ticks - 1;
         let data = EventData::new();
         let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
 
