@@ -10,150 +10,285 @@ fn envelope(attack: u8, decay: u8, sustain: u8, release: u8) -> Envelope {
     }
 }
 
-/// Byte-for-byte pin against `crates/assets/src/audio/voicegroup.rs`'s
-/// `VoiceGroup::encode`/`VoiceEntry::write` wire shape (this crate cannot
-/// depend on that crate to decode it back -- see the module docs -- so the
-/// expected bytes are hand-derived here instead).
-#[test]
-fn a_direct_sound_slot_with_a_pan_override_matches_the_documented_wire_shape() {
+fn assert_single_slot_encoding(slot: VoiceSlot, mut expected_slot: Vec<u8>) {
     let group = ResolvedVoiceGroup {
         label: "demo".to_owned(),
-        slots: vec![VoiceSlot::DirectSound {
-            base_key: 60,
-            pan: Some(100),
-            sample_id: "audio/sample/direct-sound/x".to_owned(),
-            envelope: envelope(255, 0, 255, 0),
-            mode: DirectSoundMode::Resampled,
-        }],
+        slots: vec![slot],
     };
-    let bytes = encode_voice_group(&group);
+    let mut expected_group = vec![1];
+    expected_group.append(&mut expected_slot);
+    assert_eq!(encode_voice_group(&group), expected_group);
+}
 
-    let mut expected = vec![1u8]; // slot_count
-    expected.push(KIND_DIRECT_SOUND);
-    expected.push(60); // base_key
-    expected.push(100); // pan override, written verbatim (no OR-0x80 -- see module docs)
-                        // "audio/sample/direct-sound/x".len()
-    expected.extend_from_slice(&27u16.to_le_bytes());
-    expected.extend_from_slice(b"audio/sample/direct-sound/x");
-    expected.extend_from_slice(&[255, 0, 255, 0]); // envelope
-    expected.push(MODE_RESAMPLED);
-
-    assert_eq!(bytes, expected);
+fn push_id(out: &mut Vec<u8>, id: &str) {
+    let byte_len = u16::try_from(id.len()).unwrap();
+    out.extend_from_slice(&byte_len.to_le_bytes());
+    out.extend_from_slice(id.as_bytes());
 }
 
 #[test]
-fn a_direct_sound_slot_with_no_pan_override_writes_a_zero_byte() {
-    let group = ResolvedVoiceGroup {
-        label: "demo".to_owned(),
-        slots: vec![VoiceSlot::DirectSound {
-            base_key: 60,
-            pan: None,
-            sample_id: "s".to_owned(),
-            envelope: envelope(0, 0, 0, 0),
-            mode: DirectSoundMode::Fixed,
-        }],
-    };
-    let bytes = encode_voice_group(&group);
-    // [0] count, [1] kind, [2] base_key, [3] pan byte.
-    assert_eq!(bytes[3], 0);
-    assert_eq!(*bytes.last().unwrap(), MODE_FIXED);
+fn voice_slot_tags_match_the_asset_schema() {
+    assert_eq!(
+        [
+            VoiceSlotTag::DirectSound.byte(),
+            VoiceSlotTag::Square1.byte(),
+            VoiceSlotTag::Square2.byte(),
+            VoiceSlotTag::ProgrammableWave.byte(),
+            VoiceSlotTag::Noise.byte(),
+            VoiceSlotTag::KeySplit.byte(),
+            VoiceSlotTag::Rhythm.byte(),
+            VoiceSlotTag::Empty.byte(),
+        ],
+        [0, 1, 2, 3, 4, 5, 6, 7]
+    );
 }
 
 #[test]
-fn an_empty_slot_is_a_single_tag_byte() {
-    let group = ResolvedVoiceGroup {
-        label: "demo".to_owned(),
-        slots: vec![VoiceSlot::Empty, VoiceSlot::Empty],
-    };
-    let bytes = encode_voice_group(&group);
-    assert_eq!(bytes, vec![2, KIND_EMPTY, KIND_EMPTY]);
+fn direct_sound_mode_tags_match_the_asset_schema() {
+    assert_eq!(
+        [
+            DirectSoundModeTag::from(DirectSoundMode::Resampled).byte(),
+            DirectSoundModeTag::from(DirectSoundMode::Fixed).byte(),
+            DirectSoundModeTag::from(DirectSoundMode::Reverse).byte(),
+        ],
+        [0, 1, 2]
+    );
 }
 
 #[test]
-fn a_rhythm_slot_writes_its_tag_then_the_children_id_string() {
-    let group = ResolvedVoiceGroup {
-        label: "demo".to_owned(),
-        slots: vec![VoiceSlot::Rhythm {
-            children_id: "audio/voicegroup/rs_drumset".to_owned(),
-        }],
+fn direct_sound_encodes_every_field_in_schema_order() {
+    let base_key = 60;
+    let pan = 100;
+    let sample_id = "audio/sample/direct-sound/x";
+    let envelope = envelope(255, 0, 255, 0);
+    let mode = DirectSoundMode::Resampled;
+    let slot = VoiceSlot::DirectSound {
+        base_key,
+        pan: Some(pan),
+        sample_id: sample_id.to_owned(),
+        envelope,
+        mode,
     };
-    let bytes = encode_voice_group(&group);
-    let mut expected = vec![1u8, KIND_RHYTHM];
-    expected.extend_from_slice(&27u16.to_le_bytes()); // "audio/voicegroup/rs_drumset".len()
-    expected.extend_from_slice(b"audio/voicegroup/rs_drumset");
-    assert_eq!(bytes, expected);
+
+    let mut expected = vec![VoiceSlotTag::DirectSound.byte(), base_key, pan];
+    push_id(&mut expected, sample_id);
+    expected.extend_from_slice(&[
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+    ]);
+    expected.push(DirectSoundModeTag::from(mode).byte());
+
+    assert_single_slot_encoding(slot, expected);
 }
 
 #[test]
-fn a_key_split_slot_writes_starting_note_table_len_table_then_children_id() {
-    let group = ResolvedVoiceGroup {
-        label: "demo".to_owned(),
-        slots: vec![VoiceSlot::KeySplit {
-            starting_note: 36,
-            table: vec![0, 0, 1, 1, 2],
-            children_id: "audio/voicegroup/piano_keysplit".to_owned(),
-        }],
+fn direct_sound_without_a_pan_override_encodes_the_zero_sentinel() {
+    let base_key = 60;
+    let sample_id = "s";
+    let envelope = envelope(0, 0, 0, 0);
+    let mode = DirectSoundMode::Fixed;
+    let slot = VoiceSlot::DirectSound {
+        base_key,
+        pan: None,
+        sample_id: sample_id.to_owned(),
+        envelope,
+        mode,
     };
-    let bytes = encode_voice_group(&group);
-    let mut expected = vec![1u8, KIND_KEY_SPLIT, 36, 5, 0, 0, 1, 1, 2];
-    expected.extend_from_slice(&31u16.to_le_bytes());
-    expected.extend_from_slice(b"audio/voicegroup/piano_keysplit");
-    assert_eq!(bytes, expected);
+
+    let mut expected = vec![VoiceSlotTag::DirectSound.byte(), base_key, 0];
+    push_id(&mut expected, sample_id);
+    expected.extend_from_slice(&[
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+    ]);
+    expected.push(DirectSoundModeTag::from(mode).byte());
+
+    assert_single_slot_encoding(slot, expected);
 }
 
 #[test]
-fn square_and_wave_and_noise_slots_carry_fixed_rate_as_a_single_bool_byte() {
+fn square_one_encodes_every_field_in_schema_order() {
+    let base_key = 60;
+    let length = 0;
+    let sweep = 0;
+    let duty = 2;
+    let envelope = envelope(0, 0, 15, 0);
+    let fixed_rate = true;
+    let slot = VoiceSlot::Square1 {
+        base_key,
+        length,
+        sweep,
+        duty,
+        envelope,
+        fixed_rate,
+    };
+    let expected = vec![
+        VoiceSlotTag::Square1.byte(),
+        base_key,
+        length,
+        sweep,
+        duty,
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+        u8::from(fixed_rate),
+    ];
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn square_two_encodes_every_field_in_schema_order() {
+    let base_key = 60;
+    let length = 0;
+    let duty = 3;
+    let envelope = envelope(0, 0, 15, 0);
+    let fixed_rate = false;
+    let slot = VoiceSlot::Square2 {
+        base_key,
+        length,
+        duty,
+        envelope,
+        fixed_rate,
+    };
+    let expected = vec![
+        VoiceSlotTag::Square2.byte(),
+        base_key,
+        length,
+        duty,
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+        u8::from(fixed_rate),
+    ];
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn programmable_wave_encodes_every_field_in_schema_order() {
+    let base_key = 60;
+    let length = 0;
+    let wave_id = "audio/sample/programmable-wave/01";
+    let envelope = envelope(0, 7, 15, 1);
+    let fixed_rate = true;
+    let slot = VoiceSlot::ProgrammableWave {
+        base_key,
+        length,
+        wave_id: wave_id.to_owned(),
+        envelope,
+        fixed_rate,
+    };
+
+    let mut expected = vec![VoiceSlotTag::ProgrammableWave.byte(), base_key, length];
+    push_id(&mut expected, wave_id);
+    expected.extend_from_slice(&[
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+        u8::from(fixed_rate),
+    ]);
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn noise_encodes_every_field_in_schema_order() {
+    let base_key = 60;
+    let length = 0;
+    let period = 1;
+    let envelope = envelope(0, 0, 15, 0);
+    let fixed_rate = false;
+    let slot = VoiceSlot::Noise {
+        base_key,
+        length,
+        period,
+        envelope,
+        fixed_rate,
+    };
+    let expected = vec![
+        VoiceSlotTag::Noise.byte(),
+        base_key,
+        length,
+        period,
+        envelope.attack,
+        envelope.decay,
+        envelope.sustain,
+        envelope.release,
+        u8::from(fixed_rate),
+    ];
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn key_split_encodes_every_field_in_schema_order() {
+    let starting_note = 36;
+    let table = vec![0, 0, 1, 1, 2];
+    let children_id = "audio/voicegroup/piano_keysplit";
+    let slot = VoiceSlot::KeySplit {
+        starting_note,
+        table: table.clone(),
+        children_id: children_id.to_owned(),
+    };
+
+    let table_len = u8::try_from(table.len()).unwrap();
+    let mut expected = vec![VoiceSlotTag::KeySplit.byte(), starting_note, table_len];
+    expected.extend_from_slice(&table);
+    push_id(&mut expected, children_id);
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn rhythm_encodes_its_tag_and_children_id() {
+    let children_id = "audio/voicegroup/rs_drumset";
+    let slot = VoiceSlot::Rhythm {
+        children_id: children_id.to_owned(),
+    };
+    let mut expected = vec![VoiceSlotTag::Rhythm.byte()];
+    push_id(&mut expected, children_id);
+
+    assert_single_slot_encoding(slot, expected);
+}
+
+#[test]
+fn empty_encodes_only_its_tag() {
+    assert_single_slot_encoding(VoiceSlot::Empty, vec![VoiceSlotTag::Empty.byte()]);
+}
+
+#[test]
+fn a_multi_slot_group_writes_the_count_then_each_slot_in_order() {
+    let sample_id = "s";
     let group = ResolvedVoiceGroup {
         label: "demo".to_owned(),
         slots: vec![
-            VoiceSlot::Square1 {
+            VoiceSlot::Empty,
+            VoiceSlot::DirectSound {
                 base_key: 60,
-                length: 0,
-                sweep: 0,
-                duty: 2,
-                envelope: envelope(0, 0, 15, 0),
-                fixed_rate: true,
+                pan: None,
+                sample_id: sample_id.to_owned(),
+                envelope: envelope(0, 0, 0, 0),
+                mode: DirectSoundMode::Fixed,
             },
-            VoiceSlot::Square2 {
-                base_key: 60,
-                length: 0,
-                duty: 3,
-                envelope: envelope(0, 0, 15, 0),
-                fixed_rate: false,
-            },
-            VoiceSlot::ProgrammableWave {
-                base_key: 60,
-                length: 0,
-                wave_id: "audio/sample/programmable-wave/01".to_owned(),
-                envelope: envelope(0, 7, 15, 1),
-                fixed_rate: true,
-            },
-            VoiceSlot::Noise {
-                base_key: 60,
-                length: 0,
-                period: 1,
-                envelope: envelope(0, 0, 15, 0),
-                fixed_rate: false,
-            },
+            VoiceSlot::Empty,
         ],
     };
-    let bytes = encode_voice_group(&group);
-    assert_eq!(bytes[0], 4); // slot_count
-                             // Square1: [kind, base_key, length, sweep, duty, env x4, fixed_rate] = 9 bytes.
-    assert_eq!(&bytes[1..10], &[KIND_SQUARE_1, 60, 0, 0, 2, 0, 0, 15, 0]);
-    assert_eq!(bytes[10], 1); // fixed_rate = true
-                              // Square2: [kind, base_key, length, duty, env x4, fixed_rate] = 8 bytes.
-    assert_eq!(&bytes[11..19], &[KIND_SQUARE_2, 60, 0, 3, 0, 0, 15, 0]);
-    assert_eq!(bytes[19], 0); // fixed_rate = false
-                              // ProgrammableWave: [kind, base_key, length, wave_id string, env x4,
-                              // fixed_rate] -- the string is a u16 LE length prefix + bytes.
-    assert_eq!(&bytes[20..23], &[KIND_PROGRAMMABLE_WAVE, 60, 0]);
-    assert_eq!(&bytes[23..25], &33u16.to_le_bytes());
-    assert_eq!(&bytes[25..58], b"audio/sample/programmable-wave/01");
-    assert_eq!(&bytes[58..62], &[0, 7, 15, 1]); // envelope
-    assert_eq!(bytes[62], 1); // fixed_rate = true
-                              // Noise: [kind, base_key, length, period, env x4, fixed_rate] = 9 bytes.
-    assert_eq!(&bytes[63..71], &[KIND_NOISE, 60, 0, 1, 0, 0, 15, 0]);
-    assert_eq!(bytes[71], 0); // fixed_rate = false
-    assert_eq!(bytes.len(), 72, "no trailing bytes past the last slot");
+
+    let mut expected = vec![3, VoiceSlotTag::Empty.byte()];
+    expected.push(VoiceSlotTag::DirectSound.byte());
+    expected.push(60);
+    expected.push(0);
+    push_id(&mut expected, sample_id);
+    expected.extend_from_slice(&[0, 0, 0, 0]);
+    expected.push(DirectSoundModeTag::from(DirectSoundMode::Fixed).byte());
+    expected.push(VoiceSlotTag::Empty.byte());
+    assert_eq!(encode_voice_group(&group), expected);
 }
