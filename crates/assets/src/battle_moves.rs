@@ -880,19 +880,44 @@ mod tests {
 
     // These stored values stay literal so the representative row checks remain
     // independent of the symbolic production constants they validate.
+    const EXPECTED_MOVE_NONE: MoveId = MoveId(0);
+    const EXPECTED_MOVE_POUND: MoveId = MoveId(1);
+    const EXPECTED_MOVE_SWORDS_DANCE: MoveId = MoveId(14);
+    const EXPECTED_MOVE_ROAR: MoveId = MoveId(46);
+    const EXPECTED_MOVE_COUNTER: MoveId = MoveId(68);
+    const EXPECTED_MOVE_QUICK_ATTACK: MoveId = MoveId(98);
+    const EXPECTED_MOVE_CURSE: MoveId = MoveId(174);
+    const EXPECTED_MOVE_EXTREME_SPEED: MoveId = MoveId(245);
+    const EXPECTED_MOVE_PSYCHO_BOOST: MoveId = MoveId(354);
     const EXPECTED_EFFECT_HIT: MoveEffect = MoveEffect(0);
     const EXPECTED_EFFECT_ATTACK_UP_2: MoveEffect = MoveEffect(50);
+    const EXPECTED_EFFECT_ROAR: MoveEffect = MoveEffect(28);
     const EXPECTED_EFFECT_COUNTER: MoveEffect = MoveEffect(89);
     const EXPECTED_EFFECT_QUICK_ATTACK: MoveEffect = MoveEffect(103);
     const EXPECTED_EFFECT_CURSE: MoveEffect = MoveEffect(109);
     const EXPECTED_EFFECT_OVERHEAT: MoveEffect = MoveEffect(204);
+    const EXPECTED_EMPTY_FLAGS: MoveFlags = MoveFlags(0);
     const EXPECTED_POUND_FLAGS: MoveFlags = MoveFlags(51);
     const EXPECTED_COUNTER_FLAGS: MoveFlags = MoveFlags(17);
+
+    #[test]
+    fn representative_move_constants_keep_their_stored_ids() {
+        assert_eq!(MoveId::NONE, EXPECTED_MOVE_NONE);
+        assert_eq!(MoveId::POUND, EXPECTED_MOVE_POUND);
+        assert_eq!(MoveId::SWORDS_DANCE, EXPECTED_MOVE_SWORDS_DANCE);
+        assert_eq!(MoveId::ROAR, EXPECTED_MOVE_ROAR);
+        assert_eq!(MoveId::COUNTER, EXPECTED_MOVE_COUNTER);
+        assert_eq!(MoveId::QUICK_ATTACK, EXPECTED_MOVE_QUICK_ATTACK);
+        assert_eq!(MoveId::CURSE, EXPECTED_MOVE_CURSE);
+        assert_eq!(MoveId::EXTREME_SPEED, EXPECTED_MOVE_EXTREME_SPEED);
+        assert_eq!(MoveId::PSYCHO_BOOST, EXPECTED_MOVE_PSYCHO_BOOST);
+    }
 
     #[test]
     fn effect_constants_keep_their_stored_ids() {
         assert_eq!(MoveEffect::HIT, EXPECTED_EFFECT_HIT);
         assert_eq!(MoveEffect::ATTACK_UP_2, EXPECTED_EFFECT_ATTACK_UP_2);
+        assert_eq!(MoveEffect::ROAR, EXPECTED_EFFECT_ROAR);
         assert_eq!(MoveEffect::COUNTER, EXPECTED_EFFECT_COUNTER);
         assert_eq!(MoveEffect::QUICK_ATTACK, EXPECTED_EFFECT_QUICK_ATTACK);
         assert_eq!(MoveEffect::CURSE, EXPECTED_EFFECT_CURSE);
@@ -952,6 +977,7 @@ mod tests {
         assert_eq!(MoveTarget::USER.bits(), 16);
         assert_eq!(MoveTarget::FOES_AND_ALLY.bits(), 32);
         assert_eq!(MoveTarget::OPPONENTS_FIELD.bits(), 64);
+        assert_eq!(MoveFlags::NONE, EXPECTED_EMPTY_FLAGS);
 
         let f = MoveFlags(MoveFlags::MAKES_CONTACT | MoveFlags::KINGS_ROCK_AFFECTED);
         assert!(f.makes_contact());
