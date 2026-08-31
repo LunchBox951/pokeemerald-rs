@@ -1,75 +1,245 @@
-//! Per-move battle data (S-4): the `gBattleMoves` table.
-//!
-//! Ports Emerald's per-move battle parameters from the upstream reference
-//! `pokeemerald/src/data/battle_moves.h` (`const struct BattleMove
-//! gBattleMoves[MOVES_COUNT]`). The record layout is `struct BattleMove` in
-//! `pokeemerald/include/pokemon.h`; the symbolic field values live in
-//! `pokeemerald/include/constants/battle_move_effects.h` (`EFFECT_*`),
-//! `pokeemerald/include/battle.h` (`MOVE_TARGET_*`) and
-//! `pokeemerald/include/constants/pokemon.h` (`TYPE_*`, `FLAG_*`).
-//!
-//! The numeric table is translated rather than the surrounding C copied
-//! `(no-verbatim)`, and every field is modelled with a named, typed value
-//! instead of a bare integer `(behavioral-fidelity)`. The upstream-tie test at
-//! the bottom pins a sample of named moves (including a 0-power status move, a
-//! positive- and negative-priority move, a multi-flag move, and the sole
-//! `???`-typed move) back to their `battle_moves.h` values so the transcribed
-//! table cannot silently drift, and checks the table length against
-//! `MOVES_COUNT`.
+//! Typed battle parameters for every move.
 
 use crate::error::AssetError;
 use crate::type_chart::Type;
 
-/// The number of moves in the table, matching upstream `MOVES_COUNT`
-/// (`pokeemerald/include/constants/moves.h`): ids `0..=354`.
+/// Number of entries in the move table.
 pub const MOVES_COUNT: usize = 355;
 
-/// A move identifier — a newtype index into the [`gBattleMoves`](MoveTable)
-/// table, matching the upstream `MOVE_*` ids (`0` is `MOVE_NONE`).
+/// A stable index into [`MoveTable`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MoveId(pub u16);
 
 impl MoveId {
-    /// The raw upstream `MOVE_*` id.
+    /// Returns the numeric table index.
     #[must_use]
     pub const fn index(self) -> u16 {
         self.0
     }
 }
 
-/// The battle-effect script a move runs, as the upstream `EFFECT_*` id
-/// (`battle_move_effects.h`). Kept as an opaque typed id rather than an
-/// enum: the effect *dispatch* is battle-engine behaviour extracted
-/// elsewhere, so here we only need to carry the value faithfully.
+/// Identifies the battle script that implements a move's effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MoveEffect(pub u8);
 
 impl MoveEffect {
-    /// The raw upstream `EFFECT_*` id.
+    pub(crate) const HIT: MoveEffect = MoveEffect(0);
+    pub(crate) const SLEEP: MoveEffect = MoveEffect(1);
+    pub(crate) const POISON_HIT: MoveEffect = MoveEffect(2);
+    pub(crate) const ABSORB: MoveEffect = MoveEffect(3);
+    pub(crate) const BURN_HIT: MoveEffect = MoveEffect(4);
+    pub(crate) const FREEZE_HIT: MoveEffect = MoveEffect(5);
+    pub(crate) const PARALYZE_HIT: MoveEffect = MoveEffect(6);
+    pub(crate) const EXPLOSION: MoveEffect = MoveEffect(7);
+    pub(crate) const DREAM_EATER: MoveEffect = MoveEffect(8);
+    pub(crate) const MIRROR_MOVE: MoveEffect = MoveEffect(9);
+    pub(crate) const ATTACK_UP: MoveEffect = MoveEffect(10);
+    pub(crate) const DEFENSE_UP: MoveEffect = MoveEffect(11);
+    pub(crate) const SPECIAL_ATTACK_UP: MoveEffect = MoveEffect(13);
+    pub(crate) const EVASION_UP: MoveEffect = MoveEffect(16);
+    pub(crate) const ALWAYS_HIT: MoveEffect = MoveEffect(17);
+    pub(crate) const ATTACK_DOWN: MoveEffect = MoveEffect(18);
+    pub(crate) const DEFENSE_DOWN: MoveEffect = MoveEffect(19);
+    pub(crate) const SPEED_DOWN: MoveEffect = MoveEffect(20);
+    pub(crate) const ACCURACY_DOWN: MoveEffect = MoveEffect(23);
+    pub(crate) const EVASION_DOWN: MoveEffect = MoveEffect(24);
+    pub(crate) const HAZE: MoveEffect = MoveEffect(25);
+    pub(crate) const BIDE: MoveEffect = MoveEffect(26);
+    pub(crate) const RAMPAGE: MoveEffect = MoveEffect(27);
+    pub(crate) const ROAR: MoveEffect = MoveEffect(28);
+    pub(crate) const MULTI_HIT: MoveEffect = MoveEffect(29);
+    pub(crate) const CONVERSION: MoveEffect = MoveEffect(30);
+    pub(crate) const FLINCH_HIT: MoveEffect = MoveEffect(31);
+    pub(crate) const RESTORE_HP: MoveEffect = MoveEffect(32);
+    pub(crate) const TOXIC: MoveEffect = MoveEffect(33);
+    pub(crate) const PAY_DAY: MoveEffect = MoveEffect(34);
+    pub(crate) const LIGHT_SCREEN: MoveEffect = MoveEffect(35);
+    pub(crate) const TRI_ATTACK: MoveEffect = MoveEffect(36);
+    pub(crate) const REST: MoveEffect = MoveEffect(37);
+    pub(crate) const OHKO: MoveEffect = MoveEffect(38);
+    pub(crate) const RAZOR_WIND: MoveEffect = MoveEffect(39);
+    pub(crate) const SUPER_FANG: MoveEffect = MoveEffect(40);
+    pub(crate) const DRAGON_RAGE: MoveEffect = MoveEffect(41);
+    pub(crate) const TRAP: MoveEffect = MoveEffect(42);
+    pub(crate) const HIGH_CRITICAL: MoveEffect = MoveEffect(43);
+    pub(crate) const DOUBLE_HIT: MoveEffect = MoveEffect(44);
+    pub(crate) const RECOIL_IF_MISS: MoveEffect = MoveEffect(45);
+    pub(crate) const MIST: MoveEffect = MoveEffect(46);
+    pub(crate) const FOCUS_ENERGY: MoveEffect = MoveEffect(47);
+    pub(crate) const RECOIL: MoveEffect = MoveEffect(48);
+    pub(crate) const CONFUSE: MoveEffect = MoveEffect(49);
+    pub(crate) const ATTACK_UP_2: MoveEffect = MoveEffect(50);
+    pub(crate) const DEFENSE_UP_2: MoveEffect = MoveEffect(51);
+    pub(crate) const SPEED_UP_2: MoveEffect = MoveEffect(52);
+    pub(crate) const SPECIAL_ATTACK_UP_2: MoveEffect = MoveEffect(53);
+    pub(crate) const SPECIAL_DEFENSE_UP_2: MoveEffect = MoveEffect(54);
+    pub(crate) const TRANSFORM: MoveEffect = MoveEffect(57);
+    pub(crate) const ATTACK_DOWN_2: MoveEffect = MoveEffect(58);
+    pub(crate) const DEFENSE_DOWN_2: MoveEffect = MoveEffect(59);
+    pub(crate) const SPEED_DOWN_2: MoveEffect = MoveEffect(60);
+    pub(crate) const SPECIAL_DEFENSE_DOWN_2: MoveEffect = MoveEffect(62);
+    pub(crate) const REFLECT: MoveEffect = MoveEffect(65);
+    pub(crate) const POISON: MoveEffect = MoveEffect(66);
+    pub(crate) const PARALYZE: MoveEffect = MoveEffect(67);
+    pub(crate) const ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
+    pub(crate) const DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
+    pub(crate) const SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
+    pub(crate) const SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
+    pub(crate) const SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
+    pub(crate) const ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
+    pub(crate) const SKY_ATTACK: MoveEffect = MoveEffect(75);
+    pub(crate) const CONFUSE_HIT: MoveEffect = MoveEffect(76);
+    pub(crate) const TWINEEDLE: MoveEffect = MoveEffect(77);
+    pub(crate) const VITAL_THROW: MoveEffect = MoveEffect(78);
+    pub(crate) const SUBSTITUTE: MoveEffect = MoveEffect(79);
+    pub(crate) const RECHARGE: MoveEffect = MoveEffect(80);
+    pub(crate) const RAGE: MoveEffect = MoveEffect(81);
+    pub(crate) const MIMIC: MoveEffect = MoveEffect(82);
+    pub(crate) const METRONOME: MoveEffect = MoveEffect(83);
+    pub(crate) const LEECH_SEED: MoveEffect = MoveEffect(84);
+    pub(crate) const SPLASH: MoveEffect = MoveEffect(85);
+    pub(crate) const DISABLE: MoveEffect = MoveEffect(86);
+    pub(crate) const LEVEL_DAMAGE: MoveEffect = MoveEffect(87);
+    pub(crate) const PSYWAVE: MoveEffect = MoveEffect(88);
+    pub(crate) const COUNTER: MoveEffect = MoveEffect(89);
+    pub(crate) const ENCORE: MoveEffect = MoveEffect(90);
+    pub(crate) const PAIN_SPLIT: MoveEffect = MoveEffect(91);
+    pub(crate) const SNORE: MoveEffect = MoveEffect(92);
+    pub(crate) const CONVERSION_2: MoveEffect = MoveEffect(93);
+    pub(crate) const LOCK_ON: MoveEffect = MoveEffect(94);
+    pub(crate) const SKETCH: MoveEffect = MoveEffect(95);
+    pub(crate) const SLEEP_TALK: MoveEffect = MoveEffect(97);
+    pub(crate) const DESTINY_BOND: MoveEffect = MoveEffect(98);
+    pub(crate) const FLAIL: MoveEffect = MoveEffect(99);
+    pub(crate) const SPITE: MoveEffect = MoveEffect(100);
+    pub(crate) const FALSE_SWIPE: MoveEffect = MoveEffect(101);
+    pub(crate) const HEAL_BELL: MoveEffect = MoveEffect(102);
+    pub(crate) const QUICK_ATTACK: MoveEffect = MoveEffect(103);
+    pub(crate) const TRIPLE_KICK: MoveEffect = MoveEffect(104);
+    pub(crate) const THIEF: MoveEffect = MoveEffect(105);
+    pub(crate) const MEAN_LOOK: MoveEffect = MoveEffect(106);
+    pub(crate) const NIGHTMARE: MoveEffect = MoveEffect(107);
+    pub(crate) const MINIMIZE: MoveEffect = MoveEffect(108);
+    pub(crate) const CURSE: MoveEffect = MoveEffect(109);
+    pub(crate) const PROTECT: MoveEffect = MoveEffect(111);
+    pub(crate) const SPIKES: MoveEffect = MoveEffect(112);
+    pub(crate) const FORESIGHT: MoveEffect = MoveEffect(113);
+    pub(crate) const PERISH_SONG: MoveEffect = MoveEffect(114);
+    pub(crate) const SANDSTORM: MoveEffect = MoveEffect(115);
+    pub(crate) const ENDURE: MoveEffect = MoveEffect(116);
+    pub(crate) const ROLLOUT: MoveEffect = MoveEffect(117);
+    pub(crate) const SWAGGER: MoveEffect = MoveEffect(118);
+    pub(crate) const FURY_CUTTER: MoveEffect = MoveEffect(119);
+    pub(crate) const ATTRACT: MoveEffect = MoveEffect(120);
+    pub(crate) const RETURN: MoveEffect = MoveEffect(121);
+    pub(crate) const PRESENT: MoveEffect = MoveEffect(122);
+    pub(crate) const FRUSTRATION: MoveEffect = MoveEffect(123);
+    pub(crate) const SAFEGUARD: MoveEffect = MoveEffect(124);
+    pub(crate) const THAW_HIT: MoveEffect = MoveEffect(125);
+    pub(crate) const MAGNITUDE: MoveEffect = MoveEffect(126);
+    pub(crate) const BATON_PASS: MoveEffect = MoveEffect(127);
+    pub(crate) const PURSUIT: MoveEffect = MoveEffect(128);
+    pub(crate) const RAPID_SPIN: MoveEffect = MoveEffect(129);
+    pub(crate) const SONICBOOM: MoveEffect = MoveEffect(130);
+    pub(crate) const MORNING_SUN: MoveEffect = MoveEffect(132);
+    pub(crate) const SYNTHESIS: MoveEffect = MoveEffect(133);
+    pub(crate) const MOONLIGHT: MoveEffect = MoveEffect(134);
+    pub(crate) const HIDDEN_POWER: MoveEffect = MoveEffect(135);
+    pub(crate) const RAIN_DANCE: MoveEffect = MoveEffect(136);
+    pub(crate) const SUNNY_DAY: MoveEffect = MoveEffect(137);
+    pub(crate) const DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
+    pub(crate) const ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
+    pub(crate) const ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
+    pub(crate) const BELLY_DRUM: MoveEffect = MoveEffect(142);
+    pub(crate) const PSYCH_UP: MoveEffect = MoveEffect(143);
+    pub(crate) const MIRROR_COAT: MoveEffect = MoveEffect(144);
+    pub(crate) const SKULL_BASH: MoveEffect = MoveEffect(145);
+    pub(crate) const TWISTER: MoveEffect = MoveEffect(146);
+    pub(crate) const EARTHQUAKE: MoveEffect = MoveEffect(147);
+    pub(crate) const FUTURE_SIGHT: MoveEffect = MoveEffect(148);
+    pub(crate) const GUST: MoveEffect = MoveEffect(149);
+    pub(crate) const FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
+    pub(crate) const SOLAR_BEAM: MoveEffect = MoveEffect(151);
+    pub(crate) const THUNDER: MoveEffect = MoveEffect(152);
+    pub(crate) const TELEPORT: MoveEffect = MoveEffect(153);
+    pub(crate) const BEAT_UP: MoveEffect = MoveEffect(154);
+    pub(crate) const SEMI_INVULNERABLE: MoveEffect = MoveEffect(155);
+    pub(crate) const DEFENSE_CURL: MoveEffect = MoveEffect(156);
+    pub(crate) const SOFTBOILED: MoveEffect = MoveEffect(157);
+    pub(crate) const FAKE_OUT: MoveEffect = MoveEffect(158);
+    pub(crate) const UPROAR: MoveEffect = MoveEffect(159);
+    pub(crate) const STOCKPILE: MoveEffect = MoveEffect(160);
+    pub(crate) const SPIT_UP: MoveEffect = MoveEffect(161);
+    pub(crate) const SWALLOW: MoveEffect = MoveEffect(162);
+    pub(crate) const HAIL: MoveEffect = MoveEffect(164);
+    pub(crate) const TORMENT: MoveEffect = MoveEffect(165);
+    pub(crate) const FLATTER: MoveEffect = MoveEffect(166);
+    pub(crate) const WILL_O_WISP: MoveEffect = MoveEffect(167);
+    pub(crate) const MEMENTO: MoveEffect = MoveEffect(168);
+    pub(crate) const FACADE: MoveEffect = MoveEffect(169);
+    pub(crate) const FOCUS_PUNCH: MoveEffect = MoveEffect(170);
+    pub(crate) const SMELLINGSALT: MoveEffect = MoveEffect(171);
+    pub(crate) const FOLLOW_ME: MoveEffect = MoveEffect(172);
+    pub(crate) const NATURE_POWER: MoveEffect = MoveEffect(173);
+    pub(crate) const CHARGE: MoveEffect = MoveEffect(174);
+    pub(crate) const TAUNT: MoveEffect = MoveEffect(175);
+    pub(crate) const HELPING_HAND: MoveEffect = MoveEffect(176);
+    pub(crate) const TRICK: MoveEffect = MoveEffect(177);
+    pub(crate) const ROLE_PLAY: MoveEffect = MoveEffect(178);
+    pub(crate) const WISH: MoveEffect = MoveEffect(179);
+    pub(crate) const ASSIST: MoveEffect = MoveEffect(180);
+    pub(crate) const INGRAIN: MoveEffect = MoveEffect(181);
+    pub(crate) const SUPERPOWER: MoveEffect = MoveEffect(182);
+    pub(crate) const MAGIC_COAT: MoveEffect = MoveEffect(183);
+    pub(crate) const RECYCLE: MoveEffect = MoveEffect(184);
+    pub(crate) const REVENGE: MoveEffect = MoveEffect(185);
+    pub(crate) const BRICK_BREAK: MoveEffect = MoveEffect(186);
+    pub(crate) const YAWN: MoveEffect = MoveEffect(187);
+    pub(crate) const KNOCK_OFF: MoveEffect = MoveEffect(188);
+    pub(crate) const ENDEAVOR: MoveEffect = MoveEffect(189);
+    pub(crate) const ERUPTION: MoveEffect = MoveEffect(190);
+    pub(crate) const SKILL_SWAP: MoveEffect = MoveEffect(191);
+    pub(crate) const IMPRISON: MoveEffect = MoveEffect(192);
+    pub(crate) const REFRESH: MoveEffect = MoveEffect(193);
+    pub(crate) const GRUDGE: MoveEffect = MoveEffect(194);
+    pub(crate) const SNATCH: MoveEffect = MoveEffect(195);
+    pub(crate) const LOW_KICK: MoveEffect = MoveEffect(196);
+    pub(crate) const SECRET_POWER: MoveEffect = MoveEffect(197);
+    pub(crate) const DOUBLE_EDGE: MoveEffect = MoveEffect(198);
+    pub(crate) const TEETER_DANCE: MoveEffect = MoveEffect(199);
+    pub(crate) const BLAZE_KICK: MoveEffect = MoveEffect(200);
+    pub(crate) const MUD_SPORT: MoveEffect = MoveEffect(201);
+    pub(crate) const POISON_FANG: MoveEffect = MoveEffect(202);
+    pub(crate) const WEATHER_BALL: MoveEffect = MoveEffect(203);
+    pub(crate) const OVERHEAT: MoveEffect = MoveEffect(204);
+    pub(crate) const TICKLE: MoveEffect = MoveEffect(205);
+    pub(crate) const COSMIC_POWER: MoveEffect = MoveEffect(206);
+    pub(crate) const SKY_UPPERCUT: MoveEffect = MoveEffect(207);
+    pub(crate) const BULK_UP: MoveEffect = MoveEffect(208);
+    pub(crate) const POISON_TAIL: MoveEffect = MoveEffect(209);
+    pub(crate) const WATER_SPORT: MoveEffect = MoveEffect(210);
+    pub(crate) const CALM_MIND: MoveEffect = MoveEffect(211);
+    pub(crate) const DRAGON_DANCE: MoveEffect = MoveEffect(212);
+    pub(crate) const CAMOUFLAGE: MoveEffect = MoveEffect(213);
+
+    /// Returns the stored effect identifier.
     #[must_use]
     pub const fn id(self) -> u8 {
         self.0
     }
 }
 
-/// The elemental type of a move.
-///
-/// Reuses the combat [`Type`] enum for the seventeen battle types, plus a
-/// dedicated [`Mystery`](MoveType::Mystery) variant for upstream
-/// `TYPE_MYSTERY` (the non-combat "???" type, id `9`) — used by exactly one
-/// move, `MOVE_CURSE`. Modelling it as its own variant keeps [`Type`] free of
-/// the non-combat placeholder while still representing the move honestly
-/// `(behavioral-fidelity)`.
+/// The elemental type stored for a move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MoveType {
-    /// One of the seventeen combat types.
+    /// A type that participates in the combat type chart.
     Battle(Type),
-    /// The `???` type (`TYPE_MYSTERY`, id `9`): no elemental affinity.
+    /// Curse's non-combat `???` type, which has no elemental affinity.
     Mystery,
 }
 
 impl MoveType {
-    /// The combat [`Type`], or `None` for the `???` (`Mystery`) type.
+    /// Returns the combat type, or `None` for [`MoveType::Mystery`].
     #[must_use]
     pub const fn battle_type(self) -> Option<Type> {
         match self {
@@ -79,4461 +249,615 @@ impl MoveType {
     }
 }
 
-/// Who a move can target, as the upstream `MOVE_TARGET_*` value
-/// (`battle.h`). This is a bitfield in upstream (each move stores exactly one
-/// of the defined values, several of which are single bits); the raw value is
-/// carried faithfully and decoded through the accessors below.
+/// Identifies which battlers a move can target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MoveTarget(pub u8);
 
 impl MoveTarget {
-    /// `MOVE_TARGET_SELECTED` (`0`): a single chosen target.
+    /// A single chosen target.
     pub const SELECTED: MoveTarget = MoveTarget(0);
-    /// `MOVE_TARGET_DEPENDS` (`1 << 0`).
+    /// A target selected by the move's effect.
     pub const DEPENDS: MoveTarget = MoveTarget(1 << 0);
-    /// `MOVE_TARGET_USER_OR_SELECTED` (`1 << 1`).
+    /// Either the user or a selected battler.
     pub const USER_OR_SELECTED: MoveTarget = MoveTarget(1 << 1);
-    /// `MOVE_TARGET_RANDOM` (`1 << 2`).
+    /// A random opposing battler.
     pub const RANDOM: MoveTarget = MoveTarget(1 << 2);
-    /// `MOVE_TARGET_BOTH` (`1 << 3`): both opposing battlers.
+    /// Both opposing battlers.
     pub const BOTH: MoveTarget = MoveTarget(1 << 3);
-    /// `MOVE_TARGET_USER` (`1 << 4`): the user itself.
+    /// The user.
     pub const USER: MoveTarget = MoveTarget(1 << 4);
-    /// `MOVE_TARGET_FOES_AND_ALLY` (`1 << 5`).
+    /// Every battler except the user.
     pub const FOES_AND_ALLY: MoveTarget = MoveTarget(1 << 5);
-    /// `MOVE_TARGET_OPPONENTS_FIELD` (`1 << 6`).
+    /// The opposing side of the field.
     pub const OPPONENTS_FIELD: MoveTarget = MoveTarget(1 << 6);
 
-    /// The raw upstream `MOVE_TARGET_*` value.
+    /// Returns the stored target bits.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 }
 
-/// The per-move flag bitset, mirroring upstream `FLAG_*`
-/// (`constants/pokemon.h`, bits `0..=5`). Hand-rolled bitflags with named
-/// accessors — no external crate `(minimal-deps)`.
+/// Properties that alter how other battle mechanics treat a move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MoveFlags(pub u8);
 
 impl MoveFlags {
-    /// `FLAG_MAKES_CONTACT` (`1 << 0`).
+    /// No special move properties.
+    pub const NONE: MoveFlags = MoveFlags(0);
+    /// The move makes physical contact.
     pub const MAKES_CONTACT: u8 = 1 << 0;
-    /// `FLAG_PROTECT_AFFECTED` (`1 << 1`).
+    /// Protect and Detect can block the move.
     pub const PROTECT_AFFECTED: u8 = 1 << 1;
-    /// `FLAG_MAGIC_COAT_AFFECTED` (`1 << 2`).
+    /// Magic Coat can reflect the move.
     pub const MAGIC_COAT_AFFECTED: u8 = 1 << 2;
-    /// `FLAG_SNATCH_AFFECTED` (`1 << 3`).
+    /// Snatch can steal the move.
     pub const SNATCH_AFFECTED: u8 = 1 << 3;
-    /// `FLAG_MIRROR_MOVE_AFFECTED` (`1 << 4`).
+    /// Mirror Move can copy the move.
     pub const MIRROR_MOVE_AFFECTED: u8 = 1 << 4;
-    /// `FLAG_KINGS_ROCK_AFFECTED` (`1 << 5`).
+    /// King's Rock can add a flinch chance.
     pub const KINGS_ROCK_AFFECTED: u8 = 1 << 5;
 
-    /// The raw flag bits.
+    /// Returns the stored flag bits.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 
-    /// Whether every flag in `mask` is set.
+    /// Returns whether every flag in `mask` is set.
     #[must_use]
     pub const fn contains(self, mask: u8) -> bool {
         self.0 & mask == mask
     }
 
-    /// `FLAG_MAKES_CONTACT`: the move makes physical contact.
+    /// Returns whether the move makes physical contact.
     #[must_use]
     pub const fn makes_contact(self) -> bool {
         self.contains(Self::MAKES_CONTACT)
     }
 
-    /// `FLAG_PROTECT_AFFECTED`: blocked by Protect/Detect.
+    /// Returns whether Protect and Detect can block the move.
     #[must_use]
     pub const fn protect_affected(self) -> bool {
         self.contains(Self::PROTECT_AFFECTED)
     }
 
-    /// `FLAG_MAGIC_COAT_AFFECTED`: bounced by Magic Coat.
+    /// Returns whether Magic Coat can reflect the move.
     #[must_use]
     pub const fn magic_coat_affected(self) -> bool {
         self.contains(Self::MAGIC_COAT_AFFECTED)
     }
 
-    /// `FLAG_SNATCH_AFFECTED`: stealable by Snatch.
+    /// Returns whether Snatch can steal the move.
     #[must_use]
     pub const fn snatch_affected(self) -> bool {
         self.contains(Self::SNATCH_AFFECTED)
     }
 
-    /// `FLAG_MIRROR_MOVE_AFFECTED`: copyable by Mirror Move.
+    /// Returns whether Mirror Move can copy the move.
     #[must_use]
     pub const fn mirror_move_affected(self) -> bool {
         self.contains(Self::MIRROR_MOVE_AFFECTED)
     }
 
-    /// `FLAG_KINGS_ROCK_AFFECTED`: can trigger King's Rock flinch.
+    /// Returns whether King's Rock can add a flinch chance.
     #[must_use]
     pub const fn kings_rock_affected(self) -> bool {
         self.contains(Self::KINGS_ROCK_AFFECTED)
     }
 }
 
-/// One move's battle parameters — the owned Rust form of `struct BattleMove`.
+/// Battle parameters for one move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MoveData {
-    /// The `EFFECT_*` battle-effect script id.
+    /// Battle script implementing the move's effect.
     pub effect: MoveEffect,
-    /// Base power in HP (`0` for status moves).
+    /// Base damage power; zero for non-damaging moves.
     pub power: u8,
     /// Elemental type.
     pub move_type: MoveType,
-    /// Accuracy percentage (`0` means "never misses"/bypasses the check).
+    /// Accuracy percentage; zero bypasses the accuracy check.
     pub accuracy: u8,
-    /// Base Power Points.
+    /// Base Power Points available.
     pub pp: u8,
-    /// Percent chance of the secondary effect firing (`0` if none).
+    /// Percentage chance that the secondary effect occurs.
     pub secondary_effect_chance: u8,
-    /// Targeting mode.
+    /// Battlers the move can target.
     pub target: MoveTarget,
-    /// Turn-order priority bracket — signed, from `-6` to `+5`.
+    /// Turn-order priority bracket.
     pub priority: i8,
-    /// Move flag bitset.
+    /// Properties used by other battle mechanics.
     pub flags: MoveFlags,
 }
 
-/// Construct one [`MoveData`] row. A terse free helper so the generated table
-/// stays readable; positional order mirrors `struct BattleMove`'s nine fields,
-/// so the arity is inherent to the upstream record, not a design smell.
-#[allow(clippy::too_many_arguments)]
-const fn m(
-    effect: MoveEffect,
-    power: u8,
-    move_type: MoveType,
-    accuracy: u8,
-    pp: u8,
-    secondary_effect_chance: u8,
-    target: MoveTarget,
-    priority: i8,
-    flags: MoveFlags,
-) -> MoveData {
-    MoveData {
-        effect,
-        power,
-        move_type,
-        accuracy,
-        pp,
-        secondary_effect_chance,
-        target,
-        priority,
-        flags,
+#[derive(Clone, Copy)]
+struct Power(u8);
+
+#[derive(Clone, Copy)]
+struct Accuracy(u8);
+
+impl Accuracy {
+    const ALWAYS: Accuracy = Accuracy(0);
+}
+
+#[derive(Clone, Copy)]
+struct PowerPoints(u8);
+
+#[derive(Clone, Copy)]
+struct SecondaryEffectChance(u8);
+
+impl SecondaryEffectChance {
+    const NONE: SecondaryEffectChance = SecondaryEffectChance(0);
+    const ALWAYS: SecondaryEffectChance = SecondaryEffectChance(100);
+}
+
+#[derive(Clone, Copy)]
+struct Priority(i8);
+
+impl Priority {
+    const MINUS_SIX: Priority = Priority(-6);
+    const MINUS_FIVE: Priority = Priority(-5);
+    const MINUS_FOUR: Priority = Priority(-4);
+    const MINUS_THREE: Priority = Priority(-3);
+    const MINUS_ONE: Priority = Priority(-1);
+    const STANDARD: Priority = Priority(0);
+    const PLUS_ONE: Priority = Priority(1);
+    const PLUS_THREE: Priority = Priority(3);
+    const PLUS_FOUR: Priority = Priority(4);
+    const PLUS_FIVE: Priority = Priority(5);
+}
+
+impl MoveData {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one typed argument per stored attribute keeps every data row literal"
+    )]
+    const fn new(
+        _move_id: MoveId,
+        effect: MoveEffect,
+        Power(power): Power,
+        move_type: MoveType,
+        Accuracy(accuracy): Accuracy,
+        PowerPoints(pp): PowerPoints,
+        SecondaryEffectChance(secondary_effect_chance): SecondaryEffectChance,
+        target: MoveTarget,
+        Priority(priority): Priority,
+        flags: MoveFlags,
+    ) -> MoveData {
+        MoveData {
+            effect,
+            power,
+            move_type,
+            accuracy,
+            pp,
+            secondary_effect_chance,
+            target,
+            priority,
+            flags,
+        }
     }
 }
 
-/// The transcribed `gBattleMoves` table, indexed by `MOVE_*` id. Each row is
-/// a faithful translation of the corresponding `battle_moves.h` entry.
-const MOVES: [MoveData; MOVES_COUNT] = [
-    // MOVE_NONE
-    m(
-        MoveEffect(0),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        0,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_POUND
-    m(
-        MoveEffect(0),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_KARATE_CHOP
-    m(
-        MoveEffect(43),
-        50,
-        MoveType::Battle(Type::Fighting),
-        100,
-        25,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_DOUBLE_SLAP
-    m(
-        MoveEffect(29),
-        15,
-        MoveType::Battle(Type::Normal),
-        85,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_COMET_PUNCH
-    m(
-        MoveEffect(29),
-        18,
-        MoveType::Battle(Type::Normal),
-        85,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MEGA_PUNCH
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Normal),
-        85,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_PAY_DAY
-    m(
-        MoveEffect(34),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_FIRE_PUNCH
-    m(
-        MoveEffect(4),
-        75,
-        MoveType::Battle(Type::Fire),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_ICE_PUNCH
-    m(
-        MoveEffect(5),
-        75,
-        MoveType::Battle(Type::Ice),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_THUNDER_PUNCH
-    m(
-        MoveEffect(6),
-        75,
-        MoveType::Battle(Type::Electric),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SCRATCH
-    m(
-        MoveEffect(0),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_VICE_GRIP
-    m(
-        MoveEffect(0),
-        55,
-        MoveType::Battle(Type::Normal),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_GUILLOTINE
-    m(
-        MoveEffect(38),
-        1,
-        MoveType::Battle(Type::Normal),
-        30,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_RAZOR_WIND
-    m(
-        MoveEffect(39),
-        80,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SWORDS_DANCE
-    m(
-        MoveEffect(50),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_CUT
-    m(
-        MoveEffect(0),
-        50,
-        MoveType::Battle(Type::Normal),
-        95,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_GUST
-    m(
-        MoveEffect(149),
-        40,
-        MoveType::Battle(Type::Flying),
-        100,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_WING_ATTACK
-    m(
-        MoveEffect(0),
-        60,
-        MoveType::Battle(Type::Flying),
-        100,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_WHIRLWIND
-    m(
-        MoveEffect(28),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        -6,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FLY
-    m(
-        MoveEffect(155),
-        70,
-        MoveType::Battle(Type::Flying),
-        95,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_BIND
-    m(
-        MoveEffect(42),
-        15,
-        MoveType::Battle(Type::Normal),
-        75,
-        20,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SLAM
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Normal),
-        75,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_VINE_WHIP
-    m(
-        MoveEffect(0),
-        35,
-        MoveType::Battle(Type::Grass),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_STOMP
-    m(
-        MoveEffect(150),
-        65,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_DOUBLE_KICK
-    m(
-        MoveEffect(44),
-        30,
-        MoveType::Battle(Type::Fighting),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MEGA_KICK
-    m(
-        MoveEffect(0),
-        120,
-        MoveType::Battle(Type::Normal),
-        75,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_JUMP_KICK
-    m(
-        MoveEffect(45),
-        70,
-        MoveType::Battle(Type::Fighting),
-        95,
-        25,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ROLLING_KICK
-    m(
-        MoveEffect(31),
-        60,
-        MoveType::Battle(Type::Fighting),
-        85,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SAND_ATTACK
-    m(
-        MoveEffect(23),
-        0,
-        MoveType::Battle(Type::Ground),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_HEADBUTT
-    m(
-        MoveEffect(31),
-        70,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_HORN_ATTACK
-    m(
-        MoveEffect(0),
-        65,
-        MoveType::Battle(Type::Normal),
-        100,
-        25,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_FURY_ATTACK
-    m(
-        MoveEffect(29),
-        15,
-        MoveType::Battle(Type::Normal),
-        85,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_HORN_DRILL
-    m(
-        MoveEffect(38),
-        1,
-        MoveType::Battle(Type::Normal),
-        30,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_TACKLE
-    m(
-        MoveEffect(0),
-        35,
-        MoveType::Battle(Type::Normal),
-        95,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_BODY_SLAM
-    m(
-        MoveEffect(6),
-        85,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_WRAP
-    m(
-        MoveEffect(42),
-        15,
-        MoveType::Battle(Type::Normal),
-        85,
-        20,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_TAKE_DOWN
-    m(
-        MoveEffect(48),
-        90,
-        MoveType::Battle(Type::Normal),
-        85,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_THRASH
-    m(
-        MoveEffect(27),
-        90,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        100,
-        MoveTarget(4),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_DOUBLE_EDGE
-    m(
-        MoveEffect(198),
-        120,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_TAIL_WHIP
-    m(
-        MoveEffect(19),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        30,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_POISON_STING
-    m(
-        MoveEffect(2),
-        15,
-        MoveType::Battle(Type::Poison),
-        100,
-        35,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_TWINEEDLE
-    m(
-        MoveEffect(77),
-        25,
-        MoveType::Battle(Type::Bug),
-        100,
-        20,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_PIN_MISSILE
-    m(
-        MoveEffect(29),
-        14,
-        MoveType::Battle(Type::Bug),
-        85,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_LEER
-    m(
-        MoveEffect(19),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        30,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_BITE
-    m(
-        MoveEffect(31),
-        60,
-        MoveType::Battle(Type::Dark),
-        100,
-        25,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_GROWL
-    m(
-        MoveEffect(18),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_ROAR
-    m(
-        MoveEffect(28),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        -6,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SING
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Normal),
-        55,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_SUPERSONIC
-    m(
-        MoveEffect(49),
-        0,
-        MoveType::Battle(Type::Normal),
-        55,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_SONIC_BOOM
-    m(
-        MoveEffect(130),
-        1,
-        MoveType::Battle(Type::Normal),
-        90,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_DISABLE
-    m(
-        MoveEffect(86),
-        0,
-        MoveType::Battle(Type::Normal),
-        55,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_ACID
-    m(
-        MoveEffect(69),
-        40,
-        MoveType::Battle(Type::Poison),
-        100,
-        30,
-        10,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_EMBER
-    m(
-        MoveEffect(4),
-        40,
-        MoveType::Battle(Type::Fire),
-        100,
-        25,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FLAMETHROWER
-    m(
-        MoveEffect(4),
-        95,
-        MoveType::Battle(Type::Fire),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MIST
-    m(
-        MoveEffect(46),
-        0,
-        MoveType::Battle(Type::Ice),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_WATER_GUN
-    m(
-        MoveEffect(0),
-        40,
-        MoveType::Battle(Type::Water),
-        100,
-        25,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_HYDRO_PUMP
-    m(
-        MoveEffect(0),
-        120,
-        MoveType::Battle(Type::Water),
-        80,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SURF
-    m(
-        MoveEffect(0),
-        95,
-        MoveType::Battle(Type::Water),
-        100,
-        15,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_ICE_BEAM
-    m(
-        MoveEffect(5),
-        95,
-        MoveType::Battle(Type::Ice),
-        100,
-        10,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_BLIZZARD
-    m(
-        MoveEffect(5),
-        120,
-        MoveType::Battle(Type::Ice),
-        70,
-        5,
-        10,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_PSYBEAM
-    m(
-        MoveEffect(76),
-        65,
-        MoveType::Battle(Type::Psychic),
-        100,
-        20,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_BUBBLE_BEAM
-    m(
-        MoveEffect(70),
-        65,
-        MoveType::Battle(Type::Water),
-        100,
-        20,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_AURORA_BEAM
-    m(
-        MoveEffect(68),
-        65,
-        MoveType::Battle(Type::Ice),
-        100,
-        20,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_HYPER_BEAM
-    m(
-        MoveEffect(80),
-        150,
-        MoveType::Battle(Type::Normal),
-        90,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_PECK
-    m(
-        MoveEffect(0),
-        35,
-        MoveType::Battle(Type::Flying),
-        100,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_DRILL_PECK
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Flying),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SUBMISSION
-    m(
-        MoveEffect(48),
-        80,
-        MoveType::Battle(Type::Fighting),
-        80,
-        25,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_LOW_KICK
-    m(
-        MoveEffect(196),
-        1,
-        MoveType::Battle(Type::Fighting),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_COUNTER
-    m(
-        MoveEffect(89),
-        1,
-        MoveType::Battle(Type::Fighting),
-        100,
-        20,
-        0,
-        MoveTarget(1),
-        -5,
-        MoveFlags(0b01_0001),
-    ),
-    // MOVE_SEISMIC_TOSS
-    m(
-        MoveEffect(87),
-        1,
-        MoveType::Battle(Type::Fighting),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_STRENGTH
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ABSORB
-    m(
-        MoveEffect(3),
-        20,
-        MoveType::Battle(Type::Grass),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MEGA_DRAIN
-    m(
-        MoveEffect(3),
-        40,
-        MoveType::Battle(Type::Grass),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_LEECH_SEED
-    m(
-        MoveEffect(84),
-        0,
-        MoveType::Battle(Type::Grass),
-        90,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_GROWTH
-    m(
-        MoveEffect(13),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_RAZOR_LEAF
-    m(
-        MoveEffect(43),
-        55,
-        MoveType::Battle(Type::Grass),
-        95,
-        25,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SOLAR_BEAM
-    m(
-        MoveEffect(151),
-        120,
-        MoveType::Battle(Type::Grass),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_POISON_POWDER
-    m(
-        MoveEffect(66),
-        0,
-        MoveType::Battle(Type::Poison),
-        75,
-        35,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_STUN_SPORE
-    m(
-        MoveEffect(67),
-        0,
-        MoveType::Battle(Type::Grass),
-        75,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_SLEEP_POWDER
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Grass),
-        75,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_PETAL_DANCE
-    m(
-        MoveEffect(27),
-        70,
-        MoveType::Battle(Type::Grass),
-        100,
-        20,
-        100,
-        MoveTarget(4),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_STRING_SHOT
-    m(
-        MoveEffect(20),
-        0,
-        MoveType::Battle(Type::Bug),
-        95,
-        40,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_DRAGON_RAGE
-    m(
-        MoveEffect(41),
-        1,
-        MoveType::Battle(Type::Dragon),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_FIRE_SPIN
-    m(
-        MoveEffect(42),
-        15,
-        MoveType::Battle(Type::Fire),
-        70,
-        15,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_THUNDER_SHOCK
-    m(
-        MoveEffect(6),
-        40,
-        MoveType::Battle(Type::Electric),
-        100,
-        30,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_THUNDERBOLT
-    m(
-        MoveEffect(6),
-        95,
-        MoveType::Battle(Type::Electric),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_THUNDER_WAVE
-    m(
-        MoveEffect(67),
-        0,
-        MoveType::Battle(Type::Electric),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_THUNDER
-    m(
-        MoveEffect(152),
-        120,
-        MoveType::Battle(Type::Electric),
-        70,
-        10,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_ROCK_THROW
-    m(
-        MoveEffect(0),
-        50,
-        MoveType::Battle(Type::Rock),
-        90,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_EARTHQUAKE
-    m(
-        MoveEffect(147),
-        100,
-        MoveType::Battle(Type::Ground),
-        100,
-        10,
-        0,
-        MoveTarget(32),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_FISSURE
-    m(
-        MoveEffect(38),
-        1,
-        MoveType::Battle(Type::Ground),
-        30,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_DIG
-    m(
-        MoveEffect(155),
-        60,
-        MoveType::Battle(Type::Ground),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_TOXIC
-    m(
-        MoveEffect(33),
-        0,
-        MoveType::Battle(Type::Poison),
-        85,
-        10,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_CONFUSION
-    m(
-        MoveEffect(76),
-        50,
-        MoveType::Battle(Type::Psychic),
-        100,
-        25,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_PSYCHIC
-    m(
-        MoveEffect(72),
-        90,
-        MoveType::Battle(Type::Psychic),
-        100,
-        10,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_HYPNOSIS
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Psychic),
-        60,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_MEDITATE
-    m(
-        MoveEffect(10),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_AGILITY
-    m(
-        MoveEffect(52),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_QUICK_ATTACK
-    m(
-        MoveEffect(103),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        1,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_RAGE
-    m(
-        MoveEffect(81),
-        20,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_TELEPORT
-    m(
-        MoveEffect(153),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_NIGHT_SHADE
-    m(
-        MoveEffect(87),
-        1,
-        MoveType::Battle(Type::Ghost),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_MIMIC
-    m(
-        MoveEffect(82),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_SCREECH
-    m(
-        MoveEffect(59),
-        0,
-        MoveType::Battle(Type::Normal),
-        85,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_DOUBLE_TEAM
-    m(
-        MoveEffect(16),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        15,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_RECOVER
-    m(
-        MoveEffect(32),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_HARDEN
-    m(
-        MoveEffect(11),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_MINIMIZE
-    m(
-        MoveEffect(108),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_SMOKESCREEN
-    m(
-        MoveEffect(23),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_CONFUSE_RAY
-    m(
-        MoveEffect(49),
-        0,
-        MoveType::Battle(Type::Ghost),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_WITHDRAW
-    m(
-        MoveEffect(11),
-        0,
-        MoveType::Battle(Type::Water),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_DEFENSE_CURL
-    m(
-        MoveEffect(156),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_BARRIER
-    m(
-        MoveEffect(51),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_LIGHT_SCREEN
-    m(
-        MoveEffect(35),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_HAZE
-    m(
-        MoveEffect(25),
-        0,
-        MoveType::Battle(Type::Ice),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_REFLECT
-    m(
-        MoveEffect(65),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_FOCUS_ENERGY
-    m(
-        MoveEffect(47),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_BIDE
-    m(
-        MoveEffect(26),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b10_0011),
-    ),
-    // MOVE_METRONOME
-    m(
-        MoveEffect(83),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(1),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_MIRROR_MOVE
-    m(
-        MoveEffect(9),
-        0,
-        MoveType::Battle(Type::Flying),
-        0,
-        20,
-        0,
-        MoveTarget(1),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_SELF_DESTRUCT
-    m(
-        MoveEffect(7),
-        200,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(32),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_EGG_BOMB
-    m(
-        MoveEffect(0),
-        100,
-        MoveType::Battle(Type::Normal),
-        75,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_LICK
-    m(
-        MoveEffect(6),
-        20,
-        MoveType::Battle(Type::Ghost),
-        100,
-        30,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SMOG
-    m(
-        MoveEffect(2),
-        20,
-        MoveType::Battle(Type::Poison),
-        70,
-        20,
-        40,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SLUDGE
-    m(
-        MoveEffect(2),
-        65,
-        MoveType::Battle(Type::Poison),
-        100,
-        20,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_BONE_CLUB
-    m(
-        MoveEffect(31),
-        65,
-        MoveType::Battle(Type::Ground),
-        85,
-        20,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FIRE_BLAST
-    m(
-        MoveEffect(4),
-        120,
-        MoveType::Battle(Type::Fire),
-        85,
-        5,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_WATERFALL
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Water),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_CLAMP
-    m(
-        MoveEffect(42),
-        35,
-        MoveType::Battle(Type::Water),
-        75,
-        10,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SWIFT
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Normal),
-        0,
-        20,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SKULL_BASH
-    m(
-        MoveEffect(145),
-        100,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SPIKE_CANNON
-    m(
-        MoveEffect(29),
-        20,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_CONSTRICT
-    m(
-        MoveEffect(70),
-        10,
-        MoveType::Battle(Type::Normal),
-        100,
-        35,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_AMNESIA
-    m(
-        MoveEffect(54),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_KINESIS
-    m(
-        MoveEffect(23),
-        0,
-        MoveType::Battle(Type::Psychic),
-        80,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SOFT_BOILED
-    m(
-        MoveEffect(157),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b01_1000),
-    ),
-    // MOVE_HI_JUMP_KICK
-    m(
-        MoveEffect(45),
-        85,
-        MoveType::Battle(Type::Fighting),
-        90,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_GLARE
-    m(
-        MoveEffect(67),
-        0,
-        MoveType::Battle(Type::Normal),
-        75,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_DREAM_EATER
-    m(
-        MoveEffect(8),
-        100,
-        MoveType::Battle(Type::Psychic),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_POISON_GAS
-    m(
-        MoveEffect(66),
-        0,
-        MoveType::Battle(Type::Poison),
-        55,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_BARRAGE
-    m(
-        MoveEffect(29),
-        15,
-        MoveType::Battle(Type::Normal),
-        85,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_LEECH_LIFE
-    m(
-        MoveEffect(3),
-        20,
-        MoveType::Battle(Type::Bug),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_LOVELY_KISS
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Normal),
-        75,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_SKY_ATTACK
-    m(
-        MoveEffect(75),
-        140,
-        MoveType::Battle(Type::Flying),
-        90,
-        5,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_TRANSFORM
-    m(
-        MoveEffect(57),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_BUBBLE
-    m(
-        MoveEffect(70),
-        20,
-        MoveType::Battle(Type::Water),
-        100,
-        30,
-        10,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_DIZZY_PUNCH
-    m(
-        MoveEffect(76),
-        70,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SPORE
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Grass),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_FLASH
-    m(
-        MoveEffect(23),
-        0,
-        MoveType::Battle(Type::Normal),
-        70,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_PSYWAVE
-    m(
-        MoveEffect(88),
-        1,
-        MoveType::Battle(Type::Psychic),
-        80,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SPLASH
-    m(
-        MoveEffect(85),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ACID_ARMOR
-    m(
-        MoveEffect(51),
-        0,
-        MoveType::Battle(Type::Poison),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_CRABHAMMER
-    m(
-        MoveEffect(43),
-        90,
-        MoveType::Battle(Type::Water),
-        85,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_EXPLOSION
-    m(
-        MoveEffect(7),
-        250,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(32),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_FURY_SWIPES
-    m(
-        MoveEffect(29),
-        18,
-        MoveType::Battle(Type::Normal),
-        80,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_BONEMERANG
-    m(
-        MoveEffect(44),
-        50,
-        MoveType::Battle(Type::Ground),
-        90,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_REST
-    m(
-        MoveEffect(37),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_ROCK_SLIDE
-    m(
-        MoveEffect(31),
-        75,
-        MoveType::Battle(Type::Rock),
-        90,
-        10,
-        30,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_HYPER_FANG
-    m(
-        MoveEffect(31),
-        80,
-        MoveType::Battle(Type::Normal),
-        90,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SHARPEN
-    m(
-        MoveEffect(10),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_CONVERSION
-    m(
-        MoveEffect(30),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_TRI_ATTACK
-    m(
-        MoveEffect(36),
-        80,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SUPER_FANG
-    m(
-        MoveEffect(40),
-        1,
-        MoveType::Battle(Type::Normal),
-        90,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SLASH
-    m(
-        MoveEffect(43),
-        70,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SUBSTITUTE
-    m(
-        MoveEffect(79),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_STRUGGLE
-    m(
-        MoveEffect(48),
-        50,
-        MoveType::Battle(Type::Normal),
-        100,
-        1,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SKETCH
-    m(
-        MoveEffect(95),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        1,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_TRIPLE_KICK
-    m(
-        MoveEffect(104),
-        10,
-        MoveType::Battle(Type::Fighting),
-        90,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_THIEF
-    m(
-        MoveEffect(105),
-        40,
-        MoveType::Battle(Type::Dark),
-        100,
-        10,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SPIDER_WEB
-    m(
-        MoveEffect(106),
-        0,
-        MoveType::Battle(Type::Bug),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_MIND_READER
-    m(
-        MoveEffect(94),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_NIGHTMARE
-    m(
-        MoveEffect(107),
-        0,
-        MoveType::Battle(Type::Ghost),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FLAME_WHEEL
-    m(
-        MoveEffect(125),
-        60,
-        MoveType::Battle(Type::Fire),
-        100,
-        25,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SNORE
-    m(
-        MoveEffect(92),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_CURSE
-    m(
-        MoveEffect(109),
-        0,
-        MoveType::Mystery,
-        0,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_FLAIL
-    m(
-        MoveEffect(99),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_CONVERSION_2
-    m(
-        MoveEffect(93),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        30,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_AEROBLAST
-    m(
-        MoveEffect(43),
-        100,
-        MoveType::Battle(Type::Flying),
-        95,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_COTTON_SPORE
-    m(
-        MoveEffect(60),
-        0,
-        MoveType::Battle(Type::Grass),
-        85,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_REVERSAL
-    m(
-        MoveEffect(99),
-        1,
-        MoveType::Battle(Type::Fighting),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SPITE
-    m(
-        MoveEffect(100),
-        0,
-        MoveType::Battle(Type::Ghost),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_POWDER_SNOW
-    m(
-        MoveEffect(5),
-        40,
-        MoveType::Battle(Type::Ice),
-        100,
-        25,
-        10,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_PROTECT
-    m(
-        MoveEffect(111),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        3,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_MACH_PUNCH
-    m(
-        MoveEffect(103),
-        40,
-        MoveType::Battle(Type::Fighting),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        1,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SCARY_FACE
-    m(
-        MoveEffect(60),
-        0,
-        MoveType::Battle(Type::Normal),
-        90,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_FAINT_ATTACK
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Dark),
-        0,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SWEET_KISS
-    m(
-        MoveEffect(49),
-        0,
-        MoveType::Battle(Type::Normal),
-        75,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_BELLY_DRUM
-    m(
-        MoveEffect(142),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_SLUDGE_BOMB
-    m(
-        MoveEffect(2),
-        90,
-        MoveType::Battle(Type::Poison),
-        100,
-        10,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MUD_SLAP
-    m(
-        MoveEffect(73),
-        20,
-        MoveType::Battle(Type::Ground),
-        100,
-        10,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_OCTAZOOKA
-    m(
-        MoveEffect(73),
-        65,
-        MoveType::Battle(Type::Water),
-        85,
-        10,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SPIKES
-    m(
-        MoveEffect(112),
-        0,
-        MoveType::Battle(Type::Ground),
-        0,
-        20,
-        0,
-        MoveTarget(64),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ZAP_CANNON
-    m(
-        MoveEffect(6),
-        100,
-        MoveType::Battle(Type::Electric),
-        50,
-        5,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FORESIGHT
-    m(
-        MoveEffect(113),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_DESTINY_BOND
-    m(
-        MoveEffect(98),
-        0,
-        MoveType::Battle(Type::Ghost),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_PERISH_SONG
-    m(
-        MoveEffect(114),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ICY_WIND
-    m(
-        MoveEffect(70),
-        55,
-        MoveType::Battle(Type::Ice),
-        95,
-        15,
-        100,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_DETECT
-    m(
-        MoveEffect(111),
-        0,
-        MoveType::Battle(Type::Fighting),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        3,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_BONE_RUSH
-    m(
-        MoveEffect(29),
-        25,
-        MoveType::Battle(Type::Ground),
-        80,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_LOCK_ON
-    m(
-        MoveEffect(94),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_OUTRAGE
-    m(
-        MoveEffect(27),
-        90,
-        MoveType::Battle(Type::Dragon),
-        100,
-        15,
-        100,
-        MoveTarget(4),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SANDSTORM
-    m(
-        MoveEffect(115),
-        0,
-        MoveType::Battle(Type::Rock),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_GIGA_DRAIN
-    m(
-        MoveEffect(3),
-        60,
-        MoveType::Battle(Type::Grass),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_ENDURE
-    m(
-        MoveEffect(116),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        3,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_CHARM
-    m(
-        MoveEffect(58),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_ROLLOUT
-    m(
-        MoveEffect(117),
-        30,
-        MoveType::Battle(Type::Rock),
-        90,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_FALSE_SWIPE
-    m(
-        MoveEffect(101),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SWAGGER
-    m(
-        MoveEffect(118),
-        0,
-        MoveType::Battle(Type::Normal),
-        90,
-        15,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_MILK_DRINK
-    m(
-        MoveEffect(157),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1010),
-    ),
-    // MOVE_SPARK
-    m(
-        MoveEffect(6),
-        65,
-        MoveType::Battle(Type::Electric),
-        100,
-        20,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_FURY_CUTTER
-    m(
-        MoveEffect(119),
-        10,
-        MoveType::Battle(Type::Bug),
-        95,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_STEEL_WING
-    m(
-        MoveEffect(138),
-        70,
-        MoveType::Battle(Type::Steel),
-        90,
-        25,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MEAN_LOOK
-    m(
-        MoveEffect(106),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_ATTRACT
-    m(
-        MoveEffect(120),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_SLEEP_TALK
-    m(
-        MoveEffect(97),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(1),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_HEAL_BELL
-    m(
-        MoveEffect(102),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_RETURN
-    m(
-        MoveEffect(121),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_PRESENT
-    m(
-        MoveEffect(122),
-        1,
-        MoveType::Battle(Type::Normal),
-        90,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FRUSTRATION
-    m(
-        MoveEffect(123),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SAFEGUARD
-    m(
-        MoveEffect(124),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        25,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_PAIN_SPLIT
-    m(
-        MoveEffect(91),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SACRED_FIRE
-    m(
-        MoveEffect(125),
-        100,
-        MoveType::Battle(Type::Fire),
-        95,
-        5,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MAGNITUDE
-    m(
-        MoveEffect(126),
-        1,
-        MoveType::Battle(Type::Ground),
-        100,
-        30,
-        0,
-        MoveTarget(32),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_DYNAMIC_PUNCH
-    m(
-        MoveEffect(76),
-        100,
-        MoveType::Battle(Type::Fighting),
-        50,
-        5,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_MEGAHORN
-    m(
-        MoveEffect(0),
-        120,
-        MoveType::Battle(Type::Bug),
-        85,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_DRAGON_BREATH
-    m(
-        MoveEffect(6),
-        60,
-        MoveType::Battle(Type::Dragon),
-        100,
-        20,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_BATON_PASS
-    m(
-        MoveEffect(127),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ENCORE
-    m(
-        MoveEffect(90),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_PURSUIT
-    m(
-        MoveEffect(128),
-        40,
-        MoveType::Battle(Type::Dark),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_RAPID_SPIN
-    m(
-        MoveEffect(129),
-        20,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SWEET_SCENT
-    m(
-        MoveEffect(24),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_IRON_TAIL
-    m(
-        MoveEffect(69),
-        100,
-        MoveType::Battle(Type::Steel),
-        75,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_METAL_CLAW
-    m(
-        MoveEffect(139),
-        50,
-        MoveType::Battle(Type::Steel),
-        95,
-        35,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_VITAL_THROW
-    m(
-        MoveEffect(78),
-        70,
-        MoveType::Battle(Type::Fighting),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        -1,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MORNING_SUN
-    m(
-        MoveEffect(132),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_SYNTHESIS
-    m(
-        MoveEffect(133),
-        0,
-        MoveType::Battle(Type::Grass),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_MOONLIGHT
-    m(
-        MoveEffect(134),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_HIDDEN_POWER
-    m(
-        MoveEffect(135),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_CROSS_CHOP
-    m(
-        MoveEffect(43),
-        100,
-        MoveType::Battle(Type::Fighting),
-        80,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_TWISTER
-    m(
-        MoveEffect(146),
-        40,
-        MoveType::Battle(Type::Dragon),
-        100,
-        20,
-        20,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_RAIN_DANCE
-    m(
-        MoveEffect(136),
-        0,
-        MoveType::Battle(Type::Water),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_SUNNY_DAY
-    m(
-        MoveEffect(137),
-        0,
-        MoveType::Battle(Type::Fire),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_CRUNCH
-    m(
-        MoveEffect(72),
-        80,
-        MoveType::Battle(Type::Dark),
-        100,
-        15,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_MIRROR_COAT
-    m(
-        MoveEffect(144),
-        1,
-        MoveType::Battle(Type::Psychic),
-        100,
-        20,
-        0,
-        MoveTarget(1),
-        -5,
-        MoveFlags(0b01_0000),
-    ),
-    // MOVE_PSYCH_UP
-    m(
-        MoveEffect(143),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_EXTREME_SPEED
-    m(
-        MoveEffect(103),
-        80,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        1,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ANCIENT_POWER
-    m(
-        MoveEffect(140),
-        60,
-        MoveType::Battle(Type::Rock),
-        100,
-        5,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SHADOW_BALL
-    m(
-        MoveEffect(72),
-        80,
-        MoveType::Battle(Type::Ghost),
-        100,
-        15,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FUTURE_SIGHT
-    m(
-        MoveEffect(148),
-        80,
-        MoveType::Battle(Type::Psychic),
-        90,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ROCK_SMASH
-    m(
-        MoveEffect(69),
-        20,
-        MoveType::Battle(Type::Fighting),
-        100,
-        15,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_WHIRLPOOL
-    m(
-        MoveEffect(42),
-        15,
-        MoveType::Battle(Type::Water),
-        70,
-        15,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_BEAT_UP
-    m(
-        MoveEffect(154),
-        10,
-        MoveType::Battle(Type::Dark),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_FAKE_OUT
-    m(
-        MoveEffect(158),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        1,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_UPROAR
-    m(
-        MoveEffect(159),
-        50,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        100,
-        MoveTarget(4),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_STOCKPILE
-    m(
-        MoveEffect(160),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_SPIT_UP
-    m(
-        MoveEffect(161),
-        100,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b10_0010),
-    ),
-    // MOVE_SWALLOW
-    m(
-        MoveEffect(162),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_HEAT_WAVE
-    m(
-        MoveEffect(4),
-        100,
-        MoveType::Battle(Type::Fire),
-        90,
-        10,
-        10,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_HAIL
-    m(
-        MoveEffect(164),
-        0,
-        MoveType::Battle(Type::Ice),
-        0,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_TORMENT
-    m(
-        MoveEffect(165),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FLATTER
-    m(
-        MoveEffect(166),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_WILL_O_WISP
-    m(
-        MoveEffect(167),
-        0,
-        MoveType::Battle(Type::Fire),
-        75,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_MEMENTO
-    m(
-        MoveEffect(168),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FACADE
-    m(
-        MoveEffect(169),
-        70,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_FOCUS_PUNCH
-    m(
-        MoveEffect(170),
-        150,
-        MoveType::Battle(Type::Fighting),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        -3,
-        MoveFlags(0b00_0011),
-    ),
-    // MOVE_SMELLING_SALT
-    m(
-        MoveEffect(171),
-        60,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_FOLLOW_ME
-    m(
-        MoveEffect(172),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        3,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_NATURE_POWER
-    m(
-        MoveEffect(173),
-        0,
-        MoveType::Battle(Type::Normal),
-        95,
-        20,
-        0,
-        MoveTarget(1),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_CHARGE
-    m(
-        MoveEffect(174),
-        0,
-        MoveType::Battle(Type::Electric),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_TAUNT
-    m(
-        MoveEffect(175),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_HELPING_HAND
-    m(
-        MoveEffect(176),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        5,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_TRICK
-    m(
-        MoveEffect(177),
-        0,
-        MoveType::Battle(Type::Psychic),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_ROLE_PLAY
-    m(
-        MoveEffect(178),
-        0,
-        MoveType::Battle(Type::Psychic),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_WISH
-    m(
-        MoveEffect(179),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_ASSIST
-    m(
-        MoveEffect(180),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(1),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_INGRAIN
-    m(
-        MoveEffect(181),
-        0,
-        MoveType::Battle(Type::Grass),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_SUPERPOWER
-    m(
-        MoveEffect(182),
-        120,
-        MoveType::Battle(Type::Fighting),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_MAGIC_COAT
-    m(
-        MoveEffect(183),
-        0,
-        MoveType::Battle(Type::Psychic),
-        100,
-        15,
-        0,
-        MoveTarget(1),
-        4,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_RECYCLE
-    m(
-        MoveEffect(184),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_REVENGE
-    m(
-        MoveEffect(185),
-        60,
-        MoveType::Battle(Type::Fighting),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        -4,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_BRICK_BREAK
-    m(
-        MoveEffect(186),
-        75,
-        MoveType::Battle(Type::Fighting),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_YAWN
-    m(
-        MoveEffect(187),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_KNOCK_OFF
-    m(
-        MoveEffect(188),
-        20,
-        MoveType::Battle(Type::Dark),
-        100,
-        20,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_ENDEAVOR
-    m(
-        MoveEffect(189),
-        1,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ERUPTION
-    m(
-        MoveEffect(190),
-        150,
-        MoveType::Battle(Type::Fire),
-        100,
-        5,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SKILL_SWAP
-    m(
-        MoveEffect(191),
-        0,
-        MoveType::Battle(Type::Psychic),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_IMPRISON
-    m(
-        MoveEffect(192),
-        0,
-        MoveType::Battle(Type::Psychic),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_REFRESH
-    m(
-        MoveEffect(193),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_GRUDGE
-    m(
-        MoveEffect(194),
-        0,
-        MoveType::Battle(Type::Ghost),
-        100,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SNATCH
-    m(
-        MoveEffect(195),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        10,
-        0,
-        MoveTarget(1),
-        4,
-        MoveFlags(0b01_0000),
-    ),
-    // MOVE_SECRET_POWER
-    m(
-        MoveEffect(197),
-        70,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_DIVE
-    m(
-        MoveEffect(155),
-        60,
-        MoveType::Battle(Type::Water),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ARM_THRUST
-    m(
-        MoveEffect(29),
-        15,
-        MoveType::Battle(Type::Fighting),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_CAMOUFLAGE
-    m(
-        MoveEffect(213),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_TAIL_GLOW
-    m(
-        MoveEffect(53),
-        0,
-        MoveType::Battle(Type::Bug),
-        100,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_LUSTER_PURGE
-    m(
-        MoveEffect(72),
-        70,
-        MoveType::Battle(Type::Psychic),
-        100,
-        5,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MIST_BALL
-    m(
-        MoveEffect(71),
-        70,
-        MoveType::Battle(Type::Psychic),
-        100,
-        5,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_FEATHER_DANCE
-    m(
-        MoveEffect(58),
-        0,
-        MoveType::Battle(Type::Flying),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_TEETER_DANCE
-    m(
-        MoveEffect(199),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(32),
-        0,
-        MoveFlags(0b00_0010),
-    ),
-    // MOVE_BLAZE_KICK
-    m(
-        MoveEffect(200),
-        85,
-        MoveType::Battle(Type::Fire),
-        90,
-        10,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_MUD_SPORT
-    m(
-        MoveEffect(201),
-        0,
-        MoveType::Battle(Type::Ground),
-        100,
-        15,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_ICE_BALL
-    m(
-        MoveEffect(117),
-        30,
-        MoveType::Battle(Type::Ice),
-        90,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_NEEDLE_ARM
-    m(
-        MoveEffect(150),
-        60,
-        MoveType::Battle(Type::Grass),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_SLACK_OFF
-    m(
-        MoveEffect(32),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_HYPER_VOICE
-    m(
-        MoveEffect(0),
-        90,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_POISON_FANG
-    m(
-        MoveEffect(202),
-        50,
-        MoveType::Battle(Type::Poison),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_CRUSH_CLAW
-    m(
-        MoveEffect(69),
-        75,
-        MoveType::Battle(Type::Normal),
-        95,
-        10,
-        50,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_BLAST_BURN
-    m(
-        MoveEffect(80),
-        150,
-        MoveType::Battle(Type::Fire),
-        90,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_HYDRO_CANNON
-    m(
-        MoveEffect(80),
-        150,
-        MoveType::Battle(Type::Water),
-        90,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_METEOR_MASH
-    m(
-        MoveEffect(139),
-        100,
-        MoveType::Battle(Type::Steel),
-        85,
-        10,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ASTONISH
-    m(
-        MoveEffect(150),
-        30,
-        MoveType::Battle(Type::Ghost),
-        100,
-        15,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0011),
-    ),
-    // MOVE_WEATHER_BALL
-    m(
-        MoveEffect(203),
-        50,
-        MoveType::Battle(Type::Normal),
-        100,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_AROMATHERAPY
-    m(
-        MoveEffect(102),
-        0,
-        MoveType::Battle(Type::Grass),
-        0,
-        5,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_FAKE_TEARS
-    m(
-        MoveEffect(62),
-        0,
-        MoveType::Battle(Type::Dark),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_AIR_CUTTER
-    m(
-        MoveEffect(43),
-        55,
-        MoveType::Battle(Type::Flying),
-        95,
-        25,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_OVERHEAT
-    m(
-        MoveEffect(204),
-        140,
-        MoveType::Battle(Type::Fire),
-        90,
-        5,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ODOR_SLEUTH
-    m(
-        MoveEffect(113),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_ROCK_TOMB
-    m(
-        MoveEffect(70),
-        50,
-        MoveType::Battle(Type::Rock),
-        80,
-        10,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SILVER_WIND
-    m(
-        MoveEffect(140),
-        60,
-        MoveType::Battle(Type::Bug),
-        100,
-        5,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_METAL_SOUND
-    m(
-        MoveEffect(62),
-        0,
-        MoveType::Battle(Type::Steel),
-        85,
-        40,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_GRASS_WHISTLE
-    m(
-        MoveEffect(1),
-        0,
-        MoveType::Battle(Type::Grass),
-        55,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_TICKLE
-    m(
-        MoveEffect(205),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0110),
-    ),
-    // MOVE_COSMIC_POWER
-    m(
-        MoveEffect(206),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_WATER_SPOUT
-    m(
-        MoveEffect(190),
-        150,
-        MoveType::Battle(Type::Water),
-        100,
-        5,
-        0,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SIGNAL_BEAM
-    m(
-        MoveEffect(76),
-        75,
-        MoveType::Battle(Type::Bug),
-        100,
-        15,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SHADOW_PUNCH
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Ghost),
-        0,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_EXTRASENSORY
-    m(
-        MoveEffect(150),
-        80,
-        MoveType::Battle(Type::Psychic),
-        100,
-        30,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_SKY_UPPERCUT
-    m(
-        MoveEffect(207),
-        85,
-        MoveType::Battle(Type::Fighting),
-        90,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_SAND_TOMB
-    m(
-        MoveEffect(42),
-        15,
-        MoveType::Battle(Type::Ground),
-        70,
-        15,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SHEER_COLD
-    m(
-        MoveEffect(38),
-        1,
-        MoveType::Battle(Type::Ice),
-        30,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_MUDDY_WATER
-    m(
-        MoveEffect(73),
-        95,
-        MoveType::Battle(Type::Water),
-        85,
-        10,
-        30,
-        MoveTarget(8),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_BULLET_SEED
-    m(
-        MoveEffect(29),
-        10,
-        MoveType::Battle(Type::Grass),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_AERIAL_ACE
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Flying),
-        0,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_ICICLE_SPEAR
-    m(
-        MoveEffect(29),
-        10,
-        MoveType::Battle(Type::Ice),
-        100,
-        30,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_IRON_DEFENSE
-    m(
-        MoveEffect(51),
-        0,
-        MoveType::Battle(Type::Steel),
-        0,
-        15,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_BLOCK
-    m(
-        MoveEffect(106),
-        0,
-        MoveType::Battle(Type::Normal),
-        100,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0110),
-    ),
-    // MOVE_HOWL
-    m(
-        MoveEffect(10),
-        0,
-        MoveType::Battle(Type::Normal),
-        0,
-        40,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_DRAGON_CLAW
-    m(
-        MoveEffect(0),
-        80,
-        MoveType::Battle(Type::Dragon),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_FRENZY_PLANT
-    m(
-        MoveEffect(80),
-        150,
-        MoveType::Battle(Type::Grass),
-        90,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_BULK_UP
-    m(
-        MoveEffect(208),
-        0,
-        MoveType::Battle(Type::Fighting),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_BOUNCE
-    m(
-        MoveEffect(155),
-        85,
-        MoveType::Battle(Type::Flying),
-        85,
-        5,
-        30,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MUD_SHOT
-    m(
-        MoveEffect(70),
-        55,
-        MoveType::Battle(Type::Ground),
-        95,
-        15,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_POISON_TAIL
-    m(
-        MoveEffect(209),
-        50,
-        MoveType::Battle(Type::Poison),
-        100,
-        25,
-        10,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_COVET
-    m(
-        MoveEffect(105),
-        40,
-        MoveType::Battle(Type::Normal),
-        100,
-        40,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b01_0010),
-    ),
-    // MOVE_VOLT_TACKLE
-    m(
-        MoveEffect(198),
-        120,
-        MoveType::Battle(Type::Electric),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_MAGICAL_LEAF
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Grass),
-        0,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_WATER_SPORT
-    m(
-        MoveEffect(210),
-        0,
-        MoveType::Battle(Type::Water),
-        100,
-        15,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_CALM_MIND
-    m(
-        MoveEffect(211),
-        0,
-        MoveType::Battle(Type::Psychic),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_LEAF_BLADE
-    m(
-        MoveEffect(43),
-        70,
-        MoveType::Battle(Type::Grass),
-        100,
-        15,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0011),
-    ),
-    // MOVE_DRAGON_DANCE
-    m(
-        MoveEffect(212),
-        0,
-        MoveType::Battle(Type::Dragon),
-        0,
-        20,
-        0,
-        MoveTarget(16),
-        0,
-        MoveFlags(0b00_1000),
-    ),
-    // MOVE_ROCK_BLAST
-    m(
-        MoveEffect(29),
-        25,
-        MoveType::Battle(Type::Rock),
-        80,
-        10,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_SHOCK_WAVE
-    m(
-        MoveEffect(17),
-        60,
-        MoveType::Battle(Type::Electric),
-        0,
-        20,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_WATER_PULSE
-    m(
-        MoveEffect(76),
-        60,
-        MoveType::Battle(Type::Water),
-        100,
-        20,
-        20,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-    // MOVE_DOOM_DESIRE
-    m(
-        MoveEffect(148),
-        120,
-        MoveType::Battle(Type::Steel),
-        85,
-        5,
-        0,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b00_0000),
-    ),
-    // MOVE_PSYCHO_BOOST
-    m(
-        MoveEffect(204),
-        140,
-        MoveType::Battle(Type::Psychic),
-        90,
-        5,
-        100,
-        MoveTarget(0),
-        0,
-        MoveFlags(0b11_0010),
-    ),
-];
+macro_rules! move_flags {
+    () => {
+        MoveFlags::NONE
+    };
+    ($($flag:ident)|+ $(|)?) => {
+        MoveFlags(0 $(| MoveFlags::$flag)+)
+    };
+}
 
-/// The `gBattleMoves` table: owned per-move battle data with typed lookup
-/// `(oop-boundaries)`. No global mutable state — construct one and query it.
+macro_rules! define_moves {
+    ($($name:ident = $index:literal => move_data($($attribute:expr),+ $(,)?)),+ $(,)?) => {
+        impl MoveId {
+            $(pub(crate) const $name: MoveId = MoveId($index);)+
+        }
+
+        const MOVES: [MoveData; MOVES_COUNT] = [
+            $(MoveData::new(MoveId::$name, $($attribute),+),)+
+        ];
+
+        #[cfg(test)]
+        const MOVE_IDENTITIES: [MoveId; MOVES_COUNT] = [$(MoveId::$name,)+];
+    };
+}
+
+#[rustfmt::skip]
+define_moves! {
+    NONE = 0 => move_data(MoveEffect::HIT, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(0), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    POUND = 1 => move_data(MoveEffect::HIT, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    KARATE_CHOP = 2 => move_data(MoveEffect::HIGH_CRITICAL, Power(50), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DOUBLE_SLAP = 3 => move_data(MoveEffect::MULTI_HIT, Power(15), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    COMET_PUNCH = 4 => move_data(MoveEffect::MULTI_HIT, Power(18), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MEGA_PUNCH = 5 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    PAY_DAY = 6 => move_data(MoveEffect::PAY_DAY, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FIRE_PUNCH = 7 => move_data(MoveEffect::BURN_HIT, Power(75), MoveType::Battle(Type::Fire), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ICE_PUNCH = 8 => move_data(MoveEffect::FREEZE_HIT, Power(75), MoveType::Battle(Type::Ice), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    THUNDER_PUNCH = 9 => move_data(MoveEffect::PARALYZE_HIT, Power(75), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SCRATCH = 10 => move_data(MoveEffect::HIT, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    VICE_GRIP = 11 => move_data(MoveEffect::HIT, Power(55), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    GUILLOTINE = 12 => move_data(MoveEffect::OHKO, Power(1), MoveType::Battle(Type::Normal), Accuracy(30), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    RAZOR_WIND = 13 => move_data(MoveEffect::RAZOR_WIND, Power(80), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWORDS_DANCE = 14 => move_data(MoveEffect::ATTACK_UP_2, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    CUT = 15 => move_data(MoveEffect::HIT, Power(50), MoveType::Battle(Type::Normal), Accuracy(95), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    GUST = 16 => move_data(MoveEffect::GUST, Power(40), MoveType::Battle(Type::Flying), Accuracy(100), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    WING_ATTACK = 17 => move_data(MoveEffect::HIT, Power(60), MoveType::Battle(Type::Flying), Accuracy(100), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    WHIRLWIND = 18 => move_data(MoveEffect::ROAR, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::MINUS_SIX, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FLY = 19 => move_data(MoveEffect::SEMI_INVULNERABLE, Power(70), MoveType::Battle(Type::Flying), Accuracy(95), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BIND = 20 => move_data(MoveEffect::TRAP, Power(15), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SLAM = 21 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    VINE_WHIP = 22 => move_data(MoveEffect::HIT, Power(35), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    STOMP = 23 => move_data(MoveEffect::FLINCH_MINIMIZE_HIT, Power(65), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DOUBLE_KICK = 24 => move_data(MoveEffect::DOUBLE_HIT, Power(30), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MEGA_KICK = 25 => move_data(MoveEffect::HIT, Power(120), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    JUMP_KICK = 26 => move_data(MoveEffect::RECOIL_IF_MISS, Power(70), MoveType::Battle(Type::Fighting), Accuracy(95), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ROLLING_KICK = 27 => move_data(MoveEffect::FLINCH_HIT, Power(60), MoveType::Battle(Type::Fighting), Accuracy(85), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SAND_ATTACK = 28 => move_data(MoveEffect::ACCURACY_DOWN, Power(0), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HEADBUTT = 29 => move_data(MoveEffect::FLINCH_HIT, Power(70), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HORN_ATTACK = 30 => move_data(MoveEffect::HIT, Power(65), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FURY_ATTACK = 31 => move_data(MoveEffect::MULTI_HIT, Power(15), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    HORN_DRILL = 32 => move_data(MoveEffect::OHKO, Power(1), MoveType::Battle(Type::Normal), Accuracy(30), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    TACKLE = 33 => move_data(MoveEffect::HIT, Power(35), MoveType::Battle(Type::Normal), Accuracy(95), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BODY_SLAM = 34 => move_data(MoveEffect::PARALYZE_HIT, Power(85), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WRAP = 35 => move_data(MoveEffect::TRAP, Power(15), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TAKE_DOWN = 36 => move_data(MoveEffect::RECOIL, Power(90), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    THRASH = 37 => move_data(MoveEffect::RAMPAGE, Power(90), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::RANDOM, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DOUBLE_EDGE = 38 => move_data(MoveEffect::DOUBLE_EDGE, Power(120), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TAIL_WHIP = 39 => move_data(MoveEffect::DEFENSE_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    POISON_STING = 40 => move_data(MoveEffect::POISON_HIT, Power(15), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(35), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    TWINEEDLE = 41 => move_data(MoveEffect::TWINEEDLE, Power(25), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(20), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PIN_MISSILE = 42 => move_data(MoveEffect::MULTI_HIT, Power(14), MoveType::Battle(Type::Bug), Accuracy(85), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    LEER = 43 => move_data(MoveEffect::DEFENSE_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BITE = 44 => move_data(MoveEffect::FLINCH_HIT, Power(60), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(25), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    GROWL = 45 => move_data(MoveEffect::ATTACK_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ROAR = 46 => move_data(MoveEffect::ROAR, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::MINUS_SIX, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SING = 47 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Normal), Accuracy(55), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SUPERSONIC = 48 => move_data(MoveEffect::CONFUSE, Power(0), MoveType::Battle(Type::Normal), Accuracy(55), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SONIC_BOOM = 49 => move_data(MoveEffect::SONICBOOM, Power(1), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DISABLE = 50 => move_data(MoveEffect::DISABLE, Power(0), MoveType::Battle(Type::Normal), Accuracy(55), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ACID = 51 => move_data(MoveEffect::DEFENSE_DOWN_HIT, Power(40), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(30), SecondaryEffectChance(10), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    EMBER = 52 => move_data(MoveEffect::BURN_HIT, Power(40), MoveType::Battle(Type::Fire), Accuracy(100), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FLAMETHROWER = 53 => move_data(MoveEffect::BURN_HIT, Power(95), MoveType::Battle(Type::Fire), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MIST = 54 => move_data(MoveEffect::MIST, Power(0), MoveType::Battle(Type::Ice), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    WATER_GUN = 55 => move_data(MoveEffect::HIT, Power(40), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    HYDRO_PUMP = 56 => move_data(MoveEffect::HIT, Power(120), MoveType::Battle(Type::Water), Accuracy(80), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SURF = 57 => move_data(MoveEffect::HIT, Power(95), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ICE_BEAM = 58 => move_data(MoveEffect::FREEZE_HIT, Power(95), MoveType::Battle(Type::Ice), Accuracy(100), PowerPoints(10), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BLIZZARD = 59 => move_data(MoveEffect::FREEZE_HIT, Power(120), MoveType::Battle(Type::Ice), Accuracy(70), PowerPoints(5), SecondaryEffectChance(10), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PSYBEAM = 60 => move_data(MoveEffect::CONFUSE_HIT, Power(65), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(20), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BUBBLE_BEAM = 61 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(65), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(20), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    AURORA_BEAM = 62 => move_data(MoveEffect::ATTACK_DOWN_HIT, Power(65), MoveType::Battle(Type::Ice), Accuracy(100), PowerPoints(20), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HYPER_BEAM = 63 => move_data(MoveEffect::RECHARGE, Power(150), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    PECK = 64 => move_data(MoveEffect::HIT, Power(35), MoveType::Battle(Type::Flying), Accuracy(100), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DRILL_PECK = 65 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Flying), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SUBMISSION = 66 => move_data(MoveEffect::RECOIL, Power(80), MoveType::Battle(Type::Fighting), Accuracy(80), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    LOW_KICK = 67 => move_data(MoveEffect::LOW_KICK, Power(1), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    COUNTER = 68 => move_data(MoveEffect::COUNTER, Power(1), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::MINUS_FIVE, move_flags!(MAKES_CONTACT | MIRROR_MOVE_AFFECTED)),
+    SEISMIC_TOSS = 69 => move_data(MoveEffect::LEVEL_DAMAGE, Power(1), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    STRENGTH = 70 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ABSORB = 71 => move_data(MoveEffect::ABSORB, Power(20), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MEGA_DRAIN = 72 => move_data(MoveEffect::ABSORB, Power(40), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    LEECH_SEED = 73 => move_data(MoveEffect::LEECH_SEED, Power(0), MoveType::Battle(Type::Grass), Accuracy(90), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    GROWTH = 74 => move_data(MoveEffect::SPECIAL_ATTACK_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    RAZOR_LEAF = 75 => move_data(MoveEffect::HIGH_CRITICAL, Power(55), MoveType::Battle(Type::Grass), Accuracy(95), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SOLAR_BEAM = 76 => move_data(MoveEffect::SOLAR_BEAM, Power(120), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    POISON_POWDER = 77 => move_data(MoveEffect::POISON, Power(0), MoveType::Battle(Type::Poison), Accuracy(75), PowerPoints(35), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    STUN_SPORE = 78 => move_data(MoveEffect::PARALYZE, Power(0), MoveType::Battle(Type::Grass), Accuracy(75), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SLEEP_POWDER = 79 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Grass), Accuracy(75), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PETAL_DANCE = 80 => move_data(MoveEffect::RAMPAGE, Power(70), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::RANDOM, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    STRING_SHOT = 81 => move_data(MoveEffect::SPEED_DOWN, Power(0), MoveType::Battle(Type::Bug), Accuracy(95), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DRAGON_RAGE = 82 => move_data(MoveEffect::DRAGON_RAGE, Power(1), MoveType::Battle(Type::Dragon), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FIRE_SPIN = 83 => move_data(MoveEffect::TRAP, Power(15), MoveType::Battle(Type::Fire), Accuracy(70), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    THUNDER_SHOCK = 84 => move_data(MoveEffect::PARALYZE_HIT, Power(40), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(30), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    THUNDERBOLT = 85 => move_data(MoveEffect::PARALYZE_HIT, Power(95), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    THUNDER_WAVE = 86 => move_data(MoveEffect::PARALYZE, Power(0), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    THUNDER = 87 => move_data(MoveEffect::THUNDER, Power(120), MoveType::Battle(Type::Electric), Accuracy(70), PowerPoints(10), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ROCK_THROW = 88 => move_data(MoveEffect::HIT, Power(50), MoveType::Battle(Type::Rock), Accuracy(90), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    EARTHQUAKE = 89 => move_data(MoveEffect::EARTHQUAKE, Power(100), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::FOES_AND_ALLY, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FISSURE = 90 => move_data(MoveEffect::OHKO, Power(1), MoveType::Battle(Type::Ground), Accuracy(30), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DIG = 91 => move_data(MoveEffect::SEMI_INVULNERABLE, Power(60), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TOXIC = 92 => move_data(MoveEffect::TOXIC, Power(0), MoveType::Battle(Type::Poison), Accuracy(85), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    CONFUSION = 93 => move_data(MoveEffect::CONFUSE_HIT, Power(50), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PSYCHIC = 94 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_HIT, Power(90), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(10), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HYPNOSIS = 95 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Psychic), Accuracy(60), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MEDITATE = 96 => move_data(MoveEffect::ATTACK_UP, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    AGILITY = 97 => move_data(MoveEffect::SPEED_UP_2, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    QUICK_ATTACK = 98 => move_data(MoveEffect::QUICK_ATTACK, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::PLUS_ONE, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    RAGE = 99 => move_data(MoveEffect::RAGE, Power(20), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TELEPORT = 100 => move_data(MoveEffect::TELEPORT, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    NIGHT_SHADE = 101 => move_data(MoveEffect::LEVEL_DAMAGE, Power(1), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MIMIC = 102 => move_data(MoveEffect::MIMIC, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    SCREECH = 103 => move_data(MoveEffect::DEFENSE_DOWN_2, Power(0), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DOUBLE_TEAM = 104 => move_data(MoveEffect::EVASION_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    RECOVER = 105 => move_data(MoveEffect::RESTORE_HP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    HARDEN = 106 => move_data(MoveEffect::DEFENSE_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    MINIMIZE = 107 => move_data(MoveEffect::MINIMIZE, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    SMOKESCREEN = 108 => move_data(MoveEffect::ACCURACY_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    CONFUSE_RAY = 109 => move_data(MoveEffect::CONFUSE, Power(0), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WITHDRAW = 110 => move_data(MoveEffect::DEFENSE_UP, Power(0), MoveType::Battle(Type::Water), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    DEFENSE_CURL = 111 => move_data(MoveEffect::DEFENSE_CURL, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    BARRIER = 112 => move_data(MoveEffect::DEFENSE_UP_2, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    LIGHT_SCREEN = 113 => move_data(MoveEffect::LIGHT_SCREEN, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    HAZE = 114 => move_data(MoveEffect::HAZE, Power(0), MoveType::Battle(Type::Ice), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    REFLECT = 115 => move_data(MoveEffect::REFLECT, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    FOCUS_ENERGY = 116 => move_data(MoveEffect::FOCUS_ENERGY, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    BIDE = 117 => move_data(MoveEffect::BIDE, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | KINGS_ROCK_AFFECTED)),
+    METRONOME = 118 => move_data(MoveEffect::METRONOME, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::STANDARD, move_flags!()),
+    MIRROR_MOVE = 119 => move_data(MoveEffect::MIRROR_MOVE, Power(0), MoveType::Battle(Type::Flying), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::STANDARD, move_flags!()),
+    SELF_DESTRUCT = 120 => move_data(MoveEffect::EXPLOSION, Power(200), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::FOES_AND_ALLY, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    EGG_BOMB = 121 => move_data(MoveEffect::HIT, Power(100), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    LICK = 122 => move_data(MoveEffect::PARALYZE_HIT, Power(20), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(30), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SMOG = 123 => move_data(MoveEffect::POISON_HIT, Power(20), MoveType::Battle(Type::Poison), Accuracy(70), PowerPoints(20), SecondaryEffectChance(40), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SLUDGE = 124 => move_data(MoveEffect::POISON_HIT, Power(65), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(20), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BONE_CLUB = 125 => move_data(MoveEffect::FLINCH_HIT, Power(65), MoveType::Battle(Type::Ground), Accuracy(85), PowerPoints(20), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FIRE_BLAST = 126 => move_data(MoveEffect::BURN_HIT, Power(120), MoveType::Battle(Type::Fire), Accuracy(85), PowerPoints(5), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WATERFALL = 127 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CLAMP = 128 => move_data(MoveEffect::TRAP, Power(35), MoveType::Battle(Type::Water), Accuracy(75), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWIFT = 129 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SKULL_BASH = 130 => move_data(MoveEffect::SKULL_BASH, Power(100), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SPIKE_CANNON = 131 => move_data(MoveEffect::MULTI_HIT, Power(20), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CONSTRICT = 132 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(10), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(35), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    AMNESIA = 133 => move_data(MoveEffect::SPECIAL_DEFENSE_UP_2, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    KINESIS = 134 => move_data(MoveEffect::ACCURACY_DOWN, Power(0), MoveType::Battle(Type::Psychic), Accuracy(80), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SOFT_BOILED = 135 => move_data(MoveEffect::SOFTBOILED, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HI_JUMP_KICK = 136 => move_data(MoveEffect::RECOIL_IF_MISS, Power(85), MoveType::Battle(Type::Fighting), Accuracy(90), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    GLARE = 137 => move_data(MoveEffect::PARALYZE, Power(0), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DREAM_EATER = 138 => move_data(MoveEffect::DREAM_EATER, Power(100), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    POISON_GAS = 139 => move_data(MoveEffect::POISON, Power(0), MoveType::Battle(Type::Poison), Accuracy(55), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BARRAGE = 140 => move_data(MoveEffect::MULTI_HIT, Power(15), MoveType::Battle(Type::Normal), Accuracy(85), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    LEECH_LIFE = 141 => move_data(MoveEffect::ABSORB, Power(20), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    LOVELY_KISS = 142 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SKY_ATTACK = 143 => move_data(MoveEffect::SKY_ATTACK, Power(140), MoveType::Battle(Type::Flying), Accuracy(90), PowerPoints(5), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TRANSFORM = 144 => move_data(MoveEffect::TRANSFORM, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    BUBBLE = 145 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(20), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(30), SecondaryEffectChance(10), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DIZZY_PUNCH = 146 => move_data(MoveEffect::CONFUSE_HIT, Power(70), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SPORE = 147 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FLASH = 148 => move_data(MoveEffect::ACCURACY_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(70), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PSYWAVE = 149 => move_data(MoveEffect::PSYWAVE, Power(1), MoveType::Battle(Type::Psychic), Accuracy(80), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SPLASH = 150 => move_data(MoveEffect::SPLASH, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    ACID_ARMOR = 151 => move_data(MoveEffect::DEFENSE_UP_2, Power(0), MoveType::Battle(Type::Poison), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    CRABHAMMER = 152 => move_data(MoveEffect::HIGH_CRITICAL, Power(90), MoveType::Battle(Type::Water), Accuracy(85), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    EXPLOSION = 153 => move_data(MoveEffect::EXPLOSION, Power(250), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::FOES_AND_ALLY, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FURY_SWIPES = 154 => move_data(MoveEffect::MULTI_HIT, Power(18), MoveType::Battle(Type::Normal), Accuracy(80), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BONEMERANG = 155 => move_data(MoveEffect::DOUBLE_HIT, Power(50), MoveType::Battle(Type::Ground), Accuracy(90), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    REST = 156 => move_data(MoveEffect::REST, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    ROCK_SLIDE = 157 => move_data(MoveEffect::FLINCH_HIT, Power(75), MoveType::Battle(Type::Rock), Accuracy(90), PowerPoints(10), SecondaryEffectChance(30), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HYPER_FANG = 158 => move_data(MoveEffect::FLINCH_HIT, Power(80), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SHARPEN = 159 => move_data(MoveEffect::ATTACK_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    CONVERSION = 160 => move_data(MoveEffect::CONVERSION, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    TRI_ATTACK = 161 => move_data(MoveEffect::TRI_ATTACK, Power(80), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SUPER_FANG = 162 => move_data(MoveEffect::SUPER_FANG, Power(1), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SLASH = 163 => move_data(MoveEffect::HIGH_CRITICAL, Power(70), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SUBSTITUTE = 164 => move_data(MoveEffect::SUBSTITUTE, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    STRUGGLE = 165 => move_data(MoveEffect::RECOIL, Power(50), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(1), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SKETCH = 166 => move_data(MoveEffect::SKETCH, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(1), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    TRIPLE_KICK = 167 => move_data(MoveEffect::TRIPLE_KICK, Power(10), MoveType::Battle(Type::Fighting), Accuracy(90), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    THIEF = 168 => move_data(MoveEffect::THIEF, Power(40), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SPIDER_WEB = 169 => move_data(MoveEffect::MEAN_LOOK, Power(0), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MIND_READER = 170 => move_data(MoveEffect::LOCK_ON, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    NIGHTMARE = 171 => move_data(MoveEffect::NIGHTMARE, Power(0), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FLAME_WHEEL = 172 => move_data(MoveEffect::THAW_HIT, Power(60), MoveType::Battle(Type::Fire), Accuracy(100), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SNORE = 173 => move_data(MoveEffect::SNORE, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CURSE = 174 => move_data(MoveEffect::CURSE, Power(0), MoveType::Mystery, Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    FLAIL = 175 => move_data(MoveEffect::FLAIL, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CONVERSION_2 = 176 => move_data(MoveEffect::CONVERSION_2, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    AEROBLAST = 177 => move_data(MoveEffect::HIGH_CRITICAL, Power(100), MoveType::Battle(Type::Flying), Accuracy(95), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    COTTON_SPORE = 178 => move_data(MoveEffect::SPEED_DOWN_2, Power(0), MoveType::Battle(Type::Grass), Accuracy(85), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    REVERSAL = 179 => move_data(MoveEffect::FLAIL, Power(1), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SPITE = 180 => move_data(MoveEffect::SPITE, Power(0), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    POWDER_SNOW = 181 => move_data(MoveEffect::FREEZE_HIT, Power(40), MoveType::Battle(Type::Ice), Accuracy(100), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PROTECT = 182 => move_data(MoveEffect::PROTECT, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::PLUS_THREE, move_flags!()),
+    MACH_PUNCH = 183 => move_data(MoveEffect::QUICK_ATTACK, Power(40), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::PLUS_ONE, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SCARY_FACE = 184 => move_data(MoveEffect::SPEED_DOWN_2, Power(0), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FAINT_ATTACK = 185 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Dark), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWEET_KISS = 186 => move_data(MoveEffect::CONFUSE, Power(0), MoveType::Battle(Type::Normal), Accuracy(75), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BELLY_DRUM = 187 => move_data(MoveEffect::BELLY_DRUM, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    SLUDGE_BOMB = 188 => move_data(MoveEffect::POISON_HIT, Power(90), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(10), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MUD_SLAP = 189 => move_data(MoveEffect::ACCURACY_DOWN_HIT, Power(20), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    OCTAZOOKA = 190 => move_data(MoveEffect::ACCURACY_DOWN_HIT, Power(65), MoveType::Battle(Type::Water), Accuracy(85), PowerPoints(10), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SPIKES = 191 => move_data(MoveEffect::SPIKES, Power(0), MoveType::Battle(Type::Ground), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::OPPONENTS_FIELD, Priority::STANDARD, move_flags!()),
+    ZAP_CANNON = 192 => move_data(MoveEffect::PARALYZE_HIT, Power(100), MoveType::Battle(Type::Electric), Accuracy(50), PowerPoints(5), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FORESIGHT = 193 => move_data(MoveEffect::FORESIGHT, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DESTINY_BOND = 194 => move_data(MoveEffect::DESTINY_BOND, Power(0), MoveType::Battle(Type::Ghost), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    PERISH_SONG = 195 => move_data(MoveEffect::PERISH_SONG, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    ICY_WIND = 196 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(55), MoveType::Battle(Type::Ice), Accuracy(95), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DETECT = 197 => move_data(MoveEffect::PROTECT, Power(0), MoveType::Battle(Type::Fighting), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::PLUS_THREE, move_flags!()),
+    BONE_RUSH = 198 => move_data(MoveEffect::MULTI_HIT, Power(25), MoveType::Battle(Type::Ground), Accuracy(80), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    LOCK_ON = 199 => move_data(MoveEffect::LOCK_ON, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    OUTRAGE = 200 => move_data(MoveEffect::RAMPAGE, Power(90), MoveType::Battle(Type::Dragon), Accuracy(100), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::RANDOM, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SANDSTORM = 201 => move_data(MoveEffect::SANDSTORM, Power(0), MoveType::Battle(Type::Rock), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    GIGA_DRAIN = 202 => move_data(MoveEffect::ABSORB, Power(60), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ENDURE = 203 => move_data(MoveEffect::ENDURE, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::PLUS_THREE, move_flags!()),
+    CHARM = 204 => move_data(MoveEffect::ATTACK_DOWN_2, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ROLLOUT = 205 => move_data(MoveEffect::ROLLOUT, Power(30), MoveType::Battle(Type::Rock), Accuracy(90), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FALSE_SWIPE = 206 => move_data(MoveEffect::FALSE_SWIPE, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWAGGER = 207 => move_data(MoveEffect::SWAGGER, Power(0), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MILK_DRINK = 208 => move_data(MoveEffect::SOFTBOILED, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | SNATCH_AFFECTED)),
+    SPARK = 209 => move_data(MoveEffect::PARALYZE_HIT, Power(65), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(20), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FURY_CUTTER = 210 => move_data(MoveEffect::FURY_CUTTER, Power(10), MoveType::Battle(Type::Bug), Accuracy(95), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    STEEL_WING = 211 => move_data(MoveEffect::DEFENSE_UP_HIT, Power(70), MoveType::Battle(Type::Steel), Accuracy(90), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MEAN_LOOK = 212 => move_data(MoveEffect::MEAN_LOOK, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ATTRACT = 213 => move_data(MoveEffect::ATTRACT, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SLEEP_TALK = 214 => move_data(MoveEffect::SLEEP_TALK, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::STANDARD, move_flags!()),
+    HEAL_BELL = 215 => move_data(MoveEffect::HEAL_BELL, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    RETURN = 216 => move_data(MoveEffect::RETURN, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    PRESENT = 217 => move_data(MoveEffect::PRESENT, Power(1), MoveType::Battle(Type::Normal), Accuracy(90), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FRUSTRATION = 218 => move_data(MoveEffect::FRUSTRATION, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SAFEGUARD = 219 => move_data(MoveEffect::SAFEGUARD, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    PAIN_SPLIT = 220 => move_data(MoveEffect::PAIN_SPLIT, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SACRED_FIRE = 221 => move_data(MoveEffect::THAW_HIT, Power(100), MoveType::Battle(Type::Fire), Accuracy(95), PowerPoints(5), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MAGNITUDE = 222 => move_data(MoveEffect::MAGNITUDE, Power(1), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::FOES_AND_ALLY, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DYNAMIC_PUNCH = 223 => move_data(MoveEffect::CONFUSE_HIT, Power(100), MoveType::Battle(Type::Fighting), Accuracy(50), PowerPoints(5), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MEGAHORN = 224 => move_data(MoveEffect::HIT, Power(120), MoveType::Battle(Type::Bug), Accuracy(85), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DRAGON_BREATH = 225 => move_data(MoveEffect::PARALYZE_HIT, Power(60), MoveType::Battle(Type::Dragon), Accuracy(100), PowerPoints(20), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BATON_PASS = 226 => move_data(MoveEffect::BATON_PASS, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    ENCORE = 227 => move_data(MoveEffect::ENCORE, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    PURSUIT = 228 => move_data(MoveEffect::PURSUIT, Power(40), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    RAPID_SPIN = 229 => move_data(MoveEffect::RAPID_SPIN, Power(20), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWEET_SCENT = 230 => move_data(MoveEffect::EVASION_DOWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    IRON_TAIL = 231 => move_data(MoveEffect::DEFENSE_DOWN_HIT, Power(100), MoveType::Battle(Type::Steel), Accuracy(75), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    METAL_CLAW = 232 => move_data(MoveEffect::ATTACK_UP_HIT, Power(50), MoveType::Battle(Type::Steel), Accuracy(95), PowerPoints(35), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    VITAL_THROW = 233 => move_data(MoveEffect::VITAL_THROW, Power(70), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::MINUS_ONE, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MORNING_SUN = 234 => move_data(MoveEffect::MORNING_SUN, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    SYNTHESIS = 235 => move_data(MoveEffect::SYNTHESIS, Power(0), MoveType::Battle(Type::Grass), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    MOONLIGHT = 236 => move_data(MoveEffect::MOONLIGHT, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    HIDDEN_POWER = 237 => move_data(MoveEffect::HIDDEN_POWER, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CROSS_CHOP = 238 => move_data(MoveEffect::HIGH_CRITICAL, Power(100), MoveType::Battle(Type::Fighting), Accuracy(80), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    TWISTER = 239 => move_data(MoveEffect::TWISTER, Power(40), MoveType::Battle(Type::Dragon), Accuracy(100), PowerPoints(20), SecondaryEffectChance(20), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    RAIN_DANCE = 240 => move_data(MoveEffect::RAIN_DANCE, Power(0), MoveType::Battle(Type::Water), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    SUNNY_DAY = 241 => move_data(MoveEffect::SUNNY_DAY, Power(0), MoveType::Battle(Type::Fire), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    CRUNCH = 242 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_HIT, Power(80), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(15), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MIRROR_COAT = 243 => move_data(MoveEffect::MIRROR_COAT, Power(1), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::MINUS_FIVE, move_flags!(MIRROR_MOVE_AFFECTED)),
+    PSYCH_UP = 244 => move_data(MoveEffect::PSYCH_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    EXTREME_SPEED = 245 => move_data(MoveEffect::QUICK_ATTACK, Power(80), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::PLUS_ONE, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ANCIENT_POWER = 246 => move_data(MoveEffect::ALL_STATS_UP_HIT, Power(60), MoveType::Battle(Type::Rock), Accuracy(100), PowerPoints(5), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SHADOW_BALL = 247 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_HIT, Power(80), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(15), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FUTURE_SIGHT = 248 => move_data(MoveEffect::FUTURE_SIGHT, Power(80), MoveType::Battle(Type::Psychic), Accuracy(90), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    ROCK_SMASH = 249 => move_data(MoveEffect::DEFENSE_DOWN_HIT, Power(20), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(15), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WHIRLPOOL = 250 => move_data(MoveEffect::TRAP, Power(15), MoveType::Battle(Type::Water), Accuracy(70), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BEAT_UP = 251 => move_data(MoveEffect::BEAT_UP, Power(10), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FAKE_OUT = 252 => move_data(MoveEffect::FAKE_OUT, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::PLUS_ONE, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    UPROAR = 253 => move_data(MoveEffect::UPROAR, Power(50), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::RANDOM, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    STOCKPILE = 254 => move_data(MoveEffect::STOCKPILE, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    SPIT_UP = 255 => move_data(MoveEffect::SPIT_UP, Power(100), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SWALLOW = 256 => move_data(MoveEffect::SWALLOW, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    HEAT_WAVE = 257 => move_data(MoveEffect::BURN_HIT, Power(100), MoveType::Battle(Type::Fire), Accuracy(90), PowerPoints(10), SecondaryEffectChance(10), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HAIL = 258 => move_data(MoveEffect::HAIL, Power(0), MoveType::Battle(Type::Ice), Accuracy::ALWAYS, PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    TORMENT = 259 => move_data(MoveEffect::TORMENT, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FLATTER = 260 => move_data(MoveEffect::FLATTER, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WILL_O_WISP = 261 => move_data(MoveEffect::WILL_O_WISP, Power(0), MoveType::Battle(Type::Fire), Accuracy(75), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MEMENTO = 262 => move_data(MoveEffect::MEMENTO, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FACADE = 263 => move_data(MoveEffect::FACADE, Power(70), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FOCUS_PUNCH = 264 => move_data(MoveEffect::FOCUS_PUNCH, Power(150), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::MINUS_THREE, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED)),
+    SMELLING_SALT = 265 => move_data(MoveEffect::SMELLINGSALT, Power(60), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FOLLOW_ME = 266 => move_data(MoveEffect::FOLLOW_ME, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::PLUS_THREE, move_flags!()),
+    NATURE_POWER = 267 => move_data(MoveEffect::NATURE_POWER, Power(0), MoveType::Battle(Type::Normal), Accuracy(95), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::STANDARD, move_flags!()),
+    CHARGE = 268 => move_data(MoveEffect::CHARGE, Power(0), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    TAUNT = 269 => move_data(MoveEffect::TAUNT, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    HELPING_HAND = 270 => move_data(MoveEffect::HELPING_HAND, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::PLUS_FIVE, move_flags!()),
+    TRICK = 271 => move_data(MoveEffect::TRICK, Power(0), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ROLE_PLAY = 272 => move_data(MoveEffect::ROLE_PLAY, Power(0), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    WISH = 273 => move_data(MoveEffect::WISH, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    ASSIST = 274 => move_data(MoveEffect::ASSIST, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::STANDARD, move_flags!()),
+    INGRAIN = 275 => move_data(MoveEffect::INGRAIN, Power(0), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    SUPERPOWER = 276 => move_data(MoveEffect::SUPERPOWER, Power(120), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MAGIC_COAT = 277 => move_data(MoveEffect::MAGIC_COAT, Power(0), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::PLUS_FOUR, move_flags!()),
+    RECYCLE = 278 => move_data(MoveEffect::RECYCLE, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    REVENGE = 279 => move_data(MoveEffect::REVENGE, Power(60), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::MINUS_FOUR, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BRICK_BREAK = 280 => move_data(MoveEffect::BRICK_BREAK, Power(75), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    YAWN = 281 => move_data(MoveEffect::YAWN, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    KNOCK_OFF = 282 => move_data(MoveEffect::KNOCK_OFF, Power(20), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(20), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ENDEAVOR = 283 => move_data(MoveEffect::ENDEAVOR, Power(1), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ERUPTION = 284 => move_data(MoveEffect::ERUPTION, Power(150), MoveType::Battle(Type::Fire), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SKILL_SWAP = 285 => move_data(MoveEffect::SKILL_SWAP, Power(0), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    IMPRISON = 286 => move_data(MoveEffect::IMPRISON, Power(0), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    REFRESH = 287 => move_data(MoveEffect::REFRESH, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    GRUDGE = 288 => move_data(MoveEffect::GRUDGE, Power(0), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SNATCH = 289 => move_data(MoveEffect::SNATCH, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::DEPENDS, Priority::PLUS_FOUR, move_flags!(MIRROR_MOVE_AFFECTED)),
+    SECRET_POWER = 290 => move_data(MoveEffect::SECRET_POWER, Power(70), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    DIVE = 291 => move_data(MoveEffect::SEMI_INVULNERABLE, Power(60), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ARM_THRUST = 292 => move_data(MoveEffect::MULTI_HIT, Power(15), MoveType::Battle(Type::Fighting), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    CAMOUFLAGE = 293 => move_data(MoveEffect::CAMOUFLAGE, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    TAIL_GLOW = 294 => move_data(MoveEffect::SPECIAL_ATTACK_UP_2, Power(0), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    LUSTER_PURGE = 295 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_HIT, Power(70), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(5), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MIST_BALL = 296 => move_data(MoveEffect::SPECIAL_ATTACK_DOWN_HIT, Power(70), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(5), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    FEATHER_DANCE = 297 => move_data(MoveEffect::ATTACK_DOWN_2, Power(0), MoveType::Battle(Type::Flying), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    TEETER_DANCE = 298 => move_data(MoveEffect::TEETER_DANCE, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::FOES_AND_ALLY, Priority::STANDARD, move_flags!(PROTECT_AFFECTED)),
+    BLAZE_KICK = 299 => move_data(MoveEffect::BLAZE_KICK, Power(85), MoveType::Battle(Type::Fire), Accuracy(90), PowerPoints(10), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MUD_SPORT = 300 => move_data(MoveEffect::MUD_SPORT, Power(0), MoveType::Battle(Type::Ground), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    ICE_BALL = 301 => move_data(MoveEffect::ROLLOUT, Power(30), MoveType::Battle(Type::Ice), Accuracy(90), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    NEEDLE_ARM = 302 => move_data(MoveEffect::FLINCH_MINIMIZE_HIT, Power(60), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SLACK_OFF = 303 => move_data(MoveEffect::RESTORE_HP, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    HYPER_VOICE = 304 => move_data(MoveEffect::HIT, Power(90), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    POISON_FANG = 305 => move_data(MoveEffect::POISON_FANG, Power(50), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    CRUSH_CLAW = 306 => move_data(MoveEffect::DEFENSE_DOWN_HIT, Power(75), MoveType::Battle(Type::Normal), Accuracy(95), PowerPoints(10), SecondaryEffectChance(50), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    BLAST_BURN = 307 => move_data(MoveEffect::RECHARGE, Power(150), MoveType::Battle(Type::Fire), Accuracy(90), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    HYDRO_CANNON = 308 => move_data(MoveEffect::RECHARGE, Power(150), MoveType::Battle(Type::Water), Accuracy(90), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    METEOR_MASH = 309 => move_data(MoveEffect::ATTACK_UP_HIT, Power(100), MoveType::Battle(Type::Steel), Accuracy(85), PowerPoints(10), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ASTONISH = 310 => move_data(MoveEffect::FLINCH_MINIMIZE_HIT, Power(30), MoveType::Battle(Type::Ghost), Accuracy(100), PowerPoints(15), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    WEATHER_BALL = 311 => move_data(MoveEffect::WEATHER_BALL, Power(50), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    AROMATHERAPY = 312 => move_data(MoveEffect::HEAL_BELL, Power(0), MoveType::Battle(Type::Grass), Accuracy::ALWAYS, PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    FAKE_TEARS = 313 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_2, Power(0), MoveType::Battle(Type::Dark), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    AIR_CUTTER = 314 => move_data(MoveEffect::HIGH_CRITICAL, Power(55), MoveType::Battle(Type::Flying), Accuracy(95), PowerPoints(25), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    OVERHEAT = 315 => move_data(MoveEffect::OVERHEAT, Power(140), MoveType::Battle(Type::Fire), Accuracy(90), PowerPoints(5), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ODOR_SLEUTH = 316 => move_data(MoveEffect::FORESIGHT, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    ROCK_TOMB = 317 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(50), MoveType::Battle(Type::Rock), Accuracy(80), PowerPoints(10), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SILVER_WIND = 318 => move_data(MoveEffect::ALL_STATS_UP_HIT, Power(60), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(5), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    METAL_SOUND = 319 => move_data(MoveEffect::SPECIAL_DEFENSE_DOWN_2, Power(0), MoveType::Battle(Type::Steel), Accuracy(85), PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    GRASS_WHISTLE = 320 => move_data(MoveEffect::SLEEP, Power(0), MoveType::Battle(Type::Grass), Accuracy(55), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    TICKLE = 321 => move_data(MoveEffect::TICKLE, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    COSMIC_POWER = 322 => move_data(MoveEffect::COSMIC_POWER, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    WATER_SPOUT = 323 => move_data(MoveEffect::ERUPTION, Power(150), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SIGNAL_BEAM = 324 => move_data(MoveEffect::CONFUSE_HIT, Power(75), MoveType::Battle(Type::Bug), Accuracy(100), PowerPoints(15), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SHADOW_PUNCH = 325 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Ghost), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    EXTRASENSORY = 326 => move_data(MoveEffect::FLINCH_MINIMIZE_HIT, Power(80), MoveType::Battle(Type::Psychic), Accuracy(100), PowerPoints(30), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    SKY_UPPERCUT = 327 => move_data(MoveEffect::SKY_UPPERCUT, Power(85), MoveType::Battle(Type::Fighting), Accuracy(90), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SAND_TOMB = 328 => move_data(MoveEffect::TRAP, Power(15), MoveType::Battle(Type::Ground), Accuracy(70), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SHEER_COLD = 329 => move_data(MoveEffect::OHKO, Power(1), MoveType::Battle(Type::Ice), Accuracy(30), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    MUDDY_WATER = 330 => move_data(MoveEffect::ACCURACY_DOWN_HIT, Power(95), MoveType::Battle(Type::Water), Accuracy(85), PowerPoints(10), SecondaryEffectChance(30), MoveTarget::BOTH, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BULLET_SEED = 331 => move_data(MoveEffect::MULTI_HIT, Power(10), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    AERIAL_ACE = 332 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Flying), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    ICICLE_SPEAR = 333 => move_data(MoveEffect::MULTI_HIT, Power(10), MoveType::Battle(Type::Ice), Accuracy(100), PowerPoints(30), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    IRON_DEFENSE = 334 => move_data(MoveEffect::DEFENSE_UP_2, Power(0), MoveType::Battle(Type::Steel), Accuracy::ALWAYS, PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    BLOCK = 335 => move_data(MoveEffect::MEAN_LOOK, Power(0), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MAGIC_COAT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    HOWL = 336 => move_data(MoveEffect::ATTACK_UP, Power(0), MoveType::Battle(Type::Normal), Accuracy::ALWAYS, PowerPoints(40), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    DRAGON_CLAW = 337 => move_data(MoveEffect::HIT, Power(80), MoveType::Battle(Type::Dragon), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    FRENZY_PLANT = 338 => move_data(MoveEffect::RECHARGE, Power(150), MoveType::Battle(Type::Grass), Accuracy(90), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    BULK_UP = 339 => move_data(MoveEffect::BULK_UP, Power(0), MoveType::Battle(Type::Fighting), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    BOUNCE = 340 => move_data(MoveEffect::SEMI_INVULNERABLE, Power(85), MoveType::Battle(Type::Flying), Accuracy(85), PowerPoints(5), SecondaryEffectChance(30), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MUD_SHOT = 341 => move_data(MoveEffect::SPEED_DOWN_HIT, Power(55), MoveType::Battle(Type::Ground), Accuracy(95), PowerPoints(15), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    POISON_TAIL = 342 => move_data(MoveEffect::POISON_TAIL, Power(50), MoveType::Battle(Type::Poison), Accuracy(100), PowerPoints(25), SecondaryEffectChance(10), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    COVET = 343 => move_data(MoveEffect::THIEF, Power(40), MoveType::Battle(Type::Normal), Accuracy(100), PowerPoints(40), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED)),
+    VOLT_TACKLE = 344 => move_data(MoveEffect::DOUBLE_EDGE, Power(120), MoveType::Battle(Type::Electric), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    MAGICAL_LEAF = 345 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Grass), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    WATER_SPORT = 346 => move_data(MoveEffect::WATER_SPORT, Power(0), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!()),
+    CALM_MIND = 347 => move_data(MoveEffect::CALM_MIND, Power(0), MoveType::Battle(Type::Psychic), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    LEAF_BLADE = 348 => move_data(MoveEffect::HIGH_CRITICAL, Power(70), MoveType::Battle(Type::Grass), Accuracy(100), PowerPoints(15), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(MAKES_CONTACT | PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DRAGON_DANCE = 349 => move_data(MoveEffect::DRAGON_DANCE, Power(0), MoveType::Battle(Type::Dragon), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::USER, Priority::STANDARD, move_flags!(SNATCH_AFFECTED)),
+    ROCK_BLAST = 350 => move_data(MoveEffect::MULTI_HIT, Power(25), MoveType::Battle(Type::Rock), Accuracy(80), PowerPoints(10), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    SHOCK_WAVE = 351 => move_data(MoveEffect::ALWAYS_HIT, Power(60), MoveType::Battle(Type::Electric), Accuracy::ALWAYS, PowerPoints(20), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    WATER_PULSE = 352 => move_data(MoveEffect::CONFUSE_HIT, Power(60), MoveType::Battle(Type::Water), Accuracy(100), PowerPoints(20), SecondaryEffectChance(20), MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+    DOOM_DESIRE = 353 => move_data(MoveEffect::FUTURE_SIGHT, Power(120), MoveType::Battle(Type::Steel), Accuracy(85), PowerPoints(5), SecondaryEffectChance::NONE, MoveTarget::SELECTED, Priority::STANDARD, move_flags!()),
+    PSYCHO_BOOST = 354 => move_data(MoveEffect::OVERHEAT, Power(140), MoveType::Battle(Type::Psychic), Accuracy(90), PowerPoints(5), SecondaryEffectChance::ALWAYS, MoveTarget::SELECTED, Priority::STANDARD, move_flags!(PROTECT_AFFECTED | MIRROR_MOVE_AFFECTED | KINGS_ROCK_AFFECTED)),
+}
+
+/// Provides typed lookup over the canonical move data.
 #[derive(Debug, Clone)]
 pub struct MoveTable {
     moves: &'static [MoveData; MOVES_COUNT],
 }
 
 impl MoveTable {
-    /// Build the table over the extracted upstream data.
+    /// Builds the canonical move table.
     #[must_use]
     pub const fn new() -> Self {
         Self { moves: &MOVES }
     }
 
-    /// The number of moves in the table (`MOVES_COUNT`).
+    /// Returns the number of moves in the table.
     #[must_use]
     pub const fn len(&self) -> usize {
         MOVES_COUNT
     }
 
-    /// Always `false` — the table is never empty. Present for API convention.
+    /// Returns `false`; the canonical move table is never empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
     }
 
-    /// The battle data for `id`.
+    /// Returns the data stored at `id`.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMove`] if `id` is outside `0..MOVES_COUNT`.
+    /// Returns [`AssetError::UnknownMove`] when `id` is outside the table.
     pub fn get(&self, id: MoveId) -> Result<&MoveData, AssetError> {
         self.moves
-            .get(id.0 as usize)
-            .ok_or(AssetError::UnknownMove(id.0))
+            .get(usize::from(id.index()))
+            .ok_or(AssetError::UnknownMove(id.index()))
     }
 
-    /// Iterate over every move's data in `MOVE_*` id order.
+    /// Iterates in ascending [`MoveId`] order.
     pub fn iter(&self) -> impl Iterator<Item = &MoveData> {
         self.moves.iter()
     }
@@ -4547,43 +871,88 @@ impl Default for MoveTable {
 
 #[cfg(test)]
 mod tests {
-    use super::{MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT};
+    use super::{
+        MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+        MOVE_IDENTITIES,
+    };
+    use crate::error::AssetError;
     use crate::type_chart::Type;
 
+    // These stored values stay literal so the representative row checks remain
+    // independent of the symbolic production constants they validate.
+    const EXPECTED_EFFECT_HIT: MoveEffect = MoveEffect(0);
+    const EXPECTED_EFFECT_ATTACK_UP_2: MoveEffect = MoveEffect(50);
+    const EXPECTED_EFFECT_COUNTER: MoveEffect = MoveEffect(89);
+    const EXPECTED_EFFECT_QUICK_ATTACK: MoveEffect = MoveEffect(103);
+    const EXPECTED_EFFECT_CURSE: MoveEffect = MoveEffect(109);
+    const EXPECTED_EFFECT_OVERHEAT: MoveEffect = MoveEffect(204);
+    const EXPECTED_POUND_FLAGS: MoveFlags = MoveFlags(51);
+    const EXPECTED_COUNTER_FLAGS: MoveFlags = MoveFlags(17);
+
     #[test]
-    fn table_length_matches_moves_count() {
-        // Structural anchor: upstream `gBattleMoves[MOVES_COUNT]`, MOVES_COUNT == 355.
-        let table = MoveTable::new();
-        assert_eq!(table.len(), 355);
-        assert_eq!(MOVES_COUNT, 355);
-        assert_eq!(table.iter().count(), 355);
+    fn effect_constants_keep_their_stored_ids() {
+        assert_eq!(MoveEffect::HIT, EXPECTED_EFFECT_HIT);
+        assert_eq!(MoveEffect::ATTACK_UP_2, EXPECTED_EFFECT_ATTACK_UP_2);
+        assert_eq!(MoveEffect::COUNTER, EXPECTED_EFFECT_COUNTER);
+        assert_eq!(MoveEffect::QUICK_ATTACK, EXPECTED_EFFECT_QUICK_ATTACK);
+        assert_eq!(MoveEffect::CURSE, EXPECTED_EFFECT_CURSE);
+        assert_eq!(MoveEffect::OVERHEAT, EXPECTED_EFFECT_OVERHEAT);
     }
 
     #[test]
-    fn out_of_range_id_is_rejected() {
-        use crate::error::AssetError;
+    fn table_length_matches_move_identity_space() {
         let table = MoveTable::new();
-        assert_eq!(table.get(MoveId(355)), Err(AssetError::UnknownMove(355)));
+        assert_eq!(table.len(), 355);
+        assert_eq!(MOVES_COUNT, 355);
+        assert_eq!(table.iter().count(), MOVES_COUNT);
+        assert!(!table.is_empty());
+    }
+
+    #[test]
+    fn out_of_range_ids_are_rejected() {
+        let table = MoveTable::new();
+        let first_invalid_id = MoveId(u16::try_from(MOVES_COUNT).unwrap());
         assert_eq!(
-            table.get(MoveId(0xFFFF)),
-            Err(AssetError::UnknownMove(0xFFFF))
+            table.get(first_invalid_id),
+            Err(AssetError::UnknownMove(first_invalid_id.index()))
+        );
+        assert_eq!(
+            table.get(MoveId(u16::MAX)),
+            Err(AssetError::UnknownMove(u16::MAX))
         );
     }
 
     #[test]
-    fn move_none_is_the_empty_slot() {
-        // MOVE_NONE (id 0): the all-zero placeholder entry.
+    fn every_row_has_its_declared_identity() {
         let table = MoveTable::new();
-        let none = table.get(MoveId(0)).unwrap();
-        assert_eq!(none.effect, MoveEffect(0)); // EFFECT_HIT
-        assert_eq!(none.power, 0);
-        assert_eq!(none.move_type, MoveType::Battle(Type::Normal));
-        assert_eq!(none.pp, 0);
-        assert_eq!(none.flags, MoveFlags(0));
+        for (index, (identity, _move_data)) in MOVE_IDENTITIES.iter().zip(table.iter()).enumerate()
+        {
+            assert_eq!(usize::from(identity.index()), index);
+        }
     }
 
     #[test]
-    fn flag_accessors_decode_bits() {
+    fn move_none_is_the_empty_slot() {
+        let table = MoveTable::new();
+        let none = table.get(MoveId::NONE).unwrap();
+        assert_eq!(none.effect, MoveEffect::HIT);
+        assert_eq!(none.power, 0);
+        assert_eq!(none.move_type, MoveType::Battle(Type::Normal));
+        assert_eq!(none.pp, 0);
+        assert_eq!(none.flags, MoveFlags::NONE);
+    }
+
+    #[test]
+    fn target_and_flag_constants_keep_their_stored_bits() {
+        assert_eq!(MoveTarget::SELECTED.bits(), 0);
+        assert_eq!(MoveTarget::DEPENDS.bits(), 1);
+        assert_eq!(MoveTarget::USER_OR_SELECTED.bits(), 2);
+        assert_eq!(MoveTarget::RANDOM.bits(), 4);
+        assert_eq!(MoveTarget::BOTH.bits(), 8);
+        assert_eq!(MoveTarget::USER.bits(), 16);
+        assert_eq!(MoveTarget::FOES_AND_ALLY.bits(), 32);
+        assert_eq!(MoveTarget::OPPONENTS_FIELD.bits(), 64);
+
         let f = MoveFlags(MoveFlags::MAKES_CONTACT | MoveFlags::KINGS_ROCK_AFFECTED);
         assert!(f.makes_contact());
         assert!(f.kings_rock_affected());
@@ -4594,18 +963,12 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tie_named_moves() {
-        // Pins a hand-picked sample back to their exact `battle_moves.h` values
-        // (hardcoded here — CI has no `pokeemerald/`). Covers the required edge
-        // cases: a 0-power status move, a +priority move, a -priority move, a
-        // multi-flag move, and the sole `???`-typed move.
+    fn representative_moves_preserve_attribute_values() {
         let table = MoveTable::new();
-        let get = |id: u16| *table.get(MoveId(id)).unwrap();
+        let get = |id| *table.get(id).unwrap();
 
-        // MOVE_POUND (1): a plain physical hit with all four common flags set
-        // (MAKES_CONTACT|PROTECT|MIRROR_MOVE|KINGS_ROCK = bits 0,1,4,5 = 51).
-        let pound = get(1);
-        assert_eq!(pound.effect, MoveEffect(0)); // EFFECT_HIT
+        let pound = get(MoveId::POUND);
+        assert_eq!(pound.effect, MoveEffect::HIT);
         assert_eq!(pound.power, 40);
         assert_eq!(pound.move_type, MoveType::Battle(Type::Normal));
         assert_eq!(pound.accuracy, 100);
@@ -4613,16 +976,15 @@ mod tests {
         assert_eq!(pound.secondary_effect_chance, 0);
         assert_eq!(pound.target, MoveTarget::SELECTED);
         assert_eq!(pound.priority, 0);
-        assert_eq!(pound.flags, MoveFlags(0b11_0011));
+        assert_eq!(pound.flags, EXPECTED_POUND_FLAGS);
         assert!(pound.flags.makes_contact());
         assert!(pound.flags.protect_affected());
         assert!(pound.flags.mirror_move_affected());
         assert!(pound.flags.kings_rock_affected());
         assert!(!pound.flags.snatch_affected());
 
-        // MOVE_SWORDS_DANCE (14): a 0-power status move, +2 Attack, targets user.
-        let swords = get(14);
-        assert_eq!(swords.effect, MoveEffect(50)); // EFFECT_ATTACK_UP_2
+        let swords = get(MoveId::SWORDS_DANCE);
+        assert_eq!(swords.effect, MoveEffect::ATTACK_UP_2);
         assert_eq!(swords.power, 0);
         assert_eq!(swords.accuracy, 0);
         assert_eq!(swords.pp, 30);
@@ -4630,58 +992,50 @@ mod tests {
         assert_eq!(swords.priority, 0);
         assert_eq!(swords.flags, MoveFlags(MoveFlags::SNATCH_AFFECTED));
 
-        // MOVE_QUICK_ATTACK (98): positive priority (+1).
-        let quick = get(98);
-        assert_eq!(quick.effect, MoveEffect(103)); // EFFECT_QUICK_ATTACK
+        let quick = get(MoveId::QUICK_ATTACK);
+        assert_eq!(quick.effect, MoveEffect::QUICK_ATTACK);
         assert_eq!(quick.power, 40);
         assert_eq!(quick.priority, 1);
         assert_eq!(quick.pp, 30);
 
-        // MOVE_EXTREME_SPEED (245): also +1 in Gen 3 (not +2), 80 power.
-        let espeed = get(245);
-        assert_eq!(espeed.effect, MoveEffect(103)); // EFFECT_QUICK_ATTACK
-        assert_eq!(espeed.power, 80);
-        assert_eq!(espeed.priority, 1);
-        assert_eq!(espeed.pp, 5);
+        let extreme_speed = get(MoveId::EXTREME_SPEED);
+        assert_eq!(extreme_speed.effect, MoveEffect::QUICK_ATTACK);
+        assert_eq!(extreme_speed.power, 80);
+        assert_eq!(extreme_speed.priority, 1);
+        assert_eq!(extreme_speed.pp, 5);
 
-        // MOVE_COUNTER (68): negative priority (-5), power 1, DEPENDS target,
-        // flags MAKES_CONTACT|MIRROR_MOVE = bits 0,4 = 17.
-        let counter = get(68);
-        assert_eq!(counter.effect, MoveEffect(89)); // EFFECT_COUNTER
+        let counter = get(MoveId::COUNTER);
+        assert_eq!(counter.effect, MoveEffect::COUNTER);
         assert_eq!(counter.power, 1);
         assert_eq!(counter.move_type, MoveType::Battle(Type::Fighting));
         assert_eq!(counter.accuracy, 100);
         assert_eq!(counter.target, MoveTarget::DEPENDS);
         assert_eq!(counter.priority, -5);
-        assert_eq!(counter.flags, MoveFlags(0b01_0001));
+        assert_eq!(counter.flags, EXPECTED_COUNTER_FLAGS);
 
-        // MOVE_ROAR (46): lowest priority (-6), 0 power, sound status move.
-        let roar = get(46);
-        assert_eq!(roar.effect, MoveEffect(28)); // EFFECT_ROAR
+        let roar = get(MoveId::ROAR);
+        assert_eq!(roar.effect, MoveEffect::ROAR);
         assert_eq!(roar.power, 0);
         assert_eq!(roar.priority, -6);
         assert_eq!(roar.pp, 20);
 
-        // MOVE_CURSE (174): the only `???`-typed move.
-        let curse = get(174);
-        assert_eq!(curse.effect, MoveEffect(109)); // EFFECT_CURSE
+        let curse = get(MoveId::CURSE);
+        assert_eq!(curse.effect, MoveEffect::CURSE);
         assert_eq!(curse.move_type, MoveType::Mystery);
         assert_eq!(curse.move_type.battle_type(), None);
         assert_eq!(curse.power, 0);
         assert_eq!(curse.pp, 10);
 
-        // MOVE_PSYCHO_BOOST (354): the last move, an EFFECT with -2 offense drop.
-        let psycho = get(354);
-        assert_eq!(psycho.power, 140);
-        assert_eq!(psycho.move_type, MoveType::Battle(Type::Psychic));
-        assert_eq!(psycho.accuracy, 90);
-        assert_eq!(psycho.pp, 5);
+        let psycho_boost = get(MoveId::PSYCHO_BOOST);
+        assert_eq!(psycho_boost.effect, MoveEffect::OVERHEAT);
+        assert_eq!(psycho_boost.power, 140);
+        assert_eq!(psycho_boost.move_type, MoveType::Battle(Type::Psychic));
+        assert_eq!(psycho_boost.accuracy, 90);
+        assert_eq!(psycho_boost.pp, 5);
     }
 
     #[test]
     fn priority_range_matches_upstream() {
-        // Aggregate guard: every move's priority sits in the upstream span and
-        // the two extreme brackets are populated exactly as upstream.
         let table = MoveTable::new();
         for md in table.iter() {
             assert!(
@@ -4691,15 +1045,12 @@ mod tests {
             );
         }
         let count = |p: i8| table.iter().filter(|md| md.priority == p).count();
-        // Whirlwind + Roar are the only -6 moves; Helping Hand is the only +5.
         assert_eq!(count(-6), 2, "-6 priority moves");
         assert_eq!(count(5), 1, "+5 priority moves");
     }
 
     #[test]
     fn every_move_type_is_valid() {
-        // No transcribed type escaped the modelled set: every combat type must
-        // round-trip through the upstream id, and Mystery carries no combat type.
         let table = MoveTable::new();
         for md in table.iter() {
             match md.move_type {
