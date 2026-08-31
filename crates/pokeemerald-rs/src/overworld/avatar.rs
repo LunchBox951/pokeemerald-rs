@@ -1,10 +1,44 @@
 //! Player-avatar sprite packing and per-frame OAM selection.
 //!
-//! Emerald's `sAnim_Go{South,North,West,East}` sequences in
-//! `src/data/object_events/object_event_anims.h` retain their command cursor
-//! across steps and alternate forward feet. [`PlayerState`] exposes only the
-//! current step's progress, so this renderer always uses the first forward-foot
-//! frame.
+//! # Sheet dimensions and frame layout
+//!
+//! A walking sheet is 144x32 pixels: nine 16x32 frames side by side, upstream's
+//! `overworld_frame(<pic>, 2, 4, n)` layout in
+//! `src/data/object_events/object_event_pic_tables.h`. Every "standard" NPC
+//! sheet [`super::npc`] resolves shares it, so [`pack_people_sheet_frames`]
+//! serves both. [`super::OverworldSceneError::SpriteSheetWrongDimensions`]
+//! rejects anything else.
+//!
+//! Which frame each facing and step state selects, from
+//! `sAnim_Face{South,North,West,East}`/`sAnim_Go{South,North,West,East}` in
+//! `src/data/object_events/object_event_anims.h`:
+//!
+//! | frame | content                                                |
+//! |-------|--------------------------------------------------------|
+//! | 0     | face south, standing                                   |
+//! | 1     | face north, standing                                   |
+//! | 2     | face west, standing; east reuses it h-flipped          |
+//! | 3     | south walk, forward foot                               |
+//! | 5     | north walk, forward foot                               |
+//! | 7     | west walk, forward foot; east reuses it h-flipped      |
+//!
+//! Frames 4, 6, and 8 are the other forward foot. The `sAnim_Go*` sequences
+//! retain their command cursor across steps and so alternate feet;
+//! [`PlayerState`] exposes only the current step's progress, so this renderer
+//! always uses the first forward-foot frame.
+//!
+//! # The player OBJ's fixed screen position
+//!
+//! `SetSpritePosToMapCoords` (`src/event_object_movement.c`) computes
+//! `*destX = ((mapX - gSaveBlock1Ptr->pos.x) << 4) + dx`. Upstream keeps the
+//! player's own object event in lock-step with `gSaveBlock1Ptr->pos`, so that
+//! difference is always zero: the player's OBJ never moves during ordinary
+//! walking, and the background scrolls instead ([`super::viewport`]). Only
+//! `dx`/`dy`, the camera-pan term nothing this port sets away from 0 yet,
+//! would move it. [`PLAYER_OBJ_X`]/[`PLAYER_OBJ_Y`] are that constant, taken
+//! from the same screen-center metatile [`super::viewport`] anchors on and
+//! offset up one metatile so the 32px-tall sprite's lower half covers the tile
+//! the player stands on rather than its head.
 
 use assets::{ImageRef, PaletteRef};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
@@ -91,7 +125,9 @@ pub(super) const PLAYER_OBJ_Y: u8 =
 /// Selects the player avatar's sprite sheet and palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerCharacter {
+    /// `sprite/brendan/walking`, `sprite/palette/brendan`.
     Brendan,
+    /// `sprite/may/walking`, `sprite/palette/may`.
     May,
 }
 
