@@ -675,6 +675,8 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
 
 #[test]
 fn counter_is_ahead_orders_across_the_wrap_at_any_distance() {
+    const PINNED_HALF_RANGE: u32 = 1 << 31;
+
     assert!(super::counter_is_ahead(3, 7));
     assert!(!super::counter_is_ahead(7, 3));
     assert!(!super::counter_is_ahead(5, 5));
@@ -683,14 +685,9 @@ fn counter_is_ahead_orders_across_the_wrap_at_any_distance() {
     assert!(super::counter_is_ahead(u32::MAX - 1, 2));
     assert!(!super::counter_is_ahead(0, u32::MAX));
     assert!(!super::counter_is_ahead(1, u32::MAX));
-    assert!(super::counter_is_ahead(
-        0,
-        super::SERIAL_COUNTER_HALF_RANGE - 1
-    ));
-    assert!(!super::counter_is_ahead(
-        0,
-        super::SERIAL_COUNTER_HALF_RANGE
-    ));
+    assert_eq!(super::SERIAL_COUNTER_HALF_RANGE, PINNED_HALF_RANGE);
+    assert!(super::counter_is_ahead(0, PINNED_HALF_RANGE - 1));
+    assert!(!super::counter_is_ahead(0, PINNED_HALF_RANGE));
 }
 
 #[test]

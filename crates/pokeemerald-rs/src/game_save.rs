@@ -33,7 +33,8 @@ impl SaveFileStatus {
         }
     }
 
-    /// Whether the main menu offers `CONTINUE` for this status.
+    /// Whether the main menu offers `CONTINUE` for this status. `Error` joins
+    /// `Ok`: one slot loaded intact (`pokeemerald/src/main_menu.c:654-660`).
     pub(crate) const fn menu_shows_continue(self) -> bool {
         match self {
             Self::Ok | Self::Error => true,
@@ -104,6 +105,7 @@ const fn counter_is_ahead(baseline: u32, candidate: u32) -> bool {
     candidate != baseline && candidate.wrapping_sub(baseline) < SERIAL_COUNTER_HALF_RANGE
 }
 
+/// This session's save medium: the one file boot loads from and writes back to.
 #[derive(Debug)]
 pub(crate) struct SaveSlot {
     file: Option<SaveFile>,
@@ -113,6 +115,7 @@ pub(crate) struct SaveSlot {
 }
 
 impl SaveSlot {
+    /// A deliberately unavailable medium: loads as `NoFlash`, never writes.
     pub(crate) const fn disabled() -> Self {
         Self {
             file: None,
@@ -139,6 +142,7 @@ impl SaveSlot {
         }
     }
 
+    /// A slot at an explicit `file`, so each test thread gets a scratch save.
     #[cfg(test)]
     pub(crate) fn at(file: SaveFile) -> Self {
         Self {
@@ -243,6 +247,8 @@ impl SaveSlot {
             if let (Some(session_counter), Some(session_base)) =
                 (self.session_counter, &self.session_base)
             {
+                // Disk ahead of session: boot fell back to the older generation;
+                // keep this session's base (tests::healing_a_damaged_newest_slot_*).
                 if counter_is_ahead(disk_counter, session_counter) {
                     store.restore_base(session_base.clone());
                 }
