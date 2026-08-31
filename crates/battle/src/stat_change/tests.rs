@@ -56,8 +56,8 @@ const TENTACOOL: SpeciesId = SpeciesId(72);
 const SKARMORY: SpeciesId = SpeciesId(227);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const WURMPLE: SpeciesId = SpeciesId(290);
-const MAKUHITA: SpeciesId = SpeciesId(296);
-const ROSELIA: SpeciesId = SpeciesId(315);
+const MAKUHITA: SpeciesId = SpeciesId(335);
+const ROSELIA: SpeciesId = SpeciesId(363);
 const TORKOAL: SpeciesId = SpeciesId(321);
 const CORPHISH: SpeciesId = SpeciesId(326);
 
