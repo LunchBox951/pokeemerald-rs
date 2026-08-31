@@ -1,10 +1,12 @@
 //! Selects the OAM entries that fit within one scanline's OBJ cycle budget.
 //!
-//! The GBA scans OAM in index order. Disabled or horizontally off-screen
-//! entries are absent from the sprite list, while vertically off-scanline
-//! entries remain in the traversal. Entries admitted before exhaustion apply
-//! to both visible sprites and the object-window mask. [`crate::sprite`] caches
-//! this admission once per scanline for both consumers.
+//! The GBA scans OAM in index order. Disabled entries and entries past the
+//! strict horizontal cleanup boundaries (`x + width < 0` or `x >= SCREEN_WIDTH`)
+//! are absent from the sprite list. An entry ending exactly at `x = 0` remains
+//! on the list, and vertically off-scanline entries remain in the traversal.
+//! Entries admitted before exhaustion apply to both visible sprites and the
+//! object-window mask. [`crate::sprite`] caches this admission once per
+//! scanline for both consumers.
 //!
 //! The timing oracle is mGBA:
 //! `mgba/include/mgba/internal/gba/video.h:36-37` defines the 1,210-cycle normal
@@ -226,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_entirely_left_of_the_screen_are_rejected() {
+    fn entries_past_the_strict_left_cleanup_boundary_are_rejected() {
         assert!(sprite_list_cost(&entry_at_x(-64, SIXTY_FOUR_PIXEL_SQUARE_SIZE)).is_some());
         assert_eq!(
             sprite_list_cost(&entry_at_x(-65, SIXTY_FOUR_PIXEL_SQUARE_SIZE)),
