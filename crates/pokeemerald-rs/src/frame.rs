@@ -3,7 +3,7 @@
 use platform::Frame;
 use rendering::{Framebuffer, Rgb888};
 
-/// Packs a composed framebuffer into the platform's `0x00RRGGBB` pixel format.
+/// Packs a composed framebuffer into [`Frame`]'s pixel format.
 #[must_use]
 pub fn to_platform_frame(framebuffer: &Framebuffer) -> Box<Frame> {
     framebuffer
