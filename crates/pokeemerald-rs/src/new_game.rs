@@ -229,6 +229,13 @@ fn trainer_id_bytes(
 mod tests {
     use super::*;
 
+    /// Upstream `SPECIES_TREECKO` (`pokeemerald/include/constants/species.h`),
+    /// spelled as a literal rather than read back from production's
+    /// [`TREECKO_SPECIES`]. [`PROVISIONAL_STARTER_SPECIES`] is defined as that
+    /// constant, so asserting the starter against both would compare two
+    /// aliases of one value and still pass if the starter were renumbered; the
+    /// literal keeps this test pinning the player-visible starter choice.
+    const EXPECTED_TREECKO_SPECIES_ID: assets::SpeciesId = assets::SpeciesId(277);
     const CONFIGURED_SEED_TRAINER_ID: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
     const CONFIGURED_SEED_STATE_AFTER_TRAINER_ID: u32 = 0x0000_6073;
     const NONDEGENERATE_TRAINER_ID_SEED: u32 = 0x1234;
@@ -248,8 +255,8 @@ mod tests {
     #[test]
     fn provisional_starter_is_a_deterministic_fightable_treecko() {
         let starter = provisional_starter();
-        assert_eq!(starter.species(), PROVISIONAL_STARTER_SPECIES);
-        assert_eq!(starter.species(), TREECKO_SPECIES);
+        assert_eq!(PROVISIONAL_STARTER_SPECIES, EXPECTED_TREECKO_SPECIES_ID);
+        assert_eq!(starter.species(), EXPECTED_TREECKO_SPECIES_ID);
         assert_eq!(starter.level(), PROVISIONAL_STARTER_LEVEL);
         assert!(!starter.is_fainted());
         assert_eq!(starter.current_hp(), starter.stats().max_hp);
