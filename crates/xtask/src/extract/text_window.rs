@@ -59,6 +59,8 @@ fn expected_dimensions(stem: &str) -> ImageDimensions {
     }
 }
 
+/// Extracts every text-window frame image and palette into the asset pack,
+/// rejecting a directory whose contents differ from the manifests.
 pub(super) fn extract_text_window(
     upstream: &Path,
     writer: &mut PackWriter,
