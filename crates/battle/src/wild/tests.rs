@@ -17,6 +17,7 @@ const WURMPLE: SpeciesId = SpeciesId(290);
 const SEEDOT: SpeciesId = SpeciesId(298);
 const UNKNOWN_SPECIES: SpeciesId = SpeciesId(60_000);
 
+const HEADBUTT: MoveId = MoveId(29);
 const TACKLE: MoveId = MoveId(33);
 const TAIL_WHIP: MoveId = MoveId(39);
 const GROWL: MoveId = MoveId(45);
@@ -256,10 +257,7 @@ fn a_higher_level_mon_knows_the_moves_it_has_reached_in_learning_order() {
     let at_five = initial_moveset(ZIGZAGOON, 5);
     let at_nine = initial_moveset(ZIGZAGOON, 9);
     assert_eq!(at_five, vec![TACKLE, GROWL, TAIL_WHIP]);
-    assert!(
-        at_nine.starts_with(&at_five),
-        "learning order must be preserved: {at_nine:?} does not extend {at_five:?}"
-    );
+    assert_eq!(at_nine, vec![TACKLE, GROWL, TAIL_WHIP, HEADBUTT]);
 }
 
 #[test]
