@@ -3,6 +3,28 @@
 //! Raising effects target the user and skip the accuracy check. Lowering effects
 //! target the defender and spend one accuracy draw before checking ability
 //! protection. Ability protection is checked before the stage floor.
+//!
+//! # Random draws
+//!
+//! A raising effect consumes no random values on any path. Its shared script
+//! has no accuracy check, critical-hit calculation, damage roll, or secondary-
+//! effect roll (`data/battle_scripts_1.s:489-508`).
+//!
+//! A lowering effect consumes exactly one accuracy draw whether it misses,
+//! changes a stage, reaches the floor, or is blocked by an ability. Its shared
+//! script checks accuracy before stage resolution and has no later random step
+//! (`data/battle_scripts_1.s:534-553`).
+//!
+//! # Model boundary
+//!
+//! Substitute is not represented, so lowering effects do not take the script's
+//! pre-accuracy Substitute exit. Mist and Protect are also not represented;
+//! their stat-loss guards would run after accuracy and before ability protection.
+//! Shield Dust does not guard these primary effects because its upstream branch
+//! requires a secondary-effect call without `STAT_CHANGE_ALLOW_PTR`
+//! (`src/battle_script_commands.c:6937-7038`). Adding any of those states or a
+//! secondary stat-drop pipeline requires preserving that order and revisiting
+//! the draw contract above.
 
 use assets::{AbilityId, MoveEffect, MoveId};
 
@@ -159,6 +181,13 @@ const fn lower(stat: ChangedStat, magnitude: StatChangeMagnitude) -> StatChangeE
 }
 
 /// Maps the 18 move-effect IDs that use Emerald's shared stat-change scripts.
+///
+/// Stat-named IDs omitted from this table use the ordinary-hit script instead:
+/// Speed Up, Special Defense Up, Accuracy Up, Special Attack Down, Special
+/// Defense Down, Accuracy Up Two, Evasion Up Two, Special Attack Down Two,
+/// Accuracy Down Two, and Evasion Down Two. Minimize and Defense Curl are also
+/// excluded because their scripts set their own persistent flags before raising
+/// a stat.
 pub const STAT_CHANGE_EFFECTS: [(MoveEffect, StatChangeEffect); 18] = [
     (
         EFFECT_ATTACK_UP,
