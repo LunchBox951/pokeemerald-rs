@@ -9,9 +9,9 @@ const TIE_BREAK_BIT_MASK: u16 = 1;
 /// Which of two battlers acts first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Order {
-    /// The attacker acts first.
+    /// The first battler passed to [`resolve_order`] acts first.
     AttackerFirst,
-    /// The defender acts first.
+    /// The second battler passed to [`resolve_order`] acts first.
     DefenderFirst,
 }
 
@@ -22,19 +22,19 @@ pub enum Order {
 /// (`pokeemerald/src/battle_main.c:4595`).
 #[must_use]
 pub fn resolve_order(
-    attacker_priority: i8,
-    defender_priority: i8,
-    attacker_effective_speed: u32,
-    defender_effective_speed: u32,
+    first_priority: i8,
+    second_priority: i8,
+    first_effective_speed: u32,
+    second_effective_speed: u32,
     rng: &mut impl BattleRng,
 ) -> Order {
-    match attacker_priority.cmp(&defender_priority) {
+    match first_priority.cmp(&second_priority) {
         Ordering::Greater => return Order::AttackerFirst,
         Ordering::Less => return Order::DefenderFirst,
         Ordering::Equal => {}
     }
 
-    match attacker_effective_speed.cmp(&defender_effective_speed) {
+    match first_effective_speed.cmp(&second_effective_speed) {
         Ordering::Greater => Order::AttackerFirst,
         Ordering::Less => Order::DefenderFirst,
         Ordering::Equal => {
