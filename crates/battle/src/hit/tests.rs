@@ -464,7 +464,15 @@ fn huge_power_in_ability_slot_two_doubles_a_physical_hit() {
 
     let mut thick_fat_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
     assert_eq!(
-        resolve_hit(&dex, TACKLE, &thick_fat, &defender, false, &mut thick_fat_rng,).unwrap(),
+        resolve_hit(
+            &dex,
+            TACKLE,
+            &thick_fat,
+            &defender,
+            false,
+            &mut thick_fat_rng,
+        )
+        .unwrap(),
         HitOutcome::Hit {
             damage: THICK_FAT_MARILL_TACKLE_DAMAGE,
             is_critical: false,
@@ -520,8 +528,15 @@ fn huge_power_never_touches_a_special_move() {
         .with_ability_slot(1);
 
     let mut thick_fat_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
-    let thick_fat_outcome =
-        resolve_hit(&dex, WATER_GUN, &thick_fat, &defender, false, &mut thick_fat_rng).unwrap();
+    let thick_fat_outcome = resolve_hit(
+        &dex,
+        WATER_GUN,
+        &thick_fat,
+        &defender,
+        false,
+        &mut thick_fat_rng,
+    )
+    .unwrap();
     let mut huge_power_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
     let huge_power_outcome = resolve_hit(
         &dex,
