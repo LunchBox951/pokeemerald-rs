@@ -3,7 +3,8 @@
 //! [`SaveStore`] preserves the full 128 KiB flash geometry while reading and
 //! writing the five logical sectors occupied by [`SaveBlock2`] and
 //! [`SaveBlock1`]. The remaining nine sectors in each physical slot are
-//! unmodelled and remain erased.
+//! unmodelled: fresh stores initialize them erased, while imported images
+//! preserve them without interpreting or writing them.
 //!
 //! The in-memory store validates sector signatures and checksums, but writes
 //! cannot reproduce partial hardware failures. File persistence belongs to
@@ -59,7 +60,7 @@ const NUM_SAVE_SLOTS_U32: u32 = NUM_SAVE_SLOTS as u32;
 const SAVE_BLOCK1_CHUNKS_U16: u16 = SAVE_BLOCK1_CHUNKS as u16;
 const ERASED_FLASH_BYTE: u8 = u8::MAX;
 
-/// Health of the selected save slot.
+/// Result of validating both save slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveStatus {
     /// Neither slot contains a signed sector.
@@ -68,7 +69,7 @@ pub enum SaveStatus {
     Ok,
     /// Neither slot is intact and at least one is non-empty.
     Corrupt,
-    /// One slot is intact and loaded while the other is corrupt.
+    /// Exactly one slot is intact and the other is corrupt.
     Error,
 }
 
@@ -79,7 +80,7 @@ pub enum SaveStatus {
 /// [`SaveBlock2`] key sector validate.
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
-    /// Health of the selected slot.
+    /// Result of validating both save slots.
     pub status: SaveStatus,
     /// Reconstructed [`SaveBlock1`] state.
     pub block1: SaveBlock1,
