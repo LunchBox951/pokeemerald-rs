@@ -1311,7 +1311,7 @@ mod tests {
         assert_eq!(entry.palette_bank(), NpcPaletteTag::Npc4.bank());
         assert!(entry.enabled());
         // Mom's movement type is FaceRight (East); east reuses the west
-        // stand frame, h-flipped (module docs' frame table).
+        // stand frame, h-flipped (`super::avatar`'s frame table).
         assert!(entry.h_flip());
         let (frame_west_stand, _) = avatar::stand_frame_for(Direction::West);
         assert_eq!(

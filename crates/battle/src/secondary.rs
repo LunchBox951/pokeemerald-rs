@@ -1,75 +1,16 @@
-//! The shared post-damage hook (S-6, issue #321): `Cmd_seteffectwithchance`
-//! (`pokeemerald/src/battle_script_commands.c:2908`-`:2939`), the one step
-//! every damaging battle script in this crate ends with — and the single
-//! place its `Random()` is spent.
+//! Secondary-effect chance handling after damaging moves.
 //!
-//! Before this module the draw lived inline in [`crate::hit::resolve_hit`],
-//! which was fine while one script needed it. Four more pipelines arrived
-//! with issue #321 and they *disagree* about it — [`crate::drain`] never
-//! reaches the step at all, [`crate::multi_hit`] takes it once for a whole
-//! 2..5-hit sequence, [`crate::fixed_damage`] takes it after a damage
-//! calculation that never happened — so the step became a concept of its
-//! own `(oop-boundaries)`. Getting the count wrong desynchronises every
-//! later roll in the battle, so it is worth one file.
+//! Emerald checks a certain effect before drawing. Every other path draws
+//! before checking whether the move prepared an effect or the hit had an
+//! effect (`pokeemerald/src/battle_script_commands.c:2908-2939`). Plain and
+//! ineffective hits therefore consume a discarded draw, while a certain
+//! effect on a successful hit consumes none.
 //!
-//! # The contract
-//!
-//! `Cmd_seteffectwithchance` is an `if`/`else if` over two conditions: a
-//! `MOVE_EFFECT_CERTAIN` byte on a hit that had an effect takes the first
-//! branch and applies the move's secondary effect outright, with no
-//! `Random()` call at all (`:2917`); anything else falls to the second
-//! branch, which always spends one `Random() % 100` draw against
-//! `secondaryEffectChance` (doubled under Serene Grace) before checking
-//! whether the move even carries an effect byte or whether the hit did
-//! anything (`:2923`-`:2925`). The draw sits ahead of both of those
-//! checks, not behind them — that ordering, not the branch structure
-//! itself, is what this module exists to keep straight. Three
-//! consequences follow from it:
-//!
-//! 1. **The draw is the *leading* operand of the `else if`.** It happens
-//!    before either of the tests that could suppress it, so a plain
-//!    `EFFECT_HIT` move (whose `MOVE_EFFECT_BYTE` is `0` — the plain hit
-//!    script never runs `setmoveeffect`) still spends a value and throws it
-//!    away, and so does a **type-immune** hit: `Cmd_typecalc` records
-//!    `MOVE_RESULT_DOESNT_AFFECT_FOE` and falls through rather than jumping,
-//!    and the `NO_EFFECT` test is only the third operand.
-//! 2. **A `MOVE_EFFECT_CERTAIN` byte takes the *first* branch, which draws
-//!    nothing** — as long as the hit had an effect. `MOVE_STRUGGLE`'s
-//!    `EFFECT_RECOIL` script is the one such move this crate lets through
-//!    ([`crate::hit`]'s exception), and it is why a landed Struggle costs
-//!    one draw fewer than a landed Tackle. A `CERTAIN` byte on a
-//!    *type-immune* hit falls through to the `else if` and **does** draw.
-//! 3. **Serene Grace doubles `percentChance`.** It is an ability, and the
-//!    only two this crate models are [`crate::ability`]'s, neither of which
-//!    is Serene Grace — but it changes the *value*, never the draw count, so
-//!    it could never move a stream even if it were modelled.
-//!
-//! # Fail-closed, twice over
-//!
-//! No move whose script writes a non-zero `MOVE_EFFECT_BYTE` is executable
-//! by this crate: [`crate::battle::ensure_executable`] screens every move
-//! against the four pipelines' allow-lists **before the first draw and
-//! before any state changes**, and none of those lists contains a
-//! [`SECONDARY_TRAMPOLINES`] row. So in production the hook's second operand
-//! is a constant `false` and the drawn value is always discarded.
-//!
-//! [`spend_effect_chance_draw`] nevertheless evaluates the whole chain and
-//! **refuses** — [`BattleError::UnportedSecondaryEffect`] — if a roll ever
-//! lands on a trampoline byte. That is the "dispatch to a fail-closed stub"
-//! half of the hook: the draw is upstream-faithful today, and the day issue
-//! #323 ports paralysis/poison/confusion infliction it replaces one `Err`
-//! arm here rather than inventing a second hook. Note the ordering that
-//! makes the refusal honest: the draw is spent **first**, exactly as
-//! upstream spends it, and only then is the unported byte reported — a
-//! caller that recovers from the error still has a correctly-advanced
-//! stream.
-//!
-//! # What this module is not
-//!
-//! `SetMoveEffect` itself (`:2270`-`:2700`) — the infliction semantics,
-//! including the further `Random()` calls some of its cases make (a
-//! sleep-turn roll, a confusion-turn roll) — is issue #323's, and is
-//! deliberately absent rather than stubbed with a guess.
+//! Struggle is the explicit move exception outside [`SECONDARY_TRAMPOLINES`].
+//! Its full recoil script prepares a certain user-side effect
+//! (`pokeemerald/data/battle_scripts_1.s:897-898`). Effect application is not
+//! implemented, so an effect that would apply fails closed after consuming
+//! exactly the draw Emerald consumes.
 
 use assets::{MoveEffect, MoveId};
 
@@ -77,171 +18,151 @@ use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 
-/// One `setmoveeffect X` / `goto BattleScript_EffectHit` trampoline: a move
-/// effect whose damage half is exactly [`crate::hit`]'s pipeline and whose
-/// only difference is the `MOVE_EFFECT_BYTE` it leaves for
-/// [`spend_effect_chance_draw`] to act on.
+const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
+const EFFECT_BURN_HIT: MoveEffect = MoveEffect(4);
+const EFFECT_FREEZE_HIT: MoveEffect = MoveEffect(5);
+const EFFECT_PARALYZE_HIT: MoveEffect = MoveEffect(6);
+const EFFECT_FLINCH_HIT: MoveEffect = MoveEffect(31);
+const EFFECT_PAY_DAY: MoveEffect = MoveEffect(34);
+const EFFECT_TRI_ATTACK: MoveEffect = MoveEffect(36);
+const EFFECT_TRAP: MoveEffect = MoveEffect(42);
+const EFFECT_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(68);
+const EFFECT_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(69);
+const EFFECT_SPEED_DOWN_HIT: MoveEffect = MoveEffect(70);
+const EFFECT_SPECIAL_ATTACK_DOWN_HIT: MoveEffect = MoveEffect(71);
+const EFFECT_SPECIAL_DEFENSE_DOWN_HIT: MoveEffect = MoveEffect(72);
+const EFFECT_ACCURACY_DOWN_HIT: MoveEffect = MoveEffect(73);
+const EFFECT_CONFUSE_HIT: MoveEffect = MoveEffect(76);
+const EFFECT_THIEF: MoveEffect = MoveEffect(105);
+const EFFECT_THAW_HIT: MoveEffect = MoveEffect(125);
+const EFFECT_RAPID_SPIN: MoveEffect = MoveEffect(129);
+const EFFECT_DEFENSE_UP_HIT: MoveEffect = MoveEffect(138);
+const EFFECT_ATTACK_UP_HIT: MoveEffect = MoveEffect(139);
+const EFFECT_ALL_STATS_UP_HIT: MoveEffect = MoveEffect(140);
+const EFFECT_TWISTER: MoveEffect = MoveEffect(146);
+const EFFECT_FLINCH_MINIMIZE_HIT: MoveEffect = MoveEffect(150);
+const EFFECT_FAKE_OUT: MoveEffect = MoveEffect(158);
+const EFFECT_SUPERPOWER: MoveEffect = MoveEffect(182);
+const EFFECT_KNOCK_OFF: MoveEffect = MoveEffect(188);
+const EFFECT_DOUBLE_EDGE: MoveEffect = MoveEffect(198);
+const EFFECT_BLAZE_KICK: MoveEffect = MoveEffect(200);
+const EFFECT_POISON_FANG: MoveEffect = MoveEffect(202);
+const EFFECT_OVERHEAT: MoveEffect = MoveEffect(204);
+const EFFECT_POISON_TAIL: MoveEffect = MoveEffect(209);
+
+/// Metadata for a damaging move-effect script ending in `setmoveeffect`
+/// followed immediately by `goto BattleScript_EffectHit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Trampoline {
-    /// The `EFFECT_*` id whose `gBattleScriptsForMoveEffects` entry is this
-    /// two-instruction script.
+    /// The damaging move effect that uses the trampoline.
     pub effect: MoveEffect,
-    /// The `MOVE_EFFECT_*` symbol the script writes, for diagnostics and for
-    /// the slice that ports its infliction. Carried as its upstream name
-    /// rather than its numeric value: nothing in this crate applies the
-    /// effect yet, so a number here would be data no reader could check.
+    /// The symbolic `MOVE_EFFECT_*` value prepared by the script.
     pub move_effect: &'static str,
-    /// The byte carries `MOVE_EFFECT_CERTAIN`, which takes
-    /// `Cmd_seteffectwithchance`'s **draw-free** first branch on a hit that
-    /// had an effect (module docs, consequence 2).
+    /// Whether a successful hit skips the chance draw.
     pub certain: bool,
-    /// The byte carries `MOVE_EFFECT_AFFECTS_USER`: the effect lands on the
-    /// attacker, not the target.
+    /// Whether the effect applies to the move user instead of its target.
     pub affects_user: bool,
 }
 
-/// Shorthand for a plain target-side, chance-rolled trampoline row.
-const fn hits_foe(effect: u8, move_effect: &'static str) -> Trampoline {
+const fn chance_on_target(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
     Trampoline {
-        effect: MoveEffect(effect),
+        effect,
         move_effect,
         certain: false,
         affects_user: false,
     }
 }
 
-/// Every `setmoveeffect X` immediately followed by `goto
-/// BattleScript_EffectHit` in `pokeemerald/data/battle_scripts_1.s`, paired
-/// with the `EFFECT_*` id whose dispatch-table entry points at it — the
-/// complete list of move effects for which the hook's `Random()` stops being
-/// discarded, in effect-id order.
-///
-/// Transcribed whole rather than narrowed to the ones a Route 103 party
-/// carries, because it is a membership test: a narrowed list would make the
-/// *next* slice re-derive the same scan, and a byte missing from it would
-/// silently take the "discard the roll" path — the failure this module
-/// exists to prevent.
-///
-/// Several effects share one script (`EFFECT_BLAZE_KICK` reuses
-/// `BattleScript_EffectBurnHit`, `EFFECT_POISON_TAIL` reuses
-/// `BattleScript_EffectPoisonHit`, and `EFFECT_TWISTER`/
-/// `EFFECT_FLINCH_MINIMIZE_HIT` both route through
-/// `BattleScript_FlinchEffect`, `:1830-:1832`), which is why some
-/// `MOVE_EFFECT_*` names appear more than once.
-pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
-    hits_foe(2, "MOVE_EFFECT_POISON"),       // EFFECT_POISON_HIT, :320
-    hits_foe(4, "MOVE_EFFECT_BURN"),         // EFFECT_BURN_HIT, :363
-    hits_foe(5, "MOVE_EFFECT_FREEZE"),       // EFFECT_FREEZE_HIT, :367
-    hits_foe(6, "MOVE_EFFECT_PARALYSIS"),    // EFFECT_PARALYZE_HIT, :371
-    hits_foe(31, "MOVE_EFFECT_FLINCH"),      // EFFECT_FLINCH_HIT, :669
-    hits_foe(34, "MOVE_EFFECT_PAYDAY"),      // EFFECT_PAY_DAY, :721
-    hits_foe(36, "MOVE_EFFECT_TRI_ATTACK"),  // EFFECT_TRI_ATTACK, :732
-    hits_foe(42, "MOVE_EFFECT_WRAP"),        // EFFECT_TRAP, :836
-    hits_foe(68, "MOVE_EFFECT_ATK_MINUS_1"), // EFFECT_ATTACK_DOWN_HIT, :1041
-    hits_foe(69, "MOVE_EFFECT_DEF_MINUS_1"), // EFFECT_DEFENSE_DOWN_HIT, :1045
-    hits_foe(70, "MOVE_EFFECT_SPD_MINUS_1"), // EFFECT_SPEED_DOWN_HIT, :1049
-    hits_foe(71, "MOVE_EFFECT_SP_ATK_MINUS_1"), // EFFECT_SPECIAL_ATTACK_DOWN_HIT, :1053
-    hits_foe(72, "MOVE_EFFECT_SP_DEF_MINUS_1"), // EFFECT_SPECIAL_DEFENSE_DOWN_HIT, :1057
-    hits_foe(73, "MOVE_EFFECT_ACC_MINUS_1"), // EFFECT_ACCURACY_DOWN_HIT, :1061
-    hits_foe(76, "MOVE_EFFECT_CONFUSION"),   // EFFECT_CONFUSE_HIT, :1072
-    hits_foe(105, "MOVE_EFFECT_STEAL_ITEM"), // EFFECT_THIEF, :1441
-    hits_foe(125, "MOVE_EFFECT_BURN"),       // EFFECT_THAW_HIT, :1680
+const fn chance_on_user(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
     Trampoline {
-        // EFFECT_RAPID_SPIN, :1717
-        effect: MoveEffect(129),
-        move_effect: "MOVE_EFFECT_RAPIDSPIN",
-        certain: true,
-        affects_user: true,
-    },
-    Trampoline {
-        // EFFECT_DEFENSE_UP_HIT, :1765
-        effect: MoveEffect(138),
-        move_effect: "MOVE_EFFECT_DEF_PLUS_1",
+        effect,
+        move_effect,
         certain: false,
         affects_user: true,
-    },
+    }
+}
+
+const fn certain_on_target(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
     Trampoline {
-        // EFFECT_ATTACK_UP_HIT, :1769
-        effect: MoveEffect(139),
-        move_effect: "MOVE_EFFECT_ATK_PLUS_1",
-        certain: false,
-        affects_user: true,
-    },
-    Trampoline {
-        // EFFECT_ALL_STATS_UP_HIT, :1773
-        effect: MoveEffect(140),
-        move_effect: "MOVE_EFFECT_ALL_STATS_UP",
-        certain: false,
-        affects_user: true,
-    },
-    hits_foe(146, "MOVE_EFFECT_FLINCH"), // EFFECT_TWISTER, :1831
-    hits_foe(150, "MOVE_EFFECT_FLINCH"), // EFFECT_FLINCH_MINIMIZE_HIT, :1831 (via :1901's goto)
-    Trampoline {
-        // EFFECT_FAKE_OUT, :2051 -- the CERTAIN bit means a landed Fake
-        // Out spends *zero* draws, so omitting this row would be a live
-        // stream desync, not just a dropped effect.
-        effect: MoveEffect(158),
-        move_effect: "MOVE_EFFECT_FLINCH",
+        effect,
+        move_effect,
         certain: true,
         affects_user: false,
-    },
+    }
+}
+
+const fn certain_on_user(effect: MoveEffect, move_effect: &'static str) -> Trampoline {
     Trampoline {
-        // EFFECT_SUPERPOWER, :2389
-        effect: MoveEffect(182),
-        move_effect: "MOVE_EFFECT_ATK_DEF_DOWN",
+        effect,
+        move_effect,
         certain: true,
         affects_user: true,
-    },
-    hits_foe(188, "MOVE_EFFECT_KNOCK_OFF"), // EFFECT_KNOCK_OFF, :2476
-    Trampoline {
-        // EFFECT_DOUBLE_EDGE, :2568
-        effect: MoveEffect(198),
-        move_effect: "MOVE_EFFECT_RECOIL_33",
-        certain: true,
-        affects_user: true,
-    },
-    hits_foe(200, "MOVE_EFFECT_BURN"),  // EFFECT_BLAZE_KICK, :363
-    hits_foe(202, "MOVE_EFFECT_TOXIC"), // EFFECT_POISON_FANG, :2641
-    Trampoline {
-        // EFFECT_OVERHEAT, :2649
-        effect: MoveEffect(204),
-        move_effect: "MOVE_EFFECT_SP_ATK_TWO_DOWN",
-        certain: true,
-        affects_user: true,
-    },
-    hits_foe(209, "MOVE_EFFECT_POISON"), // EFFECT_POISON_TAIL, :320
+    }
+}
+
+/// The complete sorted set of damaging move effects with a [`Trampoline`]
+/// script suffix.
+pub const SECONDARY_TRAMPOLINES: [Trampoline; 31] = [
+    chance_on_target(EFFECT_POISON_HIT, "MOVE_EFFECT_POISON"),
+    chance_on_target(EFFECT_BURN_HIT, "MOVE_EFFECT_BURN"),
+    chance_on_target(EFFECT_FREEZE_HIT, "MOVE_EFFECT_FREEZE"),
+    chance_on_target(EFFECT_PARALYZE_HIT, "MOVE_EFFECT_PARALYSIS"),
+    chance_on_target(EFFECT_FLINCH_HIT, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(EFFECT_PAY_DAY, "MOVE_EFFECT_PAYDAY"),
+    chance_on_target(EFFECT_TRI_ATTACK, "MOVE_EFFECT_TRI_ATTACK"),
+    chance_on_target(EFFECT_TRAP, "MOVE_EFFECT_WRAP"),
+    chance_on_target(EFFECT_ATTACK_DOWN_HIT, "MOVE_EFFECT_ATK_MINUS_1"),
+    chance_on_target(EFFECT_DEFENSE_DOWN_HIT, "MOVE_EFFECT_DEF_MINUS_1"),
+    chance_on_target(EFFECT_SPEED_DOWN_HIT, "MOVE_EFFECT_SPD_MINUS_1"),
+    chance_on_target(EFFECT_SPECIAL_ATTACK_DOWN_HIT, "MOVE_EFFECT_SP_ATK_MINUS_1"),
+    chance_on_target(
+        EFFECT_SPECIAL_DEFENSE_DOWN_HIT,
+        "MOVE_EFFECT_SP_DEF_MINUS_1",
+    ),
+    chance_on_target(EFFECT_ACCURACY_DOWN_HIT, "MOVE_EFFECT_ACC_MINUS_1"),
+    chance_on_target(EFFECT_CONFUSE_HIT, "MOVE_EFFECT_CONFUSION"),
+    chance_on_target(EFFECT_THIEF, "MOVE_EFFECT_STEAL_ITEM"),
+    chance_on_target(EFFECT_THAW_HIT, "MOVE_EFFECT_BURN"),
+    certain_on_user(EFFECT_RAPID_SPIN, "MOVE_EFFECT_RAPIDSPIN"),
+    chance_on_user(EFFECT_DEFENSE_UP_HIT, "MOVE_EFFECT_DEF_PLUS_1"),
+    chance_on_user(EFFECT_ATTACK_UP_HIT, "MOVE_EFFECT_ATK_PLUS_1"),
+    chance_on_user(EFFECT_ALL_STATS_UP_HIT, "MOVE_EFFECT_ALL_STATS_UP"),
+    chance_on_target(EFFECT_TWISTER, "MOVE_EFFECT_FLINCH"),
+    chance_on_target(EFFECT_FLINCH_MINIMIZE_HIT, "MOVE_EFFECT_FLINCH"),
+    certain_on_target(EFFECT_FAKE_OUT, "MOVE_EFFECT_FLINCH"),
+    certain_on_user(EFFECT_SUPERPOWER, "MOVE_EFFECT_ATK_DEF_DOWN"),
+    chance_on_target(EFFECT_KNOCK_OFF, "MOVE_EFFECT_KNOCK_OFF"),
+    certain_on_user(EFFECT_DOUBLE_EDGE, "MOVE_EFFECT_RECOIL_33"),
+    chance_on_target(EFFECT_BLAZE_KICK, "MOVE_EFFECT_BURN"),
+    chance_on_target(EFFECT_POISON_FANG, "MOVE_EFFECT_TOXIC"),
+    certain_on_user(EFFECT_OVERHEAT, "MOVE_EFFECT_SP_ATK_TWO_DOWN"),
+    chance_on_target(EFFECT_POISON_TAIL, "MOVE_EFFECT_POISON"),
 ];
 
-/// The [`Trampoline`] `effect`'s battle script is, or `None` when its script
-/// writes no `MOVE_EFFECT_BYTE` at all (every effect this crate can execute).
+/// Returns `effect`'s secondary-effect trampoline metadata.
 #[must_use]
 pub fn trampoline_for_effect(effect: MoveEffect) -> Option<&'static Trampoline> {
     SECONDARY_TRAMPOLINES.iter().find(|t| t.effect == effect)
 }
 
-/// Whether `effect`'s script writes a secondary-effect byte —
-/// i.e. whether the hook's roll would *land* rather than be discarded.
+/// Returns whether `effect`'s script has a modeled [`Trampoline`] suffix.
 #[must_use]
 pub fn is_secondary_effect(effect: MoveEffect) -> bool {
     trampoline_for_effect(effect).is_some()
 }
 
-/// Run `Cmd_seteffectwithchance` for `move_id` on a hit that
-/// `hit_had_effect` (i.e. was not `MOVE_RESULT_NO_EFFECT`).
+/// Spends the post-damage effect-chance draw for `move_id`.
 ///
-/// Draws **exactly one** `Random()` on every path except the one upstream
-/// also skips: a `MOVE_EFFECT_CERTAIN` byte on a hit that had an effect
-/// (module docs, consequence 2). For every move this crate can currently
-/// execute the drawn value is discarded, and the function returns `Ok(())`.
+/// A certain effect on a successful hit skips the draw. Every other path
+/// spends one draw, even when the hit had no effect or the move has no modeled
+/// trampoline.
 ///
 /// # Errors
 ///
-/// - [`BattleError::UnknownMove`] if `move_id` is not in `dex`. Nothing is
-///   drawn before that lookup.
-/// - [`BattleError::UnportedSecondaryEffect`] if the chain reached
-///   `SetMoveEffect` — the fail-closed stub for infliction this slice does
-///   not port (module docs). The draw, if upstream would have made one, has
-///   already happened when this is returned.
+/// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
+/// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
+/// trampoline effect or Struggle's certain recoil effect would apply; any
+/// required chance draw has already been consumed.
 pub fn spend_effect_chance_draw(
     dex: &Dex,
     move_id: MoveId,
@@ -250,28 +171,22 @@ pub fn spend_effect_chance_draw(
 ) -> Result<(), BattleError> {
     let mv = dex.move_data(move_id)?;
     let trampoline = trampoline_for_effect(mv.effect);
+    let is_struggle = move_id == STRUGGLE;
+    let has_modeled_effect = is_struggle || trampoline.is_some();
+    let modeled_effect_is_certain = is_struggle || trampoline.is_some_and(|effect| effect.certain);
 
-    // `MOVE_STRUGGLE` carries an effect byte without a trampoline row: its
-    // `EFFECT_RECOIL` script is a full script, not a two-instruction
-    // trampoline, and it writes `MOVE_EFFECT_RECOIL_25 |
-    // MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_CERTAIN` before reaching this
-    // hook (`battle_scripts_1.s:897`-`:898`). The CERTAIN test therefore
-    // cannot come from `SECONDARY_TRAMPOLINES` alone.
-    let struggle = move_id == STRUGGLE;
-    let certain = struggle || trampoline.is_some_and(|t| t.certain);
-
-    // Branch 1 (`:2917`): a CERTAIN byte on a hit that landed. No draw.
-    if certain && hit_had_effect {
+    if hit_had_effect && modeled_effect_is_certain {
         return Err(BattleError::UnportedSecondaryEffect(move_id));
     }
 
-    // Branch 2 (`:2923`): the roll is the *leading* operand, so it is spent
-    // before either suppressing test is even looked at.
-    let roll = u32::from(rng.next_u16()) % 100 < u32::from(mv.secondary_effect_chance);
-    if roll && (struggle || trampoline.is_some()) && hit_had_effect {
-        return Err(BattleError::UnportedSecondaryEffect(move_id));
+    let effect_chance_roll = u32::from(rng.next_u16()) % 100;
+    let effect_chance_succeeded = effect_chance_roll < u32::from(mv.secondary_effect_chance);
+
+    if hit_had_effect && has_modeled_effect && effect_chance_succeeded {
+        Err(BattleError::UnportedSecondaryEffect(move_id))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
