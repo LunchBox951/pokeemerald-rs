@@ -1,31 +1,13 @@
 //! Player-avatar sprite packing and per-frame OAM selection.
 //!
-//! # Sheet dimensions and frame layout
-//!
-//! A walking sheet is 144x32 pixels: nine 16x32 frames side by side, upstream's
+//! A walking sheet is nine 16x32 frames side by side, upstream's
 //! `overworld_frame(<pic>, 2, 4, n)` layout in
-//! `src/data/object_events/object_event_pic_tables.h`. Every "standard" NPC
-//! sheet [`super::npc`] resolves shares it, so [`pack_people_sheet_frames`]
-//! serves both. [`super::OverworldSceneError::SpriteSheetWrongDimensions`]
-//! rejects anything else.
+//! `src/data/object_events/object_event_pic_tables.h`; the `FRAME_*` constants
+//! below index it per `src/data/object_events/object_event_anims.h`.
 //!
-//! Which frame each facing and step state selects, from
-//! `sAnim_Face{South,North,West,East}`/`sAnim_Go{South,North,West,East}` in
-//! `src/data/object_events/object_event_anims.h`:
-//!
-//! | frame | content                                                |
-//! |-------|--------------------------------------------------------|
-//! | 0     | face south, standing                                   |
-//! | 1     | face north, standing                                   |
-//! | 2     | face west, standing; east reuses it h-flipped          |
-//! | 3     | south walk, forward foot                               |
-//! | 5     | north walk, forward foot                               |
-//! | 7     | west walk, forward foot; east reuses it h-flipped      |
-//!
-//! Frames 4, 6, and 8 are the other forward foot. The `sAnim_Go*` sequences
-//! retain their command cursor across steps and so alternate feet;
-//! [`PlayerState`] exposes only the current step's progress, so this renderer
-//! always uses the first forward-foot frame.
+//! The `sAnim_Go*` sequences there retain their command cursor across steps
+//! and alternate forward feet. [`PlayerState`] exposes only the current step's
+//! progress, so this renderer always uses the first forward-foot frame.
 //!
 //! # The player OBJ's fixed screen position
 //!

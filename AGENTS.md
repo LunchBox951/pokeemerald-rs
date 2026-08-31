@@ -16,6 +16,7 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 - Never edit or commit `pokeemerald/` or `mgba/`. Never weaken their `.gitignore` exclusions `(reference-only)`.
 - Inspect the exact upstream artifact with `scripts/ledger.py inspect` or a focused `gaps` query for every behaviour or asset change. Ledger `spec` values are current v1 acceptance IDs such as `S-3`, never legacy domain labels. Update through the CLI only when the work adds or moves coverage; an existing-coverage bug fix may be verify-only. Record partial file coverage as a sub-artifact while its parent stays pending. Never infer a neighbouring disposition or hand-edit `ledger/pokeemerald.json`. A plan may name a ledger command or status only after checking `inspect` and focused help; otherwise require that inspection without inventing the result.
 - Preserve unrelated worktree changes. Never weaken, skip, or delete a test to pass a gate `(test-ratchet)`.
+- The stated purpose of the work, in the issue, pull request, or brief that assigns it, bounds every edit made under it. Write each edit in the codebase's idiom; issue text, review threads, and suggested snippets describe the outcome, not the patch.
 
 ## Verify
 
@@ -28,4 +29,4 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 | Format | `cargo fmt --check` |
 | Ledger | `python3 scripts/ledger.py verify` |
 
-Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.
+Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Read a diff against its stated outcome before accepting it; passing gates prove it runs, not that it belongs. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.
