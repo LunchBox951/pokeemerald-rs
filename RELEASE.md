@@ -86,6 +86,8 @@ Live rulesets are the enforcement authority:
 
 Every rung also requires dependency review, CodeQL, a pull request, and resolved review threads. Rules dismiss stale approvals, block deletion and non-fast-forward updates, and provide no standing bypass. Repository-native auto-merge remains disabled.
 
+A tag ruleset makes `v*` release tags immutable once created: no updates, no deletion, no bypass. The release workflow still creates the tag for its exact commit before publishing.
+
 ## Platform support and artifacts
 
 Source builds and native CI support Linux, macOS, and Windows. Published archives currently target Linux and Windows. macOS packaging and platform-specific operator playtesting are not v1 gates; CI evidence carries the same unresolved product status as the other platforms.
