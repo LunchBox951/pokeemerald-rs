@@ -14,11 +14,9 @@ pub(crate) enum EnemyAction {
     Flee,
 }
 
-pub(crate) const fn selectable_slot(slot_move: Option<MoveId>) -> bool {
-    match slot_move {
-        Some(move_id) => move_id.0 != MOVE_NONE.0,
-        None => false,
-    }
+/// Whether the slot holds a real move, regardless of remaining PP.
+pub(crate) fn selectable_slot(slot_move: Option<MoveId>) -> bool {
+    slot_move.is_some_and(|move_id| move_id != MOVE_NONE)
 }
 
 fn all_known_moves_are_spent(enemy: &BattlePokemon) -> bool {
