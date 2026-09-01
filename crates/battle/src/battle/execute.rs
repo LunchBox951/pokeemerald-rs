@@ -151,9 +151,8 @@ impl Battle {
     ///
     /// The return value is the contract, not a convenience: an overkill hit
     /// reports the HP the target really lost, never more, and
-    /// [`crate::drain`]'s heal is computed from *this* number rather than
-    /// from the raw formula output (see that module's "`gHpDealt` contract"
-    /// section).
+    /// [`crate::drain::drain_amount`]'s heal is computed from *this* number
+    /// rather than from the raw formula output, as its doc requires.
     pub(super) fn apply_damage_to_target(&mut self, attacker_is_player: bool, damage: u32) -> u32 {
         let target = if attacker_is_player {
             &mut self.enemy

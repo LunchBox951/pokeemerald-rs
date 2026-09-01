@@ -1,48 +1,16 @@
-//! [`crate::stat_change`]'s own unit tests: the transcribed thunk table, the
-//! two tails' differing draw counts, the cap/floor outcomes, and the
-//! Clear Body/White Smoke/Keen Eye/Hyper Cutter ability guards (issue #322).
-
 use super::{
     ensure_resolvable, is_stat_change_effect, resolve_stat_change_move, stat_change_for_effect,
     ChangedStat, StatChangeDirection, StatChangeEffect, StatChangeMagnitude, StatChangeOutcome,
-    CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER, KEEN_EYE,
-    STAT_CHANGE_EFFECTS, WHITE_SMOKE,
+    CLEAR_BODY, EFFECT_ACCURACY_DOWN, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
+    EFFECT_DEFENSE_DOWN_TWO, EFFECT_DEFENSE_UP, EFFECT_SPECIAL_ATTACK_UP, EFFECT_SPEED_DOWN,
+    HYPER_CUTTER, KEEN_EYE, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
-use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
 use assets::{MoveEffect, MoveId, MoveTarget, SpeciesId};
-
-/// A `BattleRng` fed from a fixed sequence, for pinning exact draw
-/// order/count.
-struct SequenceRng {
-    values: Vec<u16>,
-    index: usize,
-}
-impl SequenceRng {
-    fn new(values: impl IntoIterator<Item = u16>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-            index: 0,
-        }
-    }
-    fn draws(&self) -> usize {
-        self.index
-    }
-}
-impl BattleRng for SequenceRng {
-    fn next_u16(&mut self) -> u16 {
-        let v = self
-            .values
-            .get(self.index)
-            .copied()
-            .expect("SequenceRng exhausted");
-        self.index += 1;
-        v
-    }
-}
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -53,12 +21,22 @@ const MAX_IVS: Ivs = Ivs {
     sp_defense: 31,
 };
 
-fn mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-    BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves).unwrap()
+const PRIMARY_ABILITY_PERSONALITY: u32 = 0;
+
+fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
+    BattlePokemon::new(
+        dex,
+        species,
+        level,
+        MAX_IVS,
+        PRIMARY_ABILITY_PERSONALITY,
+        moves,
+    )
+    .unwrap()
 }
 
-const GROWL: MoveId = MoveId(45);
 const LEER: MoveId = MoveId(43);
+const GROWL: MoveId = MoveId(45);
 const TAIL_WHIP: MoveId = MoveId(39);
 const STRING_SHOT: MoveId = MoveId(81);
 const SAND_ATTACK: MoveId = MoveId(28);
@@ -66,71 +44,83 @@ const SCREECH: MoveId = MoveId(103);
 const GROWTH: MoveId = MoveId(74);
 const HARDEN: MoveId = MoveId(106);
 const TACKLE: MoveId = MoveId(33);
+const TAIL_GLOW: MoveId = MoveId(294);
+const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
-/// `SPECIES_TENTACOOL` (`72`): the one species this crate's dex carries
-/// whose slot-0 ability is Clear Body (`gSpeciesInfo`,
-/// [`crate::pokemon::BattlePokemon::ability`]'s tests).
-const TENTACOOL: u16 = 72;
+const FIRST_MOVE_ID: u16 = 1;
+const LAST_EMERALD_MOVE_ID: u16 = 354;
+const MIN_STAT_CHANGE_MOVES: usize = 20;
 
-/// `SPECIES_SKARMORY` (`227`): slot-0 Keen Eye, slot-1 Sturdy
-/// (`gSpeciesInfo`), naturally obtainable (this crate's own
-/// wild-encounter tables carry it).
-const SKARMORY: u16 = 227;
+const VOLTORB: SpeciesId = SpeciesId(100);
+const TENTACOOL: SpeciesId = SpeciesId(72);
+const SKARMORY: SpeciesId = SpeciesId(227);
+const ZIGZAGOON: SpeciesId = SpeciesId(288);
+const WURMPLE: SpeciesId = SpeciesId(290);
+const MAKUHITA: SpeciesId = SpeciesId(335);
+const ROSELIA: SpeciesId = SpeciesId(363);
+const TORKOAL: SpeciesId = SpeciesId(321);
+const CORPHISH: SpeciesId = SpeciesId(326);
 
-/// `SPECIES_CORPHISH` (`326`): slot-0 Hyper Cutter, slot-1 Shell Armor
-/// (`gSpeciesInfo`), naturally obtainable (this crate's own
-/// wild-encounter tables carry it).
-const CORPHISH: u16 = 326;
+const EFFECT_HIT: MoveEffect = MoveEffect(0);
+const EFFECT_SPEED_UP_AS_HIT: MoveEffect = MoveEffect(12);
+const EFFECT_SPECIAL_DEFENSE_UP_AS_HIT: MoveEffect = MoveEffect(14);
+const EFFECT_ACCURACY_UP_AS_HIT: MoveEffect = MoveEffect(15);
+const EFFECT_SPECIAL_ATTACK_DOWN_AS_HIT: MoveEffect = MoveEffect(21);
+const EFFECT_SPECIAL_DEFENSE_DOWN_AS_HIT: MoveEffect = MoveEffect(22);
+const EFFECT_ACCURACY_UP_TWO_AS_HIT: MoveEffect = MoveEffect(55);
+const EFFECT_EVASION_UP_TWO_AS_HIT: MoveEffect = MoveEffect(56);
+const EFFECT_SPECIAL_ATTACK_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(61);
+const EFFECT_ACCURACY_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(63);
+const EFFECT_EVASION_DOWN_TWO_AS_HIT: MoveEffect = MoveEffect(64);
+const EFFECT_MINIMIZE: MoveEffect = MoveEffect(108);
+const EFFECT_DEFENSE_CURL: MoveEffect = MoveEffect(156);
+
+const HIT_EFFECTS_WITH_STAT_NAMES: [MoveEffect; 10] = [
+    EFFECT_SPEED_UP_AS_HIT,
+    EFFECT_SPECIAL_DEFENSE_UP_AS_HIT,
+    EFFECT_ACCURACY_UP_AS_HIT,
+    EFFECT_SPECIAL_ATTACK_DOWN_AS_HIT,
+    EFFECT_SPECIAL_DEFENSE_DOWN_AS_HIT,
+    EFFECT_ACCURACY_UP_TWO_AS_HIT,
+    EFFECT_EVASION_UP_TWO_AS_HIT,
+    EFFECT_SPECIAL_ATTACK_DOWN_TWO_AS_HIT,
+    EFFECT_ACCURACY_DOWN_TWO_AS_HIT,
+    EFFECT_EVASION_DOWN_TWO_AS_HIT,
+];
 
 #[test]
 fn the_table_covers_the_named_effects_and_nothing_outside_it() {
     assert!(is_stat_change_effect(EFFECT_ATTACK_DOWN));
     assert!(is_stat_change_effect(EFFECT_DEFENSE_DOWN));
-    assert!(is_stat_change_effect(MoveEffect(20))); // SPEED_DOWN
-    assert!(is_stat_change_effect(MoveEffect(23))); // ACCURACY_DOWN
-    assert!(is_stat_change_effect(MoveEffect(59))); // DEFENSE_DOWN_2
-    assert!(is_stat_change_effect(MoveEffect(13))); // SPECIAL_ATTACK_UP
-    assert!(is_stat_change_effect(MoveEffect(11))); // DEFENSE_UP
+    assert!(is_stat_change_effect(EFFECT_SPEED_DOWN));
+    assert!(is_stat_change_effect(EFFECT_ACCURACY_DOWN));
+    assert!(is_stat_change_effect(EFFECT_DEFENSE_DOWN_TWO));
+    assert!(is_stat_change_effect(EFFECT_SPECIAL_ATTACK_UP));
+    assert!(is_stat_change_effect(EFFECT_DEFENSE_UP));
 
-    assert!(!is_stat_change_effect(MoveEffect(0))); // EFFECT_HIT
-                                                    // The `_UP`/`_DOWN`-named ids whose real table entry is the plain hit
-                                                    // script: they belong to `crate::hit`'s allow-list, not here (this
-                                                    // module's own table docs).
-    for hit_shaped in [12u8, 14, 15, 21, 22, 55, 56, 61, 63, 64] {
+    assert!(!is_stat_change_effect(EFFECT_HIT));
+    for effect in HIT_EFFECTS_WITH_STAT_NAMES {
+        assert!(!is_stat_change_effect(effect));
         assert!(
-            !is_stat_change_effect(MoveEffect(hit_shaped)),
-            "EFFECT id {hit_shaped} dispatches to BattleScript_EffectHit, not a stat tail"
-        );
-        assert!(
-            crate::hit::is_ordinary_hit_effect(MoveEffect(hit_shaped)),
-            "...and `crate::hit` must be the one that claims it"
+            crate::hit::is_ordinary_hit_effect(effect),
+            "{effect:?} must remain assigned to ordinary hit resolution"
         );
     }
-    // EFFECT_MINIMIZE and EFFECT_DEFENSE_CURL raise a stat but run their own
-    // scripts (this module's table docs).
-    assert!(!is_stat_change_effect(MoveEffect(108)));
-    assert!(!is_stat_change_effect(MoveEffect(156)));
+    assert!(!is_stat_change_effect(EFFECT_MINIMIZE));
+    assert!(!is_stat_change_effect(EFFECT_DEFENSE_CURL));
 }
 
-/// Every row's direction must agree with the real move data that carries it:
-/// upstream's raising moves are all `MOVE_TARGET_USER` with `accuracy = 0`,
-/// and its lowering moves all target the foe with a real accuracy. A row
-/// transcribed with the wrong `up`/`down` would change *whose* stage moves,
-/// so this checks the transcription against `gBattleMoves` rather than
-/// against itself.
 #[test]
 fn every_transcribed_row_agrees_with_the_real_move_table() {
     let dex = Dex::new();
     let mut seen = 0usize;
-    for move_id in 1..=354u16 {
+    for move_id in FIRST_MOVE_ID..=LAST_EMERALD_MOVE_ID {
         let mv = dex.move_data(MoveId(move_id)).unwrap();
         let Some(change) = stat_change_for_effect(mv.effect) else {
             continue;
         };
         seen += 1;
         assert_eq!(mv.power, 0, "move {move_id}: stat-change moves are 0-power");
-        // No runtime check needed for the magnitude itself: `StatChangeMagnitude`
-        // (issue #322 follow-up) makes `1`/`2` the only representable values.
         match change.direction {
             StatChangeDirection::Raise => {
                 assert_eq!(
@@ -138,13 +128,7 @@ fn every_transcribed_row_agrees_with_the_real_move_table() {
                     MoveTarget::USER,
                     "move {move_id} raises, so it must be MOVE_TARGET_USER"
                 );
-                // Tail Glow (294) is upstream's sole raiser with a non-zero
-                // `accuracy` byte, and the byte is inert: the raising script
-                // has no `accuracycheck` command to read it, so Tail Glow
-                // cannot miss any more than Growth can. Pinned as the one
-                // exception rather than relaxed away, so a second one would
-                // fail here.
-                if move_id == 294 {
+                if MoveId(move_id) == TAIL_GLOW {
                     assert_eq!(mv.accuracy, 100, "Tail Glow's inert accuracy byte");
                 } else {
                     assert_eq!(
@@ -167,7 +151,7 @@ fn every_transcribed_row_agrees_with_the_real_move_table() {
         }
     }
     assert!(
-        seen >= 20,
+        seen >= MIN_STAT_CHANGE_MOVES,
         "the sweep must actually reach a useful number of real moves, saw {seen}"
     );
 }
@@ -191,19 +175,17 @@ fn ensure_resolvable_accepts_every_family_member_and_rejects_outsiders() {
         ensure_resolvable(&dex, TACKLE),
         Err(BattleError::UnsupportedMoveEffect(TACKLE))
     );
-    let bad = MoveId(60_000);
     assert_eq!(
-        ensure_resolvable(&dex, bad),
-        Err(BattleError::UnknownMove(bad))
+        ensure_resolvable(&dex, UNKNOWN_MOVE),
+        Err(BattleError::UnknownMove(UNKNOWN_MOVE))
     );
 }
 
 #[test]
 fn a_hit_growl_lowers_the_targets_attack_by_one_and_draws_once() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 3, vec![GROWL]); // Zigzagoon/Growl
-    let defender = mon(&dex, 290, 3, vec![TACKLE]); // Wurmple
-                                                    // Growl is 100 accuracy: roll = draw%100+1, always 1..=100 <= 100.
+    let attacker = mon(&dex, ZIGZAGOON, 3, vec![GROWL]);
+    let defender = mon(&dex, WURMPLE, 3, vec![TACKLE]);
     let mut rng = SequenceRng::new([0]);
     let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
     let StatChangeOutcome::Applied {
@@ -223,14 +205,11 @@ fn a_hit_growl_lowers_the_targets_attack_by_one_and_draws_once() {
     assert_eq!(rng.draws(), 1);
 }
 
-/// Screech is the `-2` case, and the magnitude has to survive into the
-/// stage: a transcription that dropped it would land on `-1` here.
 #[test]
 fn a_hit_screech_lowers_defense_by_two() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 100, 15, vec![SCREECH]); // Voltorb/Screech
-    let defender = mon(&dex, 290, 15, vec![TACKLE]);
-    // Screech is 85 accuracy: draw 0 -> roll 1 <= 85 -> hit.
+    let attacker = mon(&dex, VOLTORB, 15, vec![SCREECH]);
+    let defender = mon(&dex, WURMPLE, 15, vec![TACKLE]);
     let mut rng = SequenceRng::new([0]);
     let outcome = resolve_stat_change_move(&dex, SCREECH, &attacker, &defender, &mut rng).unwrap();
     let StatChangeOutcome::Applied {
@@ -245,13 +224,11 @@ fn a_hit_screech_lowers_defense_by_two() {
     assert_eq!(rng.draws(), 1);
 }
 
-/// Sand Attack reaches a stage the pre-#322 slice could not name at all: the
-/// target's **accuracy**.
 #[test]
 fn sand_attack_lowers_the_targets_accuracy_stage() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 296, 15, vec![SAND_ATTACK]); // Makuhita
-    let defender = mon(&dex, 290, 15, vec![TACKLE]);
+    let attacker = mon(&dex, MAKUHITA, 15, vec![SAND_ATTACK]);
+    let defender = mon(&dex, WURMPLE, 15, vec![TACKLE]);
     let mut rng = SequenceRng::new([0]);
     let outcome =
         resolve_stat_change_move(&dex, SAND_ATTACK, &attacker, &defender, &mut rng).unwrap();
@@ -265,15 +242,11 @@ fn sand_attack_lowers_the_targets_accuracy_stage() {
     assert_eq!(new_stage, StatStage::new(-1).unwrap());
 }
 
-/// The raising tail has no `accuracycheck` command at all, so a stat-raising
-/// move **cannot miss and costs the shared stream nothing** -- the single
-/// biggest behavioural difference between the two families. The `SequenceRng`
-/// is empty, so any draw at all would panic.
 #[test]
 fn a_stat_raising_move_draws_nothing_and_raises_the_users_own_stage() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 315, 14, vec![GROWTH]); // Roselia/Growth
-    let defender = mon(&dex, 290, 14, vec![TACKLE]);
+    let attacker = mon(&dex, ROSELIA, 14, vec![GROWTH]);
+    let defender = mon(&dex, WURMPLE, 14, vec![TACKLE]);
     let mut rng = SequenceRng::new([]);
     let outcome = resolve_stat_change_move(&dex, GROWTH, &attacker, &defender, &mut rng).unwrap();
     let StatChangeOutcome::Applied {
@@ -299,14 +272,11 @@ fn a_stat_raising_move_draws_nothing_and_raises_the_users_own_stage() {
     );
 }
 
-/// ...and the stage it reads is the *user's*, not the target's: a raise
-/// resolved against an already-boosted user must see that boost, and a
-/// boosted target must be irrelevant.
 #[test]
 fn a_raise_reads_the_users_stage_and_a_drop_reads_the_targets() {
     let dex = Dex::new();
-    let mut attacker = mon(&dex, 315, 14, vec![GROWTH, GROWL]);
-    let mut defender = mon(&dex, 290, 14, vec![TACKLE]);
+    let mut attacker = mon(&dex, ROSELIA, 14, vec![GROWTH, GROWL]);
+    let mut defender = mon(&dex, WURMPLE, 14, vec![TACKLE]);
     attacker.stages_mut().sp_attack = StatStage::new(4).unwrap();
     attacker.stages_mut().attack = StatStage::new(-3).unwrap();
     defender.stages_mut().sp_attack = StatStage::MIN;
@@ -332,9 +302,8 @@ fn a_raise_reads_the_users_stage_and_a_drop_reads_the_targets() {
 #[test]
 fn a_missed_lowering_move_reports_miss_and_still_draws_once() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 290, 3, vec![STRING_SHOT]); // Wurmple/String Shot
-    let defender = mon(&dex, 288, 3, vec![TACKLE]);
-    // String Shot is 95 accuracy: draw 95 -> roll 96 > 95 -> miss.
+    let attacker = mon(&dex, WURMPLE, 3, vec![STRING_SHOT]);
+    let defender = mon(&dex, ZIGZAGOON, 3, vec![TACKLE]);
     let mut rng = SequenceRng::new([95]);
     let outcome =
         resolve_stat_change_move(&dex, STRING_SHOT, &attacker, &defender, &mut rng).unwrap();
@@ -345,8 +314,8 @@ fn a_missed_lowering_move_reports_miss_and_still_draws_once() {
 #[test]
 fn a_floored_drop_and_a_capped_raise_both_report_capped_without_moving_the_stage() {
     let dex = Dex::new();
-    let mut attacker = mon(&dex, 315, 14, vec![GROWTH]);
-    let mut defender = mon(&dex, 290, 14, vec![TACKLE]);
+    let mut attacker = mon(&dex, ROSELIA, 14, vec![GROWTH]);
+    let mut defender = mon(&dex, WURMPLE, 14, vec![TACKLE]);
     attacker.stages_mut().sp_attack = StatStage::MAX;
     defender.stages_mut().attack = StatStage::MIN;
 
@@ -361,7 +330,7 @@ fn a_floored_drop_and_a_capped_raise_both_report_capped_without_moving_the_stage
     );
     assert_eq!(rng.draws(), 0);
 
-    let growler = mon(&dex, 288, 3, vec![GROWL]);
+    let growler = mon(&dex, ZIGZAGOON, 3, vec![GROWL]);
     let mut rng = SequenceRng::new([0]);
     assert_eq!(
         resolve_stat_change_move(&dex, GROWL, &growler, &defender, &mut rng).unwrap(),
@@ -378,13 +347,11 @@ fn a_floored_drop_and_a_capped_raise_both_report_capped_without_moving_the_stage
     );
 }
 
-/// A `-2` drop against a target one stage above the floor clamps rather than
-/// underflowing, and reports `capped: false` -- it *did* move.
 #[test]
 fn a_two_stage_drop_clamps_at_the_floor_without_reporting_capped() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 100, 15, vec![SCREECH]);
-    let mut defender = mon(&dex, 290, 15, vec![TACKLE]);
+    let attacker = mon(&dex, VOLTORB, 15, vec![SCREECH]);
+    let mut defender = mon(&dex, WURMPLE, 15, vec![TACKLE]);
     defender.stages_mut().defense = StatStage::new(-5).unwrap();
 
     let mut rng = SequenceRng::new([0]);
@@ -403,8 +370,8 @@ fn a_two_stage_drop_clamps_at_the_floor_without_reporting_capped() {
 #[test]
 fn a_rejected_move_draws_nothing() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 3, vec![TACKLE]);
-    let defender = mon(&dex, 290, 3, vec![TACKLE]);
+    let attacker = mon(&dex, ZIGZAGOON, 3, vec![TACKLE]);
+    let defender = mon(&dex, WURMPLE, 3, vec![TACKLE]);
     let mut rng = SequenceRng::new([]);
     assert_eq!(
         resolve_stat_change_move(&dex, TACKLE, &attacker, &defender, &mut rng),
@@ -412,8 +379,6 @@ fn a_rejected_move_draws_nothing() {
     );
 }
 
-/// The table's own shape: no duplicate effect ids, and every id really is a
-/// `u8` the upstream header defines.
 #[test]
 fn the_transcribed_table_has_no_duplicate_rows() {
     for (index, (id, _)) in STAT_CHANGE_EFFECTS.iter().enumerate() {
@@ -427,12 +392,10 @@ fn the_transcribed_table_has_no_duplicate_rows() {
     }
 }
 
-/// Clear Body's guard (issue #322): a Tentacool defender's Attack drop is
-/// blocked after the accuracy draw, and the stage does not move.
 #[test]
 fn a_clear_body_holders_drop_is_blocked_after_the_accuracy_draw() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
     let defender = mon(&dex, TENTACOOL, 15, vec![TACKLE]);
     assert_eq!(
         defender.ability(),
@@ -456,15 +419,10 @@ fn a_clear_body_holders_drop_is_blocked_after_the_accuracy_draw() {
     );
 }
 
-/// White Smoke shares Clear Body's guard in one upstream condition
-/// (`battle_script_commands.c:6987`-`:6989`), so it must block identically:
-/// a Torkoal defender (`SPECIES_TORKOAL`, single-ability slot 0, White
-/// Smoke) refuses the drop after the same single accuracy draw.
 #[test]
 fn a_white_smoke_holders_drop_is_blocked_identically() {
-    const TORKOAL: u16 = 321;
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
     let defender = mon(&dex, TORKOAL, 15, vec![TACKLE]);
     assert_eq!(
         defender.ability(),
@@ -484,14 +442,10 @@ fn a_white_smoke_holders_drop_is_blocked_identically() {
     assert_eq!(rng.draws(), 1);
 }
 
-/// The guard fires even when the held stage is already at the floor:
-/// upstream's ability branch is checked *before* the at-floor test, so a
-/// Clear Body holder never sees `B_MSG_STAT_WONT_DECREASE` for an
-/// opponent-inflicted drop, only the ability message.
 #[test]
 fn clear_body_blocks_even_when_already_at_the_floor() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
     let mut defender = mon(&dex, TENTACOOL, 15, vec![TACKLE]);
     defender.stages_mut().attack = StatStage::MIN;
 
@@ -503,14 +457,11 @@ fn clear_body_blocks_even_when_already_at_the_floor() {
     );
 }
 
-/// Clear Body only guards a *drop*: a holder using a raising move on itself
-/// is unaffected, because `ChangeStatBuffs`' ability block sits inside the
-/// decrease branch only (module docs).
 #[test]
 fn clear_body_never_guards_its_holders_own_raise() {
     let dex = Dex::new();
     let attacker = mon(&dex, TENTACOOL, 15, vec![GROWTH]);
-    let defender = mon(&dex, 290, 15, vec![TACKLE]);
+    let defender = mon(&dex, WURMPLE, 15, vec![TACKLE]);
     assert_eq!(attacker.ability(), CLEAR_BODY);
 
     let mut rng = SequenceRng::new([]);
@@ -521,13 +472,11 @@ fn clear_body_never_guards_its_holders_own_raise() {
     );
 }
 
-/// A defender without Clear Body is unaffected: the ordinary Applied path
-/// still runs.
 #[test]
 fn a_non_clear_body_holders_drop_is_unaffected() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 3, vec![GROWL]);
-    let defender = mon(&dex, 290, 3, vec![TACKLE]); // Wurmple: Shield Dust, not Clear Body
+    let attacker = mon(&dex, ZIGZAGOON, 3, vec![GROWL]);
+    let defender = mon(&dex, WURMPLE, 3, vec![TACKLE]);
     assert_ne!(defender.ability(), CLEAR_BODY);
 
     let mut rng = SequenceRng::new([0]);
@@ -535,14 +484,10 @@ fn a_non_clear_body_holders_drop_is_unaffected() {
     assert!(matches!(outcome, StatChangeOutcome::Applied { .. }));
 }
 
-/// Keen Eye's guard (issue #322): a Skarmory defender's Accuracy drop is
-/// blocked after the accuracy draw, and the stage does not move —
-/// `ChangeStatBuffs`' `ABILITY_KEEN_EYE && statId == STAT_ACC` branch
-/// (`battle_script_commands.c:7003`-`:7015`).
 #[test]
 fn a_keen_eye_holders_accuracy_drop_is_blocked() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![SAND_ATTACK]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![SAND_ATTACK]);
     let defender = mon(&dex, SKARMORY, 15, vec![TACKLE]);
     assert_eq!(
         defender.ability(),
@@ -567,13 +512,10 @@ fn a_keen_eye_holders_accuracy_drop_is_blocked() {
     );
 }
 
-/// Keen Eye's guard is narrow, unlike Clear Body/White Smoke's: it only
-/// covers Accuracy (`statId == STAT_ACC`), so the same Skarmory still loses
-/// Attack to Growl.
 #[test]
 fn a_keen_eye_holders_other_stats_still_drop() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
     let defender = mon(&dex, SKARMORY, 15, vec![TACKLE]);
 
     let mut rng = SequenceRng::new([0]);
@@ -584,14 +526,10 @@ fn a_keen_eye_holders_other_stats_still_drop() {
     );
 }
 
-/// Hyper Cutter's guard (issue #322): a Corphish defender's Attack drop is
-/// blocked after the accuracy draw, and the stage does not move —
-/// `ChangeStatBuffs`' `ABILITY_HYPER_CUTTER && statId == STAT_ATK` branch
-/// (`battle_script_commands.c:7016`-`:7028`).
 #[test]
 fn a_hyper_cutter_holders_attack_drop_is_blocked() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
     let defender = mon(&dex, CORPHISH, 15, vec![TACKLE]);
     assert_eq!(
         defender.ability(),
@@ -615,12 +553,10 @@ fn a_hyper_cutter_holders_attack_drop_is_blocked() {
     );
 }
 
-/// Hyper Cutter's guard is narrow too: it only covers Attack
-/// (`statId == STAT_ATK`), so the same Corphish still loses Defense to Leer.
 #[test]
 fn a_hyper_cutter_holders_other_stats_still_drop() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 288, 15, vec![LEER]);
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![LEER]);
     let defender = mon(&dex, CORPHISH, 15, vec![TACKLE]);
 
     let mut rng = SequenceRng::new([0]);
@@ -631,12 +567,6 @@ fn a_hyper_cutter_holders_other_stats_still_drop() {
     );
 }
 
-/// [`StatChangeMagnitude`]'s whole purpose (issue #322 follow-up): `get`
-/// names exactly the two upstream `stages` values, and `delta` applies
-/// direction's sign to both without any cast -- the invariant a bare `u8`
-/// field left the caller to trust is now enforced by the type itself, so
-/// there is no magnitude this test could hand `delta` that would panic or
-/// silently produce the wrong sign.
 #[test]
 fn stat_change_magnitude_names_exactly_the_two_upstream_values() {
     assert_eq!(StatChangeMagnitude::One.get(), 1);

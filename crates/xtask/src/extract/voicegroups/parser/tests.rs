@@ -141,7 +141,7 @@ fn a_file_with_no_declaration_is_rejected() {
     let text = "@ just a comment\n\n";
     assert_eq!(
         parse_voice_group(text),
-        Err(VoiceGroupError::MissingDeclaration)
+        Err(VoiceGroupError::MissingVoiceGroupDeclaration)
     );
 }
 
@@ -150,7 +150,7 @@ fn a_non_voice_group_first_line_is_rejected() {
     let text = "voice_square_1 60, 0, 0, 2, 0, 0, 15, 0\n";
     assert_eq!(
         parse_voice_group(text),
-        Err(VoiceGroupError::MissingDeclaration)
+        Err(VoiceGroupError::MissingVoiceGroupDeclaration)
     );
 }
 
@@ -159,7 +159,7 @@ fn a_bad_starting_note_is_rejected() {
     let text = "voice_group demo, not_a_number\n";
     assert_eq!(
         parse_voice_group(text),
-        Err(VoiceGroupError::BadStartingNote)
+        Err(VoiceGroupError::InvalidVoiceGroupStartingNote)
     );
 }
 
@@ -168,7 +168,7 @@ fn a_line_with_too_few_operands_is_malformed() {
     let text = "voice_group demo\n\tvoice_square_1 60, 0\n";
     assert_eq!(
         parse_voice_group(text),
-        Err(VoiceGroupError::MalformedLine {
+        Err(VoiceGroupError::MalformedVoiceSlot {
             group: "demo".to_owned(),
             line: "voice_square_1 60, 0".to_owned(),
         })
@@ -180,7 +180,7 @@ fn a_non_numeric_operand_is_malformed() {
     let text = "voice_group demo\n\tvoice_square_1 sixty, 0, 0, 2, 0, 0, 15, 0\n";
     assert!(matches!(
         parse_voice_group(text),
-        Err(VoiceGroupError::MalformedLine { .. })
+        Err(VoiceGroupError::MalformedVoiceSlot { .. })
     ));
 }
 
@@ -189,7 +189,7 @@ fn an_unrecognized_macro_is_rejected() {
     let text = "voice_group demo\n\tvoice_bogus 1, 2, 3\n";
     assert_eq!(
         parse_voice_group(text),
-        Err(VoiceGroupError::UnknownMacro {
+        Err(VoiceGroupError::UnknownVoiceMacro {
             group: "demo".to_owned(),
             macro_name: "voice_bogus".to_owned(),
         })
@@ -235,8 +235,6 @@ fn a_rhythm_reference_missing_its_prefix_is_rejected() {
     );
 }
 
-// ── keysplit_tables.inc ────────────────────────────────────────────────
-
 const KEYSPLIT_SAMPLE: &str = "\
 keysplit piano, 36
 \tsplit 0, 55
@@ -256,17 +254,14 @@ fn parses_every_keysplit_block_with_the_documented_starting_note_bias() {
 
     let piano = &tables["piano"];
     assert_eq!(piano.starting_note, 36);
-    // 108 - 36 = 72 entries: notes 36..=54 -> 0 (19), 55..=69 -> 1 (15),
-    // 70..=90 -> 2 (21), 91..=107 -> 3 (17).
-    assert_eq!(piano.table.len(), 72);
-    assert_eq!(piano.table[0], 0);
-    assert_eq!(piano.table[18], 0);
-    assert_eq!(piano.table[19], 1);
-    assert_eq!(piano.table[33], 1);
-    assert_eq!(piano.table[34], 2);
-    assert_eq!(piano.table[54], 2);
-    assert_eq!(piano.table[55], 3);
-    assert_eq!(piano.table[71], 3);
+    let expected_piano = [
+        vec![0; 55 - 36],
+        vec![1; 70 - 55],
+        vec![2; 91 - 70],
+        vec![3; 108 - 91],
+    ]
+    .concat();
+    assert_eq!(piano.table, expected_piano);
 
     let tuba = &tables["tuba"];
     assert_eq!(tuba.starting_note, 24);
@@ -291,7 +286,7 @@ fn a_split_before_any_keysplit_declaration_is_rejected() {
     let text = "\tsplit 0, 5\n";
     assert_eq!(
         parse_keysplit_tables(text),
-        Err(VoiceGroupError::SplitOutsideKeySplit)
+        Err(VoiceGroupError::SplitBeforeKeySplit)
     );
 }
 
@@ -300,7 +295,9 @@ fn a_split_earlier_than_the_running_cursor_is_rejected() {
     let text = "keysplit demo, 36\n\tsplit 0, 40\n\tsplit 1, 38\n";
     assert_eq!(
         parse_keysplit_tables(text),
-        Err(VoiceGroupError::SplitOutOfOrder("demo".to_owned()))
+        Err(VoiceGroupError::SplitOutOfOrder {
+            table: "demo".to_owned(),
+        })
     );
 }
 
@@ -309,7 +306,9 @@ fn a_duplicate_keysplit_label_is_rejected() {
     let text = "keysplit demo, 0\n\tsplit 0, 1\nkeysplit demo, 0\n\tsplit 0, 1\n";
     assert_eq!(
         parse_keysplit_tables(text),
-        Err(VoiceGroupError::DuplicateKeySplitTable("demo".to_owned()))
+        Err(VoiceGroupError::DuplicateKeySplitTable {
+            label: "demo".to_owned(),
+        })
     );
 }
 
@@ -318,47 +317,55 @@ fn a_keysplit_header_missing_its_label_is_rejected() {
     let text = "keysplit\n\tsplit 0, 1\n";
     assert_eq!(
         parse_keysplit_tables(text),
-        Err(VoiceGroupError::MalformedKeySplitTableHeader)
+        Err(VoiceGroupError::MissingKeySplitLabel)
+    );
+}
+
+#[test]
+fn a_non_numeric_keysplit_starting_note_is_rejected() {
+    let text = "keysplit demo, not_a_number\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::InvalidKeySplitStartingNote)
+    );
+}
+
+#[test]
+fn non_numeric_split_operands_are_rejected() {
+    let text = "keysplit demo, 0\n\tsplit not_a_slot, 4\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::InvalidSplitOperands {
+            table: "demo".to_owned(),
+        })
     );
 }
 
 #[test]
 fn an_unrecognized_keysplit_macro_is_rejected() {
-    // Crafted fixture: the real `keysplit_tables.inc` contains only
-    // `keysplit`/`split` lines, but a silently-skipped third macro would be
-    // a silently-truncated table, so this fails closed the same way
-    // `parse_slot_line`'s `UnknownMacro` does.
     let text = "keysplit demo, 0\n\tsplit 0, 4\n\tsplit_all 1\n";
     assert_eq!(
         parse_keysplit_tables(text),
-        Err(VoiceGroupError::UnknownKeySplitMacro(
-            "split_all".to_owned()
-        ))
+        Err(VoiceGroupError::UnknownKeySplitMacro {
+            macro_name: "split_all".to_owned(),
+        })
     );
 }
 
 #[test]
 fn a_keysplit_table_longer_than_128_entries_is_rejected() {
-    // One `split` spanning notes 0..200 expands to 200 table entries, past
-    // the 128 slots any table entry can address (`VOICE_SLOT_COUNT`).
     let text = "keysplit demo, 0\n\tsplit 0, 200\n";
     assert_eq!(
         parse_keysplit_tables(text),
         Err(VoiceGroupError::KeySplitTableTooLong {
             label: "demo".to_owned(),
-            len: 200,
+            expanded_len: 200,
         })
     );
 }
 
 #[test]
 fn parse_link_order_marks_foreign_includes_as_barriers_in_file_order() {
-    // Mirrors `sound/voice_groups.inc:66-67,136`'s own shape: a comment
-    // line, two voicegroup includes back to back, then an unrelated
-    // `sound/cry_tables.inc` include -- which must survive as a `Foreign`
-    // adjacency barrier, not vanish (physical adjacency is bytes: the
-    // group before it is followed in memory by cry-table data, not by the
-    // next voicegroup file).
     let text = "\
 @ drumsets
 .include \"sound/voicegroups/title.inc\"

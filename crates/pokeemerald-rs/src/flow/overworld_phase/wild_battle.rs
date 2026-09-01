@@ -93,7 +93,7 @@ impl OverworldPhase {
     /// The lead mon reaching here is never *fainted* in production: a loss
     /// heals it before the next step can roll another encounter
     /// ([`Self::white_out`], `crate::flow::wild_encounter`'s module docs
-    /// "The white-out, modelled" section) -- the same state upstream itself
+    /// "Wild-battle loss" section) -- the same state upstream itself
     /// cannot reach. Not re-checked here, since a second check could only
     /// ever be dead code against that invariant.
     pub(super) fn begin_wild_battle(

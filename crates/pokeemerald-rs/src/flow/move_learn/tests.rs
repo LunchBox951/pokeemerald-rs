@@ -1,8 +1,3 @@
-//! Unit tests for [`super`]'s stand-in answer to the level-up replacement
-//! prompt (S-6, issue #304) — and, more importantly, for the wiring: a
-//! headless driver must *answer* the question, because an unanswered one
-//! wedges the battle it was asked in.
-
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::{Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, Ivs, PpBonuses};
@@ -12,8 +7,6 @@ use super::settle_move_learn_prompts;
 use crate::flow::npc_trainer_battle::advance_npc_trainer_battle;
 use crate::flow::wild_encounter::SharedRng;
 
-/// `TRAINER_MAY_ROUTE_103_MUDKIP` — the same real trainer the `battle`
-/// crate's own trainer-battle pins use.
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 const TREECKO: SpeciesId = SpeciesId(277);
 const TORCHIC: SpeciesId = SpeciesId(280);
@@ -22,12 +15,9 @@ const SCRATCH: MoveId = MoveId(10);
 const LEER: MoveId = MoveId(43);
 const GROWL: MoveId = MoveId(45);
 const TACKLE: MoveId = MoveId(33);
-/// `MOVE_PECK` — Torchic's level-16 learnset entry.
 const PECK: MoveId = MoveId(64);
+const MAX_TEST_TURNS: usize = 60;
 
-/// A level-15 Torchic whose four slots are full and which is one experience
-/// point short of level 16 — so the very next award crosses the threshold
-/// and offers Peck with nowhere to put it.
 fn torchic_one_point_from_a_full_moveset_level_up(dex: &Dex) -> BattlePokemon {
     let mut mon = BattlePokemon::new(
         dex,
@@ -55,14 +45,23 @@ fn two_treecko_party(dex: &Dex) -> Vec<BattlePokemon> {
         .collect()
 }
 
-/// The wiring, end to end through a real driver: the first knockout levels
-/// the player into a full-moveset prompt *mid-battle*, and the battle keeps
-/// playing. Without the driver's own
-/// [`settle_move_learn_prompts`] call, the next turn would be refused with
-/// `BattleError::MoveLearnPending` and the driver would abandon the fight —
-/// so this pins the answer being given, not merely being available.
+fn play_until_move_learn_prompt(battle: &mut Battle, rng: &mut Rng) {
+    for _ in 0..MAX_TEST_TURNS {
+        let events = battle
+            .take_turn(battle::PlayerAction::UseMove(0), &mut SharedRng::new(rng))
+            .expect("no turn before the prompt can fail");
+        if events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::MoveLearnPrompt { .. }))
+        {
+            return;
+        }
+    }
+    panic!("battle did not reach a move-learning prompt within {MAX_TEST_TURNS} turns");
+}
+
 #[test]
-fn an_npc_trainer_battle_answers_a_mid_battle_prompt_and_plays_on() {
+fn npc_trainer_driver_declines_a_mid_battle_prompt_and_finishes() {
     let dex = Dex::new();
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex);
     let original_moves: Vec<MoveId> = player.moves().iter().map(|slot| slot.move_id).collect();
@@ -82,7 +81,7 @@ fn an_npc_trainer_battle_answers_a_mid_battle_prompt_and_plays_on() {
     let mut money = 0;
 
     let mut outcome = None;
-    for _ in 0..60 {
+    for _ in 0..MAX_TEST_TURNS {
         outcome = advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng);
         if outcome.is_some() {
             break;
@@ -107,11 +106,8 @@ fn an_npc_trainer_battle_answers_a_mid_battle_prompt_and_plays_on() {
     );
 }
 
-/// The answer itself, reported: one [`BattleEvent::MoveLearnDeclined`] per
-/// prompt, then the aftermath the prompt deferred, and nothing left pending
-/// afterwards.
 #[test]
-fn settling_declines_every_pending_prompt_and_reports_each_one() {
+fn settling_declines_the_prompt_before_releasing_the_deferred_send_out() {
     let dex = Dex::new();
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex);
     let party = two_treecko_party(&dex);
@@ -125,21 +121,7 @@ fn settling_declines_every_pending_prompt_and_reports_each_one() {
     )
     .unwrap();
 
-    // Play until the first knockout raises the prompt.
-    for _ in 0..60 {
-        let events = battle
-            .take_turn(
-                battle::PlayerAction::UseMove(0),
-                &mut SharedRng::new(&mut rng),
-            )
-            .expect("no turn before the prompt can fail");
-        if events
-            .iter()
-            .any(|event| matches!(event, BattleEvent::MoveLearnPrompt { .. }))
-        {
-            break;
-        }
-    }
+    play_until_move_learn_prompt(&mut battle, &mut rng);
     assert_eq!(
         battle.pending_move_learn().map(|pending| pending.move_id()),
         Some(PECK),
@@ -152,10 +134,6 @@ fn settling_declines_every_pending_prompt_and_reports_each_one() {
         events,
         vec![
             BattleEvent::MoveLearnDeclined { move_id: PECK },
-            // The answer also releases the aftermath the prompt was holding
-            // back -- here, the deferred forced send-out (upstream finishes
-            // the level-up script before `HandleFaintedMonActions`' case 4
-            // sends out the replacement).
             BattleEvent::TrainerSentOut {
                 species: TREECKO,
                 bench_remaining: 0,
@@ -169,10 +147,8 @@ fn settling_declines_every_pending_prompt_and_reports_each_one() {
     );
 }
 
-/// Declining does not touch the `ppBonuses` byte: only a replacement clears
-/// a slot's PP Ups (`RemoveMonPPBonus`).
 #[test]
-fn declining_leaves_every_slots_pp_ups_alone() {
+fn declining_a_prompt_preserves_the_pp_up_bits() {
     let dex = Dex::new();
     let bonuses = PpBonuses::from_bits(0b0000_1111);
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex)
@@ -192,7 +168,7 @@ fn declining_leaves_every_slots_pp_ups_alone() {
     let mut lead = None;
     let mut money = 0;
 
-    for _ in 0..60 {
+    for _ in 0..MAX_TEST_TURNS {
         if advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng).is_some() {
             break;
         }
@@ -202,11 +178,8 @@ fn declining_leaves_every_slots_pp_ups_alone() {
     assert_eq!(lead.pp_bonuses(), bonuses);
 }
 
-/// The stand-in costs no RNG, so a battle that raises a prompt sits at the
-/// same point in the shared stream as one that does not — the property
-/// every `crate::flow` handoff is written around.
 #[test]
-fn settling_a_prompt_draws_nothing_from_the_shared_stream() {
+fn settling_a_prompt_does_not_advance_the_shared_rng() {
     let dex = Dex::new();
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex);
     let party = two_treecko_party(&dex);
@@ -219,20 +192,7 @@ fn settling_a_prompt_draws_nothing_from_the_shared_stream() {
         &mut SharedRng::new(&mut rng),
     )
     .unwrap();
-    for _ in 0..60 {
-        let events = battle
-            .take_turn(
-                battle::PlayerAction::UseMove(0),
-                &mut SharedRng::new(&mut rng),
-            )
-            .unwrap();
-        if events
-            .iter()
-            .any(|event| matches!(event, BattleEvent::MoveLearnPrompt { .. }))
-        {
-            break;
-        }
-    }
+    play_until_move_learn_prompt(&mut battle, &mut rng);
     assert!(battle.pending_move_learn().is_some());
 
     let before = rng.state();
@@ -244,18 +204,11 @@ fn settling_a_prompt_draws_nothing_from_the_shared_stream() {
     );
 }
 
-/// A prompt raised by the *final* knockout defers the money payout into the
-/// settlement's own events (`Cmd_getmoneyreward` runs only after the
-/// level-up script, ask included, has finished), so the driver must credit
-/// `MoneyGained` from there too — a wallet that only scanned the turn's
-/// events would silently drop the prize.
 #[test]
-fn a_prize_deferred_behind_the_final_knockouts_prompt_is_still_credited() {
+fn npc_trainer_driver_credits_prize_released_by_the_final_prompt() {
     let dex = Dex::new();
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex);
-    // One-mon party: the knockout that raises the prompt is also the one
-    // that decides the battle, so the payout waits on the answer.
-    let party =
+    let final_knockout_party =
         vec![BattlePokemon::new(&dex, TREECKO, 5, Ivs::default(), 0, vec![POUND, LEER]).unwrap()];
     let expected_money = {
         let mut rng = Rng::new(1);
@@ -263,7 +216,7 @@ fn a_prize_deferred_behind_the_final_knockouts_prompt_is_still_credited() {
             dex.clone(),
             player.clone(),
             MAY_ROUTE_103_MUDKIP,
-            party.clone(),
+            final_knockout_party.clone(),
             &mut SharedRng::new(&mut rng),
         )
         .unwrap()
@@ -277,7 +230,7 @@ fn a_prize_deferred_behind_the_final_knockouts_prompt_is_still_credited() {
         dex,
         player,
         MAY_ROUTE_103_MUDKIP,
-        party,
+        final_knockout_party,
         &mut SharedRng::new(&mut rng),
     )
     .unwrap();
@@ -286,7 +239,7 @@ fn a_prize_deferred_behind_the_final_knockouts_prompt_is_still_credited() {
     let mut money = 0;
 
     let mut outcome = None;
-    for _ in 0..60 {
+    for _ in 0..MAX_TEST_TURNS {
         outcome = advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng);
         if outcome.is_some() {
             break;

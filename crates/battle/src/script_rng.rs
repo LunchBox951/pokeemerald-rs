@@ -1,51 +1,31 @@
-//! A test-only [`BattleRng`] fed from a fixed sequence — the tool every
-//! pipeline's tests use to pin *both* the values a script consumes and how
-//! **many** it consumes.
-//!
-//! Compiled only under `cfg(test)`. It exists because a draw *count* is a
-//! behavioural claim in this crate (see any pipeline module's "RNG draws"
-//! table): a shared stream that advances one step too far silently
-//! desynchronises every later roll in the battle, so the tests assert on
-//! [`SequenceRng::draws`] as routinely as on outcomes, and a script that
-//! draws one time too many runs off the end of the sequence and panics
-//! rather than reading a value the test never meant it to have.
-//!
-//! Older modules ([`crate::hit`], [`crate::stat_change`], `battle::trainer`,
-//! …) each carry a private copy predating this one; new modules use this.
-
 use crate::damage::BattleRng;
 
-/// A [`BattleRng`] that hands back a fixed sequence of `u16`s and counts how
-/// many were taken.
 pub(crate) struct SequenceRng {
-    values: Vec<u16>,
-    index: usize,
+    scripted_values: Vec<u16>,
+    draw_count: usize,
 }
 
 impl SequenceRng {
-    /// A stream that will yield `values`, in order, and panic if asked for
-    /// one more.
-    pub(crate) fn new(values: impl IntoIterator<Item = u16>) -> Self {
+    pub(crate) fn new(scripted_values: impl IntoIterator<Item = u16>) -> Self {
         Self {
-            values: values.into_iter().collect(),
-            index: 0,
+            scripted_values: scripted_values.into_iter().collect(),
+            draw_count: 0,
         }
     }
 
-    /// How many values have been drawn so far.
     pub(crate) fn draws(&self) -> usize {
-        self.index
+        self.draw_count
     }
 }
 
 impl BattleRng for SequenceRng {
     fn next_u16(&mut self) -> u16 {
         let value = self
-            .values
-            .get(self.index)
+            .scripted_values
+            .get(self.draw_count)
             .copied()
-            .expect("SequenceRng exhausted: the script drew more than the test scripted");
-        self.index += 1;
+            .unwrap_or_else(|| panic!("SequenceRng exhausted after {} draws", self.draw_count));
+        self.draw_count += 1;
         value
     }
 }
