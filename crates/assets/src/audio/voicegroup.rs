@@ -124,7 +124,8 @@ pub struct NoiseVoice {
     pub fixed_rate: bool,
 }
 
-/// Selects `table[note - starting_note]` from a child voicegroup.
+/// Selects `table[note - starting_note]` from a child voicegroup while retaining the played note
+/// for pitch.
 ///
 /// The source table covers only this subrange. Upstream biases its table pointer by
 /// `starting_note` and indexes it by the raw note, so notes outside the stored range read adjacent
@@ -176,7 +177,8 @@ impl KeySplitVoice {
     }
 }
 
-/// Selects the played note's slot directly from a child voicegroup.
+/// Selects the played note's slot directly from a child voicegroup and plays it at the child's
+/// base key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RhythmVoice {
     pub children: VoiceGroupId,
