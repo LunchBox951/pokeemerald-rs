@@ -790,6 +790,12 @@ mod tests {
         );
     }
 
+    // Upstream's band extents, pinned independently so the assertions
+    // below cannot drift with an accidental MAP_OFFSET change.
+    const _: () = assert!(
+        BACKUP_MAP_MIN == -7 && BACKUP_MAP_MAX_PAST_EAST == 7 && BACKUP_MAP_MAX_PAST_SOUTH == 6
+    );
+
     #[test]
     fn connected_cell_at_stops_at_upstreams_backup_map_band_edge() {
         const ACTIVE: i32 = 4;
