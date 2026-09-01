@@ -37,6 +37,15 @@
 //! every platform lets a directory be synced, so its failure is ignored
 //! rather than reported over an import that otherwise finished.
 //!
+//! Syncing the destination persists the pack's name *inside* it, never the
+//! destination's own name in the level above. So a directory this run had
+//! to create is one more entry starting life only in the page cache — and
+//! it is the entry the pack hangs from, which a crash would take the whole
+//! import with. Every level created is therefore made durable through its
+//! parent, outermost first, on the same best-effort terms. The first import
+//! on a machine is the one that creates the data directory, so this is the
+//! ordinary path rather than a corner of it.
+//!
 //! The one destination that is refused outright is the ROM being imported.
 //! `$POKEEMERALD_PACK` can name any path, including the file the player
 //! passed to `--import-rom`, and the rename would then drop the pack on
@@ -395,13 +404,17 @@ fn import_to_with(
     };
     // The temporary file has to sit in the destination directory for the
     // rename to be atomic, so the directory is created before the import
-    // runs rather than after it succeeds. `existed` is what lets a failed
-    // run put that back.
-    let existed = dir.is_dir();
+    // runs rather than after it succeeds. Which levels this run makes is
+    // asked before it makes them, and answers both of the questions that
+    // follow: what a failed run puts back, and what a successful one has to
+    // leave durable.
+    let created = directories_to_create(&dir);
+    let existed = created.is_empty();
     fs::create_dir_all(&dir).map_err(|source| ImportRomError::CreateDirFailed {
         path: dir.clone(),
         source,
     })?;
+    sync_created_directories(&created);
 
     // Everything from here on names files inside this one handle. A
     // directory component redirected after this open is a component
@@ -551,6 +564,54 @@ fn names_a_directory(pack_path: &Path) -> bool {
         Some('.') => tail.next().is_some_and(std::path::is_separator),
         Some(last) => std::path::is_separator(last),
         None => false,
+    }
+}
+
+/// The directories [`fs::create_dir_all`] will have to create for `dir`,
+/// outermost first.
+///
+/// Asked before the create, because afterwards nothing tells a level this
+/// run made from one that was always there. Empty for a `dir` that is
+/// already a directory, which is what makes it the answer to "did this run
+/// create the destination" as well.
+///
+/// A component that exists but is *not* a directory is listed like a
+/// missing one. `create_dir_all` then fails on it and the list is never
+/// used, so distinguishing the two here would buy nothing.
+fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
+    let mut missing = Vec::new();
+    let mut current = Some(dir);
+    while let Some(path) = current.filter(|path| !path.as_os_str().is_empty()) {
+        if path.is_dir() {
+            break;
+        }
+        missing.push(path.to_path_buf());
+        current = path.parent();
+    }
+    missing.reverse();
+    missing
+}
+
+/// Get the entries [`fs::create_dir_all`] just wrote onto the disk.
+///
+/// A new directory is a *name in the level above it*, so the parent is what
+/// has to be synced for it — the directory's own sync would only persist
+/// what is inside it. Outermost first, so a crash part-way through leaves a
+/// prefix of the chain rather than a deep directory hanging from a name
+/// that never reached the disk.
+///
+/// Best-effort throughout ([`dest::sync_directory`]): a weaker durability
+/// guarantee is not something to fail a finished import over.
+fn sync_created_directories(created: &[PathBuf]) {
+    for dir in created {
+        // A bare relative name has no parent, and `""` is not a directory
+        // any OS accepts, so it is the current directory — the same rule
+        // [`pack_directory`] resolves the destination with.
+        let parent = dir
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        dest::sync_directory(parent);
     }
 }
 

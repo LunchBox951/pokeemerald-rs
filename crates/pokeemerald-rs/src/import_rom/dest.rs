@@ -12,6 +12,37 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+/// Get `path`'s own directory entries onto the storage device, or give up.
+///
+/// [`Dest::publish`] syncs the destination through the handle it already
+/// holds; this is for the directories *above* it, which the import creates
+/// but never pins — a newly created directory hangs from a name in its
+/// parent, and that name is durable only once the parent is synced.
+///
+/// Best-effort for the reason [`Dest::publish`]'s sync is: the pack's bytes
+/// are on the disk either way, and not every platform will open a directory
+/// at all. A failure here is a weaker guarantee, not a failed import.
+#[cfg(unix)]
+pub(super) fn sync_directory(path: &Path) {
+    if let Ok(dir) = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    ) {
+        let _ = rustix::fs::fsync(&dir);
+    }
+}
+
+/// Get `path`'s own directory entries onto the storage device, or give up.
+///
+/// The path-based spelling of the Unix arm above, and the same best-effort
+/// contract. Windows will not open a directory as a file, so this is a
+/// no-op there — exactly as it is for [`Dest::publish`]'s own sync.
+#[cfg(not(unix))]
+pub(super) fn sync_directory(path: &Path) {
+    let _ = File::open(path).and_then(|dir| dir.sync_all());
+}
+
 /// The destination directory, pinned open.
 ///
 /// On Unix this is a descriptor for the directory itself: the kernel

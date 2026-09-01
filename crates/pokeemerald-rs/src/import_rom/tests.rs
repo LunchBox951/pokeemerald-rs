@@ -14,7 +14,8 @@ use rom_import::{ImportError, ImportedPack};
 
 use super::dest::Dest;
 use super::{
-    import_to, import_to_with, pack_directory, pack_name, temp_name, ImportOutcome, ImportRomError,
+    directories_to_create, import_to, import_to_with, pack_directory, pack_name, temp_name,
+    ImportOutcome, ImportRomError,
 };
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
@@ -123,6 +124,54 @@ fn a_successful_import_publishes_the_pack_and_clears_the_temp_file() {
     assert_eq!(outcome.entry_count(), 7);
     assert_eq!(outcome.pack_bytes(), 10);
     // The temporary file is gone: the pack is the only file left.
+    assert_eq!(
+        file_names(pack_path.parent().unwrap()),
+        ["pokeemerald.pack"]
+    );
+}
+
+#[test]
+fn every_level_the_import_must_create_is_listed_outermost_first() {
+    // Each level is a name in the one before it, and it is the *parent*
+    // that has to be synced to make that name durable -- so the list has to
+    // name every level, in the order they are created.
+    let dir = TempDir::new("levels");
+    let one = dir.join("one");
+    let two = one.join("two");
+    let three = two.join("three");
+
+    assert_eq!(
+        directories_to_create(&three),
+        [one.clone(), two.clone(), three.clone()]
+    );
+    // A destination that is already there is created by nobody, which is
+    // also how a failed import knows not to remove it.
+    assert!(directories_to_create(&dir.path).is_empty());
+
+    fs::create_dir_all(&one).expect("the first level is created");
+    assert_eq!(directories_to_create(&three), [two.clone(), three.clone()]);
+    fs::create_dir_all(&three).expect("the rest are created");
+    assert!(directories_to_create(&three).is_empty());
+}
+
+#[test]
+fn an_import_creates_and_publishes_through_every_missing_level() {
+    // The first import on a machine is the one that creates the data
+    // directory, and it can be more than one level deep.
+    let dir = TempDir::new("deep-publish");
+    let pack_path = dir
+        .join("data")
+        .join("pokeemerald-rs")
+        .join("pokeemerald.pack");
+
+    let source = SourceRom::new("deep-publish-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
     assert_eq!(
         file_names(pack_path.parent().unwrap()),
         ["pokeemerald.pack"]
