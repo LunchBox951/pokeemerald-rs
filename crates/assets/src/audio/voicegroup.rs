@@ -16,7 +16,7 @@ use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
 use super::sample::SampleId;
 
-/// The number of instrument slots addressable by M4A `VOICE` commands.
+/// The normalized voicegroup limit for the conventional `0..=127` instrument range.
 pub const VOICE_SLOT_COUNT: usize = 128;
 
 /// A voicegroup's stable asset-pack identifier.
