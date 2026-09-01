@@ -1760,9 +1760,8 @@ fn a_live_lead_is_never_saved_as_fainted_when_the_ev_gap_shrinks() {
 /// End to end: a KO that both awards EVs and crosses a level
 /// this same turn must file *both* -- the newly gained EV byte, and a stat
 /// block computed with it rather than the record's stale, pre-KO one.
-/// Regression for the issue's own defect report: "A KO that grants a level
-/// and crosses an `ev/4` boundary therefore files lower stats than
-/// upstream, and the newly earned EVs are lost."
+/// Without both, a KO that grants a level and crosses an `ev/4` boundary
+/// files lower stats than upstream and loses the newly earned EVs.
 #[test]
 fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     let dex = Dex::new();
@@ -1853,7 +1852,7 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     );
 }
 
-/// PR review finding (behavioral-fidelity): upstream only refreshes the
+/// Upstream only refreshes the
 /// cached stat block inside the level-up sequence itself
 /// (`Cmd_getexp` case 5's `CalculateMonStats`); a later KO's own
 /// `MonGainEVs` call (`battle_script_commands.c:3420`) never touches it. A
@@ -1914,7 +1913,7 @@ fn save_time_recompute_uses_the_evs_the_level_up_saw_not_later_gains() {
     );
 }
 
-/// The counterpart the fix above must reach through
+/// The same property reached through
 /// [`merge_into_save_pokemon`] too: a mon loaded from a backing record, then
 /// levelled up and only *later* KO'd for more EVs with no second level-up,
 /// must file the level-up's own block on the next merge -- not one inflated
