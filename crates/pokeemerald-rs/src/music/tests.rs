@@ -170,7 +170,7 @@ fn overruns_count_the_samples_a_full_ring_drops() {
 fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
     const FULL_VOLUME: u32 = 64;
     const VOLUME_PER_STEP: u32 = 4;
-    const FADE_FRAMES: u32 = FULL_VOLUME / VOLUME_PER_STEP * TITLE_FADE_OUT_SPEED as u32;
+    const FADE_FRAMES: u32 = 64;
 
     let mut plain = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
         .expect("null backend never errors");
