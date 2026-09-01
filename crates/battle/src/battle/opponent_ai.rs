@@ -64,6 +64,10 @@ fn consume_first_battle_setup_draws(rng: &mut impl BattleRng) {
     }
 }
 
+/// Chooses the wild opponent's action on the one AI script a first battle ever
+/// runs (`AI_SCRIPT_FIRST_BATTLE`): Struggle without a PP-positive move, Flee
+/// when the player's HP percent is at or below [`FIRST_BATTLE_FLEE_HP_PERCENT`]
+/// after the unused setup draws, else a uniform draw over PP-positive slots.
 pub(crate) fn choose_enemy_action_first_battle(
     enemy: &BattlePokemon,
     player: &BattlePokemon,
