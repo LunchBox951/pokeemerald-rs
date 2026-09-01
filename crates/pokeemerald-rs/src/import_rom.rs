@@ -406,10 +406,9 @@ fn import_to_with(
     // rename to be atomic, so the directory is created before the import
     // runs rather than after it succeeds. Which levels this run makes is
     // asked before it makes them, and answers both of the questions that
-    // follow: what a failed run puts back, and what a successful one has to
-    // leave durable.
+    // follow: which entries a successful run has to leave durable, and which
+    // directories a failed one takes back with it.
     let created = directories_to_create(&dir);
-    let existed = created.is_empty();
     fs::create_dir_all(&dir).map_err(|source| ImportRomError::CreateDirFailed {
         path: dir.clone(),
         source,
@@ -422,7 +421,7 @@ fn import_to_with(
     let dest = match Dest::open(&dir) {
         Ok(dest) => dest,
         Err(source) => {
-            undo_created_dir(&dir, existed);
+            undo_created_directories(&created);
             return Err(ImportRomError::OpenDirFailed {
                 path: dir.clone(),
                 source,
@@ -436,7 +435,7 @@ fn import_to_with(
     // ROM's name, so no guard on that name can see this. Refuse before
     // building a pack that has nowhere safe to go.
     if dest.is_same_file_as(name, &rom, rom_path) {
-        undo_created_dir(&dir, existed);
+        undo_created_directories(&created);
         return Err(ImportRomError::DestinationIsSource {
             rom_path: rom_path.to_path_buf(),
         });
@@ -452,7 +451,7 @@ fn import_to_with(
     let mut file = match dest.create_new(&temp_name) {
         Ok(file) => file,
         Err(source) => {
-            undo_created_dir(&dir, existed);
+            undo_created_directories(&created);
             return Err(ImportRomError::TempFileFailed {
                 temp_path: dir.join(&temp_name),
                 source,
@@ -465,7 +464,7 @@ fn import_to_with(
         Err(source) => {
             drop(file);
             let _ = dest.discard(&temp_name);
-            undo_created_dir(&dir, existed);
+            undo_created_directories(&created);
             return Err(ImportRomError::Import(source));
         }
     };
@@ -487,7 +486,7 @@ fn import_to_with(
     {
         drop(file);
         let _ = dest.discard(&temp_name);
-        undo_created_dir(&dir, existed);
+        undo_created_directories(&created);
         return Err(ImportRomError::TempFileFailed {
             temp_path: dir.join(&temp_name),
             source,
@@ -497,7 +496,7 @@ fn import_to_with(
 
     dest.publish(&temp_name, name).map_err(|source| {
         let temp_removed = dest.discard(&temp_name);
-        undo_created_dir(&dir, existed);
+        undo_created_directories(&created);
         ImportRomError::PublishFailed {
             temp_removed,
             temp_path: dir.join(&temp_name),
@@ -571,9 +570,11 @@ fn names_a_directory(pack_path: &Path) -> bool {
 /// outermost first.
 ///
 /// Asked before the create, because afterwards nothing tells a level this
-/// run made from one that was always there. Empty for a `dir` that is
-/// already a directory, which is what makes it the answer to "did this run
-/// create the destination" as well.
+/// run made from one that was always there — and both things done to those
+/// levels need exactly that distinction: [`sync_created_directories`]
+/// persists them, [`undo_created_directories`] takes them back. Empty for a
+/// `dir` that is already a directory, which is a run that created nothing
+/// and so has nothing to undo.
 ///
 /// A component that exists but is *not* a directory is listed like a
 /// missing one. `create_dir_all` then fails on it and the list is never
@@ -615,16 +616,24 @@ fn sync_created_directories(created: &[PathBuf]) {
     }
 }
 
-/// Remove the destination directory this run created, if it created one.
+/// Remove the directories this run created, innermost first.
 ///
 /// A failed import should leave the filesystem as it found it: an empty
 /// `pokeemerald-rs` directory in the user's data directory is litter that
-/// looks like a half-installed game. Non-recursive on purpose, so it can
-/// only ever remove a directory this run created and left empty; anything
-/// else fails harmlessly.
-fn undo_created_dir(dir: &Path, existed: bool) {
-    if !existed {
-        let _ = fs::remove_dir(dir);
+/// looks like a half-installed game, and a destination reached through
+/// several missing levels would leave a whole chain of them. Innermost
+/// first, because a directory only comes away once what it holds is gone.
+///
+/// Non-recursive on purpose, so it can only ever remove a directory this
+/// run created and left empty. The first refusal ends the walk: a level
+/// that will not go is one the level above it is not empty of either, and
+/// a directory something else has since been put in is no longer this
+/// run's to take.
+fn undo_created_directories(created: &[PathBuf]) {
+    for dir in created.iter().rev() {
+        if fs::remove_dir(dir).is_err() {
+            break;
+        }
     }
 }
 

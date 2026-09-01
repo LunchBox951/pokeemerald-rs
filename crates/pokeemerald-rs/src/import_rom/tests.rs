@@ -218,6 +218,51 @@ fn a_failed_import_removes_the_directory_it_created() {
 }
 
 #[test]
+fn a_failed_import_removes_every_level_it_created() {
+    // A `$POKEEMERALD_PACK` can point through more than one missing level,
+    // and leaving the outer ones behind is the same litter as leaving the
+    // innermost: an empty chain that looks like a half-installed game.
+    let dir = TempDir::new("undo-levels");
+    let outer = dir.join("new");
+    let pack_path = outer.join("data").join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-levels-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::Import(_)));
+    assert!(
+        !outer.exists(),
+        "every created level goes, not just the leaf"
+    );
+    assert!(file_names(&dir.path).is_empty());
+}
+
+#[test]
+fn a_failed_import_keeps_the_levels_it_did_not_create() {
+    // The cleanup reaches only the levels this run made. A directory that
+    // was already there is not this run's to remove, however empty it
+    // happens to be.
+    let dir = TempDir::new("undo-stops");
+    let kept = dir.join("already-here");
+    fs::create_dir_all(&kept).expect("the existing level is created");
+    let created = kept.join("made-by-the-import");
+    let pack_path = created.join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-stops-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::Import(_)));
+    assert!(!created.exists(), "the level the import made goes");
+    assert!(kept.is_dir(), "the level that was already there stays");
+}
+
+#[test]
 fn an_import_into_an_existing_directory_leaves_it_alone() {
     let dir = TempDir::new("keep-dir");
     let pack_path = dir.join("pokeemerald.pack");
