@@ -13,13 +13,20 @@ use engine::save::{
     BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
 };
 
-/// The save status used to choose the boot menu.
+/// The save status used to choose the boot menu — upstream `gSaveFileStatus`'s
+/// `SAVE_STATUS_*` values (`pokeemerald/include/save.h:34-38`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaveFileStatus {
+    /// `SAVE_STATUS_EMPTY` — nothing has ever been saved.
     Empty,
+    /// `SAVE_STATUS_OK` — an intact save was loaded.
     Ok,
+    /// `SAVE_STATUS_CORRUPT` — no intact slot survives.
     Corrupt,
+    /// `SAVE_STATUS_ERROR` — one intact slot was loaded; the other holds
+    /// damage.
     Error,
+    /// `SAVE_STATUS_NO_FLASH` — the save medium itself is unusable.
     NoFlash,
 }
 
@@ -45,10 +52,19 @@ impl SaveFileStatus {
 
 /// Blocks recovered during boot and the status that determines whether they
 /// are usable.
+///
+/// The blocks are always present, even for [`SaveFileStatus::Empty`] or
+/// [`SaveFileStatus::Corrupt`], mirroring upstream's unconditionally
+/// populated `gSaveBlock1Ptr`/`gSaveBlock2Ptr`. Callers gate on
+/// [`SaveFileStatus::menu_shows_continue`], never on the blocks looking
+/// plausible.
 #[derive(Debug)]
 pub(crate) struct SavedGame {
+    /// `gSaveFileStatus`.
     pub(crate) status: SaveFileStatus,
+    /// The recovered `SaveBlock1`.
     pub(crate) block1: SaveBlock1,
+    /// The recovered `SaveBlock2`.
     pub(crate) block2: SaveBlock2,
 }
 
@@ -65,6 +81,7 @@ impl SavedGame {
 /// The result of a write that can be refused without an I/O error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StoreOutcome {
+    /// The blocks were rotated in and persisted.
     Written,
     /// A continuable save appeared before the player consented to replacing
     /// it. The file is unchanged.
@@ -247,8 +264,9 @@ impl SaveSlot {
             if let (Some(session_counter), Some(session_base)) =
                 (self.session_counter, &self.session_base)
             {
-                // Disk ahead of session: boot fell back to the older generation;
-                // keep this session's base (tests::healing_a_damaged_newest_slot_*).
+                // Session ahead of disk: the newest generation was damaged
+                // after boot and this load fell back to an older one; keep
+                // this session's base (tests::healing_a_damaged_newest_slot_*).
                 if counter_is_ahead(disk_counter, session_counter) {
                     store.restore_base(session_base.clone());
                 }
