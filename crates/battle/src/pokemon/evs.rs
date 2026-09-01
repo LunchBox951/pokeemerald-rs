@@ -1,26 +1,14 @@
-//! Effort values: how [`BattlePokemon`] adopts and gains them, and the one
-//! line [`BattlePokemon::stats`] refuses to cross because of them.
+//! Effort values on [`BattlePokemon`].
 //!
-//! Every mon [`BattlePokemon::new`] builds starts at `0` EVs.
-//! [`BattlePokemon::with_evs`] adopts a loaded record's own retained bytes
-//! at the save boundary, and [`BattlePokemon::gain_evs`] is `MonGainEVs`
-//! (`pokeemerald/src/pokemon.c:5988`-`:6064`), applied on every KO before
-//! [`BattlePokemon::apply_experience`] -- upstream's own order. Neither the
-//! Pokérus nor the Macho Brace doubling applies: this crate carries
-//! neither, so every award reaching [`BattlePokemon::gain_evs`] is
-//! upstream's un-multiplied base yield.
+//! Construction starts at `0` EVs, [`BattlePokemon::with_evs`] adopts a
+//! loaded record's bytes, and [`BattlePokemon::gain_evs`] is `MonGainEVs`
+//! (`pokeemerald/src/pokemon.c:5988`-`:6064`), run on every KO before
+//! [`BattlePokemon::apply_experience`], upstream's order. Pokérus and Macho
+//! Brace doubling do not apply: this crate carries neither.
 //!
-//! [`BattlePokemon::stats`] itself never becomes EV-aware -- not at
-//! construction, not after [`BattlePokemon::with_evs`], and not across any
-//! in-battle level-up ([`BattlePokemon::raise_level_to_experience`]) --
-//! however many real EVs this mon carries. `pokeemerald-rs::party`'s own
-//! load-clamp rebase system depends on that floor never moving, to
-//! consistently measure how many points a retained or freshly recomputed
-//! save-file maximum sits above it; only that module's own save-time
-//! recompute is EV-aware, and it is fed
-//! [`BattlePokemon::evs_at_last_level_up`] rather than the live
-//! [`BattlePokemon::evs`] -- see that field's own doc for why the two must
-//! differ.
+//! [`BattlePokemon::stats`] never becomes EV-aware: the save side's
+//! load-clamp rebase depends on that fixed `0`-EV floor. Only the save-time
+//! recompute is EV-aware, fed [`BattlePokemon::evs_at_last_level_up`].
 
 use assets::EvYield;
 

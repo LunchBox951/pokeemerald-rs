@@ -291,16 +291,11 @@ fn initial_ability_slot(base_stats: &BaseStats, personality: u32) -> u8 {
 pub struct BattlePokemon {
     species: SpeciesId,
     level: u8,
-    /// [`BattlePokemon::new`]'s own `level` argument, fixed for this
-    /// instance's lifetime — the one signal
-    /// `pokeemerald-rs::party`'s save encoders have for whether a level-up
-    /// happened since this value was last known-good, since
-    /// [`BattlePokemon::level`] alone cannot say so (it already tracks
-    /// [`BattlePokemon::experience`] at every point past construction,
-    /// crossed or not). See `party::to_save_pokemon` for what reads this.
+    /// The construction level, fixed for this instance's lifetime; the save
+    /// encoders compare it with [`BattlePokemon::level`] to detect a session
+    /// level-up.
     ///
-    /// Excluded from [`PartialEq`] (below): construction-provenance
-    /// bookkeeping, not part of the Pokémon's own battle identity.
+    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
     created_at_level: u8,
     nature: Nature,
     ivs: Ivs,
@@ -316,19 +311,12 @@ pub struct BattlePokemon {
     /// adoption/gain lifecycle and what carrying them does, and does not,
     /// change.
     evs: Evs,
-    /// [`Self::evs`]'s value the instant [`BattlePokemon::raise_level_to_experience`]
-    /// last actually crossed a level -- the EV set upstream's own
-    /// `CalculateMonStats` would have cached at that same event, distinct
-    /// from the live [`Self::evs`] a later KO may since have moved (see the
-    /// [`evs`] module docs for why the live stat cache reads neither).
-    /// Starts at [`Evs::default`], matching [`Self::created_at_level`]: no
-    /// level-up has happened yet, so there is no cached-block EV set to
-    /// remember. `pokeemerald-rs::party`'s save-time recompute reads this
-    /// field, not [`Self::evs`], when it rebuilds the cached stat block.
+    /// [`Self::evs`] as of the last crossed level-up -- the set upstream's
+    /// `CalculateMonStats` cached at that event, which the save-time
+    /// recompute reads instead of the live [`Self::evs`]. [`Evs::default`]
+    /// until a level-up happens.
     ///
-    /// Excluded from [`PartialEq`] (below), same reasoning as
-    /// [`Self::created_at_level`]: bookkeeping for what a *future* save
-    /// encodes, not part of this Pokémon's own battle identity.
+    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
     evs_at_last_level_up: Evs,
     moves: Vec<MoveSlot>,
     pp_bonuses: PpBonuses,

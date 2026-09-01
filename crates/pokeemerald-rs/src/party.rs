@@ -289,19 +289,10 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon, stats: battle
 /// caller always writes `record.max_hp` first, so the cap is whichever block
 /// is actually being filed.
 ///
-/// The offset is signed, and goes negative after a level-up whose EV gap
-/// shrank: there the model's live HP moved by a *wider* delta than
-/// upstream's own EV-aware block would have, so filing upstream's number
-/// means subtracting rather than adding.
-///
-/// The offset is the caller's, measured once at load
-/// ([`hp_hidden_by_load`]) or fresh against the live `0`-EV floor
-/// ([`to_save_pokemon`], which has no load behind it), and carried as
-/// session state rather than re-derived from `record.hp` here: the start
-/// menu writes this function's output back into the slot it will pass as
-/// the next save's `base`, so a re-derivation would measure an
-/// already-translated value and drift -- saving twice must file the same
-/// bytes.
+/// The offset is signed (negative after a level-up whose EV gap shrank),
+/// measured once per session -- at load ([`hp_hidden_by_load`]) or fresh by
+/// [`to_save_pokemon`] -- and carried, never re-derived here: saving twice
+/// must file the same bytes.
 fn overlay_current_hp_with_hidden_points(
     record: &mut Pokemon,
     mon: &BattlePokemon,
@@ -346,34 +337,17 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 
 /// Overlays a battler onto the save record from which it was loaded.
 ///
-/// This port's live mon is a [`battle::BattlePokemon`], a deliberate subset
-/// of upstream's 100-byte type, so overlaying it here means writing only the
-/// fields the battler owns onto the record that was loaded -- held item,
-/// contest condition, friendship, status, mail, met data, ribbons and
-/// header metadata all stay as the save wrote them. EVs do not: the merge
-/// writes the battler's own [`battle::BattlePokemon::evs`] back.
+/// Writes only the fields the battler owns; every retained field stays as
+/// the save wrote it, except EVs, which the merge writes back from
+/// [`battle::BattlePokemon::evs`].
 ///
-/// The cached stat block is retained *conditionally*: kept when species and
-/// level are unchanged, recomputed EV-aware when the session moved either
-/// one ([`compute_levelled_up_stats`]). Current HP is always the battler's,
-/// translated back across the load clamp in *both* cases -- against the
-/// retained `max_hp` when the block is kept, against the freshly recomputed
-/// one when it is not.
-///
-/// `hp_hidden_by_load` is the session offset [`hp_hidden_by_load`] measured
-/// at load; the merge rebases it when the recompute branch runs, because the
-/// same retained EVs are worth a different number of points once the level
-/// the block is filed under has moved -- [`zero_ev_max_hp`] recovers `base`'s
-/// own gap over the `0`-EV floor at `base.level`, the freshly recomputed
-/// block supplies the gap at `mon.level()`, and the offset moves by the
-/// (possibly negative) difference before the same load-clamp translation
-/// runs against the just-recomputed maximum. A record with a different
-/// identity, an empty species, or an invalid secure checksum cannot safely
-/// retain bytes and falls back to [`to_save_pokemon`] instead -- see
-/// [`backing_substructures`] for what disqualifies it; that fallback seeds
-/// the offset from the fresh gap [`to_save_pokemon`] itself just opened,
-/// rather than zeroing it, so a same-session save that later lands on the
-/// retained branch keeps translating by the right amount.
+/// The cached stat block is kept when species and level are unchanged and
+/// recomputed EV-aware otherwise ([`compute_levelled_up_stats`]); current
+/// HP is translated across the load clamp against whichever block is
+/// filed, with the session offset rebased on the recompute branch
+/// ([`zero_ev_max_hp`]). A record that cannot safely retain bytes falls
+/// back to [`to_save_pokemon`] ([`backing_substructures`]), seeding the
+/// offset from the fresh gap it opens.
 pub(crate) fn merge_into_save_pokemon(
     dex: &Dex,
     mon: &BattlePokemon,
