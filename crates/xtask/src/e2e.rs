@@ -1,123 +1,65 @@
-//! `e2e --suite smoke` (F-3, V-1; extended for I-2, issue #109): a headless
-//! boot-shell smoke run.
+//! Headless end-to-end smoke verification.
 //!
-//! Drives `pokeemerald_rs::App`'s frame loop entirely in-process, against
-//! `platform`'s explicit null window/input backend (see
-//! `platform::Platform::new_headless`, reached here through
-//! [`pokeemerald_rs::App::new_headless`]), for a small, fixed number of
-//! frames, and asserts a clean boot:
-//!
-//! - every [`pokeemerald_rs::App::step`] call succeeds and reports "keep
-//!   going" -- proof the input pump stayed alive and nothing errored;
-//! - the scene's composed frame, exactly as handed to
-//!   `platform::Platform::present` each step, is non-blank -- proof the
-//!   boot scene actually rendered something, not just that the loop ran.
-//!
-//! `App::new_headless` always composes the I-1 synthetic scene (never the
-//! real title screen, see `pokeemerald_rs::app`'s module docs), so the above
-//! is unchanged from before I-2 -- exactly the "WITHOUT a pack (CI), the
-//! current synthetic-scene smoke behavior stays exactly as is" requirement
-//! (issue #109). [`check_title_screen`] is the I-2 addition: when a local
-//! asset pack *is* present (`cargo xtask extract` has been run), it
-//! additionally loads the real title screen
-//! (`pokeemerald_rs::title::load_repo`) and asserts, at two fixed frame
-//! indices (0 and 20, issue #116's OBJ sprites / alpha blend / cloud scroll
-//! slice), that: composing the same frame index twice is pixel-identical
-//! (deterministic), each composed frame is non-blank, and frame 0 differs
-//! from frame 20 (the "Press Start" blink cadence and cloud scroll have both
-//! visibly moved on by then -- see `pokeemerald_rs::title`'s module
-//! docs) -- entirely separately from `App`, so it neither depends on nor
-//! perturbs the headless `App` run above. Without a local pack, this step is
-//! a no-op.
-//!
-//! # Which pack "a local asset pack" means
-//!
-//! The *checkout's* pack, `<repo root>/assets-pack/pokeemerald.pack`, always:
-//! both checks load through `pack_format::repo_pack_path` (reached via
-//! `pokeemerald_rs::title::load_repo` and
-//! `pokeemerald_rs::overworld::load_repo_default_room`), never through the
-//! runtime resolver `pack_format::default_pack_path`. That resolver's
-//! earlier rungs -- `$POKEEMERALD_PACK` and the OS user-data directory --
-//! are the two destinations `pokeemerald-rs --import-rom` writes to, so
-//! resolving through it would point this gate at whichever pack the
-//! developer happens to have installed: a broken or missing freshly
-//! extracted pack could pass against an older installed one, and a stale
-//! installed one could fail a checkout that is fine `(test-ratchet)`.
-//! `xtask::extract::run` refuses the resolver on the write side, and
-//! `crate::scenario::run` reaches the same checkout path through
-//! `pokeemerald_rs::App::new_headless_real`'s own owned checkout pin
-//! (`pokeemerald_rs::pack_source::PackSource::Repo`, issue #412) for the
-//! same reason.
-//!
-//! No real window, audio device, or timer wait is touched -- `Platform`'s
-//! null backend no-ops `wait_for_next_frame` (see its docs) -- so this suite
-//! is deterministic and fast enough to run under `cargo test` as well as CI.
+//! [`run_smoke`] drives the production [`App::step`] path through its null
+//! platform backend for a fixed synthetic-scene boot. When the checkout's
+//! own extracted pack exists, it also verifies the pack-backed title and
+//! overworld renderers against exactly that pack -- never the runtime
+//! resolver's default, so an installed player pack can never substitute for
+//! the checkout's own pack under this gate `(test-ratchet)`. A missing pack
+//! skips those two checks so the synthetic boot check stays available in
+//! clean CI.
 
 use std::fmt;
 
 use pokeemerald_rs::App;
 
-/// The number of frames the smoke suite drives before declaring success.
-///
-/// Small and fixed: enough to prove the loop runs repeatedly (not just
-/// once), far short of anything that would make the suite slow or flaky.
-const SMOKE_FRAMES: u32 = 30;
+const BOOT_FRAME_COUNT: u32 = 30;
+const BLACK_PIXEL: u32 = 0;
+const INITIAL_TITLE_FRAME: u32 = 0;
+const TITLE_ANIMATION_PROBE_FRAME: u32 = 20;
+const INITIAL_OVERWORLD_TICK: u32 = 0;
+/// Second determinism probe: a `tick` that never reached
+/// `compose` would pass forever on one hardcoded value. The two ticks'
+/// frames are deliberately not required to differ — the smoke room is a
+/// `building`-tileset interior with no animated metatile on screen, so a
+/// difference assertion would be flaky about map content. Tick-to-pixel
+/// behavior is pinned by `pokeemerald_rs::overworld::tests`'
+/// `real_pack_tick_changes_only_the_animated_tile_screen_regions`.
+const SECOND_OVERWORLD_DETERMINISM_TICK: u32 = 17;
+const SMOKE_PLAYER_TILE: (i32, i32) = (5, 5);
+const SMOKE_PLAYER_GROUND_ELEVATION: u8 = 3;
+const NATIVE_FRAME_WIDTH: usize = 240;
+const AVATAR_LEFT: usize = 112;
+const AVATAR_TOP: usize = 64;
+const AVATAR_WIDTH: usize = 16;
+const AVATAR_HEIGHT: usize = 32;
+const MIN_DISTINCT_MAP_COLORS: usize = 4;
 
 /// Why `e2e --suite smoke` failed.
-///
-/// Concrete per-crate enum `(oop-boundaries)`; no `anyhow`.
 #[derive(Debug)]
 pub enum E2eError {
-    /// The headless boot shell reported a "stop" (window-close-style)
-    /// signal before completing [`SMOKE_FRAMES`] frames. `Platform`'s null
-    /// backend never requests this on its own, so seeing it at all is a
-    /// bug. Carries the 0-based frame index at which it happened.
+    /// The headless application stopped at the contained frame index.
     UnexpectedStop(u32),
-    /// A step of the boot shell's frame loop (input pump or presentation)
-    /// returned an error. Carries the error's rendered message --
-    /// `platform::PlatformError` is not named directly here, so `xtask`'s
-    /// only workspace dependency for this suite stays `pokeemerald-rs`
-    /// itself.
+    /// A headless application step failed with the contained message.
     Step(String),
-    /// Every frame ran and reported "keep going", but the composed frame
-    /// handed to `Platform::present` was blank (every pixel black) -- the
-    /// boot scene, or the presentation path, produced nothing.
+    /// The headless boot application produced an all-black frame.
     BlankFrame,
-    /// A local asset pack is present, but loading/decoding the real title
-    /// screen from it failed for a reason other than "no pack" (that case
-    /// is not an error, see [`check_title_screen`]) -- carries
-    /// `pokeemerald_rs::title::TitleSceneError`'s rendered message.
+    /// The title scene failed to load from an existing pack.
     TitleSceneFailed(String),
-    /// A local asset pack is present and the real title screen loaded, but
-    /// composing the same frame index twice produced two different frames --
-    /// `compose` must be a pure function of its frame index and
-    /// already-decoded data (I-2, issues #109 and #116). Carries the
-    /// offending frame index.
+    /// Repeated title composition differed at the contained frame index.
     TitleFrameNotDeterministic(u32),
-    /// A local asset pack is present and the real title screen composed
-    /// deterministically, but a frame was blank (every pixel black) -- the
-    /// decoded BG layers/sprites, or the compositor, produced nothing.
-    /// Carries the offending frame index.
+    /// The title scene produced an all-black frame at the contained index.
     TitleFrameBlank(u32),
-    /// A local asset pack is present and both checked frames composed
-    /// deterministically and non-blank, but frame 0 and frame 20 were
-    /// pixel-identical -- the "Press Start" blink and cloud scroll should
-    /// have visibly moved on by frame 20 (I-2, issue #116).
+    /// The title scene did not change between its two animation probes.
     TitleFramesNotAnimated,
-    /// A local asset pack is present, but loading/decoding the default
-    /// overworld room from it failed for a reason other than "no pack"
-    /// (I-3, issue #126) -- carries
-    /// `pokeemerald_rs::overworld::OverworldSceneError`'s rendered message.
+    /// The default overworld scene failed to load from an existing pack.
     OverworldSceneFailed(String),
-    /// A local asset pack is present and the default overworld room
-    /// loaded, but composing the same player state twice produced two
-    /// different frames -- `compose` must be a pure function of the
-    /// player state and this scene's already-decoded data.
+    /// Repeated overworld composition differed for the same state.
     OverworldFrameNotDeterministic,
-    /// A local asset pack is present and the default overworld room
-    /// composed deterministically, but the frame was blank (every pixel
-    /// black).
+    /// The overworld scene produced an all-black frame.
     OverworldFrameBlank,
+    /// The overworld scene did not contain enough map detail outside the avatar.
+    OverworldFrameLacksMapDetail,
 }
 
 impl fmt::Display for E2eError {
@@ -143,7 +85,7 @@ impl fmt::Display for E2eError {
             }
             Self::TitleFramesNotAnimated => write!(
                 f,
-                "title screen frame 0 and frame 20 were pixel-identical -- expected the animation to have moved on by then"
+                "title screen frame {INITIAL_TITLE_FRAME} and frame {TITLE_ANIMATION_PROBE_FRAME} were pixel-identical -- expected the animation to have moved on by then"
             ),
             Self::OverworldSceneFailed(msg) => {
                 write!(f, "default overworld room failed to load: {msg}")
@@ -156,33 +98,33 @@ impl fmt::Display for E2eError {
                 f,
                 "composed default overworld room frame was blank (all black)"
             ),
+            Self::OverworldFrameLacksMapDetail => write!(
+                f,
+                "composed default overworld room frame lacked map detail outside the avatar"
+            ),
         }
     }
 }
 
 impl std::error::Error for E2eError {}
 
-/// Run the `smoke` suite: boot the headless shell and drive it for
-/// [`SMOKE_FRAMES`] frames, asserting a clean boot (see the module docs),
-/// then [`check_title_screen`] (a no-op without a local pack).
+/// Run the bounded headless boot, title, and overworld smoke checks.
 ///
 /// # Errors
 ///
-/// Returns [`E2eError`] if the shell reports an unexpected early stop, a
-/// step errors, the final composed frame is blank, or (with a local pack
-/// present) the real title screen fails to load, composes
-/// non-deterministically, or composes blank.
+/// Returns [`E2eError`] when a production path fails or a visual probe is
+/// blank, static, or non-deterministic.
 pub fn run_smoke() -> Result<(), E2eError> {
     let mut app = App::new_headless();
 
-    for frame in 0..SMOKE_FRAMES {
+    for frame in 0..BOOT_FRAME_COUNT {
         let keep_going = app.step().map_err(|err| E2eError::Step(err.to_string()))?;
         if !keep_going {
             return Err(E2eError::UnexpectedStop(frame));
         }
     }
 
-    if app.frame().iter().all(|&pixel| pixel == 0) {
+    if is_blank(app.frame()) {
         return Err(E2eError::BlankFrame);
     }
 
@@ -219,30 +161,27 @@ fn check_title_screen() -> Result<(), E2eError> {
         Err(err) => return Err(E2eError::TitleSceneFailed(err.to_string())),
     };
 
-    // Composed frames are `Box<platform::Frame>` -- deliberately never named
-    // here (module docs: this suite's only workspace dependency stays
-    // `pokeemerald-rs`, not `platform`), so each frame index's determinism
-    // check is inlined rather than factored into a helper with an explicit
-    // return type.
-    let frame0_a = scene.compose_frame(0);
-    let frame0_b = scene.compose_frame(0);
-    if frame0_a != frame0_b {
-        return Err(E2eError::TitleFrameNotDeterministic(0));
+    let initial_frame = scene.compose_frame(INITIAL_TITLE_FRAME);
+    let repeated_initial_frame = scene.compose_frame(INITIAL_TITLE_FRAME);
+    if initial_frame != repeated_initial_frame {
+        return Err(E2eError::TitleFrameNotDeterministic(INITIAL_TITLE_FRAME));
     }
-    if frame0_a.iter().all(|&pixel| pixel == 0) {
-        return Err(E2eError::TitleFrameBlank(0));
+    if is_blank(initial_frame.as_ref()) {
+        return Err(E2eError::TitleFrameBlank(INITIAL_TITLE_FRAME));
     }
 
-    let moved_a = scene.compose_frame(20);
-    let moved_b = scene.compose_frame(20);
-    if moved_a != moved_b {
-        return Err(E2eError::TitleFrameNotDeterministic(20));
+    let animated_frame = scene.compose_frame(TITLE_ANIMATION_PROBE_FRAME);
+    let repeated_animated_frame = scene.compose_frame(TITLE_ANIMATION_PROBE_FRAME);
+    if animated_frame != repeated_animated_frame {
+        return Err(E2eError::TitleFrameNotDeterministic(
+            TITLE_ANIMATION_PROBE_FRAME,
+        ));
     }
-    if moved_a.iter().all(|&pixel| pixel == 0) {
-        return Err(E2eError::TitleFrameBlank(20));
+    if is_blank(animated_frame.as_ref()) {
+        return Err(E2eError::TitleFrameBlank(TITLE_ANIMATION_PROBE_FRAME));
     }
 
-    if frame0_a == moved_a {
+    if initial_frame == animated_frame {
         return Err(E2eError::TitleFramesNotAnimated);
     }
 
@@ -272,76 +211,70 @@ fn check_title_screen() -> Result<(), E2eError> {
 /// [`E2eError::OverworldFrameBlank`] if a pack is present and loads, but
 /// composing fails either check.
 fn check_overworld_scene() -> Result<(), E2eError> {
-    const LATER_TICK: u32 = 17;
-    const AVATAR_X: usize = 112;
-    const AVATAR_Y: usize = 64;
-    const SCREEN_W: usize = 240;
-
     // A fresh (all-clear) event-flag store: this check only cares that the
     // frame composes deterministically and non-blank, not about any
     // particular object event's hide-flag state.
-    let event_data = pokeemerald_rs::overworld::EventData::default();
+    let all_event_flags_clear = pokeemerald_rs::overworld::EventData::default();
 
-    let scene = match pokeemerald_rs::overworld::load_repo_default_room(&event_data) {
+    let scene = match pokeemerald_rs::overworld::load_repo_default_room(&all_event_flags_clear) {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::OverworldSceneFailed(err.to_string())),
     };
 
-    // A standing player somewhere inside the room's 11x9 interior
-    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`). Reached through
-    // `pokeemerald_rs::overworld`'s re-export (module docs: this suite's
-    // only workspace dependency stays `pokeemerald-rs`, not `engine`
-    // directly).
     let player = pokeemerald_rs::overworld::PlayerState::new(
-        (5, 5),
-        3,
+        SMOKE_PLAYER_TILE,
+        SMOKE_PLAYER_GROUND_ELEVATION,
         pokeemerald_rs::overworld::Direction::South,
     );
-    // Determinism at *two different* ticks (issue #160), not just at tick 0:
-    // a `tick` argument that never reached `compose` at all would leave this
-    // check passing on a single hardcoded value forever. The two ticks'
-    // frames are deliberately *not* required to differ -- the smoke room is
-    // an interior on the `building` primary tileset, whose one animated
-    // metatile (the TV) no bundled interior's own map data places, so
-    // nothing on this screen animates and requiring a difference would be a
-    // flaky assertion about map content. The "tick really reaches pixels"
-    // half is pinned properly, on a map that does show animated tiles, by
-    // `pokeemerald_rs::overworld::tests`'
-    // `real_pack_tick_changes_only_the_animated_tile_screen_regions`.
-    let frame_a = scene.compose_frame(&player, &event_data, 0);
-    let frame_b = scene.compose_frame(&player, &event_data, 0);
-    if frame_a != frame_b {
+    let initial_frame =
+        scene.compose_frame(&player, &all_event_flags_clear, INITIAL_OVERWORLD_TICK);
+    let repeated_initial_frame =
+        scene.compose_frame(&player, &all_event_flags_clear, INITIAL_OVERWORLD_TICK);
+    if initial_frame != repeated_initial_frame {
         return Err(E2eError::OverworldFrameNotDeterministic);
     }
-    let later_a = scene.compose_frame(&player, &event_data, LATER_TICK);
-    let later_b = scene.compose_frame(&player, &event_data, LATER_TICK);
-    if later_a != later_b {
+    let later_frame = scene.compose_frame(
+        &player,
+        &all_event_flags_clear,
+        SECOND_OVERWORLD_DETERMINISM_TICK,
+    );
+    let repeated_later_frame = scene.compose_frame(
+        &player,
+        &all_event_flags_clear,
+        SECOND_OVERWORLD_DETERMINISM_TICK,
+    );
+    if later_frame != repeated_later_frame {
         return Err(E2eError::OverworldFrameNotDeterministic);
     }
-    if frame_a.iter().all(|&pixel| pixel == 0) {
+    if is_blank(initial_frame.as_ref()) {
         return Err(E2eError::OverworldFrameBlank);
     }
-    // "Any non-black pixel" alone would pass even if the map viewport
-    // regressed to nothing: the player sprite always supplies non-zero
-    // pixels, and the palette-0 backdrop can itself be non-black. Require
-    // real map variation *outside* the avatar's fixed 16x32 screen rect
-    // (x 112..128, y 64..96 -- `overworld::avatar`'s PLAYER_OBJ_X/Y): a
-    // missing viewport leaves that region a single flat backdrop color,
-    // while any real room supplies floor/wall/furniture variation.
-    let mut outside_colors = std::collections::BTreeSet::new();
-    for (i, &pixel) in frame_a.iter().enumerate() {
-        let (x, y) = (i % SCREEN_W, i / SCREEN_W);
-        if (AVATAR_X..AVATAR_X + 16).contains(&x) && (AVATAR_Y..AVATAR_Y + 32).contains(&y) {
-            continue;
-        }
-        outside_colors.insert(pixel);
-    }
-    if outside_colors.len() < 4 {
-        return Err(E2eError::OverworldFrameBlank);
+    if !has_map_detail_outside_avatar(initial_frame.as_ref()) {
+        return Err(E2eError::OverworldFrameLacksMapDetail);
     }
 
     Ok(())
+}
+
+fn is_blank(frame: &[u32]) -> bool {
+    frame.iter().all(|&pixel| pixel == BLACK_PIXEL)
+}
+
+fn has_map_detail_outside_avatar(frame: &[u32]) -> bool {
+    let mut distinct_colors = std::collections::BTreeSet::new();
+    for (pixel_index, &pixel) in frame.iter().enumerate() {
+        let (x, y) = (
+            pixel_index % NATIVE_FRAME_WIDTH,
+            pixel_index / NATIVE_FRAME_WIDTH,
+        );
+        let inside_avatar = (AVATAR_LEFT..AVATAR_LEFT + AVATAR_WIDTH).contains(&x)
+            && (AVATAR_TOP..AVATAR_TOP + AVATAR_HEIGHT).contains(&y);
+        if !inside_avatar {
+            distinct_colors.insert(pixel);
+        }
+    }
+    distinct_colors.len() >= MIN_DISTINCT_MAP_COLORS
 }
 
 #[cfg(test)]
@@ -355,22 +288,11 @@ mod tests {
 
     #[test]
     fn title_screen_check_is_a_no_op_or_succeeds() {
-        // Whether or not this environment has run `cargo xtask extract`,
-        // the check must never fail: no pack -> `Ok(())` (module docs); a
-        // real local pack -> genuinely valid, non-blank, deterministic,
-        // animated frames at indices 0 and 20 (see `pokeemerald_rs::title::tests`'
-        // `real_pack_composes_non_blank_deterministic_title_frames` for the
-        // dedicated, always-runnable-with-`--ignored` version of this same
-        // assertion).
         check_title_screen().expect("title screen check should never fail in a clean checkout");
     }
 
     #[test]
     fn overworld_scene_check_is_a_no_op_or_succeeds() {
-        // Same no-pack-vs-real-pack reasoning as `title_screen_check_is_a_no_op_or_succeeds`
-        // (see `pokeemerald_rs::overworld::tests`'
-        // `real_pack_composes_non_blank_deterministic_overworld_frames` for the
-        // dedicated, always-runnable-with-`--ignored` version).
         check_overworld_scene()
             .expect("overworld scene check should never fail in a clean checkout");
     }

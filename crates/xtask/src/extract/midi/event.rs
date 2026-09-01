@@ -1,20 +1,9 @@
-//! [`SongEvent`]: this pipeline's own copy of
-//! `crates/assets::audio::song::SongEvent`'s shape — duplicated, not
-//! imported, for the same reason `xtask::extract::voicegroups::resolve`'s
-//! `VoiceSlot` duplicates `crates/assets::audio::voicegroup::VoiceEntry`: this
-//! crate never depends on `crates/assets` (`pack_format`'s module
-//! docs). [`super::encode`] serializes this to that schema's exact wire
-//! shape.
+//! Normalized MIDI commands ready for pack encoding.
 //!
-//! Only the variants [`super::compile`] can actually produce are here —
-//! `MemAcc`/`MemAccBranch` are deliberately absent (see `super`'s module
-//! docs, "Deliberately out of scope: `MEMACC`"); the wire format still
-//! reserves their tag bytes (`super::encode`'s docs), this compiler simply
-//! never writes them.
+//! Extraction keeps its own model because `assets` is optional;
+//! [`super::encode`] maps it to the shared wire schema.
 
-/// One normalized track command — mirrors
-/// `crates/assets::audio::song::SongEvent`'s variants (minus `MemAcc`/
-/// `MemAccBranch`; see the module docs).
+/// One normalized track command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum SongEvent {
     Wait(u8),
@@ -23,10 +12,7 @@ pub(super) enum SongEvent {
         velocity: u8,
         gate: u8,
     },
-    /// Always carries an explicit key: this compiler never elides it the
-    /// way `tools/mid2agb`'s own note/velocity-name compression can
-    /// (`agb.cpp:222-244`'s `PrintEndOfTieOp`) -- see `super::compile`'s
-    /// module docs, "No operand elision".
+    /// Always carries a key; this representation does not elide operands.
     EndOfTie {
         key: u8,
     },
@@ -45,8 +31,7 @@ pub(super) enum SongEvent {
     ModType(u8),
     PseudoEchoVolume(u8),
     PseudoEchoLength(u8),
-    /// An event-index target into this same track's own event list (see
-    /// `crates/assets::audio::song`'s module docs, "Looping").
+    /// Targets an event index in the same track.
     Goto(u32),
     Fine,
 }

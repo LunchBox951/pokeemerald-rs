@@ -27,7 +27,7 @@
 use std::path::Path;
 
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
-use crate::extract::voicegroups::{build_label_index, parser};
+use crate::extract::voicegroups::{index_voicegroup_sources, parser};
 
 use super::error::GenRomProfileError;
 use super::locate::{exactly_one, only_one_matching, slice_at_addr, to_offset, u32_at_addr};
@@ -87,11 +87,12 @@ pub fn locate(
     let direct_sound = locate_direct_sound(ctx, report)?;
     let programmable_wave = locate_programmable_wave(ctx, report)?;
 
-    let (groups, _paths) =
-        build_label_index(&ctx.upstream).map_err(|err| GenRomProfileError::UpstreamSource {
+    let groups = index_voicegroup_sources(&ctx.upstream)
+        .map_err(|err| GenRomProfileError::UpstreamSource {
             path: ctx.upstream.join("sound/voicegroups"),
             reason: err.to_string(),
-        })?;
+        })?
+        .groups_by_label;
 
     let songs_with_groups = ctx.pack.ids_with_prefix("audio/song/");
     let mut voicegroups = Vec::new();

@@ -461,8 +461,8 @@ impl OverworldPhase {
             // (`from_saved`'s migration, PR #291 review), so no path can
             // leave a fainted lead standing here any more and the filter
             // was removed
-            // (`crate::flow::wild_encounter`'s module docs, "The fail-closed
-            // guard, retired"). The landed tile is the player's own tile on
+            // (`crate::flow::wild_encounter`'s module docs, "Lead-health
+            // eligibility"). The landed tile is the player's own tile on
             // a drain frame, and it is what `GetPlayerPosition` would report
             // there.
             let encounter = wild_encounter::roll_for_step(

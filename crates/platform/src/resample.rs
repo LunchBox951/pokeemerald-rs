@@ -1,4 +1,4 @@
-//! A minimal linear-interpolation resampler (S-1): the bridge used whenever
+//! A minimal linear-interpolation resampler: the bridge used whenever
 //! the audio device does not support the GBA's nominal mixing rate directly.
 //! Since real devices run at 44.1/48 kHz and virtually never advertise the
 //! 13379 Hz M4A mixer rate, this is the *common* path, not a rare one (see
@@ -29,8 +29,8 @@ use crate::ring::Consumer;
 const DEFAULT_MAX_OUTPUT_FRAMES: usize = 8192;
 
 /// Linear-interpolation resampler bridging a [`Consumer`]'s nominal sample
-/// rate (what the future `audio` crate renders at) and an audio device's
-/// actual negotiated rate.
+/// rate (what the `audio` crate renders at) and an audio device's actual
+/// negotiated rate.
 ///
 /// Not a general-purpose DSP resampler — linear interpolation is cheap and
 /// good enough for bridging the sample-rate mismatch; it is explicitly out of
@@ -255,9 +255,9 @@ mod tests {
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 5.0, 10.0, 15.0]);
-        // No underrun: this call consumes exactly the 3 queued frames. The
-        // eager lookahead pull that formerly ran past them (recording a
-        // spurious 4th-frame underrun) is now deferred to the next callback.
+        // No underrun: this call consumes exactly the 3 queued frames; the
+        // lookahead pull that would run past them is deferred to the next
+        // callback (see the module docs).
         assert_eq!(resampler.underruns(), 0);
     }
 
@@ -274,8 +274,7 @@ mod tests {
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 20.0]);
         // No underrun: 2 output frames consume 4 of the 5 queued source frames
-        // (the deferred lookahead frame would be the 5th). The former
-        // eager-pull assertion of 1 encoded the trailing-pull artifact.
+        // (the deferred lookahead frame would be the 5th).
         assert_eq!(resampler.underruns(), 0);
     }
 
@@ -321,14 +320,14 @@ mod tests {
 
     #[test]
     fn empty_fill_before_priming_does_not_touch_queue_or_prime() {
-        // Regression test for #345: on a never-primed resampler, `fill` used
-        // to compute its 2-frame priming drain from `self.primed` alone, so
-        // an empty `out` still ran it. The queue here is deliberately
-        // starved to 1 sample (fewer than the 2 priming frames the old code
-        // would have drained), so the bug's two symptoms are both directly
-        // observable: `Consumer::fill`'s shortfall padding would count 1
-        // underrun on a call that produced no output, and the queue would
-        // lose its 1 queued sample even though nothing was emitted.
+        // Regression: on a never-primed resampler, a `fill` that computed
+        // its 2-frame priming drain from `self.primed` alone would run that
+        // drain for an empty `out` too. The queue here is deliberately
+        // starved to 1 sample (fewer than the 2 priming frames such a drain
+        // would take), so both symptoms are directly observable:
+        // `Consumer::fill`'s shortfall padding would count 1 underrun on a
+        // call that produced no output, and the queue would lose its 1
+        // queued sample even though nothing was emitted.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[7.0]), 1);
         let mut resampler = Resampler::new(consumer, 1, 100, 100, 16);
@@ -338,7 +337,7 @@ mod tests {
         assert_eq!(resampler.underruns(), 0);
         assert!(!resampler.primed);
 
-        // The old code would also have latched `primed = true` with
+        // Such a drain would also have latched `primed = true` with
         // `prev = 7.0` (the one real sample it grabbed) and `next = 0.0`
         // (silence, padded for the shortfall) — corrupting the interpolator
         // before any real output existed. Queue the rest of the stream and
@@ -354,18 +353,14 @@ mod tests {
     #[test]
     fn empty_fill_after_priming_leaves_interpolator_state_untouched() {
         // The post-priming counterpart to
-        // `empty_fill_before_priming_does_not_touch_queue_or_prime`. Once
-        // `primed` is already `true`, the pre-#345-fix code happened to
-        // compute a 0-frame drain for an empty `out` too (its priming count
-        // is gated on `!self.primed`), so this case was not itself broken.
-        // This test isn't a regression test for a bug in this path; it pins
+        // `empty_fill_before_priming_does_not_touch_queue_or_prime`: it pins
         // the `out.is_empty()` guard's contract — no queue/underrun/cursor
-        // change — for the primed path as well, so a future change to this
-        // method can't reintroduce a cost or side effect here without
-        // failing a test. Two identically-seeded resamplers are driven
-        // through the same real fills; only one gets an empty fill spliced
-        // in between, and every field plus the next real fill's output must
-        // still match the one that never saw an empty fill.
+        // change — for the primed path as well, so a change to this method
+        // can't introduce a cost or side effect here without failing a
+        // test. Two identically-seeded resamplers are driven through the
+        // same real fills; only one gets an empty fill spliced in between,
+        // and every field plus the next real fill's output must still match
+        // the one that never saw an empty fill.
         fn make() -> (Producer, Resampler) {
             let (producer, consumer) = ring_buffer(16);
             assert_eq!(producer.push(&[0.0, 10.0]), 2);

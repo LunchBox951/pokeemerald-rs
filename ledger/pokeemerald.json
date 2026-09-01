@@ -26762,7 +26762,7 @@
           "status": "rewritten"
         },
         "TONEDATA_TYPE_FIX": {
-          "reason": "The CGB-side use of TONEDATA_TYPE_FIX: Emerald's 8-bit-DAC frequency rounding for a fixed-rate square/wave channel, (freq_reg + 1) & 0x7fe (m4a.c:1184-1202, under the 8-bit DAC configuration selected at m4a.c:70-81), reimplemented as cgb_voice::cgb_dac_correct, applied at note-on (before the oscillator and, on channel 1, the sweep unit's shadow frequency initialize) and again on every mid-note pitch re-run (CgbVoice::set_track_pitch). The flag is threaded from the instrument through loading and playback (PR #276). The DirectSound-side use of the same flag lives on src/m4a_1.s#TONEDATA_TYPE_FIX (Voice::fixed_rate).",
+          "reason": "The CGB-side use of TONEDATA_TYPE_FIX: Emerald's 8-bit-DAC frequency rounding for a fixed-rate square/wave channel, (freq_reg + 1) & 0x7fe (m4a.c:1184-1202, under the 8-bit DAC configuration selected at m4a.c:70-81), reimplemented as cgb_voice::DacCorrection::apply, applied at note-on (before the oscillator and, on channel 1, the sweep unit's shadow frequency initialize) and again on every mid-note pitch re-run (CgbVoice::set_track_pitch). The flag is threaded from the instrument through loading and playback (PR #276). The DirectSound-side use of the same flag lives on src/m4a_1.s#TONEDATA_TYPE_FIX (Voice::fixed_rate).",
           "rust_target": "crates/audio/src/cgb_voice.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -26823,7 +26823,7 @@
           "status": "rewritten"
         },
         "TONEDATA_TYPE_FIX": {
-          "reason": "SoundMainRAM's fixed-rate DirectSound branch (m4a_1.s:498: tst TONEDATA_TYPE_FIX; movne r8, 0x800000 forces a 1:1 phase step) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3). Covers only this FIX branch, not the rest of SoundMainRAM. The separate CGB-side use of the flag (m4a.c:1184-1202 8-bit-DAC frequency rounding) is implemented too, recorded on src/m4a.c#TONEDATA_TYPE_FIX (cgb_voice::cgb_dac_correct, PR #276).",
+          "reason": "SoundMainRAM's fixed-rate DirectSound branch (m4a_1.s:498: tst TONEDATA_TYPE_FIX; movne r8, 0x800000 forces a 1:1 phase step) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3). Covers only this FIX branch, not the rest of SoundMainRAM. The separate CGB-side use of the flag (m4a.c:1184-1202 8-bit-DAC frequency rounding) is implemented too, recorded on src/m4a.c#TONEDATA_TYPE_FIX (cgb_voice::DacCorrection::apply, PR #276).",
           "rust_target": "crates/audio/src/voice.rs",
           "spec": "S-3",
           "status": "rewritten"

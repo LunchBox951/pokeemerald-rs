@@ -1,54 +1,41 @@
-//! A minimal reader for `pokeemerald/data/layouts/layouts.json`: resolves a
-//! `LAYOUT_*` id to the on-disk paths of its `map.bin` / `border.bin` grid
-//! files (and its declared dimensions, used as a defensive sanity check —
-//! see [`super::extract_layouts`]).
+//! Reads layout ids, dimensions, and grid paths from the upstream layout manifest.
 //!
-//! Deliberately not a general-purpose JSON parser (`minimal-deps`: no
-//! `serde`/`serde_json` is available). `layouts.json`'s shape is fixed and
-//! regular — 441 flat objects, always the same eight string/number keys in
-//! the same order, one `"key": value` pair per line (Porymap/upstream's own
-//! tooling emit it this way) — so this reads it line-by-line rather than
-//! implementing JSON's full grammar. Mirrors [`super::jasc_pal`]'s "genuinely
-//! trivial" parser for the same reason.
+//! The upstream file has a fixed, flat, one-field-per-line shape. This parser
+//! recognizes only that shape instead of adding a general JSON dependency
+//! (`minimal-deps`).
 
 use std::fmt;
 
-/// One parsed `layouts.json` entry — only the fields this pipeline needs.
-/// `primary_tileset`/`secondary_tileset`/`name` are skipped: already
-/// transcribed by hand in `crates::assets::map_layouts`.
+/// Layout fields used during asset extraction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutJsonEntry {
-    /// The upstream `LAYOUT_*` id.
+    /// `LAYOUT_*` identifier.
     pub id: String,
-    /// Declared width in metatiles.
+    /// Width in metatiles.
     pub width: u32,
-    /// Declared height in metatiles.
+    /// Height in metatiles.
     pub height: u32,
-    /// Path to `border.bin`, relative to the `pokeemerald/` checkout root.
+    /// Checkout-relative `border.bin` path.
     pub border_filepath: String,
-    /// Path to `map.bin`, relative to the `pokeemerald/` checkout root.
+    /// Checkout-relative `map.bin` path.
     pub blockdata_filepath: String,
 }
 
-/// An error produced while parsing `layouts.json`.
+/// Failure to parse the layout manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutsJsonError {
-    /// A `layouts` array entry closed (`}`) without every field this
-    /// pipeline needs having been seen. Carries the zero-based index of the
-    /// offending object (counting only objects inside the `layouts` array)
-    /// and the missing field's name.
+    /// A layout omitted a required field.
     MissingField {
-        /// Which `layouts[]` entry (0-based) was incomplete.
+        /// Zero-based layout index.
         object_index: usize,
-        /// The field that was never seen.
+        /// Omitted field.
         field: &'static str,
     },
-    /// A `width`/`height` value was present but not a valid non-negative
-    /// integer. Carries the entry index and field name.
+    /// A dimension was not a valid `u32`.
     BadInteger {
-        /// Which `layouts[]` entry (0-based) had the bad value.
+        /// Zero-based layout index.
         object_index: usize,
-        /// The field whose value failed to parse.
+        /// Invalid dimension field.
         field: &'static str,
     },
 }
@@ -76,8 +63,6 @@ impl fmt::Display for LayoutsJsonError {
 
 impl std::error::Error for LayoutsJsonError {}
 
-/// Accumulates one `layouts[]` object's fields as they're seen, line by
-/// line, before it's known whether all required fields were present.
 #[derive(Default)]
 struct PartialEntry {
     id: Option<String>,
@@ -88,30 +73,61 @@ struct PartialEntry {
 }
 
 impl PartialEntry {
-    fn finish(self, object_index: usize) -> Result<LayoutJsonEntry, LayoutsJsonError> {
-        let missing = |field| LayoutsJsonError::MissingField {
-            object_index,
-            field,
-        };
+    fn set_field(
+        &mut self,
+        object_index: usize,
+        field: &str,
+        value: &str,
+    ) -> Result<(), LayoutsJsonError> {
+        match field {
+            "id" => self.id = Some(value.to_owned()),
+            "width" => self.width = Some(parse_dimension(value, object_index, "width")?),
+            "height" => self.height = Some(parse_dimension(value, object_index, "height")?),
+            "border_filepath" => self.border_filepath = Some(value.to_owned()),
+            "blockdata_filepath" => self.blockdata_filepath = Some(value.to_owned()),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn into_entry(self, object_index: usize) -> Result<LayoutJsonEntry, LayoutsJsonError> {
         Ok(LayoutJsonEntry {
-            id: self.id.ok_or_else(|| missing("id"))?,
-            width: self.width.ok_or_else(|| missing("width"))?,
-            height: self.height.ok_or_else(|| missing("height"))?,
-            border_filepath: self
-                .border_filepath
-                .ok_or_else(|| missing("border_filepath"))?,
-            blockdata_filepath: self
-                .blockdata_filepath
-                .ok_or_else(|| missing("blockdata_filepath"))?,
+            id: require_field(self.id, object_index, "id")?,
+            width: require_field(self.width, object_index, "width")?,
+            height: require_field(self.height, object_index, "height")?,
+            border_filepath: require_field(self.border_filepath, object_index, "border_filepath")?,
+            blockdata_filepath: require_field(
+                self.blockdata_filepath,
+                object_index,
+                "blockdata_filepath",
+            )?,
         })
     }
 }
 
-/// Split one `"key": value` line (already trimmed) into its key and value,
-/// stripping the value's surrounding quotes (if any) and trailing comma.
-/// Returns `None` for lines that don't look like a field assignment (the
-/// bracket/brace punctuation lines, blank lines).
-fn parse_field_line(line: &str) -> Option<(&str, &str)> {
+fn require_field<T>(
+    value: Option<T>,
+    object_index: usize,
+    field: &'static str,
+) -> Result<T, LayoutsJsonError> {
+    value.ok_or(LayoutsJsonError::MissingField {
+        object_index,
+        field,
+    })
+}
+
+fn parse_dimension(
+    value: &str,
+    object_index: usize,
+    field: &'static str,
+) -> Result<u32, LayoutsJsonError> {
+    value.parse().map_err(|_| LayoutsJsonError::BadInteger {
+        object_index,
+        field,
+    })
+}
+
+fn parse_manifest_field(line: &str) -> Option<(&str, &str)> {
     let (key_part, value_part) = line.split_once(':')?;
     let key = key_part.trim().trim_matches('"');
     let mut value = value_part.trim();
@@ -123,21 +139,16 @@ fn parse_field_line(line: &str) -> Option<(&str, &str)> {
     Some((key, value))
 }
 
-/// Parse `layouts.json`'s full text into every `layouts[]` entry, in file
-/// order.
+fn starts_layouts_array(line: &str) -> bool {
+    line.starts_with("\"layouts\"")
+}
+
+/// Parses layout entries in manifest order.
 ///
 /// # Errors
 ///
-/// [`LayoutsJsonError::MissingField`] if a `layouts[]` object is missing one
-/// of the fields this pipeline needs; [`LayoutsJsonError::BadInteger`] if
-/// `width`/`height` isn't a valid integer.
-///
-/// Only reacts to lines once it has seen a `"layouts": [` line (tracked via
-/// `in_layouts_array`, reset on the matching top-level `]`), so the
-/// top-level object's own `{`/`}` and its other key (`layouts_table_label`)
-/// are never mistaken for an entry — this parser tracks that one level of
-/// array-vs-object nesting explicitly rather than assuming every `{`/`}`
-/// pair belongs to a `layouts[]` element.
+/// Returns [`LayoutsJsonError::MissingField`] for an incomplete layout and
+/// [`LayoutsJsonError::BadInteger`] for a dimension that is not a `u32`.
 pub fn parse(text: &str) -> Result<Vec<LayoutJsonEntry>, LayoutsJsonError> {
     let mut entries = Vec::new();
     let mut current: Option<PartialEntry> = None;
@@ -148,9 +159,7 @@ pub fn parse(text: &str) -> Result<Vec<LayoutJsonEntry>, LayoutsJsonError> {
         let line = raw_line.trim();
 
         if !in_layouts_array {
-            if line.starts_with("\"layouts\"") {
-                in_layouts_array = true;
-            }
+            in_layouts_array = starts_layouts_array(line);
             continue;
         }
         if line.starts_with(']') {
@@ -163,7 +172,7 @@ pub fn parse(text: &str) -> Result<Vec<LayoutJsonEntry>, LayoutsJsonError> {
         }
         if line.starts_with('}') {
             if let Some(partial) = current.take() {
-                entries.push(partial.finish(object_index)?);
+                entries.push(partial.into_entry(object_index)?);
                 object_index += 1;
             }
             continue;
@@ -171,27 +180,10 @@ pub fn parse(text: &str) -> Result<Vec<LayoutJsonEntry>, LayoutsJsonError> {
         let Some(partial) = current.as_mut() else {
             continue;
         };
-        let Some((key, value)) = parse_field_line(line) else {
+        let Some((field, value)) = parse_manifest_field(line) else {
             continue;
         };
-        match key {
-            "id" => partial.id = Some(value.to_owned()),
-            "width" => {
-                partial.width = Some(value.parse().map_err(|_| LayoutsJsonError::BadInteger {
-                    object_index,
-                    field: "width",
-                })?);
-            }
-            "height" => {
-                partial.height = Some(value.parse().map_err(|_| LayoutsJsonError::BadInteger {
-                    object_index,
-                    field: "height",
-                })?);
-            }
-            "border_filepath" => partial.border_filepath = Some(value.to_owned()),
-            "blockdata_filepath" => partial.blockdata_filepath = Some(value.to_owned()),
-            _ => {}
-        }
+        partial.set_field(object_index, field, value)?;
     }
 
     Ok(entries)
@@ -284,11 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn layouts_table_label_line_is_not_mistaken_for_the_layouts_array() {
-        // "layouts_table_label" shares a prefix with "layouts" -- make sure
-        // the array-tracking check requires the exact `"layouts"` key, not
-        // just the prefix, so this line never flips `in_layouts_array` on
-        // early.
+    fn only_the_layouts_key_starts_the_layouts_array() {
         let text = "{\n  \"layouts_table_label\": \"gMapLayouts\",\n  \"layouts\": [\n    {\n      \"id\": \"LAYOUT_X\",\n      \"width\": 1,\n      \"height\": 1,\n      \"border_filepath\": \"a\",\n      \"blockdata_filepath\": \"b\"\n    }\n  ]\n}";
         let entries = parse(text).unwrap();
         assert_eq!(entries.len(), 1);

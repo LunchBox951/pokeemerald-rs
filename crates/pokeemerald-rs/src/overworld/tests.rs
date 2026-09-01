@@ -1494,7 +1494,7 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(entries[0].palette_bank(), 0);
 
     // The one NPC entry. Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which
-    // reuses the west stand frame h-flipped (`avatar`'s frame table), and
+    // reuses the west stand frame h-flipped (`avatar::stand_frame_for`), and
     // sits in the combined sprite tileset at the first `FRAME_BLOCK_TILES`
     // stride after the player's own block -- her sheet is packed first, as
     // `object_events[0]`.

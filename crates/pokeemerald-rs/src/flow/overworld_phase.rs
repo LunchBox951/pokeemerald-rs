@@ -771,8 +771,8 @@ impl OverworldPhase {
         // the same `HealPlayerParty` primitive the conclusion now applies
         // to every fresh outcome, rather than left to spend encounter RNG
         // draws on every grass step before `Battle::new` refuses the
-        // battler (`flow::wild_encounter`'s "The fail-closed guard,
-        // retired" section leans on this migration for exactly these
+        // battler (`flow::wild_encounter`'s "Lead-health eligibility"
+        // section leans on this migration for exactly these
         // saves).
         let legacy_first_battle_save = phase.save1.player_party_count <= 1
             && phase

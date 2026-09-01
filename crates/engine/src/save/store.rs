@@ -1,186 +1,103 @@
-//! Rotating save-slot store (S-5).
+//! Two-slot rotating save storage.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of the save-slot
-//! machinery in `src/save.c`: `WriteSaveSectorOrSlot`/`HandleWriteSector`
-//! (full-slot write + sector rotation), `GetSaveValidStatus` (which of the
-//! two save slots is current/intact) and `CopySaveSlotData` (copying the
-//! winning slot's sectors back into RAM structs), collapsed into one
-//! in-memory [`SaveStore`] over a `Vec<u8>` buffer.
+//! [`SaveStore`] preserves the full 128 KiB flash geometry while reading and
+//! writing the five logical sectors occupied by [`SaveBlock2`] and
+//! [`SaveBlock1`]. The remaining nine sectors in each physical slot are
+//! unmodelled: fresh stores initialize them erased, while imported images
+//! preserve them without interpreting or writing them.
 //!
-//! # Reduced sector count
-//!
-//! Upstream gives each save slot `NUM_SECTORS_PER_SLOT` = 14 sectors:
-//! `SECTOR_ID_SAVEBLOCK2` (id 0), `SECTOR_ID_SAVEBLOCK1_START..=
-//! SECTOR_ID_SAVEBLOCK1_END` (ids 1-4, `SaveBlock1` chunked across up to 4
-//! sectors), and `SECTOR_ID_PKMN_STORAGE_START..=SECTOR_ID_PKMN_STORAGE_END`
-//! (ids 5-13, the PC box system). This port has no `PokemonStorage` model
-//! yet, so [`SECTORS_PER_SLOT`] is 5 (ids 0-4 only) rather than 14 — a
-//! deliberate, documented reduction, not a silent one. The rotation math,
-//! footer format, checksum algorithm, and slot-fallback decision table below
-//! are otherwise unchanged from upstream and generalize cleanly to a larger
-//! `SECTORS_PER_SLOT` once Pokémon storage lands.
-//!
-//! The full-size `SaveBlock1` payload is chunked across all
-//! [`SAVE_BLOCK1_CHUNKS`] sectors the way `SAVEBLOCK_CHUNK` computes it
-//! upstream (`offset = chunkNum * SECTOR_DATA_SIZE`, `size =
-//! min(len - offset, SECTOR_DATA_SIZE)` if `len >= offset` else `0`).
-//! PC Pokémon storage and its nine additional sectors remain deferred.
-//!
-//! # Simplifications
-//!
-//! This is an in-memory `Vec<u8>` buffer, not real flash
-//! (`SaveStore::save`/[`SaveStore::load`] never fail the way a physical
-//! flash write can) — upstream's `ProgramFlashSectorAndVerify` failure path
-//! and its `gDamagedSaveSectors`/rollback-to-`gLastKnownGoodSector` recovery
-//! exist to handle *write* failures a `Vec<u8>` cannot experience, so they
-//! have no counterpart here. What upstream calls "corruption" — a sector
-//! whose signature or checksum fails to validate on *load* — is fully
-//! modeled; see [`SaveStore::load`]. File I/O — moving this buffer between
-//! memory and an actual file, with the failures only a file system can
-//! produce — lives in [`super::file`], which owns the whole disk side and
-//! deliberately re-validates none of what this module decides.
+//! The in-memory store validates sector signatures and checksums, but writes
+//! cannot reproduce partial hardware failures. File persistence belongs to
+//! [`super::file`].
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
 
-/// `NUM_SAVE_SLOTS` — two rotating save slots; each full save alternates
-/// which one is written.
+/// Number of alternating save slots.
 pub const NUM_SAVE_SLOTS: usize = 2;
 
-/// `SECTOR_ID_SAVEBLOCK2`.
+/// Logical sector containing [`SaveBlock2`].
 pub const SECTOR_ID_SAVEBLOCK2: u16 = 0;
-/// `SECTOR_ID_SAVEBLOCK1_START`.
+/// First logical sector containing a [`SaveBlock1`] chunk.
 pub const SECTOR_ID_SAVEBLOCK1_START: u16 = 1;
-/// The number of sectors `SaveBlock1`'s payload may be chunked across
-/// (`SECTOR_ID_SAVEBLOCK1_END - SECTOR_ID_SAVEBLOCK1_START + 1` upstream).
+/// Number of logical sectors containing [`SaveBlock1`] chunks.
 pub const SAVE_BLOCK1_CHUNKS: usize = 4;
 
-/// The number of sectors per save slot this port models (see the module
-/// docs for why this is smaller than upstream's `NUM_SECTORS_PER_SLOT`).
+/// Number of logical sectors currently written in each save slot.
 pub const SECTORS_PER_SLOT: usize = 1 + SAVE_BLOCK1_CHUNKS;
 
-/// `NUM_SECTORS_PER_SLOT` -- the number of sectors upstream *reserves* per
-/// slot in the physical flash layout (ids 0-13, PC storage included). The
-/// layout constant, distinct from [`SECTORS_PER_SLOT`] (how many of those
-/// reserved sectors this port writes today): slot 1 starts at this offset
-/// whether or not the PC-storage sectors between are modelled, so growing
-/// `SECTORS_PER_SLOT` toward it never moves a sector that already exists.
+/// Number of physical sectors reserved for each save slot.
 pub const NUM_SECTORS_PER_SLOT: usize = 14;
 
-/// `NUM_SECTORS` -- the AGB cart's whole 128 KiB flash chip in sectors:
-/// both 14-sector slots plus the Hall of Fame (2), Trainer Hill, and
-/// recorded-battle sectors (`pokeemerald/include/constants/save.h`).
+/// Number of physical sectors in the 128 KiB flash image.
 pub const NUM_SECTORS: usize = 32;
 
 const _: () = assert!(SECTORS_PER_SLOT <= NUM_SECTORS_PER_SLOT);
 const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
 
-/// The exact byte length of a [`SaveStore`]'s backing flash image
-/// ([`SaveStore::flash_image`]): the **full 128 KiB flash chip**
-/// ([`NUM_SECTORS`] sectors), even though only [`SECTORS_PER_SLOT`] sectors
-/// per slot are written today.
+/// Exact byte length of a [`SaveStore`] flash image.
 ///
-/// Deliberately the whole chip rather than just the modelled sectors: this
-/// length (and each slot's [`NUM_SECTORS_PER_SLOT`]-sector offset) is the
-/// *on-disk format*, and freezing it at upstream's own physical geometry
-/// keeps the file's **length and slot offsets** stable when PC storage
-/// lands -- the exact-length check can never reject an older file, and no
-/// already-written sector ever moves (issue #214 review). Unmodelled
-/// sectors persist as erased `0xFF` flash, exactly what a real cart holds
-/// where nothing was ever programmed `(behavioral-fidelity)`.
-///
-/// That is the *whole* guarantee. It is **not** forward compatibility for
-/// slot *validation*: `scan_slot` requires every one of a slot's
-/// [`SECTORS_PER_SLOT`] sectors to validate, so raising that constant to
-/// 14 would make a 5-sector-era slot scan as damaged (its PC sectors are
-/// erased, not valid) and silently drop `CONTINUE` for existing saves --
-/// upstream's own `GetSaveValidStatus` is equally strict about all
-/// `NUM_SECTORS_PER_SLOT` sectors. Growing `SECTORS_PER_SLOT` is
-/// therefore a save-compatibility break that must ship with either
-/// placeholder PC sectors written from day one of that growth or a
-/// one-time migration of older images (issue #235).
+/// The full geometry keeps image length and slot offsets stable as more
+/// logical sectors are modelled. Increasing [`SECTORS_PER_SLOT`] still
+/// requires placeholder sectors or migration because slot scanning requires
+/// every modelled sector to validate.
 pub const FLASH_IMAGE_LEN: usize = NUM_SECTORS * SECTOR_SIZE;
 
-// Typed views of the small constants above, for the `u16`/`u32` contexts
-// upstream's sector ids, `gLastWrittenSector`, and `gSaveCounter % NUM_SAVE_SLOTS`
-// arithmetic need. Each constant here is small and known at compile time
-// (5, 2, 4), so the narrowing cast never actually truncates; computing it
-// once here avoids repeating `as u16`/`as u32` (each individually
-// re-triggering the same lint) at every use site below.
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "compile-time assertions bound the sector count to the flash geometry"
+)]
 const SECTORS_PER_SLOT_U16: u16 = SECTORS_PER_SLOT as u16;
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the two save slots fit in u32"
+)]
 const NUM_SAVE_SLOTS_U32: u32 = NUM_SAVE_SLOTS as u32;
-#[allow(clippy::cast_possible_truncation)]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the four SaveBlock1 chunks fit in u16"
+)]
 const SAVE_BLOCK1_CHUNKS_U16: u16 = SAVE_BLOCK1_CHUNKS as u16;
+const ERASED_FLASH_BYTE: u8 = u8::MAX;
 
-/// Overall result of resolving which save slot (if any) is current, mirrors
-/// the `SAVE_STATUS_*` values `GetSaveValidStatus` returns.
+/// Result of validating both save slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveStatus {
-    /// Neither slot has ever been written (no sector in either slot has the
-    /// correct signature).
+    /// Neither slot contains a signed sector.
     Empty,
-    /// A slot was found with every sector intact.
+    /// At least one slot is intact and the other is intact or empty.
     Ok,
-    /// Both slots have problems in a way that leaves no fully-intact slot to
-    /// prefer (e.g. one partially corrupt, the other never written).
+    /// Neither slot is intact and at least one is non-empty.
     Corrupt,
-    /// One slot is fully intact and current; the other slot exists but has
-    /// at least one corrupt sector. The intact slot's data was still loaded
-    /// — this mirrors upstream returning `SAVE_STATUS_ERROR` from
-    /// `TryLoadSaveSlot` while `CopySaveSlotData` has already copied the
-    /// good slot's data.
+    /// Exactly one slot is intact and the other is corrupt.
     Error,
 }
 
-/// The outcome of [`SaveStore::load`]: the resolved [`SaveStatus`] plus the
-/// best-effort reconstructed blocks. Fields backed by a sector that didn't
-/// validate decode to their [`Default`] value (this port has no "previous RAM
-/// contents" to fall back on the way upstream's already-resident
-/// `gSaveBlock1Ptr`/`gSaveBlock2Ptr` do). This holds even for the
-/// key-encrypted fields (money, bag quantities), in both failure directions:
-/// a non-validating `SaveBlock1` sector yields plaintext defaults — money `0`,
-/// quantities `0` — even when a nonzero `encryption_key` was recovered from an
-/// intact `SaveBlock2`; and, conversely, a validating `SaveBlock1` sector's
-/// key-encrypted fields also decode to those defaults when the `SaveBlock2`
-/// sector did *not* validate (so no usable key was recovered), rather than
-/// leaking genuine ciphertext decrypted under the fallback key `0`.
+/// State reconstructed by [`SaveStore::load`].
+///
+/// Fields from invalid sectors use plaintext defaults. Key-encrypted
+/// [`SaveBlock1`] fields are retained only when both their chunk and the
+/// [`SaveBlock2`] key sector validate.
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
-    /// Which slot (if any) was used, and how intact it was.
+    /// Result of validating both save slots.
     pub status: SaveStatus,
-    /// The reconstructed `SaveBlock1` state.
+    /// Reconstructed [`SaveBlock1`] state.
     pub block1: SaveBlock1,
-    /// The reconstructed `SaveBlock2` state.
+    /// Reconstructed [`SaveBlock2`] state.
     pub block2: SaveBlock2,
 }
 
-/// The size, in bytes, of chunk `chunk_num` of a `total_len`-byte payload,
-/// mirroring the upstream `SAVEBLOCK_CHUNK` macro (`src/save.c`):
-///
-/// ```text
-/// size = sizeof(structure) >= chunkNum * SECTOR_DATA_SIZE
-///     ? min(sizeof(structure) - chunkNum * SECTOR_DATA_SIZE, SECTOR_DATA_SIZE)
-///     : 0
-/// ```
 const fn chunk_len(total_len: usize, chunk_num: usize) -> usize {
     let offset = chunk_num * SECTOR_DATA_SIZE;
-    if total_len > offset {
-        let remaining = total_len - offset;
-        if remaining < SECTOR_DATA_SIZE {
-            remaining
-        } else {
-            SECTOR_DATA_SIZE
-        }
+    let remaining = total_len.saturating_sub(offset);
+    if remaining < SECTOR_DATA_SIZE {
+        remaining
     } else {
-        0
+        SECTOR_DATA_SIZE
     }
 }
 
-/// The byte slice for chunk `chunk_num` of `payload`, per [`chunk_len`].
-/// Never panics: `chunk_len` guarantees `offset + len <= payload.len()`
-/// whenever `len > 0`, and an empty slice is always safe to return.
 fn chunk_of(payload: &[u8], chunk_num: usize) -> &[u8] {
     let len = chunk_len(payload.len(), chunk_num);
     let offset = chunk_num * SECTOR_DATA_SIZE;
@@ -191,11 +108,7 @@ fn chunk_of(payload: &[u8], chunk_num: usize) -> &[u8] {
     }
 }
 
-/// The payload length expected for sector id `id`, or `None` if `id` isn't
-/// one of [`SECTORS_PER_SLOT`]'s ids. Used both when writing (to size each
-/// sector's checksum) and when validating on load (to know how many payload
-/// bytes to recompute the checksum over).
-fn expected_len_for(id: u16) -> Option<usize> {
+fn sector_payload_len(id: u16) -> Option<usize> {
     if id == SECTOR_ID_SAVEBLOCK2 {
         Some(SaveBlock2::PAYLOAD_LEN)
     } else if (SECTOR_ID_SAVEBLOCK1_START..SECTOR_ID_SAVEBLOCK1_START + SAVE_BLOCK1_CHUNKS_U16)
@@ -208,76 +121,85 @@ fn expected_len_for(id: u16) -> Option<usize> {
     }
 }
 
-/// Whether counter `b` should be treated as more recent than counter `a`,
-/// mirroring the wraparound-aware comparison inlined in
-/// `GetSaveValidStatus` when both slots are otherwise `SAVE_STATUS_OK`.
-/// Ordinarily this is just `a < b`, but when one counter is `u32::MAX` and
-/// the other is `0` (the counter having just wrapped around), the wrapped
-/// one (`0`) is the newer save.
-///
-/// Deliberately *not* a general modular ordering: upstream's rule only ever
-/// compares the two on-disk slots, whose counters are exactly one
-/// generation apart, so the adjacent pair is the only wrap that can occur
-/// here `(behavioral-fidelity)`. Callers asking a different question — "did
-/// the file drift an arbitrary distance past this session?" — need serial
-/// arithmetic instead (`pokeemerald-rs`'s `game_save::counter_is_ahead`,
-/// #230 review round five) and must not reuse this rule.
+/// Compares counters from adjacent save generations, including the sole
+/// `u32::MAX` to zero wrap.
 #[must_use]
-fn counter_b_is_newer(a: u32, b: u32) -> bool {
-    if (a == u32::MAX && b == 0) || (a == 0 && b == u32::MAX) {
-        a.wrapping_add(1) < b.wrapping_add(1)
-    } else {
-        a < b
+fn second_counter_is_newer(first: u32, second: u32) -> bool {
+    match (first, second) {
+        (u32::MAX, 0) => true,
+        (0, u32::MAX) => false,
+        _ => first < second,
     }
 }
 
-/// Per-slot scan result: whether the slot's sectors validate as a coherent
-/// whole, and (if any sector validated) the save counter it was written
-/// with.
+fn physical_slot_for_counter(counter: u32) -> usize {
+    (counter % NUM_SAVE_SLOTS_U32) as usize
+}
+
+fn fill_invalid_chunks_with_encrypted_defaults(
+    block1_bytes: &mut [u8; SaveBlock1::PAYLOAD_LEN],
+    valid_chunks: [bool; SAVE_BLOCK1_CHUNKS],
+    encryption_key: u32,
+) {
+    let default_bytes = SaveBlock1::default().to_bytes(encryption_key);
+    for (chunk_num, _) in valid_chunks
+        .iter()
+        .enumerate()
+        .filter(|(_, valid)| !**valid)
+    {
+        let len = chunk_len(SaveBlock1::PAYLOAD_LEN, chunk_num);
+        let offset = chunk_num * SECTOR_DATA_SIZE;
+        block1_bytes[offset..offset + len].copy_from_slice(&default_bytes[offset..offset + len]);
+    }
+}
+
+fn clear_key_encrypted_fields(block1: &mut SaveBlock1) {
+    block1.money = 0;
+    for slot in block1
+        .bag
+        .items
+        .iter_mut()
+        .chain(&mut block1.bag.key_items)
+        .chain(&mut block1.bag.poke_balls)
+        .chain(&mut block1.bag.tms_hms)
+        .chain(&mut block1.bag.berries)
+    {
+        slot.quantity = 0;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RawSlotStatus {
+enum SlotIntegrity {
     Empty,
     Ok,
     Error,
 }
 
 struct SlotScan {
-    status: RawSlotStatus,
+    integrity: SlotIntegrity,
     counter: u32,
 }
 
-/// The retained serialization base as [`SaveStore::base_snapshot`]
-/// returns it: the raw (`SaveBlock1`, `SaveBlock2`) payloads.
+struct CopiedSlotPayloads {
+    block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
+    block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
+    valid_block1_chunks: [bool; SAVE_BLOCK1_CHUNKS],
+    block2_valid: bool,
+}
+
+/// Raw payloads retained across saves for fields the model does not own.
 pub type BaseSnapshot = (
     Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
     Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
 );
 
-/// A rotating two-slot save store over an in-memory byte buffer. See the
-/// module docs for the algorithm and its (documented) reductions from
-/// upstream.
+/// A rotating two-slot save store over an in-memory flash image.
 #[derive(Debug, Clone)]
 pub struct SaveStore {
-    /// The full [`NUM_SECTORS`]-sector chip, `SECTOR_SIZE` bytes each,
-    /// laid out slot-major at upstream's physical geometry (mirrors
-    /// `gRamSaveSectorLocations`' underlying flash addressing: slot 0
-    /// occupies sectors `0..NUM_SECTORS_PER_SLOT`, slot 1 occupies
-    /// `NUM_SECTORS_PER_SLOT..2*NUM_SECTORS_PER_SLOT`; only the first
-    /// [`SECTORS_PER_SLOT`] of each span is written today).
     buffer: Vec<u8>,
-    /// `gLastWrittenSector` — the sector-rotation offset within a slot.
     last_written_sector: u16,
-    /// `gSaveCounter` — incremented on every full-slot write; its parity
-    /// selects which physical slot gets written/read.
     save_counter: u32,
-    /// The raw [`SaveBlock1`] payload the last [`SaveStore::load`] decoded
-    /// from (zero-filled before any load), kept current by
-    /// [`SaveStore::save`]. The serialization base modeled fields are
-    /// patched into, so bytes no field models yet survive a save/load round
-    /// trip — upstream rewrites the whole `gSaveBlock1` from RAM and never
-    /// forgets what it hasn't touched `(behavioral-fidelity)`.
     base_block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
-    /// [`SaveStore::base_block1`]'s [`SaveBlock2`] counterpart.
     base_block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
 }
 
@@ -288,17 +210,14 @@ impl Default for SaveStore {
 }
 
 impl SaveStore {
-    /// A fresh store: every byte `0xFF`, as if the backing flash had never
-    /// been written. Real NOR/AGB flash erases to all-`1` bits, not zero
-    /// `(behavioral-fidelity)`; this matters here because a footer's `id`
-    /// field on unwritten flash must read as `0xFFFF`, never `0`, so
-    /// [`SaveStore::load`]'s unconditional "`id == SECTOR_ID_SAVEBLOCK2`"
-    /// check (mirroring upstream `CopySaveSlotData`) never fires on a
-    /// sector that was never actually written.
+    /// Creates a fully erased flash image.
+    ///
+    /// Erased all-one footer IDs cannot be mistaken for
+    /// [`SECTOR_ID_SAVEBLOCK2`] when loading recovers the rotation offset.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            buffer: vec![0xFFu8; FLASH_IMAGE_LEN],
+            buffer: vec![ERASED_FLASH_BYTE; FLASH_IMAGE_LEN],
             last_written_sector: 0,
             save_counter: 0,
             base_block1: Box::new([0u8; SaveBlock1::PAYLOAD_LEN]),
@@ -306,34 +225,19 @@ impl SaveStore {
         }
     }
 
-    /// The backing flash image: [`FLASH_IMAGE_LEN`] bytes -- the whole
-    /// chip, both slots at their physical offsets, unmodelled sectors
-    /// erased (`0xFF`).
+    /// Returns the complete persistent flash image.
     ///
-    /// This is the whole of the store's persistent state. The two counters
-    /// [`SaveStore::last_written_sector`] and [`SaveStore::save_counter`]
-    /// are deliberately *not* part of it: upstream keeps them in RAM
-    /// (`gLastWrittenSector`/`gSaveCounter`), zeroes them at boot
-    /// (`Save_ResetSaveCounters`, `pokeemerald/src/save.c:110-115`), and
-    /// re-derives both from the image's own footers on the next load —
-    /// `GetSaveValidStatus` adopts the winning slot's counter and
-    /// `CopySaveSlotData`'s `if (id == 0)` arm recovers the rotation offset.
-    /// A persisted image is therefore self-describing, exactly as real
-    /// flash is `(behavioral-fidelity)`.
+    /// Runtime counters are excluded and reconstructed from sector footers by
+    /// [`SaveStore::load`].
     #[must_use]
     pub fn flash_image(&self) -> &[u8] {
         &self.buffer
     }
 
-    /// Rebuild a store over an existing flash `image`, or `None` if `image`
-    /// is not exactly [`FLASH_IMAGE_LEN`] bytes.
+    /// Rebuilds a store from an exact-length flash image.
     ///
-    /// The counters start at zero — this is `Save_ResetSaveCounters`
-    /// (`pokeemerald/src/save.c:110-115`), which upstream runs at boot
-    /// immediately before `LoadGameSave` (`src/intro.c:1153-1154`). Callers
-    /// that want the counters the image was last written with must call
-    /// [`SaveStore::load`], the same way upstream only ever learns them from
-    /// `LoadGameSave` `(behavioral-fidelity)`.
+    /// Runtime counters start at zero until [`SaveStore::load`] reconstructs
+    /// them from sector footers.
     #[must_use]
     pub fn from_flash_image(image: &[u8]) -> Option<Self> {
         if image.len() != FLASH_IMAGE_LEN {
@@ -348,56 +252,41 @@ impl SaveStore {
         })
     }
 
-    /// `gLastWrittenSector`'s current value, for tests/observability.
+    /// Returns the current intra-slot rotation offset.
     #[must_use]
     pub const fn last_written_sector(&self) -> u16 {
         self.last_written_sector
     }
 
-    /// A copy of the retained serialization base (see [`SaveStore`]'s
-    /// field docs): the raw `SaveBlock1`/`SaveBlock2` payloads the last
-    /// [`SaveStore::load`] or [`SaveStore::save`] established. A caller
-    /// that outlives this store — a session object that re-reads the file
-    /// for each write — snapshots the base it booted from so a later
-    /// corruption-fallback heal can write the *session's* deferred lineage
-    /// forward via [`SaveStore::restore_base`], rather than adopt the
-    /// older intact slot's (#230 review).
+    /// Copies the retained raw payloads used as the base of the next save.
+    ///
+    /// A session can restore this snapshot before healing a corrupt image so
+    /// unmodelled bytes come from that session rather than an older fallback
+    /// slot.
     #[must_use]
     pub fn base_snapshot(&self) -> BaseSnapshot {
         (self.base_block1.clone(), self.base_block2.clone())
     }
 
-    /// Replace the retained serialization base with a
-    /// [`SaveStore::base_snapshot`] taken earlier — see that method for
-    /// when a caller does this.
+    /// Restores raw payloads returned by [`SaveStore::base_snapshot`].
     pub fn restore_base(&mut self, (block1, block2): BaseSnapshot) {
         self.base_block1 = block1;
         self.base_block2 = block2;
     }
 
-    /// Zero the retained serialization base — upstream `ClearSav1`/
-    /// `ClearSav2` (`Sav2_ClearSetDefault`, `pokeemerald/src/new_game.c`),
-    /// the wholesale `memset` a new game runs before its first save. A
-    /// session that did not adopt the loaded image's blocks must call this
-    /// before [`SaveStore::save`], or the previous trainer's deferred bytes
-    /// — play time, options, Pokédex state, ciphertext under a key this
-    /// session discarded — leak into the new game's slot
-    /// `(behavioral-fidelity)`.
+    /// Clears unmodelled payload bytes before saving a new game lineage.
     pub fn clear_base(&mut self) {
         self.base_block1.fill(0);
         self.base_block2.fill(0);
     }
 
-    /// `gSaveCounter`'s current value, for tests/observability.
+    /// Returns the current wrapping save counter.
     #[must_use]
     pub const fn save_counter(&self) -> u32 {
         self.save_counter
     }
 
     fn physical_offset(slot: usize, sector_in_slot: usize) -> usize {
-        // Slots sit NUM_SECTORS_PER_SLOT (14) sectors apart -- upstream's
-        // physical geometry -- even while only SECTORS_PER_SLOT (5) of each
-        // span is written; see FLASH_IMAGE_LEN's docs.
         (slot * NUM_SECTORS_PER_SLOT + sector_in_slot) * SECTOR_SIZE
     }
 
@@ -414,20 +303,12 @@ impl SaveStore {
         self.buffer[start..start + SECTOR_SIZE].copy_from_slice(sector.as_bytes());
     }
 
-    /// Corrupt an arbitrary byte in the backing buffer. Test-only hook for
-    /// exercising [`SaveStore::load`]'s corruption detection without
-    /// reaching into private fields from outside the crate.
     #[cfg(test)]
     fn corrupt_byte(&mut self, slot: usize, sector_in_slot: usize, byte_offset: usize) {
         let idx = Self::physical_offset(slot, sector_in_slot) + byte_offset;
-        self.buffer[idx] ^= 0xFF;
+        self.buffer[idx] = !self.buffer[idx];
     }
 
-    /// Find which physical position within `slot` currently holds the
-    /// sector with footer `id`. Test-only: sector rotation makes a given
-    /// logical id's physical position depend on save history, so tests
-    /// locate it via the footer rather than re-deriving the rotation
-    /// formula.
     #[cfg(test)]
     fn find_sector_in_slot(&self, slot: usize, id: u16) -> usize {
         (0..SECTORS_PER_SLOT)
@@ -435,19 +316,8 @@ impl SaveStore {
             .expect("id must be present in a fully-written slot")
     }
 
-    /// Write a full save slot, mirroring `WriteSaveSectorOrSlot(
-    /// FULL_SAVE_SLOT, ...)` -> `HandleWriteSector` for each of
-    /// [`SECTORS_PER_SLOT`] sectors: `gLastWrittenSector` advances by one
-    /// (mod [`SECTORS_PER_SLOT`]) and `gSaveCounter` advances by one first,
-    /// then every sector is (re)written with the new counter, at a
-    /// physical position rotated by the new `gLastWrittenSector` within
-    /// whichever physical slot `gSaveCounter % NUM_SAVE_SLOTS` now selects.
+    /// Writes both blocks into the next rotated physical slot.
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
-        // Patch the modeled fields into the payloads the last load decoded
-        // from (zero fill before any load) rather than serializing from
-        // scratch, so deferred bytes — play time, options, Pokédex state, …
-        // — survive the rotation instead of being zeroed out of the newest
-        // valid slot.
         let mut block2_bytes = self.base_block2.clone();
         let mut block1_bytes = self.base_block1.clone();
         block2.patch_bytes(&mut block2_bytes);
@@ -455,7 +325,7 @@ impl SaveStore {
 
         let new_last_written_sector = (self.last_written_sector + 1) % SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
-        let slot = (new_save_counter % NUM_SAVE_SLOTS_U32) as usize;
+        let slot = physical_slot_for_counter(new_save_counter);
 
         for sector_id in 0..SECTORS_PER_SLOT_U16 {
             let data: &[u8] = if sector_id == SECTOR_ID_SAVEBLOCK2 {
@@ -472,14 +342,10 @@ impl SaveStore {
 
         self.last_written_sector = new_last_written_sector;
         self.save_counter = new_save_counter;
-        // The patched payloads are now the newest slot's on-disk truth —
-        // adopt them as the base for the next save.
         self.base_block1 = block1_bytes;
         self.base_block2 = block2_bytes;
     }
 
-    /// Scan one physical slot's sectors, mirroring the per-slot loop inside
-    /// `GetSaveValidStatus`.
     fn scan_slot(&self, slot: usize) -> SlotScan {
         let mut signature_valid = false;
         let mut valid_ids: u32 = 0;
@@ -492,7 +358,7 @@ impl SaveStore {
             }
             signature_valid = true;
             let id = sector.id();
-            if let Some(expected_len) = expected_len_for(id) {
+            if let Some(expected_len) = sector_payload_len(id) {
                 if sector.is_valid(expected_len) {
                     counter = sector.counter();
                     valid_ids |= 1 << id;
@@ -501,214 +367,113 @@ impl SaveStore {
         }
 
         let all_valid_mask = (1u32 << u32::from(SECTORS_PER_SLOT_U16)) - 1;
-        let status = if !signature_valid {
-            RawSlotStatus::Empty
+        let integrity = if !signature_valid {
+            SlotIntegrity::Empty
         } else if valid_ids == all_valid_mask {
-            RawSlotStatus::Ok
+            SlotIntegrity::Ok
         } else {
-            RawSlotStatus::Error
+            SlotIntegrity::Error
         };
-        SlotScan { status, counter }
+        SlotScan { integrity, counter }
     }
 
-    /// Resolve the overall [`SaveStatus`] and the save counter to adopt,
-    /// mirroring `GetSaveValidStatus`'s decision table. Upstream returns only
-    /// a status and leaves `gSaveCounter` set to the adopted value; the
-    /// physical slot to read is then re-derived from that counter's parity in
-    /// `CopySaveSlotData`, so this returns no separate "winner" slot index.
-    fn resolve(a: &SlotScan, b: &SlotScan) -> (SaveStatus, u32) {
-        use RawSlotStatus::{Empty, Error, Ok};
-        match (a.status, b.status) {
+    fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32) {
+        use SlotIntegrity::{Empty, Error, Ok};
+        match (slot0.integrity, slot1.integrity) {
             (Ok, Ok) => {
-                let counter = if counter_b_is_newer(a.counter, b.counter) {
-                    b.counter
+                let counter = if second_counter_is_newer(slot0.counter, slot1.counter) {
+                    slot1.counter
                 } else {
-                    a.counter
+                    slot0.counter
                 };
                 (SaveStatus::Ok, counter)
             }
-            (Ok, Error) => (SaveStatus::Error, a.counter),
-            (Ok, Empty) => (SaveStatus::Ok, a.counter),
-            (Error, Ok) => (SaveStatus::Error, b.counter),
-            (Empty, Ok) => (SaveStatus::Ok, b.counter),
+            (Ok, Error) => (SaveStatus::Error, slot0.counter),
+            (Ok, Empty) => (SaveStatus::Ok, slot0.counter),
+            (Error, Ok) => (SaveStatus::Error, slot1.counter),
+            (Empty, Ok) => (SaveStatus::Ok, slot1.counter),
             (Empty, Empty) => (SaveStatus::Empty, 0),
-            // Both slots have problems and neither is a clean OK: upstream
-            // resets to slot 0 (`gSaveCounter = 0`) and still attempts a
-            // best-effort copy from it.
             (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0),
         }
     }
 
-    /// Load the current save state, mirroring `TryLoadSaveSlot(
-    /// FULL_SAVE_SLOT, ...)` -> `GetSaveValidStatus` + `CopySaveSlotData`.
+    fn copy_valid_slot_payloads(&mut self, slot: usize) -> CopiedSlotPayloads {
+        let mut copied = CopiedSlotPayloads {
+            block1: Box::new([0; SaveBlock1::PAYLOAD_LEN]),
+            block2: Box::new([0; SaveBlock2::PAYLOAD_LEN]),
+            valid_block1_chunks: [false; SAVE_BLOCK1_CHUNKS],
+            block2_valid: false,
+        };
+
+        for physical_index in 0..SECTORS_PER_SLOT_U16 {
+            let sector = self.read_physical(slot, usize::from(physical_index));
+            let id = sector.id();
+
+            // CopySaveSlotData recovers rotation from sector id zero before validation.
+            if id == SECTOR_ID_SAVEBLOCK2 {
+                self.last_written_sector = physical_index;
+            }
+
+            let Some(payload_len) = sector_payload_len(id) else {
+                continue;
+            };
+            if payload_len == 0 || !sector.is_valid(payload_len) {
+                continue;
+            }
+
+            if id == SECTOR_ID_SAVEBLOCK2 {
+                copied.block2[..payload_len].copy_from_slice(&sector.data()[..payload_len]);
+                copied.block2_valid = true;
+            } else {
+                let chunk_num = usize::from(id - SECTOR_ID_SAVEBLOCK1_START);
+                let offset = chunk_num * SECTOR_DATA_SIZE;
+                copied.block1[offset..offset + payload_len]
+                    .copy_from_slice(&sector.data()[..payload_len]);
+                copied.valid_block1_chunks[chunk_num] = true;
+            }
+        }
+
+        copied
+    }
+
+    /// Validates both slots and loads payloads selected by the resolved
+    /// counter's parity.
     ///
-    /// Resolves the overall status (see [`SaveStatus`]) and adopts a save
-    /// counter (`gSaveCounter`). Then — exactly as upstream `TryLoadSaveSlot`
-    /// *always* calls `CopySaveSlotData` after `GetSaveValidStatus`,
-    /// regardless of the status just computed — scans the slot the *adopted
-    /// counter's parity* selects (`gSaveCounter % NUM_SAVE_SLOTS`; slot 0 when
-    /// both slots were empty, matching `GetSaveValidStatus` resetting
-    /// `gSaveCounter` to 0 in that case) and copies every sector that
-    /// individually validates (signature + checksum) into the returned
-    /// blocks. The copied slot is chosen by counter parity, not by which slot
-    /// won validation — the two can differ when a payload-valid slot carries a
-    /// corrupted footer counter (see the copy-slot comment below). A slot that
-    /// is [`SaveStatus::Error`] (one or more corrupt sectors) or
-    /// [`SaveStatus::Corrupt`] still yields whatever *did* validate for its
-    /// unaffected sectors.
+    /// The resolved counter's parity selects the slot to copy, even if a
+    /// checksum-valid payload has a corrupt footer counter that makes this
+    /// differ from the slot preferred during validation.
     #[must_use]
     pub fn load(&mut self) -> LoadOutcome {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
         let (status, counter) = Self::resolve(&scans[0], &scans[1]);
         self.save_counter = counter;
-        // `GetSaveValidStatus` also resets `gLastWrittenSector = 0` in its
-        // two terminal branches (both slots empty, both slots errored)
-        // before `CopySaveSlotData`'s `id == 0` recovery gets a chance to
-        // re-derive it from a surviving footer.
         if matches!(status, SaveStatus::Empty | SaveStatus::Corrupt) {
             self.last_written_sector = 0;
         }
-        // `CopySaveSlotData` selects its slot purely from the adopted counter's
-        // parity — `NUM_SECTORS_PER_SLOT * (gSaveCounter % NUM_SAVE_SLOTS)` —
-        // *not* from `GetSaveValidStatus`'s physical winner. The footer counter
-        // is outside the payload checksum, so a payload-valid but
-        // counter-corrupted slot can make the two disagree; matching upstream
-        // means keying off the adopted counter here `(behavioral-fidelity)`.
-        let copy_slot = (self.save_counter % NUM_SAVE_SLOTS_U32) as usize;
+        let copy_slot = physical_slot_for_counter(self.save_counter);
+        let mut copied = self.copy_valid_slot_payloads(copy_slot);
 
-        let mut block2_bytes = Box::new([0u8; SaveBlock2::PAYLOAD_LEN]);
-        let mut block1_bytes = Box::new([0u8; SaveBlock1::PAYLOAD_LEN]);
-        // Which SaveBlock1 chunks were copied from a validating sector. A
-        // chunk left `false` keeps `block1_bytes`' zero fill, which — under a
-        // recovered nonzero key — would XOR-decrypt to `key`/`low16(key)`
-        // rather than the plaintext defaults `LoadOutcome` promises; the
-        // re-seed pass below fixes that.
-        let mut block1_chunk_valid = [false; SAVE_BLOCK1_CHUNKS];
-        // Whether the SaveBlock2 *sector* validated (signature + checksum),
-        // so its payload bytes were copied and a usable key was recovered.
-        // `SaveBlock2::from_bytes` decodes every payload losslessly — an
-        // out-of-range `player_gender` byte becomes `PlayerGender::Other`
-        // rather than a decode error, mirroring `CopySaveSlotData` copying a
-        // checksum-valid sector through unexamined — so sector validity is
-        // both necessary and sufficient here; see the key-recovery step
-        // below.
-        let mut block2_sector_valid = false;
-
-        for i in 0..SECTORS_PER_SLOT_U16 {
-            let sector = self.read_physical(copy_slot, usize::from(i));
-            let id = sector.id();
-
-            // Mirrors CopySaveSlotData's unconditional `if (id == 0)
-            // gLastWrittenSector = i` — read before the validity check, so
-            // it recovers the rotation offset even for a sector whose
-            // footer id happens to be intact but whose checksum isn't. Safe
-            // unconditionally: unlike `locations[id]` upstream indexes with
-            // `id` right after, comparing `id` itself never risks an
-            // out-of-range access.
-            if id == SECTOR_ID_SAVEBLOCK2 {
-                self.last_written_sector = i;
-            }
-
-            let Some(expected_len) = expected_len_for(id) else {
-                continue;
-            };
-            if expected_len == 0 {
-                // An empty chunk (SaveBlock1's payload doesn't reach this
-                // sector's offset) has nothing to copy; its offset would
-                // fall past block1_bytes' end.
-                continue;
-            }
-            if !sector.is_valid(expected_len) {
-                continue;
-            }
-
-            if id == SECTOR_ID_SAVEBLOCK2 {
-                block2_bytes[..expected_len].copy_from_slice(&sector.data()[..expected_len]);
-                block2_sector_valid = true;
-            } else {
-                let chunk_num = (id - SECTOR_ID_SAVEBLOCK1_START) as usize;
-                let offset = chunk_num * SECTOR_DATA_SIZE;
-                block1_bytes[offset..offset + expected_len]
-                    .copy_from_slice(&sector.data()[..expected_len]);
-                block1_chunk_valid[chunk_num] = true;
-            }
-        }
-
-        // A usable key is recovered exactly when the SaveBlock2 sector
-        // validated: `from_bytes` only fails on `Truncated`, which the
-        // fixed-size `block2_bytes` above can never be, so decoding a
-        // validated sector's payload always succeeds and copies its raw
-        // encryption key — including a checksum-valid sector carrying an
-        // out-of-range gender byte, matching upstream `CopySaveSlotData`.
-        let (block2, key_recovered) = if block2_sector_valid {
-            (
-                SaveBlock2::from_bytes(&block2_bytes[..]).unwrap_or_default(),
-                true,
-            )
+        let block2 = if copied.block2_valid {
+            SaveBlock2::from_bytes(&copied.block2[..]).unwrap_or_default()
         } else {
-            (SaveBlock2::default(), false)
+            SaveBlock2::default()
         };
 
-        // Re-seed any SaveBlock1 chunk that did *not* validate with the
-        // *encryption of the default block* under the recovered key, so that
-        // decoding it yields plaintext defaults (money 0, quantities 0)
-        // regardless of the key. Without this, a corrupt SaveBlock1 chunk
-        // paired with an intact SaveBlock2 (recovering a nonzero key) would
-        // decode its zero bytes to `money == key` and every empty bag slot to
-        // `quantity == low16(key)`, diverging from upstream and breaking the
-        // `LoadOutcome` contract. Validated chunks are untouched, so the
-        // intact and single-corrupt-sector fallback paths stay byte-identical.
-        if block1_chunk_valid.iter().any(|valid| !valid) {
-            let default_bytes = SaveBlock1::default().to_bytes(block2.encryption_key);
-            for (chunk_num, _) in block1_chunk_valid
-                .iter()
-                .enumerate()
-                .filter(|(_, valid)| !**valid)
-            {
-                let len = chunk_len(SaveBlock1::PAYLOAD_LEN, chunk_num);
-                if len == 0 {
-                    continue;
-                }
-                let offset = chunk_num * SECTOR_DATA_SIZE;
-                block1_bytes[offset..offset + len]
-                    .copy_from_slice(&default_bytes[offset..offset + len]);
-            }
-        }
+        fill_invalid_chunks_with_encrypted_defaults(
+            &mut copied.block1,
+            copied.valid_block1_chunks,
+            block2.encryption_key,
+        );
 
         let mut block1 =
-            SaveBlock1::from_bytes(&block1_bytes[..], block2.encryption_key).unwrap_or_default();
+            SaveBlock1::from_bytes(&copied.block1[..], block2.encryption_key).unwrap_or_default();
 
-        // Mirror of the re-seed pass above, for the opposite failure: no
-        // usable key was recovered (the SaveBlock2 sector was missing/corrupt,
-        // or validated but failed to decode), so `encryption_key` fell back to
-        // 0. A SaveBlock1 chunk that *did* validate then holds genuine
-        // ciphertext, which decrypting under key 0 would surface verbatim
-        // (e.g. `money == money ^ real_key`, bag quantities as raw ciphertext)
-        // — again breaking the `LoadOutcome` contract that key-encrypted
-        // fields decode to plaintext defaults whenever no key was recovered.
-        // Reset only the key-encrypted state — money and each bag *quantity*
-        // (item_ids are stored in the clear, so a validated chunk's genuine
-        // ids must survive) — leaving all other validated plaintext untouched.
-        if !key_recovered {
-            block1.money = 0;
-            for slot in block1
-                .bag
-                .items
-                .iter_mut()
-                .chain(&mut block1.bag.key_items)
-                .chain(&mut block1.bag.poke_balls)
-                .chain(&mut block1.bag.tms_hms)
-                .chain(&mut block1.bag.berries)
-            {
-                slot.quantity = 0;
-            }
+        if !copied.block2_valid {
+            clear_key_encrypted_fields(&mut block1);
         }
 
-        // Retain the exact payload bytes the blocks were decoded from as
-        // the base [`SaveStore::save`] patches modeled fields into —
-        // deferred bytes in a loaded save must survive the next rotation.
-        self.base_block1 = block1_bytes;
-        self.base_block2 = block2_bytes;
+        self.base_block1 = copied.block1;
+        self.base_block2 = copied.block2;
 
         LoadOutcome {
             status,
@@ -718,10 +483,8 @@ impl SaveStore {
     }
 }
 
-const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 0) == 3968);
-const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 1) == 3968);
-const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 2) == 3968);
-const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 3) == 3848);
+const _: () = assert!(SaveBlock1::PAYLOAD_LEN <= SAVE_BLOCK1_CHUNKS * SECTOR_DATA_SIZE);
+const _: () = assert!(SaveBlock1::PAYLOAD_LEN > (SAVE_BLOCK1_CHUNKS - 1) * SECTOR_DATA_SIZE);
 const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, SAVE_BLOCK1_CHUNKS) == 0);
 
 #[cfg(test)]
@@ -730,14 +493,8 @@ mod tests {
     use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
     use crate::save::{BoxPokemon, ItemSlot, Pokemon, PokemonSubstructures};
 
-    /// The on-disk geometry is upstream's physical flash layout, frozen
-    /// (issue #214 review): the image is the whole 128 KiB chip and the two
-    /// slots sit `NUM_SECTORS_PER_SLOT` sectors apart, so growing
-    /// `SECTORS_PER_SLOT` toward 14 (PC storage) can never change the
-    /// file's length or move a sector that already exists. Any change here
-    /// is a save-format break and must be a deliberate, migrated act.
     #[test]
-    fn the_flash_image_geometry_is_upstreams_and_frozen() {
+    fn flash_image_keeps_full_physical_geometry() {
         assert_eq!(NUM_SECTORS_PER_SLOT, 14);
         assert_eq!(NUM_SECTORS, 32);
         assert_eq!(FLASH_IMAGE_LEN, 131_072);
@@ -751,15 +508,11 @@ mod tests {
 
     #[test]
     fn counter_comparison_is_wraparound_aware() {
-        // Ordinary ordering.
-        assert!(counter_b_is_newer(3, 7));
-        assert!(!counter_b_is_newer(7, 3));
-        assert!(!counter_b_is_newer(5, 5));
-        // The wraparound special case `GetSaveValidStatus` singles out:
-        // a counter that just wrapped to 0 is newer than u32::MAX...
-        assert!(counter_b_is_newer(u32::MAX, 0));
-        // ...in either slot order.
-        assert!(!counter_b_is_newer(0, u32::MAX));
+        assert!(second_counter_is_newer(3, 7));
+        assert!(!second_counter_is_newer(7, 3));
+        assert!(!second_counter_is_newer(5, 5));
+        assert!(second_counter_is_newer(u32::MAX, 0));
+        assert!(!second_counter_is_newer(0, u32::MAX));
     }
 
     fn sample_block2() -> SaveBlock2 {
@@ -893,34 +646,28 @@ mod tests {
         );
     }
 
-    /// Issue #230's Codex P1 review scenario: nonzero bytes in *deferred*
-    /// regions — play time in [`SaveBlock2`]; coins, Pokédex, PC storage in
-    /// [`SaveBlock1`] — must survive a load → save rotation. `save` patches the
-    /// modeled fields into the payloads `load` decoded from; serializing
-    /// from a zeroed buffer instead would silently strip every deferred
-    /// byte from the newest valid slot while its checksums stay green.
     #[test]
     fn a_rotation_preserves_deferred_bytes_the_model_does_not_own() {
-        const B2_DEFERRED: usize = 0x10; // play-time region: modeled nowhere yet
-        const B1_DEFERRED_CHUNK0: usize = 0x100; // between the warps and the party
-        const B1_DEFERRED_CHUNK2: usize = 0x2000; // deep in the PC-storage span
+        const UNMODELLED_BLOCK2_OFFSET: usize = 0x10;
+        const UNMODELLED_BLOCK1_CHUNK0_OFFSET: usize = 0x100;
+        const UNMODELLED_BLOCK1_CHUNK2_OFFSET: usize = 0x2000;
 
         let block1 = sample_block1();
         let block2 = sample_block2();
         let mut store = SaveStore::new();
-        store.save(&block1, &block2); // slot 1, counter 1
+        store.save(&block1, &block2);
 
-        // Plant deferred bytes directly in the written slot's sectors,
-        // exactly as a save from a build that models more subsystems would
-        // have left them.
         let mut payload = block2.to_bytes();
-        payload[B2_DEFERRED] = 0x5A;
+        payload[UNMODELLED_BLOCK2_OFFSET] = 0x5A;
         let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
         let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
         store.write_physical(1, pos, &sector);
 
         let block1_bytes = block1.to_bytes(block2.encryption_key);
-        for (offset, value) in [(B1_DEFERRED_CHUNK0, 0xA5u8), (B1_DEFERRED_CHUNK2, 0xC3u8)] {
+        for (offset, value) in [
+            (UNMODELLED_BLOCK1_CHUNK0_OFFSET, 0xA5u8),
+            (UNMODELLED_BLOCK1_CHUNK2_OFFSET, 0xC3u8),
+        ] {
             let chunk_num = offset / SECTOR_DATA_SIZE;
             let id = SECTOR_ID_SAVEBLOCK1_START + u16::try_from(chunk_num).unwrap();
             let mut payload = chunk_of(&block1_bytes, chunk_num).to_vec();
@@ -930,46 +677,38 @@ mod tests {
             store.write_physical(1, pos, &sector);
         }
 
-        // Load (as CONTINUE does), then save the loaded state (as the next
-        // TrySavingData does) — the rotation writes the *other* slot.
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Ok);
-        store.save(&outcome.block1, &outcome.block2); // slot 0, counter 2
+        store.save(&outcome.block1, &outcome.block2);
 
-        // The new newest slot still carries every deferred byte, and the
-        // modeled fields still round-trip.
         let reloaded = store.load();
         assert_eq!(reloaded.status, SaveStatus::Ok);
         assert_eq!(store.save_counter(), 2, "the rotated slot is the winner");
-        assert_eq!(store.base_block2[B2_DEFERRED], 0x5A);
-        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK0], 0xA5);
-        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK2], 0xC3);
+        assert_eq!(store.base_block2[UNMODELLED_BLOCK2_OFFSET], 0x5A);
+        assert_eq!(store.base_block1[UNMODELLED_BLOCK1_CHUNK0_OFFSET], 0xA5);
+        assert_eq!(store.base_block1[UNMODELLED_BLOCK1_CHUNK2_OFFSET], 0xC3);
         assert_eq!(reloaded.block2, block2);
         assert_eq!(reloaded.block1.money, block1.money);
         assert_eq!(reloaded.block1.bag, block1.bag);
     }
 
-    /// The retention test's complement (#230 review, second round): a
-    /// session that never adopted the loaded blocks — a new game — calls
-    /// [`SaveStore::clear_base`], so the previous trainer's deferred bytes
-    /// do not ride into its first save.
     #[test]
     fn clear_base_drops_the_loaded_deferred_bytes_from_the_next_save() {
-        const B2_DEFERRED: usize = 0x10;
+        const UNMODELLED_BLOCK2_OFFSET: usize = 0x10;
 
         let block2 = sample_block2();
         let mut store = SaveStore::new();
-        store.save(&sample_block1(), &block2); // slot 1, counter 1
+        store.save(&sample_block1(), &block2);
 
         let mut payload = block2.to_bytes();
-        payload[B2_DEFERRED] = 0x5A;
+        payload[UNMODELLED_BLOCK2_OFFSET] = 0x5A;
         let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
         let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
         store.write_physical(1, pos, &sector);
 
         assert_eq!(store.load().status, SaveStatus::Ok);
         assert_eq!(
-            store.base_block2[B2_DEFERRED], 0x5A,
+            store.base_block2[UNMODELLED_BLOCK2_OFFSET], 0x5A,
             "the deferred byte is retained before the clear"
         );
 
@@ -978,7 +717,7 @@ mod tests {
 
         assert_eq!(store.load().status, SaveStatus::Ok);
         assert_eq!(
-            store.base_block2[B2_DEFERRED], 0,
+            store.base_block2[UNMODELLED_BLOCK2_OFFSET], 0,
             "a cleared base writes zeroed deferred bytes"
         );
     }
@@ -1026,7 +765,6 @@ mod tests {
         assert_eq!(store.save_counter() % 2, 1);
         let first_sector = store.read_physical(1, 0);
         assert_eq!(first_sector.signature(), SECTOR_SIGNATURE);
-        // The other physical slot must remain untouched (still zeroed).
         assert_ne!(store.read_physical(0, 0).signature(), SECTOR_SIGNATURE);
 
         store.save(&block1, &block2);
@@ -1044,21 +782,15 @@ mod tests {
         let block1 = sample_block1();
         let block2 = sample_block2();
 
-        // Two saves: slot 1 (counter 1) then slot 0 (counter 2) is current.
         store.save(&block1, &block2);
         store.save(&block1, &block2);
         assert_eq!(store.save_counter(), 2);
 
-        // Corrupt the SaveBlock2 payload byte in the *current* slot (slot
-        // 0). Rotation puts SECTOR_ID_SAVEBLOCK2 at whatever physical
-        // position `last_written_sector` currently selects, so look it up
-        // by footer id rather than assuming position 0.
         let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(0, sector_in_slot, 0);
 
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Error);
-        // Fell back to slot 1's (still-intact) data.
         assert_eq!(outcome.block2, block2);
         assert_eq!(store.save_counter(), 1);
     }
@@ -1086,13 +818,13 @@ mod tests {
     }
 
     #[test]
-    fn both_slots_corrupt_reports_corrupt_status() {
+    fn both_corrupt_slots_copy_slot_zero_and_recover_its_rotation() {
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
 
-        store.save(&block1, &block2); // slot 1
-        store.save(&block1, &block2); // slot 0
+        store.save(&block1, &block2);
+        store.save(&block1, &block2);
 
         let in_slot0 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         let in_slot1 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
@@ -1102,11 +834,6 @@ mod tests {
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Corrupt);
         assert_eq!(store.save_counter(), 0);
-        // `load` still scans slot 0 (gSaveCounter % NUM_SAVE_SLOTS == 0)
-        // and recovers the rotation offset from wherever
-        // SECTOR_ID_SAVEBLOCK2's footer id actually is, exactly as upstream
-        // `CopySaveSlotData` does unconditionally — even though the overall
-        // status is Corrupt.
         assert_eq!(
             store.last_written_sector(),
             u16::try_from(in_slot0).unwrap()
@@ -1115,25 +842,20 @@ mod tests {
 
     #[test]
     fn corrupting_the_last_saveblock2_payload_byte_is_detected() {
-        // The entire exact-size block, including deferred bytes, remains
-        // checksum-covered. Pin the final byte as a boundary regression.
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
 
-        store.save(&block1, &block2); // slot 1 (counter 1)
-        store.save(&block1, &block2); // slot 0 is current (counter 2)
+        store.save(&block1, &block2);
+        store.save(&block1, &block2);
 
         let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(0, sector_in_slot, SaveBlock2::PAYLOAD_LEN - 1);
 
-        // The sector must fail validation over the full 4-aligned span.
         assert!(!store
             .read_physical(0, sector_in_slot)
             .is_valid(SaveBlock2::PAYLOAD_LEN));
 
-        // And load must fall back to slot 1's intact copy, not return Ok with
-        // the corrupted trainer id.
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Error);
         assert_eq!(outcome.block2, block2);
@@ -1142,16 +864,10 @@ mod tests {
 
     #[test]
     fn copy_slot_follows_adopted_counter_parity_not_validation_winner() {
-        // Regression for `CopySaveSlotData`'s slot selection: upstream copies
-        // from `NUM_SECTORS_PER_SLOT * (gSaveCounter % NUM_SAVE_SLOTS)` —
-        // purely the adopted counter's parity, not which slot won validation.
-        // The footer counter is outside the payload checksum, so corrupting
-        // only the counter keeps a slot payload-valid while flipping its
-        // parity, making the two disagree.
+        const SAVE_COUNTER_OFFSET: usize = SECTOR_SIZE - size_of::<u32>();
+
         let mut store = SaveStore::new();
         let block1 = sample_block1();
-        // Distinguish the slots by trainer id so the copied slot is
-        // identifiable.
         let block2_slot1 = SaveBlock2 {
             player_trainer_id: [0x11; TRAINER_ID_LENGTH],
             ..sample_block2()
@@ -1161,21 +877,15 @@ mod tests {
             ..sample_block2()
         };
 
-        store.save(&block1, &block2_slot1); // slot 1, counter 1
-        store.save(&block1, &block2_slot0); // slot 0, counter 2 (physical winner)
+        store.save(&block1, &block2_slot1);
+        store.save(&block1, &block2_slot0);
 
-        // Flip the low byte of every sector's footer counter in slot 0:
-        // 2 -> 253 (`2 ^ 0xFF`). Still the newest (253 > 1) so slot 0 remains
-        // the validation winner, but now odd — the same parity divergence as
-        // the doc's "2 -> 3" example, reachable via the XOR-flip test hook.
-        // The payload checksum is untouched, so slot 0 stays fully valid.
         for i in 0..SECTORS_PER_SLOT {
-            store.corrupt_byte(0, i, SECTOR_SIZE - 4);
+            store.corrupt_byte(0, i, SAVE_COUNTER_OFFSET);
         }
 
         let outcome = store.load();
-        // Adopted counter is 253 (odd); upstream copies slot 253 % 2 == 1.
-        assert_eq!(store.save_counter(), 253);
+        assert_eq!(store.save_counter(), u32::from(!2u8));
         assert_eq!(outcome.status, SaveStatus::Ok);
         assert_eq!(
             outcome.block2, block2_slot1,
@@ -1185,40 +895,24 @@ mod tests {
 
     #[test]
     fn corrupt_recovery_with_intact_block2_decodes_encrypted_fields_to_plaintext_defaults() {
-        // Regression: when no intact fallback slot exists (overall status
-        // Corrupt) but the copied slot's SaveBlock2 sector still validates —
-        // recovering a nonzero encryption_key — a corrupt SaveBlock1 chunk-0
-        // sector (holding money at 0x490 and the whole bag at 0x560..0x848)
-        // must still decode those key-encrypted fields to plaintext defaults,
-        // not to `key`/`low16(key)`.
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
         assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
 
-        store.save(&block1, &block2); // slot 1, counter 1
-        store.save(&block1, &block2); // slot 0, counter 2 (copy slot after reset)
+        store.save(&block1, &block2);
+        store.save(&block1, &block2);
 
-        // Corrupt the parity-selected slot's (slot 0, since the reset counter
-        // is 0) SaveBlock1 chunk-0 sector, but leave its SaveBlock2 sector
-        // intact so the key is still recovered.
         let block1_chunk0 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK1_START);
         store.corrupt_byte(0, block1_chunk0, 0);
-        // Also corrupt slot 1 entirely (its SaveBlock2 sector) so there is no
-        // intact fallback slot: the overall status becomes Corrupt.
         let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(1, slot1_block2, 0);
 
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Corrupt);
-        // SaveBlock2 validated, so the nonzero key was recovered...
         assert_eq!(outcome.block2, block2);
-        // ...yet the corrupt SaveBlock1 chunk decodes to plaintext defaults,
-        // never `money == encryption_key`.
         assert_eq!(outcome.block1.money, 0);
         assert_ne!(outcome.block1.money, outcome.block2.encryption_key);
-        // Every bag slot — including the empty ones — must read quantity 0,
-        // not `low16(key)`.
         let bag = &outcome.block1.bag;
         for slot in bag
             .items
@@ -1238,41 +932,24 @@ mod tests {
 
     #[test]
     fn corrupt_recovery_without_a_recovered_key_decodes_encrypted_fields_to_plaintext_defaults() {
-        // Mirror of the case above: when no intact fallback slot exists
-        // (status Corrupt) and the copied slot's SaveBlock2 sector does *not*
-        // validate, no usable encryption_key is recovered (it falls back to
-        // 0). A SaveBlock1 chunk-0 sector that *does* validate then holds
-        // genuine ciphertext, which must still decode its key-encrypted fields
-        // (money at 0x490, bag quantities in 0x560..0x848) to plaintext
-        // defaults rather than leaking the raw ciphertext under key 0.
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
         assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
         assert_ne!(block1.money, 0, "test needs nonzero encrypted state");
 
-        store.save(&block1, &block2); // slot 1, counter 1
-        store.save(&block1, &block2); // slot 0, counter 2 (copy slot after reset)
+        store.save(&block1, &block2);
+        store.save(&block1, &block2);
 
-        // Corrupt only the parity-selected slot's (slot 0) SaveBlock2 sector,
-        // leaving its SaveBlock1 chunk-0 sector intact so the genuine
-        // money/bag ciphertext survives.
         let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(0, slot0_block2, 0);
-        // Also corrupt slot 1 so there is no intact fallback slot: the overall
-        // status becomes Corrupt.
         let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(1, slot1_block2, 0);
 
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Corrupt);
-        // No key was recovered (SaveBlock2 sector invalid).
         assert_eq!(outcome.block2.encryption_key, 0);
-        // The still-valid SaveBlock1 ciphertext must not leak: money must be
-        // the plaintext default 0, never `money ^ real_key`.
         assert_eq!(outcome.block1.money, 0);
-        // Every bag quantity must read the plaintext default 0, not raw
-        // ciphertext.
         let bag = &outcome.block1.bag;
         for slot in bag
             .items
@@ -1284,9 +961,6 @@ mod tests {
         {
             assert_eq!(slot.quantity, 0, "bag quantities must decode to 0");
         }
-        // item_ids are stored in the clear, so the validated chunk's genuine
-        // ids (from `sample_block1`) must survive the quantity-only cleanup —
-        // only the key-XOR'd quantity is reset, not the whole slot.
         assert_eq!(bag.items[0].item_id, 1);
         assert_eq!(bag.key_items[29].item_id, 2);
         assert_eq!(bag.poke_balls[15].item_id, 3);
@@ -1296,29 +970,19 @@ mod tests {
 
     #[test]
     fn checksum_valid_out_of_range_gender_retains_key_and_decrypts_bag() {
-        // Regression for issue #130: a SaveBlock2 sector whose checksum
-        // validates but whose raw gender byte is out of range must NOT be
-        // treated as a decode failure. Canonical `CopySaveSlotData` copies a
-        // checksum-valid sector byte-for-byte with no semantic gender check,
-        // so the encryption key must still be recovered and used to decrypt
-        // the rest of the slot.
         const PLAYER_GENDER_OFFSET: usize = 0x08;
+        const OUT_OF_RANGE_GENDER: u8 = 9;
+
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
         assert_ne!(block1.money, 0, "test needs nonzero encrypted state");
 
-        store.save(&block1, &block2); // slot 1, counter 1
-        store.save(&block1, &block2); // slot 0, counter 2 (current)
+        store.save(&block1, &block2);
+        store.save(&block1, &block2);
 
-        // Replace slot 0's SaveBlock2 sector with one whose payload carries an
-        // out-of-range gender byte but a *freshly recomputed* checksum, so it
-        // still passes `is_valid`. The counter matches the slot's (2) so
-        // slot 0 still scans as the winner. Slot 1 is left fully intact, so
-        // both slots validate — the newer slot must still win with
-        // `SaveStatus::Ok`, not fall back or downgrade to `Error`.
         let mut payload = block2.to_bytes();
-        payload[PLAYER_GENDER_OFFSET] = 9; // neither MALE (0) nor FEMALE (1)
+        payload[PLAYER_GENDER_OFFSET] = OUT_OF_RANGE_GENDER;
         let mutated_sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 2);
         assert!(mutated_sector.is_valid(SaveBlock2::PAYLOAD_LEN));
         let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
@@ -1327,26 +991,23 @@ mod tests {
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Ok);
         assert_eq!(store.save_counter(), 2, "the newer slot stays selected");
-        // The raw out-of-range gender byte survives losslessly...
-        assert_eq!(outcome.block2.player_gender, PlayerGender::Other(9));
-        // ...identity fields and the real encryption key are retained...
+        assert_eq!(
+            outcome.block2.player_gender,
+            PlayerGender::Other(OUT_OF_RANGE_GENDER)
+        );
         assert_eq!(outcome.block2.player_trainer_id, block2.player_trainer_id);
         assert_eq!(outcome.block2.encryption_key, block2.encryption_key);
-        // ...and money/bag decrypt to their saved plaintext, not zero.
         assert_eq!(outcome.block1.money, block1.money);
         assert_eq!(outcome.block1.bag, block1.bag);
     }
 
     #[test]
-    fn checksum_preserving_xor_mutation_keeps_newer_slot_selected() {
-        // Regression for issue #130's own reproduction: XOR two bytes that
-        // each sit at the low (least-significant) byte of a distinct
-        // little-endian u32 checksum word, one turning bit 0x08 on and the
-        // other turning the same bit off. `CalculateChecksum` sums whole
-        // little-endian u32 words, so the two +8/-8 deltas cancel and the
-        // *stored* footer checksum needs no recomputation at all — proving
-        // the corruption is checksum-invisible, not merely checksum-valid by
-        // construction.
+    fn equal_and_opposite_checksum_byte_mutations_keep_newer_slot_selected() {
+        const PLAYER_NAME_FIFTH_BYTE_OFFSET: usize = 0x04;
+        const PLAYER_GENDER_OFFSET: usize = 0x08;
+        const CHECKSUM_CANCELING_BIT: u8 = 1 << 3;
+        const OUT_OF_RANGE_GENDER: u8 = 9;
+
         let mut store = SaveStore::new();
         let older_block1 = sample_block1();
         let older_block2 = SaveBlock2 {
@@ -1357,23 +1018,20 @@ mod tests {
         let mut newer_block1 = sample_block1();
         newer_block1.pos.x = 222;
         let newer_block2 = SaveBlock2 {
-            // player_name[4] == 0x59 has bit 0x08 set, matching the issue's
-            // own repro constant, so XOR-ing it and the gender byte by 0x08
-            // moves the checksum by -8 and +8 respectively.
-            player_name: *b"RUST\x59\xFF\0\0",
-            player_gender: PlayerGender::Female, // raw byte 1: bit 0x08 clear
+            player_name: *b"RUSTY\xFF\0\0",
+            player_gender: PlayerGender::Female,
             player_trainer_id: [0x22; TRAINER_ID_LENGTH],
             encryption_key: 0xA1B2_C3D4,
         };
 
-        store.save(&older_block1, &older_block2); // slot 1, counter 1
-        store.save(&newer_block1, &newer_block2); // slot 0, counter 2 (current)
+        store.save(&older_block1, &older_block2);
+        store.save(&newer_block1, &newer_block2);
 
         let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         let before = store.read_physical(0, sector_in_slot);
         let mut bytes = *before.as_bytes();
-        bytes[0x08] ^= 0x08; // gender byte: FEMALE (1) -> out-of-range (9)
-        bytes[0x04] ^= 0x08; // player_name[4]: 0x59 -> 0x51, cancels the delta
+        bytes[PLAYER_GENDER_OFFSET] ^= CHECKSUM_CANCELING_BIT;
+        bytes[PLAYER_NAME_FIFTH_BYTE_OFFSET] ^= CHECKSUM_CANCELING_BIT;
         let mutated = Sector::from_bytes(bytes);
         assert_eq!(
             mutated.stored_checksum(),
@@ -1389,7 +1047,10 @@ mod tests {
         let outcome = store.load();
         assert_eq!(outcome.status, SaveStatus::Ok);
         assert_eq!(store.save_counter(), 2, "the newer counter stays selected");
-        assert_eq!(outcome.block2.player_gender, PlayerGender::Other(9));
+        assert_eq!(
+            outcome.block2.player_gender,
+            PlayerGender::Other(OUT_OF_RANGE_GENDER)
+        );
         assert_eq!(outcome.block2.encryption_key, newer_block2.encryption_key);
         assert_eq!(
             outcome.block2.player_trainer_id,
@@ -1402,9 +1063,6 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_male_gender() {
-        // Companion to `save_then_load_round_trips_identical_state` (which
-        // uses Female): an ordinary MALE (0) save must round-trip unchanged
-        // too, alongside the new `Other` gender coverage above.
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = SaveBlock2 {
@@ -1426,8 +1084,6 @@ mod tests {
         let block1 = sample_block1();
         let block2 = sample_block2();
 
-        // Exactly one save: only slot 1 has ever been written, slot 0
-        // stays fully empty (zeroed).
         store.save(&block1, &block2);
 
         let outcome = store.load();
@@ -1444,15 +1100,13 @@ mod tests {
             [3968, 3968, 3968, 3848]
         );
 
-        // A payload that exactly fills one chunk and spills one byte into
-        // the next.
-        let total = SECTOR_DATA_SIZE + 1;
-        assert_eq!(chunk_len(total, 0), SECTOR_DATA_SIZE);
-        assert_eq!(chunk_len(total, 1), 1);
-        assert_eq!(chunk_len(total, 2), 0);
+        let two_chunk_payload_len = SECTOR_DATA_SIZE + 1;
+        assert_eq!(chunk_len(two_chunk_payload_len, 0), SECTOR_DATA_SIZE);
+        assert_eq!(chunk_len(two_chunk_payload_len, 1), 1);
+        assert_eq!(chunk_len(two_chunk_payload_len, 2), 0);
 
-        // A payload smaller than one sector only fills chunk 0.
-        assert_eq!(chunk_len(10, 0), 10);
-        assert_eq!(chunk_len(10, 1), 0);
+        let short_payload_len = 10;
+        assert_eq!(chunk_len(short_payload_len, 0), short_payload_len);
+        assert_eq!(chunk_len(short_payload_len, 1), 0);
     }
 }

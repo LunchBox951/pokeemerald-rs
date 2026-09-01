@@ -21,7 +21,11 @@ use crate::layout::{EntryKind, FORMAT_VERSION, MAGIC};
 /// would otherwise speculatively allocate gigabytes up front, before the
 /// first short read fails the parse. The `Vec` still grows to whatever the
 /// file actually holds, so a valid pack is unaffected.
-const MAX_PREALLOC_ENTRIES: usize = 1024;
+const MAX_INITIAL_DIRECTORY_CAPACITY: usize = 1024;
+
+const IMAGE_KIND_TAG: u8 = 0;
+const PALETTE_KIND_TAG: u8 = 1;
+const RAW_KIND_TAG: u8 = 2;
 
 /// One parsed directory entry: an id, its kind metadata, and where its
 /// payload lives in the pack's byte buffer.
@@ -73,44 +77,47 @@ impl std::error::Error for PackReadError {}
 /// A minimal cursor over `&[u8]` for reading the fixed-width header and
 /// directory fields, erroring rather than panicking on truncation.
 #[derive(Debug)]
-struct Cursor<'a> {
+struct DirectoryReader<'a> {
     bytes: &'a [u8],
-    pos: usize,
+    position: usize,
 }
 
-impl<'a> Cursor<'a> {
+impl<'a> DirectoryReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self { bytes, position: 0 }
     }
 
-    fn take(&mut self, len: usize) -> Result<&'a [u8], PackReadError> {
-        let end = self.pos.checked_add(len).ok_or(PackReadError::Truncated)?;
+    fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], PackReadError> {
+        let end = self
+            .position
+            .checked_add(len)
+            .ok_or(PackReadError::Truncated)?;
         let slice = self
             .bytes
-            .get(self.pos..end)
+            .get(self.position..end)
             .ok_or(PackReadError::Truncated)?;
-        self.pos = end;
+        self.position = end;
         Ok(slice)
     }
 
-    fn u8(&mut self) -> Result<u8, PackReadError> {
-        Ok(self.take(1)?[0])
+    fn read_u8(&mut self) -> Result<u8, PackReadError> {
+        Ok(self.read_bytes(1)?[0])
     }
 
-    fn u16(&mut self) -> Result<u16, PackReadError> {
-        let b = self.take(2)?;
-        Ok(u16::from_le_bytes([b[0], b[1]]))
+    fn read_u16(&mut self) -> Result<u16, PackReadError> {
+        let bytes = self.read_bytes(2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    fn u32(&mut self) -> Result<u32, PackReadError> {
-        let b = self.take(4)?;
-        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    fn read_u32(&mut self) -> Result<u32, PackReadError> {
+        let bytes = self.read_bytes(4)?;
+        Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn u64(&mut self) -> Result<u64, PackReadError> {
-        let b = self.take(8)?;
+    fn read_u64(&mut self) -> Result<u64, PackReadError> {
+        let bytes = self.read_bytes(8)?;
         Ok(u64::from_le_bytes([
-            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
 
@@ -119,8 +126,8 @@ impl<'a> Cursor<'a> {
     /// doesn't fit `usize` — only reachable on a 32-bit target with an
     /// implausibly large (>4 GiB) pack, but a real, typed failure mode
     /// beats a silent wraparound.
-    fn usize(&mut self) -> Result<usize, PackReadError> {
-        usize::try_from(self.u64()?).map_err(|_| PackReadError::Truncated)
+    fn read_usize_from_u64(&mut self) -> Result<usize, PackReadError> {
+        usize::try_from(self.read_u64()?).map_err(|_| PackReadError::Truncated)
     }
 }
 
@@ -144,45 +151,45 @@ impl<'a> Cursor<'a> {
 /// reports as truncated too — the id length it declared cannot be trusted
 /// to have landed on a real field boundary).
 pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadError> {
-    let mut cursor = Cursor::new(bytes);
+    let mut reader = DirectoryReader::new(bytes);
 
-    let magic = cursor.take(8)?;
+    let magic = reader.read_bytes(MAGIC.len())?;
     if magic != MAGIC {
         return Err(PackReadError::BadMagic);
     }
-    let version = cursor.u32()?;
+    let version = reader.read_u32()?;
     if version != FORMAT_VERSION {
         return Err(PackReadError::UnsupportedVersion(version));
     }
-    let entry_count = cursor.u32()? as usize;
+    let entry_count = reader.read_u32()? as usize;
 
-    let mut entries = Vec::with_capacity(entry_count.min(MAX_PREALLOC_ENTRIES));
+    let mut entries = Vec::with_capacity(entry_count.min(MAX_INITIAL_DIRECTORY_CAPACITY));
     for _ in 0..entry_count {
-        let id_len = usize::from(cursor.u16()?);
-        let id_bytes = cursor.take(id_len)?;
+        let id_len = usize::from(reader.read_u16()?);
+        let id_bytes = reader.read_bytes(id_len)?;
         let id = std::str::from_utf8(id_bytes)
             .map_err(|_| PackReadError::Truncated)?
             .to_owned();
-        let kind_tag = cursor.u8()?;
-        let offset = cursor.usize()?;
-        let length = cursor.usize()?;
+        let kind_tag = reader.read_u8()?;
+        let offset = reader.read_usize_from_u64()?;
+        let length = reader.read_usize_from_u64()?;
 
         let kind = match kind_tag {
-            0 => {
-                let width = cursor.u32()?;
-                let height = cursor.u32()?;
-                let bit_depth = cursor.u8()?;
+            IMAGE_KIND_TAG => {
+                let width = reader.read_u32()?;
+                let height = reader.read_u32()?;
+                let bit_depth = reader.read_u8()?;
                 EntryKind::Image {
                     width,
                     height,
                     bit_depth,
                 }
             }
-            1 => {
-                let color_count = cursor.u16()?;
+            PALETTE_KIND_TAG => {
+                let color_count = reader.read_u16()?;
                 EntryKind::Palette { color_count }
             }
-            2 => EntryKind::Raw,
+            RAW_KIND_TAG => EntryKind::Raw,
             other => return Err(PackReadError::BadEntryKind(other)),
         };
 

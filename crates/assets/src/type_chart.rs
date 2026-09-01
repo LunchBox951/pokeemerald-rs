@@ -1,26 +1,11 @@
-//! Type-effectiveness chart (S-4): the first `std`-only data extraction.
+//! Battle type identities and ordered effectiveness rules.
 //!
-//! Ports the attacking-type-vs-defending-type damage multiplier table from the
-//! upstream reference `pokeemerald/src/battle_main.c` (`gTypeEffectiveness`),
-//! whose multiplier constants (`TYPE_MUL_*`) live in
-//! `pokeemerald/include/battle_main.h` and whose `TYPE_*` identifiers live in
-//! `pokeemerald/include/constants/pokemon.h`.
-//!
-//! The data is re-expressed idiomatically rather than copied `(no-verbatim)`
-//! and pinned to the upstream values by the unit tests below
-//! `(behavioral-fidelity)`. Extraction model: the upstream table was parsed at
-//! authoring time into the [`OVERRIDES`] list; the `chart_matches_golden_grid`
-//! test pins every one of the 289 ordered matchups against an independently
-//! transcribed golden grid, so no single transcribed entry can silently drift.
+//! [`TypeChart::rows`] retains `gTypeEffectiveness` table order because callers
+//! apply each matching rule with truncating arithmetic `(behavioral-fidelity)`.
 
 use crate::error::AssetError;
 
-/// A battle type, matching the upstream `TYPE_*` identifiers.
-///
-/// Discriminants mirror `pokeemerald/include/constants/pokemon.h` exactly,
-/// including the gap at id `9` — the upstream placeholder `TYPE_MYSTERY` (the
-/// non-combat "???" type) never appears in the effectiveness chart and is
-/// intentionally not modelled here.
+/// A combat type encoded with its canonical battle-data id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Type {
@@ -43,8 +28,10 @@ pub enum Type {
     Dark = 17,
 }
 
+const RESERVED_MYSTERY_TYPE_ID: u8 = 9;
+
 impl Type {
-    /// Every modelled battle type, in upstream id order.
+    /// Every combat type in id order.
     pub const ALL: [Type; 17] = [
         Type::Normal,
         Type::Fighting,
@@ -65,18 +52,17 @@ impl Type {
         Type::Dark,
     ];
 
-    /// The upstream `TYPE_*` id for this type.
+    /// This type's battle-data id.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Resolve an upstream `TYPE_*` id into a [`Type`].
+    /// Resolves a battle-data id into a combat type.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownType`] if `id` is not one of the seventeen
-    /// modelled combat types (this includes `9`, the reserved `TYPE_MYSTERY`).
+    /// Returns [`AssetError::UnknownType`] for reserved or unknown ids.
     pub fn from_id(id: u8) -> Result<Self, AssetError> {
         match id {
             0 => Ok(Self::Normal),
@@ -96,44 +82,35 @@ impl Type {
             15 => Ok(Self::Ice),
             16 => Ok(Self::Dragon),
             17 => Ok(Self::Dark),
+            RESERVED_MYSTERY_TYPE_ID => Err(AssetError::UnknownType(id)),
             other => Err(AssetError::UnknownType(other)),
         }
     }
 }
 
-/// How effective an attacking type is against a defending type.
-///
-/// Maps to the upstream `TYPE_MUL_*` fixed-point (times-ten) multipliers.
+/// A type matchup's fixed-point damage multiplier, scaled by ten.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum Effectiveness {
-    /// No effect — `TYPE_MUL_NO_EFFECT` (x0).
-    NoEffect,
-    /// Not very effective — `TYPE_MUL_NOT_EFFECTIVE` (x0.5).
-    NotVeryEffective,
-    /// Neutral — `TYPE_MUL_NORMAL` (x1); the default for any unlisted pairing.
-    Normal,
-    /// Super effective — `TYPE_MUL_SUPER_EFFECTIVE` (x2).
-    SuperEffective,
+    NoEffect = 0,
+    NotVeryEffective = 5,
+    Normal = 10,
+    SuperEffective = 20,
 }
 
 impl Effectiveness {
-    /// The upstream fixed-point multiplier scaled by ten (`TYPE_MUL_*`): `0`,
-    /// `5`, `10`, or `20`. Divide by ten for the real multiplier.
+    /// Returns the damage multiplier scaled by ten.
     #[must_use]
     pub const fn multiplier_x10(self) -> u8 {
-        match self {
-            Self::NoEffect => 0,
-            Self::NotVeryEffective => 5,
-            Self::Normal => 10,
-            Self::SuperEffective => 20,
-        }
+        self as u8
     }
 }
 
-/// The single-type matchups that differ from neutral, transcribed from
-/// upstream `gTypeEffectiveness`. Every pairing absent from this list is
-/// [`Effectiveness::Normal`].
-const OVERRIDES: &[(Type, Type, Effectiveness)] = &[
+type EffectivenessRule = (Type, Type, Effectiveness);
+
+const FORESIGHT_BYPASSED_IMMUNITIES_START: usize = 108;
+
+const ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES: &[EffectivenessRule] = &[
     (Type::Normal, Type::Rock, Effectiveness::NotVeryEffective),
     (Type::Normal, Type::Steel, Effectiveness::NotVeryEffective),
     (Type::Fire, Type::Fire, Effectiveness::NotVeryEffective),
@@ -270,59 +247,47 @@ const OVERRIDES: &[(Type, Type, Effectiveness)] = &[
     (Type::Steel, Type::Ice, Effectiveness::SuperEffective),
     (Type::Steel, Type::Rock, Effectiveness::SuperEffective),
     (Type::Steel, Type::Steel, Effectiveness::NotVeryEffective),
-    // --- entries below sit after the TYPE_FORESIGHT separator in the
-    //     upstream table (immunities that Foresight/Scrappy bypass) ---
     (Type::Normal, Type::Ghost, Effectiveness::NoEffect),
     (Type::Fighting, Type::Ghost, Effectiveness::NoEffect),
 ];
 
-/// Number of index slots needed to address types by their upstream id.
-///
-/// Ids run `0..=17` (with `9` unused), so the dense matrix is `18` wide.
-const TYPE_SLOTS: usize = 18;
+const TYPE_SLOTS: usize = Type::Dark as usize + 1;
 
-/// The type-effectiveness chart: an owned lookup from
-/// `(attacker, defender)` to [`Effectiveness`] `(oop-boundaries)`.
+/// An owned lookup of single-type effectiveness.
 #[derive(Debug, Clone)]
 pub struct TypeChart {
     matrix: [[Effectiveness; TYPE_SLOTS]; TYPE_SLOTS],
 }
 
 impl TypeChart {
-    /// Build the chart from the extracted upstream data.
+    /// Builds the canonical chart.
     #[must_use]
     pub fn new() -> Self {
         let mut matrix = [[Effectiveness::Normal; TYPE_SLOTS]; TYPE_SLOTS];
-        for &(attacker, defender, effectiveness) in OVERRIDES {
+        for &(attacker, defender, effectiveness) in ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES {
             matrix[attacker.id() as usize][defender.id() as usize] = effectiveness;
         }
         Self { matrix }
     }
 
-    /// The effectiveness of an `attacker`-type move against a `defender` type.
+    /// Returns the effectiveness of `attacker` against `defender`.
     #[must_use]
     pub fn multiplier(&self, attacker: Type, defender: Type) -> Effectiveness {
         self.matrix[attacker.id() as usize][defender.id() as usize]
     }
 
-    /// The upstream `gTypeEffectiveness` rows, in **table order**
-    /// (`pokeemerald/src/battle_main.c`). Only non-neutral pairings appear —
-    /// a pairing absent here is `x1` and upstream never modulates it.
+    /// Returns non-neutral rules in canonical application order.
     ///
-    /// The order is observable `(behavioral-fidelity)`: `Cmd_typecalc` scans
-    /// this table linearly and modulates damage at each matching row, and
-    /// because every step truncates then floors, applying `x0.5` before `x2`
-    /// can differ by one from the reverse. Callers reproducing upstream's
-    /// per-slot modulation must walk these rows in order rather than loop
-    /// over defender type slots.
-    ///
-    /// The final two rows (Normal/Fighting vs Ghost) sit past the upstream
-    /// `TYPE_FORESIGHT` sentinel: a scan *without* Foresight active
-    /// processes them (upstream skips only the sentinel row itself); a
-    /// Foresight-aware caller stops before them.
+    /// Callers must preserve this order because each multiplication truncates.
     #[must_use]
     pub fn rows() -> &'static [(Type, Type, Effectiveness)] {
-        OVERRIDES
+        ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES
+    }
+
+    /// Returns the ordered rules applied while Foresight is active.
+    #[must_use]
+    pub fn rows_with_foresight() -> &'static [(Type, Type, Effectiveness)] {
+        &ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES[..FORESIGHT_BYPASSED_IMMUNITIES_START]
     }
 }
 
@@ -334,12 +299,13 @@ impl Default for TypeChart {
 
 #[cfg(test)]
 mod tests {
-    use super::{Effectiveness, Type, TypeChart, OVERRIDES};
+    use super::{
+        Effectiveness, Type, TypeChart, ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES,
+        RESERVED_MYSTERY_TYPE_ID,
+    };
 
     #[test]
     fn id_matches_upstream_constants() {
-        // Anchor every discriminant to its absolute upstream `TYPE_*` id
-        // (constants/pokemon.h), including the id-9 `TYPE_MYSTERY` gap.
         let expected = [
             (Type::Normal, 0),
             (Type::Fighting, 1),
@@ -362,6 +328,7 @@ mod tests {
         for (ty, id) in expected {
             assert_eq!(ty.id(), id, "{ty:?} id");
         }
+        assert_eq!(RESERVED_MYSTERY_TYPE_ID, 9);
     }
 
     #[test]
@@ -419,7 +386,6 @@ mod tests {
 
     #[test]
     fn every_no_effect_pairing_is_present() {
-        // Upstream has exactly seven x0 entries; assert each one explicitly.
         let chart = TypeChart::new();
         let immune = [
             (Type::Electric, Type::Ground),
@@ -457,9 +423,9 @@ mod tests {
     }
 
     #[test]
-    fn overrides_have_no_duplicate_pairings() {
-        for (i, a) in OVERRIDES.iter().enumerate() {
-            for b in &OVERRIDES[i + 1..] {
+    fn ordered_rules_have_no_duplicate_pairings() {
+        for (i, a) in ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES.iter().enumerate() {
+            for b in &ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES[i + 1..] {
                 assert!(
                     !(a.0 == b.0 && a.1 == b.1),
                     "duplicate override for {:?} -> {:?}",
@@ -471,20 +437,25 @@ mod tests {
     }
 
     #[test]
-    fn no_override_is_neutral() {
-        for &(_, _, eff) in OVERRIDES {
+    fn no_ordered_rule_is_neutral() {
+        for &(_, _, eff) in ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES {
             assert_ne!(eff, Effectiveness::Normal);
         }
     }
 
     #[test]
+    fn foresight_boundary_precedes_bypassed_ghost_immunities() {
+        assert_eq!(
+            &TypeChart::rows()[TypeChart::rows_with_foresight().len()..],
+            &[
+                (Type::Normal, Type::Ghost, Effectiveness::NoEffect),
+                (Type::Fighting, Type::Ghost, Effectiveness::NoEffect),
+            ]
+        );
+    }
+
+    #[test]
     fn chart_matches_golden_grid() {
-        // Exact per-pair equivalence check. `GOLDEN` is an independent
-        // transcription of `gTypeEffectiveness` as a 17x17 grid: rows are the
-        // attacker, columns the defender, both in `Type::ALL` order. Codes:
-        // `.` neutral, `-` not-very-effective, `+` super-effective, `0` no
-        // effect. Because it is a second, differently-shaped encoding of the
-        // upstream data, any single drifted `OVERRIDES` entry fails here.
         const GOLDEN: [&str; 17] = [
             ".....-.0-........",
             "+.--.+-0+....-+.+",
@@ -526,11 +497,6 @@ mod tests {
 
     #[test]
     fn full_distribution_matches_upstream() {
-        // Aggregate cross-check against the upstream distribution: over all
-        // 17x17 ordered pairs the category counts must match
-        // `gTypeEffectiveness` exactly (57 not-very-effective, 46 super-
-        // effective, 7 no-effect, rest neutral). Exact per-pair pinning is
-        // done by `chart_matches_golden_grid`; this guards the totals.
         let chart = TypeChart::new();
         let (mut no, mut not, mut sup, mut neutral) = (0, 0, 0, 0);
         for atk in Type::ALL {
@@ -547,6 +513,10 @@ mod tests {
         assert_eq!(not, 57, "not-very-effective count");
         assert_eq!(sup, 46, "super-effective count");
         assert_eq!(neutral, 17 * 17 - 110, "neutral count");
-        assert_eq!(OVERRIDES.len(), 110, "override count");
+        assert_eq!(
+            ORDERED_NON_NEUTRAL_EFFECTIVENESS_RULES.len(),
+            110,
+            "rule count"
+        );
     }
 }

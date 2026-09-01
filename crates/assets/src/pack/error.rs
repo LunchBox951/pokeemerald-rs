@@ -1,127 +1,83 @@
-//! [`PackError`]: the pack loader's error type.
-//!
-//! Kept separate from [`crate::error::AssetError`] — see `crate::pack`'s
-//! module docs for why.
+//! Asset-pack loading and lookup failures.
 
 use std::fmt;
 use std::path::PathBuf;
 
 use crate::audio::AudioError;
 
-/// An error produced while loading or querying an [`AssetPack`](crate::pack::AssetPack).
-///
-/// A concrete, dedicated enum, separate from [`crate::error::AssetError`]
-/// — see the `pack` module docs for why.
+/// A failure while loading or querying an [`AssetPack`](crate::pack::AssetPack).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackError {
-    /// No file exists at the given path. This is the "missing pack"
-    /// diagnostic Discussion #71 required: its [`Display`](fmt::Display)
-    /// message names the exact command for both audiences the pack has,
-    /// a player who imports their own ROM (`--import-rom`) and a developer
-    /// who extracts from a checkout (`cargo xtask extract`). Carries the
-    /// path that was checked.
+    /// No file exists at the requested path.
     NotFound(PathBuf),
-    /// Reading the pack file failed for a reason other than "missing"
-    /// (permissions, I/O error, ...). Carries the path and the underlying
-    /// error's rendered message.
+    /// Reading the pack failed for another I/O reason.
     ReadFailed(PathBuf, String),
-    /// The pack file's first 8 bytes were not [`super::format::MAGIC`].
+    /// The file does not begin with [`super::format::MAGIC`].
     BadMagic,
-    /// The pack file's format version did not match
-    /// [`super::format::FORMAT_VERSION`]. Carries the version found.
+    /// The file declares a version other than [`super::format::FORMAT_VERSION`].
     UnsupportedVersion(u32),
-    /// The pack file was shorter than its own header/directory declared —
-    /// truncated or corrupt.
+    /// The header or directory is malformed, or a payload range lies outside the file.
     Truncated,
-    /// A pack entry's `kind` byte was not one of the three the format
-    /// defines (0/1/2). Carries the offending byte.
+    /// A directory entry has an unrecognized content-kind tag.
     BadEntryKind(u8),
-    /// No entry with the given normalized asset id exists in the pack.
-    /// Carries the id that was looked up.
+    /// The pack has no entry with the requested asset id.
     UnknownAsset(String),
-    /// An entry with the given id exists, but as a different
-    /// [`super::EntryKind`] than the accessor asked for. Carries the id,
-    /// what the caller asked for, and what kind the entry actually is
-    /// (both as short labels, e.g. `"image"`/`"palette"`/`"raw blob"`).
+    /// An entry's [`super::EntryKind`] differs from the requested kind.
     WrongKind {
-        /// The id that was looked up.
+        /// Requested asset id.
         id: String,
-        /// What the caller asked for.
+        /// Requested content-kind label.
         expected: &'static str,
-        /// What kind the entry actually is.
+        /// Stored content-kind label.
         actual: &'static str,
     },
-    /// A text-window palette entry exists but is not the exact 16-colour,
-    /// 32-byte GBA palette bank the typed window handles document
-    /// ([`WindowFrameHandle`](crate::pack::WindowFrameHandle)). Extraction
-    /// enforces this shape on write; this error surfaces a corrupt or
-    /// hand-built pack whose metadata or payload disagrees on read.
+    /// A text-window palette is not one complete 16-colour GBA palette bank.
     MalformedTextWindowPalette {
-        /// The id that was looked up.
+        /// Palette asset id.
         id: String,
-        /// The entry's declared colour count.
+        /// Declared colour count.
         color_count: u16,
-        /// The entry's actual payload length in bytes.
+        /// Payload length in bytes.
         byte_len: usize,
     },
-    /// A text-window frame's tile bitmap is not the exact shape its frame
-    /// kind requires (24x24 for the selectable border frames — a 3x3 grid
-    /// of 8x8 tiles — or 56x16 for the default message box). A corrupt or
-    /// hand-built pack could otherwise hand a renderer an incomplete
-    /// border. Surfaced on read; extraction enforces the same shapes on
-    /// write.
+    /// A text-window image has dimensions that do not match its frame kind.
     TextWindowImageWrongDimensions {
-        /// The tile bitmap entry's id.
+        /// Image asset id.
         id: String,
-        /// The entry's declared width in pixels.
+        /// Declared width in pixels.
         width: u32,
-        /// The entry's declared height in pixels.
+        /// Declared height in pixels.
         height: u32,
-        /// The width this frame kind requires.
+        /// Required width in pixels.
         expected_width: u32,
-        /// The height this frame kind requires.
+        /// Required height in pixels.
         expected_height: u32,
     },
-    /// A text-window frame's tile bitmap entry's payload length disagrees
-    /// with its own declared `width * height` pixel count — a corrupt or
-    /// hand-built pack whose [`ImageRef`](crate::pack::ImageRef)
-    /// pixel-count invariant would be false. Surfaced on read; the
-    /// extraction writer always emits matching lengths.
+    /// A text-window image's payload length differs from its declared pixel count.
     MalformedTextWindowImage {
-        /// The tile bitmap entry's id.
+        /// Image asset id.
         id: String,
-        /// The entry's declared width in pixels.
+        /// Declared width in pixels.
         width: u32,
-        /// The entry's declared height in pixels.
+        /// Declared height in pixels.
         height: u32,
-        /// The entry's actual payload length in bytes.
+        /// Payload length in bytes.
         byte_len: usize,
     },
-    /// A text-window frame's tile bitmap holds a pixel index its bundled
-    /// palette cannot map (possible in a corrupt or hand-built pack
-    /// carrying an 8-bit-indexed image entry alongside a valid 16-colour
-    /// palette). Extraction rejects such a pair on write; this error
-    /// surfaces the same defect on read.
+    /// A text-window image contains an index outside its bundled palette.
     TextWindowPixelOutsidePalette {
-        /// The tile bitmap entry's id.
+        /// Image asset id.
         id: String,
-        /// The offending pixel value.
+        /// Out-of-range palette index.
         pixel: u8,
-        /// The bundled palette's colour count.
+        /// Bundled palette length.
         palette_len: u16,
     },
-    /// An `audio/song/*`, `audio/voicegroup/*`, or `audio/sample/*` entry
-    /// exists as [`super::EntryKind::Raw`] (so [`super::AssetPack::raw`]
-    /// itself succeeded) but its bytes failed the schema's own structural
-    /// decode ([`AudioError`], from [`crate::audio::Song::decode`],
-    /// [`crate::audio::VoiceGroup::decode`], or
-    /// [`crate::audio::Sample::decode`]) — a corrupt or stale pack, since
-    /// extraction always writes a schema's own `encode` output. Carries the
-    /// id that was looked up and the underlying decode error.
+    /// A raw audio entry failed its schema's structural decode.
     AudioDecode {
-        /// The id that was looked up.
+        /// Audio asset id.
         id: String,
-        /// The schema decode failure.
+        /// Underlying schema error.
         source: AudioError,
     },
 }
@@ -213,9 +169,7 @@ impl fmt::Display for PackError {
 
 impl std::error::Error for PackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // Every variant is spelled out (the `crates/platform` `source()`
-        // precedent): a future source-carrying variant then fails to compile
-        // here instead of silently reporting an empty cause chain.
+        // An exhaustive match forces new source-carrying variants to choose their error chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
             Self::NotFound(_)
