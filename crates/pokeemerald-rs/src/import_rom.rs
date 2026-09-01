@@ -409,10 +409,15 @@ fn import_to_with(
     // follow: which entries a successful run has to leave durable, and which
     // directories a failed one takes back with it.
     let created = directories_to_create(&dir);
-    fs::create_dir_all(&dir).map_err(|source| ImportRomError::CreateDirFailed {
-        path: dir.clone(),
-        source,
-    })?;
+    if let Err(source) = fs::create_dir_all(&dir) {
+        // `create_dir_all` can fail after creating outer levels; take those
+        // back too, not just the levels of a fully created destination.
+        undo_created_directories(&created);
+        return Err(ImportRomError::CreateDirFailed {
+            path: dir.clone(),
+            source,
+        });
+    }
     sync_created_directories(&created);
 
     // Everything from here on names files inside this one handle. A
@@ -577,8 +582,9 @@ fn names_a_directory(pack_path: &Path) -> bool {
 /// and so has nothing to undo.
 ///
 /// A component that exists but is *not* a directory is listed like a
-/// missing one. `create_dir_all` then fails on it and the list is never
-/// used, so distinguishing the two here would buy nothing.
+/// missing one. `create_dir_all` then fails on it and the failure path's
+/// [`undo_created_directories`] skips it, so distinguishing the two here
+/// would buy nothing.
 fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
     let mut missing = Vec::new();
     let mut current = Some(dir);
@@ -632,7 +638,16 @@ fn sync_created_directories(created: &[PathBuf]) {
 fn undo_created_directories(created: &[PathBuf]) {
     for dir in created.iter().rev() {
         if fs::remove_dir(dir).is_err() {
-            break;
+            // A partial `create_dir_all` never made this level -- it is
+            // missing, unnameable, or the non-directory component it tripped
+            // on -- and the outer levels it did create still get taken back.
+            // A level that still stands as a directory refused removal for
+            // real (it holds something), so the levels above hold it too and
+            // are not this run's to take back.
+            match fs::symlink_metadata(dir) {
+                Ok(meta) if meta.is_dir() => break,
+                _ => {}
+            }
         }
     }
 }

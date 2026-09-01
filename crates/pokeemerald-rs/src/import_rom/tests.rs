@@ -263,6 +263,27 @@ fn a_failed_import_keeps_the_levels_it_did_not_create() {
 }
 
 #[test]
+fn a_failed_directory_creation_removes_the_levels_it_created() {
+    // `create_dir_all` itself can fail part-way: the overlong component
+    // trips it after `new/` is already on disk. The prefix it created is
+    // the same litter as any other failed import's.
+    let dir = TempDir::new("undo-partial-create");
+    let outer = dir.join("new");
+    let overlong = "x".repeat(300);
+    let pack_path = outer.join(&overlong).join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-partial-create-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::CreateDirFailed { .. }));
+    assert!(!outer.exists(), "the level the failed creation made goes");
+    assert!(file_names(&dir.path).is_empty());
+}
+
+#[test]
 fn an_import_into_an_existing_directory_leaves_it_alone() {
     let dir = TempDir::new("keep-dir");
     let pack_path = dir.join("pokeemerald.pack");
