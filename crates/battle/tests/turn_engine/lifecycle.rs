@@ -171,6 +171,13 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
             .any(|e| matches!(e, BattleEvent::ExpGained(_))),
         "a level-100 player gains no exp and sees no exp event: {events:?}"
     );
+    assert_eq!(
+        battle.player().evs(),
+        battle::Evs::default(),
+        "a MAX_LEVEL recipient is excluded from `MonGainEVs` \
+         too -- the same `Cmd_getexp` case 2 guard that zeroes the exp \
+         award skips the whole body, `gain_evs` included"
+    );
     assert_eq!(rng.draws(), 7);
 }
 
