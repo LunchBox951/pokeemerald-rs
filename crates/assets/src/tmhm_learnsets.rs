@@ -133,6 +133,7 @@ impl TmHmLearnsets {
     }
 
     /// Returns the compatibility mask for `species`, or `None` for an unknown identity.
+    /// Bit `i` indicates compatibility with the machine whose slot index is `i`.
     #[must_use]
     pub fn mask(&self, species: SpeciesId) -> Option<u64> {
         self.masks.get(species.0 as usize).copied()
