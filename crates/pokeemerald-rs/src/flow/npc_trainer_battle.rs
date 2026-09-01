@@ -186,6 +186,7 @@ fn party_personalities(
 ///
 /// Returns [`NpcTrainerBattleError::UnnamedCharacter`] when a name cannot be encoded,
 /// [`NpcTrainerBattleError::HeldItemParty`] for a held-item party, or a battle data error.
+#[cfg(test)]
 pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
     let trainer = battle::trainer_data(id)?;
     let entries = party_entries(id, trainer)?;
@@ -213,7 +214,7 @@ pub fn start_npc_trainer_battle(
     let dex = Dex::new();
     let data = battle::trainer_data(trainer)?;
     let entries = party_entries(trainer, data)?;
-    let personalities = trainer_party_personalities(trainer)?;
+    let personalities = party_personalities(data, &entries)?;
 
     let movesets: Vec<Vec<MoveId>> = entries
         .iter()
