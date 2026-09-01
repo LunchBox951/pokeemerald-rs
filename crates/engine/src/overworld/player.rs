@@ -91,6 +91,8 @@ impl Landing {
 
 impl PlayerState {
     /// Creates a stationary player on `position`.
+    ///
+    /// Collision and render elevations both start at `elevation`.
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
@@ -171,9 +173,25 @@ impl PlayerState {
 
     /// Applies one directional-input poll.
     ///
-    /// Input is ignored during a tile crossing. From rest, a new direction
-    /// turns the player; during a movement streak, it starts a step. Step
-    /// attempts test impassability, elevation, then local object occupancy.
+    /// Input is ignored during a tile crossing.
+    ///
+    /// # Turn vs. step
+    ///
+    /// A direction change turns in place unless a movement streak is active.
+    /// Every attempted step starts or continues that streak, including a blocked
+    /// attempt. An accepted poll without directional input ends the streak.
+    ///
+    /// # Collision
+    ///
+    /// Same-map steps test impassability, elevation, then visible object
+    /// occupancy. Connection landings omit neighbouring behaviour attributes and
+    /// object events because [`ConnectedMapData`] does not expose them.
+    ///
+    /// # Elevation adoption
+    ///
+    /// A successful landing adopts its elevation for collision. Render elevation
+    /// changes only for a non-transition landing. If either endpoint is
+    /// multi-level, both elevation values remain unchanged.
     pub fn step(
         &mut self,
         input: Option<Direction>,
