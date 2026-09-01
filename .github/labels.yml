@@ -41,6 +41,9 @@
 - name: needs-review
   color: "d4c5f9"
   description: Awaiting maintainer or routine review before it can advance.
+- name: needs-split
+  color: "c5def5"
+  description: Valid work too large for one agent session; a later pass splits it into sub-issues.
 - name: needs-operator
   color: "e99695"
   description: Blocked on a genuine human decision, incl. player-channel promotion signoff.

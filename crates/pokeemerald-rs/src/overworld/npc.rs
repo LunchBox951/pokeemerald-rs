@@ -1,151 +1,21 @@
-//! NPC/prop object-event rendering (I-3, issue #161): generalizes
-//! [`super::avatar`]'s player OBJ machinery to the current map's other
-//! [`assets::ObjectEvent`]s.
+//! Renders stationary object events backed by supported 16x32 people sprites.
 //!
-//! # Scope: which graphics ids actually draw a sprite
+//! [`resolve_sprite_source`] is the complete graphics-id binding table. Hidden
+//! events are filtered through [`visible_object_events`], the same visibility
+//! used for interaction. A visible unsupported event remains interaction-ready
+//! but produces no [`OamEntry`]. `OBJ_EVENT_GFX_VAR_0` binds only when its
+//! event variable contains one of the two Route 103 rival ids; decoration slots
+//! remain unsupported. A decoration slice that clears a `FLAG_DECORATION_n`
+//! hide flag must first write that slot's `VAR_OBJ_GFX_ID_0 + n`, or the
+//! persistent rival id resolves the decoration to a rival sprite.
 //!
-//! Every visible object event is *tracked* (hide-flag filtered, available to
-//! [`engine::overworld::facing_object_event`] for interaction) regardless of
-//! its `graphics_id`, but only a bounded, explicitly resolved set of ids
-//! actually contribute an [`OamEntry`] here -- [`resolve_sprite_source`]'s
-//! own match arms are the full list. Two shapes are modelled:
+//! Object events retain their initial movement-facing frame. Their positions
+//! share [`super::viewport::camera_lag_px`] with the background during a step.
 //!
-//! - **`Standard`**: twenty ordinary 16x32 "standing" NPCs -- the original
-//!   eight (Mom, the twin, the fat man, boy 2, Professor Birch, woman 4,
-//!   Norman, scientist 1) plus, since issue #262, Oldale Town's girl
-//!   (`GIRL_3`) and mart employee (`MART_EMPLOYEE`), the footprints
-//!   man/maniac (`MANIAC`), and Route 103's own background NPCs/trainers
-//!   (`BLACK_BELT`, `BOY_1`, `FISHERMAN`, `MAN_3`, `MAN_5`, `POKEFAN_M`,
-//!   `SWIMMER_F`, `SWIMMER_M`, `WOMAN_2`) -- that all share the exact
-//!   upstream `overworld_frame(<pic>, 2, 4, n)` 9-frame layout
-//!   [`super::avatar::pack_people_sheet_frames`] already knows how to pack,
-//!   drawn from one of the four generic `npc_1..4` palettes
-//!   (`OBJ_EVENT_PAL_TAG_NPC_1..4`, transcribed from each id's own
-//!   `gObjectEventGraphicsInfo_*.paletteTag` -- `object_event_graphics_info.h`)
-//!   -- **plus** the two rival variants
-//!   (`OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`/`_RIVAL_MAY_NORMAL`), which
-//!   upstream gives the *protagonists'* own walking sheets and palettes
-//!   rather than any rival-specific art, at
-//!   `.paletteSlot = PALSLOT_NPC_SPECIAL` ([`OTHER_PROTAGONIST_BANK`]).
-//! - **`PlayerCharacter`**: the degenerate case of the above -- a rival
-//!   variant that happens to *be* this run's own protagonist, whose sheet
-//!   and palette [`super::OverworldScene`] has already loaded at base tile
-//!   `0` / bank `0`, so nothing extra is decoded. Not reachable in the
-//!   bundled data (a house's resident rival object is hidden while you live
-//!   there), but resolved rather than special-cased --
-//!   [`protagonist_source`] has the full reasoning, including why the rival
-//!   you can actually meet is always the *opposite* protagonist.
-//!
-//! Twenty-three [`resolve_sprite_source`] arms in total -- twenty-two
-//! fixed-id arms, **all of which resolve for either [`PlayerCharacter`]**,
-//! plus the live `OBJ_EVENT_GFX_VAR_0` indirection below (issue #248) --
-//! covering twenty-two of the **46** distinct `graphics_id`s the nine
-//! bundled maps' object events actually reference on a fresh store (Route
-//! 101, since issue #177, adds three unresolved ids -- the youngster,
-//! Birch's starter bag, and the wild Zigzagoon -- to the six
-//! Littleroot-family maps' own 29, and Oldale Town / Route 103, since issue
-//! #248, add fourteen of their own -- twelve background-NPC ids, all twelve
-//! of which issue #262 now binds, plus Route 103's two unresolved props
-//! (`OBJ_EVENT_GFX_BERRY_TREE` and `OBJ_EVENT_GFX_CUTTABLE_TREE`);
-//! `resolve_sprite_source_covers_the_reachable_graphics_ids`
-//! pins that exact partition, and that it is gender-independent, so a newly
-//! reachable standard NPC cannot silently stop drawing).
-//!
-//! **Not drawn** (still hide-flag tracked, just no [`OamEntry`]):
-//! decorations (`OBJ_EVENT_GFX_VAR_*`, upstream's variable-graphics
-//! decoration system -- no decoration-placement save state or graphics-id
-//! resolution table exists here), inanimate props/dolls/the moving truck
-//! (different OAM shapes and sizes -- `48x48`/`16x16` -- than the uniform
-//! 16x32 this module's OAM building assumes), and the two non-16x32-vertical
-//! NPCs in scope's own reachable maps (Vigoroth, `32x32`; the rival's
-//! sibling -- the ninja boy declared only by
-//! `LittlerootTown_BrendansHouse_1F`/`LittlerootTown_MaysHouse_1F`'s own
-//! `map.json`, not by Route 103 -- `16x16`,
-//! `gObjectEventGraphicsInfo_NinjaBoy.width/height`,
-//! `object_event_graphics_info.h:115-132` -- upstream draws him from a
-//! smaller OAM shape than every other object event this module resolves,
-//! and stays out of scope for the same reason Vigoroth does: this module's
-//! [`oam_entries`] hard-codes [`avatar::PLAYER_OBJ_SHAPE`]/`_SIZE` for
-//! every entry it builds, so binding a non-16x32 id here today would
-//! mis-render it at the wrong shape rather than leave it merely undrawn --
-//! collision/interaction are unaffected either way, since hide-flag
-//! tracking never depended on a sprite binding existing). A future slice
-//! can extend [`resolve_sprite_source`] and this module's OAM building to
-//! cover them; nothing here silently mis-renders them as 16x32.
-//!
-//! **One `OBJ_EVENT_GFX_VAR_0` exception (I-5, issue #248).** Route 103's
-//! rival object event shares that exact `graphics_id` string with every
-//! bedroom decoration placeholder above -- upstream's
-//! `GetObjectEventGraphicsInfo` resolves `OBJ_EVENT_GFX_VAR_n` through
-//! `VAR_OBJ_GFX_ID_0 + n` (`event_object_movement.c:1914-1931`, `n == 0`
-//! here), a live indirection through event data rather than a fixed id, so
-//! the two cases can only be told apart by *what the var currently holds*,
-//! not by the graphics-id string alone. [`resolve_sprite_source`] therefore
-//! reads [`VAR_OBJ_GFX_ID_0`] and resolves to a rival
-//! ([`protagonist_source`]) only when it holds
-//! `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`'s or `_MAY_NORMAL`'s own numeric id
-//! -- [`RIVAL_BRENDAN_NORMAL_GFX_ID`]/[`RIVAL_MAY_NORMAL_GFX_ID`], written by
-//! `crate::flow::overworld_phase::route103_rival_trigger::setup_rival_gfx_id_on_transition`
-//! on entering Route 103. The exact-id check is what narrows the exception
-//! to the rival: [`VAR_OBJ_GFX_ID_0`] is ordinary persistent event data, so
-//! once a Route 103 visit has written a rival id it stays written on every
-//! other map too, and the *other* bundled `OBJ_EVENT_GFX_VAR_0` object
-//! events -- the bedroom decoration placeholders, Oldale Town's own rival,
-//! and the Littleroot Town / Birch's Lab rivals
-//! (`FLAG_HIDE_LITTLEROOT_TOWN_RIVAL` /
-//! `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL`, both new-game-set) -- are
-//! kept invisible by their hide flags (`FLAG_DECORATION_*`,
-//! set on every bedroom entry; `FLAG_HIDE_OLDALE_TOWN_RIVAL`, set at new
-//! game and never cleared while `Route103_EventScript_RivalEnd`'s
-//! `clearflag` stays a recorded deferral), which gate them out of
-//! `visible_object_events` before this module is asked at all. A future
-//! decoration slice that clears `FLAG_DECORATION_n` must also model
-//! upstream's per-slot `VAR_OBJ_GFX_ID_0 + n` writes
-//! (`InitSecretBaseDecorationSprites`), or a placed decoration would
-//! resolve through the rival id this exception matches.
-//!
-//! # Screen position: glued to the camera through a step (I-3, issue #217)
-//!
-//! [`object_screen_position`] generalizes [`super::avatar::PLAYER_OBJ_X`]/
-//! `PLAYER_OBJ_Y`'s derivation (upstream `SetSpritePosToMapCoords`) from the
-//! player's own always-zero `mapX - gSaveBlock1Ptr->pos.x` identity to the
-//! general case, where an NPC's map position differs from the player's own
-//! -- **and** applies [`super::viewport::camera_lag_px`]'s shared mid-step
-//! lag term, the way upstream's `gSpriteCoordOffsetX`/`Y` does for every
-//! real object-event sprite, not just the player's
-//! (`UpdateOamCoords`, `pokeemerald/src/sprite.c:340-350`). Without it, a
-//! stationary NPC's OAM position would jump to its destination-relative
-//! offset the instant a step starts (`PlayerState::step` commits the tile
-//! position immediately) while the BG scroll still lags smoothly behind,
-//! producing a one-metatile snap followed by an apparent glide relative to
-//! the map -- the bug this module previously documented as a fidelity
-//! delta and issue #217 fixed. `oam_entries` now adds the exact same signed
-//! lag [`super::viewport::build_tilemaps`] feeds its BG scroll, so a
-//! stationary object's screen displacement matches the background's own at
-//! every frame of the walk animation, not just at rest. Never affects
-//! tile-position logic (hide-flag filtering, interaction) -- only this
-//! module's own pixel placement.
-//!
-//! # Documented fidelity delta: no y-derived sprite subpriority
-//!
-//! Upstream orders overlapping object-event sprites by a *subpriority*
-//! derived from each sprite's own screen y, not by OAM index:
-//! `SetObjectSubpriorityByElevation`
-//! (`event_object_movement.c:7773-7779`) computes
-//! `y = (16 - (screenY >> 4)) << 1` and adds it to
-//! `sElevationToSubpriority[elevation]`, so a *lower* (further south)
-//! sprite gets a numerically smaller subpriority and therefore draws in
-//! front -- an NPC standing one tile south of the player overlaps and
-//! covers the player's head. `rendering::SpriteLayer` has no subpriority
-//! concept: same-priority ties go to the lower OAM index
-//! (`rendering::sprite`'s own docs), and
-//! [`super::OverworldScene::compose`] always puts the player at index 0,
-//! so **here the player always draws in front of every NPC**, whichever
-//! side of them it stands on. Only ever visible where the two 16x32
-//! sprites' pixels actually overlap (adjacent tiles); never affects
-//! tile-position logic. A future slice porting subpriority would also want
-//! `ObjectEventUpdateSubpriority`'s `previousElevation` input, which this
-//! port's stationary object events don't track yet.
+//! Upstream resolves equal-priority overlap with a y-derived subpriority
+//! (`SetObjectSubpriorityByElevation`, `event_object_movement.c:7773-7779`).
+//! [`rendering::SpriteLayer`] has no subpriority, so its lower OAM index wins
+//! and the player draws in front of every same-priority NPC.
 
 use std::collections::HashMap;
 
@@ -160,9 +30,6 @@ use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 use super::avatar::{self, PlayerCharacter};
 use super::{OverworldSceneError, METATILE_PX};
 
-/// One of the four generic NPC palette banks (`OBJ_EVENT_PAL_TAG_NPC_1..4`,
-/// `graphics/object_events/palettes/npc_{1..4}.pal`) -- see
-/// [`build_combined_palette`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NpcPaletteTag {
     Npc1,
@@ -171,24 +38,15 @@ enum NpcPaletteTag {
     Npc4,
 }
 
-/// The scene's combined sprite [`Palette`] bank holding the *other*
-/// protagonist's own palette (`graphics/object_events/palettes/{brendan,may}.pal`,
-/// upstream `OBJ_EVENT_PAL_TAG_BRENDAN`/`_MAY`) -- what an
-/// `OBJ_EVENT_GFX_RIVAL_*_NORMAL` object event draws from when it is not
-/// this run's own player character (see [`resolve_sprite_source`]).
-///
-/// A distinct bank rather than a reuse of bank 0 because upstream gives the
-/// rival infos `.paletteSlot = PALSLOT_NPC_SPECIAL` while the player's own
-/// use `PALSLOT_PLAYER`
-/// (`src/data/object_events/object_event_graphics_info.h:1920-1937` and
-/// `:1-18`) -- precisely so a rival and the player can be on screen at once
-/// with different palettes.
+const PLAYER_PALETTE_BANK: u8 = 0;
+
+/// Separate because upstream gives rivals `PALSLOT_NPC_SPECIAL`, not the
+/// player's `PALSLOT_PLAYER` (`object_event_graphics_info.h:1-18,1920-2032`).
 const OTHER_PROTAGONIST_BANK: u8 = 5;
 
+const TILE_BYTES: usize = 32;
+
 impl NpcPaletteTag {
-    /// This tag's fixed palette bank in the scene's combined sprite
-    /// [`Palette`] -- bank 0 is always the player's own (`avatar::sprite_palette`),
-    /// so these start at 1.
     const fn bank(self) -> u8 {
         match self {
             Self::Npc1 => 1,
@@ -198,8 +56,6 @@ impl NpcPaletteTag {
         }
     }
 
-    /// The pack entry name (`sprite/palette/<name>`, via
-    /// [`AssetPack::sprite_palette`]) for this tag.
     const fn pack_name(self) -> &'static str {
         match self {
             Self::Npc1 => "npc_1",
@@ -210,159 +66,124 @@ impl NpcPaletteTag {
     }
 }
 
-/// Where a `graphics_id` this module recognizes draws its sprite from
-/// (module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NpcSpriteSource {
-    /// Reuses this run's player-character sheet/palette (bank 0), already
-    /// loaded by [`super::OverworldScene::from_pack`] -- no extra decode.
+    /// Reuses the player sheet and palette already loaded by the scene.
     PlayerCharacter,
-    /// A standalone 9-frame 16x32 sheet plus the palette bank it draws
-    /// from.
-    Standard {
+    People16x32 {
         sprite_path: &'static str,
         palette_bank: u8,
     },
 }
 
-/// `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`) -- see module docs'
-/// "One `OBJ_EVENT_GFX_VAR_0` exception" section.
+/// `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`).
 const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
 
-/// `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`'s own numeric id
-/// (`include/constants/event_objects.h:107`) -- what [`VAR_OBJ_GFX_ID_0`]
-/// holds for a female player's Route 103 rival (module docs).
+/// `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL` (`event_objects.h:107`).
 const RIVAL_BRENDAN_NORMAL_GFX_ID: u16 = 100;
 
-/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`'s own numeric id
-/// (`include/constants/event_objects.h:112`) -- what [`VAR_OBJ_GFX_ID_0`]
-/// holds for a male player's Route 103 rival (module docs).
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL` (`event_objects.h:112`).
 const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 
-/// Resolve `graphics_id` into a sprite source, or `None` if this slice
-/// doesn't render a sprite for it (module docs' "not drawn" list).
-///
-/// `sprite_path` values are pack sprite ids (`AssetPack::sprite`, i.e. the
-/// upstream `graphics/object_events/pics/people/<path>.png` file, minus
-/// extension) -- transcribed from `object_event_graphics_info_pointers.h`'s
-/// `OBJ_EVENT_GFX_*` -> `gObjectEventGraphicsInfo_*` table and each of those
-/// structs' own `.images`/`.paletteTag` fields
-/// (`object_event_pic_tables.h`/`object_event_graphics.h`).
-///
-/// `event_data` is read only for `"OBJ_EVENT_GFX_VAR_0"` (module docs' "One
-/// `OBJ_EVENT_GFX_VAR_0` exception" section); every other arm ignores it,
-/// matching upstream's own per-graphics-id dispatch, where only the
-/// `OBJ_EVENT_GFX_VAR_*` family is a live indirection at all.
 fn resolve_sprite_source(
     graphics_id: &str,
     player: PlayerCharacter,
     event_data: &EventData,
 ) -> Option<NpcSpriteSource> {
     use NpcPaletteTag::{Npc1, Npc2, Npc3, Npc4};
-    use NpcSpriteSource::Standard;
+    use NpcSpriteSource::People16x32;
 
     match graphics_id {
         "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL" => {
             Some(protagonist_source(PlayerCharacter::Brendan, player))
         }
         "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL" => Some(protagonist_source(PlayerCharacter::May, player)),
-        "OBJ_EVENT_GFX_VAR_0" => {
-            match event_data.var_get(VAR_OBJ_GFX_ID_0).unwrap_or(0) {
-                id if id == RIVAL_BRENDAN_NORMAL_GFX_ID => {
-                    Some(protagonist_source(PlayerCharacter::Brendan, player))
-                }
-                id if id == RIVAL_MAY_NORMAL_GFX_ID => {
-                    Some(protagonist_source(PlayerCharacter::May, player))
-                }
-                // A bedroom decoration placeholder (var still `0`, the
-                // fresh-save value), or any other value this port never
-                // writes -- module docs.
-                _ => None,
+        "OBJ_EVENT_GFX_VAR_0" => match event_data.var_get(VAR_OBJ_GFX_ID_0).unwrap_or(0) {
+            id if id == RIVAL_BRENDAN_NORMAL_GFX_ID => {
+                Some(protagonist_source(PlayerCharacter::Brendan, player))
             }
-        }
-        "OBJ_EVENT_GFX_MOM" => Some(Standard {
+            id if id == RIVAL_MAY_NORMAL_GFX_ID => {
+                Some(protagonist_source(PlayerCharacter::May, player))
+            }
+            _ => None,
+        },
+        "OBJ_EVENT_GFX_MOM" => Some(People16x32 {
             sprite_path: "mom",
             palette_bank: Npc4.bank(),
         }),
-        "OBJ_EVENT_GFX_TWIN" => Some(Standard {
+        "OBJ_EVENT_GFX_TWIN" => Some(People16x32 {
             sprite_path: "twin",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_FAT_MAN" => Some(Standard {
+        "OBJ_EVENT_GFX_FAT_MAN" => Some(People16x32 {
             sprite_path: "fat_man",
             palette_bank: Npc1.bank(),
         }),
-        "OBJ_EVENT_GFX_BOY_2" => Some(Standard {
+        "OBJ_EVENT_GFX_BOY_2" => Some(People16x32 {
             sprite_path: "boy_2",
             palette_bank: Npc1.bank(),
         }),
-        "OBJ_EVENT_GFX_PROF_BIRCH" => Some(Standard {
+        "OBJ_EVENT_GFX_PROF_BIRCH" => Some(People16x32 {
             sprite_path: "prof_birch",
             palette_bank: Npc3.bank(),
         }),
-        "OBJ_EVENT_GFX_WOMAN_4" => Some(Standard {
+        "OBJ_EVENT_GFX_WOMAN_4" => Some(People16x32 {
             sprite_path: "woman_4",
             palette_bank: Npc1.bank(),
         }),
-        "OBJ_EVENT_GFX_NORMAN" => Some(Standard {
+        "OBJ_EVENT_GFX_NORMAN" => Some(People16x32 {
             sprite_path: "gym_leaders/norman",
             palette_bank: Npc4.bank(),
         }),
-        "OBJ_EVENT_GFX_SCIENTIST_1" => Some(Standard {
+        "OBJ_EVENT_GFX_SCIENTIST_1" => Some(People16x32 {
             sprite_path: "scientist_1",
             palette_bank: Npc3.bank(),
         }),
-        // Oldale Town / Route 103 background NPCs (issue #262) -- same
-        // 9-frame `overworld_frame(<pic>, 2, 4, n)` 16x32 "standing" shape
-        // as the eight `Standard` arms above, each transcribed from its own
-        // `gObjectEventGraphicsInfo_*`'s `.images`/`.paletteTag`
-        // (`object_event_graphics_info.h`) and pic table
-        // (`object_event_pic_tables.h`).
-        "OBJ_EVENT_GFX_MART_EMPLOYEE" => Some(Standard {
+        "OBJ_EVENT_GFX_MART_EMPLOYEE" => Some(People16x32 {
             sprite_path: "mart_employee",
             palette_bank: Npc1.bank(),
         }),
-        "OBJ_EVENT_GFX_GIRL_3" => Some(Standard {
+        "OBJ_EVENT_GFX_GIRL_3" => Some(People16x32 {
             sprite_path: "girl_3",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_MANIAC" => Some(Standard {
+        "OBJ_EVENT_GFX_MANIAC" => Some(People16x32 {
             sprite_path: "maniac",
             palette_bank: Npc4.bank(),
         }),
-        "OBJ_EVENT_GFX_MAN_3" => Some(Standard {
+        "OBJ_EVENT_GFX_MAN_3" => Some(People16x32 {
             sprite_path: "man_3",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_WOMAN_2" => Some(Standard {
+        "OBJ_EVENT_GFX_WOMAN_2" => Some(People16x32 {
             sprite_path: "woman_2",
             palette_bank: Npc3.bank(),
         }),
-        "OBJ_EVENT_GFX_BOY_1" => Some(Standard {
+        "OBJ_EVENT_GFX_BOY_1" => Some(People16x32 {
             sprite_path: "boy_1",
             palette_bank: Npc3.bank(),
         }),
-        "OBJ_EVENT_GFX_POKEFAN_M" => Some(Standard {
+        "OBJ_EVENT_GFX_POKEFAN_M" => Some(People16x32 {
             sprite_path: "pokefan_m",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_BLACK_BELT" => Some(Standard {
+        "OBJ_EVENT_GFX_BLACK_BELT" => Some(People16x32 {
             sprite_path: "black_belt",
             palette_bank: Npc3.bank(),
         }),
-        "OBJ_EVENT_GFX_MAN_5" => Some(Standard {
+        "OBJ_EVENT_GFX_MAN_5" => Some(People16x32 {
             sprite_path: "man_5",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_SWIMMER_F" => Some(Standard {
+        "OBJ_EVENT_GFX_SWIMMER_F" => Some(People16x32 {
             sprite_path: "swimmer_f",
             palette_bank: Npc2.bank(),
         }),
-        "OBJ_EVENT_GFX_SWIMMER_M" => Some(Standard {
+        "OBJ_EVENT_GFX_SWIMMER_M" => Some(People16x32 {
             sprite_path: "swimmer_m",
             palette_bank: Npc1.bank(),
         }),
-        "OBJ_EVENT_GFX_FISHERMAN" => Some(Standard {
+        "OBJ_EVENT_GFX_FISHERMAN" => Some(People16x32 {
             sprite_path: "fisherman",
             palette_bank: Npc2.bank(),
         }),
@@ -370,57 +191,21 @@ fn resolve_sprite_source(
     }
 }
 
-/// Where an `OBJ_EVENT_GFX_RIVAL_<who>_NORMAL` object event draws from,
-/// given this run's `player`.
-///
-/// Upstream's two rival infos are *not* gender-switched at runtime: each
-/// simply reuses the corresponding protagonist's own walking sheet and
-/// palette --
-/// `gObjectEventGraphicsInfo_RivalBrendanNormal` has
-/// `.images = sPicTable_BrendanNormal`, `.paletteTag = OBJ_EVENT_PAL_TAG_BRENDAN`
-/// (`src/data/object_events/object_event_graphics_info.h:1920-1937`) and
-/// `..._RivalMayNormal` has `sPicTable_MayNormal` /
-/// `OBJ_EVENT_PAL_TAG_MAY` (`:2015-2032`). There are no `rival_*` PNGs or
-/// palettes at all; the only fields differing from the player's own infos
-/// are `.size` and `.paletteSlot`.
-///
-/// **The rival is always the opposite protagonist**, which is what the
-/// previous binding got backwards. The two Littleroot houses are mirrored
-/// maps that each hardcode their own resident's id
-/// (`LittlerootTown_BrendansHouse_2F/map.json:19` ->
-/// `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`;
-/// `LittlerootTown_MaysHouse_2F/map.json:19` ->
-/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`), and the intro warp sends a male player
-/// to Brendan's house and a female player to May's
-/// (`data/maps/LittlerootTown/scripts.inc:116`/`:127`). So playing as
-/// Brendan, the rival object you can actually meet is May's, in *her* house
-/// -- the one the old `if player == PlayerCharacter::Brendan` guard resolved
-/// to `None`, leaving it undrawn once its hide flag cleared. (The mirrored
-/// script confirms the intent:
-/// `RivalsHouse_2F_EventScript_Rival` does `checkplayergender` and greets
-/// May for a `MALE` player -- `LittlerootTown_MaysHouse_2F/scripts.inc:236-241`.)
-///
-/// `who == player` is still resolved to [`NpcSpriteSource::PlayerCharacter`]:
-/// that sheet and palette are already loaded at base tile 0 / bank 0, so
-/// there is nothing to decode. It is not reachable in the bundled data (the
-/// resident's own id is always hidden while you live there), but it is the
-/// correct binding rather than a special case, and it keeps
-/// [`resolve_bindings`] from decoding the player's sheet a second time if a
-/// future map ever does place one.
+/// Reuses the loaded player assets only when `who` is the current player.
+/// Rival graphics use the corresponding protagonist's walking assets upstream
+/// (`object_event_graphics_info.h:1920-2032`).
 fn protagonist_source(who: PlayerCharacter, player: PlayerCharacter) -> NpcSpriteSource {
     if who == player {
         NpcSpriteSource::PlayerCharacter
     } else {
-        NpcSpriteSource::Standard {
+        NpcSpriteSource::People16x32 {
             sprite_path: who.sprite_path(),
             palette_bank: OTHER_PROTAGONIST_BANK,
         }
     }
 }
 
-/// One recognized graphics id's resolved rendering binding: which frame
-/// block of the scene's combined sprite [`rendering::Tileset`] to draw from,
-/// and which palette bank.
+/// Tile and palette location for a resolved graphics id.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SpriteBinding {
     base_tile: u16,
@@ -429,45 +214,24 @@ pub(super) struct SpriteBinding {
 
 #[cfg(test)]
 impl SpriteBinding {
-    /// This binding's frame block within the scene's combined sprite
-    /// tileset. Exposed for the scene's own tests, which assert *which*
-    /// block a resolved graphics id addresses (notably that a rival's is
-    /// its own, not the player's at `0`).
+    /// Returns the first tile in this sprite's frame block.
     pub(super) const fn base_tile(self) -> u16 {
         self.base_tile
     }
 
-    /// This binding's palette bank. Exposed for the same tests -- bank `0`
-    /// is the player's own, so a non-zero bank is what distinguishes an
-    /// independently-loaded sheet.
+    /// Returns this sprite's palette bank.
     pub(super) const fn palette_bank(self) -> u8 {
         self.palette_bank
     }
 }
 
-/// Resolve every distinct `graphics_id` `object_events` references into a
-/// [`SpriteBinding`], appending each distinct [`NpcSpriteSource::Standard`]
-/// sheet's packed frame bytes to `sprite_bytes` in turn (module docs: the
-/// scene's sprite [`rendering::Tileset`] is one combined decode, so this
-/// only ever *appends*; the caller has already seeded `sprite_bytes` with
-/// the player's own frames at base tile `0`).
-///
-/// `event_data` is this room's own current flags/vars, needed only for
-/// [`resolve_sprite_source`]'s `"OBJ_EVENT_GFX_VAR_0"` arm (module docs) --
-/// the binding this resolves to therefore reflects whatever
-/// `VAR_OBJ_GFX_ID_0` holds at the moment the scene is built, which is
-/// correct exactly because that var never changes for the rest of the
-/// room's visit (`route103_rival_trigger::setup_rival_gfx_id_on_transition`
-/// writes it once, on entry, before the scene decodes).
+/// Resolves distinct object graphics and appends their packed frames after
+/// the player frames already in `sprite_bytes`.
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Pack`]/[`OverworldSceneError::Asset`] if a
-/// resolved sprite's pack entry is missing; the same
-/// [`OverworldSceneError::SpriteSheetWrongDimensions`]/
-/// [`OverworldSceneError::ImagePixelCountMismatch`]/
-/// [`OverworldSceneError::ImageNotTileAligned`] cases as
-/// [`avatar::pack_people_sheet_frames`].
+/// Returns an asset, sprite-dimension, pixel-count, or tile-alignment error
+/// when a resolved sheet cannot be loaded and packed.
 pub(super) fn resolve_bindings(
     pack: &AssetPack,
     player: PlayerCharacter,
@@ -486,21 +250,23 @@ pub(super) fn resolve_bindings(
                     event.graphics_id,
                     SpriteBinding {
                         base_tile: 0,
-                        palette_bank: 0,
+                        palette_bank: PLAYER_PALETTE_BANK,
                     },
                 );
             }
-            Some(NpcSpriteSource::Standard {
+            Some(NpcSpriteSource::People16x32 {
                 sprite_path,
                 palette_bank,
             }) => {
                 let base_bytes = sprite_bytes.len();
-                #[allow(clippy::cast_possible_truncation)] // bounded by a handful of small sheets.
-                let base_tile = (base_bytes / 32) as u16;
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a scene contains only a small number of NPC sheets"
+                )]
+                let base_tile = (base_bytes / TILE_BYTES) as u16;
                 debug_assert!(
                     base_tile.is_multiple_of(avatar::FRAME_BLOCK_TILES),
-                    "every prior block is a whole `FRAME_BLOCK_TILES`-tile sheet, player's own \
-                     included, so every new base tile must land on that same stride"
+                    "each packed people sheet must occupy a whole frame block"
                 );
                 let image = pack.sprite(sprite_path)?;
                 sprite_bytes.extend(avatar::pack_people_sheet_frames(sprite_path, image)?);
@@ -518,31 +284,18 @@ pub(super) fn resolve_bindings(
     Ok(bindings)
 }
 
-/// Build the scene's combined sprite [`Palette`]: `player_bank0`'s colors at
-/// bank 0 (the player's own -- also what
-/// [`NpcSpriteSource::PlayerCharacter`] entries draw from), all four
-/// generic `npc_1..4` palettes at banks 1..=4, and the *other*
-/// protagonist's own palette at [`OTHER_PROTAGONIST_BANK`] for a rival
-/// object event (module docs).
-///
-/// All six non-player banks are loaded unconditionally, regardless of
-/// whether this particular map's object events reference any of them: they
-/// are a handful of 16-color banks and every map still needs *a* combined
-/// palette either way.
+/// Loads the player, four generic NPC, and other-protagonist palette banks.
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Pack`] if `sprite/palette/npc_1..4` or the other
-/// protagonist's `sprite/palette/{brendan,may}` is missing from the pack
-/// (never true for a real pack `cargo xtask extract` produces -- it
-/// extracts both protagonists' palettes, see [`avatar::PlayerCharacter`]).
+/// Returns [`OverworldSceneError::Pack`] when a required palette is missing.
 pub(super) fn build_combined_palette(
     pack: &AssetPack,
     player: PlayerCharacter,
     player_bank0: PaletteRef<'_>,
 ) -> Result<Palette, OverworldSceneError> {
     let mut colors = [Bgr555::default(); Palette::LEN];
-    avatar::fill_palette_bank(&mut colors, 0, player_bank0);
+    avatar::fill_palette_bank(&mut colors, usize::from(PLAYER_PALETTE_BANK), player_bank0);
     for tag in [
         NpcPaletteTag::Npc1,
         NpcPaletteTag::Npc2,
@@ -557,56 +310,40 @@ pub(super) fn build_combined_palette(
     Ok(Palette::new(colors))
 }
 
-/// Wrap a computed screen coordinate into the GBA OAM 9-bit X field's raw
-/// representation (`0..=511`, upper half sign-extending to negative --
-/// [`OamEntry::new`]'s own doc comment already masks/decodes this, so any
-/// `u16` here round-trips correctly even when the true position is off the
-/// left edge of the screen).
-#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // rem_euclid(512) is always 0..512.
+const OAM_X_MODULUS: i32 = 512;
+const OAM_Y_MODULUS: i32 = 256;
+
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "rem_euclid bounds the result to the nine-bit OAM x range"
+)]
 fn wrap_oam_x(x: i32) -> u16 {
-    x.rem_euclid(512) as u16
+    x.rem_euclid(OAM_X_MODULUS) as u16
 }
 
-/// Wrap a computed screen coordinate into the GBA OAM 8-bit Y field (wraps
-/// modulo 256, matching hardware -- `OamEntry::y`'s own doc comment).
-#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // rem_euclid(256) is always 0..256.
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    reason = "rem_euclid bounds the result to the eight-bit OAM y range"
+)]
 fn wrap_oam_y(y: i32) -> u8 {
-    y.rem_euclid(256) as u8
+    y.rem_euclid(OAM_Y_MODULUS) as u8
 }
 
-/// The screen position an object event standing at `npc` (map tile
-/// coordinates) draws at, given `player`'s current tile `player_pos` and
-/// this frame's shared [`super::viewport::camera_lag_px`] `camera_lag` --
-/// module docs' generalization of [`avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y`
-/// to a stationary object whose map position differs from the player's own,
-/// glued to the same camera lag the BG scroll applies mid-step.
-/// `camera_lag == (0, 0)` at rest, reducing to plain map-relative placement.
 fn object_screen_position(
-    npc: (i32, i32),
+    object_pos: (i32, i32),
     player_pos: (i32, i32),
     camera_lag: (i32, i32),
 ) -> (u16, u8) {
-    let dx = (npc.0 - player_pos.0) * METATILE_PX + camera_lag.0;
-    let dy = (npc.1 - player_pos.1) * METATILE_PX + camera_lag.1;
+    let dx = (object_pos.0 - player_pos.0) * METATILE_PX + camera_lag.0;
+    let dy = (object_pos.1 - player_pos.1) * METATILE_PX + camera_lag.1;
     let x = i32::from(avatar::PLAYER_OBJ_X) + dx;
     let y = i32::from(avatar::PLAYER_OBJ_Y) + dy;
     (wrap_oam_x(x), wrap_oam_y(y))
 }
 
-/// Build one [`OamEntry`] per currently-visible object event this module
-/// recognizes a sprite for (module docs), to append after the player's own
-/// entry in [`super::OverworldScene::compose`]'s
-/// [`rendering::SpriteLayer`] -- lower array index wins a same-priority tie
-/// (`rendering::sprite`'s own docs), so the player (index 0) always wins
-/// over any NPC standing on the exact same pixel.
-///
-/// Each entry's tile index is [`SpriteBinding::base_tile`] plus the standing
-/// frame [`avatar::stand_frame_for`] selects for the object event's
-/// [`engine::overworld::initial_facing_direction`] (derived from its
-/// [`MovementType`] -- module docs on why this is always the *initial*
-/// facing, never updated). Objects with no [`SpriteBinding`] (an
-/// unrecognized `graphics_id`) are skipped -- tracked for interaction, not
-/// drawn (module docs).
+/// Builds OAM entries for visible events with resolved sprite bindings.
 #[must_use]
 pub(super) fn oam_entries(
     object_events: &'static [ObjectEvent],
@@ -615,19 +352,8 @@ pub(super) fn oam_entries(
     event_data: &EventData,
 ) -> Vec<OamEntry> {
     let player_pos = player.position();
-    // Shared with `viewport::build_tilemaps`'s BG scroll (module docs) --
-    // `(0, 0)` at rest, the signed mid-step pixel lag otherwise, so a
-    // stationary NPC's screen position stays glued to the background
-    // through every frame of the player's walk animation.
     let camera_lag = super::viewport::camera_lag_px(player);
     visible_object_events_with_binding(object_events, bindings, event_data)
-        // Upstream's spawn window (`engine::overworld::object_event_is_in_view`
-        // -- `TrySpawnObjectEvents`/`RemoveObjectEventIfOutsideView`), applied
-        // *before* the wrapped OAM entry is constructed. Load-bearing, not an
-        // optimization: `wrap_oam_y` reduces modulo 256, so an object event
-        // exactly 16 metatiles away in y would otherwise land on the player's
-        // own screen row and draw on top of them. See that function's own docs
-        // for why the window is both the faithful gate and a sufficient one.
         .filter(|(event, _)| object_event_is_in_view(event, player_pos))
         .map(|(event, binding)| {
             let facing = initial_facing_direction(event.movement_type);
@@ -648,46 +374,21 @@ pub(super) fn oam_entries(
                 false,
                 avatar::PLAYER_OBJ_SHAPE,
                 avatar::PLAYER_OBJ_SIZE,
-                // An object event's OAM priority is elevation-derived
-                // upstream too, not a constant: spawning one seeds both
-                // elevation fields from the *template*
-                // (`event_object_movement.c:1313-1314`), and
-                // `UpdateObjectEventElevationAndPriority` (`:7737-7746`,
-                // the same function driving the player's --
-                // `avatar::priority_for_elevation`) then sets
-                // `oam.priority = sElevationToPriority[previousElevation]`.
-                // This port has no per-object movement simulation
-                // (`super`'s module docs), so an object's spawn-time
-                // elevation is its elevation forever.
-                //
-                // Residual gap, deliberate: upstream's first
-                // `DoGroundEffects_OnSpawn` pass runs
-                // `ObjectEventUpdateElevation` (`:7759-7771`) before reading
-                // the table, which overwrites `previousElevation` with the
-                // *map grid's* elevation under the object unless that cell
-                // is `ELEVATION_TRANSITION`/`ELEVATION_MULTI_LEVEL`. Only
-                // the template elevation is reachable here -- `SceneSprites`
-                // holds this room's object events, not its layout grid --
-                // so a template whose authored elevation disagrees with the
-                // tile beneath it would resolve one step off. Across every
-                // bundled map, exactly one object event both disagrees *and*
-                // would change priority (`MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F`'s
-                // `OBJ_EVENT_GFX_PICHU_DOLL`: template 4, grid 3), and it is
-                // one of the prop/doll graphics `resolve_sprite_source`
-                // doesn't bind, so nothing this module actually draws is
-                // affected today.
-                avatar::priority_for_elevation(event.elevation),
+                priority_for_stationary_object(event),
                 true,
             )
         })
         .collect()
 }
 
-/// The subset of `object_events` that is both currently visible
-/// ([`engine::overworld::visible_object_events`] -- the engine's own
-/// hide-flag filter, shared with [`engine::overworld::facing_object_event`]
-/// rather than re-implemented here) and has a [`SpriteBinding`] this module
-/// can actually draw, paired with that binding.
+/// Uses authored elevation because the sprite resources do not retain the map
+/// grid. Upstream replaces it with the grid elevation on spawn
+/// (`event_object_movement.c:7737-7771`); the only bundled priority-changing
+/// mismatch belongs to an unsupported Pichu doll.
+fn priority_for_stationary_object(event: &ObjectEvent) -> u8 {
+    avatar::priority_for_elevation(event.elevation)
+}
+
 fn visible_object_events_with_binding<'a>(
     object_events: &'a [ObjectEvent],
     bindings: &'a HashMap<&'static str, SpriteBinding>,
@@ -706,6 +407,13 @@ mod tests {
     use assets::{MovementType, TrainerType};
     use engine::overworld::Direction;
 
+    const DEFAULT_ELEVATION: u8 = 3;
+    const RAISED_ELEVATION: u8 = 4;
+    const RAISED_PRIORITY: u8 = 1;
+    const HIDE_BRENDAN_BEDROOM_RIVAL: u16 = 0x2F8;
+    const NON_RIVAL_GFX_ID: u16 = 1;
+    const EXPECTED_WALK_FRAMES_PER_TILE: u8 = 16;
+
     fn object(
         graphics_id: &'static str,
         x: i16,
@@ -717,7 +425,7 @@ mod tests {
             graphics_id,
             x,
             y,
-            elevation: 3,
+            elevation: DEFAULT_ELEVATION,
             movement_type,
             movement_range_x: 0,
             movement_range_y: 0,
@@ -728,49 +436,33 @@ mod tests {
         }
     }
 
-    /// **Replaces** an earlier test that asserted the inverse (only the
-    /// variant matching *this run's* player resolved, everything else
-    /// `None`). That encoded the bug, not upstream: the rival object event a
-    /// player can actually meet is always the *opposite* protagonist's, so
-    /// the old binding resolved the one id that stays hidden while you live
-    /// there and dropped the one that does not. See
-    /// [`protagonist_source`]'s doc comment for the citations.
-    ///
-    /// Both gender configurations, both ids -- four cases, none `None`.
     #[test]
     fn both_rival_variants_resolve_for_either_player_gender() {
         let no_flags = EventData::new();
-        // Playing as Brendan: May's House declares OBJ_EVENT_GFX_RIVAL_MAY_NORMAL,
-        // and that object *is* the rival -- it must draw from May's own sheet
-        // and palette.
         assert_eq!(
             resolve_sprite_source(
                 "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
                 PlayerCharacter::Brendan,
                 &no_flags
             ),
-            Some(NpcSpriteSource::Standard {
+            Some(NpcSpriteSource::People16x32 {
                 sprite_path: "may/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
             }),
             "the rival of a Brendan player is May, drawn from May's sheet"
         );
-        // The mirror image.
         assert_eq!(
             resolve_sprite_source(
                 "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
                 PlayerCharacter::May,
                 &no_flags
             ),
-            Some(NpcSpriteSource::Standard {
+            Some(NpcSpriteSource::People16x32 {
                 sprite_path: "brendan/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
             }),
             "the rival of a May player is Brendan, drawn from Brendan's sheet"
         );
-
-        // The same-gender ids still resolve -- to the already-loaded player
-        // sheet at bank 0, not to `None`.
         assert_eq!(
             resolve_sprite_source(
                 "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
@@ -789,17 +481,10 @@ mod tests {
         );
     }
 
-    /// The Route 103 rival's own `OBJ_EVENT_GFX_VAR_0` indirection (module
-    /// docs' "One `OBJ_EVENT_GFX_VAR_0` exception" section, issue #248):
-    /// resolves to a rival exactly when `VAR_OBJ_GFX_ID_0` holds one of the
-    /// two real rival graphics ids, and to `None` for a bedroom decoration's
-    /// fresh-save `0` or any other value this port never writes there.
     #[test]
     fn var_0_resolves_to_a_rival_only_when_the_var_holds_a_real_rival_gfx_id() {
         let mut event_data = EventData::new();
 
-        // Fresh save (a bedroom decoration placeholder's real state, and
-        // Route 103's own before its on-transition script runs): not drawn.
         assert_eq!(
             resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
             None
@@ -810,7 +495,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
-            Some(NpcSpriteSource::Standard {
+            Some(NpcSpriteSource::People16x32 {
                 sprite_path: "may/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
             }),
@@ -822,30 +507,25 @@ mod tests {
             .unwrap();
         assert_eq!(
             resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::May, &event_data),
-            Some(NpcSpriteSource::Standard {
+            Some(NpcSpriteSource::People16x32 {
                 sprite_path: "brendan/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
             }),
             "a female player's Route 103 rival is Brendan"
         );
 
-        // Some other, never-written value: still not drawn -- the check is
-        // an exact id match, not merely "nonzero".
-        event_data.var_set(VAR_OBJ_GFX_ID_0, 1).unwrap();
+        event_data
+            .var_set(VAR_OBJ_GFX_ID_0, NON_RIVAL_GFX_ID)
+            .unwrap();
         assert_eq!(
             resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
             None
         );
     }
 
-    /// The rival's palette bank must be distinct from the player's own
-    /// (bank 0) and from all four generic NPC banks -- upstream gives the
-    /// rival infos `PALSLOT_NPC_SPECIAL` precisely so both protagonists'
-    /// palettes can be resident at once
-    /// (`object_event_graphics_info.h:1920-1937` vs `:1-18`).
     #[test]
     fn the_other_protagonist_palette_bank_collides_with_nothing() {
-        assert_ne!(OTHER_PROTAGONIST_BANK, 0, "bank 0 is the player's own");
+        assert_ne!(OTHER_PROTAGONIST_BANK, PLAYER_PALETTE_BANK);
         for tag in [
             NpcPaletteTag::Npc1,
             NpcPaletteTag::Npc2,
@@ -866,20 +546,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             source,
-            NpcSpriteSource::Standard {
+            NpcSpriteSource::People16x32 {
                 sprite_path: "mom",
                 palette_bank: NpcPaletteTag::Npc4.bank(),
             }
         );
     }
 
-    /// The twelve Oldale Town / Route 103 background NPCs issue #262 binds,
-    /// each cross-checked against its own `gObjectEventGraphicsInfo_*.paletteTag`
-    /// (`object_event_graphics_info.h`): Oldale's girl (`GIRL_3`) and mart
-    /// employee (`MART_EMPLOYEE`), the footprints man/maniac (`MANIAC`), and
-    /// Route 103's own background NPCs/trainers (`BLACK_BELT`, `BOY_1`,
-    /// `FISHERMAN`, `MAN_3`, `MAN_5`, `POKEFAN_M`, `SWIMMER_F`, `SWIMMER_M`,
-    /// `WOMAN_2`).
     #[test]
     fn resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs() {
         use NpcPaletteTag::{Npc1, Npc2, Npc3, Npc4};
@@ -902,7 +575,7 @@ mod tests {
         for (id, sprite_path, tag) in cases {
             assert_eq!(
                 resolve_sprite_source(id, PlayerCharacter::Brendan, &no_flags),
-                Some(NpcSpriteSource::Standard {
+                Some(NpcSpriteSource::People16x32 {
                     sprite_path,
                     palette_bank: tag.bank(),
                 }),
@@ -911,12 +584,7 @@ mod tests {
         }
     }
 
-    /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
-    /// every map whose object events this port can ever be asked to
-    /// render. Mirrored here (this crate cannot depend on `xtask`); that
-    /// module's own `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
-    /// is the tripwire that fails loudly when the list grows.
-    const BUNDLED_MAPS: [&str; 9] = [
+    const EXTRACTED_MAPS: [&str; 9] = [
         "MAP_LITTLEROOT_TOWN",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
@@ -928,13 +596,10 @@ mod tests {
         "MAP_ROUTE103",
     ];
 
-    /// Every distinct `graphics_id` referenced by an object event on one of
-    /// [`BUNDLED_MAPS`], sorted -- straight from the generated
-    /// [`assets::MapEventsTable`], no pack needed.
-    fn reachable_graphics_ids() -> Vec<&'static str> {
+    fn extracted_map_graphics_ids() -> Vec<&'static str> {
         let table = assets::MapEventsTable::new();
         let mut ids: Vec<&'static str> = Vec::new();
-        for map in BUNDLED_MAPS {
+        for map in EXTRACTED_MAPS {
             let events = table.resolve(assets::MapId(map)).unwrap();
             for event in events.object_events {
                 if !ids.contains(&event.graphics_id) {
@@ -946,26 +611,15 @@ mod tests {
         ids
     }
 
-    /// The module docs' scope claim, pinned as an exact partition of the
-    /// *reachable* graphics-id set: which of the 46 distinct ids the nine
-    /// bundled maps reference draw a sprite, and which are only hide-flag/
-    /// interaction tracked. Dropping an arm from
-    /// [`resolve_sprite_source`] -- or a map-data change making a new
-    /// standard NPC reachable -- fails here rather than silently making
-    /// that NPC invisible.
-    ///
-    /// `event_data` is a fresh, all-clear store throughout: `OBJ_EVENT_GFX_VAR_0`'s
-    /// own live-var exception is pinned separately by
-    /// `var_0_resolves_to_a_rival_only_when_the_var_holds_a_real_rival_gfx_id`,
-    /// and a fresh store's `VAR_OBJ_GFX_ID_0` is `0`, matching neither rival
-    /// id -- so it stays in `not_drawn` here exactly as it always has.
     #[test]
-    fn resolve_sprite_source_covers_the_reachable_graphics_ids() {
-        let reachable = reachable_graphics_ids();
+    fn resolve_sprite_source_partitions_every_extracted_map_graphics_id() {
+        const GRAPHICS_ID_COUNT: usize = 46;
+
+        let reachable = extracted_map_graphics_ids();
         assert_eq!(
             reachable.len(),
-            46,
-            "the nine bundled maps reference 46 distinct graphics ids"
+            GRAPHICS_ID_COUNT,
+            "the extracted map set changed"
         );
 
         let no_flags = EventData::new();
@@ -1000,11 +654,7 @@ mod tests {
                 "OBJ_EVENT_GFX_WOMAN_2",
                 "OBJ_EVENT_GFX_WOMAN_4",
             ],
-            "the eight original `Standard` NPCs, both rival variants -- the \
-             opposite-gender one is the rival the player can actually meet \
-             (`protagonist_source`), and it must draw whichever way round \
-             this run's `PlayerCharacter` is -- and (issue #262) the twelve \
-             Oldale Town / Route 103 background NPCs this slice newly binds"
+            "the supported graphics-id set changed"
         );
         assert_eq!(
             not_drawn,
@@ -1034,20 +684,9 @@ mod tests {
                 "OBJ_EVENT_GFX_YOUNGSTER",
                 "OBJ_EVENT_GFX_ZIGZAGOON_1",
             ],
-            "module docs' own 'not drawn' list: decorations (`OBJ_EVENT_GFX_VAR_0`'s \
-             own fresh-save/decoration state included), props/dolls, the \
-             truck, the two non-16x32 NPCs (Vigoroth, and the ninja boy the \
-             two Littleroot houses declare as the rival's sibling), and \
-             Route 101's own unresolved youngster/bag/Zigzagoon ids (issue \
-             #177) -- every Oldale Town/Route 103 background NPC is now \
-             bound (issue #262), leaving only that pair of maps' own berry \
-             and cuttable trees unresolved there"
+            "the unsupported graphics-id set changed"
         );
 
-        // The *partition* is gender-independent -- every id that draws for a
-        // Brendan player draws for a May player too. Only which side of the
-        // rival pair reuses bank 0 changes, and that is
-        // `both_rival_variants_resolve_for_either_player_gender`'s job.
         let drawn_as_may: Vec<_> = reachable
             .iter()
             .filter(|id| resolve_sprite_source(id, PlayerCharacter::May, &no_flags).is_some())
@@ -1055,8 +694,7 @@ mod tests {
             .collect();
         assert_eq!(
             drawn_as_may, drawn,
-            "no graphics id may draw for one protagonist and not the other -- \
-             that asymmetry was the opposite-gender rival bug"
+            "graphics-id support must not depend on the player character"
         );
     }
 
@@ -1116,11 +754,6 @@ mod tests {
 
     #[test]
     fn object_screen_position_applies_the_camera_lag_before_wrapping() {
-        // A stationary NPC one tile east of the player, with a full 16px of
-        // west-signed camera lag still owed (as at the very start of a west
-        // step, `camera_lag_px`'s own docs): the lag term shifts the NPC's
-        // screen x left by 16px on top of the plain distance offset,
-        // exactly cancelling what would otherwise be a one-metatile snap.
         let metatile_px = i32::from(u16::try_from(super::METATILE_PX).unwrap());
         let (x, _) = object_screen_position((6, 5), (5, 5), (-metatile_px, 0));
         assert_eq!(
@@ -1131,36 +764,24 @@ mod tests {
         );
     }
 
-    /// The wrap-safety invariant
-    /// [`engine::overworld::object_event_is_in_view`]'s own docs rest on,
-    /// asserted rather than left as prose -- and asserted against the
-    /// *actual drawn sprite height*, because that is the term with no
-    /// headroom left.
-    ///
-    /// The spawn window admits `event.y - player.y` in `-7 ..= +9`; the
-    /// mid-step [`super::viewport::camera_lag_px`] term adds another
-    /// `-16 ..= +16` (issue #217). Unwrapped screen `y` therefore spans
-    /// `-64 ..= 224`, and `rendering::sprite`'s OAM-clean placement rule
-    /// (`y0 = y; if y0 + height > 256 { y0 -= 256 }`) leaves the top end
-    /// alone only while `224 + height <= 256`. With today's uniform 16x32
-    /// object-event sprites that is `256 <= 256` -- true by exactly zero
-    /// pixels. Draw a 48px-tall object event (upstream's `48x48`
-    /// props/truck, which module docs deliberately leave unresolved) and
-    /// the topmost admitted NPC would be yanked up by 256 and painted
-    /// across the visible rows. This test is the tripwire for that.
+    #[test]
+    fn camera_placement_uses_the_upstream_walk_duration() {
+        assert_eq!(
+            engine::overworld::WALK_FRAMES_PER_TILE,
+            EXPECTED_WALK_FRAMES_PER_TILE
+        );
+    }
+
     #[test]
     fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
-        /// The OAM `y` field's modulus, and the modulus
-        /// `rendering::sprite`'s placement rule compares against.
-        const OAM_Y_SPACE: i32 = 256;
-        /// `rendering::Framebuffer::HEIGHT` -- the visible row count.
-        const SCREEN_ROWS: i32 = 160;
+        const CANDIDATE_ROW_RADIUS: i32 = 32;
+        const EXPECTED_ADMITTED_ROWS: usize = 17;
+        const EXPECTED_UNWRAPPED_Y_BOUNDS: (i32, i32) = (-64, 224);
 
         let player = (40, 40);
         let max_lag = i32::from(engine::overworld::WALK_FRAMES_PER_TILE);
+        let screen_rows = i32::try_from(rendering::Framebuffer::HEIGHT).unwrap();
 
-        // The one drawn sprite's real height, straight off the OAM entry
-        // the production path builds -- not a restated `32`.
         let mut bindings = HashMap::new();
         bindings.insert(
             "OBJ_EVENT_GFX_MOM",
@@ -1179,17 +800,15 @@ mod tests {
         let drawn = oam_entries(
             here,
             &bindings,
-            &PlayerState::new(player, 3, Direction::South),
+            &PlayerState::new(player, DEFAULT_ELEVATION, Direction::South),
             &data,
         );
         let sprite_height = i32::try_from(drawn[0].dimensions().1).unwrap();
 
-        // Every candidate row in a band far wider than the window, kept
-        // only if the window admits it, crossed with every reachable lag.
         let mut admitted = 0_usize;
         let mut min_y = i32::MAX;
         let mut max_y = i32::MIN;
-        for event_y in (player.1 - 32)..=(player.1 + 32) {
+        for event_y in (player.1 - CANDIDATE_ROW_RADIUS)..=(player.1 + CANDIDATE_ROW_RADIUS) {
             let event = object(
                 "OBJ_EVENT_GFX_MOM",
                 i16::try_from(player.0).unwrap(),
@@ -1207,46 +826,36 @@ mod tests {
                 min_y = min_y.min(unwrapped);
                 max_y = max_y.max(unwrapped);
 
-                // The production helper really does place it there (its
-                // only extra step is the 8-bit field's own wrap).
                 let (_, wrapped) = object_screen_position((player.0, event_y), player, (0, lag_y));
                 assert_eq!(
                     i32::from(wrapped),
-                    unwrapped.rem_euclid(OAM_Y_SPACE),
+                    unwrapped.rem_euclid(OAM_Y_MODULUS),
                     "object_screen_position must be the wrapped unwrapped position"
                 );
             }
         }
 
         assert_eq!(
-            admitted, 17,
-            "the window admits `event.y - player.y` in -7..=+9"
+            admitted, EXPECTED_ADMITTED_ROWS,
+            "the object-event view window changed"
         );
         assert_eq!(
             (min_y, max_y),
-            (-64, 224),
-            "the admitted band, camera lag included -- it was -48..=208 \
-             before issue #217 added the lag term"
+            EXPECTED_UNWRAPPED_Y_BOUNDS,
+            "the admitted y range with camera lag changed"
         );
 
-        // Top end: never pulled up into the visible rows. Zero headroom.
         assert!(
-            max_y + sprite_height <= OAM_Y_SPACE,
+            max_y + sprite_height <= OAM_Y_MODULUS,
             "a {sprite_height}px-tall object event at the bottom of the spawn \
-             window ({max_y}) would be wrapped up by {OAM_Y_SPACE} and painted \
-             across the top of the screen. What bounds this is the spawn \
-             window in `engine::overworld::object_event_is_in_view`: narrow \
-             that window before drawing taller object events"
+             window ({max_y}) would wrap across the top of the screen"
         );
 
-        // Bottom end: a negative position aliases to a row below the
-        // screen, and its true position is above it -- invisible either
-        // way, so the aliasing is unobservable.
         assert!(
-            OAM_Y_SPACE + min_y >= SCREEN_ROWS,
+            OAM_Y_MODULUS + min_y >= screen_rows,
             "the top of the spawn window ({min_y}) aliases to row {}, which \
-             must stay off the bottom of the {SCREEN_ROWS}-row screen",
-            OAM_Y_SPACE + min_y
+             must stay below the {screen_rows}-row screen",
+            OAM_Y_MODULUS + min_y
         );
         assert!(
             min_y + sprite_height <= 0,
@@ -1257,7 +866,7 @@ mod tests {
     #[test]
     fn oam_entries_skips_a_hidden_object_and_one_with_no_binding() {
         let mut data = EventData::new();
-        data.flag_set(0x2F8).unwrap(); // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM
+        data.flag_set(HIDE_BRENDAN_BEDROOM_RIVAL).unwrap();
 
         let hidden = {
             let mut o = object(
@@ -1277,11 +886,11 @@ mod tests {
             "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
             SpriteBinding {
                 base_tile: 0,
-                palette_bank: 0,
+                palette_bank: PLAYER_PALETTE_BANK,
             },
         );
 
-        let player = PlayerState::new((7, 2), 3, Direction::North);
+        let player = PlayerState::new((7, 2), DEFAULT_ELEVATION, Direction::North);
         let entries = oam_entries(events, &bindings, &player, &data);
         assert!(
             entries.is_empty(),
@@ -1304,14 +913,12 @@ mod tests {
             },
         );
 
-        let player = PlayerState::new((2, 6), 3, Direction::South);
+        let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
         let entries = oam_entries(events, &bindings, &player, &data);
         assert_eq!(entries.len(), 1);
         let entry = entries[0];
         assert_eq!(entry.palette_bank(), NpcPaletteTag::Npc4.bank());
         assert!(entry.enabled());
-        // Mom's movement type is FaceRight (East); east reuses the west
-        // stand frame, h-flipped (module docs' frame table).
         assert!(entry.h_flip());
         let (frame_west_stand, _) = avatar::stand_frame_for(Direction::West);
         assert_eq!(
@@ -1320,15 +927,6 @@ mod tests {
         );
     }
 
-    /// An object event's OAM priority comes from its *own* elevation
-    /// (`sElevationToPriority[template->elevation]` -- see
-    /// [`oam_entries`]' own comment and
-    /// [`avatar::priority_for_elevation`]), not from a constant shared with
-    /// the player. A template on ordinary elevation-3 floor keeps the
-    /// default `2`; the same object authored on a raised elevation-4 tile
-    /// (upstream's counters, stair landings, and the props Littleroot's
-    /// TRUCKs and this bedroom's `VAR_5` doll sit on) draws one step in
-    /// front, at `1`.
     #[test]
     fn oam_entries_take_their_priority_from_the_templates_elevation() {
         let data = EventData::new();
@@ -1340,10 +938,13 @@ mod tests {
                 palette_bank: NpcPaletteTag::Npc4.bank(),
             },
         );
-        let player = PlayerState::new((2, 6), 3, Direction::South);
+        let player = PlayerState::new((2, 6), DEFAULT_ELEVATION, Direction::South);
 
         let flat = object("OBJ_EVENT_GFX_MOM", 2, 6, MovementType::FaceDown);
-        assert_eq!(flat.elevation, 3, "fixture precondition: ordinary floor");
+        assert_eq!(
+            flat.elevation, DEFAULT_ELEVATION,
+            "fixture precondition: ordinary floor"
+        );
         let flat: &'static [ObjectEvent] = Box::leak(Box::new([flat]));
         assert_eq!(
             oam_entries(flat, &bindings, &player, &data)[0].priority(),
@@ -1352,32 +953,23 @@ mod tests {
 
         let raised = {
             let mut o = object("OBJ_EVENT_GFX_MOM", 2, 6, MovementType::FaceDown);
-            o.elevation = 4;
+            o.elevation = RAISED_ELEVATION;
             o
         };
         let raised: &'static [ObjectEvent] = Box::leak(Box::new([raised]));
         assert_eq!(
             oam_entries(raised, &bindings, &player, &data)[0].priority(),
-            1,
-            "sElevationToPriority[4] == 1 -- a raised object must not draw \
-             at the flat default"
+            RAISED_PRIORITY,
+            "a raised object must not draw at the flat priority"
         );
     }
 
-    /// The OAM y-wrap regression, on the real bundled `MAP_LITTLEROOT_TOWN`
-    /// data: with the player at the map's north edge, the always-visible boy
-    /// at `(14, 17)` is exactly 16 metatiles (256px) south -- the one
-    /// distance an 8-bit OAM `y` field aliases onto the player's own row. He
-    /// must produce no entry at all.
-    ///
-    /// The test first *demonstrates* the alias rather than asserting around
-    /// it: `object_screen_position` for that offset really does return
-    /// [`avatar::PLAYER_OBJ_Y`], so without the in-view gate the boy would
-    /// have been drawn standing on the player. Then it checks he walks back
-    /// into view as the player approaches, so the gate is a distance test
-    /// and not an accidental blanket skip.
     #[test]
     fn a_distant_object_event_produces_no_oam_entry_instead_of_wrapping_onto_the_player() {
+        const BOY_POSITION: (i32, i32) = (14, 17);
+        const NORTH_EDGE: (i32, i32) = (14, 1);
+        const NEAR_BOY: (i32, i32) = (14, 12);
+
         let events = assets::MapEventsTable::new()
             .resolve(assets::MapId("MAP_LITTLEROOT_TOWN"))
             .expect("a bundled map must resolve in the generated table");
@@ -1386,15 +978,17 @@ mod tests {
             .iter()
             .find(|o| o.graphics_id == "OBJ_EVENT_GFX_BOY_2")
             .expect("Littleroot Town's object events include the boy");
-        assert_eq!((boy.x, boy.y), (14, 17), "his real map.json position");
+        assert_eq!(
+            (i32::from(boy.x), i32::from(boy.y)),
+            BOY_POSITION,
+            "the bundled boy moved"
+        );
 
-        // The alias this gate exists to prevent, shown explicitly.
-        let (_, wrapped_y) = object_screen_position((14, 17), (14, 1), (0, 0));
+        let (_, wrapped_y) = object_screen_position(BOY_POSITION, NORTH_EDGE, (0, 0));
         assert_eq!(
             wrapped_y,
             avatar::PLAYER_OBJ_Y,
-            "16 metatiles of separation wraps to the player's own screen row \
-             -- exactly why culling must happen before the OAM entry is built"
+            "the distant coordinate must alias before view culling"
         );
 
         let mut bindings = HashMap::new();
@@ -1407,41 +1001,34 @@ mod tests {
         );
         let data = EventData::new();
 
-        // Player at the map's north edge: the boy is far out of view.
-        let north_edge = PlayerState::new((14, 1), 3, Direction::South);
+        let north_edge = PlayerState::new(NORTH_EDGE, DEFAULT_ELEVATION, Direction::South);
         let entries = oam_entries(events.object_events, &bindings, &north_edge, &data);
         assert!(
             entries.iter().all(|e| e.y() != avatar::PLAYER_OBJ_Y),
-            "no NPC may be drawn on the player's own row from 16 tiles away"
+            "a distant NPC must not alias onto the player's row"
         );
         assert!(
             entries.is_empty(),
             "the boy is the only bound object event here, and he is out of view"
         );
 
-        // Walk south until he is genuinely on screen: now he draws, at his
-        // true (unwrapped) offset rather than an aliased one.
-        let near = PlayerState::new((14, 12), 3, Direction::South);
+        let near = PlayerState::new(NEAR_BOY, DEFAULT_ELEVATION, Direction::South);
         let entries = oam_entries(events.object_events, &bindings, &near, &data);
         assert_eq!(entries.len(), 1, "in view from five tiles away");
-        let expected_y = avatar::PLAYER_OBJ_Y + u8::try_from(5 * super::METATILE_PX).unwrap();
+        let tile_distance = BOY_POSITION.1 - NEAR_BOY.1;
+        let expected_y =
+            avatar::PLAYER_OBJ_Y + u8::try_from(tile_distance * super::METATILE_PX).unwrap();
         assert_eq!(entries[0].y(), expected_y);
     }
 
-    // -- Camera alignment during a step (I-3, issue #217) -------------------
-
-    /// A flat, fully walkable `width`x`height`
-    /// [`engine::overworld::MapRuntime`], elevation 3 throughout, no object
-    /// events of its own -- just enough to drive `PlayerState::step`/`tick`
-    /// through a full ordinary walk transit for the camera-lag test below
-    /// (mirrors `super::viewport::tests`' own scroll-lag fixture).
     fn open_runtime(width: u16, height: u16) -> engine::overworld::MapRuntime<'static> {
-        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        let cell_count = usize::from(width) * usize::from(height);
+        let mut bytes = Vec::with_capacity(cell_count * std::mem::size_of::<u16>());
         for _ in 0..(u32::from(width) * u32::from(height)) {
             let raw = assets::MetatileCell {
                 metatile_id: 0,
                 collision: 0,
-                elevation: 3,
+                elevation: DEFAULT_ELEVATION,
             }
             .pack();
             bytes.extend_from_slice(&raw.to_le_bytes());
@@ -1492,16 +1079,10 @@ mod tests {
         )
     }
 
-    /// The issue #217 acceptance test: during every ordinary 16-frame player
-    /// step, a stationary NPC's OAM position must stay glued to the camera
-    /// -- no snap the instant the step starts, no glide relative to the
-    /// background, and the total displacement across the transit is exactly
-    /// one metatile, applied one pixel per frame. Checked at all four
-    /// checkpoints the issue names (progress 0, an intermediate frame, the
-    /// last transit frame, and the first resting frame) in all four
-    /// cardinal directions.
     #[test]
     fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a_step() {
+        let midpoint_ticks = EXPECTED_WALK_FRAMES_PER_TILE / 2;
+        let remaining_transit_ticks = EXPECTED_WALK_FRAMES_PER_TILE - midpoint_ticks - 1;
         let data = EventData::new();
         let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
 
@@ -1522,13 +1103,10 @@ mod tests {
         ] {
             let runtime = open_runtime(10, 10);
             let start = (5, 5);
-            // Two tiles east of the player's start: clear of every
-            // direction's single-tile step, and still comfortably in view
-            // afterward.
             let mom = object("OBJ_EVENT_GFX_MOM", 7, 5, MovementType::FaceDown);
             let events: &'static [ObjectEvent] = Box::leak(Box::new([mom]));
 
-            let mut player = PlayerState::new(start, 3, direction);
+            let mut player = PlayerState::new(start, DEFAULT_ELEVATION, direction);
             let at_rest = oam_entries(events, &bindings, &player, &data);
             assert_eq!(
                 at_rest.len(),
@@ -1543,9 +1121,6 @@ mod tests {
                 "{direction:?}: an open runtime must let the step through"
             );
 
-            // Progress 0: no snap -- identical to the pre-step, at-rest
-            // entry (the exact bug report: Mom must not jump the instant a
-            // step starts).
             let progress0 = oam_entries(events, &bindings, &player, &data);
             assert_eq!(
                 (progress0[0].x(), progress0[0].y()),
@@ -1553,46 +1128,31 @@ mod tests {
                 "{direction:?}: a stationary NPC must not jump when a step starts"
             );
 
-            for _ in 0..8 {
+            for _ in 0..midpoint_ticks {
                 player.tick();
             }
             assert!(
                 player.in_transit(),
-                "{direction:?}: 8 frames elapsed, still mid-transit"
+                "{direction:?}: the midpoint must remain in transit"
             );
             let mid = oam_entries(events, &bindings, &player, &data);
 
-            for _ in 0..7 {
+            for _ in 0..remaining_transit_ticks {
                 player.tick();
             }
             assert!(
                 player.in_transit(),
-                "{direction:?}: 15 frames elapsed, still mid-transit"
+                "{direction:?}: the last transit frame must remain in transit"
             );
             let last = oam_entries(events, &bindings, &player, &data);
 
             player.tick();
             assert!(
                 !player.in_transit(),
-                "{direction:?}: the 16th tick ends the transit"
+                "{direction:?}: the final tick must end the transit"
             );
             let settled = oam_entries(events, &bindings, &player, &data);
 
-            // Continuous, one pixel per frame, *opposite* the direction of
-            // travel -- same as any fixed BG content: walking east slides
-            // the world (and every stationary NPC in it) left on screen, not
-            // right (`camera_lag_px`'s own docs). Never a multi-pixel jump,
-            // totalling exactly one metatile (8 + 7 + 1 = 16) across the
-            // whole transit.
-            //
-            // The BG half of the same property is pinned by
-            // `super::super::viewport::tests`'
-            // `build_tilemaps_scroll_lags_behind_during_a_transit_and_settles_at_rest`,
-            // at these same checkpoints: 8 frames into an east step this
-            // NPC has moved `-8` px while that test's `scroll_x` has grown
-            // by `+8`. Equal and opposite is exactly what "glued to the
-            // background" means -- scrolling the map right by 8 and moving
-            // the sprite left by 8 are the same displacement.
             let (dx, dy) = direction.delta();
             let step = |a: rendering::OamEntry, b: rendering::OamEntry| {
                 (
@@ -1602,13 +1162,19 @@ mod tests {
             };
             assert_eq!(
                 step(progress0[0], mid[0]),
-                (-dx * 8, -dy * 8),
-                "{direction:?}: frames 0-8"
+                (
+                    -dx * i32::from(midpoint_ticks),
+                    -dy * i32::from(midpoint_ticks)
+                ),
+                "{direction:?}: progress zero to midpoint"
             );
             assert_eq!(
                 step(mid[0], last[0]),
-                (-dx * 7, -dy * 7),
-                "{direction:?}: frames 8-15"
+                (
+                    -dx * i32::from(remaining_transit_ticks),
+                    -dy * i32::from(remaining_transit_ticks),
+                ),
+                "{direction:?}: midpoint to last transit frame"
             );
             assert_eq!(
                 step(last[0], settled[0]),
@@ -1616,11 +1182,8 @@ mod tests {
                 "{direction:?}: frame 15 to the first resting frame"
             );
 
-            // The settled position matches a fresh, never-transited player
-            // already standing at the destination -- the "first resting
-            // frame" is exactly the plain at-rest placement, not an
-            // approximation of it.
-            let fresh_at_destination = PlayerState::new(player.position(), 3, direction);
+            let fresh_at_destination =
+                PlayerState::new(player.position(), DEFAULT_ELEVATION, direction);
             let fresh = oam_entries(events, &bindings, &fresh_at_destination, &data);
             assert_eq!(
                 (settled[0].x(), settled[0].y()),

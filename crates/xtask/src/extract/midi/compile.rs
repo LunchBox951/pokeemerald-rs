@@ -1,181 +1,27 @@
-//! The compiler proper: turns [`parse::parse_track`]'s per-`MTrk` output
-//! into one [`event::SongEvent`] stream per playable (MIDI-track,
-//! MIDI-channel) pair, reproducing `tools/mid2agb`'s own interpretation —
-//! `midi.cpp`'s `ReadMidiTracks`/`MergeEvents`/`ConvertTimes`/`CreateTies`
-//! pipeline and `agb.cpp`'s `PrintAgbTrack` translation — without
-//! reproducing the parts of that pipeline that only exist to serve a
-//! *compiled-byte-code* concern this schema deliberately does not model.
-//! Read this file's docs alongside `crates/assets::audio`'s "Deliberately
-//! deferred" section, which this module's choices are downstream of.
+//! Compiles parsed MIDI chunks into explicit [`SongEvent`] streams.
 //!
-//! # Pipeline
+//! Each playable `(chunk, channel)` pair becomes one output track, ordered by
+//! chunk and then channel. A channel is playable only when a note-on has a
+//! later same-key note-off in that channel. Track zero supplies tempo, timing,
+//! and loop events, and only the first output track receives tempo. These rules
+//! reproduce `midi.cpp:434-490,916-964` without its seek-based parsing.
 //!
-//! 1. [`compile`] reads `MThd`, splits every `MTrk` chunk
-//!    ([`super::reader`]), and parses each one once ([`super::parse`]).
-//! 2. Track 0's parse is filtered down to "sequence events" — tempo, time
-//!    signature, and the four loop-marker text events — matching
-//!    `ReadSeqEvent`'s own narrower recognition (`midi.cpp:253-348`; `ReadTrackEvent` recognizes
-//!    a disjoint event set, so one parse serves both purposes — see
-//!    `super::parse`'s module docs, "One pass, not sixteen").
-//! 3. For every `(MTrk chunk, MIDI channel)` pair that carries at least one
-//!    *playable* note-on ([`channel_is_playable`]), [`compile_track`] builds
-//!    that channel's own [`event::SongEvent`] stream, reproducing
-//!    `midi.cpp:916-964`'s nested loop order exactly (`MTrk` chunk outer,
-//!    ascending; channel inner, ascending `0..16`) so output track order
-//!    matches upstream's `g_agbTrack` numbering.
+//! Exact gates and the default clock scale are required because [`SongEvent`]
+//! has no clock-scale metadata. Notes and tie ends keep every operand explicit;
+//! pattern compression and operand elision do not change musical behavior and
+//! are not represented. `MEMACC` controllers fail closed because their branch
+//! state is not represented either.
 //!
-//! # Which channels become tracks
+//! [`SongEvent::Wait`] stores a free `u8` tick count rather than upstream's
+//! restricted `Wnn` opcode set. The compiler therefore preserves total delays
+//! without reproducing ordinary wait chunking. It does reproduce the one
+//! observable exception: CC `0x1E` omits its own first wait chunk after
+//! upstream inserts whole-note timing marks and off-grid splits
+//! (`midi.cpp:653-730`, `agb.cpp:349-405`).
 //!
-//! Upstream's gate is `s_minNote != 0xFF` (`midi.cpp:933`), and `s_minNote`
-//! is only ever touched inside `ReadTrackEvents`'s note-on arm *under*
-//! `if (event.param2 > 0)` (`:484-490`) — `param2` there being the raw MIDI
-//! tick duration `FindNoteEnd` has just computed, before any scaling. A
-//! channel is therefore playable to upstream when it carries at least one
-//! note-on whose note-off lands strictly later than it; a channel whose
-//! every note-on is cancelled at the same tick emits no track at all.
-//! [`channel_is_playable`] reproduces that gate exactly, rather than the
-//! looser "any note-on at all" test an earlier revision of this file used.
-//! The difference is unobservable for `mus_title.mid` (10 tracks either
-//! way), but it is not cosmetic: an extra emitted track would also shift
-//! which track counts as the first one, and so which track receives the
-//! song's `Tempo` (`include_tempo`, [`compile_track`]).
-//!
-//! # Note pairing, not upstream's seek-and-rewind
-//!
-//! `midi.cpp:434-448`'s `FindNoteEnd` computes a note's duration by saving
-//! the file position, scanning forward byte-by-byte for the next matching
-//! note-off/note-on-velocity-`0` on the same channel and key, then seeking
-//! back. [`find_note_end`] does the equivalent forward search over the
-//! already-parsed, already-channel-filtered event list instead — same
-//! result (first matching note-off after this note-on, ignoring everything
-//! else in between, including a same-key retrigger), no seek needed because
-//! nothing here is a stream (`no-verbatim`).
-//!
-//! # Tick scaling and gate length: exact, not LUT-quantized
-//!
-//! `midi.cpp:646`: `if (!g_exactGateTime && duration < 96) duration =
-//! g_noteDurationLUT[duration];` — the note-duration quantization table
-//! (`tables.cpp:23-122`) only ever fires when `-E` is *absent*.
-//! `mus_title.mid`'s own `midi.cfg` entry always carries `-E`
-//! (`sound/songs/midi/midi.cfg:186`), so this compiler requires it
-//! ([`super::error::MidiError::NonExactGateTime`] otherwise) and never
-//! implements that table at all — an honest, title-scoped cut, not an
-//! oversight: a future compiler slice for a song whose `midi.cfg` entry
-//! omits `-E` would need to add it. The same reasoning applies to
-//! `-X`/48-clocks-per-beat ([`super::error::MidiError::UnsupportedClocksPerBeat`]):
-//! this schema carries no "ticks per quarter note" field a consumer could
-//! use to tell a `-X` song's ticks apart from a default song's, so
-//! supporting it here would produce ticks a generic consumer can't
-//! correctly interpret — a schema gap for a later slice to close, not
-//! something this compiler should paper over by guessing.
-//!
-//! With `-E` required, `agb.cpp:150-158`'s `gtp`
-//! (exact-gate-time-parameter) split — which re-derives the *compiled
-//! opcode's* coarse duration via the same LUT and stores only the
-//! remainder as a second operand — nets out to the exact original tick
-//! count once decoded (`ply_note`, `src/m4a_1.s:1538-1576`, adds the two
-//! back together): [`event::SongEvent::Note::gate`] is simply that exact
-//! value, with no LUT involved on this compiler's side either.
-//!
-//! # `Wait` is a free tick count, not a 49-value enum
-//!
-//! `sound/MPlayDef.s:1-49` only defines 49 distinct `WAIT`/`Wnn` opcodes
-//! (`0`, `1..=24`, then a coarser tail up to `96`), so `tools/mid2agb`'s
-//! `SplitTime` (`midi.cpp:689-730`) — which also drives its whole-note
-//! (`WholeNoteMark`) bookkeeping for the pattern-compression pass this
-//! schema doesn't model — exists to break any longer or off-grid rest into
-//! pieces that opcode set can represent. None of that is a musical
-//! constraint: MP2K's `WAIT` deltas are purely additive (no side effects
-//! between them), so splitting one 48-tick rest into `W30`+`W18` instead of
-//! one `W48` is inaudible. [`event::SongEvent::Wait`] carries a plain `u8`
-//! tick count with no such enum to respect, so [`push_wait`] only splits a
-//! gap when it doesn't fit in a `u8` (`> 255` ticks) — a wire-format
-//! necessity of *this* schema, unrelated to upstream's 49-value opcode set.
-//!
-//! One boundary in that machinery *does* change emitted delays: the wait
-//! upstream drops after a CC `0x1E` is the selector's post-`CalculateWaits`
-//! `time`, which reaches only to the next element of the augmented stream —
-//! the first timing mark `InsertTimingEvents` seeded on the whole-note grid
-//! (`midi.cpp:653-686`), or the first `TimeSplit` inside what remains.
-//! [`emit_track`]'s grid walk plus [`split_time_first_chunk`] model exactly
-//! that one boundary — the rest of the chunking stays unmodelled per the
-//! above.
-//!
-//! # No operand elision
-//!
-//! `tools/mid2agb`'s compression pass (`g_compressionEnabled`, on by
-//! default and not disabled by `-N` in `mus_title.mid`'s own entry) elides
-//! repeated operands for on-disk size — most visibly,
-//! `agb.cpp:222-244`'s `PrintEndOfTieOp` omits `EOT`'s key operand
-//! entirely when it matches the immediately preceding note (the engine then
-//! matches whichever key the channel currently has sounding). This is a
-//! wire-size optimization, not new musical content — the same category as
-//! `PATT`/`PEND` (`crates/assets::audio`'s "Deliberately deferred" docs) —
-//! so this compiler always writes an explicit key
-//! ([`event::SongEvent::EndOfTie`]'s docs), and likewise never elides a
-//! `Note`'s key/velocity. Every `Note`/`EndOfTie` this compiler emits is
-//! therefore fully self-describing, at the cost of not byte-matching a
-//! compressed compile — the same trade-off this schema already makes by not
-//! modelling `PATT`/`PEND` at all.
-//!
-//! # `MEMACC` controllers: unsupported, not silently dropped
-//!
-//! Controllers `0x0C`/`0x0D`/`0x0E`/`0x0F`/`0x10`/`0x11` — `MEMACC`'s
-//! set/branch-op/address/data operands and its `_L<n>:` branch-target label
-//! (`agb.cpp:254-329`'s `PrintMemAcc`, `:366-382`'s state-setting cases)
-//! — are the one controller family this compiler refuses outright
-//! ([`super::error::MidiError::UnsupportedMemAccController`]) rather than
-//! translating: `mus_title.mid` carries zero of them (confirmed against a
-//! locally built `tools/mid2agb` oracle — the compiled reference has no
-//! `MEMACC` byte anywhere), and the schema's one canonical `MEMACC` user,
-//! `mus_vs_trainer`, is a different song outside this issue's scope
-//! (`crates/assets::audio`'s "Deliberately deferred" docs already model
-//! [`event::SongEvent`]'s wire shape for it — `super::event`'s module docs).
-//! Failing closed here, instead of adding untested branch-resolution
-//! machinery no real input in this slice exercises, is the honest choice;
-//! a future slice compiling `mus_vs_trainer` is what should teach this
-//! compiler `MEMACC`, informed by a real test case.
-//!
-//! # Extended commands (`XCMD`): both directions modelled
-//!
-//! Unlike `MEMACC`, `XCMD` (`agb.cpp:331-347`'s `PrintExtendedOp`) *is*
-//! exercised by `mus_title.mid` (three `xIECV` occurrences in the oracle),
-//! so both of its recognized sub-commands are modelled
-//! ([`event::SongEvent::PseudoEchoVolume`]/[`event::SongEvent::PseudoEchoLength`]);
-//! any other extended-command value is a silent no-op, matching upstream's
-//! own `default: PrintWait(event.time); break;` (`agb.cpp:343-345`,
-//! its own `// TODO: support for other extended commands` comment) — this
-//! is upstream's *actual*, exercised behaviour, not a scope cut.
-//!
-//! # Track preamble order: volume, wait, `KEYSH`
-//!
-//! [`emit_track`] opens every track with the optional synthetic
-//! full-volume byte, then the initial wait, then `KeyShift(0)` — which is
-//! `PrintAgbTrack`'s own order: `agb.cpp:441-442`'s conditional
-//! `PrintByte("VOL ...")`, then `:444`'s `PrintWait(g_initialWait)`, then
-//! `:445`'s `PrintByte("KEYSH ...")`. Reviewed against upstream directly
-//! (the wait precedes `KEYSH` there too, and `g_initialWait` is
-//! `events[0].time` captured before `CalculateWaits` rewrites each event's
-//! time into a gap — `midi.cpp:758-763`), so this is a match, not a latent
-//! divergence. It is called out because the ordering *looks* arbitrary: a
-//! `KEYSH` is a state write with no duration, so hoisting it ahead of the
-//! initial rest would be inaudible, and a reader comparing the two files
-//! could reasonably wonder which way round upstream had it. It is this way
-//! round.
-//!
-//! # Sort order
-//!
-//! [`ItemKind::sort_key`] reproduces `midi.cpp:565-598`'s `EventCompare`
-//! exactly enough to matter: `MergeEvents`'s two-pointer merge
-//! (`midi.cpp:600-629`) only ever breaks a tie between two events of the
-//! *same* concrete type (channel-voice events never collide with the
-//! disjoint seq-event types), so concatenating this track's items in any
-//! order and running one stable
-//! sort by `(time, type-priority, note-for-EndOfTie)` — Rust's `sort_by_key`
-//! preserves original relative order for equal keys — reproduces the exact
-//! same final order upstream's merge-then-two-sorts (`MergeEvents`, then
-//! `std::stable_sort` again after `CreateTies` inserts new `EndOfTie`
-//! events) produces, without literally replicating either pass.
+//! Same-tick items use upstream's semantic type order, with note key as the
+//! note and tie-end tiebreaker (`midi.cpp:565-598`). A stable sort preserves
+//! source order when those keys are equal.
 
 use super::cfg::MidiCfgEntry;
 use super::error::MidiError;
@@ -188,72 +34,64 @@ use super::translate::{
 };
 use super::velocity;
 
-/// One MIDI-channel's worth of normalized events, tagged by its sort
-/// priority relative to `midi.cpp:32-51`'s `EventType` — see the module
-/// docs, "Sort order".
+const MIDI_CHANNEL_COUNT: u8 = 16;
+const MAX_UNTIED_NOTE_TICKS: u32 = 96;
+const DEFAULT_WHOLE_NOTE_TICKS: u32 = 96;
+const FULL_MIDI_VALUE: u8 = 127;
+
 #[derive(Debug, Clone)]
 enum ItemKind {
-    EndOfTie {
-        key: u8,
-    },
-    Label,
+    EndOfTie { key: u8 },
+    SilentLabel,
     LoopEnd,
     LoopEndBegin,
     LoopBegin,
     Tempo(u16),
-    /// A file time-signature event (`RawEvent::TimeSignature`, converted to
-    /// its whole-note grid period in ticks). Emits nothing itself — after
-    /// `CalculateWaits` it is a `WholeNoteMark`, a pure wait printer
-    /// (`agb.cpp:488-494`) — but it keeps its own following wait like
-    /// [`Self::SilentController`], and it re-phases the timing grid that
-    /// bounds the dropped wait after a CC `0x1E` ([`emit_track`]).
-    TimeSignature(u32),
+    TimingGridChange(u32),
     ProgramChange(u8),
     Command(SongEvent),
-    /// CC `0x1E`'s own timing-only marker — no [`SongEvent`] is emitted for
-    /// it, but [`emit_track`] needs it recorded so it can drop the first
-    /// [`split_time_first_chunk`] of the wait that follows, reproducing
-    /// upstream's missing `PrintWait(event.time)` (`super::translate`'s
-    /// module docs, "Reproduced: the dropped wait after CC `0x1E`").
-    ExtendedCommandSelect,
-    /// A controller upstream's switch handles with a bare
-    /// `PrintWait(event.time)` (an unknown CC, or a `0x1D`/`0x1F` trigger
-    /// whose selected sub-command is not `8`/`9`): no [`SongEvent`], but
-    /// unlike [`Self::ExtendedCommandSelect`] its own wait *is* kept, so it
-    /// must stay an item — dropping it would fold its gap into the previous
-    /// item's wait, and after a CC `0x1E` that folded gap would be dropped
-    /// wholesale where upstream drops only the selector's own gap.
+    ExtendedCommandSelector,
     SilentController,
     PitchBend(i8),
-    Note {
-        key: u8,
-        velocity: u8,
-        gate: u8,
-    },
+    Note { key: u8, velocity: u8, gate: u8 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ItemPriority {
+    EndOfTie,
+    SilentLabel,
+    LoopEnd,
+    LoopEndBegin,
+    LoopBegin,
+    TimingGridChange,
+    Tempo,
+    ProgramChange,
+    Controller,
+    PitchBend,
+    Note,
 }
 
 impl ItemKind {
-    fn sort_key(&self) -> (u32, u32) {
+    fn sort_key(&self) -> (ItemPriority, u8) {
         match *self {
-            Self::EndOfTie { key } => (0x01, u32::from(key)),
-            Self::Label => (0x11, 0),
-            Self::LoopEnd => (0x12, 0),
-            Self::LoopEndBegin => (0x13, 0),
-            Self::LoopBegin => (0x14, 0),
-            Self::TimeSignature(_) => (0x18, 0),
-            Self::Tempo(_) => (0x19, 0),
-            Self::ProgramChange(_) => (0x21, 0),
-            // All three are upstream's own `EventType::Controller`
-            // (`midi.h:45`), so all share its sort priority.
-            Self::Command(_) | Self::ExtendedCommandSelect | Self::SilentController => (0x22, 0),
-            Self::PitchBend(_) => (0x23, 0),
-            Self::Note { key, .. } => (0x40 + u32::from(key), 0),
+            Self::EndOfTie { key } => (ItemPriority::EndOfTie, key),
+            Self::SilentLabel => (ItemPriority::SilentLabel, 0),
+            Self::LoopEnd => (ItemPriority::LoopEnd, 0),
+            Self::LoopEndBegin => (ItemPriority::LoopEndBegin, 0),
+            Self::LoopBegin => (ItemPriority::LoopBegin, 0),
+            Self::TimingGridChange(_) => (ItemPriority::TimingGridChange, 0),
+            Self::Tempo(_) => (ItemPriority::Tempo, 0),
+            Self::ProgramChange(_) => (ItemPriority::ProgramChange, 0),
+            Self::Command(_) | Self::ExtendedCommandSelector | Self::SilentController => {
+                (ItemPriority::Controller, 0)
+            }
+            Self::PitchBend(_) => (ItemPriority::PitchBend, 0),
+            Self::Note { key, .. } => (ItemPriority::Note, key),
         }
     }
 }
 
-/// A fully compiled song: `midi.cfg`'s song-level metadata plus one
-/// [`event::SongEvent`] stream per playable track, in `g_agbTrack` order.
+/// Song metadata and tracks ready for asset encoding.
 #[derive(Debug)]
 pub(super) struct CompiledSong {
     pub(super) voicegroup_label: String,
@@ -262,46 +100,20 @@ pub(super) struct CompiledSong {
     pub(super) tracks: Vec<Vec<SongEvent>>,
 }
 
-/// Find the tick position of the note-off (or velocity-`0` note-on, already
-/// folded into [`RawEvent::NoteOff`] by [`parse::parse_track`]) that ends
-/// the note-on at `channel_events[from..][0]`'s own `key` — the first
-/// matching entry after it, ignoring everything else (module docs, "Note
-/// pairing").
-///
-/// `channel` is not part of the search — `channel_events` is already one
-/// channel's slice — and is carried purely to label the error, so a
-/// "note doesn't end" diagnostic names the offending channel the way
-/// upstream's own `RaiseError` context does. That is deliberate, not a
-/// leftover parameter.
-///
-/// # Errors
-///
-/// [`MidiError::UnterminatedNote`] if no match is found before the track's
-/// end.
 fn find_note_end(
     channel_events: &[(u32, RawEvent)],
-    channel: u8,
+    error_channel: u8,
     key: u8,
 ) -> Result<u32, MidiError> {
     channel_events
         .iter()
         .find_map(|&(t, e)| matches!(e, RawEvent::NoteOff { key: k, .. } if k == key).then_some(t))
-        .ok_or(MidiError::UnterminatedNote { channel, key })
+        .ok_or(MidiError::UnterminatedNote {
+            channel: error_channel,
+            key,
+        })
 }
 
-/// Whether this channel becomes one of the compiled song's tracks:
-/// `true` when it carries at least one note-on with a strictly positive
-/// *raw* tick duration, reproducing `midi.cpp:484-490`'s `if
-/// (event.param2 > 0)` guard around `s_minNote` and `:933`'s
-/// `if (s_minNote != 0xFF)` test on it (module docs, "Which channels become
-/// tracks").
-///
-/// # Errors
-///
-/// [`MidiError::UnterminatedNote`] if a note-on on this channel never ends
-/// — the same failure [`push_notes`] would raise, surfaced here because
-/// upstream's `FindNoteEnd` likewise runs (and can `RaiseError`) for every
-/// note-on before the gate is consulted.
 fn channel_is_playable(channel_events: &[(u32, RawEvent)], channel: u8) -> Result<bool, MidiError> {
     for index in 0..channel_events.len() {
         let (time, event) = channel_events[index];
@@ -316,10 +128,6 @@ fn channel_is_playable(channel_events: &[(u32, RawEvent)], channel: u8) -> Resul
     Ok(false)
 }
 
-/// Pair every note-on in `channel_events` with its ending tick, apply the
-/// velocity quantization table, and tie-split any duration over 96 ticks
-/// (`midi.cpp:738-749`'s `CreateTies`) — pushing the resulting `Note`/
-/// `EndOfTie` items onto `items`.
 fn push_notes(
     items: &mut Vec<(u32, ItemKind)>,
     channel_events: &[(u32, RawEvent)],
@@ -340,13 +148,10 @@ fn push_notes(
         let raw_duration = off_time.checked_sub(time).ok_or(MidiError::Truncated)?;
 
         let start = convert_ticks(time, division)?;
-        let mut duration = convert_ticks(raw_duration, division)?;
-        if duration == 0 {
-            duration = 1; // midi.cpp:643-644
-        }
+        let duration = convert_ticks(raw_duration, division)?.max(1);
         let velocity = velocity::NOTE_VELOCITY_LUT[usize::from(raw_velocity)];
 
-        if duration > 96 {
+        if duration > MAX_UNTIED_NOTE_TICKS {
             items.push((
                 start,
                 ItemKind::Note {
@@ -360,8 +165,7 @@ fn push_notes(
                 .ok_or(MidiError::TickOverflow(off_time))?;
             items.push((end, ItemKind::EndOfTie { key }));
         } else {
-            #[allow(clippy::cast_possible_truncation)] // duration <= 96 here
-            let gate = duration as u8;
+            let gate = u8::try_from(duration).expect("untied note duration fits in u8");
             items.push((
                 start,
                 ItemKind::Note {
@@ -375,11 +179,6 @@ fn push_notes(
     Ok(())
 }
 
-/// Compile one `(MTrk chunk, MIDI channel)` pair's events into a single
-/// track's [`SongEvent`] stream. `include_tempo` is `true` only for the
-/// very first track any real `MTrk` chunk produces (`midi.cpp:941-946`
-/// strips `Tempo` from the shared sequence-event list right after the
-/// first track consumes it).
 #[allow(clippy::too_many_arguments)]
 fn compile_track(
     channel: u8,
@@ -416,7 +215,7 @@ fn compile_track(
                     }
                     ControllerEvent::ExtendedCommandSelect => {
                         let converted = convert_ticks(time, division)?;
-                        items.push((converted, ItemKind::ExtendedCommandSelect));
+                        items.push((converted, ItemKind::ExtendedCommandSelector));
                     }
                     ControllerEvent::None => {
                         let converted = convert_ticks(time, division)?;
@@ -443,20 +242,17 @@ fn compile_track(
                 numerator,
                 denominator_exponent,
             } => {
-                // midi.cpp:329-331 at the enforced clocks_per_beat == 1;
-                // the numerator keeps the product far below upstream's
-                // `timeSig >= 0x10000` guard, so only the zero case is
-                // reachable here.
-                let period = (96 * u32::from(numerator)) >> denominator_exponent;
+                let period =
+                    (DEFAULT_WHOLE_NOTE_TICKS * u32::from(numerator)) >> denominator_exponent;
                 if period == 0 {
                     return Err(MidiError::ZeroTimeSignature);
                 }
-                items.push((converted, ItemKind::TimeSignature(period)));
+                items.push((converted, ItemKind::TimingGridChange(period)));
             }
             RawEvent::LoopBegin => items.push((converted, ItemKind::LoopBegin)),
             RawEvent::LoopEndBegin => items.push((converted, ItemKind::LoopEndBegin)),
             RawEvent::LoopEnd => items.push((converted, ItemKind::LoopEnd)),
-            RawEvent::Label => items.push((converted, ItemKind::Label)),
+            RawEvent::Label => items.push((converted, ItemKind::SilentLabel)),
             _ => {}
         }
     }
@@ -469,41 +265,25 @@ fn compile_track(
     emit_track(&items, master_volume, final_boundary)
 }
 
-/// Append `ticks`' worth of [`SongEvent::Wait`], splitting on `u8::MAX`
-/// only because [`SongEvent::Wait`] carries a plain `u8` — a wire
-/// constraint of *this* schema, not upstream's 49-value opcode set (module
-/// docs).
-/// `tables.cpp:23-122`'s `g_noteDurationLUT`, indices `0..=96`: each tick
-/// count's nearest representable `Wnn` opcode value at or below it. Only
-/// consulted by [`split_time_first_chunk`]; the note-duration quantization
-/// path that also reads this table stays unmodelled (module docs, "Tick
-/// scaling and gate length").
-const NOTE_DURATION_LUT: [u8; 97] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 24,
-    24, 24, 28, 28, 30, 30, 32, 32, 32, 32, 36, 36, 36, 36, 40, 40, 42, 42, 44, 44, 44, 44, 48, 48,
-    48, 48, 52, 52, 54, 54, 56, 56, 56, 56, 60, 60, 60, 60, 64, 64, 66, 66, 68, 68, 68, 68, 72, 72,
-    72, 72, 76, 76, 78, 78, 80, 80, 80, 80, 84, 84, 84, 84, 88, 88, 90, 90, 92, 92, 92, 92, 96,
+/// The distinct `Wnn` durations represented by `g_noteDurationLUT`
+/// (`tables.cpp:23-122`), in ascending order.
+const ENCODABLE_WAIT_TICKS: &[u8] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 28,
+    30, 32, 36, 40, 42, 44, 48, 52, 54, 56, 60, 64, 66, 68, 72, 76, 78, 80, 84, 88, 90, 92, 96,
 ];
 
-/// How much of `gap` upstream's `SplitTime` (`midi.cpp:689-730`) leaves
-/// between an event and the first `TimeSplit` it inserts into that gap
-/// (the caller has already clamped `gap` to the next whole-note timing
-/// mark, which `InsertTimingEvents` seeded before `SplitTime` ran --
-/// [`emit_track`]'s grid walk):
-/// `96` when the gap exceeds a whole note (`midi.cpp:699-712` peels
-/// whole-note chunks first), otherwise the gap's `g_noteDurationLUT` floor
-/// (`midi.cpp:714-722`) — the entire gap exactly when it is a LUT fixed
-/// point. After `CalculateWaits` this first chunk is the *only* wait the
-/// preceding event's own `time` field carries; every later chunk belongs
-/// to a `TimeSplit`, which prints its own wait via `PrintAgbTrack`'s
-/// `default:` arm (`agb.cpp:518-520`).
-fn split_time_first_chunk(gap: u32) -> u32 {
-    if gap > 96 {
-        96
-    } else {
-        let gap = usize::try_from(gap).expect("gap <= 96 here, checked just above");
-        u32::from(NOTE_DURATION_LUT[gap])
+fn first_encodable_wait_chunk(gap: u32) -> u32 {
+    if gap > DEFAULT_WHOLE_NOTE_TICKS {
+        return DEFAULT_WHOLE_NOTE_TICKS;
     }
+
+    ENCODABLE_WAIT_TICKS
+        .iter()
+        .rev()
+        .copied()
+        .map(u32::from)
+        .find(|&ticks| ticks <= gap)
+        .expect("encodable waits include zero")
 }
 
 fn push_wait(out: &mut Vec<SongEvent>, ticks: u32) {
@@ -513,22 +293,51 @@ fn push_wait(out: &mut Vec<SongEvent>, ticks: u32) {
         remaining -= u32::from(u8::MAX);
     }
     if remaining > 0 {
-        #[allow(clippy::cast_possible_truncation)] // remaining <= u8::MAX here
-        let ticks = remaining as u8;
+        let ticks = u8::try_from(remaining).expect("remaining wait fits in u8");
         out.push(SongEvent::Wait(ticks));
     }
 }
 
-/// Turn a track's sorted items into the final [`SongEvent`] stream:
-/// optional synthetic full-volume preamble, initial wait, `KeyShift(0)`,
-/// then each item's own command followed by the wait until the next one (or
-/// until `final_boundary` for the last item) — `agb.cpp:417-525`'s
-/// `PrintAgbTrack`, ending with `Fine`.
-///
-/// # Errors
-///
-/// [`MidiError::DanglingLoopEnd`] if a `LoopEnd`/`LoopEndBegin` item has no
-/// preceding `LoopBegin`/`LoopEndBegin`.
+struct TimingGrid {
+    period: u32,
+    next_mark: u32,
+}
+
+impl TimingGrid {
+    fn new() -> Self {
+        Self {
+            period: DEFAULT_WHOLE_NOTE_TICKS,
+            next_mark: 0,
+        }
+    }
+
+    fn update_for_item(&mut self, time: u32, kind: &ItemKind) -> Result<(), MidiError> {
+        if let ItemKind::TimingGridChange(period) = kind {
+            self.period = *period;
+            self.next_mark = time
+                .checked_add(*period)
+                .ok_or(MidiError::TickOverflow(time))?;
+        } else if self.next_mark <= time {
+            let elapsed_periods = (time - self.next_mark) / self.period + 1;
+            self.next_mark = elapsed_periods
+                .checked_mul(self.period)
+                .and_then(|elapsed| self.next_mark.checked_add(elapsed))
+                .ok_or(MidiError::TickOverflow(time))?;
+        }
+        Ok(())
+    }
+
+    fn ticks_until_next_mark(&self, time: u32) -> u32 {
+        self.next_mark
+            .checked_sub(time)
+            .expect("timing grid advances beyond each item")
+    }
+}
+
+fn output_index(out: &[SongEvent]) -> u32 {
+    u32::try_from(out.len()).expect("track event count fits in u32")
+}
+
 fn emit_track(
     items: &[(u32, ItemKind)],
     master_volume: u8,
@@ -536,10 +345,7 @@ fn emit_track(
 ) -> Result<Vec<SongEvent>, MidiError> {
     let mut out = Vec::new();
 
-    // agb.cpp:427-442: scan for the first Note or CC7 (volume); a CC7
-    // found first means the track's own content sets an explicit starting
-    // volume, so no synthetic full-volume command is needed.
-    let found_volume_before_note = items
+    let has_initial_volume = items
         .iter()
         .find_map(|(_, kind)| match kind {
             ItemKind::Note { .. } => Some(false),
@@ -547,8 +353,11 @@ fn emit_track(
             _ => None,
         })
         .unwrap_or(false);
-    if !found_volume_before_note {
-        out.push(SongEvent::Volume(scale_volume(127, master_volume)));
+    if !has_initial_volume {
+        out.push(SongEvent::Volume(scale_volume(
+            FULL_MIDI_VALUE,
+            master_volume,
+        )));
     }
 
     let initial_wait = items.first().map_or(0, |&(t, _)| t);
@@ -556,67 +365,22 @@ fn emit_track(
     out.push(SongEvent::KeyShift(0));
 
     let mut loop_target: Option<u32> = None;
-    // midi.cpp:653-686 (`InsertTimingEvents`): a timing mark sits at every
-    // whole-note grid boundary -- period `96 * clocks_per_beat` ticks from
-    // `0`, re-phased to `time + period` by each file time-signature event
-    // -- and each mark prints its own wait as a `WholeNoteMark`
-    // (`agb.cpp:488-494`). The marks are wait chunking this schema doesn't
-    // model (module docs), but the next one bounds the wait upstream drops
-    // after a CC 0x1E, so walk their positions alongside the items.
-    let mut grid_period: u32 = 96;
-    let mut next_mark: u32 = 0;
+    let mut timing_grid = TimingGrid::new();
     for (index, (time, kind)) in items.iter().enumerate() {
-        if let ItemKind::TimeSignature(period) = kind {
-            // midi.cpp:671-679: a file time-signature event overwrites the
-            // pending mark outright (a mark coincident with it is skipped:
-            // TimeSignature never sorts before itself in `EventCompare`).
-            grid_period = *period;
-            next_mark = time
-                .checked_add(*period)
-                .ok_or(MidiError::TickOverflow(*time))?;
-        } else {
-            // midi.cpp:663-667: marks are emitted up to (and, for item
-            // kinds that sort after `TimeSignature`, including) this item's
-            // time. Consuming through ties for the earlier-sorting kinds
-            // too is harmless: only the marks' positions matter here, never
-            // their interleaving with zero-gap neighbours. Advanced
-            // arithmetically, not one period at a time: a `1/64` signature
-            // makes the period `1`, and a legal-VLQ event near `u32::MAX`
-            // would otherwise walk billions of iterations. Checked: a mark
-            // that cannot exceed a `u32::MAX` item time fails closed (a
-            // track that long is ~2 years of ticks) instead of saturating,
-            // which previously looped forever.
-            if next_mark <= *time {
-                let periods = (*time - next_mark) / grid_period + 1;
-                next_mark = periods
-                    .checked_mul(grid_period)
-                    .and_then(|step| next_mark.checked_add(step))
-                    .ok_or(MidiError::TickOverflow(*time))?;
-            }
-        }
+        timing_grid.update_for_item(*time, kind)?;
         match kind {
             ItemKind::EndOfTie { key } => out.push(SongEvent::EndOfTie { key: *key }),
-            // Label emits nothing, matching upstream (module docs, "Sort
-            // order"); ExtendedCommandSelect and SilentController emit
-            // nothing either -- both are timing markers (their doc
-            // comments) -- but the arms are merged for
-            // clippy::match_same_arms, not because they mean the same
-            // thing: only ExtendedCommandSelect suppresses the wait below.
-            ItemKind::Label
-            | ItemKind::ExtendedCommandSelect
+            ItemKind::SilentLabel
+            | ItemKind::ExtendedCommandSelector
             | ItemKind::SilentController
-            | ItemKind::TimeSignature(_) => {}
+            | ItemKind::TimingGridChange(_) => {}
             ItemKind::LoopBegin => {
-                loop_target = Some(
-                    u32::try_from(out.len()).expect("a track has far fewer than u32::MAX events"),
-                );
+                loop_target = Some(output_index(&out));
             }
             ItemKind::LoopEndBegin => {
                 let target = loop_target.ok_or(MidiError::DanglingLoopEnd)?;
                 out.push(SongEvent::Goto(target));
-                loop_target = Some(
-                    u32::try_from(out.len()).expect("a track has far fewer than u32::MAX events"),
-                );
+                loop_target = Some(output_index(&out));
             }
             ItemKind::LoopEnd => {
                 let target = loop_target.ok_or(MidiError::DanglingLoopEnd)?;
@@ -640,18 +404,9 @@ fn emit_track(
         }
         let next_time = items.get(index + 1).map_or(final_boundary, |&(t, _)| t);
         let gap = next_time.checked_sub(*time).ok_or(MidiError::Truncated)?;
-        // agb.cpp:402-405: CC 0x1E's own arm is the one `PrintControllerOp`
-        // case that `break`s without a trailing `PrintWait(event.time)`.
-        // By then the stream already carries the timing marks and
-        // `SplitTime`'s `TimeSplit`s, all of which print their own waits,
-        // so the selector's post-`CalculateWaits` `time` -- the wait that
-        // goes missing -- reaches only to the nearest of the next item,
-        // the next grid mark, and the first `TimeSplit` boundary. Drop
-        // exactly that much (`super::translate`'s module docs,
-        // "Reproduced: the dropped wait after CC `0x1E`").
-        if matches!(kind, ItemKind::ExtendedCommandSelect) {
-            let bounded = gap.min(next_mark - *time);
-            push_wait(&mut out, gap - split_time_first_chunk(bounded));
+        if matches!(kind, ItemKind::ExtendedCommandSelector) {
+            let bounded_gap = gap.min(timing_grid.ticks_until_next_mark(*time));
+            push_wait(&mut out, gap - first_encodable_wait_chunk(bounded_gap));
         } else {
             push_wait(&mut out, gap);
         }
@@ -661,13 +416,12 @@ fn emit_track(
     Ok(out)
 }
 
-/// Compile a whole `.mid` file's bytes into every playable track's
-/// [`SongEvent`] stream, per `cfg`'s compile flags — see the module docs
-/// for the pipeline and every deliberate scope cut.
+/// Compiles a MIDI file according to its extraction configuration.
 ///
 /// # Errors
 ///
-/// See [`MidiError`]'s variants.
+/// Returns [`MidiError`] when the file is malformed or requires an unsupported
+/// compilation feature.
 pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledSong, MidiError> {
     if !cfg.exact_gate_time {
         return Err(MidiError::NonExactGateTime);
@@ -682,8 +436,8 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
     }
     let track_slices = reader::split_tracks(midi_bytes, header.track_count)?;
 
-    let seq_track = parse::parse_track(track_slices[0])?;
-    let seq_events: Vec<(u32, RawEvent)> = seq_track
+    let sequence_track = parse::parse_track(track_slices[0])?;
+    let sequence_events: Vec<(u32, RawEvent)> = sequence_track
         .events
         .iter()
         .copied()
@@ -701,38 +455,35 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
         .collect();
 
     let mut tracks = Vec::new();
-    let mut is_first_agb_track = true;
+    let mut include_tempo = true;
     for track_data in &track_slices {
         let parsed = parse::parse_track(track_data)?;
-        for channel in 0..16u8 {
+        for channel in 0..MIDI_CHANNEL_COUNT {
             let channel_events: Vec<(u32, RawEvent)> = parsed
                 .events
                 .iter()
                 .copied()
                 .filter(|(_, e)| e.channel() == Some(channel))
                 .collect();
-            // Upstream's own `s_minNote != 0xFF` gate, which only a note-on
-            // of raw duration > 0 can clear (module docs, "Which channels
-            // become tracks").
             if !channel_is_playable(&channel_events, channel)? {
                 continue;
             }
 
             let final_boundary = convert_ticks(
-                seq_track.end_of_track.max(parsed.end_of_track),
+                sequence_track.end_of_track.max(parsed.end_of_track),
                 header.division,
             )?;
             let track = compile_track(
                 channel,
                 &channel_events,
-                &seq_events,
-                is_first_agb_track,
+                &sequence_events,
+                include_tempo,
                 header.division,
                 cfg.master_volume,
                 final_boundary,
             )?;
             tracks.push(track);
-            is_first_agb_track = false;
+            include_tempo = false;
         }
     }
 
