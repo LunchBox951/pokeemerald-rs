@@ -1,135 +1,29 @@
-//! Generic NPC trainer-battle construction and headless driver -- the shared
-//! home `CreateNPCTrainerParty`'s own port lives in, factored out of
-//! [`crate::flow::route103_rival`] (issue #237, S-6) when issue #264 (I-5
-//! follow-up) needed the exact same construction for Route 103's *sight*
-//! trainers, not just its scripted rival `(oop-boundaries)`: the party-build
-//! quirks below have nothing to do with *which* trainer is fighting, so
-//! duplicating them per caller would drift the two paths apart the moment
-//! either one changed. [`crate::flow::route103_rival`] keeps its own
-//! `PlayerStarter`/`Rival`/`route103_rival_for` mapping (the rival-specific
-//! *choice* of trainer); its own trigger
-//! (`overworld_phase::route103_rival_trigger`) and tests call
-//! [`start_npc_trainer_battle`]/[`advance_npc_trainer_battle`] directly
-//! rather than through a same-named pass-through. Issue #264 shipped that
-//! wrapper pair (plus a `RivalBattleError` alias); issue #347 retired both
-//! outright — neither carried any Route-103-specific behaviour, and a
-//! second name for the same function was one more place a caller-side
-//! screen could quietly drift out of sync with this module's own (see
-//! "Nothing is built before the whole party is screened" below for exactly
-//! that drift).
+//! Constructs NPC trainer parties and drives their headless battles.
 //!
-//! # `CreateNPCTrainerParty`, and its very odd personality seed
+//! # Personality construction
 //!
-//! `pokeemerald/src/battle_main.c:1960`-`:2073`, reached from
-//! `CB2_InitBattleInternal` (`:697`) for `gBattleTypeFlags &
-//! BATTLE_TYPE_TRAINER`. Per party member `i`:
-//!
-//! ```text
-//! personalityValue = doubleBattle ? 0x80 : (F_TRAINER_FEMALE ? 0x78 : 0x88);
-//! for (j = 0; trainerName[j] != EOS; j++)   nameHash += trainerName[j];
-//! for (j = 0; speciesName[j] != EOS; j++)   nameHash += speciesName[j];
-//! personalityValue += nameHash << 8;
-//! fixedIV = partyData[i].iv * MAX_PER_STAT_IVS / 255;
-//! CreateMon(&party[i], species, lvl, fixedIV, TRUE, personalityValue, OT_ID_RANDOM_NO_SHINY, 0);
-//! ```
-//!
-//! Three details that a "reasonable" reimplementation would get wrong, and
-//! which [`trainer_party_personalities`] therefore reproduces exactly
-//! `(behavioral-fidelity)`:
-//!
-//! 1. **`nameHash` is declared outside the loop and never reset.** The
-//!    trainer's name is added again on *every* iteration, and each species
-//!    name accumulates on top of the previous ones — so party member `i`'s
-//!    seed carries the trainer name `i + 1` times plus the names of mons
-//!    `0..=i`. A one-mon party (every Route 103 rival) never shows this, but
-//!    a two-mon party would, so the accumulator is modelled rather than
-//!    flattened to a per-mon hash.
-//! 2. **The bytes are Gen-3 charmap bytes, not ASCII.** `gSpeciesNames` and
-//!    `Trainer.trainerName` are stored in the game's own encoding
-//!    (`pokeemerald/charmap.txt`: `'A'` is `0xBB`, not `0x41`), so the sum —
-//!    and therefore the personality, and therefore the **nature** the
-//!    personality derives — depends on that encoding. [`engine::text`]
-//!    already owns the transcribed charmap, so this module reuses
-//!    [`engine::text::char_to_byte`] rather than duplicating it, and fails
-//!    closed ([`NpcTrainerBattleError::UnnamedCharacter`]) on a glyph it does
-//!    not cover.
-//! 3. **`personalityValue += nameHash << 8` is `u32` arithmetic that can
-//!    overflow**, and does so silently in C. Reproduced with
-//!    [`u32::wrapping_shl`]/[`u32::wrapping_add`].
-//!
-//! `CreateMon` itself then draws only its OT id
-//! ([`battle::roll_non_shiny_ot_id`]) — the personality and IVs are both
-//! fixed here — which is where this construction's whole RNG cost lives.
+//! Upstream's `CreateNPCTrainerParty` carries one wrapping name-byte sum across the whole
+//! party (`battle_main.c:1960-2073`). Each member adds the trainer name again and then its
+//! species name before the sum becomes part of its personality. The names use the Gen III
+//! character encoding, not ASCII.
 //!
 //! # RNG stream
 //!
-//! Off the same single shared stream as every other `crate::flow` handoff
-//! ([`crate::flow::wild_encounter`]'s module docs), in upstream's order:
-//! `CreateNPCTrainerParty` runs at `CB2_InitBattleInternal:697`, before
-//! `BeginBattleIntro` reaches `BattleStartClearSetData`'s `gRandomTurnNumber
-//! = Random()` (`battle_main.c:3140`). So [`start_npc_trainer_battle`] draws
-//! **two per party member** (one `Random32` OT id each, barring the
-//! `8/65536` shiny retry) and then hands the stream to
-//! [`battle::Battle::new_trainer`] for its turn-number draw and conditional
-//! speed-tie draw.
-//!
-//! There is no `SetWildMonHeldItem` draw on this path, and none to
-//! account for: the call at `battle_main.c:700` is reached, but its gate
-//! excludes `BATTLE_TYPE_TRAINER` outright (`src/pokemon.c:6680`), so
-//! upstream spends nothing -- unlike the wild and first-battle handoffs,
-//! which both spend that draw (issue #303).
+//! [`start_npc_trainer_battle`] uses the overworld's shared generator. Fixed personalities
+//! and IVs consume no draws. Each constructed party member draws a non-shiny OT ID before
+//! [`battle::Battle::new_trainer`] draws its initial turn state. Trainer battles consume no
+//! wild held-item draw because upstream's `SetWildMonHeldItem` excludes them
+//! (`pokemon.c:6678-6682`).
 //!
 //! # Nothing is built before the whole party is screened
 //!
-//! Upstream never *refuses* a trainer battle, so every refusal this port
-//! makes has to cost nothing: the draws have no upstream counterpart, and
-//! [`start_npc_trainer_battle`]'s hottest caller
-//! ([`crate::flow::overworld_phase::sight_trainer_trigger`]) asks again on
-//! **every frame** the player stands in a sight cone, with no button gate to
-//! slow it down. Building the party mon by mon and letting
-//! [`battle::Battle::new_trainer`]'s own screens reject it afterwards
-//! therefore leaked two draws per party member per frame (issue #264
-//! review) -- a real, observable corruption of the one shared stream every
-//! wild encounter and battle turn shares.
+//! Every rejection occurs before the first RNG draw. This keeps repeated sight-cone checks
+//! from changing the shared stream while a trainer party remains unsupported.
 //!
-//! So [`start_npc_trainer_battle`] checks `player_lead.is_fainted()` first,
-//! ahead of even the trainer/party lookups, then resolves each member's
-//! moveset (which draws nothing) and runs
-//! [`battle::ensure_trainer_party_startable`] -- the same screens
-//! `new_trainer` applies, composed into a pre-flight that takes no RNG at
-//! all -- **before** the first [`battle::build_trainer_pokemon`] call. A
-//! trainer this engine cannot fight, or a fainted lead, is refused for
-//! free, forever, the same no-draw-at-all shape
-//! [`crate::flow::wild_encounter::map_wild_table_fightable`] already applies
-//! to wild tables via [`battle::ensure_wild_startable`].
+//! # Held-item parties
 //!
-//! The fainted-lead check used to live on the caller side instead, and only
-//! one of the two in-tree callers actually carried it: `sight_trainer_trigger`
-//! screened `party_lead.is_fainted()` before ever reaching this function,
-//! but `route103_rival_trigger` did not, so a fainted lead reaching Route
-//! 103's rival trigger paid the full `CreateNPCTrainerParty` OT-id cost
-//! before [`battle::Battle::new_trainer`] raised
-//! [`battle::BattleError::FaintedBattler`] one level down -- a real
-//! stream corruption this module's own former docs mis-described as
-//! impossible ("both in-tree callers check the lead before calling here").
-//! Issue #347 moves the screen in here instead: every caller is now
-//! no-draw-on-refusal *by construction*, with no caller-side check left to
-//! forget or drift out of sync.
-//!
-//! # Held-item parties: a fail-closed gap, not a silent drop
-//!
-//! Upstream's `party` field is a `union TrainerMonPtr` that can carry a
-//! per-mon held item (`F_TRAINER_PARTY_HELD_ITEM`) alongside the fixed-vs-
-//! custom moveset axis; [`battle::BattlePokemon`] has no held-item concept at
-//! all yet. Building such a party anyway would silently drop a Sitrus Berry
-//! or an Oran Berry rather than fail, so [`party_entries`] refuses instead
-//! ([`NpcTrainerBattleError::HeldItemParty`]) — the same fail-closed posture
-//! this module's every other unmodellable input takes. Reachable in real
-//! play as of issue #264: `TRAINER_MIGUEL_1` (Route 103's own Miguel,
-//! `crate::flow::overworld_phase::sight_trainer_trigger`) carries
-//! `TrainerParty::ItemDefaultMoves`, so his sight cone finds him, but his
-//! battle refuses to construct — recorded on that module's own docs and the
-//! ledger, not papered over.
+//! [`battle::BattlePokemon`] cannot represent held items. This module rejects either
+//! held-item party shape instead of silently discarding its items.
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
@@ -140,52 +34,21 @@ use super::battle_finalize::finalize_battle_turn;
 use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
-/// `MAX_MONEY` (`pokeemerald/src/money.c:13`): the wallet's own hard cap,
-/// upstream `999999`.
+/// Maximum wallet balance.
 pub const MAX_MONEY: u32 = 999_999;
 
-/// `AddMoney` (`pokeemerald/src/money.c:90-108`): add `amount` to `*money`,
-/// saturating at [`MAX_MONEY`] rather than wrapping past it. Upstream's own
-/// version reads as two branches -- a pre-check against `MAX_MONEY` and a
-/// post-add overflow guard that also clamps to `MAX_MONEY` -- but both
-/// branches land on the same value a plain saturating add and a final
-/// `min` already produce, for every `u32` input; this is that
-/// simplification, not a behavioural narrowing.
 fn credit_money(money: &mut u32, amount: u32) {
     *money = money.saturating_add(amount).min(MAX_MONEY);
 }
 
 /// Why an NPC trainer battle could not be constructed.
-///
-/// A concrete enum owned by this module rather than a reuse of
-/// [`BattleError`] `(oop-boundaries)`: two of its three cases are
-/// *construction*-layer facts (an un-encodable name, a party shape carrying
-/// held items) that the `battle` crate has no vocabulary for, and both are
-/// deliberately fatal rather than silently approximated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NpcTrainerBattleError {
-    /// The party or the battle was refused — either this module's own
-    /// pre-draw fainted-lead screen ([`BattleError::FaintedBattler`]) or
-    /// [`battle::Battle::new_trainer`]'s own error list.
+    /// The party or battle violates a battle-engine requirement.
     Battle(BattleError),
-    /// A trainer or species name contains a character
-    /// [`engine::text::char_to_byte`] has no Gen-3 charmap byte for, so
-    /// `CreateNPCTrainerParty`'s `nameHash` cannot be computed faithfully.
-    ///
-    /// Unreachable for the extracted tables (a whole-table test in
-    /// [`crate::flow::route103_rival`] proves every `gTrainers[].trainerName`
-    /// and every `gSpeciesNames[]` entry encodes), and fatal rather than
-    /// skipped because a wrong hash is a wrong *personality*, hence a wrong
-    /// nature, hence wrong stats.
-    UnnamedCharacter {
-        /// The name that could not be encoded.
-        name: &'static str,
-        /// The offending character.
-        character: char,
-    },
-    /// The trainer's party carries held items
-    /// (`F_TRAINER_PARTY_HELD_ITEM`), which [`battle::BattlePokemon`] cannot
-    /// represent at all (module docs' "Held-item parties" section).
+    /// A trainer or species name has no Gen III encoding for its character.
+    UnnamedCharacter { name: &'static str, character: char },
+    /// The trainer's party carries held items, which are not modelled.
     HeldItemParty(TrainerId),
 }
 
@@ -221,30 +84,27 @@ impl From<BattleError> for NpcTrainerBattleError {
     }
 }
 
-/// `CreateNPCTrainerParty`'s three personality bases
-/// (`battle_main.c:1993`-`:1998`), chosen by the trainer's own flags rather
-/// than by anything about the mon: `0x80` for a double battle, `0x78` for a
-/// female trainer ("use personality more likely to result in a female
-/// Pokémon"), `0x88` otherwise.
+const DOUBLE_BATTLE_PERSONALITY_BASE: u32 = 0x80;
+const FEMALE_TRAINER_PERSONALITY_BASE: u32 = 0x78;
+const MALE_TRAINER_PERSONALITY_BASE: u32 = 0x88;
+const NAME_HASH_PERSONALITY_SHIFT: u32 = 8;
+const HEADLESS_PLAYER_MOVE_SLOT: usize = 0;
+
 #[must_use]
 fn personality_base(trainer: &TrainerData) -> u32 {
     if trainer.double_battle {
-        0x80
+        DOUBLE_BATTLE_PERSONALITY_BASE
     } else if trainer.encounter_music.is_female {
-        0x78
+        FEMALE_TRAINER_PERSONALITY_BASE
     } else {
-        0x88
+        MALE_TRAINER_PERSONALITY_BASE
     }
 }
 
-/// Sum a name's Gen-3 charmap bytes into `hash`, upstream's
-/// `for (j = 0; name[j] != EOS; j++) nameHash += name[j];`.
-///
-/// # Errors
-///
-/// [`NpcTrainerBattleError::UnnamedCharacter`] for a glyph outside
-/// [`engine::text::char_to_byte`]'s table (module docs).
-fn add_name_bytes(hash: &mut u32, name: &'static str) -> Result<(), NpcTrainerBattleError> {
+fn add_encoded_name_to_hash(
+    hash: &mut u32,
+    name: &'static str,
+) -> Result<(), NpcTrainerBattleError> {
     for character in name.chars() {
         let byte = engine::text::char_to_byte(character)
             .ok_or(NpcTrainerBattleError::UnnamedCharacter { name, character })?;
@@ -253,29 +113,14 @@ fn add_name_bytes(hash: &mut u32, name: &'static str) -> Result<(), NpcTrainerBa
     Ok(())
 }
 
-/// One party-table row, flattened out of [`TrainerParty`]'s four shapes into
-/// the fields `CreateNPCTrainerParty` actually feeds `CreateMon`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PartyEntry {
-    /// `partyData[i].species`.
     species: assets::SpeciesId,
-    /// `partyData[i].lvl`.
     level: u8,
-    /// `partyData[i].iv`, before [`battle::fixed_ivs`]'s `* 31 / 255` scale.
-    iv: u8,
-    /// The fixed moveset the `F_TRAINER_PARTY_CUSTOM_MOVESET` shapes write
-    /// over `CreateMon`'s result, or `None` for "leave
-    /// `GiveBoxMonInitialMoveset`'s level-up moveset in place".
-    moves: Option<Vec<MoveId>>,
+    unscaled_iv: u8,
+    custom_moves: Option<Vec<MoveId>>,
 }
 
-/// Every member of `trainer`'s party, in `gTrainers[].party` order — the
-/// shape-dependent half of `CreateNPCTrainerParty`'s per-mon work.
-///
-/// # Errors
-///
-/// [`NpcTrainerBattleError::HeldItemParty`] for the two
-/// `F_TRAINER_PARTY_HELD_ITEM` shapes (see that variant).
 fn party_entries(
     id: TrainerId,
     trainer: &TrainerData,
@@ -286,8 +131,8 @@ fn party_entries(
             .map(|mon| PartyEntry {
                 species: mon.species,
                 level: mon.lvl,
-                iv: mon.iv,
-                moves: None,
+                unscaled_iv: mon.iv,
+                custom_moves: None,
             })
             .collect(),
         TrainerParty::NoItemCustomMoves(party) => party
@@ -295,10 +140,14 @@ fn party_entries(
             .map(|mon| PartyEntry {
                 species: mon.species,
                 level: mon.lvl,
-                iv: mon.iv,
-                // `MOVE_NONE` pads the fixed array upstream; a real moveset
-                // is however many leading slots are filled.
-                moves: Some(mon.moves.iter().copied().filter(|m| m.0 != 0).collect()),
+                unscaled_iv: mon.iv,
+                custom_moves: Some(
+                    mon.moves
+                        .iter()
+                        .copied()
+                        .filter(|move_id| *move_id != battle::MOVE_NONE)
+                        .collect(),
+                ),
             })
             .collect(),
         TrainerParty::ItemDefaultMoves(_) | TrainerParty::ItemCustomMoves(_) => {
@@ -308,83 +157,56 @@ fn party_entries(
     Ok(entries)
 }
 
-/// The personality `CreateNPCTrainerParty` seeds each of `trainer`'s party
-/// members with, in party order — the accumulator quirk and the charmap
-/// encoding of the module docs, and **no RNG at all**.
-///
-/// Exposed (rather than folded into [`start_npc_trainer_battle`]) because it
-/// is the part worth pinning on its own: a personality decides a mon's
-/// nature, so this one arithmetic chain decides whether a rival's Treecko is
-/// Adamant or Bold.
-///
-/// # Errors
-///
-/// [`NpcTrainerBattleError::UnnamedCharacter`] or
-/// [`NpcTrainerBattleError::HeldItemParty`] — see each.
-pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
-    let trainer = battle::trainer_data(id)?;
-    let entries = party_entries(id, trainer)?;
+fn party_personalities(
+    trainer: &TrainerData,
+    entries: &[PartyEntry],
+) -> Result<Vec<u32>, NpcTrainerBattleError> {
     let names = SpeciesNames::new();
     let base = personality_base(trainer);
 
-    // Declared once for the whole party, exactly as upstream's `u32
-    // nameHash = 0;` is -- see the module docs' first quirk.
     let mut name_hash: u32 = 0;
     let mut personalities = Vec::with_capacity(entries.len());
-    for entry in &entries {
-        add_name_bytes(&mut name_hash, trainer.name)?;
+    for entry in entries {
+        add_encoded_name_to_hash(&mut name_hash, trainer.name)?;
         let species_name = names.name(entry.species).map_err(|_| {
             NpcTrainerBattleError::Battle(BattleError::UnknownSpecies(entry.species))
         })?;
-        add_name_bytes(&mut name_hash, species_name)?;
-        personalities.push(base.wrapping_add(name_hash.wrapping_shl(8)));
+        add_encoded_name_to_hash(&mut name_hash, species_name)?;
+        personalities.push(base.wrapping_add(name_hash.wrapping_shl(NAME_HASH_PERSONALITY_SHIFT)));
     }
     Ok(personalities)
 }
 
-/// Build `trainer`'s whole party (`CreateNPCTrainerParty`) and start the
-/// `BATTLE_TYPE_TRAINER` battle around it — the trainer-battle counterpart of
-/// [`crate::flow::first_battle::start_first_battle`], and the shared core
-/// both `overworld_phase::route103_rival_trigger`'s
-/// `begin_route103_rival_battle` and
-/// [`crate::flow::overworld_phase::sight_trainer_trigger`]'s own battle
-/// handoff call directly (issue #347 retired the Route-103-flavoured
-/// pass-through the first of those two used to go through).
+/// Computes each party member's fixed personality without consuming RNG.
 ///
-/// Draws in upstream's order off the shared stream (module docs, "RNG
-/// stream"): each party member's OT id, then
-/// [`battle::Battle::new_trainer`]'s turn-number draw and its conditional
-/// speed-tie draw. The personality and IVs draw nothing — they are the
-/// seeded/fixed values above — and a moveset the party table leaves default
-/// comes from [`battle::initial_moveset`] (`GiveBoxMonInitialMoveset`, which
-/// also draws nothing).
-///
-/// A refusal draws **nothing at all**: `player_lead.is_fainted()` is
-/// checked before any lookup, and the rest of the party is screened by
-/// [`battle::ensure_trainer_party_startable`] ahead of the first
-/// [`battle::build_trainer_pokemon`] call (module docs, "Nothing is built
-/// before the whole party is screened").
+/// The wrapping Gen III name-byte hash carries across party members as described in the
+/// module contract.
 ///
 /// # Errors
 ///
-/// Every [`NpcTrainerBattleError`] case is raised **before the first
-/// draw** (module docs, "Nothing is built before the whole party is
-/// screened"): a refused call -- an unbuildable party, an un-encodable
-/// name, held items, or a fainted `player_lead` -- leaves `rng` exactly as
-/// it found it, however many times it is asked. The fainted-lead case is
-/// [`battle::BattleError::FaintedBattler`], the one screen
-/// [`battle::ensure_trainer_party_startable`]'s own pre-flight cannot cover
-/// (it takes no player argument), so this function checks it directly
-/// rather than leaving it to the caller.
+/// Returns [`NpcTrainerBattleError::UnnamedCharacter`] when a name cannot be encoded,
+/// [`NpcTrainerBattleError::HeldItemParty`] for a held-item party, or a battle data error.
+pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
+    let trainer = battle::trainer_data(id)?;
+    let entries = party_entries(id, trainer)?;
+    party_personalities(trainer, &entries)
+}
+
+/// Builds a trainer's party and starts its battle on the shared RNG stream.
+///
+/// All validation finishes before party construction, so every error leaves `rng`
+/// unchanged. Successful construction draws each party member's OT ID before battle
+/// initialization.
+///
+/// # Errors
+///
+/// Returns [`NpcTrainerBattleError`] when the lead, trainer data, or party cannot start a
+/// supported battle.
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
     trainer: TrainerId,
     rng: &mut Rng,
 ) -> Result<Battle, NpcTrainerBattleError> {
-    // Checked before the trainer/party lookups below, let alone any draw:
-    // this is the one `BattleError::FaintedBattler` case
-    // `ensure_trainer_party_startable`'s pre-flight cannot cover on its own
-    // (module docs, "Nothing is built before the whole party is screened").
     if player_lead.is_fainted() {
         return Err(BattleError::FaintedBattler(true).into());
     }
@@ -393,14 +215,11 @@ pub fn start_npc_trainer_battle(
     let entries = party_entries(trainer, data)?;
     let personalities = trainer_party_personalities(trainer)?;
 
-    // Resolve each member's real moveset first (`GiveBoxMonInitialMoveset`
-    // draws nothing), then screen the whole party -- ahead of the first
-    // `build_trainer_pokemon` call, which would draw an OT id.
     let movesets: Vec<Vec<MoveId>> = entries
         .iter()
         .map(|entry| {
             entry
-                .moves
+                .custom_moves
                 .clone()
                 .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level))
         })
@@ -422,7 +241,7 @@ pub fn start_npc_trainer_battle(
             &dex,
             entry.species,
             entry.level,
-            battle::fixed_ivs(entry.iv),
+            battle::fixed_ivs(entry.unscaled_iv),
             personality,
             moves,
             &mut SharedRng::new(rng),
@@ -438,71 +257,31 @@ pub fn start_npc_trainer_battle(
     )?)
 }
 
-/// Play one turn of the in-progress trainer battle in `slot`, headlessly. A
-/// no-op if `slot` is empty.
+fn credit_reward_events(money: &mut u32, events: impl IntoIterator<Item = BattleEvent>) {
+    for event in events {
+        if let BattleEvent::MoneyGained(amount) = event {
+            credit_money(money, amount);
+        }
+    }
+}
+
+/// Advances a headless trainer battle by one turn and settles its resulting state.
 ///
-/// Mirrors [`crate::flow::first_battle::advance_first_battle`]'s shape —
-/// turn, write-back, neutral stat-stage reset, error-ends-the-battle-too —
-/// and for the same reason picks [`PlayerAction::UseMove`]`(0)` every turn
-/// rather than [`PlayerAction::Run`]: a trainer battle refuses Run outright
-/// ([`BattleError::NoRunningFromTrainer`]), so reusing
-/// `wild_encounter::advance_wild_battle`'s policy here would end the battle
-/// on turn one instead of playing it. The action is a stand-in for the
-/// player's choice, and only the action: every rule it exercises — turn
-/// order, the trainer AI's real `AI_SCRIPT_*` scoring, damage, fainting, the
-/// forced post-faint send-out, exp and prize money — is the real
-/// [`battle::Battle`].
-///
-/// The write-back is unconditional, fainted lead included — this function's
-/// own job stops at "the battle ended, here is who's left standing," the
-/// same as [`crate::flow::wild_encounter::advance_wild_battle`]. Losing a
-/// trainer battle upstream routes through `CB2_EndTrainerBattle`'s
-/// `IsPlayerDefeated` check (`src/battle_setup.c:1327`-`:1338`) to
-/// `CB2_WhiteOut`, which halves the player's money, heals the party and
-/// warps to the last heal location — this function's own callers are what
-/// run that (`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`),
-/// the instant they see [`BattleOutcome::PlayerLost`] here — so the fainted
-/// lead this function hands back is only ever momentarily fainted in
-/// practice, not a standing gap.
-///
-/// Any level-up move-replacement prompt is answered by
-/// `crate::flow::move_learn::settle_move_learn_prompts` before the outcome
-/// is read. That matters most here: a trainer battle awards experience on
-/// every knockout and then keeps playing, so an unanswered prompt would
-/// refuse the *next* turn ([`BattleError::MoveLearnPending`]) and this
-/// driver's error arm would abandon a winnable fight.
-///
-/// [`battle::BattleEvent::MoneyGained`] is credited to `*money` the instant
-/// it is seen, via [`credit_money`] -- `Cmd_getmoneyreward`'s own
-/// `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
-/// (`pokeemerald/src/battle_script_commands.c:5641`), reached only on the
-/// win path that emits the event in the first place -- so a loss or an
-/// in-progress battle never touches the wallet here; only
-/// [`crate::flow::overworld_phase::white_out`]'s halving does. The event
-/// can arrive from either of the engine's two mouths: the turn itself
-/// (`battle::Battle`'s own `end_of_turn`), or -- when the final knockout's
-/// level-up stopped on a move-learn prompt -- the settlement below, since
-/// upstream pays out only after the level-up script (ask included) has
-/// finished. Both are scanned.
-///
-/// A `None` return is intentionally ambiguous: it can mean that `slot` was
-/// already empty, that the battle remains ongoing, or that a failed turn
-/// ended the battle and cleared `slot`. Callers must inspect `slot` after the
-/// call to determine whether a battle is still active.
+/// With no battle menu, the driver selects the first move slot. It answers pending move
+/// replacement prompts, credits any reward events, and writes back the player's lead when
+/// the battle ends. `None` can mean no active battle, an ongoing battle, or a failed turn;
+/// callers inspect `battle_slot` to distinguish an active battle.
 pub fn advance_npc_trainer_battle(
-    slot: &mut Option<Battle>,
-    lead: &mut Option<BattlePokemon>,
+    battle_slot: &mut Option<Battle>,
+    player_lead: &mut Option<BattlePokemon>,
     money: &mut u32,
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
-    let battle = slot.as_mut()?;
-    let failed = match battle.take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(rng)) {
+    let battle = battle_slot.as_mut()?;
+    let player_action = PlayerAction::UseMove(HEADLESS_PLAYER_MOVE_SLOT);
+    let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
         Ok(events) => {
-            for event in &events {
-                if let BattleEvent::MoneyGained(amount) = event {
-                    credit_money(money, *amount);
-                }
-            }
+            credit_reward_events(money, events);
             false
         }
         Err(error) => {
@@ -510,21 +289,8 @@ pub fn advance_npc_trainer_battle(
             true
         }
     };
-    // See `crate::flow::move_learn`: a trainer battle awards experience on
-    // every knockout, so this is the driver most likely to meet the
-    // replacement prompt -- and, with a bench behind the fainted mon, the
-    // one where leaving it unanswered would refuse the *next* turn. A
-    // prompt raised by the *final* knockout defers the payout too
-    // (`Cmd_getmoneyreward` runs only once the level-up script, ask
-    // included, has finished -- `battle::Battle::resolve_move_learn`'s
-    // docs), so the settlement's own events must be scanned for
-    // `MoneyGained` exactly like the turn's.
-    for event in settle_move_learn_prompts(battle) {
-        if let BattleEvent::MoneyGained(amount) = event {
-            credit_money(money, amount);
-        }
-    }
-    finalize_battle_turn(slot, failed, lead)
+    credit_reward_events(money, settle_move_learn_prompts(battle));
+    finalize_battle_turn(battle_slot, turn_failed, player_lead)
 }
 
 #[cfg(test)]
@@ -532,31 +298,22 @@ mod tests {
     use super::*;
     use assets::SpeciesId;
 
-    /// The screen module docs' "Nothing is built before the whole party is
-    /// screened" describes: a fainted `player_lead` is refused before any
-    /// lookup or draw, for *any* trainer -- not just the ones whose caller
-    /// happens to check first (module docs' "The fainted-lead check used to
-    /// live on the caller side instead").
-    ///
-    /// This is the shared-constructor coverage that replaces
-    /// `overworld_phase::sight_trainer_trigger`'s own former caller-side
-    /// test of the same fact (issue #347): that trigger's caller-side
-    /// `is_fainted` guard is retired along with the test that pinned it,
-    /// since the guard's own no-draw claim is now proven at its true
-    /// source rather than only for the one caller that happened to carry
-    /// it. `TrainerId(532)` (`TRAINER_MAY_ROUTE_103_TREECKO`) is an
-    /// arbitrary real, constructible trainer -- the point here is the
-    /// *player's* own screen, which runs before this function even looks
-    /// the trainer up, so which trainer id is passed cannot matter.
+    const TREECKO: SpeciesId = SpeciesId(277);
+    const SLASH: MoveId = MoveId(163);
+    const TEST_LEVEL: u8 = 50;
+    const TEST_PARTY_IV: u8 = 31;
+    const TEST_PERSONALITY: u32 = 0;
+    const UNKNOWN_TRAINER: TrainerId = TrainerId(u16::MAX);
+
     #[test]
-    fn a_fainted_player_lead_is_refused_before_any_draw() {
+    fn fainted_player_lead_is_rejected_before_trainer_lookup_or_rng_draw() {
         let mut lead = BattlePokemon::new(
             &Dex::new(),
-            SpeciesId(277), // SPECIES_TREECKO
-            50,
-            battle::fixed_ivs(31),
-            0,
-            vec![MoveId(163)], // MOVE_SLASH
+            TREECKO,
+            TEST_LEVEL,
+            battle::fixed_ivs(TEST_PARTY_IV),
+            TEST_PERSONALITY,
+            vec![SLASH],
         )
         .expect("Treecko/Slash is a valid pairing");
         lead.apply_damage(u32::MAX);
@@ -564,14 +321,13 @@ mod tests {
 
         let mut rng = Rng::new(1);
         let before = rng.state();
-        let result = start_npc_trainer_battle(lead, TrainerId(532), &mut rng);
+        let result = start_npc_trainer_battle(lead, UNKNOWN_TRAINER, &mut rng);
         assert_eq!(
             result.err(),
             Some(NpcTrainerBattleError::Battle(BattleError::FaintedBattler(
                 true
             ))),
-            "a fainted player lead must be refused with the same error \
-             `Battle::new_trainer` itself would raise for one"
+            "the lead must be rejected before the unknown trainer is looked up"
         );
         assert_eq!(
             rng.state(),
