@@ -29,7 +29,7 @@
 //!
 //! The two production steps they cannot take are
 //! [`OverworldPhase::continue_saved_game`]'s own
-//! `crate::overworld::load_room` call and `crate::start_menu::open_default`,
+//! `crate::overworld::load_room` call and `crate::start_menu::open`,
 //! both of which need the pack. The two `#[ignore]`d `real_pack_*` cases
 //! below close that gap on the real-pack lane.
 //!
@@ -756,7 +756,11 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
     assert!(saved_map_id(block1.location).is_none());
 
     // `OverworldPhase` has no `Debug`, so this cannot be `expect_err`.
-    let Err(err) = OverworldPhase::continue_saved_game(block1, SaveBlock2::default()) else {
+    let Err(err) = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Runtime,
+        block1,
+        SaveBlock2::default(),
+    ) else {
         panic!("an unknown location must not resolve to some other map");
     };
     assert!(
@@ -786,7 +790,12 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(menu.selected(), MainMenuItem::Continue);
 
     let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
-    let (next, _frame) = super::advance_scene(scene, pressed(Buttons::A), &mut slot);
+    let (next, _frame) = super::advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::Overworld(resumed) = next else {
         panic!("A on CONTINUE must hand off to the overworld");
@@ -805,7 +814,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
 }
 
 /// The other pack-gated step (module docs): `START` really opening the
-/// menu through `crate::start_menu::open_default`, with real chrome, and a
+/// menu through `crate::start_menu::open`, with real chrome, and a
 /// whole save running through the pack-decoded windows.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]

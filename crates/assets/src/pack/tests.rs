@@ -5,7 +5,7 @@
 //! `pokeemerald/` checkout and no real pack). The one exception,
 //! [`real_pack_loads_and_every_typed_accessor_works`], is `#[ignore]`d.
 
-use super::{AssetPack, PackError, MAGIC};
+use super::{AssetPack, PackError, FORMAT_VERSION, MAGIC};
 use crate::audio::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, ProgrammableWave, Sample,
     SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
@@ -338,7 +338,7 @@ fn synthetic_pack() -> Vec<u8> {
         },
     ];
     // Directory entries must be written in id-sorted order, exactly like
-    // the real writer (`extract::pack::PackWriter::finish`) -- sort here
+    // the real writer (`pack_format::PackWriter::finish`) -- sort here
     // rather than trusting the literal array order above, so
     // reordering/adding fixture entries later can't quietly reintroduce an
     // unsorted directory the reader's binary search then misses.
@@ -358,7 +358,7 @@ fn synthetic_pack() -> Vec<u8> {
 
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&super::format::FORMAT_VERSION.to_le_bytes()); // format_version
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes()); // format_version
     out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
     for (e, &off) in entries.iter().zip(&offsets) {
         out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
@@ -408,6 +408,35 @@ fn loads_and_reads_every_entry_kind() {
 }
 
 #[test]
+fn entries_walks_the_whole_directory_in_sorted_order() {
+    let path = write_synthetic_pack("entries");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let ids: Vec<&str> = pack.entries().map(|e| e.id.as_str()).collect();
+    assert!(ids.contains(&"tileset/test/tiles"));
+    assert!(ids.contains(&"tileset/test/palette/00"));
+    assert!(ids.contains(&"tileset/test/metatiles"));
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted);
+
+    // Every entry's offset/length addresses the same payload the typed
+    // accessors hand out, so a caller can compare two packs entry by entry
+    // without going through a lookup id.
+    let entry = pack
+        .entries()
+        .find(|e| e.id == "tileset/test/metatiles")
+        .unwrap();
+    assert_eq!(entry.kind, super::EntryKind::Raw);
+    assert_eq!(
+        &pack.bytes()[entry.offset..entry.offset + entry.length],
+        pack.raw("tileset/test/metatiles").unwrap()
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn tileset_handle_needs_all_sixteen_palettes() {
     // The synthetic pack only has palette slot 00, not 01..15, so bundling
     // should fail with UnknownAsset for the first missing slot rather than
@@ -448,9 +477,14 @@ fn wrong_kind_is_reported() {
 fn missing_pack_file_gives_the_required_diagnostic() {
     let err = AssetPack::load(std::path::Path::new("/definitely/does/not/exist.pack")).unwrap_err();
     assert!(matches!(err, PackError::NotFound(_)));
-    let rendered = err.to_string();
-    assert!(rendered.contains("init.sh"));
-    assert!(rendered.contains("cargo xtask extract"));
+    // Pinned whole: the message serves two audiences, and dropping either
+    // half strands one of them (Discussion #71 policy A and policy C).
+    assert_eq!(
+        err.to_string(),
+        "asset pack not found at `/definitely/does/not/exist.pack`: players run \
+         `pokeemerald-rs --import-rom <path to your Pokemon Emerald (US) ROM>`; developers \
+         run `./init.sh` then `cargo xtask extract`"
+    );
 }
 
 #[test]
@@ -472,6 +506,14 @@ fn unsupported_version_is_rejected() {
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(99));
+    // Same two audiences as the missing-pack diagnostic: a stale pack is
+    // rebuilt by whichever route built it in the first place.
+    assert_eq!(
+        err.to_string(),
+        "asset pack: unsupported format version `99`: the pack predates this build's \
+         format; players rebuild it with `pokeemerald-rs --import-rom <path to your \
+         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+    );
     let _ = std::fs::remove_file(path);
 }
 
@@ -764,6 +806,13 @@ fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
 
 #[test]
 fn default_path_ends_with_expected_relative_path() {
+    // Rungs 1 to 3 of `pack_format::default_pack_path` redirect the path on
+    // purpose; only the plain developer checkout is deterministic.
+    if std::env::var_os(pack_format::PACK_PATH_ENV).is_some()
+        || pack_format::user_pack_path().is_some_and(|p| p.is_file())
+    {
+        return;
+    }
     let path = AssetPack::default_path();
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
@@ -778,7 +827,7 @@ fn default_path_ends_with_expected_relative_path() {
 fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
     let path = AssetPack::repo_pack_path();
     assert!(path.is_absolute(), "{} must be absolute", path.display());
-    assert!(path.ends_with(super::OUTPUT_RELATIVE_PATH));
+    assert!(path.ends_with(pack_format::OUTPUT_RELATIVE_PATH));
 
     let root = path
         .parent()
@@ -972,9 +1021,10 @@ fn sample_accessor_reports_a_malformed_payload() {
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
-/// exercises every typed accessor against it -- proof the writer
-/// (`xtask::extract::pack`) and this reader agree byte-for-byte on the
-/// format, not just on the synthetic fixtures above. Needs a local pack:
+/// exercises every typed accessor against it -- proof the extraction
+/// pipeline (`xtask::extract`, writing through `pack_format::PackWriter`)
+/// and this reader agree byte-for-byte on the format, not just on the
+/// synthetic fixtures above. Needs a local pack:
 /// run `cargo xtask extract` first, then `cargo test -p assets -- --ignored`.
 // Long because it's one end-to-end smoke test exercising every typed
 // accessor this module offers (tileset/sprite/title/layout/font/text-window)

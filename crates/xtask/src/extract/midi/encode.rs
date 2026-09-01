@@ -1,9 +1,8 @@
 //! Serializes a [`compile::CompiledSong`] to the exact binary shape
 //! `crates/assets/src/audio/song.rs`'s `Song::encode`/`SongEvent::write`
 //! produce — duplicated rather than shared, since this crate never depends
-//! on `crates/assets` (`crate::extract::pack`'s module docs: the two crates
-//! stay decoupled the same way the pack container format itself is
-//! duplicated on both sides). Any change to that schema's wire shape must be
+//! on `crates/assets`. (The pack container around these payloads is shared:
+//! `pack_format` owns it.) Any change to that schema's wire shape must be
 //! mirrored here by hand — mirrors `xtask::extract::voicegroups::encode`'s
 //! own doc note verbatim.
 //!

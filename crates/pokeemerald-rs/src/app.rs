@@ -146,7 +146,8 @@ fn compose_boot_frame() -> Box<Frame> {
 /// real title screen ([`crate::title::load_default`]). The latter is the
 /// I-2 "missing pack" diagnostic: [`AppError::Title`] with
 /// [`TitleSceneError::is_pack_missing`] true prints exactly what to run
-/// (`./init.sh` then `cargo xtask extract`) and lets `main` exit cleanly --
+/// (`--import-rom <rom>` for a player, `./init.sh` then `cargo xtask
+/// extract` for a developer) and lets `main` exit cleanly --
 /// no panic, no window ever opened.
 #[derive(Debug)]
 pub enum AppError {
@@ -285,6 +286,17 @@ pub struct App {
     /// previous song in this session left configured, matching upstream's
     /// `gMPlayReverb` never resetting between `m4aSongNumStart` calls.
     music_context: MusicContext,
+    /// Where every scene load [`crate::flow::advance_scene`] performs -- and
+    /// [`Self::start_title_music`]'s own second pack load -- reads
+    /// from (issue #412): [`crate::pack_source::PackSource::Runtime`] for
+    /// [`Self::new`], [`crate::pack_source::PackSource::Repo`] for
+    /// [`Self::new_headless_real`] -- resolved once here, at construction,
+    /// and threaded down through every [`Self::step`] call rather than a
+    /// process-wide `$POKEEMERALD_PACK` override (`crates/README.md`'s
+    /// `no-global-mutable-state` convention). Unused by [`Self::new_headless`],
+    /// whose synthetic [`BootScene`] frame never advances through `flow` at
+    /// all.
+    pack_source: crate::pack_source::PackSource,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -319,6 +331,7 @@ impl App {
         platform: Platform,
         (frame, scene): (Box<Frame>, AppScene),
         save_slot: SaveSlot,
+        pack_source: crate::pack_source::PackSource,
     ) -> Self {
         Self {
             platform,
@@ -327,6 +340,7 @@ impl App {
             save_slot,
             music: None,
             music_context: MusicContext::new(),
+            pack_source,
         }
     }
 
@@ -342,21 +356,35 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// Returns [`AppError::Title`] if there is no asset pack
     /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
-    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
-    /// run) or is otherwise malformed; whatever `open_platform` fails with
+    /// message names the exact commands to run, `--import-rom <rom>` for a
+    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; whatever `open_platform` fails with
     /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
     /// event loop could not be created) otherwise.
+    ///
+    /// `pack_source` is stored on the assembled `App` (see [`Self::pack_source`]'s
+    /// own field docs) and used only after this call returns: `load_title`
+    /// is still the one thing that loads the title screen itself, so a
+    /// caller picking a pinned `load_title` must pass the matching
+    /// [`crate::pack_source::PackSource`] here too, or later scene loads
+    /// would disagree with the one this boot already made.
     fn boot(
+        load_title: impl FnOnce() -> Result<title::TitleScene, title::TitleSceneError>,
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
         open_save_slot: impl FnOnce() -> SaveSlot,
+        pack_source: crate::pack_source::PackSource,
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
         // missing.
-        let loaded = compose_title_scene(title::load_default()?);
+        let loaded = compose_title_scene(load_title()?);
         let platform = open_platform()?;
-        Ok(Self::assemble(platform, loaded, open_save_slot()))
+        Ok(Self::assemble(
+            platform,
+            loaded,
+            open_save_slot(),
+            pack_source,
+        ))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -374,14 +402,19 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// Returns [`AppError::Title`] if there is no asset pack
     /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
-    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
-    /// run) or is otherwise malformed; [`AppError::Platform`] if the
+    /// message names the exact commands to run, `--import-rom <rom>` for a
+    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Platform::new(title), SaveSlot::default_location)?;
-        app.music = Self::start_title_music(&mut app.music_context, || {
+        let mut app = Self::boot(
+            title::load_default,
+            || Platform::new(title),
+            SaveSlot::default_location,
+            crate::pack_source::PackSource::Runtime,
+        )?;
+        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
         Ok(app)
@@ -392,12 +425,30 @@ impl App {
     /// window.
     ///
     /// This is the scripted-scenario counterpart to [`App::new`]: it runs
-    /// the same pack load, scene construction, [`App::step`] transitions,
-    /// and presentation calls without opening a display or pacing against
-    /// wall time. Persistence is deliberately disabled so a scenario
-    /// always starts on the no-save menu and never reads or writes a
-    /// player's save file. No BGM is started either -- a scenario asserts
-    /// frames, not audio, and [`App::new`] alone owns the real device.
+    /// the same scene construction, [`App::step`] transitions, and
+    /// presentation calls without opening a display or pacing against wall
+    /// time. The one deliberate divergence is the pack: every load reachable
+    /// through this `App` -- the title screen [`App::boot`] loads eagerly
+    /// ([`title::load_repo`]), and every scene `flow::advance_scene` and the
+    /// [`crate::flow::OverworldPhase`] it builds load lazily afterwards
+    /// (main menu, intro, overworld, warps, map-edge connections, NPC/
+    /// sight-trainer dialog, the field start menu) -- reads the checkout's
+    /// own extracted pack ([`crate::pack_source::PackSource::Repo`], issue
+    /// #412), because the scenario and e2e gates that boot through here
+    /// promise fixed inputs (`docs/scenarios.md`) and must never validate an
+    /// installed user pack, or one an inherited `$POKEEMERALD_PACK` happens
+    /// to name, that shadows the checkout's.
+    ///
+    /// Stored as plain owned data on the assembled `App`
+    /// ([`Self::pack_source`]'s own field docs), not a process-wide
+    /// override: `crates/README.md`'s `no-global-mutable-state` convention
+    /// rules out mutating `$POKEEMERALD_PACK` itself, which would still
+    /// leak into anything else this process loads afterwards.
+    ///
+    /// Persistence is deliberately disabled so a scenario always starts on
+    /// the no-save menu and never reads or writes a player's save file. No
+    /// BGM is started either -- a scenario asserts frames, not audio, and
+    /// [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///
@@ -405,14 +456,22 @@ impl App {
     /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
     /// when no local asset pack has been extracted yet.
     pub fn new_headless_real() -> Result<Self, AppError> {
-        Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)
+        Self::boot(
+            title::load_repo,
+            || Ok(Platform::new_headless()),
+            SaveSlot::disabled,
+            crate::pack_source::PackSource::Repo,
+        )
     }
 
     /// Test-only: [`App::new_headless_real`] with the title BGM started
     /// against `platform`'s null audio backend (mirroring [`App::new`]'s
     /// real path, minus the real device), so the I-2 real-boot check's
     /// music assertions run against exactly the same per-step body
-    /// [`App::new`] does.
+    /// [`App::new`] does. The BGM is loaded through this `App`'s own
+    /// [`crate::pack_source::PackSource::Repo`] pin, like every other load
+    /// reachable from here, so the checkout gate hears the checkout's audio
+    /// rather than whatever pack the runtime resolver would have picked.
     ///
     /// # Errors
     ///
@@ -420,8 +479,13 @@ impl App {
     /// [`App::new`].
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)?;
-        app.music = Self::start_title_music(&mut app.music_context, || {
+        let mut app = Self::boot(
+            title::load_repo,
+            || Ok(Platform::new_headless()),
+            SaveSlot::disabled,
+            crate::pack_source::PackSource::Repo,
+        )?;
+        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
             ))
@@ -435,11 +499,20 @@ impl App {
     /// inheritance against `context` ([`Self::music_context`]'s field docs),
     /// logging and returning `None` on any failure instead of propagating it
     /// -- see [`Self::music`]'s field docs on why this stays best-effort.
+    ///
+    /// Reads through `pack_source` -- this session's own
+    /// ([`Self::pack_source`]'s field docs) -- for the same reason every
+    /// scene load does: a checkout gate booting through
+    /// [`Self::new_headless_real_title`] must hear the checkout's own
+    /// extracted audio, never an installed user pack or one an inherited
+    /// `$POKEEMERALD_PACK` names. This second load resolving differently
+    /// from [`Self::boot`]'s first is exactly the split issue #412 closed.
     fn start_title_music(
+        pack_source: crate::pack_source::PackSource,
         context: &mut MusicContext,
         open_audio: impl FnOnce() -> Result<platform::AudioOutput, PlatformError>,
     ) -> Option<MusicPlayer> {
-        let pack = match assets::AssetPack::load_default() {
+        let pack = match pack_source.load() {
             Ok(pack) => pack,
             Err(err) => {
                 eprintln!("music: {err} -- the title screen will play without music");
@@ -475,6 +548,10 @@ impl App {
             save_slot: SaveSlot::disabled(),
             music: None,
             music_context: MusicContext::new(),
+            // Never consulted: `scene` is `None`, so `Self::step` never
+            // reaches `flow::advance_scene` (`Self::pack_source`'s own field
+            // docs).
+            pack_source: crate::pack_source::PackSource::Runtime,
         }
     }
 
@@ -488,6 +565,7 @@ impl App {
             Platform::new_headless(),
             compose_title_scene(scene),
             SaveSlot::disabled(),
+            crate::pack_source::PackSource::Runtime,
         )
     }
 
@@ -546,7 +624,8 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) = flow::advance_scene(scene, buttons, &mut self.save_slot);
+            let (next, frame) =
+                flow::advance_scene(scene, buttons, &mut self.save_slot, self.pack_source);
             self.scene = Some(next);
             self.frame = frame;
         }

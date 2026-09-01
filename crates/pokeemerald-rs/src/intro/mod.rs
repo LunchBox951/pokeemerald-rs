@@ -475,7 +475,20 @@ impl IntroScene {
 /// if no pack has been extracted yet; see [`IntroScene::from_pack`] for the
 /// other (real-pack-only) error cases.
 pub fn load_default() -> Result<IntroScene, IntroSceneError> {
-    let pack = AssetPack::load_default()?;
+    load(crate::pack_source::PackSource::Runtime)
+}
+
+/// [`load_default`], pinned to whichever [`crate::pack_source::PackSource`]
+/// `source` names instead of always the runtime resolver (issue #412) --
+/// what [`crate::flow::advance_scene`] calls with the same source
+/// [`crate::App`] resolved at construction, so a headless-real scenario's
+/// `MainMenu` -> `Intro` transition keeps reading the checkout's own pack.
+///
+/// # Errors
+///
+/// See [`load_default`].
+pub(crate) fn load(source: crate::pack_source::PackSource) -> Result<IntroScene, IntroSceneError> {
+    let pack = source.load()?;
     IntroScene::from_pack(&pack)
 }
 

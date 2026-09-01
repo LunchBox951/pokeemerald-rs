@@ -482,7 +482,7 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
                 cfg.master_volume,
                 final_boundary,
             )?;
-            tracks.push(track);
+            tracks.push(canonical::canonicalize_waits(&track));
             include_tempo = false;
         }
     }
@@ -494,6 +494,8 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
         tracks,
     })
 }
+
+mod canonical;
 
 #[cfg(test)]
 mod tests;

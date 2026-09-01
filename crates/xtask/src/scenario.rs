@@ -171,7 +171,14 @@ impl ScenarioDriver for App {
     }
 }
 
-/// Runs a named scenario against the default pack through the production headless app.
+/// Runs a named scenario against the checkout's own extracted pack through
+/// the production headless app. [`App::new_headless_real`] pins every lazy
+/// pack load to that pack alone (issue #412), never a process-wide
+/// `$POKEEMERALD_PACK` override, so an installed or inherited pack can never
+/// substitute the bytes under a running scenario -- proved hostile-environment
+/// safe by `tests/scenario_pack_pin.rs` (a child process, since handing this
+/// process's own environment a decoy is the global mutable state the change
+/// exists to remove `(oop-boundaries)`).
 ///
 /// # Errors
 ///

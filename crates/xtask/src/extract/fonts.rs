@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
-use super::{png, read_file, ExtractError};
+use super::{build_image_entry, png, read_file, ExtractError};
+use pack_format::PackWriter;
 
 #[derive(Clone, Copy)]
 struct FontSource {
@@ -46,15 +46,7 @@ pub(super) fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<
         let bytes = read_file(&path)?;
         let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         validate_font_sheet(&path, &image)?;
-        writer.push(PackEntry {
-            id: font.pack_id.to_owned(),
-            kind: PackKind::Image {
-                width: image.width,
-                height: image.height,
-                bit_depth: image.bit_depth,
-            },
-            payload: image.pixels,
-        });
+        writer.push(build_image_entry(&path, font.pack_id.to_owned(), image)?);
     }
     Ok(())
 }

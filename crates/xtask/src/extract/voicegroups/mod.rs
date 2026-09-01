@@ -16,26 +16,35 @@
 
 mod encode;
 mod error;
-mod parser;
+pub(crate) mod parser;
 mod resolve;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_text, ExtractError};
+use pack_format::PackWriter;
 use parser::RawVoiceGroup;
 
 pub(crate) use error::VoiceGroupError;
 
 /// Number of addressable slots in the asset-pack voicegroup schema.
+/// Duplicated from `crates/assets/src/audio/voicegroup.rs`'s own
+/// `VOICE_SLOT_COUNT` rather than imported (this crate never depends on
+/// `crates/assets` -- see `pack_format`'s module docs).
 pub(super) const VOICE_SLOT_COUNT: usize = 128;
 
 const TITLE_VOICEGROUP_LABEL: &str = "title";
 
+/// [`index_voicegroup_sources`]'s return shape: every parsed group keyed by
+/// its declared label, alongside the path (relative to `sound/voicegroups/`,
+/// forward-slashed) each one was parsed from, keyed the same way -- see that
+/// function's own docs for why both maps are needed. `groups_by_label` is
+/// crate-visible: `gen_rom_profile::audio` reuses this same index to plan
+/// the ROM-side voicegroup layout from the identical parsed source of truth.
 #[derive(Debug)]
-struct VoiceGroupSourceIndex {
-    groups_by_label: HashMap<String, RawVoiceGroup>,
+pub(crate) struct VoiceGroupSourceIndex {
+    pub(crate) groups_by_label: HashMap<String, RawVoiceGroup>,
     labels_by_relative_path: HashMap<String, String>,
 }
 
@@ -66,7 +75,14 @@ fn discover_voicegroup_sources(dir: &Path) -> Result<Vec<PathBuf>, ExtractError>
     Ok(out)
 }
 
-fn index_voicegroup_sources(upstream: &Path) -> Result<VoiceGroupSourceIndex, ExtractError> {
+/// Reads and fully parses every voicegroup `.inc` file under
+/// `sound/voicegroups/`, keyed by declared label, alongside each file's path
+/// relative to `sound/voicegroups/` keyed the same way (what
+/// [`link_order_successors`] needs to resolve `sound/voice_groups.inc`'s
+/// path-based `.include` targets to labels).
+pub(crate) fn index_voicegroup_sources(
+    upstream: &Path,
+) -> Result<VoiceGroupSourceIndex, ExtractError> {
     let source_root = upstream.join("sound/voicegroups");
     let mut groups_by_label = HashMap::new();
     let mut source_paths_by_label = HashMap::new();
@@ -163,11 +179,10 @@ pub(super) fn extract_voicegroups(
     .map_err(ExtractError::VoiceGroup)?;
 
     for group in &resolved_groups {
-        writer.push(PackEntry {
-            id: resolve::voice_group_pack_id(&group.label),
-            kind: PackKind::Raw,
-            payload: encode::encode_voice_group(group),
-        });
+        writer.push(pack_format::raw_entry(
+            resolve::voice_group_pack_id(&group.label),
+            encode::encode_voice_group(group),
+        ));
     }
     Ok(())
 }
@@ -178,7 +193,7 @@ mod tests {
         discover_voicegroup_sources, extract_voicegroups, index_voicegroup_sources,
         link_order_successors, TITLE_VOICEGROUP_LABEL,
     };
-    use crate::extract::pack::PackWriter;
+    use pack_format::PackWriter;
 
     const REFERENCE_VOICEGROUP_SOURCE_COUNT: usize = 195;
     const TITLE_DECLARED_SLOT_COUNT: usize = 89;

@@ -76,8 +76,8 @@ use std::path::Path;
 
 pub(crate) use error::MidiError;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_file, read_text, ExtractError};
+use pack_format::PackWriter;
 
 /// The upstream `.mid` source this slice compiles, and the pack id its
 /// compiled song is written under (module docs, "Asset id").
@@ -86,7 +86,7 @@ const SONG_PACK_ID: &str = "audio/song/mus_title";
 
 /// Compile [`SONG_MIDI_FILENAME`] into its normalized [`event::SongEvent`]
 /// streams (per [`compile::compile`]'s own semantics) and write it as a
-/// [`PackKind::Raw`] entry under [`SONG_PACK_ID`].
+/// [`EntryKind::Raw`] entry under [`SONG_PACK_ID`].
 ///
 /// # Errors
 ///
@@ -109,11 +109,7 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
     let payload =
         encode::encode_song(&song).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
 
-    writer.push(PackEntry {
-        id: SONG_PACK_ID.to_owned(),
-        kind: PackKind::Raw,
-        payload,
-    });
+    writer.push(pack_format::raw_entry(SONG_PACK_ID.to_owned(), payload));
     Ok(())
 }
 
@@ -121,7 +117,7 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
 mod tests {
     use super::event::SongEvent;
     use super::{extract_song, SONG_PACK_ID};
-    use crate::extract::pack::PackWriter;
+    use pack_format::PackWriter;
 
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]

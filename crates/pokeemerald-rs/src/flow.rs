@@ -311,10 +311,18 @@ fn log_game_continued(phase: &OverworldPhase) {
 /// the `Overworld` arm hands it to
 /// [`OverworldPhase::advance_start_menu_frame`], the *only* write side
 /// (module docs).
+///
+/// `pack_source` is [`crate::App`]'s own retained
+/// [`crate::pack_source::PackSource`] (issue #412), resolved once at
+/// construction and passed down unchanged to every one of this function's
+/// own pack loads -- and, for the `Overworld` arm, into the
+/// [`OverworldPhase`] it builds, which retains it for every load *it*
+/// performs afterwards (`crate::pack_source`'s own module docs).
 pub(crate) fn advance_scene(
     scene: AppScene,
     buttons: ButtonState,
     save_slot: &mut SaveSlot,
+    pack_source: crate::pack_source::PackSource,
 ) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(mut title) => {
@@ -335,23 +343,26 @@ pub(crate) fn advance_scene(
                 // observable result is identical: the menu shown is the one
                 // the save on disk selects.
                 let saved = save_slot.load();
-                match main_menu::load_default(menu_type_for(&saved)) {
+                match main_menu::load(pack_source, menu_type_for(&saved)) {
                     Ok(menu) => {
                         let state = MainMenuState { scene: menu, saved };
                         let frame = state.scene.compose_frame();
                         return (AppScene::MainMenu(Box::new(state)), frame);
                     }
                     // The hint covers both failure shapes operators actually
-                    // hit: no pack extracted at all (`PackError::NotFound`),
-                    // and -- easy to mistake for a code bug -- a pack
-                    // extracted before this screen existed, whose directory
-                    // has no `interface/palette/main_menu_bg` entry
+                    // hit: no pack built at all (`PackError::NotFound`),
+                    // and -- easy to mistake for a code bug -- a pack built
+                    // before this screen existed, whose directory has no
+                    // `interface/palette/main_menu_bg` entry
                     // (`PackError::UnknownAsset`). Both are fixed by
-                    // re-extracting; neither changes what the error *is*.
+                    // rebuilding the pack by whichever route built it in
+                    // the first place -- a player has no decomp checkout to
+                    // extract from; neither changes what the error *is*.
                     Err(err) => eprintln!(
-                        "main menu: {err} -- staying on the title screen; \
-                         re-run `cargo xtask extract` (a pack extracted before \
-                         this screen existed is missing its entries)"
+                        "main menu: {err} -- staying on the title screen; a pack built \
+                         before this screen existed is missing its entries: players \
+                         rebuild it with `pokeemerald-rs --import-rom <path to your \
+                         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
                     ),
                 }
             }
@@ -365,7 +376,7 @@ pub(crate) fn advance_scene(
                 // action mapping is pinned by a pack-less test -- see
                 // `menu_action`'s own doc comment.
                 match menu_action(state.scene.selected()) {
-                    MainMenuAction::NewGame => match intro::load_default() {
+                    MainMenuAction::NewGame => match intro::load(pack_source) {
                         Ok(intro_scene) => {
                             let frame = intro_scene.compose_frame();
                             return (AppScene::Intro(Box::new(intro_scene)), frame);
@@ -381,7 +392,7 @@ pub(crate) fn advance_scene(
                     MainMenuAction::Continue => {
                         let (block1, block2) =
                             (state.saved.block1.clone(), state.saved.block2.clone());
-                        match OverworldPhase::continue_saved_game(block1, block2) {
+                        match OverworldPhase::continue_saved_game(pack_source, block1, block2) {
                             Ok(phase) => {
                                 log_game_continued(&phase);
                                 let frame = phase.compose_frame();
@@ -406,7 +417,7 @@ pub(crate) fn advance_scene(
             let status = intro_scene.tick(intro_printer_input(buttons));
 
             if status == IntroStatus::Finished {
-                match OverworldPhase::load_default() {
+                match OverworldPhase::load(pack_source) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();
@@ -431,7 +442,7 @@ pub(crate) fn advance_scene(
         }
         AppScene::OverworldLoadFailed(intro_scene) => {
             if should_retry_overworld_load(buttons) {
-                match OverworldPhase::load_default() {
+                match OverworldPhase::load(pack_source) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();

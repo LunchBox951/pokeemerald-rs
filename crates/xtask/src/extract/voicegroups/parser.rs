@@ -1,7 +1,20 @@
+//! Line-level parsing of upstream voicegroup sources: one `.inc` file under
+//! `pokeemerald/sound/voicegroups/` (a single `voice_group` declaration
+//! followed by its slots, one `voice_*` macro invocation per line — see
+//! `pokeemerald/asm/macros/music_voice.inc`), and
+//! `pokeemerald/sound/keysplit_tables.inc` (several `keysplit`/`split`
+//! blocks — see that file's own header comment).
+//!
+//! Pure text in, structured data out — no filesystem access here (that's
+//! `super`'s job, mirroring [`super::super::jasc_pal`]/[`super::super::layouts_json`]'s
+//! split). Nothing here resolves a `voice_keysplit`/`voice_keysplit_all`
+//! reference into another group's content, derives a pack id, or knows
+//! about the 128-slot bound — that linking work is [`super::resolve`]'s job.
+
 pub(super) use super::error::VoiceGroupError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Envelope {
+pub(crate) struct Envelope {
     pub attack: u8,
     pub decay: u8,
     pub sustain: u8,
@@ -9,14 +22,14 @@ pub(super) struct Envelope {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DirectSoundMode {
+pub(crate) enum DirectSoundMode {
     Resampled,
     Fixed,
     Reverse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RawSlot {
+pub(crate) enum RawSlot {
     DirectSound {
         base_key: u8,
         pan: Option<u8>,
@@ -63,7 +76,7 @@ pub(super) enum RawSlot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RawVoiceGroup {
+pub(crate) struct RawVoiceGroup {
     pub label: String,
     pub starting_note: u8,
     pub slots: Vec<RawSlot>,
@@ -72,7 +85,7 @@ pub(super) struct RawVoiceGroup {
 /// An expanded key-split table whose entry `i` selects a child slot for note
 /// `starting_note + i`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RawKeySplitTable {
+pub(crate) struct RawKeySplitTable {
     pub starting_note: u8,
     pub table: Vec<u8>,
 }
@@ -390,7 +403,14 @@ fn finish_keysplit_block(
     Ok(())
 }
 
-pub(super) fn parse_keysplit_tables(
+/// Parse `keysplit_tables.inc`'s full text into every `keysplit` block,
+/// keyed by label. See [`RawKeySplitTable`] and that file's own header
+/// comment for the `starting_note` bias this reconstructs.
+///
+/// # Errors
+///
+/// See [`VoiceGroupError`]'s variants.
+pub(crate) fn parse_keysplit_tables(
     text: &str,
 ) -> Result<std::collections::HashMap<String, RawKeySplitTable>, VoiceGroupError> {
     let mut out = std::collections::HashMap::new();
@@ -434,6 +454,10 @@ fn parse_include_path(line: &str) -> Option<&str> {
     Some(&quoted_path[..closing_quote])
 }
 
+/// Parses `sound/voice_groups.inc`'s own `.include` lines, in file order.
+/// A non-voicegroup include becomes [`LinkOrderItem::Foreign`] rather than
+/// being dropped, since it still breaks byte adjacency between the
+/// voicegroups on either side of it.
 pub(super) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
     const VOICEGROUP_INCLUDE_PREFIX: &str = "sound/voicegroups/";
     text.lines()
@@ -447,6 +471,7 @@ pub(super) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum LinkOrderItem {
+    /// A `sound/voicegroups/<relative>` include -- carries `<relative>`.
     VoiceGroup(String),
     /// A non-voicegroup include whose bytes break voicegroup adjacency.
     Foreign,

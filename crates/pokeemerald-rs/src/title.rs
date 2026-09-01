@@ -114,11 +114,14 @@ impl fmt::Display for TitleSceneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // Every requested asset ID is static, so an unknown asset means
-            // the pack schema predates the binary.
+            // the pack schema predates the binary. Both remedies are named
+            // below, like `PackError::NotFound`: an imported pack goes
+            // stale the same way an extracted one does.
             Self::Pack(err @ PackError::UnknownAsset(_)) => write!(
                 f,
-                "title screen: {err}: the local asset pack predates this build -- re-run \
-                 `cargo xtask extract` to refresh it"
+                "title screen: {err}: the local asset pack predates this build -- players \
+                 rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon Emerald \
+                 (US) ROM>`, developers with `cargo xtask extract`"
             ),
             Self::Pack(err) => write!(f, "title screen: {err}"),
             Self::Render(err) => write!(f, "title screen: {err}"),
@@ -320,16 +323,39 @@ impl TitleScene {
     }
 }
 
-/// Loads the title scene from the default asset-pack location.
+/// Loads the pack from its default location and decodes the title screen in
+/// one step -- the entry point [`crate::App::new`] uses. Checkout gates use
+/// [`load_repo`] instead.
 ///
 /// # Errors
 ///
-/// Returns [`TitleSceneError`] when the pack is absent, stale, or malformed.
+/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// if there is no pack yet (`pokeemerald-rs --import-rom <rom>`, or
+/// `./init.sh` then `cargo xtask extract` in a checkout); see
+/// [`TitleScene::from_pack`] for the other (real-pack-only) error cases.
 pub fn load_default() -> Result<TitleScene, TitleSceneError> {
     let pack = AssetPack::load_default()?;
     TitleScene::from_pack(&pack)
 }
 
+/// [`load_default`], pinned to the checkout's own extracted pack
+/// ([`AssetPack::load_repo`]) instead of the runtime resolution order --
+/// checkout gates must judge the pack the checkout just produced, not
+/// whatever a player has installed. Players never reach this.
+///
+/// # Errors
+///
+/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// if the checkout has no extracted pack yet (`./init.sh` then
+/// `cargo xtask extract`); otherwise as [`load_default`].
+pub fn load_repo() -> Result<TitleScene, TitleSceneError> {
+    let pack = AssetPack::load_repo()?;
+    TitleScene::from_pack(&pack)
+}
+
+/// Repacks a pack image entry's row-major pixel bytes into `rendering`'s
+/// GBA-tiled [`Tileset`] layout (matching how `gbagfx` packs upstream's own
+/// tilesheets), 8x8-block by 8x8-block.
 fn image_to_tileset(
     id: &'static str,
     image: ImageRef<'_>,
@@ -658,3 +684,6 @@ fn affine_tilemap_from_raw(raw: &[u8]) -> Result<AffineTilemap, TitleSceneError>
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tile_roundtrip_tests;

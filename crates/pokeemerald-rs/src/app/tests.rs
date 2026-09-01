@@ -195,6 +195,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
     let mut opened = false;
     let mut save_opened = false;
     let Err(err) = App::boot(
+        crate::title::load_default,
         || {
             opened = true;
             Ok(platform::Platform::new_headless())
@@ -203,6 +204,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
             save_opened = true;
             SaveSlot::disabled()
         },
+        crate::pack_source::PackSource::Runtime,
     ) else {
         panic!("with no pack extracted, boot must fail");
     };
@@ -226,8 +228,10 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boot_propagates_a_platform_opener_error() {
     let Err(err) = App::boot(
+        crate::title::load_repo,
         || Err(platform::PlatformError::NoAudioDevice),
         SaveSlot::disabled,
+        crate::pack_source::PackSource::Repo,
     ) else {
         panic!("the opener failed, so boot must fail");
     };

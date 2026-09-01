@@ -528,7 +528,24 @@ fn darken_outside(fb: &mut Framebuffer, bg0: &textbox::Coverage, rect: (i32, i32
 /// true if no pack has been extracted yet; see
 /// [`MainMenuScene::from_pack`] for the other (real-pack-only) error cases.
 pub fn load_default(menu_type: MainMenuType) -> Result<MainMenuScene, MainMenuSceneError> {
-    let pack = AssetPack::load_default()?;
+    load(crate::pack_source::PackSource::Runtime, menu_type)
+}
+
+/// [`load_default`], pinned to whichever [`crate::pack_source::PackSource`]
+/// `source` names instead of always the runtime resolver (issue #412) --
+/// what [`crate::flow::advance_scene`] calls with the same source
+/// [`crate::App`] resolved at construction, so a headless-real scenario's
+/// `Title` -> `MainMenu` transition keeps reading the checkout's own pack
+/// exactly as its title screen already did.
+///
+/// # Errors
+///
+/// See [`load_default`].
+pub(crate) fn load(
+    source: crate::pack_source::PackSource,
+    menu_type: MainMenuType,
+) -> Result<MainMenuScene, MainMenuSceneError> {
+    let pack = source.load()?;
     MainMenuScene::from_pack(&pack, menu_type)
 }
 

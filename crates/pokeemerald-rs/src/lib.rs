@@ -8,9 +8,21 @@
 //! binary `(oop-boundaries)`.
 //!
 //! [`title`] decodes the real title screen from the local asset pack
-//! (`assets::pack`, populated by `cargo xtask extract`); [`App::new`] uses
-//! it, falling back to no scene at all (a clean, no-panic diagnostic) when
-//! no pack has been extracted yet -- see [`title`]'s module docs.
+//! (`assets::pack`, populated by `pokeemerald-rs --import-rom <rom>` or, in
+//! a checkout, `cargo xtask extract`); [`App::new`] loads it before it
+//! opens a window, and when there is no pack yet it returns
+//! [`AppError::Title`](app::AppError::Title) rather than an [`App`] with no
+//! scene in it -- a clean, no-panic diagnostic naming what to run. See
+//! [`title`]'s module docs.
+//!
+//! [`import_rom`](crate::import_rom) (S-4, Discussion #71 policy C, issue
+//! #122) is the other half of that: the binary's `--import-rom <path>` flag
+//! reads the player's own Pokemon Emerald (US) ROM through the `rom-import`
+//! crate and writes the pack where `pack_format` resolves it, atomically.
+//! `src/cli.rs` (a module of the binary, not of this crate) parses the flag.
+//! The pack it writes is complete and byte-identical to `cargo xtask
+//! extract`'s, so a player needs no checkout (see `rom_import`'s own
+//! module docs for the contract and its equivalence harness).
 //!
 //! [`overworld`] (I-3, issue #126) composes the map viewport + player OBJ
 //! presentation lane over the `engine` overworld runtime (S-5, PR #120) --
@@ -116,11 +128,13 @@ mod authored_message;
 mod flow;
 pub mod frame;
 mod game_save;
+pub mod import_rom;
 pub mod intro;
 pub mod main_menu;
 pub mod music;
 pub mod new_game;
 pub mod overworld;
+mod pack_source;
 mod party;
 pub mod scene;
 mod start_menu;
@@ -133,6 +147,7 @@ pub use flow::first_battle::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
     FIRST_BATTLE_OPPONENT_SPECIES,
 };
+pub use import_rom::{import_rom, ImportOutcome, ImportRomError};
 pub use platform::Buttons as AppButtons;
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a

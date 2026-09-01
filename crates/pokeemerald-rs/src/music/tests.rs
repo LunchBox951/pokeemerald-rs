@@ -352,7 +352,7 @@ mod synthetic_pack {
     use crate::music::load_song_from_pack;
 
     /// Serialize `entries` (id -> raw payload) into the pack container
-    /// format (`assets::pack::format`: magic, version, directory of Raw
+    /// format (`pack_format`: magic, version, directory of Raw
     /// entries, payloads) and write it to a per-test scratch path.
     fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         const RAW_KIND: u8 = 2;
@@ -367,7 +367,7 @@ mod synthetic_pack {
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"PKMRPACK");
-        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
         for (id, payload) in &entries {
             bytes.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());

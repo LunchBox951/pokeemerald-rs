@@ -3,7 +3,8 @@
 //!
 //! Implements the owner-decided "policy A" from Discussion #71: extraction
 //! reads the local checkout `./init.sh` fetches and writes a deterministic,
-//! versioned pack to disk (format: [`pack`]); it never runs automatically
+//! versioned pack to disk (format: the `pack_format` crate, which owns the
+//! container layout and the writer); it never runs automatically
 //! (only an explicit `cargo xtask extract` invocation triggers it, wired in
 //! `crate::dispatch`), and the pack itself is never committed, never a CI
 //! artifact, and never embedded in a binary (`.gitignore` excludes
@@ -29,7 +30,7 @@
 //!   `anim/**/*.png` animation frame (present for `general` and
 //!   `building` only), all 16 `palettes/NN.pal` files, and
 //!   `metatiles.bin` / `metatile_attributes.bin` as opaque
-//!   [`pack::PackKind::Raw`] blobs (upstream ships these as flat binary
+//!   [`pack_format::EntryKind::Raw`] blobs (upstream ships these as flat binary
 //!   files directly, not compiled from another source — see
 //!   `crates/assets/src/map_layouts.rs`'s docs for the identical
 //!   raw-binary-source situation with `map.bin`/`border.bin`). Extracting
@@ -48,7 +49,10 @@
 //!   *their* in-game palette directly from the PNG
 //!   (`INCGFX_U16(...png", ".gbapal")` in `graphics.c`), not a sibling
 //!   `.pal` file, so this is the only way to recover it (see
-//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]).
+//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]). One of the three `.pal`
+//!   files is not extracted whole: `pokemon_logo.pal` is cut to the 224
+//!   colours upstream's own build rule keeps (see
+//!   [`TITLE_SCREEN_PALETTE_CUTS`]).
 //! - **Player/NPC sprites** (`graphics/object_events/pics/people/`): every
 //!   PNG in the directory (133 files: Brendan's and May's own animation
 //!   sheets, plus the full upstream NPC roster — nurses, gym leaders,
@@ -82,7 +86,7 @@
 //!   Littleroot ↔ Route 101 ↔ Oldale Town ↔ Route 103 chain I-5's Route 103
 //!   rival battle needs to be reachable on foot (see [`LAYOUTS`]). Resolved
 //!   via `data/layouts/layouts.json` ([`layouts_json`]) rather than
-//!   hardcoded upstream paths, and extracted as opaque [`pack::PackKind::Raw`]
+//!   hardcoded upstream paths, and extracted as opaque [`pack_format::EntryKind::Raw`]
 //!   blobs — same rationale as `metatiles.bin` / `metatile_attributes.bin`
 //!   above: these are upstream's own flat binary files, not compiled from
 //!   another source. `crates/assets::map_layouts` already ships the typed
@@ -117,7 +121,7 @@
 //!   key-split sub-groups — see [`audio_samples`]'s module docs for exactly
 //!   how that set was traced and for the wire format each entry's payload
 //!   carries (`crates/assets::audio::sample::Sample`'s encoding, duplicated
-//!   here per this module's crate-decoupling policy — see [`pack`]'s
+//!   here per this module's crate-decoupling policy — see `pack_format`'s
 //!   docs). [`wav`] is the `.wav`-source decoder this needs; see its module
 //!   docs for the field-by-field derivation, cited into
 //!   `tools/wav2agb`.
@@ -206,7 +210,7 @@
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
 //! decomp revisions) — never a `gTileset_*`-style linker symbol. See
-//! [`pack`]'s module docs for why that matters.
+//! `pack_format`'s crate docs for why that matters.
 
 mod audio_samples;
 mod error;
@@ -215,22 +219,16 @@ pub mod inflate;
 pub mod jasc_pal;
 mod layouts_json;
 mod midi;
-pub mod pack;
 pub mod png;
 mod text_window;
-mod voicegroups;
+pub(crate) mod voicegroups;
 mod wav;
 
 use std::path::{Path, PathBuf};
 
 pub use error::ExtractError;
-use pack::{PackEntry, PackKind, PackWriter};
-
-/// The pack's location, relative to the repository root: a top-level,
-/// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
-/// top-level gitignored reference dirs) rather than something under
-/// `target/`, so it survives `cargo clean`.
-pub const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
+pub use pack_format::OUTPUT_RELATIVE_PATH;
+use pack_format::{EntryShapeError, PackEntry, PackWriter};
 
 /// Serializes the ignored tests that touch the one real, developer-local
 /// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
@@ -288,6 +286,13 @@ pub(crate) fn upstream_present() -> bool {
 ///
 /// See [`extract_to`].
 pub fn run() -> Result<ExtractReport, ExtractError> {
+    // Deliberately the repo path, not `pack_format::default_pack_path()`.
+    // That resolver answers "where does a *running game* find its pack",
+    // and its earlier rungs (`$POKEEMERALD_PACK`, the OS user-data
+    // directory, the executable's own directory) would silently redirect
+    // `cargo xtask extract` away from the checkout it belongs to. This is a
+    // developer tool writing a developer's gitignored build product; the
+    // only right destination is this repository.
     extract_to(&repo_root().join(OUTPUT_RELATIVE_PATH))
 }
 
@@ -369,16 +374,27 @@ fn read_text(path: &Path) -> Result<String, ExtractError> {
 fn decode_png_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let bytes = read_file(path)?;
     let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
-    writer.push(PackEntry {
-        id,
-        kind: PackKind::Image {
-            width: image.width,
-            height: image.height,
-            bit_depth: image.bit_depth,
-        },
-        payload: image.pixels,
-    });
+    writer.push(build_image_entry(path, id, image)?);
     Ok(())
+}
+
+/// Turn a decoded PNG into a [`EntryKind::Image`] entry through
+/// [`pack_format::image_entry`], the constructor the ROM importer also
+/// writes through. Every decoded-PNG call site in this pipeline funnels
+/// here, so no two of them can shape an image entry differently.
+///
+/// # Errors
+///
+/// [`ExtractError::EntryShape`] if the decoded pixel buffer is not
+/// `width * height` bytes. `png::decode` always produces exactly that, so
+/// this is a contract check, not a real failure mode.
+fn build_image_entry(
+    path: &Path,
+    id: String,
+    image: png::IndexedImage,
+) -> Result<PackEntry, ExtractError> {
+    pack_format::image_entry(id, image.width, image.height, image.bit_depth, image.pixels)
+        .map_err(|e| ExtractError::EntryShape(path.to_path_buf(), e))
 }
 
 fn decode_palette_entry(
@@ -386,15 +402,48 @@ fn decode_palette_entry(
     id: String,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
+    decode_palette_entry_cut(path, id, None, writer)
+}
+
+/// As [`decode_palette_entry`], keeping only the first `cut` colours.
+///
+/// A `.pal` file can be longer than the palette upstream's build actually
+/// compiles from it (see [`TITLE_SCREEN_PALETTE_CUTS`]). The cut is applied
+/// here rather than in [`build_palette_entry`] so every other call site
+/// keeps reading whole files.
+///
+/// # Errors
+///
+/// [`ExtractError::PaletteShorterThanCut`] if the file has fewer colours
+/// than the cut asks for. Padding it out would put colours in the pack that
+/// no source declares; the cut is a fact about upstream's build rule, so a
+/// file that cannot satisfy it means the rule and the source have diverged.
+fn decode_palette_entry_cut(
+    path: &Path,
+    id: String,
+    cut: Option<usize>,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
     let text = read_text(path)?;
-    let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    let mut colors =
+        jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    if let Some(cut) = cut {
+        if colors.len() < cut {
+            return Err(ExtractError::PaletteShorterThanCut {
+                path: path.to_path_buf(),
+                cut,
+                actual: colors.len(),
+            });
+        }
+        colors.truncate(cut);
+    }
     writer.push(build_palette_entry(path, &colors, id)?);
     Ok(())
 }
 
 /// Serialize already-decoded colours (from either a JASC `.pal` file or a
 /// PNG's own `PLTE` chunk — see [`text_window`]) into a
-/// [`PackKind::Palette`] entry. The one place the JASC (`.pal`) and
+/// [`EntryKind::Palette`] entry. The one place the JASC (`.pal`) and
 /// embedded-PNG (`PLTE`) decode paths converge before writing the pack's
 /// `color_count` field, so both share this same bounds check rather than
 /// each narrowing `colors.len()` with its own truncating cast.
@@ -403,44 +452,33 @@ fn decode_palette_entry(
 ///
 /// [`ExtractError::PaletteColorCountUnrepresentable`] if `colors.len()`
 /// exceeds `u16::MAX` — the pack format's `color_count` field cannot
-/// represent it (`pack`'s format docs). Carries `path` purely for the error
+/// represent it (`pack_format`'s format docs). Carries `path` purely for the error
 /// message; the returned entry is never associated back with a file.
 fn build_palette_entry(
     path: &Path,
     colors: &[jasc_pal::Rgb888],
     id: String,
 ) -> Result<PackEntry, ExtractError> {
-    let color_count = u16::try_from(colors.len()).map_err(|_| {
-        ExtractError::PaletteColorCountUnrepresentable(path.to_path_buf(), colors.len())
-    })?;
-    let mut payload = Vec::with_capacity(colors.len() * 2);
-    for color in colors {
-        payload.extend_from_slice(&color.to_gba555().to_le_bytes());
-    }
-    // `payload` is built from exactly `colors`, one GBA555 `u16` (2 bytes)
-    // each, so this can never trip in practice -- asserted anyway since the
-    // pack's own payload-shape contract (`pack`'s format docs: "Palette:
-    // color_count * 2 bytes") is exactly what `color_count` promises readers.
-    debug_assert_eq!(payload.len(), usize::from(color_count) * 2);
-    Ok(PackEntry {
-        id,
-        kind: PackKind::Palette { color_count },
-        payload,
+    // The GBA555 conversion is this pipeline's (upstream's `.pal` files are
+    // 8-bit RGB); the packing is `pack_format`'s, shared with the ROM
+    // importer, whose colours arrive GBA-native already.
+    let colors: Vec<u16> = colors.iter().map(|c| c.to_gba555()).collect();
+    pack_format::palette_entry(id, &colors).map_err(|e| match e {
+        EntryShapeError::PaletteColorCountUnrepresentable(actual) => {
+            ExtractError::PaletteColorCountUnrepresentable(path.to_path_buf(), actual)
+        }
+        other => ExtractError::EntryShape(path.to_path_buf(), other),
     })
 }
 
-fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
+fn push_raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let payload = read_file(path)?;
-    writer.push(PackEntry {
-        id,
-        kind: PackKind::Raw,
-        payload,
-    });
+    writer.push(pack_format::raw_entry(id, payload));
     Ok(())
 }
 
 /// Recursively collect every `*.png` under `dir`, sorted by full path —
-/// deterministic regardless of the OS's `read_dir` order (see [`pack`]'s
+/// deterministic regardless of the OS's `read_dir` order (see `pack_format`'s
 /// determinism docs).
 fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -502,12 +540,12 @@ fn extract_tileset(
         )?;
     }
 
-    raw_entry(
+    push_raw_entry(
         &base.join("metatiles.bin"),
         format!("tileset/{name}/metatiles"),
         writer,
     )?;
-    raw_entry(
+    push_raw_entry(
         &base.join("metatile_attributes.bin"),
         format!("tileset/{name}/metatile-attributes"),
         writer,
@@ -525,6 +563,20 @@ fn extract_tileset(
 /// `title/palette/<name>` alongside the normal `title/image/<name>` entry
 /// (see [`extract_title_screen`]).
 const TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS: [&str; 2] = ["emerald_version", "press_start"];
+
+/// Title-screen `.pal` files upstream's own build rule cuts short, and the
+/// colour count it cuts them to.
+///
+/// `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with
+/// `-num_colors 224`, so the ROM holds 224 colours while the `.pal` file
+/// holds 256, the last 32 of them black. The game never reads past 224
+/// either (`pokeemerald_rs::title`'s `LOGO_PALETTE_COLORS`: entries
+/// `224..=255` of that flat palette come from
+/// `title/palette/rayquaza_and_clouds` and from unloaded palette RAM, not
+/// from this file). Honouring the cut here is what lets this pipeline and
+/// the ROM importer emit the same bytes for the same id, which is the whole
+/// point of the two backends sharing `pack_format`'s constructors.
+const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
 
 /// Extract `graphics/title_screen/`'s full contents.
 fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
@@ -559,18 +611,20 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                         build_palette_entry(&path, &colors, format!("title/palette/{stem}"))?;
                     writer.push(entry);
                 }
-                writer.push(PackEntry {
-                    id: format!("title/image/{stem}"),
-                    kind: PackKind::Image {
-                        width: image.width,
-                        height: image.height,
-                        bit_depth: image.bit_depth,
-                    },
-                    payload: image.pixels,
-                });
+                writer.push(build_image_entry(
+                    &path,
+                    format!("title/image/{stem}"),
+                    image,
+                )?);
             }
-            Some("pal") => decode_palette_entry(&path, format!("title/palette/{stem}"), writer)?,
-            Some("bin") => raw_entry(&path, format!("title/raw/{stem}"), writer)?,
+            Some("pal") => {
+                let cut = TITLE_SCREEN_PALETTE_CUTS
+                    .iter()
+                    .find(|(name, _)| *name == stem)
+                    .map(|&(_, colors)| colors);
+                decode_palette_entry_cut(&path, format!("title/palette/{stem}"), cut, writer)?;
+            }
+            Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
             _ => {}
         }
     }
@@ -735,11 +789,10 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
                 actual: map_bytes.len(),
             });
         }
-        writer.push(PackEntry {
-            id: format!("layout/{name}/map"),
-            kind: PackKind::Raw,
-            payload: map_bytes,
-        });
+        writer.push(pack_format::raw_entry(
+            format!("layout/{name}/map"),
+            map_bytes,
+        ));
 
         let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
         if border_bytes.len() != BORDER_BLOCK_BYTES {
@@ -748,11 +801,10 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
                 actual: border_bytes.len(),
             });
         }
-        writer.push(PackEntry {
-            id: format!("layout/{name}/border"),
-            kind: PackKind::Raw,
-            payload: border_bytes,
-        });
+        writer.push(pack_format::raw_entry(
+            format!("layout/{name}/border"),
+            border_bytes,
+        ));
     }
     Ok(())
 }
@@ -896,7 +948,7 @@ mod tests {
 
     #[test]
     fn oversized_jasc_palette_is_rejected_not_truncated() {
-        // The pack format's `color_count` field is a `u16` (`pack`'s format
+        // The pack format's `color_count` field is a `u16` (`pack_format`'s
         // docs) -- 65 536 colours, one more than it can hold, must fail
         // closed via `ExtractError::PaletteColorCountUnrepresentable` rather
         // than silently narrow with an `as u16` cast (issue #301).
@@ -917,7 +969,7 @@ mod tests {
         let path = dir.join("oversized.pal");
         std::fs::write(&path, &text).unwrap();
 
-        let mut writer = super::pack::PackWriter::new();
+        let mut writer = pack_format::PackWriter::new();
         let err =
             super::decode_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
         assert!(
@@ -984,7 +1036,7 @@ mod tests {
         // module docs), so this just confirms every expected `layout/*`
         // id's bytes made it into the pack's directory, via a crude
         // substring search over the raw file (every id is stored verbatim,
-        // UTF-8, in the directory region -- see `pack`'s format docs).
+        // UTF-8, in the directory region -- see `pack_format`'s format docs).
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("layouts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");

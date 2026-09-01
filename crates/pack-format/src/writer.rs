@@ -1,12 +1,9 @@
-//! Deterministic serializer for the asset-pack format consumed by `crates/assets`.
-//!
-//! A pack contains a fixed header, an asset-id-sorted directory, and payloads
-//! in the same order. Directory rows store the UTF-8 id, content kind, absolute
-//! payload offset, payload length, and kind-specific metadata. All integers are
-//! little-endian.
+//! The write side: queue [`PackEntry`] values, get pack bytes back.
 
 use std::fmt;
 use std::mem::size_of;
+
+use crate::layout::{EntryKind, FORMAT_VERSION, MAGIC};
 
 const ID_LENGTH_SIZE: usize = size_of::<u16>();
 const KIND_TAG_SIZE: usize = size_of::<u8>();
@@ -15,44 +12,9 @@ const PAYLOAD_LENGTH_SIZE: usize = size_of::<u64>();
 const DIRECTORY_ENTRY_FIXED_SIZE: usize =
     ID_LENGTH_SIZE + KIND_TAG_SIZE + PAYLOAD_OFFSET_SIZE + PAYLOAD_LENGTH_SIZE;
 
-/// Serialization identity at the start of every pack.
-pub const MAGIC: [u8; 8] = *b"PKMRPACK";
-
-/// Pack revision emitted by this writer and accepted by `crates/assets`.
-pub const FORMAT_VERSION: u32 = 6;
-
 const PACK_HEADER_SIZE: usize = MAGIC.len() + size_of::<u32>() + size_of::<u32>();
 
-/// Content kind and directory metadata for an asset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PackKind {
-    /// A row-major indexed bitmap with one palette index per byte.
-    Image {
-        /// Width in pixels.
-        width: u32,
-        /// Height in pixels.
-        height: u32,
-        /// Informational source PNG bit depth: 2, 4, or 8.
-        bit_depth: u8,
-    },
-    /// Little-endian GBA BGR555 colours.
-    Palette {
-        /// Number of colours.
-        color_count: u16,
-    },
-    /// Opaque bytes.
-    Raw,
-}
-
-impl PackKind {
-    const fn tag(self) -> u8 {
-        match self {
-            Self::Image { .. } => 0,
-            Self::Palette { .. } => 1,
-            Self::Raw => 2,
-        }
-    }
-
+impl EntryKind {
     const fn metadata_size(self) -> usize {
         match self {
             Self::Image { .. } => 2 * size_of::<u32>() + size_of::<u8>(),
@@ -80,14 +42,26 @@ impl PackKind {
     }
 }
 
-/// An asset waiting to be serialized.
+/// One asset queued for the pack, before its final on-disk offset is known.
 pub struct PackEntry {
-    /// Stable lookup id.
+    /// The normalized asset id (see the crate docs).
     pub id: String,
-    /// Content kind and metadata.
-    pub kind: PackKind,
+    /// The entry's content kind and its fixed metadata.
+    pub kind: EntryKind,
     /// The payload bytes.
     pub payload: Vec<u8>,
+}
+
+// Hand-written rather than derived: a payload runs to hundreds of KiB, and
+// a derived `Debug` would dump every byte into a failing test's output.
+impl fmt::Debug for PackEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PackEntry")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("payload_len", &self.payload.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PackEntry {
@@ -109,12 +83,13 @@ impl PackEntry {
     }
 }
 
-/// Failure to serialize an asset pack.
+/// An error building a pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackWriteError {
-    /// Multiple entries use the same id.
+    /// Two entries were queued with the same id. Carries the offending id.
     DuplicateId(String),
-    /// An id is empty or cannot fit in the directory's `u16` length field.
+    /// An id was empty, or longer than `u16::MAX` bytes (the directory's
+    /// `id_len` field cannot represent it).
     InvalidId(String),
 }
 
@@ -139,31 +114,38 @@ fn wrapping_entry_count_field(entry_count: usize) -> u32 {
     }
 }
 
-/// Collects assets and serializes a deterministic pack.
+/// Accumulates [`PackEntry`] values and serializes them into the pack
+/// format described in the crate docs.
 #[derive(Default)]
 pub struct PackWriter {
     entries: Vec<PackEntry>,
 }
 
 impl PackWriter {
-    /// Creates an empty writer.
+    /// Create an empty writer.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Queues an asset. Serialization order is independent of insertion order.
+    /// Queue one entry. Order of calls does not matter — [`finish`](Self::finish)
+    /// sorts by id before serializing.
     pub fn push(&mut self, entry: PackEntry) {
         self.entries.push(entry);
     }
 
-    /// Returns the number of queued assets.
+    /// The number of entries queued so far.
+    // `xtask::extract`'s manifest always pushes a fixed, nonzero set of
+    // entries before checking this, so an `is_empty` companion (clippy's
+    // usual `len_without_is_empty` ask) would be genuinely dead code here
+    // rather than real API surface.
     #[must_use]
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Sorts queued assets by id and serializes the pack.
+    /// Sort entries by id and serialize the whole pack to bytes.
     ///
     /// # Errors
     ///
@@ -213,7 +195,7 @@ mod tests {
     use std::mem::size_of;
 
     use super::{
-        wrapping_entry_count_field, PackEntry, PackKind, PackWriteError, PackWriter,
+        wrapping_entry_count_field, EntryKind, PackEntry, PackWriteError, PackWriter,
         FORMAT_VERSION, ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
     };
 
@@ -223,7 +205,7 @@ mod tests {
         assert_eq!(writer.len(), 0);
         writer.push(PackEntry {
             id: "a".into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![],
         });
         assert_eq!(writer.len(), 1);
@@ -251,12 +233,12 @@ mod tests {
         let mut writer = PackWriter::new();
         writer.push(PackEntry {
             id: "zzz".into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![9],
         });
         writer.push(PackEntry {
             id: "aaa".into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![1],
         });
         let bytes = writer.finish().unwrap();
@@ -276,12 +258,12 @@ mod tests {
         let mut writer = PackWriter::new();
         writer.push(PackEntry {
             id: "dup".into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![],
         });
         writer.push(PackEntry {
             id: "dup".into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![],
         });
         assert_eq!(
@@ -296,7 +278,7 @@ mod tests {
             let mut writer = PackWriter::new();
             writer.push(PackEntry {
                 id: invalid_id.clone(),
-                kind: PackKind::Raw,
+                kind: EntryKind::Raw,
                 payload: vec![],
             });
             assert_eq!(
@@ -322,7 +304,7 @@ mod tests {
             let mut writer = PackWriter::new();
             writer.push(PackEntry {
                 id: "tileset/general/tiles".into(),
-                kind: PackKind::Image {
+                kind: EntryKind::Image {
                     width: 8,
                     height: 8,
                     bit_depth: 4,
@@ -331,7 +313,7 @@ mod tests {
             });
             writer.push(PackEntry {
                 id: "tileset/general/palette/00".into(),
-                kind: PackKind::Palette { color_count: 16 },
+                kind: EntryKind::Palette { color_count: 16 },
                 payload: vec![0u8; 32],
             });
             writer.finish().unwrap()
@@ -344,7 +326,7 @@ mod tests {
         let id = "a";
         let entry = PackEntry {
             id: id.into(),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: vec![0xAB],
         };
         let expected_payload_offset = PACK_HEADER_SIZE + entry.directory_size();
