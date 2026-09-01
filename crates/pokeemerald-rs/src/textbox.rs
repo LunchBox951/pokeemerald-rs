@@ -61,6 +61,7 @@ pub(crate) struct Coverage {
 }
 
 impl Coverage {
+    /// A tracker sized to the framebuffer, with nothing painted yet.
     pub(crate) fn recording() -> Self {
         Self {
             painted_pixels: vec![false; Framebuffer::WIDTH * Framebuffer::HEIGHT],
@@ -73,6 +74,8 @@ impl Coverage {
         }
     }
 
+    /// Whether a blit painted this pixel. A disabled tracker and an
+    /// out-of-range coordinate both answer `false`.
     pub(crate) fn is_painted(&self, x: usize, y: usize) -> bool {
         x < Framebuffer::WIDTH
             && self
@@ -219,6 +222,7 @@ pub(crate) struct FrameAssets {
 }
 
 impl FrameAssets {
+    /// Owned copies of a pack window frame's tiles and decoded palette.
     pub(crate) fn from_handle(handle: assets::pack::WindowFrameHandle<'_>) -> Self {
         Self {
             pixels: handle.tiles.pixels.to_vec(),
@@ -228,6 +232,7 @@ impl FrameAssets {
         }
     }
 
+    /// The frame tiles as the blitters' borrowed image shape.
     pub(crate) fn image(&self) -> ImageRef<'_> {
         ImageRef {
             width: self.width,
