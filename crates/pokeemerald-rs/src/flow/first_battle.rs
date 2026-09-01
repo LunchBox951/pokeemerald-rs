@@ -171,12 +171,17 @@ pub fn start_first_battle(
 /// `first_battle` makes running an instant [`BattleError::RunForbidden`]
 /// rather than a legal (if often futile) attempt (module docs).
 ///
-/// The stat-stage reset is `advance_wild_battle`'s verbatim — stat stages
-/// live in `gBattleMons[].statStages` only and never reach the party struct;
-/// see that function's doc comment for the citations. The **unconditional**
-/// write-back is shaped the same but justified differently: for an ordinary
-/// wild battle it is a knowing deviation (upstream white-outs and heals on a
-/// loss), while here it is upstream's own behaviour. `CB2_EndFirstBattle`
+/// The stat-stage reset is `advance_wild_battle`'s verbatim — both drivers
+/// finalize through `crate::flow::battle_finalize::finalize_battle_turn`,
+/// whose [`battle::BattlePokemon::clear_battle_scratch`] drops stages that
+/// live in `gBattleMons[].statStages` only and never reach the party struct
+/// (pinned, with its upstream citation, by
+/// `crate::flow::wild_encounter::tests::ending_a_battle_writes_the_lead_back_with_neutral_stat_stages`).
+///
+/// The **unconditional** write-back is shaped the same but justified
+/// differently: for an ordinary wild battle it is a knowing deviation
+/// (upstream white-outs and heals on a loss), while here it is upstream's
+/// own behaviour. `CB2_EndFirstBattle`
 /// (`pokeemerald/src/battle_setup.c:950`-`:954`) runs
 /// `Overworld_ClearSavedMusic` and goes straight to
 /// `CB2_ReturnToFieldContinueScriptPlayMapMusic` with no `IsPlayerDefeated`

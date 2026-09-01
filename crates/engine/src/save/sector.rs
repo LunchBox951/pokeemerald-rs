@@ -1,75 +1,52 @@
-//! Flash sector image (S-5).
+//! Encoding and validation for one 4 KiB flash sector.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of `struct
-//! SaveSector` (`include/save.h`) and the footer bytes `HandleWriteSector`
-//! writes into it (`src/save.c`). Upstream's flash is organised as 32
-//! fixed-size 4 KiB sectors; each sector is `SECTOR_DATA_SIZE` bytes of
-//! payload followed by a `SECTOR_FOOTER_SIZE`-byte footer, of which only the
-//! last 12 bytes are used:
-//!
-//! ```text
-//! offset 0                      3968      4084  4086  4088      4092      4096
-//!        |------- data --------|-unused-|-id-|-cksum-|-signature-|-counter-|
-//! ```
-//!
-//! This module models one such 4096-byte sector image and its footer
-//! fields; [`super::store`] owns the collection of sectors and the slot
-//! rotation logic built on top.
+//! A sector contains a fixed-width payload and a footer. The footer reserves
+//! its final 12 bytes for the logical ID, checksum, signature, and save counter,
+//! in that order (`pokeemerald/include/save.h:71-79`). [`super::store`] owns the
+//! physical sector collection and slot rotation.
 
 use super::checksum;
+use std::mem::size_of;
 
-/// `SECTOR_DATA_SIZE` — payload bytes per sector, before the footer.
+/// Number of payload bytes in each flash sector.
 pub const SECTOR_DATA_SIZE: usize = 3968;
-/// `SECTOR_FOOTER_SIZE` — trailing footer bytes per sector (only the last 12
-/// are used; the rest is unused padding upstream never reads).
+/// Number of reserved footer bytes in each flash sector.
 pub const SECTOR_FOOTER_SIZE: usize = 128;
-/// `SECTOR_SIZE` (`SECTOR_DATA_SIZE + SECTOR_FOOTER_SIZE`) — total bytes per
-/// flash sector.
+/// Total encoded size of one flash sector.
 pub const SECTOR_SIZE: usize = SECTOR_DATA_SIZE + SECTOR_FOOTER_SIZE;
 
-/// `SECTOR_SIGNATURE` — the footer value that marks a sector as written and
-/// intact. Any other value means the sector is empty or foreign.
+/// Footer marker required for a written sector to be valid.
 pub const SECTOR_SIGNATURE: u32 = 0x0801_2025;
 
-const FOOTER_USED_SIZE: usize = 12; // id(2) + checksum(2) + signature(4) + counter(4)
-const ID_OFFSET: usize = SECTOR_DATA_SIZE + (SECTOR_FOOTER_SIZE - FOOTER_USED_SIZE);
-const CHECKSUM_OFFSET: usize = ID_OFFSET + 2;
-const SIGNATURE_OFFSET: usize = CHECKSUM_OFFSET + 2;
-const COUNTER_OFFSET: usize = SIGNATURE_OFFSET + 4;
+const ERASED_FLASH_BYTE: u8 = 0xFF;
+const FOOTER_METADATA_SIZE: usize = size_of::<u16>() * 2 + size_of::<u32>() * 2;
+const FOOTER_PADDING_SIZE: usize = SECTOR_FOOTER_SIZE - FOOTER_METADATA_SIZE;
+const ID_OFFSET: usize = SECTOR_DATA_SIZE + FOOTER_PADDING_SIZE;
+const CHECKSUM_OFFSET: usize = ID_OFFSET + size_of::<u16>();
+const SIGNATURE_OFFSET: usize = CHECKSUM_OFFSET + size_of::<u16>();
+const COUNTER_OFFSET: usize = SIGNATURE_OFFSET + size_of::<u32>();
+const _: () = assert!(COUNTER_OFFSET + size_of::<u32>() == SECTOR_SIZE);
 
-// Ground-truth check that the footer field layout above lands exactly where
-// `struct SaveSector`'s trailing `id`/`checksum`/`signature`/`counter`
-// fields do (offsets 4084/4086/4088/4092 of a 4096-byte sector).
-const _: () = assert!(ID_OFFSET == 4084);
-const _: () = assert!(COUNTER_OFFSET + 4 == SECTOR_SIZE);
-
-/// One 4096-byte flash sector image: `SECTOR_DATA_SIZE` payload bytes plus
-/// the footer (`id`, `checksum`, `signature`, `counter`). Mirrors upstream
-/// `struct SaveSector`.
+/// A fixed-width flash-sector image.
 #[derive(Debug, Clone, Copy)]
 pub struct Sector([u8; SECTOR_SIZE]);
 
 impl Sector {
-    /// A freshly erased sector — all bytes `0xFF`, matching real NOR/AGB
-    /// flash's erased state `(behavioral-fidelity)` — no signature, so
-    /// [`Sector::is_valid`] always reports `false` for it. Stands in for
-    /// never-written flash; see [`super::store::SaveStore::new`] for why the
-    /// fill value (not just "any non-signature value") matters.
+    /// Creates an erased sector whose bytes are all `0xFF`.
+    ///
+    /// mGBA initializes unwritten flash to this value
+    /// (`mgba/src/gba/savedata.c:267-294`).
     #[must_use]
     pub const fn empty() -> Self {
-        Self([0xFF; SECTOR_SIZE])
+        Self([ERASED_FLASH_BYTE; SECTOR_SIZE])
     }
 
-    /// Build a sector image the way upstream `HandleWriteSector` does:
-    /// start from an all-zero buffer, copy `data` into the payload region,
-    /// and set the footer (`id`, `signature`, `counter`, and `checksum`
-    /// computed over `data` via [`checksum::checksum`]).
+    /// Encodes `data` and its checksum with the supplied footer fields.
+    /// Unused payload and footer bytes are zero-filled.
     ///
     /// # Panics
     ///
-    /// Panics if `data.len() > SECTOR_DATA_SIZE` — upstream's
-    /// `SaveSectorLocation::size` can never exceed it either (see
-    /// `STATIC_ASSERT`s in `src/save.c`).
+    /// Panics if `data` exceeds [`SECTOR_DATA_SIZE`].
     #[must_use]
     pub fn write(id: u16, data: &[u8], counter: u32) -> Self {
         assert!(
@@ -79,42 +56,40 @@ impl Sector {
         );
         let mut bytes = [0u8; SECTOR_SIZE];
         bytes[..data.len()].copy_from_slice(data);
-        let sum = checksum::checksum(data);
+        let checksum = checksum::checksum(data);
         bytes[ID_OFFSET..ID_OFFSET + 2].copy_from_slice(&id.to_le_bytes());
-        bytes[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 2].copy_from_slice(&sum.to_le_bytes());
+        bytes[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 2].copy_from_slice(&checksum.to_le_bytes());
         bytes[SIGNATURE_OFFSET..SIGNATURE_OFFSET + 4]
             .copy_from_slice(&SECTOR_SIGNATURE.to_le_bytes());
         bytes[COUNTER_OFFSET..COUNTER_OFFSET + 4].copy_from_slice(&counter.to_le_bytes());
         Self(bytes)
     }
 
-    /// Reinterpret a raw `SECTOR_SIZE`-byte image (e.g. read back from a
-    /// [`super::store::SaveStore`]'s buffer) as a sector.
+    /// Wraps a raw flash-sector image.
     #[must_use]
     pub const fn from_bytes(bytes: [u8; SECTOR_SIZE]) -> Self {
         Self(bytes)
     }
 
-    /// The raw `SECTOR_SIZE`-byte image, for writing into a byte buffer.
+    /// Returns the raw encoded image.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; SECTOR_SIZE] {
         &self.0
     }
 
-    /// The footer `id` field — which logical chunk (`SECTOR_ID_*`) this
-    /// sector holds.
+    /// Returns the logical payload ID from the footer.
     #[must_use]
     pub fn id(&self) -> u16 {
         u16::from_le_bytes([self.0[ID_OFFSET], self.0[ID_OFFSET + 1]])
     }
 
-    /// The footer `checksum` field, as stored (not recomputed).
+    /// Returns the stored payload checksum without recomputing it.
     #[must_use]
     pub fn stored_checksum(&self) -> u16 {
         u16::from_le_bytes([self.0[CHECKSUM_OFFSET], self.0[CHECKSUM_OFFSET + 1]])
     }
 
-    /// The footer `signature` field.
+    /// Returns the sector signature from the footer.
     #[must_use]
     pub fn signature(&self) -> u32 {
         u32::from_le_bytes([
@@ -125,8 +100,7 @@ impl Sector {
         ])
     }
 
-    /// The footer `counter` field — upstream `gSaveCounter` at the time this
-    /// sector was written.
+    /// Returns the save-generation counter from the footer.
     #[must_use]
     pub fn counter(&self) -> u32 {
         u32::from_le_bytes([
@@ -137,24 +111,14 @@ impl Sector {
         ])
     }
 
-    /// The payload region, all `SECTOR_DATA_SIZE` bytes (callers slice down
-    /// to the length they expect).
+    /// Returns the fixed-width payload, including unused trailing bytes.
     #[must_use]
     pub fn data(&self) -> &[u8] {
         &self.0[..SECTOR_DATA_SIZE]
     }
 
-    /// Whether this sector is intact: the signature matches
-    /// [`SECTOR_SIGNATURE`] *and* the stored checksum matches the checksum
-    /// recomputed over the first `expected_len` payload bytes. Mirrors the
-    /// `signature == SECTOR_SIGNATURE && checksum == CalculateChecksum(...)`
-    /// check inlined at each of upstream's `CopySaveSlotData`,
-    /// `GetSaveValidStatus`, and `TryLoadSaveSector`.
-    ///
-    /// `expected_len` greater than [`SECTOR_DATA_SIZE`] can never describe a
-    /// real sector's payload (upstream's `SaveSectorLocation::size` is
-    /// statically bounded by it too, see [`Sector::write`]), so such a
-    /// length simply reports `false` instead of panicking.
+    /// Returns whether the signature and checksum match the expected payload.
+    /// Lengths greater than [`SECTOR_DATA_SIZE`] fail validation.
     #[must_use]
     pub fn is_valid(&self, expected_len: usize) -> bool {
         expected_len <= SECTOR_DATA_SIZE
@@ -176,7 +140,6 @@ mod tests {
         assert_eq!(sector.counter(), 42);
         assert_eq!(sector.stored_checksum(), checksum::checksum(&data));
         assert_eq!(&sector.data()[..data.len()], &data[..]);
-        // Bytes past the copied payload are zeroed.
         assert!(sector.data()[data.len()..].iter().all(|&b| b == 0));
     }
 
@@ -188,8 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_sector_is_never_valid() {
+    fn empty_sector_is_erased_and_never_valid() {
         let sector = Sector::empty();
+        assert!(sector
+            .as_bytes()
+            .iter()
+            .all(|&byte| byte == ERASED_FLASH_BYTE));
         assert_ne!(sector.signature(), SECTOR_SIGNATURE);
         assert!(!sector.is_valid(0));
     }
@@ -197,12 +164,11 @@ mod tests {
     #[test]
     fn corrupted_payload_fails_validation() {
         let data = [7u8; 50];
-        let mut sector = Sector::write(2, &data, 1);
-        // Flip a payload byte after the footer was already computed.
+        let sector = Sector::write(2, &data, 1);
         let mut bytes = *sector.as_bytes();
         bytes[0] ^= 0xFF;
-        sector = Sector::from_bytes(bytes);
-        assert!(!sector.is_valid(data.len()));
+        let corrupted = Sector::from_bytes(bytes);
+        assert!(!corrupted.is_valid(data.len()));
     }
 
     #[test]
@@ -210,13 +176,30 @@ mod tests {
         let data = [0u8; 1];
         let sector = Sector::write(0x1234, &data, 0x0A0B_0C0D);
         let bytes = sector.as_bytes();
-        assert_eq!(u16::from_le_bytes([bytes[4084], bytes[4085]]), 0x1234);
+        assert_eq!(ID_OFFSET, 4_084);
+        assert_eq!(CHECKSUM_OFFSET, 4_086);
+        assert_eq!(SIGNATURE_OFFSET, 4_088);
+        assert_eq!(COUNTER_OFFSET, 4_092);
         assert_eq!(
-            u32::from_le_bytes([bytes[4088], bytes[4089], bytes[4090], bytes[4091]]),
+            u16::from_le_bytes([bytes[ID_OFFSET], bytes[ID_OFFSET + 1]]),
+            0x1234
+        );
+        assert_eq!(
+            u32::from_le_bytes([
+                bytes[SIGNATURE_OFFSET],
+                bytes[SIGNATURE_OFFSET + 1],
+                bytes[SIGNATURE_OFFSET + 2],
+                bytes[SIGNATURE_OFFSET + 3]
+            ]),
             SECTOR_SIGNATURE
         );
         assert_eq!(
-            u32::from_le_bytes([bytes[4092], bytes[4093], bytes[4094], bytes[4095]]),
+            u32::from_le_bytes([
+                bytes[COUNTER_OFFSET],
+                bytes[COUNTER_OFFSET + 1],
+                bytes[COUNTER_OFFSET + 2],
+                bytes[COUNTER_OFFSET + 3]
+            ]),
             0x0A0B_0C0D
         );
     }

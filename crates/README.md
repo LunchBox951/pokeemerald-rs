@@ -10,7 +10,7 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 - Require a `// SAFETY:` block that states the invariant for every `unsafe` use.
 - Prefer narrow `#[expect(..., reason = "...")]` for unconditional lint exceptions. Use `#[allow(..., reason = "...")]` only when configuration can make the lint unavailable.
 - Use concrete per-crate error enums. Do not add `anyhow` to library crates.
-- Document public surfaces with `///`. Keep unit tests beside code and integration tests under `<crate>/tests/`.
+- Document public surfaces with a `///` line stating the contract. Keep unit tests beside code and integration tests under `<crate>/tests/`.
 - Search every caller before changing a shared API. Keep caller-specific behaviour explicit at its owning boundary instead of hiding it in a generic default.
 - Make every regression test fail against the unfixed behaviour and exercise the actual failure boundary, not merely a nearby input.
 - Prove upstream ordering and other implicit semantics with an explicitly sequenced call site or test. Do not treat language-unspecified expression evaluation as behavioural evidence.

@@ -42,7 +42,7 @@
 //!
 //! The player's own OBJ sprite is drawn at a **fixed** screen position
 //! every frame (`(avatar::PLAYER_OBJ_X`, `avatar::PLAYER_OBJ_Y)`) -- see
-//! [`avatar`]'s module docs for the upstream derivation
+//! [`avatar::PLAYER_OBJ_X`] for the upstream derivation
 //! (`SetSpritePosToMapCoords`'s `mapX - gSaveBlock1Ptr->pos.x == 0`
 //! identity for the player's own object event). It is the **BG scroll**
 //! that moves, smoothly, during an ordinary walk step: [`viewport`] derives
@@ -91,7 +91,7 @@
 //!   to upstream whenever the middle layer is opaque, and an honest "shows
 //!   nothing" rather than a fabricated pixel in the rare case it isn't.
 //! - **No left/right foot alternation across steps.** See
-//!   [`avatar`]'s module docs.
+//!   `avatar::FRAME_SOUTH_STEP`.
 //! - **No sub-scanline vertical centering tie-break claim.** [`VIEW_ROWS`]
 //!   (10 metatiles) is even, so there is no single upstream-verified
 //!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
