@@ -1,9 +1,9 @@
 //! Draws text-window frames and revealed glyphs directly into framebuffers.
 //!
 //! Revealed glyphs have pixel positions inside a window, so they do not fit
-//! the tile-aligned background compositor. Their fallback colors stay legible
-//! until printers model upstream's per-window palettes; frame tiles use their
-//! extracted palettes unchanged `(behavioral-fidelity)`.
+//! the tile-aligned background compositor. Glyphs draw with this module's
+//! fixed fallback colors; frame tiles use their extracted palettes unchanged
+//! `(behavioral-fidelity)`.
 
 use assets::pack::ImageRef;
 use engine::text::render::RevealedGlyph;
