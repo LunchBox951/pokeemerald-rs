@@ -23,7 +23,7 @@ pub struct PlayerState {
     render_elevation: u8,
     facing: Direction,
     movement_streak_active: bool,
-    crossing_frames_elapsed: Option<u8>,
+    transit_frames: Option<u8>,
 }
 
 /// The result of one directional-input poll.
@@ -101,7 +101,7 @@ impl PlayerState {
             render_elevation: elevation,
             facing,
             movement_streak_active: false,
-            crossing_frames_elapsed: None,
+            transit_frames: None,
         }
     }
 
@@ -137,7 +137,7 @@ impl PlayerState {
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
-        match self.crossing_frames_elapsed {
+        match self.transit_frames {
             Some(frames) => frames,
             None => 0,
         }
@@ -146,15 +146,16 @@ impl PlayerState {
     /// Returns whether a tile crossing is still in progress.
     #[must_use]
     pub const fn in_transit(&self) -> bool {
-        self.crossing_frames_elapsed.is_some()
+        self.transit_frames.is_some()
     }
 
     /// Advances the current tile crossing by one frame.
+    /// Does nothing when `transit_frames` is `None`.
     pub fn tick(&mut self) {
-        if let Some(frames) = self.crossing_frames_elapsed.as_mut() {
+        if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
             if *frames >= WALK_FRAMES_PER_TILE {
-                self.crossing_frames_elapsed = None;
+                self.transit_frames = None;
             }
         }
     }
@@ -314,7 +315,7 @@ impl PlayerState {
             });
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
-        self.crossing_frames_elapsed = Some(0);
+        self.transit_frames = Some(0);
         Ok(())
     }
 }
@@ -331,7 +332,7 @@ mod tests {
 
     const NO_FLAGS: EventData = EventData::new();
 
-    fn flat_map_parts(
+    fn flat_runtime(
         width: u16,
         height: u16,
         collision_at: impl Fn(u16, u16) -> u8,
@@ -400,7 +401,7 @@ mod tests {
     }
 
     fn south_connected_runtime() -> MapRuntime<'static> {
-        let (bytes, mut header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, mut header, events) = flat_runtime(5, 5, |_, _| 0);
         header.connections = &[MapConnection {
             direction: assets::Direction::South,
             offset: 0,
@@ -435,7 +436,7 @@ mod tests {
         assert_eq!(player.position(), (2, 2));
         assert!(!player.in_transit());
 
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -465,7 +466,7 @@ mod tests {
 
     #[test]
     fn fresh_pressing_the_facing_direction_steps_immediately() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -499,7 +500,7 @@ mod tests {
 
     #[test]
     fn pressing_a_new_direction_from_standstill_turns_without_stepping() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -541,7 +542,7 @@ mod tests {
 
     #[test]
     fn changing_direction_mid_movement_steps_immediately_without_a_turn_frame() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -582,7 +583,7 @@ mod tests {
 
     #[test]
     fn release_during_transit_does_not_end_the_movement_streak() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -627,7 +628,7 @@ mod tests {
 
     #[test]
     fn releasing_input_resets_to_not_moving_so_the_next_direction_turns_first() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -664,7 +665,7 @@ mod tests {
 
     #[test]
     fn in_transit_step_calls_are_a_no_op() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -701,7 +702,7 @@ mod tests {
 
     #[test]
     fn collision_bit_blocks_the_step_and_leaves_position_unchanged() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, y| u8::from(y == 3));
+        let (bytes, header, events) = flat_runtime(5, 5, |_, y| u8::from(y == 3));
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -842,7 +843,7 @@ mod tests {
             primary_tileset: "gTileset_Building",
             secondary_tileset: "gTileset_BrendansMaysHouse",
         };
-        let (_, header, events) = flat_map_parts(1, 1, |_, _| 0);
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
         let bytes = Box::leak(bytes.into_boxed_slice());
         let attrs = Box::leak(attrs.into_boxed_slice());
         let header = Box::leak(Box::new(header));
@@ -1313,7 +1314,7 @@ mod tests {
 
     #[test]
     fn connection_crossing_does_not_check_local_object_events() {
-        let (bytes, mut header, _) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, mut header, _) = flat_runtime(5, 5, |_, _| 0);
         header.connections = &[MapConnection {
             direction: assets::Direction::South,
             offset: 0,
@@ -1370,7 +1371,7 @@ mod tests {
 
     #[test]
     fn stepping_off_the_edge_without_a_connection_is_blocked() {
-        let (bytes, header, events) = flat_map_parts(5, 5, |_, _| 0);
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
@@ -1422,7 +1423,7 @@ mod tests {
         events: &'static MapEvents,
         collision_at: impl Fn(u16, u16) -> u8,
     ) -> MapRuntime<'static> {
-        let (bytes, header, _) = flat_map_parts(10, 10, collision_at);
+        let (bytes, header, _) = flat_runtime(10, 10, collision_at);
         let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let header: &'static MapHeader = Box::leak(Box::new(header));
         let layout: &'static assets::MapLayout = Box::leak(Box::new(assets::MapLayout {
