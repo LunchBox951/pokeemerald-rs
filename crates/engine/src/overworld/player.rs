@@ -186,6 +186,7 @@ impl PlayerState {
     /// Same-map steps test impassability, elevation, then visible object
     /// occupancy. Connection landings omit neighbouring behaviour attributes and
     /// object events because [`ConnectedMapData`] does not expose them.
+    /// A blocked attempt still leaves the player facing the attempted direction.
     ///
     /// # Elevation adoption
     ///
