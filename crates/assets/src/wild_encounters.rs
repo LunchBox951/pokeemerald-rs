@@ -16,9 +16,6 @@ pub const FISHING_SLOTS: usize = 10;
 pub const MAP_HEADER_COUNT: usize = 124;
 
 /// A symbolic `MAP_*` identity shared with map-header data.
-///
-/// The symbolic form avoids inventing numeric group and map positions before
-/// the map-layout model owns them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MapId(pub &'static str);
 
