@@ -1,184 +1,135 @@
-//! Stateless value scaling ([`scale_volume`], [`centre_relative`],
-//! [`convert_ticks`], [`bpm_from_microseconds`]) and the control-change ->
-//! [`SongEvent`] mapping ([`translate_controller`]) [`super::compile`]'s
-//! pipeline needs — split out of that module to keep it under this crate's
-//! ~600-line-per-file guideline (`oop-boundaries`), mirroring
-//! `xtask::extract::voicegroups`'s own file-per-concern split.
+//! MIDI control-change and timing value translation.
 //!
-//! # Reproduced: the dropped wait after CC `0x1E`
+//! # Extended-command selector timing
 //!
-//! `agb.cpp:402-405`'s `case 0x1E:` records the extended-command selector
-//! (`s_extendedCommand = event.param2;`) and `break`s **without** the
-//! `PrintWait(event.time)` every other arm of that switch ends with. Since
-//! `event.time` is that event's gap to the *next* event (`CalculateWaits`,
-//! `midi.cpp:759-767`), upstream silently swallows that gap — but only up
-//! to the next element of the augmented stream, because two passes have
-//! already subdivided it by the time `PrintAgbTrack` runs, and every
-//! inserted piece prints its own wait. `InsertTimingEvents`
-//! (`midi.cpp:653-686`) seeds a timing mark at every whole-note grid
-//! boundary — `96 * clocks_per_beat` ticks, re-phased by each file
-//! time-signature event — and each mark becomes a wait-printing
-//! `WholeNoteMark` (`agb.cpp:488-494`); then `SplitTime`
-//! (`midi.cpp:689-730`) drops a wait-printing `TimeSplit` at the
-//! `g_noteDurationLUT` floor of whatever off-grid stretch remains
-//! (`agb.cpp:518-520`). So a CC `0x1E` at tick 4 followed by 24 ticks of
-//! rest loses all 24, one followed by 27 ticks loses only 24 (`W03`
-//! survives), and one at tick 90 followed by 20 ticks loses only the 6
-//! that reach the grid line at 96 (`W14` survives). That looks like an
-//! oversight next to the `// TODO: loop op` comment sitting on the same
-//! arm, not an intended musical effect — but this compiler's job is to
-//! reproduce upstream's compiled output, oversight or not, so it does.
-//!
-//! [`translate_controller`] returns [`ControllerEvent::ExtendedCommandSelect`]
-//! for CC `0x1E`: no [`SongEvent`] is emitted (exactly as upstream emits no
-//! byte), but unlike every other silent controller it is not simply
-//! discarded — `super::compile::compile_track` still records it as a
-//! timing-only item so `super::compile::emit_track` can single it out and
-//! shorten the following [`SongEvent::Wait`] by exactly the swallowed
-//! first chunk: the gap clamped to the next whole-note timing mark, then
-//! floored through the LUT (`emit_track`'s grid walk plus its
-//! `split_time_first_chunk`), matching upstream's missing
-//! `PrintWait(event.time)`. `mus_title.mid`'s own
-//! six CC `0x1E` occurrences (two each on the three pseudo-echo tracks,
-//! `mus_title_7`/`_8`/`_10`) all sit at tick `0` with a zero gap to the
-//! `0x1D`/`0x1F` that consumes them, so this is unobservable there (confirmed
-//! against a locally built `tools/mid2agb` oracle — all ten compiled tracks
-//! are byte-identical either way) but real for a song with a rest after a CC
-//! `0x1E` (`super::compile`'s tests).
+//! Upstream's extended-command selector omits the trailing wait emitted by
+//! every other controller arm (`tools/mid2agb/agb.cpp:402-405`). By then,
+//! timing marks and split points have divided that wait into chunks.
+//! [`ControllerEvent::ExtendedCommandSelect`] preserves the selector as a
+//! timing marker so [`super::compile`] suppresses only the first chunk. Other
+//! silent controllers retain their complete wait.
 
 use super::error::MidiError;
 use super::event::SongEvent;
 
-/// Scale a raw `0..=127` control-change value against `midi.cfg`'s `-V`
-/// master volume, matching `agb.cpp:357`'s assembler-evaluated
-/// `<value>*<label>_mvl/mxv` expression (`mxv` = `0x7F` = 127,
-/// `sound/MPlayDef.s:128`) — plain truncating integer division, the same
-/// arithmetic the GNU assembler performs on that expression.
+const MIDI_CONTROL_MAX: u8 = 127;
+const MIDI_CONTROL_CENTER: i16 = 64;
+const SONG_TICKS_PER_BEAT: u64 = 24;
+const MICROSECONDS_PER_MINUTE: f32 = 60_000_000.0;
+
+const MODULATION_CONTROLLER: u8 = 0x01;
+const VOLUME_CONTROLLER: u8 = 0x07;
+const PAN_CONTROLLER: u8 = 0x0A;
+const MEMACC_FIRST_CONTROLLER: u8 = 0x0C;
+const MEMACC_LAST_CONTROLLER: u8 = 0x11;
+const BEND_RANGE_CONTROLLER: u8 = 0x14;
+const LFO_SPEED_CONTROLLER: u8 = 0x15;
+const MODULATION_TYPE_CONTROLLER: u8 = 0x16;
+const TUNE_CONTROLLER: u8 = 0x18;
+const LFO_DELAY_CONTROLLER: u8 = 0x1A;
+const EXTENDED_COMMAND_CONTROLLER: u8 = 0x1D;
+const EXTENDED_COMMAND_SELECT_CONTROLLER: u8 = 0x1E;
+const ALTERNATE_EXTENDED_COMMAND_CONTROLLER: u8 = 0x1F;
+const PRIORITY_CONTROLLER: u8 = 0x21;
+const ALTERNATE_PRIORITY_CONTROLLER: u8 = 0x27;
+
+const PSEUDO_ECHO_VOLUME_COMMAND: u8 = 0x08;
+const PSEUDO_ECHO_LENGTH_COMMAND: u8 = 0x09;
+
+/// Scales a MIDI control value by the configured master volume using
+/// truncating integer division.
 pub(super) fn scale_volume(raw: u8, master_volume: u8) -> u8 {
-    let scaled = (u32::from(raw) * u32::from(master_volume)) / 127;
-    #[allow(clippy::cast_possible_truncation)] // raw, master_volume <= 127 => scaled <= 127
+    let scaled = (u32::from(raw) * u32::from(master_volume)) / u32::from(MIDI_CONTROL_MAX);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a MIDI control value is at most 127, so the result cannot exceed master_volume"
+    )]
     let scaled = scaled as u8;
     scaled
 }
 
-/// A raw `0..=127` byte, centred at `64` (`c_v`, `sound/MPlayDef.s:132`),
-/// matching `agb.cpp:360`/`:393`/`:513`'s `<value> - 64` (pan, tune, pitch
-/// bend).
+/// Converts a MIDI control value to its signed, center-relative value.
 pub(super) fn centre_relative(raw: u8) -> i8 {
-    let v = i16::from(raw) - 64;
-    #[allow(clippy::cast_possible_truncation)] // raw in 0..=127 => v in -64..=63
-    let v = v as i8;
-    v
+    let centered = i16::from(raw) - MIDI_CONTROL_CENTER;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "centering a MIDI control value gives -64..=63"
+    )]
+    let centered = centered as i8;
+    centered
 }
 
-/// `24 * clocks_per_beat * raw / division` (`midi.cpp:635`/`:641`'s
-/// `ConvertTimes`), with `clocks_per_beat` pinned to `1` by
-/// [`super::compile::compile`]'s own guard. `division` is nonzero because
-/// that entry point rejects a zero header division before calling this
-/// private helper.
+/// Converts raw MIDI ticks to the song's 24-ticks-per-beat scale.
 ///
-/// Evaluated in `u64`, unlike upstream's `std::uint32_t` expression: a
-/// legal 4-byte VLQ reaches `0x0FFF_FFFF`, and `24 * 0x0FFF_FFFF` is
-/// already past `u32::MAX`, so doing this multiply in `u32` would wrap
-/// (release) or panic (debug) on a tick a hostile — or merely
-/// weird — `.mid` file may legitimately encode. Widening keeps the answer
-/// exact for every input whose *result* still fits, which is every input
-/// with a sane `division`; only the quotient is range-checked
-/// ([`MidiError::TickOverflow`]), so the never-panic contract this module
-/// and [`super::reader`] share holds for arbitrary bytes.
+/// The widened multiplication prevents input overflow before division; only
+/// the final quotient must fit the song's `u32` tick representation.
 ///
 /// # Errors
 ///
-/// [`MidiError::TickOverflow`] if the scaled tick does not fit a `u32` —
-/// where upstream would silently wrap. Unreachable for any real file: with
-/// the standard `division` of 24 or more the quotient is at most `raw`
-/// itself, so this needs both a past-4-byte-VLQ tick and a tiny `division`.
+/// Returns [`MidiError::TickOverflow`] if the scaled tick exceeds `u32`.
+///
+/// # Panics
+///
+/// Panics if `division` is zero. The MIDI compiler rejects a zero time
+/// division before translating ticks.
 pub(super) fn convert_ticks(raw: u32, division: u16) -> Result<u32, MidiError> {
-    let scaled = (24 * u64::from(raw)) / u64::from(division);
+    let scaled = (SONG_TICKS_PER_BEAT * u64::from(raw)) / u64::from(division);
     u32::try_from(scaled).map_err(|_| MidiError::TickOverflow(raw))
 }
 
-/// `round(60_000_000.0f32 / microseconds)` (`agb.cpp:506`) — an `f32`
-/// division and round, not `f64`. `microseconds` is nonzero because
-/// [`super::parse::parse_track`] rejects zero-tempo payloads before this
-/// private helper is reached. See [`super::compile`]'s module docs on why
-/// this compiler stores this real BPM value directly rather than the further
-/// `*tbs/2`-scaled wire byte the compiled ROM actually carries.
+/// Converts microseconds per quarter note to `f32`-rounded beats per minute.
 ///
-/// Upstream stores the rounded result in a 32-bit `int`
-/// (`static_cast<int>`, `agb.cpp:505-507`) and never range-checks it before
-/// formatting it into the `.s` output. A Rust `as u16` cast on that same
-/// `f32` does not have a 32-bit intermediate to be honest about being
-/// wrong in — it saturates straight to `u16::MAX`, so every microseconds
-/// value in `1..=915` (all of which round to a BPM the wire schema's `u16`
-/// [`super::event::SongEvent::Tempo`] field cannot hold) would silently
-/// compile to the *same* `65535` tempo instead of failing. This compiler
-/// fails closed instead of reproducing that collapse.
+/// The `f32` calculation preserves the source compiler's rounding
+/// (`tools/mid2agb/agb.cpp:505-507`). Values outside the song's `u16` tempo
+/// representation fail instead of saturating.
 ///
 /// # Errors
 ///
-/// [`MidiError::TempoOverflow`] if the rounded BPM does not fit a `u16`.
+/// Returns [`MidiError::TempoOverflow`] if the rounded tempo exceeds `u16`.
 pub(super) fn bpm_from_microseconds(microseconds: u32) -> Result<u16, MidiError> {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "upstream's own conversion is f32 arithmetic (agb.cpp:506); \
-                  reproducing it is the point"
+        reason = "tools/mid2agb uses f32 arithmetic for this conversion"
     )]
     let microseconds_f32 = microseconds as f32;
-    let bpm = (60_000_000.0_f32 / microseconds_f32).round();
+    let bpm = (MICROSECONDS_PER_MINUTE / microseconds_f32).round();
     if bpm > f32::from(u16::MAX) {
         return Err(MidiError::TempoOverflow(microseconds));
     }
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "bpm is in 0.0..=65535.0 here: microseconds > 0 keeps the \
-                  division positive, and the range check above rules out \
-                  anything over u16::MAX"
+        reason = "the positive BPM is bounded by u16::MAX above"
     )]
     let bpm = bpm as u16;
     Ok(bpm)
 }
 
-/// Translate one extended-command trigger (`agb.cpp:331-347`'s
-/// `PrintExtendedOp`) into a [`SongEvent`], given the sub-command
-/// `extended_command` a preceding CC `0x1E` selected. Any value other than
-/// `8`/`9` is a silent no-op, matching upstream's own `default` branch
-/// (`super::compile`'s module docs, "Extended commands").
-fn translate_extended_command(extended_command: Option<u8>, value: u8) -> Option<SongEvent> {
-    match extended_command {
-        Some(0x08) => Some(SongEvent::PseudoEchoVolume(value)),
-        Some(0x09) => Some(SongEvent::PseudoEchoLength(value)),
+fn translate_extended_command(selected_command: Option<u8>, value: u8) -> Option<SongEvent> {
+    match selected_command {
+        Some(PSEUDO_ECHO_VOLUME_COMMAND) => Some(SongEvent::PseudoEchoVolume(value)),
+        Some(PSEUDO_ECHO_LENGTH_COMMAND) => Some(SongEvent::PseudoEchoLength(value)),
         _ => None,
     }
 }
 
-/// What one translated control-change message means to
-/// `super::compile::compile_track`: silence (matching upstream's own
-/// `default: PrintWait(event.time); break;` no-op — a plain wait, nothing
-/// else), a genuine [`SongEvent`], or CC `0x1E`'s own case, which is
-/// neither — no [`SongEvent`] is emitted (upstream writes no byte either),
-/// but it is not silence: `emit_track` needs a timing-only marker for it so
-/// it can drop the first `SplitTime` chunk of the wait that follows,
-/// reproducing upstream's missing `PrintWait(event.time)` (module docs,
-/// "Reproduced: the dropped wait after CC `0x1E`").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ControllerEvent {
+    /// Preserves controller timing without emitting a song event.
     None,
+    /// Emits the translated song event and preserves controller timing.
     Event(SongEvent),
+    /// Updates extended-command state and invokes the selector timing quirk.
     ExtendedCommandSelect,
 }
 
-/// Translate one control-change message into a [`ControllerEvent`],
-/// mirroring `agb.cpp:349-415`'s `PrintControllerOp` switch one arm at a
-/// time. `extended_command` is per-track state a preceding CC `0x1E` sets,
-/// read back by CC `0x1D`/`0x1F` (`super::compile`'s module docs, "Extended
-/// commands").
+/// Translates a control change and maintains its track's extended-command
+/// selection.
 ///
 /// # Errors
 ///
-/// [`MidiError::UnsupportedMemAccController`] for the `MEMACC` family
-/// (`super::compile`'s module docs).
+/// Returns [`MidiError::UnsupportedMemAccController`] for a `MEMACC`
+/// controller.
 pub(super) fn translate_controller(
     controller: u8,
     value: u8,
@@ -186,24 +137,32 @@ pub(super) fn translate_controller(
     extended_command: &mut Option<u8>,
 ) -> Result<ControllerEvent, MidiError> {
     let event = match controller {
-        0x01 => ControllerEvent::Event(SongEvent::Modulation(value)),
-        0x07 => ControllerEvent::Event(SongEvent::Volume(scale_volume(value, master_volume))),
-        0x0A => ControllerEvent::Event(SongEvent::Pan(centre_relative(value))),
-        0x0C..=0x11 => return Err(MidiError::UnsupportedMemAccController(controller)),
-        0x14 => ControllerEvent::Event(SongEvent::BendRange(value)),
-        0x15 => ControllerEvent::Event(SongEvent::LfoSpeed(value)),
-        0x16 => ControllerEvent::Event(SongEvent::ModType(value)),
-        0x18 => ControllerEvent::Event(SongEvent::Tune(centre_relative(value))),
-        0x1A => ControllerEvent::Event(SongEvent::LfoDelay(value)),
-        0x1D | 0x1F => match translate_extended_command(*extended_command, value) {
-            Some(event) => ControllerEvent::Event(event),
-            None => ControllerEvent::None,
-        },
-        0x1E => {
+        MODULATION_CONTROLLER => ControllerEvent::Event(SongEvent::Modulation(value)),
+        VOLUME_CONTROLLER => {
+            ControllerEvent::Event(SongEvent::Volume(scale_volume(value, master_volume)))
+        }
+        PAN_CONTROLLER => ControllerEvent::Event(SongEvent::Pan(centre_relative(value))),
+        MEMACC_FIRST_CONTROLLER..=MEMACC_LAST_CONTROLLER => {
+            return Err(MidiError::UnsupportedMemAccController(controller));
+        }
+        BEND_RANGE_CONTROLLER => ControllerEvent::Event(SongEvent::BendRange(value)),
+        LFO_SPEED_CONTROLLER => ControllerEvent::Event(SongEvent::LfoSpeed(value)),
+        MODULATION_TYPE_CONTROLLER => ControllerEvent::Event(SongEvent::ModType(value)),
+        TUNE_CONTROLLER => ControllerEvent::Event(SongEvent::Tune(centre_relative(value))),
+        LFO_DELAY_CONTROLLER => ControllerEvent::Event(SongEvent::LfoDelay(value)),
+        EXTENDED_COMMAND_CONTROLLER | ALTERNATE_EXTENDED_COMMAND_CONTROLLER => {
+            match translate_extended_command(*extended_command, value) {
+                Some(event) => ControllerEvent::Event(event),
+                None => ControllerEvent::None,
+            }
+        }
+        EXTENDED_COMMAND_SELECT_CONTROLLER => {
             *extended_command = Some(value);
             ControllerEvent::ExtendedCommandSelect
         }
-        0x21 | 0x27 => ControllerEvent::Event(SongEvent::Priority(value)),
+        PRIORITY_CONTROLLER | ALTERNATE_PRIORITY_CONTROLLER => {
+            ControllerEvent::Event(SongEvent::Priority(value))
+        }
         _ => ControllerEvent::None,
     };
     Ok(event)
@@ -212,45 +171,42 @@ pub(super) fn translate_controller(
 #[cfg(test)]
 mod tests {
     use super::super::error::MidiError;
-    use super::{bpm_from_microseconds, translate_controller, ControllerEvent};
+    use super::{
+        bpm_from_microseconds, translate_controller, ControllerEvent,
+        EXTENDED_COMMAND_SELECT_CONTROLLER, MIDI_CONTROL_MAX, PSEUDO_ECHO_VOLUME_COMMAND,
+    };
 
-    /// `916` microseconds/quarter-note is the smallest value whose rounded
-    /// BPM (`65502`) still fits a `u16`; one microsecond less (`915`, the
-    /// next test) rounds to `65574`, which does not.
     #[test]
-    fn bpm_from_microseconds_boundary_still_representable() {
-        assert_eq!(bpm_from_microseconds(916), Ok(65502));
+    fn bpm_accepts_smallest_representable_microsecond_interval() {
+        let smallest_representable = 916;
+        assert_eq!(bpm_from_microseconds(smallest_representable), Ok(65502));
     }
 
-    /// The overflow side of the same boundary: `915` microseconds/quarter
-    /// rounds to `65574`, past `u16::MAX`, and must error rather than
-    /// saturate (`agb.cpp:505-507` computes into a 32-bit `int` and never
-    /// range-checks it; a Rust `as u16` cast would silently saturate here
-    /// instead).
     #[test]
-    fn bpm_from_microseconds_boundary_overflow() {
+    fn bpm_rejects_first_overflowing_microsecond_interval() {
+        let first_overflowing = 915;
         assert_eq!(
-            bpm_from_microseconds(915),
-            Err(MidiError::TempoOverflow(915))
+            bpm_from_microseconds(first_overflowing),
+            Err(MidiError::TempoOverflow(first_overflowing))
         );
     }
 
-    /// The extreme case: one microsecond per quarter note rounds to
-    /// `60_000_000` BPM, nowhere close to fitting a `u16`.
     #[test]
-    fn bpm_from_microseconds_one_microsecond_overflows() {
+    fn bpm_rejects_one_microsecond_interval() {
         assert_eq!(bpm_from_microseconds(1), Err(MidiError::TempoOverflow(1)));
     }
 
-    /// CC `0x1E` sets the extended-command state and reports the
-    /// timing-only marker `super::super::compile` needs, matching
-    /// `agb.cpp:402-405`'s own no-byte `case 0x1E:` (module docs,
-    /// "Reproduced: the dropped wait after CC `0x1E`").
     #[test]
-    fn cc_0x1e_selects_without_emitting_an_event() {
+    fn extended_command_selector_updates_state_without_song_event() {
         let mut extended_command = None;
-        let result = translate_controller(0x1E, 8, 127, &mut extended_command).unwrap();
+        let result = translate_controller(
+            EXTENDED_COMMAND_SELECT_CONTROLLER,
+            PSEUDO_ECHO_VOLUME_COMMAND,
+            MIDI_CONTROL_MAX,
+            &mut extended_command,
+        )
+        .unwrap();
         assert_eq!(result, ControllerEvent::ExtendedCommandSelect);
-        assert_eq!(extended_command, Some(8));
+        assert_eq!(extended_command, Some(PSEUDO_ECHO_VOLUME_COMMAND));
     }
 }

@@ -126,6 +126,7 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
       FINAL: ${{ needs.setup.outputs.final }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download Linux artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -136,6 +137,14 @@ jobs:
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
           path: artifacts/windows
+      # Binds refs/tags/${TAG} to GITHUB_SHA before publication; see
+      # scripts/release_tag.py for the contract (F-5, #445).
+      - name: Bind the release tag to this run's exact commit
+        run: |
+          python3 scripts/release_tag.py \
+            --remote origin \
+            --tag "${TAG}" \
+            --target "${GITHUB_SHA}"
       - name: Create GitHub Release
         env:
           GH_REPO: ${{ github.repository }}
@@ -148,5 +157,6 @@ jobs:
           gh release create "${TAG}" \
             --title "Release ${TAG}" \
             --generate-notes \
+            --verify-tag \
             ${prerelease_flag} \
             artifacts/linux/* artifacts/windows/*

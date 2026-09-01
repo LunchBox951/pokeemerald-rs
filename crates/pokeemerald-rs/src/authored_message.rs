@@ -1,75 +1,37 @@
-//! Shared authored-message parsing (issue #438): [`crate::overworld::npc_scripts`]'s
-//! NPC/field messages and [`crate::intro::speech`]'s Birch-speech pages both
-//! write dialogue as data, not code `(no-verbatim)`, in the same small
-//! escape convention -- a literal `\n` is a real Rust newline (->
-//! [`Token::Newline`], upstream `CHAR_NEWLINE`), `{P}` marks upstream's `\p`
-//! (-> [`Token::PromptClear`] -- wait for a button press, then clear and
-//! start a fresh page/box), `{L}` marks `\l` (-> [`Token::PromptScroll`] --
-//! wait for a button press, then scroll up one line), and `{PAUSE n}` marks
-//! upstream's `EXT_CTRL_CODE_PAUSE` (-> [`Token::ExtCtrl`] with
-//! [`EXT_CTRL_CODE_PAUSE`] and one argument byte `n` -- pause printing for
-//! `n` frames, [`engine::text::render::Printer`]'s `PrinterState::Pause`).
-//! Every other character maps through [`Token::Char`] unchanged.
+//! Parses crate-authored dialogue into engine text tokens.
 //!
-//! `pub(crate)`: shared by [`crate::overworld::npc_scripts`] and
-//! [`crate::intro::speech`] so this convention has exactly one
-//! implementation to keep in sync (issue #438).
-//!
-//! # Malformed-marker policy
-//!
-//! `{P}`, `{L}` and `{PAUSE n}` are the *only* markers: every authored
-//! message in this crate is compile-time source, never runtime player
-//! input, so `{` is never meant as a literal character and any other -- or
-//! unterminated -- `{...}` is a typo, not text to print. [`parse_message`]
-//! fails closed on one with a concrete [`AuthoredMessageError`] rather than
-//! either re-emitting the marker as literal text or silently dropping it. A
-//! caller whose text is fixed at compile time turns that `Err` into a panic
-//! with [`Result::expect`], surfacing the typo in its own tests instead of
-//! rendering it wrong at runtime.
+//! Authored messages accept literal newlines and the `{P}`, `{L}`, and
+//! `{PAUSE n}` markers. An opening brace must begin a valid, terminated marker;
+//! every other character is literal.
 
 use std::fmt;
 
 use engine::text::{Token, EXT_CTRL_CODE_PAUSE};
 
-/// Why [`parse_message`] rejected an authored message -- always a typo in
-/// this crate's own compile-time text, never a condition a real player can
-/// trigger (module docs' "Malformed-marker policy" section).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AuthoredMessageError {
-    /// A `{` marker ran to the end of the message with no closing `}`.
-    UnterminatedMarker {
-        /// Everything collected after the `{` before the message ended.
-        marker: String,
-    },
-    /// A `{...}` marker's body is not `P`, `L`, or `PAUSE <n>`.
-    UnknownMarker {
-        /// The marker's body, without its braces.
-        marker: String,
-    },
-    /// A `{PAUSE n}` marker's `n` is not a valid `u8`.
-    InvalidPause {
-        /// The marker's body, without its braces.
-        marker: String,
-    },
+    UnterminatedMarker { partial_body: String },
+    UnknownMarker { body: String },
+    InvalidPauseArgument { argument: String },
 }
 
 impl fmt::Display for AuthoredMessageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnterminatedMarker { marker } => {
+            Self::UnterminatedMarker { partial_body } => {
                 write!(
                     f,
-                    "unterminated {{...}} marker {marker:?} in an authored message"
+                    "unterminated {{...}} marker {partial_body:?} in an authored message"
                 )
             }
-            Self::UnknownMarker { marker } => write!(
+            Self::UnknownMarker { body } => write!(
                 f,
-                "unrecognized {{{marker}}} marker in an authored message (expected {{P}}, {{L}} \
+                "unrecognized {{{body}}} marker in an authored message (expected {{P}}, {{L}} \
                  or {{PAUSE n}})"
             ),
-            Self::InvalidPause { marker } => write!(
+            Self::InvalidPauseArgument { argument } => write!(
                 f,
-                "bad {{PAUSE}} marker {{{marker}}}: not a valid u8 frame count"
+                "bad {{PAUSE}} marker {{PAUSE {argument}}}: not a valid u8 frame count"
             ),
         }
     }
@@ -77,57 +39,57 @@ impl fmt::Display for AuthoredMessageError {
 
 impl std::error::Error for AuthoredMessageError {}
 
-/// Translate one authored message (module docs' escape convention) into a
-/// decoded [`Token`] stream, terminated with [`Token::End`].
+/// Parses an authored message into a token stream terminated by [`Token::End`].
 ///
 /// # Errors
 ///
-/// See [`AuthoredMessageError`] and the module docs' "Malformed-marker
-/// policy" section.
+/// Returns an error when an opening brace does not form a supported marker.
 pub(crate) fn parse_message(text: &str) -> Result<Vec<Token>, AuthoredMessageError> {
     let mut tokens = Vec::new();
-    let mut chars = text.chars();
-    while let Some(c) = chars.next() {
-        match c {
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        match character {
             '\n' => tokens.push(Token::Newline),
-            '{' => {
-                let mut marker = String::new();
-                let mut closed = false;
-                for c in chars.by_ref() {
-                    if c == '}' {
-                        closed = true;
-                        break;
-                    }
-                    marker.push(c);
-                }
-                if !closed {
-                    return Err(AuthoredMessageError::UnterminatedMarker { marker });
-                }
-                match marker.as_str() {
-                    "P" => tokens.push(Token::PromptClear),
-                    "L" => tokens.push(Token::PromptScroll),
-                    _ => {
-                        let Some(frames) = marker.strip_prefix("PAUSE ") else {
-                            return Err(AuthoredMessageError::UnknownMarker { marker });
-                        };
-                        let frames: u8 =
-                            frames
-                                .parse()
-                                .map_err(|_| AuthoredMessageError::InvalidPause {
-                                    marker: marker.clone(),
-                                })?;
-                        tokens.push(Token::ExtCtrl {
-                            sub: EXT_CTRL_CODE_PAUSE,
-                            args: vec![frames],
-                        });
-                    }
-                }
-            }
+            '{' => tokens.push(parse_marker(&mut characters)?),
             other => tokens.push(Token::Char(other)),
         }
     }
     tokens.push(Token::End);
     Ok(tokens)
+}
+
+fn parse_marker(
+    characters: &mut impl Iterator<Item = char>,
+) -> Result<Token, AuthoredMessageError> {
+    let mut body = String::new();
+    for character in characters {
+        if character != '}' {
+            body.push(character);
+            continue;
+        }
+
+        return match body.as_str() {
+            "P" => Ok(Token::PromptClear),
+            "L" => Ok(Token::PromptScroll),
+            _ => {
+                let Some(argument) = body.strip_prefix("PAUSE ") else {
+                    return Err(AuthoredMessageError::UnknownMarker { body });
+                };
+                let frames =
+                    argument
+                        .parse()
+                        .map_err(|_| AuthoredMessageError::InvalidPauseArgument {
+                            argument: argument.to_owned(),
+                        })?;
+                Ok(Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_PAUSE,
+                    args: vec![frames],
+                })
+            }
+        };
+    }
+
+    Err(AuthoredMessageError::UnterminatedMarker { partial_body: body })
 }
 
 #[cfg(test)]
@@ -157,8 +119,6 @@ mod tests {
         );
     }
 
-    /// `{L}` is `\l`: wait, then scroll -- distinct from `{P}`'s wait, then
-    /// clear.
     #[test]
     fn translates_the_scroll_marker() {
         assert_eq!(
@@ -172,9 +132,6 @@ mod tests {
         );
     }
 
-    /// `{PAUSE 96}` must survive authoring as a real pause token, not
-    /// degrade into literal text -- the regression this module's fail-closed
-    /// marker parse exists for.
     #[test]
     fn translates_a_pause_marker() {
         let tokens = parse_message("a{PAUSE 96}b").unwrap();
@@ -192,8 +149,6 @@ mod tests {
         );
     }
 
-    /// A standalone `}` outside a `{...}` marker has no special meaning and
-    /// passes through like any other glyph -- only `{` opens a marker.
     #[test]
     fn a_lone_closing_brace_is_an_ordinary_character() {
         assert_eq!(
@@ -207,51 +162,42 @@ mod tests {
         );
     }
 
-    /// A mistyped marker used to re-emit itself as literal text in the
-    /// overworld parser -- so `{PAUSE96}` (no space) would have *printed*
-    /// "{PAUSE96}" and silently dropped the pause. It must fail closed
-    /// instead (module docs' "Malformed-marker policy" section).
     #[test]
     fn a_marker_missing_its_space_is_an_unknown_marker() {
         assert_eq!(
             parse_message("This is a POKéMON.{PAUSE96}{P}"),
             Err(AuthoredMessageError::UnknownMarker {
-                marker: "PAUSE96".to_string()
+                body: "PAUSE96".to_string()
             })
         );
     }
 
-    /// Same fail-closed posture for a marker this parser has no case for at
-    /// all.
     #[test]
     fn an_unrecognized_marker_is_rejected() {
         assert_eq!(
             parse_message("So it's {PLAYER}?"),
             Err(AuthoredMessageError::UnknownMarker {
-                marker: "PLAYER".to_string()
+                body: "PLAYER".to_string()
             })
         );
     }
 
-    /// An unterminated marker used to swallow the whole rest of the message
-    /// and then re-emit a `}` that was never there.
     #[test]
     fn an_unterminated_marker_is_rejected() {
         assert_eq!(
             parse_message("Hi!{P"),
             Err(AuthoredMessageError::UnterminatedMarker {
-                marker: "P".to_string()
+                partial_body: "P".to_string()
             })
         );
     }
 
-    /// A `{PAUSE n}` whose argument isn't a `u8`.
     #[test]
     fn a_pause_marker_with_an_out_of_range_argument_is_rejected() {
         assert_eq!(
             parse_message("{PAUSE 300}"),
-            Err(AuthoredMessageError::InvalidPause {
-                marker: "PAUSE 300".to_string()
+            Err(AuthoredMessageError::InvalidPauseArgument {
+                argument: "300".to_string()
             })
         );
     }

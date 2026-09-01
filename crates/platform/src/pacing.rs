@@ -1,4 +1,4 @@
-//! Frame pacing (S-1): a fixed-cadence wait analogous to upstream's
+//! Frame pacing: a fixed-cadence wait analogous to upstream's
 //! `WaitForVBlank` (`pokeemerald/src/main.c`).
 //!
 //! The GBA's LCD refreshes every 280896 CPU cycles at ~16.78 MHz — **not** a
@@ -109,8 +109,8 @@ impl FramePacer {
     /// has been scheduled). Test-only introspection used to assert,
     /// deterministically, that a caller never consults the pacer at all —
     /// see `window::tests::headless_wait_for_next_frame_never_consults_pacer`,
-    /// the replacement for a wall-clock timing assertion that could flake
-    /// under scheduler pressure.
+    /// which pins that in place of a wall-clock timing assertion that could
+    /// flake under scheduler pressure.
     pub(crate) fn has_ticked(&self) -> bool {
         self.next_deadline.is_some()
     }
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn frame_period_matches_gba_hardware_cadence() {
         // 280896 cycles at 16.777216 MHz, expressed precisely in
-        // nanoseconds per the issue's formula: 280896 * 1e9 / 16_777_216.
+        // nanoseconds: 280896 * 1e9 / 16_777_216.
         assert_eq!(GBA_FRAME_PERIOD, Duration::from_nanos(16_742_706));
         // And, in Hz, ~59.7275 - not a rounded 60.
         let hz = 1.0 / GBA_FRAME_PERIOD.as_secs_f64();
