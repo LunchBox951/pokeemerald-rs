@@ -107,7 +107,7 @@
 //! that cannot be examined — an unsearchable directory component — stops
 //! resolution and is handed back, so the loader reports the permission
 //! failure at the pack the player installed rather than a missing-file
-//! error naming some other path `(no-silent-failure)`.
+//! error naming some other path.
 //!
 //! That order is right for a *running game* and wrong for a gate that means
 //! to validate this checkout: rungs 1 and 2 are the very destinations

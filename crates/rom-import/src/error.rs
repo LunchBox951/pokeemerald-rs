@@ -313,7 +313,7 @@ pub enum ImportError {
     /// before a byte is written, so the write would *succeed* and leave the
     /// player holding a pack where their cartridge image used to be. The
     /// importer refuses instead, before writing anything
-    /// `(no-silent-failure)`.
+    ///.
     SameFile {
         /// The ROM that would have been overwritten.
         path: PathBuf,

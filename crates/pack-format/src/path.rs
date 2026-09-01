@@ -96,7 +96,7 @@ pub fn user_pack_path() -> Option<PathBuf> {
 /// candidate that cannot be examined at all — an unsearchable directory
 /// component, say — stops resolution and is returned, so the loader's error
 /// names the pack the player actually installed instead of silently
-/// reaching past it for another one `(no-silent-failure)`. See [`Probe`].
+/// reaching past it for another one. See [`Probe`].
 ///
 /// Rung 4 always yields a path, so this never fails; the caller's own
 /// "no pack extracted yet" diagnostic covers a path that does not exist.
@@ -131,7 +131,7 @@ pub(crate) enum Probe {
 /// portable install or the compile-time checkout path. The player then gets
 /// either a *different* pack loaded silently or a "no pack" message naming
 /// a path they have never heard of, when the honest answer is that their
-/// own installed pack could not be reached `(no-silent-failure)`.
+/// own installed pack could not be reached.
 ///
 /// Only [`NotFound`](std::io::ErrorKind::NotFound) advances. Anything at
 /// the candidate that is not a regular file counts as missing too: a
@@ -163,7 +163,7 @@ fn std_env(key: &str) -> Option<OsString> {
 /// *stops* here and hands the candidate back: the pack may well be there,
 /// and letting `AssetPack::load` fail on the path the player actually
 /// installed to is the only way they learn it was a permission problem
-/// rather than a missing file `(no-silent-failure)`.
+/// rather than a missing file.
 fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,

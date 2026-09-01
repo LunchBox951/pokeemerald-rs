@@ -15,8 +15,10 @@
 //!
 //! [`crate::App`] resolves this choice once, at construction, and carries it
 //! as plain owned data (`crates/README.md`'s `no-global-mutable-state`
-//! convention) rather than a process-wide override -- the same pin, reaching
-//! every lazily-loaded scene, dialog, warp, and map-connection load the
+//! convention) rather than a process-wide override. What is pinned is the
+//! source *choice* -- `Runtime` re-resolves the precedence rungs on each
+//! load, so a pack published mid-session is picked up. The pinned choice
+//! reaches every lazily-loaded scene, dialog, warp, and map-connection load the
 //! title screen's own [`title::load_repo`](crate::title::load_repo)/
 //! [`title::load_default`](crate::title::load_default) split already models
 //! for the one scene [`crate::App::boot`] loads eagerly.

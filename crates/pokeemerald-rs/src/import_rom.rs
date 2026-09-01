@@ -26,7 +26,7 @@
 //! and renamed into place only after the import succeeds. A same-directory
 //! rename is atomic on every OS this project targets, so an interrupted or
 //! failed import leaves the previous pack intact rather than a truncated
-//! one that would load as a corrupt pack `(no-silent-failure)`.
+//! one that would load as a corrupt pack.
 //!
 //! The temporary file is `sync_all`ed before that rename, on the same
 //! reasoning `engine`'s save writer spells out for save images: the rename
@@ -199,7 +199,7 @@ pub enum ImportRomError {
     /// a directory, which is not a file to publish either. Refused before
     /// anything is written; substituting a default name, or the name in
     /// front of the separator, would publish somewhere the player did not
-    /// ask for `(no-silent-failure)`.
+    /// ask for.
     DestinationNamesNoFile {
         /// The destination that names no file.
         pack_path: PathBuf,
@@ -209,7 +209,7 @@ pub enum ImportRomError {
     /// Publishing renames the finished pack over the destination, so a
     /// `$POKEEMERALD_PACK` pointing at the file passed to `--import-rom`
     /// would replace the player's cartridge image with a pack. Refused
-    /// before anything is written `(no-silent-failure)`.
+    /// before anything is written.
     DestinationIsSource {
         /// The ROM that would have been replaced.
         rom_path: PathBuf,
@@ -549,7 +549,7 @@ fn pack_name(pack_path: &Path) -> Option<&OsStr> {
 /// whatever already held the name. The loader reads `$POKEEMERALD_PACK`
 /// back exactly as it was set ([`pack_format::default_pack_path`]'s first
 /// rung), so the import would report success over a pack the next run
-/// cannot open `(no-silent-failure)`.
+/// cannot open.
 ///
 /// Separators and `.` are ASCII, and [`OsStr::to_string_lossy`] leaves
 /// ASCII bytes alone, so a destination that is not UTF-8 reads correctly
