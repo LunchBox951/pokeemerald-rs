@@ -88,7 +88,7 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     assert_eq!(
         battle.player().evs().speed,
         1,
-        "issue #415: MonGainEVs runs on this KO too, before the exp award -- \
+        "MonGainEVs runs on this KO too, before the exp award -- \
          Rattata's own Speed EV yield (species_info.h) lands on the player \
          regardless of the wild mon's own level or HP"
     );

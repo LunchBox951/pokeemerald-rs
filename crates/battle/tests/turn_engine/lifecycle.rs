@@ -174,7 +174,7 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
     assert_eq!(
         battle.player().evs(),
         battle::Evs::default(),
-        "issue #415: a MAX_LEVEL recipient is excluded from `MonGainEVs` \
+        "a MAX_LEVEL recipient is excluded from `MonGainEVs` \
          too -- the same `Cmd_getexp` case 2 guard that zeroes the exp \
          award skips the whole body, `gain_evs` included"
     );
