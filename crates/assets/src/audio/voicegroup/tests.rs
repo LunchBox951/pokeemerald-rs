@@ -245,12 +245,10 @@ fn maximum_voicegroup_size_round_trips() {
     let highest_slot = VoiceEntry::Rhythm(RhythmVoice {
         children: VoiceGroupId("audio/voicegroup/highest_slot".to_owned()),
     });
-    // Every slot carries a distinct payload so corruption of any one slot's
-    // bytes near the boundary breaks the round trip.
     let mut slots: Vec<VoiceEntry> = (0..VOICE_SLOT_COUNT - 1)
         .map(|i| {
             VoiceEntry::Square1(Square1Voice {
-                base_key: 60,
+                base_key: u8::try_from(i).expect("a slot index below VOICE_SLOT_COUNT fits a u8"),
                 length: 0,
                 sweep: 0,
                 duty: u8::try_from(i % 4).expect("i % 4 < 4"),
@@ -260,6 +258,13 @@ fn maximum_voicegroup_size_round_trips() {
         })
         .collect();
     slots.push(highest_slot.clone());
+    for (i, slot) in slots.iter().enumerate() {
+        assert!(
+            !slots[..i].contains(slot),
+            "slot {i} repeats an earlier payload, so the round trip would not \
+             notice one slot's bytes landing in another slot's place"
+        );
+    }
     let group = VoiceGroup::new(slots).unwrap();
     assert_eq!(group.slots().len(), VOICE_SLOT_COUNT);
     let bytes = group.encode();
