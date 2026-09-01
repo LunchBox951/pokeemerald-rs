@@ -227,6 +227,9 @@ fn an_unchanged_shedinja_lead_normalizes_a_stale_stored_maximum() {
 }
 
 #[test]
+/// Upstream `MonGainEVs` writes EV bytes without a `CalculateMonStats` call and
+/// this save path performs no recomputation event, so the five cached stats stay
+/// stale; recomputing them at save would change observable behavior.
 fn an_unchanged_shedinja_keeps_the_five_cached_stats_its_evs_have_outrun() {
     let dex = Dex::new();
     let lead = shedinja_fixture(20);
