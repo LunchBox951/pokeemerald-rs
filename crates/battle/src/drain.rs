@@ -30,8 +30,8 @@ pub fn is_drain_effect(effect: MoveEffect) -> bool {
 /// The requested attacker HP transfer after a draining move deals damage.
 ///
 /// The caller clamps and applies this transfer before resolving the target's
-/// faint because upstream checks the attacker first
-/// (`pokeemerald/data/battle_scripts_1.s:358`).
+/// faint because upstream faints the attacker before the target
+/// (`pokeemerald/data/battle_scripts_1.s:358-:359`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DrainOutcome {
     /// HP requested before the caller clamps healing or damage. Always
@@ -45,9 +45,10 @@ pub struct DrainOutcome {
 /// Returns half the target's actual HP loss, with a minimum of one.
 ///
 /// Zero HP loss returns zero. The caller must pass damage after the target-HP
-/// clamp, not the formula result. Upstream halves `gHpDealt` before applying
-/// the one-HP floor (`pokeemerald/src/battle_script_commands.c:1920-1928`,
-/// `:6925-6932`).
+/// clamp, not the formula result. Upstream halves `gHpDealt` — the HP the
+/// target actually lost after `Cmd_datahpupdate`'s clamp
+/// (`pokeemerald/src/battle_script_commands.c:1928-1932`) — before applying
+/// the one-HP floor (`:6925-6932`).
 #[must_use]
 pub const fn drain_amount(target_hp_lost: u32) -> u32 {
     if target_hp_lost == 0 {
