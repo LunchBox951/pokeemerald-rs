@@ -33,6 +33,9 @@ const GLYPH_COLORS: [Option<Rgb888>; 4] = [
 const TILE_SIZE: usize = msgwin::TILE_SIZE as usize;
 const TILE_SIZE_PX: i32 = msgwin::TILE_SIZE.cast_signed();
 const GLYPH_SIZE: usize = assets::fonts::GLYPH_SIZE as usize;
+// GBA hardware sizes: deriving alone would let a source-constant slip
+// resize every frame and glyph in lockstep and still pass the tests.
+const _: () = assert!(TILE_SIZE == 8 && GLYPH_SIZE == 16);
 const TRANSPARENT_PALETTE_INDEX: usize = 0;
 const FRAME_TILE_BIT_DEPTH: u8 = 4;
 
