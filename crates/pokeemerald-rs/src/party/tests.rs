@@ -38,6 +38,7 @@ const HP_EV_INDEX: usize = 0;
 const ATTACK_EV_INDEX: usize = 1;
 const DEFENSE_EV_INDEX: usize = 2;
 const MAX_EFFECTIVE_EV: u8 = 252;
+const MAX_TOTAL_EVS: u16 = 510;
 const MISC_POKERUS: usize = 0;
 const MISC_MET_LOCATION: usize = 1;
 const MISC_MET_DATA: Range<usize> = 2..4;
@@ -696,6 +697,21 @@ fn retained_evs() -> battle::Evs {
     }
 }
 
+#[test]
+fn the_retained_evs_stay_inside_a_total_an_upstream_save_can_hold() {
+    let evs = retained_evs();
+    let total = u16::from(evs.hp)
+        + u16::from(evs.attack)
+        + u16::from(evs.defense)
+        + u16::from(evs.speed)
+        + u16::from(evs.sp_attack)
+        + u16::from(evs.sp_defense);
+    assert!(
+        total <= MAX_TOTAL_EVS,
+        "fixture sanity: {total} EVs is a spread no upstream save can hold"
+    );
+}
+
 fn stored_record_with_retained_fields() -> Pokemon {
     let mut record = to_save_pokemon(&Dex::new(), &treecko_fixture());
 
@@ -1211,6 +1227,11 @@ fn a_stat_block_recompute_still_translates_the_load_clamp_offset() {
 
     let first = merge_into_save_pokemon(&dex, &lead, &stored, &mut offset);
     let gap_new = u32::from(first.max_hp) - lead.stats().max_hp;
+    assert_ne!(
+        gap_new, gap_old,
+        "fixture sanity: the retained bonus must leave the gap a different \
+         size at the new level, or an unrebased offset would pass unnoticed"
+    );
     let expected_offset = i64::from(HIDDEN) + i64::from(gap_new) - i64::from(gap_old);
     assert_eq!(
         i64::from(offset),
