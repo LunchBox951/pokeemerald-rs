@@ -1102,10 +1102,6 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
 }
 
 #[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one continuous level-up-and-merge scenario; splitting would re-derive the same fixture state"
-)]
 fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();

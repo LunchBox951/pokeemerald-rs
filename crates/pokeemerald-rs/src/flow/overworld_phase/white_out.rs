@@ -289,7 +289,7 @@ mod tests {
         // have to be genuine, not just a bump to `stored.max_hp` the way
         // `white_out_restores_the_stored_hp_to_the_retained_maximum` above
         // gets away with for its untouched-level fixture. Carried by the
-        // lead itself too (`with_evs`, issue #415), matching what a real
+        // lead itself too (`with_evs`), matching what a real
         // `party::from_save_pokemon` decode would seed it with -- a lead
         // whose own EVs disagree with its paired record's bytes is a pair
         // `from_saved`'s own continue path can never produce.
@@ -313,9 +313,9 @@ mod tests {
             evs,
         );
 
-        // `to_save_pokemon` now writes the lead's own EVs through (issue
-        // #415), so the record's `evs_and_condition` bytes already agree
-        // with `evs` without a manual poke.
+        // `to_save_pokemon` writes the lead's own EVs through, so the
+        // record's `evs_and_condition` bytes already agree with `evs`
+        // without a manual poke.
         let mut stored = crate::party::to_save_pokemon(&dex, &lead);
         stored.max_hp = u16::try_from(ev_aware_at_level_5.max_hp).unwrap();
         stored.hp = stored.max_hp;
