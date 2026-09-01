@@ -936,8 +936,8 @@ fn a_fired_encounter_consumes_the_frames_field_input() {
 const SHUCKLE: u16 = 213;
 
 /// **Replaces** the former `a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws`
-/// regression (issue #261, `flow::wild_encounter`'s module docs "The
-/// white-out, modelled" section): that test pinned the *interim* fail-closed
+/// regression (issue #261, `flow::wild_encounter`'s module docs
+/// "Wild-battle loss" section): that test pinned the *interim* fail-closed
 /// posture this crate shipped before this issue -- a lost battle left a
 /// fainted mon standing in the party, and the since-removed `lead_can_fight`
 /// guard refused every later roll rather than let the gap become
@@ -1139,8 +1139,8 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
 /// `overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle`
 /// (issue #251) now heals that lead in the very same frame the battle ends,
 /// on every outcome -- so the guard's own precondition can no longer occur
-/// at all, and it has been removed (`super`'s own module docs, "The
-/// fail-closed guard, retired"). This test proves the *strictly stronger*
+/// at all, and it has been removed (`super`'s own module docs, "Lead-health
+/// eligibility"). This test proves the *strictly stronger*
 /// claim the old one could not: not "a roll is suppressed while the lead is
 /// fainted," but "the lead is never fainted in the first place, past the
 /// frame the battle ends" -- a claim that makes the deleted guard's own
