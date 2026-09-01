@@ -242,24 +242,17 @@ fn an_oversize_pack_id_is_rejected_by_the_constructor() {
 
 #[test]
 fn maximum_voicegroup_size_round_trips() {
-    let slots: Vec<VoiceEntry> = (0..VOICE_SLOT_COUNT)
-        .map(|_| {
-            VoiceEntry::Square1(Square1Voice {
-                base_key: 60,
-                length: 0,
-                sweep: 0,
-                duty: 0,
-                envelope: sample_envelope(),
-                fixed_rate: false,
-            })
-        })
-        .collect();
+    let highest_slot = VoiceEntry::Rhythm(RhythmVoice {
+        children: VoiceGroupId("audio/voicegroup/highest_slot".to_owned()),
+    });
+    let mut slots = vec![VoiceEntry::Empty; VOICE_SLOT_COUNT - 1];
+    slots.push(highest_slot.clone());
     let group = VoiceGroup::new(slots).unwrap();
     assert_eq!(group.slots().len(), VOICE_SLOT_COUNT);
     let bytes = group.encode();
     let decoded = VoiceGroup::decode(&bytes).unwrap();
     assert_eq!(decoded, group);
-    assert_eq!(decoded.slot(VOICE_SLOT_COUNT - 1), group.slots().last());
+    assert_eq!(decoded.slot(VOICE_SLOT_COUNT - 1), Some(&highest_slot));
     assert!(decoded.slot(VOICE_SLOT_COUNT).is_none());
 }
 
