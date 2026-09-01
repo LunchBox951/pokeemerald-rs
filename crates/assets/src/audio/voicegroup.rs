@@ -1,7 +1,16 @@
-//! Typed instrument slots stored in voicegroup asset-pack entries.
+//! Typed, normalized forms of upstream's 12-byte `struct ToneData` voice slots
+//! (`include/gba/m4a_internal.h`). All 195 `sound/voicegroups/*.inc` sources,
+//! 180 top-level plus 10 drumsets and 5 key splits, use that shape.
 //!
-//! Key-split and rhythm slots retain their child [`VoiceGroupId`] references;
-//! decoding validates structure without resolving those references.
+//! Concrete [`VoiceEntry`] variants contain playable voices. [`KeySplit`](VoiceEntry::KeySplit)
+//! and [`Rhythm`](VoiceEntry::Rhythm) retain child [`VoiceGroupId`] references so groups can be
+//! shared. This schema validates their structure without resolving ids or rejecting nested
+//! indirection; extraction and playback own those cross-entry checks.
+//!
+//! Only [`DirectSoundVoice`] has a pan override. Upstream reads `ToneData::pan_sweep` as pan after
+//! rhythm selects a `DirectSound` child. Its CGB macros place their similarly named operand in
+//! `ToneData::length`, which `ply_note` loads as the hardware sound-length counter
+//! (`src/m4a_1.s:1612-1619`, `:1771-1772`). The CGB variants therefore expose `length` instead.
 
 use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
@@ -115,7 +124,11 @@ pub struct NoiseVoice {
     pub fixed_rate: bool,
 }
 
-/// Selects a child voice by mapping each note from `starting_note` through `table`.
+/// Selects `table[note - starting_note]` from a child voicegroup.
+///
+/// The source table covers only this subrange. Upstream biases its table pointer by
+/// `starting_note` and indexes it by the raw note, so notes outside the stored range read adjacent
+/// ROM bytes and have no defined mapping (`sound/keysplit_tables.inc`, `src/m4a_1.s:1589-1591`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeySplitVoice {
     pub starting_note: u8,
