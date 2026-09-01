@@ -6,8 +6,9 @@
 //! moves and PP, IVs, ability slot, level, and current HP. A new record uses
 //! save-format defaults for everything else; [`merge_into_save_pokemon`]
 //! overlays those fields onto the record that was loaded, retaining its
-//! header, held item, friendship, EVs, contest condition, egg flag, encounter
-//! data, ribbons, status, and mail.
+//! header, held item, friendship, contest condition, egg flag, encounter
+//! data, ribbons, status, and mail. EVs are the battler's: the merge writes
+//! them back from [`battle::BattlePokemon::evs`].
 //!
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
@@ -348,8 +349,9 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 /// This port's live mon is a [`battle::BattlePokemon`], a deliberate subset
 /// of upstream's 100-byte type, so overlaying it here means writing only the
 /// fields the battler owns onto the record that was loaded -- held item,
-/// EVs, contest condition, friendship, status, mail, met data, ribbons and
-/// header metadata all stay as the save wrote them.
+/// contest condition, friendship, status, mail, met data, ribbons and
+/// header metadata all stay as the save wrote them. EVs do not: the merge
+/// writes the battler's own [`battle::BattlePokemon::evs`] back.
 ///
 /// The cached stat block is retained *conditionally*: kept when species and
 /// level are unchanged, recomputed EV-aware when the session moved either

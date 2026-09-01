@@ -246,11 +246,11 @@ impl Battle {
             } else {
                 wild_faint_exp(defeated.base_exp, level)
             };
-            // `MonGainEVs` (`battle_script_commands.c:3420`, issue #415) --
-            // upstream runs it here, before the exp/level-up sequence below
-            // that can invoke `CalculateMonStats`, so a KO that both awards
-            // EVs and levels this mon up folds the gain into that same
-            // level's stat recompute (`BattlePokemon::gain_evs`'s own docs).
+            // `MonGainEVs` (`battle_script_commands.c:3420`) runs before the
+            // exp/level-up sequence, upstream's own order, so a level-up this
+            // turn snapshots the gain into `evs_at_last_level_up` for the
+            // save encoder's EV-aware block; the live recompute stays 0-EV
+            // (`battle::pokemon::evs`'s module docs).
             // Gated by the same `MAX_LEVEL` check as the exp award: upstream
             // skips `MonGainEVs` too for a recipient already at the cap
             // (`:3351`-`:3356`).
