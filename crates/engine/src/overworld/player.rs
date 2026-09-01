@@ -15,13 +15,6 @@ pub const WALK_FRAMES_PER_TILE: u8 = 16;
 /// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MovementState {
-    Stationary,
-    TurnedInPlace,
-    Stepping,
-}
-
 /// The player's tile position, facing, elevation, and step progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerState {
@@ -29,7 +22,7 @@ pub struct PlayerState {
     collision_elevation: u8,
     render_elevation: u8,
     facing: Direction,
-    movement_state: MovementState,
+    movement_streak_active: bool,
     crossing_frames_elapsed: Option<u8>,
 }
 
@@ -105,7 +98,7 @@ impl PlayerState {
             collision_elevation: elevation,
             render_elevation: elevation,
             facing,
-            movement_state: MovementState::Stationary,
+            movement_streak_active: false,
             crossing_frames_elapsed: None,
         }
     }
@@ -164,7 +157,7 @@ impl PlayerState {
         }
     }
 
-    fn adopt_landing_elevation(&mut self, origin_elevation: u8, destination_elevation: u8) {
+    fn adopt_elevation(&mut self, origin_elevation: u8, destination_elevation: u8) {
         if origin_elevation == super::collision::ELEVATION_MULTI_LEVEL
             || destination_elevation == super::collision::ELEVATION_MULTI_LEVEL
         {
@@ -193,17 +186,16 @@ impl PlayerState {
         }
 
         let Some(direction) = input else {
-            self.movement_state = MovementState::Stationary;
+            self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
 
-        if direction != self.facing && self.movement_state != MovementState::Stepping {
-            self.movement_state = MovementState::TurnedInPlace;
+        if direction != self.facing && !self.movement_streak_active {
             self.facing = direction;
             return StepOutcome::Turned(direction);
         }
 
-        self.movement_state = MovementState::Stepping;
+        self.movement_streak_active = true;
         self.facing = direction;
 
         let (dx, dy) = direction.delta();
@@ -219,7 +211,7 @@ impl PlayerState {
                 .unwrap_or(MB_NORMAL);
             let from = self.position;
             let landing = Landing::on_current_map(target, cell, target_behavior);
-            return match self.try_start_step(
+            return match self.try_start_resolved_step(
                 direction,
                 runtime,
                 event_data,
@@ -244,7 +236,7 @@ impl PlayerState {
                 };
             };
             let landing = Landing::across_connection(crossing.position, cell);
-            return match self.try_start_step(
+            return match self.try_start_resolved_step(
                 direction,
                 runtime,
                 event_data,
@@ -268,7 +260,7 @@ impl PlayerState {
         }
     }
 
-    fn try_start_step(
+    fn try_start_resolved_step(
         &mut self,
         direction: Direction,
         runtime: &MapRuntime<'_>,
@@ -303,7 +295,7 @@ impl PlayerState {
                 origin_cell.elevation
             });
         self.position = landing.position;
-        self.adopt_landing_elevation(origin_elevation, landing.cell.elevation);
+        self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.crossing_frames_elapsed = Some(0);
         Ok(())
     }
