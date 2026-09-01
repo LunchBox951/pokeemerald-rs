@@ -84,7 +84,9 @@ pub struct Square1Voice {
     /// Duty cycle selector, `0..=3`.
     pub duty: u8,
     pub envelope: Envelope,
-    /// Whether playback ignores the played note's pitch.
+    /// Whether the note-derived frequency register is rounded to the
+    /// PWM-aligned rate (`TONEDATA_TYPE_FIX` on a CGB voice). The played
+    /// note still sets the pitch.
     pub fixed_rate: bool,
 }
 
