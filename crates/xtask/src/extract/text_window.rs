@@ -1,32 +1,13 @@
-//! Text-window frame extraction (S-4, issue #114): `graphics/text_window/`.
-//!
-//! Everything in the directory is extracted — all 20 numbered border-frame
-//! tile sheets (`1.png`..`20.png`, upstream `sWindowFrames` /
-//! `WINDOW_FRAMES_COUNT`, `pokeemerald/src/text_window.c`), the default
-//! message-box tile sheet (`message_box.png`, upstream `gMessageBox_Gfx`),
-//! and the four extra textbox colour palettes
-//! (`text_pal1.pal`..`text_pal4.pal`, upstream `sTextWindowPalettes`).
-//! Unlike tilesets/sprites, the frame and message-box PNGs have no sibling
-//! `.pal` file of their own — upstream's own `INCGFX_U16(..., ".gbapal")`
-//! build rule for them reads the palette straight out of each PNG's own
-//! `PLTE` chunk, so this pipeline does too, via [`png::decode_palette`]
-//! (see that function's docs for why it's a separate read path from
-//! [`png::decode`]). This is every file in the directory, so
-//! `graphics/text_window` closes fully `ported` in the ledger.
-//!
-//! Each frame's image and palette are validated **as a pair** before either
-//! entry is serialized: the palette must be exactly one 16-colour GBA bank,
-//! and every pixel index must be mappable through it (an 8-bit-indexed PNG
-//! can hold indices >= 16 alongside a valid 16-entry `PLTE`).
-//! `crates/assets`' typed accessors re-run the same checks on read — packs
-//! are untrusted input there.
-
 use std::path::Path;
 
 use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{jasc_pal, png, read_file, read_text, ExtractError};
 
-/// Filename stems for every PNG required from `graphics/text_window/`.
+const TEXT_WINDOW_DIRECTORY: &str = "graphics/text_window";
+const PNG_EXTENSION: &str = "png";
+const PALETTE_EXTENSION: &str = "pal";
+const MESSAGE_BOX_STEM: &str = "message_box";
+
 const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
     "1",
     "2",
@@ -48,190 +29,207 @@ const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
     "18",
     "19",
     "20",
-    "message_box",
+    MESSAGE_BOX_STEM,
 ];
 
-/// Filename stems for every standalone palette required from
-/// `graphics/text_window/`.
 const TEXT_WINDOW_PALETTE_STEMS: [&str; 4] = ["text_pal1", "text_pal2", "text_pal3", "text_pal4"];
 
-/// Every text-window palette occupies one 16-colour GBA palette bank.
-const TEXT_WINDOW_PALETTE_COLORS: usize = 16;
+const COLORS_PER_GBA_PALETTE_BANK: usize = 16;
 
-/// Every numbered border frame is a 3x3 grid of 8x8 tiles — a 24x24
-/// source sheet (upstream `sWindowFrames`).
-const FRAME_DIMENSIONS: (u32, u32) = (24, 24);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ImageDimensions {
+    width: u32,
+    height: u32,
+}
 
-/// `message_box.png` (upstream `gMessageBox_Gfx`) is a 56x16 (7x2-tile)
-/// strip, distinct from the border frames' 24x24 shape.
-const MESSAGE_BOX_DIMENSIONS: (u32, u32) = (56, 16);
+const BORDER_FRAME_SHEET_DIMENSIONS: ImageDimensions = ImageDimensions {
+    width: 24,
+    height: 24,
+};
+const MESSAGE_BOX_SHEET_DIMENSIONS: ImageDimensions = ImageDimensions {
+    width: 56,
+    height: 16,
+};
 
-/// The exact shape `stem`'s image must have (see the two constants above).
-fn expected_dimensions(stem: &str) -> (u32, u32) {
-    if stem == "message_box" {
-        MESSAGE_BOX_DIMENSIONS
+fn expected_dimensions(stem: &str) -> ImageDimensions {
+    if stem == MESSAGE_BOX_STEM {
+        MESSAGE_BOX_SHEET_DIMENSIONS
     } else {
-        FRAME_DIMENSIONS
+        BORDER_FRAME_SHEET_DIMENSIONS
     }
 }
 
-/// Extract `graphics/text_window/`'s full contents (see the module docs).
+/// Extracts every text-window frame image and palette into the asset pack,
+/// rejecting a directory whose contents differ from the manifests.
 pub(super) fn extract_text_window(
     upstream: &Path,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    let dir = upstream.join("graphics/text_window");
+    let directory = upstream.join(TEXT_WINDOW_DIRECTORY);
 
-    validate_text_window_manifest(&dir)?;
+    validate_text_window_manifest(&directory)?;
 
     for stem in TEXT_WINDOW_IMAGE_STEMS {
-        let path = dir.join(format!("{stem}.png"));
-        let bytes = read_file(&path)?;
-        let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-        let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-        // Validate the pair as a unit, before either entry is serialized
-        // (see the module docs): exact per-kind shape first (the read
-        // side rejects any other shape), then the colour count before the
-        // pixel check so an undersized palette reports as a palette
-        // problem, not as a pixel out of range.
-        validate_text_window_dimensions(&path, &image, expected_dimensions(stem))?;
-        if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
-            return Err(ExtractError::TextWindowPaletteWrongColorCount(
-                path,
-                colors.len(),
-            ));
-        }
-        validate_text_window_pixels(&path, &image.pixels, colors.len())?;
-        writer.push(PackEntry {
-            id: format!("text-window/image/{stem}"),
-            kind: PackKind::Image {
-                width: image.width,
-                height: image.height,
-                bit_depth: image.bit_depth,
-            },
-            payload: image.pixels,
-        });
-        push_text_window_palette_entry(
-            &path,
-            &colors,
-            format!("text-window/palette/{stem}"),
-            writer,
-        )?;
+        let path = asset_path(&directory, stem, PNG_EXTENSION);
+        let (image_entry, palette_entry) = decode_text_window_image_pair(&path, stem)?;
+        writer.push(image_entry);
+        writer.push(palette_entry);
     }
+
     for stem in TEXT_WINDOW_PALETTE_STEMS {
-        let path = dir.join(format!("{stem}.pal"));
+        let path = asset_path(&directory, stem, PALETTE_EXTENSION);
         let text = read_text(&path)?;
         let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.clone(), e))?;
-        push_text_window_palette_entry(
+        writer.push(build_text_window_palette_entry(
             &path,
             &colors,
-            format!("text-window/palette/{stem}"),
-            writer,
-        )?;
+            text_window_palette_id(stem),
+        )?);
     }
     Ok(())
 }
 
-/// Reject a text-window bitmap that is not the exact shape its kind
-/// requires (see [`extract_text_window`]'s pairing validation and
-/// [`expected_dimensions`]) — the read side rejects any other shape, so
-/// extraction must not produce one.
+fn decode_text_window_image_pair(
+    path: &Path,
+    stem: &str,
+) -> Result<(PackEntry, PackEntry), ExtractError> {
+    let bytes = read_file(path)?;
+    let image =
+        png::decode(&bytes).map_err(|error| ExtractError::Png(path.to_path_buf(), error))?;
+    let colors = png::decode_palette(&bytes)
+        .map_err(|error| ExtractError::Png(path.to_path_buf(), error))?;
+
+    validate_text_window_dimensions(path, &image, expected_dimensions(stem))?;
+    let palette_entry =
+        build_text_window_palette_entry(path, &colors, text_window_palette_id(stem))?;
+    validate_text_window_pixels(path, &image.pixels, colors.len())?;
+    let image_entry = PackEntry {
+        id: text_window_image_id(stem),
+        kind: PackKind::Image {
+            width: image.width,
+            height: image.height,
+            bit_depth: image.bit_depth,
+        },
+        payload: image.pixels,
+    };
+    Ok((image_entry, palette_entry))
+}
+
 fn validate_text_window_dimensions(
     path: &Path,
     image: &png::IndexedImage,
-    (expected_width, expected_height): (u32, u32),
+    expected: ImageDimensions,
 ) -> Result<(), ExtractError> {
-    if image.width != expected_width || image.height != expected_height {
+    if image.width != expected.width || image.height != expected.height {
         return Err(ExtractError::TextWindowImageWrongDimensions {
             path: path.to_path_buf(),
             width: image.width,
             height: image.height,
-            expected_width,
-            expected_height,
+            expected_width: expected.width,
+            expected_height: expected.height,
         });
     }
     Ok(())
 }
 
-/// Reject any text-window pixel index that cannot be mapped through the
-/// frame's own bundled palette (see [`extract_text_window`]'s pairing
-/// validation).
 fn validate_text_window_pixels(
     path: &Path,
     pixels: &[u8],
     palette_len: usize,
 ) -> Result<(), ExtractError> {
-    match pixels
+    if let Some(&pixel) = pixels
         .iter()
         .find(|&&pixel| usize::from(pixel) >= palette_len)
     {
-        Some(&pixel) => Err(ExtractError::TextWindowPixelOutsidePalette(
+        return Err(ExtractError::TextWindowPixelOutsidePalette(
             path.to_path_buf(),
             pixel,
             palette_len,
-        )),
-        None => Ok(()),
-    }
-}
-
-fn push_text_window_palette_entry(
-    path: &Path,
-    colors: &[jasc_pal::Rgb888],
-    id: String,
-    writer: &mut PackWriter,
-) -> Result<(), ExtractError> {
-    if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
-        return Err(ExtractError::TextWindowPaletteWrongColorCount(
-            path.to_path_buf(),
-            colors.len(),
         ));
     }
-    writer.push(super::build_palette_entry(path, colors, id)?);
     Ok(())
 }
 
-fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
+fn validate_text_window_palette_color_count(
+    path: &Path,
+    color_count: usize,
+) -> Result<(), ExtractError> {
+    if color_count != COLORS_PER_GBA_PALETTE_BANK {
+        return Err(ExtractError::TextWindowPaletteWrongColorCount(
+            path.to_path_buf(),
+            color_count,
+        ));
+    }
+    Ok(())
+}
+
+fn build_text_window_palette_entry(
+    path: &Path,
+    colors: &[jasc_pal::Rgb888],
+    id: String,
+) -> Result<PackEntry, ExtractError> {
+    validate_text_window_palette_color_count(path, colors.len())?;
+    super::build_palette_entry(path, colors, id)
+}
+
+fn text_window_image_id(stem: &str) -> String {
+    format!("text-window/image/{stem}")
+}
+
+fn text_window_palette_id(stem: &str) -> String {
+    format!("text-window/palette/{stem}")
+}
+
+fn asset_path(directory: &Path, stem: &str, extension: &str) -> std::path::PathBuf {
+    directory.join(format!("{stem}.{extension}"))
+}
+
+fn validate_text_window_manifest(directory: &Path) -> Result<(), ExtractError> {
     for (stems, extension) in [
-        (TEXT_WINDOW_IMAGE_STEMS.as_slice(), "png"),
-        (TEXT_WINDOW_PALETTE_STEMS.as_slice(), "pal"),
+        (TEXT_WINDOW_IMAGE_STEMS.as_slice(), PNG_EXTENSION),
+        (TEXT_WINDOW_PALETTE_STEMS.as_slice(), PALETTE_EXTENSION),
     ] {
         for stem in stems {
-            let path = dir.join(format!("{stem}.{extension}"));
+            let path = asset_path(directory, stem, extension);
             if !path.is_file() {
                 return Err(ExtractError::MissingTextWindowAsset(path));
             }
         }
     }
 
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
+    let entries = std::fs::read_dir(directory)
+        .map_err(|error| ExtractError::ReadFailed(directory.to_path_buf(), error.to_string()))?;
     let mut paths = entries
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
+        .map_err(|error| ExtractError::ReadFailed(directory.to_path_buf(), error.to_string()))?;
     paths.sort();
     for path in paths {
-        let stem = path.file_stem().and_then(|stem| stem.to_str());
-        let extension = path.extension().and_then(|extension| extension.to_str());
-        let is_expected = match extension {
-            Some("png") => stem.is_some_and(|stem| TEXT_WINDOW_IMAGE_STEMS.contains(&stem)),
-            Some("pal") => stem.is_some_and(|stem| TEXT_WINDOW_PALETTE_STEMS.contains(&stem)),
-            _ => false,
-        };
-        if !is_expected {
+        if !is_expected_text_window_asset(&path) {
             return Err(ExtractError::UnexpectedTextWindowAsset(path));
         }
     }
     Ok(())
 }
 
+fn is_expected_text_window_asset(path: &Path) -> bool {
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(PNG_EXTENSION) => TEXT_WINDOW_IMAGE_STEMS.contains(&stem),
+        Some(PALETTE_EXTENSION) => TEXT_WINDOW_PALETTE_STEMS.contains(&stem),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{extract_to, png, upstream_present};
     use super::{
-        expected_dimensions, push_text_window_palette_entry, validate_text_window_dimensions,
-        validate_text_window_manifest, validate_text_window_pixels, ExtractError,
-        TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
+        build_text_window_palette_entry, expected_dimensions, validate_text_window_dimensions,
+        validate_text_window_manifest, validate_text_window_pixels, ExtractError, ImageDimensions,
+        COLORS_PER_GBA_PALETTE_BANK, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
     };
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
@@ -314,14 +312,14 @@ mod tests {
 
         for actual in [0, 1, 15, 17] {
             let colors = vec![color; actual];
-            let mut writer = super::super::pack::PackWriter::new();
-            let err = push_text_window_palette_entry(
+            let result = build_text_window_palette_entry(
                 path,
                 &colors,
                 "text-window/palette/example".to_owned(),
-                &mut writer,
-            )
-            .unwrap_err();
+            );
+            let Err(err) = result else {
+                panic!("accepted a text-window palette with {actual} colors");
+            };
             assert!(
                 matches!(
                     err,
@@ -330,19 +328,21 @@ mod tests {
                 ),
                 "wrong error for {actual}-colour text-window palette"
             );
-            assert_eq!(writer.len(), 0, "invalid palette must not be serialized");
         }
 
-        let colors = vec![color; TEXT_WINDOW_PALETTE_COLORS];
-        let mut writer = super::super::pack::PackWriter::new();
-        push_text_window_palette_entry(
+        let colors = vec![color; COLORS_PER_GBA_PALETTE_BANK];
+        let entry = build_text_window_palette_entry(
             path,
             &colors,
             "text-window/palette/example".to_owned(),
-            &mut writer,
         )
         .unwrap();
-        assert_eq!(writer.len(), 1);
+        assert_eq!(entry.id, "text-window/palette/example");
+        assert!(matches!(
+            entry.kind,
+            super::super::pack::PackKind::Palette { color_count }
+                if usize::from(color_count) == COLORS_PER_GBA_PALETTE_BANK
+        ));
     }
 
     #[test]
@@ -356,18 +356,29 @@ mod tests {
             palette: Vec::new(),
         };
 
-        // Numbered border frames are 24x24; message_box is 56x16.
-        assert_eq!(expected_dimensions("7"), (24, 24));
-        assert_eq!(expected_dimensions("message_box"), (56, 16));
-        validate_text_window_dimensions(path, &image(24, 24), expected_dimensions("7")).unwrap();
-        validate_text_window_dimensions(path, &image(56, 16), expected_dimensions("message_box"))
-            .unwrap();
+        let frame_dimensions = expected_dimensions("7");
+        let message_box_dimensions = expected_dimensions("message_box");
+        assert_eq!(
+            frame_dimensions,
+            ImageDimensions {
+                width: 24,
+                height: 24
+            }
+        );
+        assert_eq!(
+            message_box_dimensions,
+            ImageDimensions {
+                width: 56,
+                height: 16,
+            }
+        );
+        validate_text_window_dimensions(path, &image(24, 24), frame_dimensions).unwrap();
+        validate_text_window_dimensions(path, &image(56, 16), message_box_dimensions).unwrap();
 
-        // Anything else — including a self-consistent single 8x8 tile and
-        // zero-area shapes — must fail at extraction, not later on read.
         for (width, height) in [(8, 8), (56, 16), (0, 2), (2, 0), (0, 0)] {
             let err =
-                validate_text_window_dimensions(path, &image(width, height), (24, 24)).unwrap_err();
+                validate_text_window_dimensions(path, &image(width, height), frame_dimensions)
+                    .unwrap_err();
             assert!(
                 matches!(
                     err,
@@ -375,9 +386,13 @@ mod tests {
                         path: error_path,
                         width: error_width,
                         height: error_height,
-                        expected_width: 24,
-                        expected_height: 24,
-                    } if error_path == path && error_width == width && error_height == height
+                        expected_width,
+                        expected_height,
+                    } if error_path == path
+                        && error_width == width
+                        && error_height == height
+                        && expected_width == frame_dimensions.width
+                        && expected_height == frame_dimensions.height
                 ),
                 "wrong error for a {width}x{height} text-window image"
             );
@@ -388,23 +403,19 @@ mod tests {
     fn text_window_pixels_must_map_through_their_palette() {
         let path = std::path::Path::new("graphics/text_window/example.png");
 
-        // Every index strictly below the palette length is fine, including
-        // the 4bpp maximum on a full 16-entry palette.
-        validate_text_window_pixels(path, &[0, 3, 15], TEXT_WINDOW_PALETTE_COLORS).unwrap();
-        validate_text_window_pixels(path, &[], TEXT_WINDOW_PALETTE_COLORS).unwrap();
+        validate_text_window_pixels(path, &[0, 3, 15], COLORS_PER_GBA_PALETTE_BANK).unwrap();
+        validate_text_window_pixels(path, &[], COLORS_PER_GBA_PALETTE_BANK).unwrap();
 
-        // An 8-bit-indexed PNG can carry indices >= 16 alongside a valid
-        // 16-entry PLTE; the first offending pixel is reported.
         for (pixels, expected_pixel) in [([0u8, 16, 3], 16u8), ([255, 16, 3], 255)] {
-            let err =
-                validate_text_window_pixels(path, &pixels, TEXT_WINDOW_PALETTE_COLORS).unwrap_err();
+            let err = validate_text_window_pixels(path, &pixels, COLORS_PER_GBA_PALETTE_BANK)
+                .unwrap_err();
             assert!(
                 matches!(
                     err,
                     ExtractError::TextWindowPixelOutsidePalette(error_path, pixel, palette_len)
                         if error_path == path
                             && pixel == expected_pixel
-                            && palette_len == TEXT_WINDOW_PALETTE_COLORS
+                            && palette_len == COLORS_PER_GBA_PALETTE_BANK
                 ),
                 "wrong error for pixel {expected_pixel} outside a 16-colour palette"
             );
