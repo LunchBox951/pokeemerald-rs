@@ -2,10 +2,10 @@
 //! move slots.
 //!
 //! [`BattlePokemon`] does not retain held items or non-volatile status.
-//! Shedinja's 1-HP special case (issue #401) *is* modelled — see
+//! Shedinja's 1-HP special case *is* modelled — see
 //! [`calc_max_hp`].
 //!
-//! EVs are modelled only as far as issue #415 needs: every mon
+//! EVs are modelled only as far as the battle loop needs: every mon
 //! [`BattlePokemon::new`] builds starts at `0` EVs, [`BattlePokemon::with_evs`]
 //! adopts a loaded record's own retained bytes, and [`BattlePokemon::gain_evs`]
 //! is `MonGainEVs` (`pokeemerald/src/pokemon.c:5988`), applied on every KO
@@ -134,7 +134,7 @@ impl Ivs {
 ///
 /// Each byte accepts `0..=255`. The stat formula divides by four, so values
 /// `252..=255` all provide the maximum contribution. [`BattlePokemon::evs`]'s
-/// type (issue #415), and also the standalone value [`compute_stats_with_evs`]
+/// type, and also the standalone value [`compute_stats_with_evs`]
 /// takes for the one caller outside this crate with real EVs and no battler
 /// of its own to attach them to — `party::merge_into_save_pokemon`,
 /// recomputing a levelled-up stat block from a save record's own bytes.
@@ -352,7 +352,7 @@ pub struct BattlePokemon {
     species: SpeciesId,
     level: u8,
     /// [`BattlePokemon::new`]'s own `level` argument, fixed for this
-    /// instance's lifetime (issue #415) — the one signal
+    /// instance's lifetime — the one signal
     /// `pokeemerald-rs::party`'s save encoders have for whether a level-up
     /// happened since this value was last known-good, since
     /// [`BattlePokemon::level`] alone cannot say so (it already tracks
@@ -372,7 +372,7 @@ pub struct BattlePokemon {
     experience: u32,
     stats: Stats,
     current_hp: u32,
-    /// This mon's effort values (issue #415) — `0` for every mon
+    /// This mon's effort values — `0` for every mon
     /// [`BattlePokemon::new`] builds, a loaded record's own retained bytes
     /// for one restored through [`BattlePokemon::with_evs`], incremented in
     /// place by [`BattlePokemon::gain_evs`] on every KO. See the module docs
@@ -543,7 +543,7 @@ impl BattlePokemon {
             // `CreateBoxMon` zeroes the box before writing the fields it
             // sets, and the EV bytes are not one of them: a freshly built
             // mon has no effort values. A saved one restores its own bytes
-            // through [`BattlePokemon::with_evs`] (issue #415).
+            // through [`BattlePokemon::with_evs`].
             evs: Evs::default(),
             // No level-up has happened yet -- see the field's own doc.
             evs_at_last_level_up: Evs::default(),
@@ -639,7 +639,7 @@ impl BattlePokemon {
         self
     }
 
-    /// This mon's effort values (issue #415) — see the field's own docs and
+    /// This mon's effort values — see the field's own docs and
     /// the module docs for what carrying this value does, and does not,
     /// change.
     #[must_use]
@@ -670,7 +670,7 @@ impl BattlePokemon {
     /// path never recomputes either. Every byte is accepted: upstream's EV
     /// fields are unconstrained `u8`s — [`MAX_PER_STAT_EVS`] and
     /// [`MAX_TOTAL_EVS`] bound only what [`BattlePokemon::gain_evs`] writes,
-    /// not what a hand-edited or pre-#415 save can already hold.
+    /// not what every value a hand-edited save can already hold.
     #[must_use]
     pub const fn with_evs(mut self, evs: Evs) -> Self {
         self.evs = evs;
@@ -800,7 +800,7 @@ impl BattlePokemon {
     }
 
     /// `MonGainEVs` (`pokeemerald/src/pokemon.c:5988`-`:6064`), restricted to
-    /// this crate's own scope (issue #415): adds `ev_yield`'s per-stat award
+    /// this crate's own scope: adds `ev_yield`'s per-stat award
     /// to [`BattlePokemon::evs`], capping the running total at
     /// [`MAX_TOTAL_EVS`] before each stat's own value at
     /// [`MAX_PER_STAT_EVS`] — upstream's own order. The loop stops entirely,
@@ -861,7 +861,7 @@ impl BattlePokemon {
     /// decision to [`BattlePokemon::resolve_move_learn`] before applying more
     /// experience. [`BattlePokemon::evs`] is not changed here —
     /// [`BattlePokemon::gain_evs`] already folds a KO's award in before this
-    /// runs (issue #415); friendship is still not part of this battle model
+    /// runs; friendship is still not part of this battle model
     /// and does not change.
     ///
     /// # Errors

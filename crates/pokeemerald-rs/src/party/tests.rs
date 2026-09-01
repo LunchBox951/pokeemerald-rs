@@ -1202,7 +1202,7 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     assert_eq!(
         after.evs_and_condition[0..6],
         RETAINED_EVS_AND_CONDITION[0..6],
-        "issue #415: the record's own retained EVs round-trip back out \
+        "the record's own retained EVs round-trip back out \
          unchanged -- nothing in this session called `gain_evs`"
     );
 
@@ -1757,7 +1757,7 @@ fn a_live_lead_is_never_saved_as_fainted_when_the_ev_gap_shrinks() {
     );
 }
 
-/// Issue #415, end to end: a KO that both awards EVs and crosses a level
+/// End to end: a KO that both awards EVs and crosses a level
 /// this same turn must file *both* -- the newly gained EV byte, and a stat
 /// block computed with it rather than the record's stale, pre-KO one.
 /// Regression for the issue's own defect report: "A KO that grants a level
@@ -1849,7 +1849,7 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
         merged.attack,
         u16::try_from(filed_with_the_gain.attack).unwrap(),
         "the level-up save carries the battle's own EV yield -- not the \
-         weaker pre-KO stat block issue #415 exists to fix"
+         weaker stale pre-KO stat block"
     );
 }
 
@@ -1981,7 +1981,7 @@ fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
     );
 }
 
-/// Slice-review finding (behavioral-fidelity), issue #415: an in-battle
+/// An in-battle
 /// level-up must not leave [`battle::BattlePokemon::stats`] EV-aware for
 /// the rest of the session. `hp_hidden_by_load`'s whole rebase system
 /// assumes the live model's own maximum is *always* the `0`-EV floor

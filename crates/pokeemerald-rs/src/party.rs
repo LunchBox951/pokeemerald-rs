@@ -18,7 +18,7 @@
 //! for each instead; friendship is derived from the species' base
 //! friendship, matching `CreateBoxMon`.
 //!
-//! Effort values round-trip as of issue #415:
+//! Effort values round-trip through the save codec:
 //! [`battle::BattlePokemon::with_evs`] adopts a loaded record's own bytes at
 //! construction, and [`battle::BattlePokemon::gain_evs`] increments them on
 //! every KO (`MonGainEVs`, `pokeemerald/src/battle_script_commands.c:3420`);
@@ -138,8 +138,8 @@ fn unpack_ivs(word: u32) -> Ivs {
 /// `PokemonSubstruct2`'s first six bytes, one whole byte per EV, in the same
 /// HP/Attack/Defense/Speed/SpAttack/SpDefense order [`pack_ivs`]/
 /// [`unpack_ivs`] use, unlike the IVs' packed five-bit fields. Used by
-/// [`from_save_pokemon`] to seed [`battle::BattlePokemon::with_evs`] (issue
-/// #415) -- [`compute_levelled_up_stats`]'s own stat-block recompute reads
+/// [`from_save_pokemon`] to seed [`battle::BattlePokemon::with_evs`] --
+/// [`compute_levelled_up_stats`]'s own stat-block recompute reads
 /// [`battle::BattlePokemon::evs_at_last_level_up`] instead, not these bytes
 /// directly. [`evs_to_substruct2`] is the inverse.
 fn evs_from_substruct2(evs_and_condition: &[u8; SUBSTRUCTURE_LEN]) -> battle::Evs {
@@ -154,7 +154,7 @@ fn evs_from_substruct2(evs_and_condition: &[u8; SUBSTRUCTURE_LEN]) -> battle::Ev
     }
 }
 
-/// [`evs_from_substruct2`]'s inverse (issue #415): packs a [`battle::Evs`]
+/// [`evs_from_substruct2`]'s inverse: packs a [`battle::Evs`]
 /// back into `PokemonSubstruct2`'s first six bytes, in the same order. Used
 /// by both encoders to file the battler's own (possibly KO-incremented) EVs
 /// -- [`to_save_pokemon`] for a mon with no backing record,
@@ -165,7 +165,7 @@ fn evs_to_substruct2(evs: battle::Evs) -> [u8; 6] {
 
 /// Recomputes a changed stat cache EV-aware, fed `mon`'s own IVs and nature
 /// alongside `evs`, for a lead whose species or level moved since the
-/// reference point each caller compares against (issue #415's own review).
+/// reference point each caller compares against.
 ///
 /// `evs` must be [`battle::BattlePokemon::evs_at_last_level_up`], not the
 /// live [`battle::BattlePokemon::evs`]: upstream's `CalculateMonStats` only
@@ -221,7 +221,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let iv_word = pack_ivs(mon.ivs()) | (u32::from(mon.ability_slot()) << ABILITY_SLOT_SHIFT);
     misc[MISC_IV_WORD].copy_from_slice(&iv_word.to_le_bytes());
 
-    // `PokemonSubstruct2` -- the mon's own EVs (issue #415; `0` for a mon
+    // `PokemonSubstruct2` -- the mon's own EVs (`0` for a mon
     // nothing has ever called `with_evs`/`gain_evs` on, matching `CreateMon`'s
     // own default) in the first six bytes, contest condition zero in the
     // trailing six (module docs).
@@ -242,7 +242,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         ..Pokemon::default()
     };
     // The stat block: recomputed EV-aware only when `mon` has levelled up
-    // since `BattlePokemon::new` built it (issue #415's own review) -- the
+    // since `BattlePokemon::new` built it -- the
     // one upstream event this port can reach that calls `CalculateMonStats`
     // with real EVs. `MonGainEVs` itself never does. Otherwise this is
     // `BattlePokemon::stats`'s live `0`-EV cache, matching upstream's own
@@ -300,7 +300,7 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon, stats: battle
 /// mon: the points of a stored `hp` above the model's maximum were hidden
 /// from the session, so they are added back onto the live number, capped at
 /// `record.max_hp`, floored at `1` for a live battler. Used for both a
-/// *retained* stat block and a freshly *recomputed* one (issue #415) -- the
+/// *retained* stat block and a freshly *recomputed* one -- the
 /// caller always writes `record.max_hp` first, so the cap is whichever block
 /// is actually being filed.
 ///
@@ -364,7 +364,7 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 /// This port's live mon is a [`battle::BattlePokemon`], a deliberate subset
 /// of upstream's 100-byte type, so overlaying it here means writing only the
 /// fields the battler owns onto the record that was loaded -- held item, EVs
-/// (issue #415), contest condition, friendship, status, mail, met data,
+///, contest condition, friendship, status, mail, met data,
 /// ribbons and header metadata all stay as the save wrote them.
 ///
 /// The cached stat block is retained *conditionally*: kept when species and
@@ -428,7 +428,7 @@ pub(crate) fn merge_into_save_pokemon(
     substructures.misc[MISC_IV_WORD].copy_from_slice(&merged_iv_word.to_le_bytes());
 
     // `PokemonSubstruct2`'s first six bytes -- the battler's own live EVs
-    // (issue #415), written unconditionally: upstream's `MonGainEVs` writes
+    //, written unconditionally: upstream's `MonGainEVs` writes
     // them on every KO regardless of whether a level-up follows, independent
     // of the stat-block branch below -- which is fed
     // [`battle::BattlePokemon::evs_at_last_level_up`], not these bytes, so a
@@ -505,7 +505,7 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// Stats are recomputed from species/level/nature/IVs, at `0` EVs, by
 /// [`battle::BattlePokemon::new`]; the record's own EVs
 /// ([`evs_from_substruct2`]) are adopted right after, through
-/// [`battle::BattlePokemon::with_evs`] (issue #415), which does not disturb
+/// [`battle::BattlePokemon::with_evs`], which does not disturb
 /// that `0`-EV stat block -- `battle`'s own live cache stays `0`-EV for the
 /// whole battle, load included. Accumulated experience is wound back to the
 /// saved value through [`battle::BattlePokemon::reconcile_saved_experience`];
@@ -538,8 +538,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     // docs.
     let pp_bonuses = battle::PpBonuses::from_bits(substructures.growth[GROWTH_PP_BONUSES]);
 
-    // `PokemonSubstruct2`'s first six bytes -- this record's own EVs (issue
-    // #415), adopted through `with_evs` below so the battler carries them
+    // `PokemonSubstruct2`'s first six bytes -- this record's own EVs,
+    // adopted through `with_evs` below so the battler carries them
     // for the merge's own save-time recompute to read back later; adopting
     // them does not disturb the `0`-EV stat block `BattlePokemon::new` just
     // built, so the order relative to `reconcile_saved_experience` below

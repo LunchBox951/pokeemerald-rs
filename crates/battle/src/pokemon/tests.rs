@@ -875,7 +875,7 @@ fn gain_evs_does_not_disturb_the_live_stat_cache() {
     );
 }
 
-/// Slice-review finding (correctness), issue #415: a level-up's HP growth
+/// A level-up's HP growth
 /// must be measured `0`-EV-old-max to `0`-EV-new-max, the same delta a
 /// freshly built mon gets -- never against an EV-aware maximum the live
 /// cache never held *before* this level-up. `party::hp_hidden_by_load`'s
@@ -934,7 +934,7 @@ fn a_level_up_on_a_loaded_ev_trained_mon_grows_current_hp_by_the_zero_ev_delta()
     );
 }
 
-/// The property issue #415 exists for: a KO that awards EVs and crosses a
+/// A KO that awards EVs and crosses a
 /// level in the same turn must leave [`BattlePokemon::evs`] carrying the
 /// just-gained EVs by the time the save-time recompute
 /// (`pokeemerald-rs::party::merge_into_save_pokemon`) reads them back --
