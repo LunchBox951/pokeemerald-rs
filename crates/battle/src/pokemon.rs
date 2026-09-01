@@ -13,10 +13,14 @@
 //! Neither the Pokérus nor the Macho Brace doubling applies: this crate
 //! carries neither, so every award is upstream's un-multiplied base yield.
 //! [`BattlePokemon::stats`] itself stays the `0`-EV formula through every
-//! in-battle level-up regardless; only `pokeemerald-rs::party`'s save-time
-//! recompute reads [`BattlePokemon::evs`] for the EV-aware block a save
-//! needs. [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns
-//! level-up move decisions.
+//! in-battle level-up regardless; `pokeemerald-rs::party`'s save-time
+//! recompute is what needs an EV-aware block, and it is fed
+//! [`BattlePokemon::evs_at_last_level_up`] rather than the live
+//! [`BattlePokemon::evs`] -- upstream's own `CalculateMonStats` only runs
+//! inside the level-up sequence, so a later KO's `MonGainEVs` bytes must not
+//! retroactively inflate the block that level-up cached.
+//! [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns level-up
+//! move decisions.
 
 use assets::{experience_for_level, AbilityId, BaseStats, EvYield, MoveId, SpeciesId, Type};
 
@@ -374,6 +378,23 @@ pub struct BattlePokemon {
     /// place by [`BattlePokemon::gain_evs`] on every KO. See the module docs
     /// for what carrying this value does, and does not, change.
     evs: Evs,
+    /// [`Self::evs`]'s value the instant [`BattlePokemon::raise_level_to_experience`]
+    /// last actually crossed a level -- the EV set upstream's own
+    /// `CalculateMonStats` would have cached at that same event. Starts at
+    /// [`Evs::default`], matching [`Self::created_at_level`]: no level-up has
+    /// happened yet, so there is no cached-block EV set to remember.
+    ///
+    /// Deliberately distinct from the live [`Self::evs`]: upstream's
+    /// `MonGainEVs` writes new EV bytes on every KO with no
+    /// `CalculateMonStats` call of its own (module docs), so a KO after the
+    /// most recent level-up must not retroactively inflate the stat block
+    /// that level-up cached. `pokeemerald-rs::party`'s save-time recompute
+    /// reads this field, not [`Self::evs`], when it rebuilds that block.
+    ///
+    /// Excluded from [`PartialEq`] (below), same reasoning as
+    /// [`Self::created_at_level`]: bookkeeping for what a *future* save
+    /// encodes, not part of this Pokémon's own battle identity.
+    evs_at_last_level_up: Evs,
     moves: Vec<MoveSlot>,
     pp_bonuses: PpBonuses,
     stages: StatStages,
@@ -381,8 +402,9 @@ pub struct BattlePokemon {
     pending_move_learn: Option<PendingMoveLearn>,
 }
 
-// Manual, rather than derived, so `created_at_level` (this field's own doc
-// comment) can stay out of it without a wrapper type.
+// Manual, rather than derived, so `created_at_level` and
+// `evs_at_last_level_up` (their own doc comments) can stay out of it without
+// a wrapper type.
 impl PartialEq for BattlePokemon {
     fn eq(&self, other: &Self) -> bool {
         let Self {
@@ -400,6 +422,7 @@ impl PartialEq for BattlePokemon {
             stats,
             current_hp,
             evs,
+            evs_at_last_level_up: _,
             moves,
             pp_bonuses,
             stages,
@@ -522,6 +545,8 @@ impl BattlePokemon {
             // mon has no effort values. A saved one restores its own bytes
             // through [`BattlePokemon::with_evs`] (issue #415).
             evs: Evs::default(),
+            // No level-up has happened yet -- see the field's own doc.
+            evs_at_last_level_up: Evs::default(),
             moves: slots,
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
@@ -620,6 +645,16 @@ impl BattlePokemon {
     #[must_use]
     pub const fn evs(&self) -> Evs {
         self.evs
+    }
+
+    /// [`Self::evs_at_last_level_up`]'s own field doc: the EV set the most
+    /// recent level-up's `CalculateMonStats` would have cached, distinct
+    /// from [`BattlePokemon::evs`]'s current, possibly KO-incremented-since
+    /// value. `pokeemerald-rs::party`'s save-time recompute is this
+    /// method's one caller.
+    #[must_use]
+    pub const fn evs_at_last_level_up(&self) -> Evs {
+        self.evs_at_last_level_up
     }
 
     /// Adopts a saved record's own EV bytes at the boundary that restores
@@ -879,6 +914,11 @@ impl BattlePokemon {
     /// [`BattlePokemon::gain_evs`]'s own award still reaches the save file —
     /// `pokeemerald-rs::party` reads [`BattlePokemon::evs`] directly for its
     /// own save-time recompute.
+    ///
+    /// A crossed level also snapshots [`Self::evs`] into
+    /// [`Self::evs_at_last_level_up`] -- the one moment this port has a
+    /// `CalculateMonStats`-equivalent event, so it is the one moment that
+    /// snapshot is allowed to move (that field's own doc).
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -907,6 +947,7 @@ impl BattlePokemon {
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
+        self.evs_at_last_level_up = self.evs;
         Some((old_level, new_level))
     }
 

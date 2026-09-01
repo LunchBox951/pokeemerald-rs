@@ -146,9 +146,11 @@ fn shedinja_fixture(level: u8) -> BattlePokemon {
 fn compute_levelled_up_stats_forces_shedinja_to_one_max_hp() {
     let dex = Dex::new();
     let mon = shedinja_fixture(50);
-    let evs_and_condition: [u8; engine::save::SUBSTRUCTURE_LEN] =
-        [252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let stats = compute_levelled_up_stats(&dex, &mon, &evs_and_condition);
+    let evs = battle::Evs {
+        hp: 252,
+        ..battle::Evs::default()
+    };
+    let stats = compute_levelled_up_stats(&dex, &mon, evs);
     assert_eq!(stats.max_hp, 1);
 }
 
@@ -242,7 +244,11 @@ fn an_unchanged_shedinja_keeps_the_five_cached_stats_its_evs_have_outrun() {
     stored.hp = 40;
 
     let reloaded = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
-    let ev_aware = compute_levelled_up_stats(&dex, &reloaded, &substructures.evs_and_condition);
+    let ev_aware = compute_levelled_up_stats(
+        &dex,
+        &reloaded,
+        evs_from_substruct2(&substructures.evs_and_condition),
+    );
     assert!(
         ev_aware.attack > u32::from(stored.attack),
         "fixture sanity: a fresh EV-aware recompute really would move the \
@@ -1844,6 +1850,134 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
         u16::try_from(filed_with_the_gain.attack).unwrap(),
         "the level-up save carries the battle's own EV yield -- not the \
          weaker pre-KO stat block issue #415 exists to fix"
+    );
+}
+
+/// PR review finding (behavioral-fidelity): upstream only refreshes the
+/// cached stat block inside the level-up sequence itself
+/// (`Cmd_getexp` case 5's `CalculateMonStats`); a later KO's own
+/// `MonGainEVs` call (`battle_script_commands.c:3420`) never touches it. A
+/// level-up in one battle followed by EV gains in a later battle, with no
+/// second level-up, must therefore file the level-up's own block -- not one
+/// inflated by the later EVs.
+#[test]
+fn save_time_recompute_uses_the_evs_the_level_up_saw_not_later_gains() {
+    const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    };
+    let dex = Dex::new();
+    let mut mon = treecko_fixture();
+    let species = dex.species(mon.species()).unwrap();
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    let evs_at_level_up = mon.evs();
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, mon.created_at_level() + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(mon.level(), mon.created_at_level() + 1);
+    let block_upstream_would_have_cached = battle::compute_stats_with_evs(
+        mon.species(),
+        species,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        evs_at_level_up,
+    );
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    assert_eq!(mon.level(), mon.created_at_level() + 1);
+    assert!(
+        battle::compute_stats_with_evs(
+            mon.species(),
+            species,
+            mon.level(),
+            mon.nature(),
+            mon.ivs(),
+            mon.evs()
+        )
+        .max_hp
+            > block_upstream_would_have_cached.max_hp
+    );
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        block_upstream_would_have_cached.max_hp,
+        "the filed block must be the one the level-up's own CalculateMonStats produced"
+    );
+}
+
+/// The counterpart the fix above must reach through
+/// [`merge_into_save_pokemon`] too: a mon loaded from a backing record, then
+/// levelled up and only *later* KO'd for more EVs with no second level-up,
+/// must file the level-up's own block on the next merge -- not one inflated
+/// by the later gains -- exactly as [`to_save_pokemon`]'s own regression
+/// above.
+#[test]
+fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
+    const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    };
+    let dex = Dex::new();
+    let mut mon = treecko_fixture();
+    let species = dex.species(mon.species()).unwrap();
+    // The backing record this merge overlays onto -- filed before any EVs
+    // or level-up, so the recompute branch below has something to compare
+    // its own species/level against.
+    let base = to_save_pokemon(&dex, &mon);
+
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    let evs_at_level_up = mon.evs();
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, mon.created_at_level() + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level() + 1,
+        "fixture sanity: the level moved"
+    );
+    let block_upstream_would_have_cached = battle::compute_stats_with_evs(
+        mon.species(),
+        species,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        evs_at_level_up,
+    );
+
+    // A later battle's own KOs, no further level-up.
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level() + 1,
+        "fixture sanity: still no second level-up"
+    );
+
+    let mut offset = hp_hidden_by_load(&dex, &base, &mon);
+    let merged = merge_into_save_pokemon(&dex, &mon, &base, &mut offset);
+
+    assert_eq!(
+        u32::from(merged.max_hp),
+        block_upstream_would_have_cached.max_hp,
+        "merge_into_save_pokemon must file the level-up's own cached block, \
+         not one inflated by the later EV gains"
     );
 }
 
