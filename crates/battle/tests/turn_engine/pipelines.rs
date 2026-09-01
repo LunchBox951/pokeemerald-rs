@@ -338,7 +338,7 @@ fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
 ///
 /// Bulbasaur level 5 has 21 maximum HP, so the gate (`hp <= maxHP / 3`) is
 /// 7. Absorb's power goes 20 -> 30 and the damage 8 -> 12
-/// (`battle::drain`'s unit tests carry the full hand computation).
+/// (`battle::drain`'s unit tests pin both figures as named constants).
 #[test]
 fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     // 1 (battle start) + turn number + enemy selection + Absorb's 3 +
