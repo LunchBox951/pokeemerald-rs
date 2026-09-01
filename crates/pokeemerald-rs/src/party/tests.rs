@@ -227,8 +227,8 @@ fn an_unchanged_shedinja_lead_normalizes_a_stale_stored_maximum() {
 }
 
 #[test]
-/// `MonGainEVs` writes EV bytes with no `CalculateMonStats` call, so the five
-/// cached stats stay legitimately stale; recomputing at save changes behavior.
+/// Upstream's EV award writes EV bytes without recomputing the five cached
+/// stats, so they stay legitimately stale; recomputing at save changes behavior.
 fn an_unchanged_shedinja_keeps_the_five_cached_stats_its_evs_have_outrun() {
     let dex = Dex::new();
     let lead = shedinja_fixture(20);
