@@ -1,8 +1,8 @@
 //! Encodes [`CompiledSong`] values into the asset pack's song schema.
 //!
-//! `xtask` and `assets` intentionally remain decoupled, so schema changes must
-//! be mirrored between their encoders. Strings are UTF-8 prefixed by their
-//! `u16` little-endian byte length. Each track is prefixed by its `u32`
+//! MIDI extraction writes this schema without using the `assets` encoder, so
+//! schema changes must be mirrored between them. Strings are UTF-8 prefixed by
+//! their `u16` little-endian byte length. Each track is prefixed by its `u32`
 //! little-endian event count.
 
 use super::compile::CompiledSong;
