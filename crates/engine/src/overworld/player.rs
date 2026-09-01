@@ -37,7 +37,7 @@ pub enum StepOutcome {
     Blocked {
         /// The attempted direction.
         direction: Direction,
-        /// The first collision detected at the destination.
+        /// Why the attempted step was denied.
         collision: super::collision::Collision,
     },
     /// The player entered an adjacent tile on the current map.
@@ -149,8 +149,7 @@ impl PlayerState {
         self.transit_frames.is_some()
     }
 
-    /// Advances the current tile crossing by one frame.
-    /// Does nothing when `transit_frames` is `None`.
+    /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     pub fn tick(&mut self) {
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
