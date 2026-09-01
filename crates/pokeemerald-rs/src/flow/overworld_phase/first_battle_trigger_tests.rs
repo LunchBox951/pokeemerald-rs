@@ -805,9 +805,10 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
 /// up after the behavior check), and **Route 101 declares none at all** — a
 /// route is entered by walking, not through a door. So no test over bundled
 /// data can make a warp and this coord event contend for the same frame; the
-/// precedence is encoded and documented rather than pinned, exactly as
-/// `crate::flow::wild_encounter::arrow_poll_open` already documents for its
-/// own equally-unreachable encounter arm.
+/// precedence is encoded and unit-pinned rather than driven end to end,
+/// exactly as
+/// `crate::flow::wild_encounter::tests::a_fired_encounter_closes_the_arrow_warp_poll`
+/// pins `arrow_poll_open`'s own equally-unreachable encounter arm.
 ///
 /// What this test *does* pin is that reachability argument itself — the
 /// emptiness of `warp_events` is an assertion, so a future Route 101 warp
