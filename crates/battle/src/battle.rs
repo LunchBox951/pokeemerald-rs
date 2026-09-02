@@ -191,7 +191,7 @@
 //! trainer AI (`I-5`, still explicitly out of scope): the branch is narrowed
 //! to exactly the one AI script `AI_SCRIPT_FIRST_BATTLE` ever runs, because
 //! that is the *only* `aiFlags` bit this specific `gBattleTypeFlags` value
-//! ever sets. See that method's own docs for the full derivation, and
+//! ever sets. See that method's docs, and
 //! [`crate::critical`] and `crate::escape` for the other two `first_battle`
 //! deltas.
 //!

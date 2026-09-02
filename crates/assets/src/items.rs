@@ -900,6 +900,22 @@ mod tests {
     }
 
     #[test]
+    fn item_none_is_the_empty_slot() {
+        let table = ItemTable::new();
+        let none = table.get(ItemId::NONE).unwrap();
+        assert_eq!(none.item_id, ItemId::NONE);
+        assert_eq!(none.price, 0);
+        assert_eq!(none.hold_effect, EXPECTED_HOLD_EFFECT_NONE);
+        assert_eq!(none.hold_effect_param, 0);
+        assert_eq!(none.pocket, Pocket::Items);
+        assert_eq!(none.item_type, ItemType::USE_BAG_MENU);
+        assert_eq!(none.battle_usage, BattleUsage::None);
+        assert_eq!(none.importance, 0);
+        assert!(!none.registrable);
+        assert_eq!(none.secondary_id, 0);
+    }
+
+    #[test]
     fn pocket_and_battle_usage_decoders_round_trip() {
         for raw in 0u8..=5 {
             assert_eq!(Pocket::from_id(raw).unwrap().id(), raw);

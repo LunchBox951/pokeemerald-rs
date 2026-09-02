@@ -1,184 +1,99 @@
-//! Wild encounter tables (S-4): the `gWildMonHeaders` table.
-//!
-//! Ports the per-map wild encounter data from the upstream reference
-//! `pokeemerald/src/data/wild_encounters.json` (`wild_encounter_groups[0]`,
-//! label `gWildMonHeaders`) — 124 `MAP_*` entries, each with up to four
-//! encounter kinds (land, water, rock smash, fishing). `gWildMonHeaders`
-//! itself is not a checked-in file: it is generated from that JSON by the
-//! build's Jinja-style templating (`wild_encounters.json.txt`) into
-//! `data/wild_encounters.h`, which `src/wild_encounter.c` `#include`s. This
-//! module transcribes straight from the JSON, the canonical source, not from
-//! any generated header.
-//!
-//! The upstream shape (`pokeemerald/include/wild_encounter.h`) is
-//! `struct WildPokemon {minLevel, maxLevel, species}`,
-//! `struct WildPokemonInfo {encounterRate, wildPokemon}`, and
-//! `struct WildPokemonHeader {mapGroup, mapNum, landMonsInfo, waterMonsInfo,
-//! rockSmashMonsInfo, fishingMonsInfo}`. Re-expressed idiomatically here
-//! `(no-verbatim)`: the four `*MonsInfo` pointers (each `NULL` when that
-//! encounter kind is absent for a map) become `Option` fields on
-//! [`WildEncounterHeader`], and each present kind is an owned, fixed-size
-//! [`WildPokemon`] array rather than a raw pointer.
-//!
-//! **`mapGroup`/`mapNum` and [`MapId`].** Upstream's `mapGroup`/`mapNum` come
-//! from the `MAP_GROUP(map)`/`MAP_NUM(map)` macros, which derive numeric
-//! values from a map's *position* in `data/maps/map_groups.json` — a whole
-//! map/location layout system that does not exist in this workspace yet and
-//! is out of scope here (a future maps/tilesets slice). Modelling fabricated
-//! numeric group/num pairs would be dishonest, so [`MapId`] instead wraps the
-//! upstream `MAP_*` name directly (e.g. `MapId("MAP_ROUTE101")`) — the same
-//! identifier the JSON's `map` field and the game's map-header data already
-//! use elsewhere, with no invented numbering.
-//!
-//! **Duplicate map ids.** 124 JSON entries name only 116 distinct maps: nine
-//! entries all share `MAP_ALTERING_CAVE` (`gAlteringCave1`..`gAlteringCave9`),
-//! reflecting the real game's rotating Altering Cave species (the cave's
-//! wild table is swapped at runtime by logic outside this data). Because a
-//! [`MapId`] is therefore not always a unique key, [`WildEncounterHeader`]
-//! also carries the upstream `base_label` (unique across all 124 entries,
-//! e.g. `"gRoute101"` / `"gAlteringCave3"`) as [`label`](WildEncounterHeader::label),
-//! and [`WildEncounterTable`] exposes both a by-label lookup (always unique)
-//! and a by-map lookup (returns the first matching entry, plus an
-//! `all_by_map` iterator for the Altering Cave case).
-//!
-//! **Fixed slot counts.** `pokeemerald/include/constants/wild_encounter.h`
-//! (cited by the originating issue as the source of the per-kind slot counts)
-//! no longer exists in this reference checkout; the invariants are instead
-//! derived from the JSON itself, where every present `land_mons`/`water_mons`/
-//! `rock_smash_mons`/`fishing_mons` block's `mons` array has a fixed length:
-//! land 12, water 5, rock smash 5, fishing 10 ([`LAND_SLOTS`], [`WATER_SLOTS`],
-//! [`ROCK_SMASH_SLOTS`], [`FISHING_SLOTS`]). A structural test below checks
-//! this holds for every present block across the whole table.
-//!
-//! **Fishing rods.** The JSON's top-level `fields` metadata fixes how a rod
-//! indexes into the 10 flat `fishing_mons` slots: `old_rod` -> `[0, 1]`,
-//! `good_rod` -> `[2, 3, 4]`, `super_rod` -> `[5, 6, 7, 8, 9]`. This grouping
-//! is the same for every map (it is metadata about the encounter-kind shape,
-//! not per-map data), so it is transcribed once as [`FishingRod::slots`]
-//! rather than repeated per entry.
-//!
-//! The upstream-tie tests at the bottom pin Route 101 (land only, the first
-//! route reachable from Littleroot — needed for I-4), Route 102 (water +
-//! fishing) and Route 111 (rock smash), plus the table length and per-kind
-//! slot-count invariants.
+//! Typed wild encounters indexed by their canonical map and base labels.
 
 use crate::error::AssetError;
 use crate::species::SpeciesId;
 
-/// The number of wild-Pokémon slots in a land encounter table
-/// (`land_mons.mons` length in every present JSON block).
+/// Number of slots in every land encounter table.
 pub const LAND_SLOTS: usize = 12;
-/// The number of wild-Pokémon slots in a water encounter table
-/// (`water_mons.mons` length in every present JSON block).
+/// Number of slots in every water encounter table.
 pub const WATER_SLOTS: usize = 5;
-/// The number of wild-Pokémon slots in a rock-smash encounter table
-/// (`rock_smash_mons.mons` length in every present JSON block).
+/// Number of slots in every rock-smash encounter table.
 pub const ROCK_SMASH_SLOTS: usize = 5;
-/// The number of wild-Pokémon slots in a fishing encounter table
-/// (`fishing_mons.mons` length in every present JSON block).
+/// Number of slots in every fishing encounter table.
 pub const FISHING_SLOTS: usize = 10;
 
-/// The number of map entries in `gWildMonHeaders`
-/// (`wild_encounter_groups[0].encounters.length` in the upstream JSON).
-///
-/// Not the number of *distinct* maps — see the module docs on duplicate map
-/// ids (Altering Cave).
+/// Number of encounter headers, including all nine Altering Cave variants.
 pub const MAP_HEADER_COUNT: usize = 124;
 
-/// A map identifier — the upstream `MAP_*` name, e.g. `MapId("MAP_ROUTE101")`.
-///
-/// See the module docs for why this wraps the symbolic name rather than a
-/// numeric `(map_group, map_num)` pair: deriving upstream's actual
-/// `mapGroup`/`mapNum` values requires the map-layout system
-/// (`data/maps/map_groups.json`), which is out of scope for this slice.
+/// A symbolic `MAP_*` identity shared with map-header data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MapId(pub &'static str);
 
 impl MapId {
-    /// The upstream `MAP_*` name.
+    /// Returns the symbolic `MAP_*` name.
     #[must_use]
     pub const fn name(self) -> &'static str {
         self.0
     }
 }
 
-/// One wild-Pokémon slot — the owned form of upstream `struct WildPokemon`.
+/// A species and inclusive level range for one encounter slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WildPokemon {
-    /// The lowest level this slot can generate (upstream `minLevel`).
+    /// Lowest generated level.
     pub min_level: u8,
-    /// The highest level this slot can generate (upstream `maxLevel`).
+    /// Highest generated level.
     pub max_level: u8,
-    /// The species this slot generates.
+    /// Generated species.
     pub species: SpeciesId,
 }
 
-/// A land encounter table — the owned form of upstream `struct
-/// WildPokemonInfo` for `landMonsInfo` (always [`LAND_SLOTS`] slots).
+/// Land encounters for one map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LandEncounters {
-    /// The chance (out of upstream's internal scale) of a land encounter
-    /// triggering at all on this map (upstream `encounterRate`).
+    /// Stored land encounter rate.
     pub encounter_rate: u8,
-    /// The fixed-size slot table, in upstream order.
+    /// Slots in selection order.
     pub mons: [WildPokemon; LAND_SLOTS],
 }
 
-/// A water encounter table — the owned form of upstream `struct
-/// WildPokemonInfo` for `waterMonsInfo` (always [`WATER_SLOTS`] slots).
+/// Water encounters for one map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaterEncounters {
-    /// Upstream `encounterRate` for water encounters on this map.
+    /// Stored water encounter rate.
     pub encounter_rate: u8,
-    /// The fixed-size slot table, in upstream order.
+    /// Slots in selection order.
     pub mons: [WildPokemon; WATER_SLOTS],
 }
 
-/// A rock-smash encounter table — the owned form of upstream `struct
-/// WildPokemonInfo` for `rockSmashMonsInfo` (always [`ROCK_SMASH_SLOTS`]
-/// slots).
+/// Rock-smash encounters for one map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RockSmashEncounters {
-    /// Upstream `encounterRate` for rock-smash encounters on this map.
+    /// Stored rock-smash encounter rate.
     pub encounter_rate: u8,
-    /// The fixed-size slot table, in upstream order.
+    /// Slots in selection order.
     pub mons: [WildPokemon; ROCK_SMASH_SLOTS],
 }
 
-/// A fishing encounter table — the owned form of upstream `struct
-/// WildPokemonInfo` for `fishingMonsInfo` (always [`FISHING_SLOTS`] slots,
-/// grouped into rod tiers by [`FishingRod::slots`]).
+/// Fishing encounters for one map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FishingEncounters {
-    /// Upstream `encounterRate` for fishing encounters on this map.
+    /// Stored fishing encounter rate.
     pub encounter_rate: u8,
-    /// The fixed-size slot table, in upstream order.
+    /// Slots partitioned by [`FishingRod::slots`].
     pub mons: [WildPokemon; FISHING_SLOTS],
 }
 
 impl FishingEncounters {
-    /// The slots usable with `rod`, in upstream order.
+    /// Returns the slots available to `rod`, in selection order.
     pub fn mons_for_rod(&self, rod: FishingRod) -> impl Iterator<Item = WildPokemon> + '_ {
         rod.slots().iter().map(|&i| self.mons[i])
     }
 }
 
-/// The three fishing-rod tiers, matching the upstream `groups` object in
-/// `wild_encounters.json`'s `fishing_mons` field metadata.
+/// Fishing-rod tiers that partition the ten fishing slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FishingRod {
-    /// The Old Rod (`old_rod`): slots `[0, 1]`.
+    /// Old Rod tier.
     Old,
-    /// The Good Rod (`good_rod`): slots `[2, 3, 4]`.
+    /// Good Rod tier.
     Good,
-    /// The Super Rod (`super_rod`): slots `[5, 6, 7, 8, 9]`.
+    /// Super Rod tier.
     Super,
 }
 
 impl FishingRod {
-    /// The fixed slot indices into a [`FishingEncounters::mons`] array usable
-    /// with this rod, per the upstream `groups` metadata (the same for every
-    /// map).
+    /// Returns this rod's partition of [`FishingEncounters::mons`].
     #[must_use]
     pub const fn slots(self) -> &'static [usize] {
         match self {
@@ -189,3268 +104,3259 @@ impl FishingRod {
     }
 }
 
-/// One `gWildMonHeaders` entry — the owned form of upstream `struct
-/// WildPokemonHeader`, keyed by [`map`](WildEncounterHeader::map) and a
-/// unique [`label`](WildEncounterHeader::label).
+/// Wild encounters for one canonical base label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WildEncounterHeader {
-    /// The map this header describes (upstream `mapGroup`/`mapNum`, see the
-    /// module docs on [`MapId`]). Not always unique across the table — see
-    /// the Altering Cave note in the module docs.
+    /// Map identity. Altering Cave deliberately has nine headers with this ID.
     pub map: MapId,
-    /// The upstream `base_label` (e.g. `"gRoute101"`), unique across all
-    /// [`MAP_HEADER_COUNT`] entries.
+    /// Unique base label, such as `"gRoute101"`.
     pub label: &'static str,
-    /// Land encounters, if this map has any (upstream `landMonsInfo`, `NULL`
-    /// when absent).
+    /// Land encounters, when present.
     pub land: Option<LandEncounters>,
-    /// Water encounters, if this map has any (upstream `waterMonsInfo`,
-    /// `NULL` when absent).
+    /// Water encounters, when present.
     pub water: Option<WaterEncounters>,
-    /// Rock-smash encounters, if this map has any (upstream
-    /// `rockSmashMonsInfo`, `NULL` when absent).
+    /// Rock-smash encounters, when present.
     pub rock_smash: Option<RockSmashEncounters>,
-    /// Fishing encounters, if this map has any (upstream `fishingMonsInfo`,
-    /// `NULL` when absent).
+    /// Fishing encounters, when present.
     pub fishing: Option<FishingEncounters>,
 }
 
-// --- GENERATED: transcribed from pokeemerald/src/data/wild_encounters.json ---
-
-const fn w(min_level: u8, max_level: u8, species: SpeciesId) -> WildPokemon {
-    WildPokemon {
-        min_level,
-        max_level,
-        species,
-    }
+macro_rules! wild {
+    (levels: $min_level:literal..=$max_level:literal, species: $species:expr) => {
+        WildPokemon {
+            min_level: $min_level,
+            max_level: $max_level,
+            species: $species,
+        }
+    };
 }
 
 const GROUTE101_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(2, 2, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(2, 2, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(2, 2, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(3, 3, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(3, 3, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(2, 2, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(2, 2, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
+        wild!(levels: 2..=2, species: SpeciesId::WURMPLE),
+        wild!(levels: 2..=2, species: SpeciesId::POOCHYENA),
+        wild!(levels: 2..=2, species: SpeciesId::WURMPLE),
+        wild!(levels: 3..=3, species: SpeciesId::WURMPLE),
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 3..=3, species: SpeciesId::WURMPLE),
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 2..=2, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 2..=2, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
     ],
 };
 
 const GROUTE102_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(3, 3, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(4, 4, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(4, 4, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(3, 3, SpeciesId(295)), /* SPECIES_LOTAD */
-        w(4, 4, SpeciesId(295)), /* SPECIES_LOTAD */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(4, 4, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(4, 4, SpeciesId(392)), /* SPECIES_RALTS */
-        w(4, 4, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(298)), /* SPECIES_SEEDOT */
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 3..=3, species: SpeciesId::WURMPLE),
+        wild!(levels: 4..=4, species: SpeciesId::POOCHYENA),
+        wild!(levels: 4..=4, species: SpeciesId::WURMPLE),
+        wild!(levels: 3..=3, species: SpeciesId::LOTAD),
+        wild!(levels: 4..=4, species: SpeciesId::LOTAD),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 4..=4, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 4..=4, species: SpeciesId::RALTS),
+        wild!(levels: 4..=4, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::SEEDOT),
     ],
 };
 
 const GROUTE102_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(20, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 20..=30, species: SpeciesId::GOLDEEN),
     ],
 };
 
 const GROUTE102_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(25, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(30, 35, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(20, 25, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(35, 40, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(40, 45, SpeciesId(326)), /* SPECIES_CORPHISH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 25..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 30..=35, species: SpeciesId::CORPHISH),
+        wild!(levels: 20..=25, species: SpeciesId::CORPHISH),
+        wild!(levels: 35..=40, species: SpeciesId::CORPHISH),
+        wild!(levels: 40..=45, species: SpeciesId::CORPHISH),
     ],
 };
 
 const GROUTE103_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(2, 2, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(3, 3, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(4, 4, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(2, 2, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(4, 4, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(3, 3, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(3, 3, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(2, 2, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(4, 4, SpeciesId(309)), /* SPECIES_WINGULL */
+        wild!(levels: 2..=2, species: SpeciesId::POOCHYENA),
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 3..=3, species: SpeciesId::POOCHYENA),
+        wild!(levels: 4..=4, species: SpeciesId::POOCHYENA),
+        wild!(levels: 2..=2, species: SpeciesId::WINGULL),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 4..=4, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 3..=3, species: SpeciesId::WINGULL),
+        wild!(levels: 3..=3, species: SpeciesId::WINGULL),
+        wild!(levels: 2..=2, species: SpeciesId::WINGULL),
+        wild!(levels: 4..=4, species: SpeciesId::WINGULL),
     ],
 };
 
 const GROUTE103_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE103_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE104_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(4, 4, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(4, 4, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(5, 5, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(5, 5, SpeciesId(183)), /* SPECIES_MARILL */
-        w(4, 4, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 5, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(4, 4, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(5, 5, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(4, 4, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(4, 4, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(3, 3, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(5, 5, SpeciesId(309)), /* SPECIES_WINGULL */
+        wild!(levels: 4..=4, species: SpeciesId::POOCHYENA),
+        wild!(levels: 4..=4, species: SpeciesId::WURMPLE),
+        wild!(levels: 5..=5, species: SpeciesId::POOCHYENA),
+        wild!(levels: 5..=5, species: SpeciesId::MARILL),
+        wild!(levels: 4..=4, species: SpeciesId::MARILL),
+        wild!(levels: 5..=5, species: SpeciesId::POOCHYENA),
+        wild!(levels: 4..=4, species: SpeciesId::TAILLOW),
+        wild!(levels: 5..=5, species: SpeciesId::TAILLOW),
+        wild!(levels: 4..=4, species: SpeciesId::WINGULL),
+        wild!(levels: 4..=4, species: SpeciesId::WINGULL),
+        wild!(levels: 3..=3, species: SpeciesId::WINGULL),
+        wild!(levels: 5..=5, species: SpeciesId::WINGULL),
     ],
 };
 
 const GROUTE104_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE104_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(25, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(30, 35, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(20, 25, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(35, 40, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(40, 45, SpeciesId(129)), /* SPECIES_MAGIKARP */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 25..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 30..=35, species: SpeciesId::MAGIKARP),
+        wild!(levels: 20..=25, species: SpeciesId::MAGIKARP),
+        wild!(levels: 35..=40, species: SpeciesId::MAGIKARP),
+        wild!(levels: 40..=45, species: SpeciesId::MAGIKARP),
     ],
 };
 
 const GROUTE105_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE105_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE110_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(12, 12, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(12, 12, SpeciesId(337)), /* SPECIES_ELECTRIKE */
-        w(12, 12, SpeciesId(367)), /* SPECIES_GULPIN */
-        w(13, 13, SpeciesId(337)), /* SPECIES_ELECTRIKE */
-        w(13, 13, SpeciesId(354)), /* SPECIES_MINUN */
-        w(13, 13, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(13, 13, SpeciesId(354)), /* SPECIES_MINUN */
-        w(13, 13, SpeciesId(367)), /* SPECIES_GULPIN */
-        w(12, 12, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(12, 12, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(12, 12, SpeciesId(353)), /* SPECIES_PLUSLE */
-        w(13, 13, SpeciesId(353)), /* SPECIES_PLUSLE */
+        wild!(levels: 12..=12, species: SpeciesId::POOCHYENA),
+        wild!(levels: 12..=12, species: SpeciesId::ELECTRIKE),
+        wild!(levels: 12..=12, species: SpeciesId::GULPIN),
+        wild!(levels: 13..=13, species: SpeciesId::ELECTRIKE),
+        wild!(levels: 13..=13, species: SpeciesId::MINUN),
+        wild!(levels: 13..=13, species: SpeciesId::ODDISH),
+        wild!(levels: 13..=13, species: SpeciesId::MINUN),
+        wild!(levels: 13..=13, species: SpeciesId::GULPIN),
+        wild!(levels: 12..=12, species: SpeciesId::WINGULL),
+        wild!(levels: 12..=12, species: SpeciesId::WINGULL),
+        wild!(levels: 12..=12, species: SpeciesId::PLUSLE),
+        wild!(levels: 13..=13, species: SpeciesId::PLUSLE),
     ],
 };
 
 const GROUTE110_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE110_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE111_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(21, 21, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(21, 21, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(19, 19, SpeciesId(318)), /* SPECIES_BALTOY */
-        w(21, 21, SpeciesId(318)), /* SPECIES_BALTOY */
-        w(19, 19, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(19, 19, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(318)), /* SPECIES_BALTOY */
-        w(20, 20, SpeciesId(344)), /* SPECIES_CACNEA */
-        w(22, 22, SpeciesId(344)), /* SPECIES_CACNEA */
-        w(22, 22, SpeciesId(344)), /* SPECIES_CACNEA */
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 21..=21, species: SpeciesId::SANDSHREW),
+        wild!(levels: 21..=21, species: SpeciesId::TRAPINCH),
+        wild!(levels: 19..=19, species: SpeciesId::BALTOY),
+        wild!(levels: 21..=21, species: SpeciesId::BALTOY),
+        wild!(levels: 19..=19, species: SpeciesId::SANDSHREW),
+        wild!(levels: 19..=19, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::BALTOY),
+        wild!(levels: 20..=20, species: SpeciesId::CACNEA),
+        wild!(levels: 22..=22, species: SpeciesId::CACNEA),
+        wild!(levels: 22..=22, species: SpeciesId::CACNEA),
     ],
 };
 
 const GROUTE111_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(20, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 20..=30, species: SpeciesId::GOLDEEN),
     ],
 };
 
 const GROUTE111_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 20,
     mons: [
-        w(10, 15, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(5, 10, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
+        wild!(levels: 10..=15, species: SpeciesId::GEODUDE),
+        wild!(levels: 5..=10, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
     ],
 };
 
 const GROUTE111_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(20, 25, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(35, 40, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(40, 45, SpeciesId(323)), /* SPECIES_BARBOACH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 20..=25, species: SpeciesId::BARBOACH),
+        wild!(levels: 35..=40, species: SpeciesId::BARBOACH),
+        wild!(levels: 40..=45, species: SpeciesId::BARBOACH),
     ],
 };
 
 const GROUTE112_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(15, 15, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(15, 15, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(15, 15, SpeciesId(183)), /* SPECIES_MARILL */
-        w(14, 14, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(14, 14, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(14, 14, SpeciesId(183)), /* SPECIES_MARILL */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(16, 16, SpeciesId(183)), /* SPECIES_MARILL */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
+        wild!(levels: 15..=15, species: SpeciesId::NUMEL),
+        wild!(levels: 15..=15, species: SpeciesId::NUMEL),
+        wild!(levels: 15..=15, species: SpeciesId::MARILL),
+        wild!(levels: 14..=14, species: SpeciesId::NUMEL),
+        wild!(levels: 14..=14, species: SpeciesId::NUMEL),
+        wild!(levels: 14..=14, species: SpeciesId::MARILL),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
+        wild!(levels: 16..=16, species: SpeciesId::MARILL),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
     ],
 };
 
 const GROUTE113_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(15, 15, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(15, 15, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(15, 15, SpeciesId(218)), /* SPECIES_SLUGMA */
-        w(14, 14, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(14, 14, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(14, 14, SpeciesId(218)), /* SPECIES_SLUGMA */
-        w(16, 16, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(16, 16, SpeciesId(218)), /* SPECIES_SLUGMA */
-        w(16, 16, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(16, 16, SpeciesId(227)), /* SPECIES_SKARMORY */
-        w(16, 16, SpeciesId(308)), /* SPECIES_SPINDA */
-        w(16, 16, SpeciesId(227)), /* SPECIES_SKARMORY */
+        wild!(levels: 15..=15, species: SpeciesId::SPINDA),
+        wild!(levels: 15..=15, species: SpeciesId::SPINDA),
+        wild!(levels: 15..=15, species: SpeciesId::SLUGMA),
+        wild!(levels: 14..=14, species: SpeciesId::SPINDA),
+        wild!(levels: 14..=14, species: SpeciesId::SPINDA),
+        wild!(levels: 14..=14, species: SpeciesId::SLUGMA),
+        wild!(levels: 16..=16, species: SpeciesId::SPINDA),
+        wild!(levels: 16..=16, species: SpeciesId::SLUGMA),
+        wild!(levels: 16..=16, species: SpeciesId::SPINDA),
+        wild!(levels: 16..=16, species: SpeciesId::SKARMORY),
+        wild!(levels: 16..=16, species: SpeciesId::SPINDA),
+        wild!(levels: 16..=16, species: SpeciesId::SKARMORY),
     ],
 };
 
 const GROUTE114_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(16, 16, SpeciesId(358)), /* SPECIES_SWABLU */
-        w(16, 16, SpeciesId(295)), /* SPECIES_LOTAD */
-        w(17, 17, SpeciesId(358)), /* SPECIES_SWABLU */
-        w(15, 15, SpeciesId(358)), /* SPECIES_SWABLU */
-        w(15, 15, SpeciesId(295)), /* SPECIES_LOTAD */
-        w(16, 16, SpeciesId(296)), /* SPECIES_LOMBRE */
-        w(16, 16, SpeciesId(296)), /* SPECIES_LOMBRE */
-        w(18, 18, SpeciesId(296)), /* SPECIES_LOMBRE */
-        w(17, 17, SpeciesId(379)), /* SPECIES_SEVIPER */
-        w(15, 15, SpeciesId(379)), /* SPECIES_SEVIPER */
-        w(17, 17, SpeciesId(379)), /* SPECIES_SEVIPER */
-        w(15, 15, SpeciesId(299)), /* SPECIES_NUZLEAF */
+        wild!(levels: 16..=16, species: SpeciesId::SWABLU),
+        wild!(levels: 16..=16, species: SpeciesId::LOTAD),
+        wild!(levels: 17..=17, species: SpeciesId::SWABLU),
+        wild!(levels: 15..=15, species: SpeciesId::SWABLU),
+        wild!(levels: 15..=15, species: SpeciesId::LOTAD),
+        wild!(levels: 16..=16, species: SpeciesId::LOMBRE),
+        wild!(levels: 16..=16, species: SpeciesId::LOMBRE),
+        wild!(levels: 18..=18, species: SpeciesId::LOMBRE),
+        wild!(levels: 17..=17, species: SpeciesId::SEVIPER),
+        wild!(levels: 15..=15, species: SpeciesId::SEVIPER),
+        wild!(levels: 17..=17, species: SpeciesId::SEVIPER),
+        wild!(levels: 15..=15, species: SpeciesId::NUZLEAF),
     ],
 };
 
 const GROUTE114_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(20, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 20..=30, species: SpeciesId::GOLDEEN),
     ],
 };
 
 const GROUTE114_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 20,
     mons: [
-        w(10, 15, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(5, 10, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
+        wild!(levels: 10..=15, species: SpeciesId::GEODUDE),
+        wild!(levels: 5..=10, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
     ],
 };
 
 const GROUTE114_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(20, 25, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(35, 40, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(40, 45, SpeciesId(323)), /* SPECIES_BARBOACH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 20..=25, species: SpeciesId::BARBOACH),
+        wild!(levels: 35..=40, species: SpeciesId::BARBOACH),
+        wild!(levels: 40..=45, species: SpeciesId::BARBOACH),
     ],
 };
 
 const GROUTE116_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(6, 6, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(6, 6, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(6, 6, SpeciesId(301)), /* SPECIES_NINCADA */
-        w(7, 7, SpeciesId(63)),  /* SPECIES_ABRA */
-        w(7, 7, SpeciesId(301)), /* SPECIES_NINCADA */
-        w(6, 6, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(7, 7, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(8, 8, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(7, 7, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(8, 8, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(7, 7, SpeciesId(315)), /* SPECIES_SKITTY */
-        w(8, 8, SpeciesId(315)), /* SPECIES_SKITTY */
+        wild!(levels: 6..=6, species: SpeciesId::POOCHYENA),
+        wild!(levels: 6..=6, species: SpeciesId::WHISMUR),
+        wild!(levels: 6..=6, species: SpeciesId::NINCADA),
+        wild!(levels: 7..=7, species: SpeciesId::ABRA),
+        wild!(levels: 7..=7, species: SpeciesId::NINCADA),
+        wild!(levels: 6..=6, species: SpeciesId::TAILLOW),
+        wild!(levels: 7..=7, species: SpeciesId::TAILLOW),
+        wild!(levels: 8..=8, species: SpeciesId::TAILLOW),
+        wild!(levels: 7..=7, species: SpeciesId::POOCHYENA),
+        wild!(levels: 8..=8, species: SpeciesId::POOCHYENA),
+        wild!(levels: 7..=7, species: SpeciesId::SKITTY),
+        wild!(levels: 8..=8, species: SpeciesId::SKITTY),
     ],
 };
 
 const GROUTE117_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(13, 13, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(13, 13, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(14, 14, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(14, 14, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(13, 13, SpeciesId(183)), /* SPECIES_MARILL */
-        w(13, 13, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(13, 13, SpeciesId(387)), /* SPECIES_ILLUMISE */
-        w(13, 13, SpeciesId(387)), /* SPECIES_ILLUMISE */
-        w(14, 14, SpeciesId(387)), /* SPECIES_ILLUMISE */
-        w(14, 14, SpeciesId(387)), /* SPECIES_ILLUMISE */
-        w(13, 13, SpeciesId(386)), /* SPECIES_VOLBEAT */
-        w(13, 13, SpeciesId(298)), /* SPECIES_SEEDOT */
+        wild!(levels: 13..=13, species: SpeciesId::POOCHYENA),
+        wild!(levels: 13..=13, species: SpeciesId::ODDISH),
+        wild!(levels: 14..=14, species: SpeciesId::POOCHYENA),
+        wild!(levels: 14..=14, species: SpeciesId::ODDISH),
+        wild!(levels: 13..=13, species: SpeciesId::MARILL),
+        wild!(levels: 13..=13, species: SpeciesId::ODDISH),
+        wild!(levels: 13..=13, species: SpeciesId::ILLUMISE),
+        wild!(levels: 13..=13, species: SpeciesId::ILLUMISE),
+        wild!(levels: 14..=14, species: SpeciesId::ILLUMISE),
+        wild!(levels: 14..=14, species: SpeciesId::ILLUMISE),
+        wild!(levels: 13..=13, species: SpeciesId::VOLBEAT),
+        wild!(levels: 13..=13, species: SpeciesId::SEEDOT),
     ],
 };
 
 const GROUTE117_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(20, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 20..=30, species: SpeciesId::GOLDEEN),
     ],
 };
 
 const GROUTE117_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(25, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(30, 35, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(20, 25, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(35, 40, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(40, 45, SpeciesId(326)), /* SPECIES_CORPHISH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 25..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 30..=35, species: SpeciesId::CORPHISH),
+        wild!(levels: 20..=25, species: SpeciesId::CORPHISH),
+        wild!(levels: 35..=40, species: SpeciesId::CORPHISH),
+        wild!(levels: 40..=45, species: SpeciesId::CORPHISH),
     ],
 };
 
 const GROUTE118_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(24, 24, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(24, 24, SpeciesId(337)), /* SPECIES_ELECTRIKE */
-        w(26, 26, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(26, 26, SpeciesId(337)), /* SPECIES_ELECTRIKE */
-        w(26, 26, SpeciesId(289)), /* SPECIES_LINOONE */
-        w(26, 26, SpeciesId(338)), /* SPECIES_MANECTRIC */
-        w(25, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(27, 27, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 25, SpeciesId(317)), /* SPECIES_KECLEON */
+        wild!(levels: 24..=24, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 24..=24, species: SpeciesId::ELECTRIKE),
+        wild!(levels: 26..=26, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 26..=26, species: SpeciesId::ELECTRIKE),
+        wild!(levels: 26..=26, species: SpeciesId::LINOONE),
+        wild!(levels: 26..=26, species: SpeciesId::MANECTRIC),
+        wild!(levels: 25..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 27..=27, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=25, species: SpeciesId::KECLEON),
     ],
 };
 
 const GROUTE118_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE118_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(20, 25, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(35, 40, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(40, 45, SpeciesId(330)), /* SPECIES_CARVANHA */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::CARVANHA),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::CARVANHA),
+        wild!(levels: 20..=25, species: SpeciesId::CARVANHA),
+        wild!(levels: 35..=40, species: SpeciesId::CARVANHA),
+        wild!(levels: 40..=45, species: SpeciesId::CARVANHA),
     ],
 };
 
 const GROUTE124_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE124_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GPETALBURGWOODS_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(5, 5, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(5, 5, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(5, 5, SpeciesId(306)), /* SPECIES_SHROOMISH */
-        w(6, 6, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(5, 5, SpeciesId(291)), /* SPECIES_SILCOON */
-        w(5, 5, SpeciesId(293)), /* SPECIES_CASCOON */
-        w(6, 6, SpeciesId(290)), /* SPECIES_WURMPLE */
-        w(6, 6, SpeciesId(306)), /* SPECIES_SHROOMISH */
-        w(5, 5, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(5, 5, SpeciesId(364)), /* SPECIES_SLAKOTH */
-        w(6, 6, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(6, 6, SpeciesId(364)), /* SPECIES_SLAKOTH */
+        wild!(levels: 5..=5, species: SpeciesId::POOCHYENA),
+        wild!(levels: 5..=5, species: SpeciesId::WURMPLE),
+        wild!(levels: 5..=5, species: SpeciesId::SHROOMISH),
+        wild!(levels: 6..=6, species: SpeciesId::POOCHYENA),
+        wild!(levels: 5..=5, species: SpeciesId::SILCOON),
+        wild!(levels: 5..=5, species: SpeciesId::CASCOON),
+        wild!(levels: 6..=6, species: SpeciesId::WURMPLE),
+        wild!(levels: 6..=6, species: SpeciesId::SHROOMISH),
+        wild!(levels: 5..=5, species: SpeciesId::TAILLOW),
+        wild!(levels: 5..=5, species: SpeciesId::SLAKOTH),
+        wild!(levels: 6..=6, species: SpeciesId::TAILLOW),
+        wild!(levels: 6..=6, species: SpeciesId::SLAKOTH),
     ],
 };
 
 const GRUSTURFTUNNEL_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(6, 6, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(7, 7, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(6, 6, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(6, 6, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(7, 7, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(7, 7, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(5, 5, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(8, 8, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(5, 5, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(8, 8, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(5, 5, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(8, 8, SpeciesId(370)), /* SPECIES_WHISMUR */
+        wild!(levels: 6..=6, species: SpeciesId::WHISMUR),
+        wild!(levels: 7..=7, species: SpeciesId::WHISMUR),
+        wild!(levels: 6..=6, species: SpeciesId::WHISMUR),
+        wild!(levels: 6..=6, species: SpeciesId::WHISMUR),
+        wild!(levels: 7..=7, species: SpeciesId::WHISMUR),
+        wild!(levels: 7..=7, species: SpeciesId::WHISMUR),
+        wild!(levels: 5..=5, species: SpeciesId::WHISMUR),
+        wild!(levels: 8..=8, species: SpeciesId::WHISMUR),
+        wild!(levels: 5..=5, species: SpeciesId::WHISMUR),
+        wild!(levels: 8..=8, species: SpeciesId::WHISMUR),
+        wild!(levels: 5..=5, species: SpeciesId::WHISMUR),
+        wild!(levels: 8..=8, species: SpeciesId::WHISMUR),
     ],
 };
 
 const GGRANITECAVE_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(7, 7, SpeciesId(41)),    /* SPECIES_ZUBAT */
-        w(8, 8, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(7, 7, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(8, 8, SpeciesId(41)),    /* SPECIES_ZUBAT */
-        w(9, 9, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(8, 8, SpeciesId(63)),    /* SPECIES_ABRA */
-        w(10, 10, SpeciesId(335)), /* SPECIES_MAKUHITA */
-        w(6, 6, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(7, 7, SpeciesId(74)),    /* SPECIES_GEODUDE */
-        w(8, 8, SpeciesId(74)),    /* SPECIES_GEODUDE */
-        w(6, 6, SpeciesId(74)),    /* SPECIES_GEODUDE */
-        w(9, 9, SpeciesId(74)),    /* SPECIES_GEODUDE */
+        wild!(levels: 7..=7, species: SpeciesId::ZUBAT),
+        wild!(levels: 8..=8, species: SpeciesId::MAKUHITA),
+        wild!(levels: 7..=7, species: SpeciesId::MAKUHITA),
+        wild!(levels: 8..=8, species: SpeciesId::ZUBAT),
+        wild!(levels: 9..=9, species: SpeciesId::MAKUHITA),
+        wild!(levels: 8..=8, species: SpeciesId::ABRA),
+        wild!(levels: 10..=10, species: SpeciesId::MAKUHITA),
+        wild!(levels: 6..=6, species: SpeciesId::MAKUHITA),
+        wild!(levels: 7..=7, species: SpeciesId::GEODUDE),
+        wild!(levels: 8..=8, species: SpeciesId::GEODUDE),
+        wild!(levels: 6..=6, species: SpeciesId::GEODUDE),
+        wild!(levels: 9..=9, species: SpeciesId::GEODUDE),
     ],
 };
 
 const GGRANITECAVE_B1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(9, 9, SpeciesId(41)),    /* SPECIES_ZUBAT */
-        w(10, 10, SpeciesId(382)), /* SPECIES_ARON */
-        w(9, 9, SpeciesId(382)),   /* SPECIES_ARON */
-        w(11, 11, SpeciesId(382)), /* SPECIES_ARON */
-        w(10, 10, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(9, 9, SpeciesId(63)),    /* SPECIES_ABRA */
-        w(10, 10, SpeciesId(335)), /* SPECIES_MAKUHITA */
-        w(11, 11, SpeciesId(335)), /* SPECIES_MAKUHITA */
-        w(10, 10, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(10, 10, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(9, 9, SpeciesId(322)),   /* SPECIES_SABLEYE */
-        w(11, 11, SpeciesId(322)), /* SPECIES_SABLEYE */
+        wild!(levels: 9..=9, species: SpeciesId::ZUBAT),
+        wild!(levels: 10..=10, species: SpeciesId::ARON),
+        wild!(levels: 9..=9, species: SpeciesId::ARON),
+        wild!(levels: 11..=11, species: SpeciesId::ARON),
+        wild!(levels: 10..=10, species: SpeciesId::ZUBAT),
+        wild!(levels: 9..=9, species: SpeciesId::ABRA),
+        wild!(levels: 10..=10, species: SpeciesId::MAKUHITA),
+        wild!(levels: 11..=11, species: SpeciesId::MAKUHITA),
+        wild!(levels: 10..=10, species: SpeciesId::SABLEYE),
+        wild!(levels: 10..=10, species: SpeciesId::SABLEYE),
+        wild!(levels: 9..=9, species: SpeciesId::SABLEYE),
+        wild!(levels: 11..=11, species: SpeciesId::SABLEYE),
     ],
 };
 
 const GMTPYRE_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
     ],
 };
 
 const GVICTORYROAD_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(336)), /* SPECIES_HARIYAMA */
-        w(40, 40, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(40, 40, SpeciesId(371)), /* SPECIES_LOUDRED */
-        w(36, 36, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(36, 36, SpeciesId(335)), /* SPECIES_MAKUHITA */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(336)), /* SPECIES_HARIYAMA */
-        w(36, 36, SpeciesId(382)), /* SPECIES_ARON */
-        w(36, 36, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(36, 36, SpeciesId(382)), /* SPECIES_ARON */
-        w(36, 36, SpeciesId(370)), /* SPECIES_WHISMUR */
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::HARIYAMA),
+        wild!(levels: 40..=40, species: SpeciesId::LAIRON),
+        wild!(levels: 40..=40, species: SpeciesId::LOUDRED),
+        wild!(levels: 36..=36, species: SpeciesId::ZUBAT),
+        wild!(levels: 36..=36, species: SpeciesId::MAKUHITA),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::HARIYAMA),
+        wild!(levels: 36..=36, species: SpeciesId::ARON),
+        wild!(levels: 36..=36, species: SpeciesId::WHISMUR),
+        wild!(levels: 36..=36, species: SpeciesId::ARON),
+        wild!(levels: 36..=36, species: SpeciesId::WHISMUR),
     ],
 };
 
 const GSAFARIZONE_SOUTH_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(25, 25, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(25, 25, SpeciesId(203)), /* SPECIES_GIRAFARIG */
-        w(27, 27, SpeciesId(203)), /* SPECIES_GIRAFARIG */
-        w(25, 25, SpeciesId(177)), /* SPECIES_NATU */
-        w(25, 25, SpeciesId(84)),  /* SPECIES_DODUO */
-        w(25, 25, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(27, 27, SpeciesId(202)), /* SPECIES_WOBBUFFET */
-        w(25, 25, SpeciesId(25)),  /* SPECIES_PIKACHU */
-        w(27, 27, SpeciesId(202)), /* SPECIES_WOBBUFFET */
-        w(27, 27, SpeciesId(25)),  /* SPECIES_PIKACHU */
-        w(29, 29, SpeciesId(202)), /* SPECIES_WOBBUFFET */
+        wild!(levels: 25..=25, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 25..=25, species: SpeciesId::GIRAFARIG),
+        wild!(levels: 27..=27, species: SpeciesId::GIRAFARIG),
+        wild!(levels: 25..=25, species: SpeciesId::NATU),
+        wild!(levels: 25..=25, species: SpeciesId::DODUO),
+        wild!(levels: 25..=25, species: SpeciesId::GLOOM),
+        wild!(levels: 27..=27, species: SpeciesId::WOBBUFFET),
+        wild!(levels: 25..=25, species: SpeciesId::PIKACHU),
+        wild!(levels: 27..=27, species: SpeciesId::WOBBUFFET),
+        wild!(levels: 27..=27, species: SpeciesId::PIKACHU),
+        wild!(levels: 29..=29, species: SpeciesId::WOBBUFFET),
     ],
 };
 
 const GUNDERWATER_ROUTE126_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(373)), /* SPECIES_CLAMPERL */
-        w(20, 30, SpeciesId(170)), /* SPECIES_CHINCHOU */
-        w(30, 35, SpeciesId(373)), /* SPECIES_CLAMPERL */
-        w(30, 35, SpeciesId(381)), /* SPECIES_RELICANTH */
-        w(30, 35, SpeciesId(381)), /* SPECIES_RELICANTH */
+        wild!(levels: 20..=30, species: SpeciesId::CLAMPERL),
+        wild!(levels: 20..=30, species: SpeciesId::CHINCHOU),
+        wild!(levels: 30..=35, species: SpeciesId::CLAMPERL),
+        wild!(levels: 30..=35, species: SpeciesId::RELICANTH),
+        wild!(levels: 30..=35, species: SpeciesId::RELICANTH),
     ],
 };
 
 const GABANDONEDSHIP_ROOMS_B1F_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(73)), /* SPECIES_TENTACRUEL */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACRUEL),
     ],
 };
 
 const GABANDONEDSHIP_ROOMS_B1F_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 20,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(25, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
-        w(25, 30, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
-        w(20, 25, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 25..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACRUEL),
+        wild!(levels: 25..=30, species: SpeciesId::TENTACRUEL),
+        wild!(levels: 20..=25, species: SpeciesId::TENTACRUEL),
     ],
 };
 
 const GGRANITECAVE_B2F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(10, 10, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(11, 11, SpeciesId(382)), /* SPECIES_ARON */
-        w(10, 10, SpeciesId(382)), /* SPECIES_ARON */
-        w(11, 11, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(12, 12, SpeciesId(382)), /* SPECIES_ARON */
-        w(10, 10, SpeciesId(63)),  /* SPECIES_ABRA */
-        w(10, 10, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(11, 11, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(12, 12, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(10, 10, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(12, 12, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(10, 10, SpeciesId(322)), /* SPECIES_SABLEYE */
+        wild!(levels: 10..=10, species: SpeciesId::ZUBAT),
+        wild!(levels: 11..=11, species: SpeciesId::ARON),
+        wild!(levels: 10..=10, species: SpeciesId::ARON),
+        wild!(levels: 11..=11, species: SpeciesId::ZUBAT),
+        wild!(levels: 12..=12, species: SpeciesId::ARON),
+        wild!(levels: 10..=10, species: SpeciesId::ABRA),
+        wild!(levels: 10..=10, species: SpeciesId::SABLEYE),
+        wild!(levels: 11..=11, species: SpeciesId::SABLEYE),
+        wild!(levels: 12..=12, species: SpeciesId::SABLEYE),
+        wild!(levels: 10..=10, species: SpeciesId::SABLEYE),
+        wild!(levels: 12..=12, species: SpeciesId::SABLEYE),
+        wild!(levels: 10..=10, species: SpeciesId::SABLEYE),
     ],
 };
 
 const GGRANITECAVE_B2F_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 20,
     mons: [
-        w(10, 15, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(10, 20, SpeciesId(320)), /* SPECIES_NOSEPASS */
-        w(5, 10, SpeciesId(74)),   /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)),  /* SPECIES_GEODUDE */
+        wild!(levels: 10..=15, species: SpeciesId::GEODUDE),
+        wild!(levels: 10..=20, species: SpeciesId::NOSEPASS),
+        wild!(levels: 5..=10, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
     ],
 };
 
 const GFIERYPATH_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(15, 15, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(15, 15, SpeciesId(109)), /* SPECIES_KOFFING */
-        w(16, 16, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(15, 15, SpeciesId(66)),  /* SPECIES_MACHOP */
-        w(15, 15, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(15, 15, SpeciesId(218)), /* SPECIES_SLUGMA */
-        w(16, 16, SpeciesId(109)), /* SPECIES_KOFFING */
-        w(16, 16, SpeciesId(66)),  /* SPECIES_MACHOP */
-        w(14, 14, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(16, 16, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(14, 14, SpeciesId(88)),  /* SPECIES_GRIMER */
-        w(14, 14, SpeciesId(88)),  /* SPECIES_GRIMER */
+        wild!(levels: 15..=15, species: SpeciesId::NUMEL),
+        wild!(levels: 15..=15, species: SpeciesId::KOFFING),
+        wild!(levels: 16..=16, species: SpeciesId::NUMEL),
+        wild!(levels: 15..=15, species: SpeciesId::MACHOP),
+        wild!(levels: 15..=15, species: SpeciesId::TORKOAL),
+        wild!(levels: 15..=15, species: SpeciesId::SLUGMA),
+        wild!(levels: 16..=16, species: SpeciesId::KOFFING),
+        wild!(levels: 16..=16, species: SpeciesId::MACHOP),
+        wild!(levels: 14..=14, species: SpeciesId::TORKOAL),
+        wild!(levels: 16..=16, species: SpeciesId::TORKOAL),
+        wild!(levels: 14..=14, species: SpeciesId::GRIMER),
+        wild!(levels: 14..=14, species: SpeciesId::GRIMER),
     ],
 };
 
 const GMETEORFALLS_B1F_2R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(30, 30, SpeciesId(395)), /* SPECIES_BAGON */
-        w(35, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(35, 35, SpeciesId(395)), /* SPECIES_BAGON */
-        w(37, 37, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(25, 25, SpeciesId(395)), /* SPECIES_BAGON */
-        w(39, 39, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=30, species: SpeciesId::BAGON),
+        wild!(levels: 35..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 35..=35, species: SpeciesId::BAGON),
+        wild!(levels: 37..=37, species: SpeciesId::SOLROCK),
+        wild!(levels: 25..=25, species: SpeciesId::BAGON),
+        wild!(levels: 39..=39, species: SpeciesId::SOLROCK),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GMETEORFALLS_B1F_2R_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(25, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(15, 25, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(5, 15, SpeciesId(349)),  /* SPECIES_SOLROCK */
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 25..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 15..=25, species: SpeciesId::SOLROCK),
+        wild!(levels: 5..=15, species: SpeciesId::SOLROCK),
     ],
 };
 
 const GMETEORFALLS_B1F_2R_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(35, 40, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(40, 45, SpeciesId(324)), /* SPECIES_WHISCASH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::WHISCASH),
+        wild!(levels: 35..=40, species: SpeciesId::WHISCASH),
+        wild!(levels: 40..=45, species: SpeciesId::WHISCASH),
     ],
 };
 
 const GJAGGEDPASS_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(21, 21, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(21, 21, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(21, 21, SpeciesId(66)),  /* SPECIES_MACHOP */
-        w(20, 20, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(20, 20, SpeciesId(351)), /* SPECIES_SPOINK */
-        w(20, 20, SpeciesId(66)),  /* SPECIES_MACHOP */
-        w(21, 21, SpeciesId(351)), /* SPECIES_SPOINK */
-        w(22, 22, SpeciesId(66)),  /* SPECIES_MACHOP */
-        w(22, 22, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(22, 22, SpeciesId(351)), /* SPECIES_SPOINK */
-        w(22, 22, SpeciesId(339)), /* SPECIES_NUMEL */
-        w(22, 22, SpeciesId(351)), /* SPECIES_SPOINK */
+        wild!(levels: 21..=21, species: SpeciesId::NUMEL),
+        wild!(levels: 21..=21, species: SpeciesId::NUMEL),
+        wild!(levels: 21..=21, species: SpeciesId::MACHOP),
+        wild!(levels: 20..=20, species: SpeciesId::NUMEL),
+        wild!(levels: 20..=20, species: SpeciesId::SPOINK),
+        wild!(levels: 20..=20, species: SpeciesId::MACHOP),
+        wild!(levels: 21..=21, species: SpeciesId::SPOINK),
+        wild!(levels: 22..=22, species: SpeciesId::MACHOP),
+        wild!(levels: 22..=22, species: SpeciesId::NUMEL),
+        wild!(levels: 22..=22, species: SpeciesId::SPOINK),
+        wild!(levels: 22..=22, species: SpeciesId::NUMEL),
+        wild!(levels: 22..=22, species: SpeciesId::SPOINK),
     ],
 };
 
 const GROUTE106_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE106_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE107_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE107_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE108_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE108_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE109_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE109_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE115_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(23, 23, SpeciesId(358)), /* SPECIES_SWABLU */
-        w(23, 23, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(25, 25, SpeciesId(358)), /* SPECIES_SWABLU */
-        w(24, 24, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(25, 25, SpeciesId(304)), /* SPECIES_TAILLOW */
-        w(25, 25, SpeciesId(305)), /* SPECIES_SWELLOW */
-        w(24, 24, SpeciesId(39)),  /* SPECIES_JIGGLYPUFF */
-        w(25, 25, SpeciesId(39)),  /* SPECIES_JIGGLYPUFF */
-        w(24, 24, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(24, 24, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 25, SpeciesId(309)), /* SPECIES_WINGULL */
+        wild!(levels: 23..=23, species: SpeciesId::SWABLU),
+        wild!(levels: 23..=23, species: SpeciesId::TAILLOW),
+        wild!(levels: 25..=25, species: SpeciesId::SWABLU),
+        wild!(levels: 24..=24, species: SpeciesId::TAILLOW),
+        wild!(levels: 25..=25, species: SpeciesId::TAILLOW),
+        wild!(levels: 25..=25, species: SpeciesId::SWELLOW),
+        wild!(levels: 24..=24, species: SpeciesId::JIGGLYPUFF),
+        wild!(levels: 25..=25, species: SpeciesId::JIGGLYPUFF),
+        wild!(levels: 24..=24, species: SpeciesId::WINGULL),
+        wild!(levels: 24..=24, species: SpeciesId::WINGULL),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=25, species: SpeciesId::WINGULL),
     ],
 };
 
 const GROUTE115_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE115_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GNEWMAUVILLE_INSIDE_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(24, 24, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(24, 24, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(25, 25, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(25, 25, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(23, 23, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(23, 23, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(26, 26, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(26, 26, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(22, 22, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(22, 22, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(26, 26, SpeciesId(101)), /* SPECIES_ELECTRODE */
-        w(26, 26, SpeciesId(82)),  /* SPECIES_MAGNETON */
+        wild!(levels: 24..=24, species: SpeciesId::VOLTORB),
+        wild!(levels: 24..=24, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 25..=25, species: SpeciesId::VOLTORB),
+        wild!(levels: 25..=25, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 23..=23, species: SpeciesId::VOLTORB),
+        wild!(levels: 23..=23, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 26..=26, species: SpeciesId::VOLTORB),
+        wild!(levels: 26..=26, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 22..=22, species: SpeciesId::VOLTORB),
+        wild!(levels: 22..=22, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 26..=26, species: SpeciesId::ELECTRODE),
+        wild!(levels: 26..=26, species: SpeciesId::MAGNETON),
     ],
 };
 
 const GROUTE119_LAND: LandEncounters = LandEncounters {
     encounter_rate: 15,
     mons: [
-        w(25, 25, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(25, 25, SpeciesId(289)), /* SPECIES_LINOONE */
-        w(27, 27, SpeciesId(288)), /* SPECIES_ZIGZAGOON */
-        w(25, 25, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(289)), /* SPECIES_LINOONE */
-        w(26, 26, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(24, 24, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(25, 25, SpeciesId(369)), /* SPECIES_TROPIUS */
-        w(26, 26, SpeciesId(369)), /* SPECIES_TROPIUS */
-        w(27, 27, SpeciesId(369)), /* SPECIES_TROPIUS */
-        w(25, 25, SpeciesId(317)), /* SPECIES_KECLEON */
+        wild!(levels: 25..=25, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 25..=25, species: SpeciesId::LINOONE),
+        wild!(levels: 27..=27, species: SpeciesId::ZIGZAGOON),
+        wild!(levels: 25..=25, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::LINOONE),
+        wild!(levels: 26..=26, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 24..=24, species: SpeciesId::ODDISH),
+        wild!(levels: 25..=25, species: SpeciesId::TROPIUS),
+        wild!(levels: 26..=26, species: SpeciesId::TROPIUS),
+        wild!(levels: 27..=27, species: SpeciesId::TROPIUS),
+        wild!(levels: 25..=25, species: SpeciesId::KECLEON),
     ],
 };
 
 const GROUTE119_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE119_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(25, 30, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(30, 35, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(20, 25, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(35, 40, SpeciesId(330)), /* SPECIES_CARVANHA */
-        w(40, 45, SpeciesId(330)), /* SPECIES_CARVANHA */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::CARVANHA),
+        wild!(levels: 25..=30, species: SpeciesId::CARVANHA),
+        wild!(levels: 30..=35, species: SpeciesId::CARVANHA),
+        wild!(levels: 20..=25, species: SpeciesId::CARVANHA),
+        wild!(levels: 35..=40, species: SpeciesId::CARVANHA),
+        wild!(levels: 40..=45, species: SpeciesId::CARVANHA),
     ],
 };
 
 const GROUTE120_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(25, 25, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(25, 25, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(27, 27, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(25, 25, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(25, 25, SpeciesId(183)), /* SPECIES_MARILL */
-        w(26, 26, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(183)), /* SPECIES_MARILL */
-        w(25, 25, SpeciesId(376)), /* SPECIES_ABSOL */
-        w(27, 27, SpeciesId(376)), /* SPECIES_ABSOL */
-        w(25, 25, SpeciesId(317)), /* SPECIES_KECLEON */
-        w(25, 25, SpeciesId(298)), /* SPECIES_SEEDOT */
+        wild!(levels: 25..=25, species: SpeciesId::POOCHYENA),
+        wild!(levels: 25..=25, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 27..=27, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 25..=25, species: SpeciesId::ODDISH),
+        wild!(levels: 25..=25, species: SpeciesId::MARILL),
+        wild!(levels: 26..=26, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::MARILL),
+        wild!(levels: 25..=25, species: SpeciesId::ABSOL),
+        wild!(levels: 27..=27, species: SpeciesId::ABSOL),
+        wild!(levels: 25..=25, species: SpeciesId::KECLEON),
+        wild!(levels: 25..=25, species: SpeciesId::SEEDOT),
     ],
 };
 
 const GROUTE120_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(20, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 20..=30, species: SpeciesId::GOLDEEN),
     ],
 };
 
 const GROUTE120_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(20, 25, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(35, 40, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(40, 45, SpeciesId(323)), /* SPECIES_BARBOACH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 20..=25, species: SpeciesId::BARBOACH),
+        wild!(levels: 35..=40, species: SpeciesId::BARBOACH),
+        wild!(levels: 40..=45, species: SpeciesId::BARBOACH),
     ],
 };
 
 const GROUTE121_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(26, 26, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(26, 26, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(28, 28, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(28, 28, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(27, 27, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(28, 28, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 25, SpeciesId(317)), /* SPECIES_KECLEON */
+        wild!(levels: 26..=26, species: SpeciesId::POOCHYENA),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 26..=26, species: SpeciesId::ODDISH),
+        wild!(levels: 28..=28, species: SpeciesId::ODDISH),
+        wild!(levels: 28..=28, species: SpeciesId::GLOOM),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 27..=27, species: SpeciesId::WINGULL),
+        wild!(levels: 28..=28, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=25, species: SpeciesId::KECLEON),
     ],
 };
 
 const GROUTE121_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE121_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE122_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE122_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE123_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(26, 26, SpeciesId(286)), /* SPECIES_POOCHYENA */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(287)), /* SPECIES_MIGHTYENA */
-        w(26, 26, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(28, 28, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(28, 28, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(27, 27, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(28, 28, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 25, SpeciesId(317)), /* SPECIES_KECLEON */
+        wild!(levels: 26..=26, species: SpeciesId::POOCHYENA),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::MIGHTYENA),
+        wild!(levels: 26..=26, species: SpeciesId::ODDISH),
+        wild!(levels: 28..=28, species: SpeciesId::ODDISH),
+        wild!(levels: 28..=28, species: SpeciesId::GLOOM),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 27..=27, species: SpeciesId::WINGULL),
+        wild!(levels: 28..=28, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=25, species: SpeciesId::KECLEON),
     ],
 };
 
 const GROUTE123_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE123_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GMTPYRE_2F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
     ],
 };
 
 const GMTPYRE_3F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
     ],
 };
 
 const GMTPYRE_4F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(25, 25, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(29, 29, SpeciesId(361)), /* SPECIES_DUSKULL */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 25..=25, species: SpeciesId::DUSKULL),
+        wild!(levels: 29..=29, species: SpeciesId::DUSKULL),
     ],
 };
 
 const GMTPYRE_5F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(25, 25, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(29, 29, SpeciesId(361)), /* SPECIES_DUSKULL */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 25..=25, species: SpeciesId::DUSKULL),
+        wild!(levels: 29..=29, species: SpeciesId::DUSKULL),
     ],
 };
 
 const GMTPYRE_6F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(23, 23, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(22, 22, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(27, 27, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(25, 25, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(29, 29, SpeciesId(361)), /* SPECIES_DUSKULL */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 23..=23, species: SpeciesId::SHUPPET),
+        wild!(levels: 22..=22, species: SpeciesId::SHUPPET),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 27..=27, species: SpeciesId::DUSKULL),
+        wild!(levels: 25..=25, species: SpeciesId::DUSKULL),
+        wild!(levels: 29..=29, species: SpeciesId::DUSKULL),
     ],
 };
 
 const GMTPYRE_EXTERIOR_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(37)),  /* SPECIES_VULPIX */
-        w(27, 27, SpeciesId(37)),  /* SPECIES_VULPIX */
-        w(29, 29, SpeciesId(37)),  /* SPECIES_VULPIX */
-        w(25, 25, SpeciesId(37)),  /* SPECIES_VULPIX */
-        w(27, 27, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(27, 27, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(26, 26, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(28, 28, SpeciesId(309)), /* SPECIES_WINGULL */
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::VULPIX),
+        wild!(levels: 27..=27, species: SpeciesId::VULPIX),
+        wild!(levels: 29..=29, species: SpeciesId::VULPIX),
+        wild!(levels: 25..=25, species: SpeciesId::VULPIX),
+        wild!(levels: 27..=27, species: SpeciesId::WINGULL),
+        wild!(levels: 27..=27, species: SpeciesId::WINGULL),
+        wild!(levels: 26..=26, species: SpeciesId::WINGULL),
+        wild!(levels: 28..=28, species: SpeciesId::WINGULL),
     ],
 };
 
 const GMTPYRE_SUMMIT_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(28, 28, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(29, 29, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(27, 27, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(26, 26, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(30, 30, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(25, 25, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(24, 24, SpeciesId(377)), /* SPECIES_SHUPPET */
-        w(28, 28, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(26, 26, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(30, 30, SpeciesId(361)), /* SPECIES_DUSKULL */
-        w(28, 28, SpeciesId(411)), /* SPECIES_CHIMECHO */
-        w(28, 28, SpeciesId(411)), /* SPECIES_CHIMECHO */
+        wild!(levels: 28..=28, species: SpeciesId::SHUPPET),
+        wild!(levels: 29..=29, species: SpeciesId::SHUPPET),
+        wild!(levels: 27..=27, species: SpeciesId::SHUPPET),
+        wild!(levels: 26..=26, species: SpeciesId::SHUPPET),
+        wild!(levels: 30..=30, species: SpeciesId::SHUPPET),
+        wild!(levels: 25..=25, species: SpeciesId::SHUPPET),
+        wild!(levels: 24..=24, species: SpeciesId::SHUPPET),
+        wild!(levels: 28..=28, species: SpeciesId::DUSKULL),
+        wild!(levels: 26..=26, species: SpeciesId::DUSKULL),
+        wild!(levels: 30..=30, species: SpeciesId::DUSKULL),
+        wild!(levels: 28..=28, species: SpeciesId::CHIMECHO),
+        wild!(levels: 28..=28, species: SpeciesId::CHIMECHO),
     ],
 };
 
 const GGRANITECAVE_STEVENSROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(7, 7, SpeciesId(41)),    /* SPECIES_ZUBAT */
-        w(8, 8, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(7, 7, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(8, 8, SpeciesId(41)),    /* SPECIES_ZUBAT */
-        w(9, 9, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(8, 8, SpeciesId(63)),    /* SPECIES_ABRA */
-        w(10, 10, SpeciesId(335)), /* SPECIES_MAKUHITA */
-        w(6, 6, SpeciesId(335)),   /* SPECIES_MAKUHITA */
-        w(7, 7, SpeciesId(382)),   /* SPECIES_ARON */
-        w(8, 8, SpeciesId(382)),   /* SPECIES_ARON */
-        w(7, 7, SpeciesId(382)),   /* SPECIES_ARON */
-        w(8, 8, SpeciesId(382)),   /* SPECIES_ARON */
+        wild!(levels: 7..=7, species: SpeciesId::ZUBAT),
+        wild!(levels: 8..=8, species: SpeciesId::MAKUHITA),
+        wild!(levels: 7..=7, species: SpeciesId::MAKUHITA),
+        wild!(levels: 8..=8, species: SpeciesId::ZUBAT),
+        wild!(levels: 9..=9, species: SpeciesId::MAKUHITA),
+        wild!(levels: 8..=8, species: SpeciesId::ABRA),
+        wild!(levels: 10..=10, species: SpeciesId::MAKUHITA),
+        wild!(levels: 6..=6, species: SpeciesId::MAKUHITA),
+        wild!(levels: 7..=7, species: SpeciesId::ARON),
+        wild!(levels: 8..=8, species: SpeciesId::ARON),
+        wild!(levels: 7..=7, species: SpeciesId::ARON),
+        wild!(levels: 8..=8, species: SpeciesId::ARON),
     ],
 };
 
 const GROUTE125_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE125_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE126_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE126_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE127_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE127_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE128_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE128_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(325)), /* SPECIES_LUVDISC */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(325)), /* SPECIES_LUVDISC */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(222)), /* SPECIES_CORSOLA */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::LUVDISC),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::LUVDISC),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::CORSOLA),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE129_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(314)), /* SPECIES_WAILORD */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILORD),
     ],
 };
 
 const GROUTE129_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE130_LAND: LandEncounters = LandEncounters {
     encounter_rate: 20,
     mons: [
-        w(30, 30, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(35, 35, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(25, 25, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(40, 40, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(20, 20, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(45, 45, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(15, 15, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(50, 50, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(10, 10, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(5, 5, SpeciesId(360)),   /* SPECIES_WYNAUT */
-        w(10, 10, SpeciesId(360)), /* SPECIES_WYNAUT */
-        w(5, 5, SpeciesId(360)),   /* SPECIES_WYNAUT */
+        wild!(levels: 30..=30, species: SpeciesId::WYNAUT),
+        wild!(levels: 35..=35, species: SpeciesId::WYNAUT),
+        wild!(levels: 25..=25, species: SpeciesId::WYNAUT),
+        wild!(levels: 40..=40, species: SpeciesId::WYNAUT),
+        wild!(levels: 20..=20, species: SpeciesId::WYNAUT),
+        wild!(levels: 45..=45, species: SpeciesId::WYNAUT),
+        wild!(levels: 15..=15, species: SpeciesId::WYNAUT),
+        wild!(levels: 50..=50, species: SpeciesId::WYNAUT),
+        wild!(levels: 10..=10, species: SpeciesId::WYNAUT),
+        wild!(levels: 5..=5, species: SpeciesId::WYNAUT),
+        wild!(levels: 10..=10, species: SpeciesId::WYNAUT),
+        wild!(levels: 5..=5, species: SpeciesId::WYNAUT),
     ],
 };
 
 const GROUTE130_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE130_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE131_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE131_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE132_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE132_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(116)), /* SPECIES_HORSEA */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::HORSEA),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE133_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE133_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(116)), /* SPECIES_HORSEA */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::HORSEA),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GROUTE134_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GROUTE134_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(116)), /* SPECIES_HORSEA */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::HORSEA),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GABANDONEDSHIP_HIDDENFLOORCORRIDORS_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(73)), /* SPECIES_TENTACRUEL */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACRUEL),
     ],
 };
 
 const GABANDONEDSHIP_HIDDENFLOORCORRIDORS_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 20,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(25, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(30, 35, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
-        w(25, 30, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
-        w(20, 25, SpeciesId(73)),  /* SPECIES_TENTACRUEL */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 25..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 30..=35, species: SpeciesId::TENTACRUEL),
+        wild!(levels: 25..=30, species: SpeciesId::TENTACRUEL),
+        wild!(levels: 20..=25, species: SpeciesId::TENTACRUEL),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM1_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM2_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM3_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM4_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM5_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM6_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM6_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM6_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM7_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM7_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM7_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GSEAFLOORCAVERN_ROOM8_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ENTRANCE_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GSEAFLOORCAVERN_ENTRANCE_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GCAVEOFORIGIN_ENTRANCE_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(33, 33, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(29, 29, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(35, 35, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 29..=29, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 35..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GCAVEOFORIGIN_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(32, 32, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(33, 33, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SABLEYE),
+        wild!(levels: 32..=32, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GCAVEOFORIGIN_UNUSEDRUBYSAPPHIREMAP1_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(32, 32, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(33, 33, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SABLEYE),
+        wild!(levels: 32..=32, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GCAVEOFORIGIN_UNUSEDRUBYSAPPHIREMAP2_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(32, 32, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(33, 33, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SABLEYE),
+        wild!(levels: 32..=32, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GCAVEOFORIGIN_UNUSEDRUBYSAPPHIREMAP3_LAND: LandEncounters = LandEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(31, 31, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(32, 32, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(33, 33, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(36, 36, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 31..=31, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SABLEYE),
+        wild!(levels: 32..=32, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 33..=33, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::ZUBAT),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 36..=36, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GNEWMAUVILLE_ENTRANCE_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(24, 24, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(24, 24, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(25, 25, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(25, 25, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(23, 23, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(23, 23, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(26, 26, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(26, 26, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(22, 22, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(22, 22, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
-        w(22, 22, SpeciesId(100)), /* SPECIES_VOLTORB */
-        w(22, 22, SpeciesId(81)),  /* SPECIES_MAGNEMITE */
+        wild!(levels: 24..=24, species: SpeciesId::VOLTORB),
+        wild!(levels: 24..=24, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 25..=25, species: SpeciesId::VOLTORB),
+        wild!(levels: 25..=25, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 23..=23, species: SpeciesId::VOLTORB),
+        wild!(levels: 23..=23, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 26..=26, species: SpeciesId::VOLTORB),
+        wild!(levels: 26..=26, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 22..=22, species: SpeciesId::VOLTORB),
+        wild!(levels: 22..=22, species: SpeciesId::MAGNEMITE),
+        wild!(levels: 22..=22, species: SpeciesId::VOLTORB),
+        wild!(levels: 22..=22, species: SpeciesId::MAGNEMITE),
     ],
 };
 
 const GSAFARIZONE_SOUTHWEST_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(25, 25, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(25, 25, SpeciesId(203)), /* SPECIES_GIRAFARIG */
-        w(27, 27, SpeciesId(203)), /* SPECIES_GIRAFARIG */
-        w(25, 25, SpeciesId(177)), /* SPECIES_NATU */
-        w(27, 27, SpeciesId(84)),  /* SPECIES_DODUO */
-        w(25, 25, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(27, 27, SpeciesId(202)), /* SPECIES_WOBBUFFET */
-        w(25, 25, SpeciesId(25)),  /* SPECIES_PIKACHU */
-        w(27, 27, SpeciesId(202)), /* SPECIES_WOBBUFFET */
-        w(27, 27, SpeciesId(25)),  /* SPECIES_PIKACHU */
-        w(29, 29, SpeciesId(202)), /* SPECIES_WOBBUFFET */
+        wild!(levels: 25..=25, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 25..=25, species: SpeciesId::GIRAFARIG),
+        wild!(levels: 27..=27, species: SpeciesId::GIRAFARIG),
+        wild!(levels: 25..=25, species: SpeciesId::NATU),
+        wild!(levels: 27..=27, species: SpeciesId::DODUO),
+        wild!(levels: 25..=25, species: SpeciesId::GLOOM),
+        wild!(levels: 27..=27, species: SpeciesId::WOBBUFFET),
+        wild!(levels: 25..=25, species: SpeciesId::PIKACHU),
+        wild!(levels: 27..=27, species: SpeciesId::WOBBUFFET),
+        wild!(levels: 27..=27, species: SpeciesId::PIKACHU),
+        wild!(levels: 29..=29, species: SpeciesId::WOBBUFFET),
     ],
 };
 
 const GSAFARIZONE_SOUTHWEST_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 9,
     mons: [
-        w(20, 30, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(20, 30, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(30, 35, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(30, 35, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(30, 35, SpeciesId(54)), /* SPECIES_PSYDUCK */
+        wild!(levels: 20..=30, species: SpeciesId::PSYDUCK),
+        wild!(levels: 20..=30, species: SpeciesId::PSYDUCK),
+        wild!(levels: 30..=35, species: SpeciesId::PSYDUCK),
+        wild!(levels: 30..=35, species: SpeciesId::PSYDUCK),
+        wild!(levels: 30..=35, species: SpeciesId::PSYDUCK),
     ],
 };
 
 const GSAFARIZONE_SOUTHWEST_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 35,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 25, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(25, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(30, 35, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(30, 35, SpeciesId(119)), /* SPECIES_SEAKING */
-        w(35, 40, SpeciesId(119)), /* SPECIES_SEAKING */
-        w(25, 30, SpeciesId(119)), /* SPECIES_SEAKING */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=25, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 25..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 30..=35, species: SpeciesId::GOLDEEN),
+        wild!(levels: 30..=35, species: SpeciesId::SEAKING),
+        wild!(levels: 35..=40, species: SpeciesId::SEAKING),
+        wild!(levels: 25..=30, species: SpeciesId::SEAKING),
     ],
 };
 
 const GSAFARIZONE_NORTH_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(27, 27, SpeciesId(231)), /* SPECIES_PHANPY */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(29, 29, SpeciesId(231)), /* SPECIES_PHANPY */
-        w(29, 29, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(177)), /* SPECIES_NATU */
-        w(29, 29, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(31, 31, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(29, 29, SpeciesId(177)), /* SPECIES_NATU */
-        w(29, 29, SpeciesId(178)), /* SPECIES_XATU */
-        w(27, 27, SpeciesId(214)), /* SPECIES_HERACROSS */
-        w(31, 31, SpeciesId(178)), /* SPECIES_XATU */
-        w(29, 29, SpeciesId(214)), /* SPECIES_HERACROSS */
+        wild!(levels: 27..=27, species: SpeciesId::PHANPY),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 29..=29, species: SpeciesId::PHANPY),
+        wild!(levels: 29..=29, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::NATU),
+        wild!(levels: 29..=29, species: SpeciesId::GLOOM),
+        wild!(levels: 31..=31, species: SpeciesId::GLOOM),
+        wild!(levels: 29..=29, species: SpeciesId::NATU),
+        wild!(levels: 29..=29, species: SpeciesId::XATU),
+        wild!(levels: 27..=27, species: SpeciesId::HERACROSS),
+        wild!(levels: 31..=31, species: SpeciesId::XATU),
+        wild!(levels: 29..=29, species: SpeciesId::HERACROSS),
     ],
 };
 
 const GSAFARIZONE_NORTH_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 25,
     mons: [
-        w(10, 15, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(5, 10, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(15, 20, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(20, 25, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(25, 30, SpeciesId(74)), /* SPECIES_GEODUDE */
+        wild!(levels: 10..=15, species: SpeciesId::GEODUDE),
+        wild!(levels: 5..=10, species: SpeciesId::GEODUDE),
+        wild!(levels: 15..=20, species: SpeciesId::GEODUDE),
+        wild!(levels: 20..=25, species: SpeciesId::GEODUDE),
+        wild!(levels: 25..=30, species: SpeciesId::GEODUDE),
     ],
 };
 
 const GSAFARIZONE_NORTHWEST_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(27, 27, SpeciesId(111)), /* SPECIES_RHYHORN */
-        w(27, 27, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(29, 29, SpeciesId(111)), /* SPECIES_RHYHORN */
-        w(29, 29, SpeciesId(43)),  /* SPECIES_ODDISH */
-        w(27, 27, SpeciesId(84)),  /* SPECIES_DODUO */
-        w(29, 29, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(31, 31, SpeciesId(44)),  /* SPECIES_GLOOM */
-        w(29, 29, SpeciesId(84)),  /* SPECIES_DODUO */
-        w(29, 29, SpeciesId(85)),  /* SPECIES_DODRIO */
-        w(27, 27, SpeciesId(127)), /* SPECIES_PINSIR */
-        w(31, 31, SpeciesId(85)),  /* SPECIES_DODRIO */
-        w(29, 29, SpeciesId(127)), /* SPECIES_PINSIR */
+        wild!(levels: 27..=27, species: SpeciesId::RHYHORN),
+        wild!(levels: 27..=27, species: SpeciesId::ODDISH),
+        wild!(levels: 29..=29, species: SpeciesId::RHYHORN),
+        wild!(levels: 29..=29, species: SpeciesId::ODDISH),
+        wild!(levels: 27..=27, species: SpeciesId::DODUO),
+        wild!(levels: 29..=29, species: SpeciesId::GLOOM),
+        wild!(levels: 31..=31, species: SpeciesId::GLOOM),
+        wild!(levels: 29..=29, species: SpeciesId::DODUO),
+        wild!(levels: 29..=29, species: SpeciesId::DODRIO),
+        wild!(levels: 27..=27, species: SpeciesId::PINSIR),
+        wild!(levels: 31..=31, species: SpeciesId::DODRIO),
+        wild!(levels: 29..=29, species: SpeciesId::PINSIR),
     ],
 };
 
 const GSAFARIZONE_NORTHWEST_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 9,
     mons: [
-        w(20, 30, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(20, 30, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(30, 35, SpeciesId(54)), /* SPECIES_PSYDUCK */
-        w(30, 35, SpeciesId(55)), /* SPECIES_GOLDUCK */
-        w(25, 40, SpeciesId(55)), /* SPECIES_GOLDUCK */
+        wild!(levels: 20..=30, species: SpeciesId::PSYDUCK),
+        wild!(levels: 20..=30, species: SpeciesId::PSYDUCK),
+        wild!(levels: 30..=35, species: SpeciesId::PSYDUCK),
+        wild!(levels: 30..=35, species: SpeciesId::GOLDUCK),
+        wild!(levels: 25..=40, species: SpeciesId::GOLDUCK),
     ],
 };
 
 const GSAFARIZONE_NORTHWEST_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 35,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 25, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(25, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(30, 35, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(30, 35, SpeciesId(119)), /* SPECIES_SEAKING */
-        w(35, 40, SpeciesId(119)), /* SPECIES_SEAKING */
-        w(25, 30, SpeciesId(119)), /* SPECIES_SEAKING */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=25, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 25..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 30..=35, species: SpeciesId::GOLDEEN),
+        wild!(levels: 30..=35, species: SpeciesId::SEAKING),
+        wild!(levels: 35..=40, species: SpeciesId::SEAKING),
+        wild!(levels: 25..=30, species: SpeciesId::SEAKING),
     ],
 };
 
 const GVICTORYROAD_B1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(336)), /* SPECIES_HARIYAMA */
-        w(40, 40, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(40, 40, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(336)), /* SPECIES_HARIYAMA */
-        w(42, 42, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(42, 42, SpeciesId(336)), /* SPECIES_HARIYAMA */
-        w(42, 42, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(38, 38, SpeciesId(355)), /* SPECIES_MAWILE */
-        w(42, 42, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(38, 38, SpeciesId(355)), /* SPECIES_MAWILE */
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::HARIYAMA),
+        wild!(levels: 40..=40, species: SpeciesId::LAIRON),
+        wild!(levels: 40..=40, species: SpeciesId::LAIRON),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::HARIYAMA),
+        wild!(levels: 42..=42, species: SpeciesId::GOLBAT),
+        wild!(levels: 42..=42, species: SpeciesId::HARIYAMA),
+        wild!(levels: 42..=42, species: SpeciesId::LAIRON),
+        wild!(levels: 38..=38, species: SpeciesId::MAWILE),
+        wild!(levels: 42..=42, species: SpeciesId::LAIRON),
+        wild!(levels: 38..=38, species: SpeciesId::MAWILE),
     ],
 };
 
 const GVICTORYROAD_B1F_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 20,
     mons: [
-        w(30, 40, SpeciesId(75)), /* SPECIES_GRAVELER */
-        w(30, 40, SpeciesId(74)), /* SPECIES_GEODUDE */
-        w(35, 40, SpeciesId(75)), /* SPECIES_GRAVELER */
-        w(35, 40, SpeciesId(75)), /* SPECIES_GRAVELER */
-        w(35, 40, SpeciesId(75)), /* SPECIES_GRAVELER */
+        wild!(levels: 30..=40, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=40, species: SpeciesId::GEODUDE),
+        wild!(levels: 35..=40, species: SpeciesId::GRAVELER),
+        wild!(levels: 35..=40, species: SpeciesId::GRAVELER),
+        wild!(levels: 35..=40, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GVICTORYROAD_B2F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(40, 40, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(40, 40, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(42, 42, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(42, 42, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(44, 44, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(44, 44, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(42, 42, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(42, 42, SpeciesId(355)), /* SPECIES_MAWILE */
-        w(44, 44, SpeciesId(383)), /* SPECIES_LAIRON */
-        w(44, 44, SpeciesId(355)), /* SPECIES_MAWILE */
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::SABLEYE),
+        wild!(levels: 40..=40, species: SpeciesId::LAIRON),
+        wild!(levels: 40..=40, species: SpeciesId::LAIRON),
+        wild!(levels: 42..=42, species: SpeciesId::GOLBAT),
+        wild!(levels: 42..=42, species: SpeciesId::SABLEYE),
+        wild!(levels: 44..=44, species: SpeciesId::GOLBAT),
+        wild!(levels: 44..=44, species: SpeciesId::SABLEYE),
+        wild!(levels: 42..=42, species: SpeciesId::LAIRON),
+        wild!(levels: 42..=42, species: SpeciesId::MAWILE),
+        wild!(levels: 44..=44, species: SpeciesId::LAIRON),
+        wild!(levels: 44..=44, species: SpeciesId::MAWILE),
     ],
 };
 
 const GVICTORYROAD_B2F_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 35, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(25, 30, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 40, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 40, SpeciesId(42)), /* SPECIES_GOLBAT */
-        w(35, 40, SpeciesId(42)), /* SPECIES_GOLBAT */
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 25..=30, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=40, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GVICTORYROAD_B2F_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(35, 40, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(40, 45, SpeciesId(324)), /* SPECIES_WHISCASH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::WHISCASH),
+        wild!(levels: 35..=40, species: SpeciesId::WHISCASH),
+        wild!(levels: 40..=45, species: SpeciesId::WHISCASH),
     ],
 };
 
 const GMETEORFALLS_1F_1R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(16, 16, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(17, 17, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(18, 18, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(15, 15, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(14, 14, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(16, 16, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(18, 18, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(14, 14, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(19, 19, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(20, 20, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(19, 19, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(20, 20, SpeciesId(41)),  /* SPECIES_ZUBAT */
+        wild!(levels: 16..=16, species: SpeciesId::ZUBAT),
+        wild!(levels: 17..=17, species: SpeciesId::ZUBAT),
+        wild!(levels: 18..=18, species: SpeciesId::ZUBAT),
+        wild!(levels: 15..=15, species: SpeciesId::ZUBAT),
+        wild!(levels: 14..=14, species: SpeciesId::ZUBAT),
+        wild!(levels: 16..=16, species: SpeciesId::SOLROCK),
+        wild!(levels: 18..=18, species: SpeciesId::SOLROCK),
+        wild!(levels: 14..=14, species: SpeciesId::SOLROCK),
+        wild!(levels: 19..=19, species: SpeciesId::ZUBAT),
+        wild!(levels: 20..=20, species: SpeciesId::ZUBAT),
+        wild!(levels: 19..=19, species: SpeciesId::ZUBAT),
+        wild!(levels: 20..=20, species: SpeciesId::ZUBAT),
     ],
 };
 
 const GMETEORFALLS_1F_1R_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(30, 35, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(25, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(15, 25, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(5, 15, SpeciesId(349)),  /* SPECIES_SOLROCK */
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 25..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 15..=25, species: SpeciesId::SOLROCK),
+        wild!(levels: 5..=15, species: SpeciesId::SOLROCK),
     ],
 };
 
 const GMETEORFALLS_1F_1R_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(20, 25, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(35, 40, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(40, 45, SpeciesId(323)), /* SPECIES_BARBOACH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 20..=25, species: SpeciesId::BARBOACH),
+        wild!(levels: 35..=40, species: SpeciesId::BARBOACH),
+        wild!(levels: 40..=45, species: SpeciesId::BARBOACH),
     ],
 };
 
 const GMETEORFALLS_1F_2R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(33, 33, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(37, 37, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(39, 39, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 33..=33, species: SpeciesId::SOLROCK),
+        wild!(levels: 37..=37, species: SpeciesId::SOLROCK),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 39..=39, species: SpeciesId::SOLROCK),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GMETEORFALLS_1F_2R_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(25, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(15, 25, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(5, 15, SpeciesId(349)),  /* SPECIES_SOLROCK */
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 25..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 15..=25, species: SpeciesId::SOLROCK),
+        wild!(levels: 5..=15, species: SpeciesId::SOLROCK),
     ],
 };
 
 const GMETEORFALLS_1F_2R_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(35, 40, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(40, 45, SpeciesId(324)), /* SPECIES_WHISCASH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::WHISCASH),
+        wild!(levels: 35..=40, species: SpeciesId::WHISCASH),
+        wild!(levels: 40..=45, species: SpeciesId::WHISCASH),
     ],
 };
 
 const GMETEORFALLS_B1F_1R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(33, 33, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(37, 37, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(39, 39, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 33..=33, species: SpeciesId::SOLROCK),
+        wild!(levels: 37..=37, species: SpeciesId::SOLROCK),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 39..=39, species: SpeciesId::SOLROCK),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
     ],
 };
 
 const GMETEORFALLS_B1F_1R_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(30, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(25, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(15, 25, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(5, 15, SpeciesId(349)),  /* SPECIES_SOLROCK */
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 25..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 15..=25, species: SpeciesId::SOLROCK),
+        wild!(levels: 5..=15, species: SpeciesId::SOLROCK),
     ],
 };
 
 const GMETEORFALLS_B1F_1R_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 30,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(25, 30, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(323)), /* SPECIES_BARBOACH */
-        w(30, 35, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(35, 40, SpeciesId(324)), /* SPECIES_WHISCASH */
-        w(40, 45, SpeciesId(324)), /* SPECIES_WHISCASH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 25..=30, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::BARBOACH),
+        wild!(levels: 30..=35, species: SpeciesId::WHISCASH),
+        wild!(levels: 35..=40, species: SpeciesId::WHISCASH),
+        wild!(levels: 40..=45, species: SpeciesId::WHISCASH),
     ],
 };
 
 const GSHOALCAVE_LOWTIDESTAIRSROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(26, 26, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(26, 26, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(28, 28, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 26..=26, species: SpeciesId::ZUBAT),
+        wild!(levels: 26..=26, species: SpeciesId::SPHEAL),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDELOWERROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(26, 26, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(26, 26, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(28, 28, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 26..=26, species: SpeciesId::ZUBAT),
+        wild!(levels: 26..=26, species: SpeciesId::SPHEAL),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEINNERROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(26, 26, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(26, 26, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(28, 28, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 26..=26, species: SpeciesId::ZUBAT),
+        wild!(levels: 26..=26, species: SpeciesId::SPHEAL),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEINNERROOM_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(25, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(25, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(25, 35, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 25..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 25..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 25..=35, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEINNERROOM_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEENTRANCEROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(26, 26, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(26, 26, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(28, 28, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 26..=26, species: SpeciesId::ZUBAT),
+        wild!(levels: 26..=26, species: SpeciesId::SPHEAL),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::ZUBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEENTRANCEROOM_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(5, 35, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(25, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(25, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(25, 35, SpeciesId(341)), /* SPECIES_SPHEAL */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 5..=35, species: SpeciesId::ZUBAT),
+        wild!(levels: 25..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 25..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 25..=35, species: SpeciesId::SPHEAL),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEENTRANCEROOM_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GLILYCOVECITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GLILYCOVECITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(120)), /* SPECIES_STARYU */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::STARYU),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GDEWFORDTOWN_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GDEWFORDTOWN_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GSLATEPORTCITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GSLATEPORTCITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(20, 25, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 20..=25, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GMOSSDEEPCITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GMOSSDEEPCITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GPACIFIDLOGTOWN_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GPACIFIDLOGTOWN_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(72)),  /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(331)), /* SPECIES_SHARPEDO */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(25, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::SHARPEDO),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 25..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GEVERGRANDECITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(5, 35, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(15, 25, SpeciesId(309)), /* SPECIES_WINGULL */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
-        w(25, 30, SpeciesId(310)), /* SPECIES_PELIPPER */
+        wild!(levels: 5..=35, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::WINGULL),
+        wild!(levels: 15..=25, species: SpeciesId::WINGULL),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
+        wild!(levels: 25..=30, species: SpeciesId::PELIPPER),
     ],
 };
 
 const GEVERGRANDECITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(325)), /* SPECIES_LUVDISC */
-        w(10, 30, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(325)), /* SPECIES_LUVDISC */
-        w(30, 35, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(30, 35, SpeciesId(222)), /* SPECIES_CORSOLA */
-        w(35, 40, SpeciesId(313)), /* SPECIES_WAILMER */
-        w(40, 45, SpeciesId(313)), /* SPECIES_WAILMER */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::LUVDISC),
+        wild!(levels: 10..=30, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::LUVDISC),
+        wild!(levels: 30..=35, species: SpeciesId::WAILMER),
+        wild!(levels: 30..=35, species: SpeciesId::CORSOLA),
+        wild!(levels: 35..=40, species: SpeciesId::WAILMER),
+        wild!(levels: 40..=45, species: SpeciesId::WAILMER),
     ],
 };
 
 const GPETALBURGCITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 1,
     mons: [
-        w(20, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(10, 20, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
-        w(5, 10, SpeciesId(183)),  /* SPECIES_MARILL */
+        wild!(levels: 20..=30, species: SpeciesId::MARILL),
+        wild!(levels: 10..=20, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
+        wild!(levels: 5..=10, species: SpeciesId::MARILL),
     ],
 };
 
 const GPETALBURGCITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(118)),  /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(10, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(25, 30, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(30, 35, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(20, 25, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(35, 40, SpeciesId(326)), /* SPECIES_CORPHISH */
-        w(40, 45, SpeciesId(326)), /* SPECIES_CORPHISH */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 10..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 25..=30, species: SpeciesId::CORPHISH),
+        wild!(levels: 30..=35, species: SpeciesId::CORPHISH),
+        wild!(levels: 20..=25, species: SpeciesId::CORPHISH),
+        wild!(levels: 35..=40, species: SpeciesId::CORPHISH),
+        wild!(levels: 40..=45, species: SpeciesId::CORPHISH),
     ],
 };
 
 const GUNDERWATER_ROUTE124_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 4,
     mons: [
-        w(20, 30, SpeciesId(373)), /* SPECIES_CLAMPERL */
-        w(20, 30, SpeciesId(170)), /* SPECIES_CHINCHOU */
-        w(30, 35, SpeciesId(373)), /* SPECIES_CLAMPERL */
-        w(30, 35, SpeciesId(381)), /* SPECIES_RELICANTH */
-        w(30, 35, SpeciesId(381)), /* SPECIES_RELICANTH */
+        wild!(levels: 20..=30, species: SpeciesId::CLAMPERL),
+        wild!(levels: 20..=30, species: SpeciesId::CHINCHOU),
+        wild!(levels: 30..=35, species: SpeciesId::CLAMPERL),
+        wild!(levels: 30..=35, species: SpeciesId::RELICANTH),
+        wild!(levels: 30..=35, species: SpeciesId::RELICANTH),
     ],
 };
 
 const GSHOALCAVE_LOWTIDEICEROOM_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(26, 26, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(26, 26, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(28, 28, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(28, 28, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(41)),  /* SPECIES_ZUBAT */
-        w(30, 30, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(26, 26, SpeciesId(346)), /* SPECIES_SNORUNT */
-        w(32, 32, SpeciesId(341)), /* SPECIES_SPHEAL */
-        w(30, 30, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(28, 28, SpeciesId(346)), /* SPECIES_SNORUNT */
-        w(32, 32, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(30, 30, SpeciesId(346)), /* SPECIES_SNORUNT */
+        wild!(levels: 26..=26, species: SpeciesId::ZUBAT),
+        wild!(levels: 26..=26, species: SpeciesId::SPHEAL),
+        wild!(levels: 28..=28, species: SpeciesId::ZUBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::ZUBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SPHEAL),
+        wild!(levels: 26..=26, species: SpeciesId::SNORUNT),
+        wild!(levels: 32..=32, species: SpeciesId::SPHEAL),
+        wild!(levels: 30..=30, species: SpeciesId::GOLBAT),
+        wild!(levels: 28..=28, species: SpeciesId::SNORUNT),
+        wild!(levels: 32..=32, species: SpeciesId::GOLBAT),
+        wild!(levels: 30..=30, species: SpeciesId::SNORUNT),
     ],
 };
 
 const GSKYPILLAR_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(38, 38, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(38, 38, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(38, 38, SpeciesId(319)), /* SPECIES_CLAYDOL */
+        wild!(levels: 33..=33, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::BANETTE),
+        wild!(levels: 38..=38, species: SpeciesId::BANETTE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::CLAYDOL),
+        wild!(levels: 38..=38, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::CLAYDOL),
+        wild!(levels: 38..=38, species: SpeciesId::CLAYDOL),
     ],
 };
 
 const GSOOTOPOLISCITY_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 1,
     mons: [
-        w(5, 35, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(15, 25, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(25, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(25, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
+        wild!(levels: 5..=35, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 15..=25, species: SpeciesId::MAGIKARP),
+        wild!(levels: 25..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 25..=30, species: SpeciesId::MAGIKARP),
     ],
 };
 
 const GSOOTOPOLISCITY_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 10,
     mons: [
-        w(5, 10, SpeciesId(129)),  /* SPECIES_MAGIKARP */
-        w(5, 10, SpeciesId(72)),   /* SPECIES_TENTACOOL */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(10, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(30, 35, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(30, 35, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(35, 40, SpeciesId(130)), /* SPECIES_GYARADOS */
-        w(35, 45, SpeciesId(130)), /* SPECIES_GYARADOS */
-        w(5, 45, SpeciesId(130)),  /* SPECIES_GYARADOS */
+        wild!(levels: 5..=10, species: SpeciesId::MAGIKARP),
+        wild!(levels: 5..=10, species: SpeciesId::TENTACOOL),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 10..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 30..=35, species: SpeciesId::MAGIKARP),
+        wild!(levels: 30..=35, species: SpeciesId::MAGIKARP),
+        wild!(levels: 35..=40, species: SpeciesId::GYARADOS),
+        wild!(levels: 35..=45, species: SpeciesId::GYARADOS),
+        wild!(levels: 5..=45, species: SpeciesId::GYARADOS),
     ],
 };
 
 const GSKYPILLAR_3F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(38, 38, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(38, 38, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(38, 38, SpeciesId(319)), /* SPECIES_CLAYDOL */
+        wild!(levels: 33..=33, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::BANETTE),
+        wild!(levels: 38..=38, species: SpeciesId::BANETTE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::CLAYDOL),
+        wild!(levels: 38..=38, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::CLAYDOL),
+        wild!(levels: 38..=38, species: SpeciesId::CLAYDOL),
     ],
 };
 
 const GSKYPILLAR_5F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(34, 34, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(34, 34, SpeciesId(322)), /* SPECIES_SABLEYE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(38, 38, SpeciesId(378)), /* SPECIES_BANETTE */
-        w(36, 36, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(37, 37, SpeciesId(319)), /* SPECIES_CLAYDOL */
-        w(38, 38, SpeciesId(359)), /* SPECIES_ALTARIA */
-        w(39, 39, SpeciesId(359)), /* SPECIES_ALTARIA */
-        w(39, 39, SpeciesId(359)), /* SPECIES_ALTARIA */
+        wild!(levels: 33..=33, species: SpeciesId::SABLEYE),
+        wild!(levels: 34..=34, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 34..=34, species: SpeciesId::SABLEYE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::BANETTE),
+        wild!(levels: 38..=38, species: SpeciesId::BANETTE),
+        wild!(levels: 36..=36, species: SpeciesId::CLAYDOL),
+        wild!(levels: 37..=37, species: SpeciesId::CLAYDOL),
+        wild!(levels: 38..=38, species: SpeciesId::ALTARIA),
+        wild!(levels: 39..=39, species: SpeciesId::ALTARIA),
+        wild!(levels: 39..=39, species: SpeciesId::ALTARIA),
     ],
 };
 
 const GSAFARIZONE_SOUTHEAST_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(33, 33, SpeciesId(191)), /* SPECIES_SUNKERN */
-        w(34, 34, SpeciesId(179)), /* SPECIES_MAREEP */
-        w(35, 35, SpeciesId(191)), /* SPECIES_SUNKERN */
-        w(36, 36, SpeciesId(179)), /* SPECIES_MAREEP */
-        w(34, 34, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(33, 33, SpeciesId(167)), /* SPECIES_SPINARAK */
-        w(35, 35, SpeciesId(163)), /* SPECIES_HOOTHOOT */
-        w(34, 34, SpeciesId(209)), /* SPECIES_SNUBBULL */
-        w(36, 36, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(37, 37, SpeciesId(207)), /* SPECIES_GLIGAR */
-        w(39, 39, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(40, 40, SpeciesId(207)), /* SPECIES_GLIGAR */
+        wild!(levels: 33..=33, species: SpeciesId::SUNKERN),
+        wild!(levels: 34..=34, species: SpeciesId::MAREEP),
+        wild!(levels: 35..=35, species: SpeciesId::SUNKERN),
+        wild!(levels: 36..=36, species: SpeciesId::MAREEP),
+        wild!(levels: 34..=34, species: SpeciesId::AIPOM),
+        wild!(levels: 33..=33, species: SpeciesId::SPINARAK),
+        wild!(levels: 35..=35, species: SpeciesId::HOOTHOOT),
+        wild!(levels: 34..=34, species: SpeciesId::SNUBBULL),
+        wild!(levels: 36..=36, species: SpeciesId::STANTLER),
+        wild!(levels: 37..=37, species: SpeciesId::GLIGAR),
+        wild!(levels: 39..=39, species: SpeciesId::STANTLER),
+        wild!(levels: 40..=40, species: SpeciesId::GLIGAR),
     ],
 };
 
 const GSAFARIZONE_SOUTHEAST_WATER: WaterEncounters = WaterEncounters {
     encounter_rate: 9,
     mons: [
-        w(25, 30, SpeciesId(194)), /* SPECIES_WOOPER */
-        w(25, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(25, 30, SpeciesId(183)), /* SPECIES_MARILL */
-        w(30, 35, SpeciesId(183)), /* SPECIES_MARILL */
-        w(35, 40, SpeciesId(195)), /* SPECIES_QUAGSIRE */
+        wild!(levels: 25..=30, species: SpeciesId::WOOPER),
+        wild!(levels: 25..=30, species: SpeciesId::MARILL),
+        wild!(levels: 25..=30, species: SpeciesId::MARILL),
+        wild!(levels: 30..=35, species: SpeciesId::MARILL),
+        wild!(levels: 35..=40, species: SpeciesId::QUAGSIRE),
     ],
 };
 
 const GSAFARIZONE_SOUTHEAST_FISHING: FishingEncounters = FishingEncounters {
     encounter_rate: 35,
     mons: [
-        w(25, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(25, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(25, 30, SpeciesId(129)), /* SPECIES_MAGIKARP */
-        w(25, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(30, 35, SpeciesId(223)), /* SPECIES_REMORAID */
-        w(25, 30, SpeciesId(118)), /* SPECIES_GOLDEEN */
-        w(25, 30, SpeciesId(223)), /* SPECIES_REMORAID */
-        w(30, 35, SpeciesId(223)), /* SPECIES_REMORAID */
-        w(30, 35, SpeciesId(223)), /* SPECIES_REMORAID */
-        w(35, 40, SpeciesId(224)), /* SPECIES_OCTILLERY */
+        wild!(levels: 25..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 25..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 25..=30, species: SpeciesId::MAGIKARP),
+        wild!(levels: 25..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 30..=35, species: SpeciesId::REMORAID),
+        wild!(levels: 25..=30, species: SpeciesId::GOLDEEN),
+        wild!(levels: 25..=30, species: SpeciesId::REMORAID),
+        wild!(levels: 30..=35, species: SpeciesId::REMORAID),
+        wild!(levels: 30..=35, species: SpeciesId::REMORAID),
+        wild!(levels: 35..=40, species: SpeciesId::OCTILLERY),
     ],
 };
 
 const GSAFARIZONE_NORTHEAST_LAND: LandEncounters = LandEncounters {
     encounter_rate: 25,
     mons: [
-        w(33, 33, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(34, 34, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(35, 35, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(36, 36, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(34, 34, SpeciesId(191)), /* SPECIES_SUNKERN */
-        w(33, 33, SpeciesId(165)), /* SPECIES_LEDYBA */
-        w(35, 35, SpeciesId(163)), /* SPECIES_HOOTHOOT */
-        w(34, 34, SpeciesId(204)), /* SPECIES_PINECO */
-        w(36, 36, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(37, 37, SpeciesId(241)), /* SPECIES_MILTANK */
-        w(39, 39, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(40, 40, SpeciesId(241)), /* SPECIES_MILTANK */
+        wild!(levels: 33..=33, species: SpeciesId::AIPOM),
+        wild!(levels: 34..=34, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 35..=35, species: SpeciesId::AIPOM),
+        wild!(levels: 36..=36, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 34..=34, species: SpeciesId::SUNKERN),
+        wild!(levels: 33..=33, species: SpeciesId::LEDYBA),
+        wild!(levels: 35..=35, species: SpeciesId::HOOTHOOT),
+        wild!(levels: 34..=34, species: SpeciesId::PINECO),
+        wild!(levels: 36..=36, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 37..=37, species: SpeciesId::MILTANK),
+        wild!(levels: 39..=39, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 40..=40, species: SpeciesId::MILTANK),
     ],
 };
 
 const GSAFARIZONE_NORTHEAST_ROCKSMASH: RockSmashEncounters = RockSmashEncounters {
     encounter_rate: 25,
     mons: [
-        w(25, 30, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(20, 25, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(30, 35, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(30, 35, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(35, 40, SpeciesId(213)), /* SPECIES_SHUCKLE */
+        wild!(levels: 25..=30, species: SpeciesId::SHUCKLE),
+        wild!(levels: 20..=25, species: SpeciesId::SHUCKLE),
+        wild!(levels: 30..=35, species: SpeciesId::SHUCKLE),
+        wild!(levels: 30..=35, species: SpeciesId::SHUCKLE),
+        wild!(levels: 35..=40, species: SpeciesId::SHUCKLE),
     ],
 };
 
 const GMAGMAHIDEOUT_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_2F_1R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_2F_2R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_3F_1R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_3F_2R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_4F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_3F_3R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMAGMAHIDEOUT_2F_3R_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(27, 27, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(28, 28, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(28, 28, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(321)), /* SPECIES_TORKOAL */
-        w(29, 29, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(74)),  /* SPECIES_GEODUDE */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(30, 30, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(31, 31, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(32, 32, SpeciesId(75)),  /* SPECIES_GRAVELER */
-        w(33, 33, SpeciesId(75)),  /* SPECIES_GRAVELER */
+        wild!(levels: 27..=27, species: SpeciesId::GEODUDE),
+        wild!(levels: 28..=28, species: SpeciesId::TORKOAL),
+        wild!(levels: 28..=28, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::TORKOAL),
+        wild!(levels: 29..=29, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GEODUDE),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 30..=30, species: SpeciesId::GRAVELER),
+        wild!(levels: 31..=31, species: SpeciesId::GRAVELER),
+        wild!(levels: 32..=32, species: SpeciesId::GRAVELER),
+        wild!(levels: 33..=33, species: SpeciesId::GRAVELER),
     ],
 };
 
 const GMIRAGETOWER_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(21, 21, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(21, 21, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(22, 22, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(22, 22, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(23, 23, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(23, 23, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(24, 24, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(24, 24, SpeciesId(332)), /* SPECIES_TRAPINCH */
+        wild!(levels: 21..=21, species: SpeciesId::SANDSHREW),
+        wild!(levels: 21..=21, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 22..=22, species: SpeciesId::SANDSHREW),
+        wild!(levels: 22..=22, species: SpeciesId::TRAPINCH),
+        wild!(levels: 23..=23, species: SpeciesId::SANDSHREW),
+        wild!(levels: 23..=23, species: SpeciesId::TRAPINCH),
+        wild!(levels: 24..=24, species: SpeciesId::SANDSHREW),
+        wild!(levels: 24..=24, species: SpeciesId::TRAPINCH),
     ],
 };
 
 const GMIRAGETOWER_2F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(21, 21, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(21, 21, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(22, 22, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(22, 22, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(23, 23, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(23, 23, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(24, 24, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(24, 24, SpeciesId(332)), /* SPECIES_TRAPINCH */
+        wild!(levels: 21..=21, species: SpeciesId::SANDSHREW),
+        wild!(levels: 21..=21, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 22..=22, species: SpeciesId::SANDSHREW),
+        wild!(levels: 22..=22, species: SpeciesId::TRAPINCH),
+        wild!(levels: 23..=23, species: SpeciesId::SANDSHREW),
+        wild!(levels: 23..=23, species: SpeciesId::TRAPINCH),
+        wild!(levels: 24..=24, species: SpeciesId::SANDSHREW),
+        wild!(levels: 24..=24, species: SpeciesId::TRAPINCH),
     ],
 };
 
 const GMIRAGETOWER_3F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(21, 21, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(21, 21, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(22, 22, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(22, 22, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(23, 23, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(23, 23, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(24, 24, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(24, 24, SpeciesId(332)), /* SPECIES_TRAPINCH */
+        wild!(levels: 21..=21, species: SpeciesId::SANDSHREW),
+        wild!(levels: 21..=21, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 22..=22, species: SpeciesId::SANDSHREW),
+        wild!(levels: 22..=22, species: SpeciesId::TRAPINCH),
+        wild!(levels: 23..=23, species: SpeciesId::SANDSHREW),
+        wild!(levels: 23..=23, species: SpeciesId::TRAPINCH),
+        wild!(levels: 24..=24, species: SpeciesId::SANDSHREW),
+        wild!(levels: 24..=24, species: SpeciesId::TRAPINCH),
     ],
 };
 
 const GMIRAGETOWER_4F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(21, 21, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(21, 21, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(20, 20, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(20, 20, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(22, 22, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(22, 22, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(23, 23, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(23, 23, SpeciesId(332)), /* SPECIES_TRAPINCH */
-        w(24, 24, SpeciesId(27)),  /* SPECIES_SANDSHREW */
-        w(24, 24, SpeciesId(332)), /* SPECIES_TRAPINCH */
+        wild!(levels: 21..=21, species: SpeciesId::SANDSHREW),
+        wild!(levels: 21..=21, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 20..=20, species: SpeciesId::SANDSHREW),
+        wild!(levels: 20..=20, species: SpeciesId::TRAPINCH),
+        wild!(levels: 22..=22, species: SpeciesId::SANDSHREW),
+        wild!(levels: 22..=22, species: SpeciesId::TRAPINCH),
+        wild!(levels: 23..=23, species: SpeciesId::SANDSHREW),
+        wild!(levels: 23..=23, species: SpeciesId::TRAPINCH),
+        wild!(levels: 24..=24, species: SpeciesId::SANDSHREW),
+        wild!(levels: 24..=24, species: SpeciesId::TRAPINCH),
     ],
 };
 
 const GDESERTUNDERPASS_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(38, 38, SpeciesId(132)), /* SPECIES_DITTO */
-        w(35, 35, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(40, 40, SpeciesId(132)), /* SPECIES_DITTO */
-        w(40, 40, SpeciesId(371)), /* SPECIES_LOUDRED */
-        w(41, 41, SpeciesId(132)), /* SPECIES_DITTO */
-        w(36, 36, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(38, 38, SpeciesId(371)), /* SPECIES_LOUDRED */
-        w(42, 42, SpeciesId(132)), /* SPECIES_DITTO */
-        w(38, 38, SpeciesId(370)), /* SPECIES_WHISMUR */
-        w(43, 43, SpeciesId(132)), /* SPECIES_DITTO */
-        w(44, 44, SpeciesId(371)), /* SPECIES_LOUDRED */
-        w(45, 45, SpeciesId(132)), /* SPECIES_DITTO */
+        wild!(levels: 38..=38, species: SpeciesId::DITTO),
+        wild!(levels: 35..=35, species: SpeciesId::WHISMUR),
+        wild!(levels: 40..=40, species: SpeciesId::DITTO),
+        wild!(levels: 40..=40, species: SpeciesId::LOUDRED),
+        wild!(levels: 41..=41, species: SpeciesId::DITTO),
+        wild!(levels: 36..=36, species: SpeciesId::WHISMUR),
+        wild!(levels: 38..=38, species: SpeciesId::LOUDRED),
+        wild!(levels: 42..=42, species: SpeciesId::DITTO),
+        wild!(levels: 38..=38, species: SpeciesId::WHISMUR),
+        wild!(levels: 43..=43, species: SpeciesId::DITTO),
+        wild!(levels: 44..=44, species: SpeciesId::LOUDRED),
+        wild!(levels: 45..=45, species: SpeciesId::DITTO),
     ],
 };
 
 const GARTISANCAVE_B1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(40, 40, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(41, 41, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(42, 42, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(43, 43, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(44, 44, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(45, 45, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(46, 46, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(47, 47, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(48, 48, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(49, 49, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(50, 50, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(50, 50, SpeciesId(235)), /* SPECIES_SMEARGLE */
+        wild!(levels: 40..=40, species: SpeciesId::SMEARGLE),
+        wild!(levels: 41..=41, species: SpeciesId::SMEARGLE),
+        wild!(levels: 42..=42, species: SpeciesId::SMEARGLE),
+        wild!(levels: 43..=43, species: SpeciesId::SMEARGLE),
+        wild!(levels: 44..=44, species: SpeciesId::SMEARGLE),
+        wild!(levels: 45..=45, species: SpeciesId::SMEARGLE),
+        wild!(levels: 46..=46, species: SpeciesId::SMEARGLE),
+        wild!(levels: 47..=47, species: SpeciesId::SMEARGLE),
+        wild!(levels: 48..=48, species: SpeciesId::SMEARGLE),
+        wild!(levels: 49..=49, species: SpeciesId::SMEARGLE),
+        wild!(levels: 50..=50, species: SpeciesId::SMEARGLE),
+        wild!(levels: 50..=50, species: SpeciesId::SMEARGLE),
     ],
 };
 
 const GARTISANCAVE_1F_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(40, 40, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(41, 41, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(42, 42, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(43, 43, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(44, 44, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(45, 45, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(46, 46, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(47, 47, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(48, 48, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(49, 49, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(50, 50, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(50, 50, SpeciesId(235)), /* SPECIES_SMEARGLE */
+        wild!(levels: 40..=40, species: SpeciesId::SMEARGLE),
+        wild!(levels: 41..=41, species: SpeciesId::SMEARGLE),
+        wild!(levels: 42..=42, species: SpeciesId::SMEARGLE),
+        wild!(levels: 43..=43, species: SpeciesId::SMEARGLE),
+        wild!(levels: 44..=44, species: SpeciesId::SMEARGLE),
+        wild!(levels: 45..=45, species: SpeciesId::SMEARGLE),
+        wild!(levels: 46..=46, species: SpeciesId::SMEARGLE),
+        wild!(levels: 47..=47, species: SpeciesId::SMEARGLE),
+        wild!(levels: 48..=48, species: SpeciesId::SMEARGLE),
+        wild!(levels: 49..=49, species: SpeciesId::SMEARGLE),
+        wild!(levels: 50..=50, species: SpeciesId::SMEARGLE),
+        wild!(levels: 50..=50, species: SpeciesId::SMEARGLE),
     ],
 };
 
 const GALTERINGCAVE1_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(10, 10, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(12, 12, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(8, 8, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(14, 14, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(10, 10, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(12, 12, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(16, 16, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(6, 6, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(8, 8, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(14, 14, SpeciesId(41)), /* SPECIES_ZUBAT */
-        w(8, 8, SpeciesId(41)),   /* SPECIES_ZUBAT */
-        w(14, 14, SpeciesId(41)), /* SPECIES_ZUBAT */
+        wild!(levels: 10..=10, species: SpeciesId::ZUBAT),
+        wild!(levels: 12..=12, species: SpeciesId::ZUBAT),
+        wild!(levels: 8..=8, species: SpeciesId::ZUBAT),
+        wild!(levels: 14..=14, species: SpeciesId::ZUBAT),
+        wild!(levels: 10..=10, species: SpeciesId::ZUBAT),
+        wild!(levels: 12..=12, species: SpeciesId::ZUBAT),
+        wild!(levels: 16..=16, species: SpeciesId::ZUBAT),
+        wild!(levels: 6..=6, species: SpeciesId::ZUBAT),
+        wild!(levels: 8..=8, species: SpeciesId::ZUBAT),
+        wild!(levels: 14..=14, species: SpeciesId::ZUBAT),
+        wild!(levels: 8..=8, species: SpeciesId::ZUBAT),
+        wild!(levels: 14..=14, species: SpeciesId::ZUBAT),
     ],
 };
 
 const GALTERINGCAVE2_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(7, 7, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(9, 9, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(5, 5, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(11, 11, SpeciesId(179)), /* SPECIES_MAREEP */
-        w(7, 7, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(9, 9, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(13, 13, SpeciesId(179)), /* SPECIES_MAREEP */
-        w(3, 3, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(5, 5, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(11, 11, SpeciesId(179)), /* SPECIES_MAREEP */
-        w(5, 5, SpeciesId(179)),   /* SPECIES_MAREEP */
-        w(11, 11, SpeciesId(179)), /* SPECIES_MAREEP */
+        wild!(levels: 7..=7, species: SpeciesId::MAREEP),
+        wild!(levels: 9..=9, species: SpeciesId::MAREEP),
+        wild!(levels: 5..=5, species: SpeciesId::MAREEP),
+        wild!(levels: 11..=11, species: SpeciesId::MAREEP),
+        wild!(levels: 7..=7, species: SpeciesId::MAREEP),
+        wild!(levels: 9..=9, species: SpeciesId::MAREEP),
+        wild!(levels: 13..=13, species: SpeciesId::MAREEP),
+        wild!(levels: 3..=3, species: SpeciesId::MAREEP),
+        wild!(levels: 5..=5, species: SpeciesId::MAREEP),
+        wild!(levels: 11..=11, species: SpeciesId::MAREEP),
+        wild!(levels: 5..=5, species: SpeciesId::MAREEP),
+        wild!(levels: 11..=11, species: SpeciesId::MAREEP),
     ],
 };
 
 const GALTERINGCAVE3_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(23, 23, SpeciesId(204)), /* SPECIES_PINECO */
-        w(25, 25, SpeciesId(204)), /* SPECIES_PINECO */
-        w(22, 22, SpeciesId(204)), /* SPECIES_PINECO */
-        w(27, 27, SpeciesId(204)), /* SPECIES_PINECO */
-        w(23, 23, SpeciesId(204)), /* SPECIES_PINECO */
-        w(25, 25, SpeciesId(204)), /* SPECIES_PINECO */
-        w(29, 29, SpeciesId(204)), /* SPECIES_PINECO */
-        w(19, 19, SpeciesId(204)), /* SPECIES_PINECO */
-        w(21, 21, SpeciesId(204)), /* SPECIES_PINECO */
-        w(27, 27, SpeciesId(204)), /* SPECIES_PINECO */
-        w(21, 21, SpeciesId(204)), /* SPECIES_PINECO */
-        w(27, 27, SpeciesId(204)), /* SPECIES_PINECO */
+        wild!(levels: 23..=23, species: SpeciesId::PINECO),
+        wild!(levels: 25..=25, species: SpeciesId::PINECO),
+        wild!(levels: 22..=22, species: SpeciesId::PINECO),
+        wild!(levels: 27..=27, species: SpeciesId::PINECO),
+        wild!(levels: 23..=23, species: SpeciesId::PINECO),
+        wild!(levels: 25..=25, species: SpeciesId::PINECO),
+        wild!(levels: 29..=29, species: SpeciesId::PINECO),
+        wild!(levels: 19..=19, species: SpeciesId::PINECO),
+        wild!(levels: 21..=21, species: SpeciesId::PINECO),
+        wild!(levels: 27..=27, species: SpeciesId::PINECO),
+        wild!(levels: 21..=21, species: SpeciesId::PINECO),
+        wild!(levels: 27..=27, species: SpeciesId::PINECO),
     ],
 };
 
 const GALTERINGCAVE4_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(16, 16, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(18, 18, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(14, 14, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(20, 20, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(16, 16, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(18, 18, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(22, 22, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(12, 12, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(14, 14, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(20, 20, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(14, 14, SpeciesId(228)), /* SPECIES_HOUNDOUR */
-        w(20, 20, SpeciesId(228)), /* SPECIES_HOUNDOUR */
+        wild!(levels: 16..=16, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 18..=18, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 14..=14, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 20..=20, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 16..=16, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 18..=18, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 22..=22, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 12..=12, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 14..=14, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 20..=20, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 14..=14, species: SpeciesId::HOUNDOUR),
+        wild!(levels: 20..=20, species: SpeciesId::HOUNDOUR),
     ],
 };
 
 const GALTERINGCAVE5_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(10, 10, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(12, 12, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(8, 8, SpeciesId(216)),   /* SPECIES_TEDDIURSA */
-        w(14, 14, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(10, 10, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(12, 12, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(16, 16, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(6, 6, SpeciesId(216)),   /* SPECIES_TEDDIURSA */
-        w(8, 8, SpeciesId(216)),   /* SPECIES_TEDDIURSA */
-        w(14, 14, SpeciesId(216)), /* SPECIES_TEDDIURSA */
-        w(8, 8, SpeciesId(216)),   /* SPECIES_TEDDIURSA */
-        w(14, 14, SpeciesId(216)), /* SPECIES_TEDDIURSA */
+        wild!(levels: 10..=10, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 12..=12, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 8..=8, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 14..=14, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 10..=10, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 12..=12, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 16..=16, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 6..=6, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 8..=8, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 14..=14, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 8..=8, species: SpeciesId::TEDDIURSA),
+        wild!(levels: 14..=14, species: SpeciesId::TEDDIURSA),
     ],
 };
 
 const GALTERINGCAVE6_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(22, 22, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(24, 24, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(20, 20, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(26, 26, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(22, 22, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(24, 24, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(28, 28, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(18, 18, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(20, 20, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(26, 26, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(20, 20, SpeciesId(190)), /* SPECIES_AIPOM */
-        w(26, 26, SpeciesId(190)), /* SPECIES_AIPOM */
+        wild!(levels: 22..=22, species: SpeciesId::AIPOM),
+        wild!(levels: 24..=24, species: SpeciesId::AIPOM),
+        wild!(levels: 20..=20, species: SpeciesId::AIPOM),
+        wild!(levels: 26..=26, species: SpeciesId::AIPOM),
+        wild!(levels: 22..=22, species: SpeciesId::AIPOM),
+        wild!(levels: 24..=24, species: SpeciesId::AIPOM),
+        wild!(levels: 28..=28, species: SpeciesId::AIPOM),
+        wild!(levels: 18..=18, species: SpeciesId::AIPOM),
+        wild!(levels: 20..=20, species: SpeciesId::AIPOM),
+        wild!(levels: 26..=26, species: SpeciesId::AIPOM),
+        wild!(levels: 20..=20, species: SpeciesId::AIPOM),
+        wild!(levels: 26..=26, species: SpeciesId::AIPOM),
     ],
 };
 
 const GALTERINGCAVE7_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(22, 22, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(24, 24, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(20, 20, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(26, 26, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(22, 22, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(24, 24, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(28, 28, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(18, 18, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(20, 20, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(26, 26, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(20, 20, SpeciesId(213)), /* SPECIES_SHUCKLE */
-        w(26, 26, SpeciesId(213)), /* SPECIES_SHUCKLE */
+        wild!(levels: 22..=22, species: SpeciesId::SHUCKLE),
+        wild!(levels: 24..=24, species: SpeciesId::SHUCKLE),
+        wild!(levels: 20..=20, species: SpeciesId::SHUCKLE),
+        wild!(levels: 26..=26, species: SpeciesId::SHUCKLE),
+        wild!(levels: 22..=22, species: SpeciesId::SHUCKLE),
+        wild!(levels: 24..=24, species: SpeciesId::SHUCKLE),
+        wild!(levels: 28..=28, species: SpeciesId::SHUCKLE),
+        wild!(levels: 18..=18, species: SpeciesId::SHUCKLE),
+        wild!(levels: 20..=20, species: SpeciesId::SHUCKLE),
+        wild!(levels: 26..=26, species: SpeciesId::SHUCKLE),
+        wild!(levels: 20..=20, species: SpeciesId::SHUCKLE),
+        wild!(levels: 26..=26, species: SpeciesId::SHUCKLE),
     ],
 };
 
 const GALTERINGCAVE8_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(22, 22, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(24, 24, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(20, 20, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(26, 26, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(22, 22, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(24, 24, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(28, 28, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(18, 18, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(20, 20, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(26, 26, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(20, 20, SpeciesId(234)), /* SPECIES_STANTLER */
-        w(26, 26, SpeciesId(234)), /* SPECIES_STANTLER */
+        wild!(levels: 22..=22, species: SpeciesId::STANTLER),
+        wild!(levels: 24..=24, species: SpeciesId::STANTLER),
+        wild!(levels: 20..=20, species: SpeciesId::STANTLER),
+        wild!(levels: 26..=26, species: SpeciesId::STANTLER),
+        wild!(levels: 22..=22, species: SpeciesId::STANTLER),
+        wild!(levels: 24..=24, species: SpeciesId::STANTLER),
+        wild!(levels: 28..=28, species: SpeciesId::STANTLER),
+        wild!(levels: 18..=18, species: SpeciesId::STANTLER),
+        wild!(levels: 20..=20, species: SpeciesId::STANTLER),
+        wild!(levels: 26..=26, species: SpeciesId::STANTLER),
+        wild!(levels: 20..=20, species: SpeciesId::STANTLER),
+        wild!(levels: 26..=26, species: SpeciesId::STANTLER),
     ],
 };
 
 const GALTERINGCAVE9_LAND: LandEncounters = LandEncounters {
     encounter_rate: 7,
     mons: [
-        w(22, 22, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(24, 24, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(20, 20, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(26, 26, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(22, 22, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(24, 24, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(28, 28, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(18, 18, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(20, 20, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(26, 26, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(20, 20, SpeciesId(235)), /* SPECIES_SMEARGLE */
-        w(26, 26, SpeciesId(235)), /* SPECIES_SMEARGLE */
+        wild!(levels: 22..=22, species: SpeciesId::SMEARGLE),
+        wild!(levels: 24..=24, species: SpeciesId::SMEARGLE),
+        wild!(levels: 20..=20, species: SpeciesId::SMEARGLE),
+        wild!(levels: 26..=26, species: SpeciesId::SMEARGLE),
+        wild!(levels: 22..=22, species: SpeciesId::SMEARGLE),
+        wild!(levels: 24..=24, species: SpeciesId::SMEARGLE),
+        wild!(levels: 28..=28, species: SpeciesId::SMEARGLE),
+        wild!(levels: 18..=18, species: SpeciesId::SMEARGLE),
+        wild!(levels: 20..=20, species: SpeciesId::SMEARGLE),
+        wild!(levels: 26..=26, species: SpeciesId::SMEARGLE),
+        wild!(levels: 20..=20, species: SpeciesId::SMEARGLE),
+        wild!(levels: 26..=26, species: SpeciesId::SMEARGLE),
     ],
 };
 
 const GMETEORFALLS_STEVENSCAVE_LAND: LandEncounters = LandEncounters {
     encounter_rate: 10,
     mons: [
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(33, 33, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(35, 35, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(33, 33, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(37, 37, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(35, 35, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(39, 39, SpeciesId(349)), /* SPECIES_SOLROCK */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(38, 38, SpeciesId(42)),  /* SPECIES_GOLBAT */
-        w(40, 40, SpeciesId(42)),  /* SPECIES_GOLBAT */
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 33..=33, species: SpeciesId::GOLBAT),
+        wild!(levels: 35..=35, species: SpeciesId::SOLROCK),
+        wild!(levels: 33..=33, species: SpeciesId::SOLROCK),
+        wild!(levels: 37..=37, species: SpeciesId::SOLROCK),
+        wild!(levels: 35..=35, species: SpeciesId::GOLBAT),
+        wild!(levels: 39..=39, species: SpeciesId::SOLROCK),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
+        wild!(levels: 38..=38, species: SpeciesId::GOLBAT),
+        wild!(levels: 40..=40, species: SpeciesId::GOLBAT),
     ],
 };
 
@@ -4449,31 +4355,29 @@ pub(crate) static HEADERS: [WildEncounterHeader; MAP_HEADER_COUNT] = [
     },
 ];
 
-/// The `gWildMonHeaders` table: owned, read-only access to every map's wild
-/// encounter data with typed lookup `(oop-boundaries)`.
+/// Read-only access to every wild-encounter header.
 #[derive(Debug, Clone, Copy)]
 pub struct WildEncounterTable {
     headers: &'static [WildEncounterHeader; MAP_HEADER_COUNT],
 }
 
 impl WildEncounterTable {
-    /// The number of entries in the table ([`MAP_HEADER_COUNT`]).
+    /// Number of entries in the table.
     pub const LEN: usize = MAP_HEADER_COUNT;
 
-    /// Build the table over the extracted upstream data.
+    /// Returns the canonical encounter table.
     #[must_use]
     pub const fn new() -> Self {
         Self { headers: &HEADERS }
     }
 
-    /// The entry with the given unique `label` (upstream `base_label`, e.g.
-    /// `"gRoute101"`), or `None` if no entry has that label.
+    /// Returns the entry with `label`, if present.
     #[must_use]
     pub fn get_by_label(&self, label: &str) -> Option<&'static WildEncounterHeader> {
         self.headers.iter().find(|h| h.label == label)
     }
 
-    /// The entry with the given unique `label`.
+    /// Returns the entry with `label`.
     ///
     /// # Errors
     ///
@@ -4486,18 +4390,16 @@ impl WildEncounterTable {
             .ok_or(AssetError::UnknownMap(label))
     }
 
-    /// The first entry for `map`, in table order, or `None` if no entry
-    /// names that map.
+    /// Returns the first entry for `map`, if present.
     ///
-    /// Most maps have exactly one entry, so this is the primary accessor;
-    /// see [`WildEncounterTable::all_by_map`] for maps with more than one
-    /// (currently only `MAP_ALTERING_CAVE`).
+    /// Altering Cave has nine entries; use [`Self::all_by_map`] to access all
+    /// of its variants.
     #[must_use]
     pub fn get_by_map(&self, map: MapId) -> Option<&'static WildEncounterHeader> {
         self.headers.iter().find(|h| h.map == map)
     }
 
-    /// The first entry for `map`, in table order.
+    /// Returns the first entry for `map`.
     ///
     /// # Errors
     ///
@@ -4506,25 +4408,23 @@ impl WildEncounterTable {
         self.get_by_map(map).ok_or(AssetError::UnknownMap(map.0))
     }
 
-    /// Every entry naming `map`, in table order (more than one only for
-    /// `MAP_ALTERING_CAVE`, whose nine variants the game swaps between at
-    /// runtime).
+    /// Returns every entry for `map`, in table order.
     pub fn all_by_map(&self, map: MapId) -> impl Iterator<Item = &'static WildEncounterHeader> {
         self.headers.iter().filter(move |h| h.map == map)
     }
 
-    /// Iterate over every entry, in upstream table order.
+    /// Iterates over every entry in canonical table order.
     pub fn iter(&self) -> impl Iterator<Item = &'static WildEncounterHeader> {
         self.headers.iter()
     }
 
-    /// The number of entries in the table ([`MAP_HEADER_COUNT`]).
+    /// Returns the number of entries.
     #[must_use]
     pub const fn len(&self) -> usize {
         MAP_HEADER_COUNT
     }
 
-    /// Always `false` — the table is never empty. Present for API convention.
+    /// Returns `false`; the fixed canonical table is never empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
@@ -4540,26 +4440,14 @@ impl Default for WildEncounterTable {
 #[cfg(test)]
 mod tests {
     use super::{
-        FishingRod, MapId, WildEncounterTable, FISHING_SLOTS, LAND_SLOTS, MAP_HEADER_COUNT,
-        ROCK_SMASH_SLOTS, WATER_SLOTS,
+        FishingRod, MapId, WildEncounterTable, WildPokemon, FISHING_SLOTS, LAND_SLOTS,
+        MAP_HEADER_COUNT, ROCK_SMASH_SLOTS, WATER_SLOTS,
     };
     use crate::error::AssetError;
-    use crate::species::SpeciesId;
-
-    // Raw upstream species ids used below (from `include/constants/species.h`).
-    const WURMPLE: u16 = 290;
-    const POOCHYENA: u16 = 286;
-    const ZIGZAGOON: u16 = 288;
-    const MARILL: u16 = 183;
-    const GOLDEEN: u16 = 118;
-    const MAGIKARP: u16 = 129;
-    const CORPHISH: u16 = 326;
-    const GEODUDE: u16 = 74;
+    use crate::species::{SpeciesId, SPECIES_COUNT};
 
     #[test]
-    fn table_length_matches_upstream_encounter_count() {
-        // Structural anchor: wild_encounter_groups[0].encounters has 124
-        // entries in the upstream JSON.
+    fn table_has_every_canonical_header() {
         let table = WildEncounterTable::new();
         assert_eq!(MAP_HEADER_COUNT, 124);
         assert_eq!(table.len(), 124);
@@ -4570,8 +4458,6 @@ mod tests {
 
     #[test]
     fn every_present_kind_has_the_fixed_slot_count() {
-        // Slot-count invariants derived from the JSON itself (see module
-        // docs: constants/wild_encounter.h no longer exists upstream).
         let table = WildEncounterTable::new();
         for h in table.iter() {
             if let Some(land) = h.land {
@@ -4590,8 +4476,68 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tie_route_101_land_only() {
-        // gRoute101: land mons only, straight from wild_encounters.json.
+    fn fishing_rods_partition_all_slots() {
+        assert_eq!(FishingRod::Old.slots(), &[0, 1]);
+        assert_eq!(FishingRod::Good.slots(), &[2, 3, 4]);
+        assert_eq!(FishingRod::Super.slots(), &[5, 6, 7, 8, 9]);
+
+        let slots: Vec<_> = [FishingRod::Old, FishingRod::Good, FishingRod::Super]
+            .into_iter()
+            .flat_map(FishingRod::slots)
+            .copied()
+            .collect();
+        assert_eq!(slots, (0..FISHING_SLOTS).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn every_header_and_encounter_slot_is_structurally_valid() {
+        let table = WildEncounterTable::new();
+        let mut map_counts = std::collections::HashMap::new();
+
+        for header in table.iter() {
+            assert!(header.map.name().starts_with("MAP_"));
+            assert!(header.label.starts_with('g'));
+            *map_counts.entry(header.map).or_insert(0) += 1;
+
+            let kinds: [Option<(u8, &[WildPokemon])>; 4] = [
+                header
+                    .land
+                    .as_ref()
+                    .map(|encounters| (encounters.encounter_rate, encounters.mons.as_slice())),
+                header
+                    .water
+                    .as_ref()
+                    .map(|encounters| (encounters.encounter_rate, encounters.mons.as_slice())),
+                header
+                    .rock_smash
+                    .as_ref()
+                    .map(|encounters| (encounters.encounter_rate, encounters.mons.as_slice())),
+                header
+                    .fishing
+                    .as_ref()
+                    .map(|encounters| (encounters.encounter_rate, encounters.mons.as_slice())),
+            ];
+            assert!(kinds.iter().any(Option::is_some));
+
+            for (encounter_rate, slots) in kinds.into_iter().flatten() {
+                assert!(encounter_rate > 0);
+                for slot in slots {
+                    assert!(slot.min_level > 0);
+                    assert!(slot.min_level <= slot.max_level);
+                    assert_ne!(slot.species, SpeciesId::NONE);
+                    assert!((slot.species.index() as usize) < SPECIES_COUNT);
+                }
+            }
+        }
+
+        assert_eq!(map_counts.get(&MapId("MAP_ALTERING_CAVE")), Some(&9));
+        assert!(map_counts.iter().all(|(map, count)| {
+            *count == 1 || (*map == MapId("MAP_ALTERING_CAVE") && *count == 9)
+        }));
+    }
+
+    #[test]
+    fn route_101_has_only_its_canonical_land_encounters() {
         let table = WildEncounterTable::new();
         let h = table.by_map(MapId("MAP_ROUTE101")).unwrap();
         assert_eq!(h.label, "gRoute101");
@@ -4600,30 +4546,29 @@ mod tests {
         assert!(h.fishing.is_none());
         let land = h.land.unwrap();
         assert_eq!(land.encounter_rate, 20);
-        let expected: &[(u8, u8, u16)] = &[
-            (2, 2, WURMPLE),
-            (2, 2, POOCHYENA),
-            (2, 2, WURMPLE),
-            (3, 3, WURMPLE),
-            (3, 3, POOCHYENA),
-            (3, 3, POOCHYENA),
-            (3, 3, WURMPLE),
-            (3, 3, POOCHYENA),
-            (2, 2, ZIGZAGOON),
-            (2, 2, ZIGZAGOON),
-            (3, 3, ZIGZAGOON),
-            (3, 3, ZIGZAGOON),
+        let expected: &[(u8, u8, SpeciesId)] = &[
+            (2, 2, SpeciesId::WURMPLE),
+            (2, 2, SpeciesId::POOCHYENA),
+            (2, 2, SpeciesId::WURMPLE),
+            (3, 3, SpeciesId::WURMPLE),
+            (3, 3, SpeciesId::POOCHYENA),
+            (3, 3, SpeciesId::POOCHYENA),
+            (3, 3, SpeciesId::WURMPLE),
+            (3, 3, SpeciesId::POOCHYENA),
+            (2, 2, SpeciesId::ZIGZAGOON),
+            (2, 2, SpeciesId::ZIGZAGOON),
+            (3, 3, SpeciesId::ZIGZAGOON),
+            (3, 3, SpeciesId::ZIGZAGOON),
         ];
-        for (slot, &(min, max, sp)) in land.mons.iter().zip(expected) {
+        for (slot, &(min, max, species)) in land.mons.iter().zip(expected) {
             assert_eq!(slot.min_level, min);
             assert_eq!(slot.max_level, max);
-            assert_eq!(slot.species, SpeciesId(sp));
+            assert_eq!(slot.species, species);
         }
     }
 
     #[test]
-    fn upstream_tie_route_102_water_and_fishing() {
-        // gRoute102: land + water + fishing, straight from wild_encounters.json.
+    fn route_102_has_its_canonical_water_and_fishing_encounters() {
         let table = WildEncounterTable::new();
         let h = table.by_map(MapId("MAP_ROUTE102")).unwrap();
         assert_eq!(h.label, "gRoute102");
@@ -4631,82 +4576,91 @@ mod tests {
 
         let water = h.water.unwrap();
         assert_eq!(water.encounter_rate, 4);
-        let expected_water: &[(u8, u8, u16)] = &[
-            (20, 30, MARILL),
-            (10, 20, MARILL),
-            (30, 35, MARILL),
-            (5, 10, MARILL),
-            (20, 30, GOLDEEN),
+        let expected_water: &[(u8, u8, SpeciesId)] = &[
+            (20, 30, SpeciesId::MARILL),
+            (10, 20, SpeciesId::MARILL),
+            (30, 35, SpeciesId::MARILL),
+            (5, 10, SpeciesId::MARILL),
+            (20, 30, SpeciesId::GOLDEEN),
         ];
-        for (slot, &(min, max, sp)) in water.mons.iter().zip(expected_water) {
+        for (slot, &(min, max, species)) in water.mons.iter().zip(expected_water) {
             assert_eq!(slot.min_level, min);
             assert_eq!(slot.max_level, max);
-            assert_eq!(slot.species, SpeciesId(sp));
+            assert_eq!(slot.species, species);
         }
 
         let fishing = h.fishing.unwrap();
         assert_eq!(fishing.encounter_rate, 30);
-        let expected_fishing: &[(u8, u8, u16)] = &[
-            (5, 10, MAGIKARP),
-            (5, 10, GOLDEEN),
-            (10, 30, MAGIKARP),
-            (10, 30, GOLDEEN),
-            (10, 30, CORPHISH),
-            (25, 30, CORPHISH),
-            (30, 35, CORPHISH),
-            (20, 25, CORPHISH),
-            (35, 40, CORPHISH),
-            (40, 45, CORPHISH),
+        let expected_fishing: &[(u8, u8, SpeciesId)] = &[
+            (5, 10, SpeciesId::MAGIKARP),
+            (5, 10, SpeciesId::GOLDEEN),
+            (10, 30, SpeciesId::MAGIKARP),
+            (10, 30, SpeciesId::GOLDEEN),
+            (10, 30, SpeciesId::CORPHISH),
+            (25, 30, SpeciesId::CORPHISH),
+            (30, 35, SpeciesId::CORPHISH),
+            (20, 25, SpeciesId::CORPHISH),
+            (35, 40, SpeciesId::CORPHISH),
+            (40, 45, SpeciesId::CORPHISH),
         ];
-        for (slot, &(min, max, sp)) in fishing.mons.iter().zip(expected_fishing) {
+        for (slot, &(min, max, species)) in fishing.mons.iter().zip(expected_fishing) {
             assert_eq!(slot.min_level, min);
             assert_eq!(slot.max_level, max);
-            assert_eq!(slot.species, SpeciesId(sp));
+            assert_eq!(slot.species, species);
         }
 
-        // Old rod only reaches the first two (weakest) slots.
         let old_rod: Vec<_> = fishing.mons_for_rod(FishingRod::Old).collect();
         assert_eq!(old_rod.len(), 2);
-        assert_eq!(old_rod[0].species, SpeciesId(MAGIKARP));
-        assert_eq!(old_rod[1].species, SpeciesId(GOLDEEN));
-        // Super rod reaches the last five slots (the Corphish tier).
+        assert_eq!(old_rod[0].species, SpeciesId::MAGIKARP);
+        assert_eq!(old_rod[1].species, SpeciesId::GOLDEEN);
         let super_rod: Vec<_> = fishing.mons_for_rod(FishingRod::Super).collect();
         assert_eq!(super_rod.len(), 5);
-        assert!(super_rod.iter().all(|m| m.species == SpeciesId(CORPHISH)));
+        assert!(super_rod
+            .iter()
+            .all(|encounter| encounter.species == SpeciesId::CORPHISH));
     }
 
     #[test]
-    fn upstream_tie_route_111_rock_smash() {
-        // gRoute111: rock-smash slots, straight from wild_encounters.json.
+    fn route_111_has_its_canonical_rock_smash_encounters() {
         let table = WildEncounterTable::new();
         let h = table.by_map(MapId("MAP_ROUTE111")).unwrap();
         let rock_smash = h.rock_smash.unwrap();
         assert_eq!(rock_smash.encounter_rate, 20);
-        let expected: &[(u8, u8, u16)] = &[
-            (10, 15, GEODUDE),
-            (5, 10, GEODUDE),
-            (15, 20, GEODUDE),
-            (15, 20, GEODUDE),
-            (15, 20, GEODUDE),
+        let expected: &[(u8, u8, SpeciesId)] = &[
+            (10, 15, SpeciesId::GEODUDE),
+            (5, 10, SpeciesId::GEODUDE),
+            (15, 20, SpeciesId::GEODUDE),
+            (15, 20, SpeciesId::GEODUDE),
+            (15, 20, SpeciesId::GEODUDE),
         ];
-        for (slot, &(min, max, sp)) in rock_smash.mons.iter().zip(expected) {
+        for (slot, &(min, max, species)) in rock_smash.mons.iter().zip(expected) {
             assert_eq!(slot.min_level, min);
             assert_eq!(slot.max_level, max);
-            assert_eq!(slot.species, SpeciesId(sp));
+            assert_eq!(slot.species, species);
         }
     }
 
     #[test]
-    fn altering_cave_has_nine_distinct_labelled_entries() {
-        // The game's rotating Altering Cave: nine entries share MAP_ALTERING_CAVE
-        // but have distinct base_labels and distinct first-slot species.
+    fn altering_cave_variants_have_distinct_labels_and_species() {
         let table = WildEncounterTable::new();
         let entries: Vec<_> = table.all_by_map(MapId("MAP_ALTERING_CAVE")).collect();
-        assert_eq!(entries.len(), 9);
-        let labels: std::collections::HashSet<_> = entries.iter().map(|h| h.label).collect();
-        assert_eq!(labels.len(), 9, "altering cave labels must be distinct");
-        // The first (gAlteringCave1) still resolves via the primary by-map
-        // accessor (first match in table order).
+        let expected = [
+            ("gAlteringCave1", SpeciesId::ZUBAT),
+            ("gAlteringCave2", SpeciesId::MAREEP),
+            ("gAlteringCave3", SpeciesId::PINECO),
+            ("gAlteringCave4", SpeciesId::HOUNDOUR),
+            ("gAlteringCave5", SpeciesId::TEDDIURSA),
+            ("gAlteringCave6", SpeciesId::AIPOM),
+            ("gAlteringCave7", SpeciesId::SHUCKLE),
+            ("gAlteringCave8", SpeciesId::STANTLER),
+            ("gAlteringCave9", SpeciesId::SMEARGLE),
+        ];
+
+        for (entry, (label, species)) in entries.iter().zip(expected) {
+            assert_eq!(entry.label, label);
+            assert_eq!(entry.land.unwrap().mons[0].species, species);
+        }
+
         let first = table.by_map(MapId("MAP_ALTERING_CAVE")).unwrap();
         assert_eq!(first.label, "gAlteringCave1");
     }
