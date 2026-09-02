@@ -1,42 +1,4 @@
-//! [`PlayerState`]: the player avatar's tile position, facing, and sub-tile
-//! step progress (S-5, issue #108).
-//!
-//! Ported behaviour, from `pokeemerald/src/field_player_avatar.c`:
-//! - Turn-vs-step classification: `CheckMovementInputNotOnBike` (the
-//!   `NOT_MOVING`/`TURN_DIRECTION`/`MOVING` `runningState` machine).
-//! - Collision handling and elevation-adopt-on-arrival:
-//!   `PlayerNotOnBikeMoving` + `CheckForPlayerAvatarCollision` (collision
-//!   classification itself lives in `crate::overworld::collision`) and
-//!   `event_object_movement.c`'s `ObjectEventUpdateElevation` — including its
-//!   current-vs-previous elevation split (S-5, issue #218): `currentElevation`
-//!   (this port's [`PlayerState::elevation`]) adopts every arrival including
-//!   the `ELEVATION_TRANSITION` wildcard, while `previousElevation` (this
-//!   port's [`PlayerState::previous_elevation`]) retains the last
-//!   *non*-transition arrival — see [`PlayerState::step`]'s "# Elevation
-//!   adoption" section.
-//! - Object-event collision: `GetCollisionAtCoords`' `COLLISION_OBJECT_EVENT`
-//!   arm / `DoesObjectCollideWithObjectAt` — see [`PlayerState::step`].
-//! - Walk speed: `event_object_movement.c`'s `MOVE_SPEED_NORMAL` step table
-//!   (`sStep1Funcs`, 16 entries) — see [`WALK_FRAMES_PER_TILE`].
-//!
-//! **Scope: ordinary on-foot walking only.** No bike (`MovePlayerOnBike`),
-//! no running (`PlayerRun`/dash), no forced movement (currents, slopes, ice
-//! — `TryDoMetatileBehaviorForcedMovement` and its `ForcedMovement_*`
-//! table), no ledges (`ShouldJumpLedge`), no movement-range clamp
-//! (`IsCoordOutsideObjectEventMovementRange`, which never constrains the
-//! player — its `range` is zero), and no camera clamp
-//! (`CanCameraMoveInDirection`). Stationary object events *do* block
-//! movement (`DoesObjectCollideWithObjectAt`, added for issue #161 — see
-//! [`PlayerState::step`]), and so does behavior-driven **directional**
-//! impassability (`IsMetatileDirectionallyImpassable`, added for issue #218 —
-//! see [`crate::overworld::collision::directionally_impassable`]). All of
-//! upstream's per-frame *animation* timing (the
-//! specific pixel offsets `Step1`/`Step2`/... apply) is also out of scope —
-//! there is no renderer yet to consume it — but the *pacing* it produces
-//! (16 frames to cross one tile at a walk, and no new turn/step decision
-//! takes effect until that finishes) is modelled, since the issue calls for
-//! "sub-tile step progress" as a first-class concept future rendering work
-//! can build on.
+//! On-foot player movement, collision, connection crossings, and tile pacing.
 
 use assets::{MapId, MetatileCell};
 
@@ -47,193 +9,132 @@ use super::metatile_behavior::MB_NORMAL;
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
 
-/// Frames a normal (on-foot, not running) walk step takes to cross one
-/// tile. Mirrors upstream `MOVE_SPEED_NORMAL`'s per-frame step table
-/// (`sStep1Funcs`, `event_object_movement.c`): 16 entries, each of which
-/// advances the sprite 1 of a tile's 16 pixels. Running (`MOVE_SPEED_FAST_1`,
-/// 8 frames) and every faster/bike speed are not modelled yet — deferred,
-/// still in v1 scope (see the module docs).
+/// Frames required for a normal on-foot step to cross one tile.
 pub const WALK_FRAMES_PER_TILE: u8 = 16;
 
-/// A tile position, `(x, y)`, in whichever map's coordinate space the
-/// current [`MapRuntime`] is bound to.
+/// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
 
-/// The upstream `runningState` machine
-/// (`include/global.fieldmap.h`'s `NOT_MOVING`/`TURN_DIRECTION`/`MOVING`
-/// enum), tracked so a direction change is classified as a turn-in-place
-/// only when the avatar was not already mid-movement — see
-/// [`PlayerState::step`]'s doc for the exact rule and why it produces the
-/// "hold to keep moving even around corners" behaviour real play exhibits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RunningState {
-    NotMoving,
-    Turning,
-    Moving,
-}
-
-/// The player avatar's on-foot movement state: tile position, elevation,
-/// facing, and sub-tile step progress.
+/// The player's tile position, facing, elevation, and step progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlayerState {
     position: TilePos,
-    elevation: u8,
-    /// Upstream `objEvent->previousElevation` — see [`PlayerState::previous_elevation`].
-    previous_elevation: u8,
+    collision_elevation: u8,
+    render_elevation: u8,
     facing: Direction,
-    running: RunningState,
-    /// Frames elapsed of the current step's walk animation, or `None` when
-    /// not mid-step. Upstream's combined `tileTransitionState`/anim-active
-    /// gate, reduced to just the counter a future renderer needs (see the
-    /// module docs).
+    movement_streak_active: bool,
     transit_frames: Option<u8>,
 }
 
-/// The result of one [`PlayerState::step`] call.
+/// The result of one directional-input poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepOutcome {
-    /// No input, or a new step/turn can't begin yet because the previous
-    /// step's walk animation hasn't finished (mirrors upstream's
-    /// `PlayerIsAnimActive()` gate on `PlayerSetAnimId`).
+    /// No input was applied, or the current tile crossing is still in progress.
     Idle,
-    /// The avatar turned to face `direction` without moving (upstream
-    /// `PlayerNotOnBikeTurningInPlace` / `PlayerTurnInPlace`).
+    /// The player faced a new direction without changing tiles.
     Turned(Direction),
-    /// A step in `direction` was attempted and denied by collision
-    /// (upstream `PlayerNotOnBikeCollide`); position is unchanged.
+    /// Collision prevented the attempted step.
     Blocked {
-        /// The direction the step was attempted in.
+        /// The attempted direction.
         direction: Direction,
-        /// Why it was denied.
+        /// Why the attempted step was denied.
         collision: super::collision::Collision,
     },
-    /// The avatar stepped from one tile to an adjacent tile on the same
-    /// map.
+    /// The player entered an adjacent tile on the current map.
     Advanced {
-        /// The tile stepped from.
+        /// The tile departed.
         from: TilePos,
-        /// The tile stepped to.
+        /// The tile entered.
         to: TilePos,
     },
-    /// The step landed outside the current map's grid, on a tile a
-    /// [`super::map_runtime::MapConnection`](assets::MapConnection) covers.
-    /// The caller must rebind its [`MapRuntime`] to `to_map`'s data before
-    /// the next call. The landing cell has already been checked and its
-    /// elevation adopted; `to_position` is expressed in `to_map`'s own
-    /// coordinate space (see
-    /// [`MapRuntime::resolve_connection`](super::map_runtime::MapRuntime::resolve_connection)).
+    /// The player entered an adjacent map through a connection.
+    ///
+    /// The caller must bind its runtime to `to_map` before the next input poll.
+    /// The landing cell has already been checked and its elevation adopted.
     Crossed {
-        /// The map the crossing entered.
+        /// The connected map entered.
         to_map: MapId,
-        /// The landing position, in `to_map`'s coordinate space.
+        /// The landing tile in the connected map's coordinate space.
         to_position: TilePos,
     },
 }
 
-/// A step's destination, resolved before any collision test runs — either a
-/// cell on this map's own grid, or a landing tile across a connection. This
-/// is the "resolved landing data" [`PlayerState::try_start_resolved_step`]
-/// validates; acquiring it (a same-map grid lookup vs. [`MapRuntime::resolve_connection`]
-/// plus a neighbour lookup through [`ConnectedMapData`]) stays with each
-/// call site in [`PlayerState::step`], since only they know which source to
-/// read from.
 #[derive(Debug, Clone, Copy)]
 struct Landing {
-    /// Where this step would land: still on this map for a same-map step,
-    /// or a neighbour's landing tile (in that neighbour's own coordinate
-    /// space) for a connection crossing.
     position: TilePos,
-    /// The destination's decoded metatile cell (grid collision bits and
-    /// elevation).
     cell: MetatileCell,
-    /// The target-side input to [`directionally_impassable`]. A same-map
-    /// step supplies the real destination behavior; a connection crossing
-    /// supplies [`MB_NORMAL`], since a neighbour's tileset attributes are
-    /// not reachable through [`ConnectedMapData`] — see [`PlayerState::step`]'s
-    /// "# Collision" doc for why that narrowing is unobservable today.
-    target_behavior: u8,
-    /// Whether to run the object-event occupancy test against `position`.
-    /// `false` for a connection crossing, whose neighbour's object events
-    /// are likewise unreachable through [`ConnectedMapData`] (same doc).
-    check_object_event: bool,
+    destination_behavior: u8,
+    object_events_accessible: bool,
+}
+
+impl Landing {
+    fn on_current_map(position: TilePos, cell: MetatileCell, destination_behavior: u8) -> Self {
+        Self {
+            position,
+            cell,
+            destination_behavior,
+            object_events_accessible: true,
+        }
+    }
+
+    fn across_connection(position: TilePos, cell: MetatileCell) -> Self {
+        // ConnectedMapData exposes neighbour cells, but not behaviour
+        // attributes or object events.
+        Self {
+            position,
+            cell,
+            destination_behavior: MB_NORMAL,
+            object_events_accessible: false,
+        }
+    }
 }
 
 impl PlayerState {
-    /// A freshly placed player: not moving, facing `facing`, standing at
-    /// `position` on a tile at `elevation`. Upstream's own spawn init
-    /// (`event_object_movement.c:1313-1314`) sets `currentElevation` and
-    /// `previousElevation` to the same starting value, so
-    /// [`PlayerState::previous_elevation`] starts equal to `elevation` too.
+    /// Creates a stationary player on `position`.
+    ///
+    /// Collision and render elevations both start at `elevation`.
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
             position,
-            elevation,
-            previous_elevation: elevation,
+            collision_elevation: elevation,
+            render_elevation: elevation,
             facing,
-            running: RunningState::NotMoving,
+            movement_streak_active: false,
             transit_frames: None,
         }
     }
 
-    /// The avatar's current tile position.
+    /// Returns the current tile position.
     #[must_use]
     pub const fn position(&self) -> TilePos {
         self.position
     }
 
-    /// The avatar's current elevation (adopted from the tile last arrived
-    /// at — see [`PlayerState::step`]). Upstream `objEvent->currentElevation`:
-    /// the field the elevation-mismatch collision check consults, which
-    /// adopts *every* arrival, including the `ELEVATION_TRANSITION` wildcard.
+    /// Returns the elevation used for collision checks.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
-        self.elevation
+        self.collision_elevation
     }
 
-    /// The last *non-transition* elevation the avatar arrived at — upstream
-    /// `objEvent->previousElevation`, which
-    /// [`ObjectEventUpdateElevation`](https://github.com/pret/pokeemerald/blob/master/src/event_object_movement.c)
-    /// retains across `ELEVATION_TRANSITION` crossings rather than
-    /// overwriting with the wildcard. `UpdateObjectEventElevationAndPriority`
-    /// selects the sprite's OAM priority/subsprite table from *this* field,
-    /// not [`PlayerState::elevation`] — a raised tile's render state stays
-    /// pinned to its own elevation while the avatar crosses a transition
-    /// tile onto or off of it, rather than flickering back to the default
-    /// priority for the one frame it stands on the wildcard (S-5, issue
-    /// #218). See [`crate::overworld::player`]'s module docs.
+    /// Returns the last non-transition elevation used for render priority.
     #[must_use]
     pub const fn previous_elevation(&self) -> u8 {
-        self.previous_elevation
+        self.render_elevation
     }
 
-    /// The direction the avatar currently faces.
+    /// Returns the current facing direction.
     #[must_use]
     pub const fn facing(&self) -> Direction {
         self.facing
     }
 
-    /// Turn the avatar in place to face `direction` — upstream
-    /// `ObjectEventSetHeldMovement(playerObj, GetFaceDirectionMovementAction(dir))`,
-    /// which `PlayerFaceApproachingTrainer` uses to turn the player toward an
-    /// approaching sight trainer (`src/trainer_see.c:508-528`, S-5 issue
-    /// #300). `MovementAction_Face*_Step0` set `facingDirection` and return
-    /// `TRUE` in the same frame, so this costs no animation time and touches
-    /// nothing else: position, elevation and any in-progress step's transit
-    /// timer are all left exactly as they were.
-    ///
-    /// Deliberately *not* [`PlayerState::step`]'s own turn-in-place arm
-    /// ([`StepOutcome::Turned`]): that one is player **input**, so it is
-    /// refused while [`PlayerState::in_transit`] and it *steps* rather than
-    /// turns when the avatar already faces `direction`. A scripted face is
-    /// something a cutscene does *to* the player, and neither property
-    /// applies.
+    /// Changes facing without starting or interrupting a step.
     pub const fn face(&mut self, direction: Direction) {
         self.facing = direction;
     }
 
-    /// Frames elapsed of the current step's walk animation, `0` when not
-    /// mid-step.
+    /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
         match self.transit_frames {
@@ -242,16 +143,13 @@ impl PlayerState {
         }
     }
 
-    /// Whether a step is still animating (`step_progress()` is less than
-    /// [`WALK_FRAMES_PER_TILE`]).
+    /// Returns whether a tile crossing is still in progress.
     #[must_use]
     pub const fn in_transit(&self) -> bool {
         self.transit_frames.is_some()
     }
 
-    /// Advance the current step's walk-animation timer by one frame.
-    /// Once [`WALK_FRAMES_PER_TILE`] frames have elapsed, [`PlayerState::step`]
-    /// accepts a new turn/step again.
+    /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     pub fn tick(&mut self) {
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
@@ -261,184 +159,40 @@ impl PlayerState {
         }
     }
 
-    /// `ObjectEventUpdateElevation` (`event_object_movement.c`), called by
-    /// [`PlayerState::step`] once a step onto `dest`'s elevation from a tile
-    /// at `origin`'s elevation has already been accepted — see that
-    /// method's "# Elevation adoption" section for what each field means
-    /// and why the split exists.
-    ///
-    /// [`Self::elevation`] adopts `dest` unconditionally; [`Self::previous_elevation`]
-    /// adopts `dest` only when it is not [`super::collision::ELEVATION_TRANSITION`].
-    /// Both are left untouched if *either* `origin` or `dest` is
-    /// [`super::collision::ELEVATION_MULTI_LEVEL`] — upstream's own early
-    /// return, guarding the sentinel some multi-level bridge overlaps use
-    /// for "this cell doesn't have one well-defined elevation".
-    ///
-    /// This is the *per-step* half of upstream's one function, where
-    /// `currentCoords` and `previousCoords` really are different cells.
-    /// [`super::map_runtime::MapRuntime::arrival_elevation`] is the
-    /// *spawn/arrival* half (issue #379), reading the same rule off a single
-    /// cell because a freshly placed object event's two coordinate pairs are
-    /// equal (`event_object_movement.c:1309-1312`) — see that method's own
-    /// docs for why the `prevElevation` half of the guard collapses there.
-    fn adopt_elevation(&mut self, origin: u8, dest: u8) {
-        if origin == super::collision::ELEVATION_MULTI_LEVEL
-            || dest == super::collision::ELEVATION_MULTI_LEVEL
+    fn adopt_elevation(&mut self, origin_elevation: u8, destination_elevation: u8) {
+        if origin_elevation == super::collision::ELEVATION_MULTI_LEVEL
+            || destination_elevation == super::collision::ELEVATION_MULTI_LEVEL
         {
             return;
         }
-        self.elevation = dest;
-        if dest != super::collision::ELEVATION_TRANSITION {
-            self.previous_elevation = dest;
+        self.collision_elevation = destination_elevation;
+        if destination_elevation != super::collision::ELEVATION_TRANSITION {
+            self.render_elevation = destination_elevation;
         }
     }
 
-    /// Process one input poll: `Some(direction)` for a held direction,
-    /// `None` for no direction held. Mirrors upstream `PlayerStep` narrowed
-    /// to on-foot movement — `MovePlayerAvatarUsingKeypadInput` ->
-    /// `MovePlayerNotOnBike` -> `CheckMovementInputNotOnBike` ->
-    /// `PlayerNotOnBike{NotMoving,TurningInPlace,Moving}`.
+    /// Applies one directional-input poll.
+    ///
+    /// Input is ignored during a tile crossing.
     ///
     /// # Turn vs. step
     ///
-    /// Mirrors `CheckMovementInputNotOnBike`'s exact rule: a direction
-    /// different from the avatar's facing turns it in place *only* when the
-    /// avatar was not already mid-movement (`running != Moving`); once a
-    /// movement streak has started, changing direction steps in the new
-    /// direction immediately rather than inserting a turn frame — this is
-    /// why real play lets you "cut a corner" while holding input, but a
-    /// fresh direction press from a standstill always turns first before it
-    /// steps.
-    ///
-    /// # Busy gate
-    ///
-    /// If [`PlayerState::in_transit`], this call is a no-op returning
-    /// [`StepOutcome::Idle`]. In upstream, `TryInterruptObjectEventSpecialAnim`
-    /// consumes `DIR_NONE` while the held walk movement is unfinished, before
-    /// `CheckMovementInputNotOnBike` can reset `runningState`; preserving the
-    /// state here retains the same corner-cut behavior at tile center. Call
-    /// [`PlayerState::tick`] each frame to drain the transit timer.
+    /// A direction change turns in place unless a movement streak is active.
+    /// Every attempted step starts or continues that streak, including a blocked
+    /// attempt. An accepted poll without directional input ends the streak.
     ///
     /// # Collision
     ///
-    /// The destination tile is tested in `GetCollisionAtCoords`' own order
-    /// (`event_object_movement.c:4658-4672`): first the whole
-    /// `COLLISION_IMPASSABLE` arm — the grid's collision bits
-    /// (`MapGridGetCollisionAt`), the off-the-edge-with-no-connection case
-    /// (`GetMapBorderIdAt(x, y) == CONNECTION_INVALID`), and — new for issue
-    /// #218 — behavior-driven directional impassability
-    /// (`IsMetatileDirectionallyImpassable`, `:4715-4722`), which upstream
-    /// `||`s into that *same* `else if` so all three report
-    /// [`Collision::Impassable`](super::collision::Collision::Impassable) —
-    /// then the elevation mismatch (`IsElevationMismatchAt`, `:7707-7723`),
-    /// then — added for issue #161 — whether a visible object event stands there
-    /// (`DoesObjectCollideWithObjectAt`, reported as
-    /// [`Collision::ObjectEvent`](super::collision::Collision::ObjectEvent)).
-    /// `event_data` is what makes that last test honest: upstream scans the
-    /// *spawned* `gObjectEvents`, and a template with its hide flag set is
-    /// never spawned, so a hidden NPC must not block — see
-    /// [`visible_object_event_at`], which the interaction lookup
-    /// ([`facing_object_event`](super::object_event::facing_object_event))
-    /// shares, so movement and interaction can never disagree about which
-    /// object occupies a tile.
-    ///
-    /// A blocked step is *not* a no-op: `self.facing` has already been set
-    /// to `direction` above, matching `PlayerNotOnBikeCollide`
-    /// (`field_player_avatar.c:1011-1015`), which plays a walk-in-place
-    /// animation in the attempted direction — walking into an NPC turns the
-    /// avatar to face it, exactly as walking into a wall does.
-    ///
-    /// Three deliberate narrowings against upstream, all invisible here:
-    ///
-    /// - **The player never collides with itself.** Upstream's scan skips
-    ///   `curObject != objectEvent`; this port has no player entry to skip,
-    ///   because [`MapRuntime`]'s object events are the map's own
-    ///   `object_events` list (map.json NPCs and props), which never
-    ///   contains the player — the avatar is this `PlayerState`, held apart
-    ///   from the map's data entirely.
-    /// - **The connection-crossing branch below does not run the object
-    ///   test.** [`ConnectedMapData`] exposes a neighbour's dimensions and
-    ///   grid cells but no event data, so a neighbouring map's NPCs are not
-    ///   reachable from here; the current map's own object events all lie
-    ///   inside its own grid, so testing them against an off-grid landing
-    ///   tile would be vacuous anyway. Wiring cross-map object events in
-    ///   belongs with the rest of connection support (see
-    ///   `crate::overworld`'s scope notes), not with this slice.
-    /// - **The connection-crossing branch runs only the *standing* half of
-    ///   the directional-impassability test.** That half needs only this
-    ///   map's own behavior, which [`MapRuntime`] has; the target half would
-    ///   need the *neighbouring* map's tileset attribute tables, and
-    ///   [`ConnectedMapData`] hands out decoded cells only. The landing tile
-    ///   is therefore evaluated as [`MB_NORMAL`] — the same "unrecognized
-    ///   behavior is ordinary ground" convention
-    ///   [`MapRuntime::metatile_behavior`]'s `None` already carries (see
-    ///   `crate::overworld::metatile_behavior`'s module docs). No bundled
-    ///   map puts an `MB_IMPASSABLE_*` tile on a connection edge, so this
-    ///   narrowing is unobservable today; it is listed rather than hidden.
-    ///
-    /// The directional test's *standing*-side input is upstream's
-    /// `objectEvent->currentMetatileBehavior`, which
-    /// `ObjectEventUpdateMetatileBehaviors` (`:7428-7432`) keeps equal to
-    /// `MapGridGetMetatileBehaviorAt(currentCoords)`. This port re-reads the
-    /// grid at [`Self::position`] instead of caching a field — the same
-    /// value by construction, and one fewer piece of state to keep in sync.
+    /// Same-map steps test impassability, elevation, then visible object
+    /// occupancy. Connection landings omit neighbouring behaviour attributes and
+    /// object events because [`ConnectedMapData`] does not expose them.
+    /// A blocked attempt still leaves the player facing the attempted direction.
     ///
     /// # Elevation adoption
     ///
-    /// [`Self::adopt_elevation`] is `ObjectEventUpdateElevation` in full for
-    /// a player who is already on the map and steps
-    /// ([`super::map_runtime::MapRuntime::arrival_elevation`] is the same
-    /// function's arrival read, for a player being placed):
-    /// [`Self::elevation`] (upstream `currentElevation`, what the collision
-    /// check above consults) adopts *every* arrival elevation, including the
-    /// `ELEVATION_TRANSITION` wildcard; [`Self::previous_elevation`]
-    /// (upstream `previousElevation`) only overwrites on a *non*-transition
-    /// arrival, so it retains the last "real" elevation across however many
-    /// transition tiles the avatar crosses in between. This is what a
-    /// renderer needs to select OAM priority/subsprite table correctly for
-    /// a raised tile that neighbours a transition wildcard — e.g. the
-    /// protagonist's bedroom bed (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`,
-    /// S-5 issue #218), whose raised elevation-4 edge tiles sit directly
-    /// against `ELEVATION_TRANSITION` (0) tiles on both the north and south
-    /// sides.
-    ///
-    /// **That bed is also where issue #218's reported escape actually
-    /// lives — and elevation is not what closes it.** The bed's authored
-    /// cells (`x=0..2, y=4..6` in the room's own local space) decode to a
-    /// `0 → 4 → 0` elevation run down each *side* column and a
-    /// collision-bit-blocked center tile at `(1, 5)`. Those side columns are
-    /// walkable end to end in this port **and in upstream alike**, and that
-    /// is faithful, not a bug: [`elevation_mismatch`] matches
-    /// `IsElevationMismatchAt` field for field
-    /// (`event_object_movement.c:7707-7723`), both sides run the identical
-    /// transition-wildcard formula over the identical authored data, and
-    /// that function's only mover-side input is
-    /// `objectEvent->currentElevation` — never `previousElevation`, so the
-    /// current-vs-previous split does not and must not move any of those
-    /// verdicts. Tightening the wildcard to "fix" the side columns would
-    /// break the bedroom's own stair warp (issue #163) and every
-    /// bridge/staircase landing built on the same rule.
-    ///
-    /// The step that was genuinely blocked upstream and permitted here is a
-    /// different one: the bed's **center pillow tile** `(1, 4)`, elevation
-    /// `3`, whose metatile `0x284` carries behavior `0xC0`
-    /// ([`MB_IMPASSABLE_SOUTH_AND_NORTH`](super::metatile_behavior::MB_IMPASSABLE_SOUTH_AND_NORTH))
-    /// in `data/tilesets/secondary/brendans_mays_house/metatile_attributes.bin`.
-    /// Its collision bits are `0` and its elevation matches the floor above
-    /// it, so neither of the two tests this port used to run said anything
-    /// about it — the avatar could walk straight through the pillow and out
-    /// the bed's north side. Upstream refuses both halves of that crossing
-    /// in `IsMetatileDirectionallyImpassable`: standing on `(1, 4)` and
-    /// moving north is stopped by the *standing*-tile predicate, and
-    /// standing on `(1, 3)` and moving south by the *target*-tile one. That
-    /// check is now modeled (see the "# Collision" section above and
-    /// [`directionally_impassable`]), and pinned both as a unit test on this
-    /// method and by `crates/pokeemerald-rs`'s
-    /// `bedroom_bed_center_pillow_cannot_be_crossed_lengthwise` real-pack
-    /// regression, which walks the real route onto the pillow and asserts
-    /// the north-side exit does not complete. The side-column parity test
-    /// alongside it stays exactly as it was — those columns *are* walkable
-    /// in both.
+    /// A successful landing adopts its elevation for collision. Render elevation
+    /// changes only for a non-transition landing. If either endpoint is
+    /// multi-level, both elevation values remain unchanged.
     pub fn step(
         &mut self,
         input: Option<Direction>,
@@ -451,48 +205,31 @@ impl PlayerState {
         }
 
         let Some(direction) = input else {
-            self.running = RunningState::NotMoving;
+            self.movement_streak_active = false;
             return StepOutcome::Idle;
         };
 
-        if direction != self.facing && self.running != RunningState::Moving {
-            self.running = RunningState::Turning;
+        if direction != self.facing && !self.movement_streak_active {
             self.facing = direction;
             return StepOutcome::Turned(direction);
         }
 
-        self.running = RunningState::Moving;
+        self.movement_streak_active = true;
         self.facing = direction;
 
         let (dx, dy) = direction.delta();
         let target = (self.position.0 + dx, self.position.1 + dy);
 
-        // `objectEvent->currentMetatileBehavior` (kept fresh by
-        // ObjectEventUpdateMetatileBehaviors, `:7428-7432`), re-read from the
-        // grid rather than cached -- see this method's "# Collision" doc.
-        // An unclassifiable attribute entry reads as ordinary ground, the
-        // same convention `MapRuntime::metatile_behavior`'s `None` carries
-        // everywhere else.
         let standing_behavior = runtime
             .metatile_behavior(self.position.0, self.position.1)
             .unwrap_or(MB_NORMAL);
 
         if let Some(cell) = runtime.metatile_cell(target.0, target.1) {
-            // GetCollisionAtCoords' COLLISION_IMPASSABLE arm, in full: the
-            // grid's collision bits `||` IsMetatileDirectionallyImpassable
-            // (`:4663`). One arm upstream, so one arm here -- and both ahead
-            // of the elevation mismatch below, which is a *different*
-            // COLLISION_* value.
             let target_behavior = runtime
                 .metatile_behavior(target.0, target.1)
                 .unwrap_or(MB_NORMAL);
             let from = self.position;
-            let landing = Landing {
-                position: target,
-                cell,
-                target_behavior,
-                check_object_event: true,
-            };
+            let landing = Landing::on_current_map(target, cell, target_behavior);
             return match self.try_start_resolved_step(
                 direction,
                 runtime,
@@ -517,18 +254,7 @@ impl PlayerState {
                     collision: Collision::Impassable,
                 };
             };
-            // Same arm as above, minus the target half: a neighbouring map's
-            // tileset attributes are not reachable through `ConnectedMapData`,
-            // so the landing tile reads as MB_NORMAL (documented narrowing in
-            // this method's "# Collision" section). The standing half is this
-            // map's own tile and is evaluated for real; the object-event
-            // test is skipped entirely for the same reason (same section).
-            let landing = Landing {
-                position: crossing.position,
-                cell,
-                target_behavior: MB_NORMAL,
-                check_object_event: false,
-            };
+            let landing = Landing::across_connection(crossing.position, cell);
             return match self.try_start_resolved_step(
                 direction,
                 runtime,
@@ -553,17 +279,6 @@ impl PlayerState {
         }
     }
 
-    /// The shared sequence both [`PlayerState::step`] branches run against a
-    /// resolved `landing` — `GetCollisionAtCoords`' own order (collision
-    /// bits and directional impassability together, then the elevation
-    /// mismatch, then, when `landing.check_object_event` says to, the
-    /// object-event occupancy test) — and, once every test clears, the
-    /// elevation adoption and transit start common to every successful
-    /// step. See [`PlayerState::step`]'s "# Collision" and "# Elevation
-    /// adoption" doc sections for why each test is ordered and gated the
-    /// way it is; this method only centralizes that ordering; which source
-    /// supplied `landing` and which [`StepOutcome`] variant to build from
-    /// the result stay with each call site, since only they know that.
     fn try_start_resolved_step(
         &mut self,
         direction: Direction,
@@ -573,24 +288,19 @@ impl PlayerState {
         landing: Landing,
     ) -> Result<(), Collision> {
         if landing.cell.collision != 0
-            || directionally_impassable(standing_behavior, landing.target_behavior, direction)
+            || directionally_impassable(standing_behavior, landing.destination_behavior, direction)
         {
             return Err(Collision::Impassable);
         }
-        if elevation_mismatch(self.elevation, landing.cell.elevation) {
+        if elevation_mismatch(self.collision_elevation, landing.cell.elevation) {
             return Err(Collision::ElevationMismatch);
         }
-        // GetCollisionAtCoords' last test: COLLISION_OBJECT_EVENT via
-        // DoesObjectCollideWithObjectAt. Queried at the *player's* current
-        // elevation -- upstream passes `objectEvent->currentElevation`, not
-        // the destination cell's -- so `AreElevationsCompatible` compares
-        // the two movers, not the mover and the ground.
-        if landing.check_object_event
+        if landing.object_events_accessible
             && visible_object_event_at(
                 runtime,
                 landing.position.0,
                 landing.position.1,
-                self.elevation,
+                self.collision_elevation,
                 event_data,
             )
             .is_some()
@@ -598,14 +308,11 @@ impl PlayerState {
             return Err(Collision::ObjectEvent);
         }
 
-        // Read before `self.position` moves: `adopt_elevation`'s `origin`
-        // argument is `ObjectEventUpdateElevation`'s own fresh
-        // `MapGridGetElevationAt(previousCoords)` read, not a cached field
-        // (see that method's doc) -- always this map's own grid, since the
-        // avatar's *origin* tile never moves to a neighbour's map.
         let origin_elevation = runtime
             .metatile_cell(self.position.0, self.position.1)
-            .map_or(self.elevation, |origin_cell| origin_cell.elevation);
+            .map_or(self.collision_elevation, |origin_cell| {
+                origin_cell.elevation
+            });
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.transit_frames = Some(0);
@@ -623,10 +330,6 @@ mod tests {
         MetatileCell, ObjectEvent, RegionMapSectionId, Weather,
     };
 
-    /// A fresh event-flag store: nothing hidden. Every fixture below whose
-    /// map has no object events at all is indifferent to it; the
-    /// object-event collision tests at the end of this module build their
-    /// own stores with specific `FLAG_HIDE_*` bits set.
     const NO_FLAGS: EventData = EventData::new();
 
     fn flat_runtime(
@@ -725,11 +428,6 @@ mod tests {
         )
     }
 
-    /// A scripted [`PlayerState::face`] turns the avatar and does nothing
-    /// else -- including mid-step, where the *input* turn arm
-    /// ([`StepOutcome::Turned`]) is refused outright, and when the avatar
-    /// already faces that way, where the input arm would step instead
-    /// (that method's own docs).
     #[test]
     fn a_scripted_face_turns_the_player_without_moving_or_disturbing_a_step() {
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
@@ -822,8 +520,6 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
-        // Facing South, tap East: turn only, no step (CheckMovementInputNotOnBike:
-        // direction != movementDirection && runningState != MOVING -> TURN_DIRECTION).
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(outcome, StepOutcome::Turned(Direction::East));
         assert_eq!(
@@ -834,7 +530,6 @@ mod tests {
         assert_eq!(player.facing(), Direction::East);
         assert!(!player.in_transit());
 
-        // Holding the same (now-facing) direction next poll steps.
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
@@ -867,7 +562,6 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
-        // Start a south step, then let the walk animation finish.
         assert!(matches!(
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
@@ -877,9 +571,6 @@ mod tests {
         }
         assert!(!player.in_transit());
 
-        // Still "moving" (held South continuously); now change to East. Per
-        // CheckMovementInputNotOnBike, `runningState == MOVING` short-circuits the
-        // turn-in-place branch, so this steps East immediately rather than turning.
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
@@ -917,9 +608,6 @@ mod tests {
             StepOutcome::Advanced { .. }
         ));
 
-        // TryInterruptObjectEventSpecialAnim consumes DIR_NONE while the
-        // current held movement is unfinished, so CheckMovementInputNotOnBike
-        // cannot reset runningState to NOT_MOVING during these polls.
         for _ in 0..WALK_FRAMES_PER_TILE {
             assert_eq!(
                 player.step(None, &runtime, &no_connections, &NO_FLAGS),
@@ -967,12 +655,10 @@ mod tests {
         for _ in 0..WALK_FRAMES_PER_TILE {
             player.tick();
         }
-        // Release input for one poll.
         assert_eq!(
             player.step(None, &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Idle
         );
-        // A new direction now turns first rather than stepping immediately.
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(outcome, StepOutcome::Turned(Direction::East));
     }
@@ -1003,7 +689,6 @@ mod tests {
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
         ));
-        // Immediately try to step again before ticking: busy, no-op.
         assert_eq!(
             player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Idle
@@ -1017,7 +702,6 @@ mod tests {
 
     #[test]
     fn collision_bit_blocks_the_step_and_leaves_position_unchanged() {
-        // Wall directly south of the player's start.
         let (bytes, header, events) = flat_runtime(5, 5, |_, y| u8::from(y == 3));
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
@@ -1060,7 +744,6 @@ mod tests {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
         for y in 0..height {
             for x in 0..width {
-                // Every tile is elevation 3 except the one south of start (elevation 7).
                 let elevation = if x == 2 && y == 3 { 7 } else { 3 };
                 let raw = MetatileCell {
                     metatile_id: 1,
@@ -1127,20 +810,6 @@ mod tests {
         assert_eq!(player.position(), (2, 2));
     }
 
-    // -- Directional metatile impassability (S-5, issue #218) --------------
-
-    /// A 3x8 grid laid out in the protagonist bedroom's *own* local
-    /// coordinate space (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), so the
-    /// coordinates below are literally the ones issue #218 cites. Every
-    /// cell is plain, walkable, elevation-3 floor with clear collision bits
-    /// — including `(1, 5)`, which the real map walls off — *except* that
-    /// `(1, 4)`, the bed's center pillow tile, carries behavior
-    /// [`MB_IMPASSABLE_SOUTH_AND_NORTH`] (upstream metatile `0x284`'s
-    /// attribute `0x00C0`). Stripping every other obstruction is the point:
-    /// whatever blocks a step in these tests can only be the behavior.
-    ///
-    /// `pillow_elevation` lets one test additionally make the pillow
-    /// elevation-mismatched, to pin `GetCollisionAtCoords`' ordering.
     fn bed_pillow_runtime(pillow_elevation: u8) -> MapRuntime<'static> {
         const WIDTH: u16 = 3;
         const HEIGHT: u16 = 8;
@@ -1151,8 +820,6 @@ mod tests {
             for x in 0..WIDTH {
                 let is_pillow = (x, y) == PILLOW;
                 let raw = MetatileCell {
-                    // Metatile id 1 is the pillow, id 0 is everything else;
-                    // both index the primary attribute table below.
                     metatile_id: u16::from(is_pillow),
                     collision: 0,
                     elevation: if is_pillow { pillow_elevation } else { 3 },
@@ -1162,10 +829,11 @@ mod tests {
             }
         }
 
-        // A `metatile_attributes.bin`-shaped buffer: one little-endian u16
-        // per metatile, behavior in bits 0-7 (`METATILE_ATTR_BEHAVIOR_MASK`)
-        // and layer type in bits 12-15 (0 == `METATILE_LAYER_TYPE_NORMAL`).
-        let attrs = vec![MB_NORMAL, 0x00, MB_IMPASSABLE_SOUTH_AND_NORTH, 0x00];
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_IMPASSABLE_SOUTH_AND_NORTH).to_le_bytes(),
+        ]
+        .concat();
 
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_TEST"),
@@ -1190,18 +858,6 @@ mod tests {
         )
     }
 
-    /// Issue #218's AC#1, standing-tile half: the avatar on the bed's center
-    /// pillow `(1, 4)` at elevation 3, pressing North, must get
-    /// `COLLISION_IMPASSABLE`. Upstream reaches that verdict through
-    /// `IsMetatileDirectionallyImpassable`'s
-    /// `gOppositeDirectionBlockedMetatileFuncs[DIR_NORTH - 1]` —
-    /// `MetatileBehavior_IsNorthBlocked` applied to
-    /// `objectEvent->currentMetatileBehavior` (`event_object_movement.c:4717`)
-    /// — which matches `MB_IMPASSABLE_SOUTH_AND_NORTH`
-    /// (`metatile_behavior.c:957-966`). This port returned
-    /// `Collision::None` here before the fix, which is the escape the issue
-    /// reports: the avatar walked straight off the bed through its
-    /// headboard.
     #[test]
     fn the_beds_pillow_tile_cannot_be_left_northward() {
         let runtime = bed_pillow_runtime(3);
@@ -1222,13 +878,6 @@ mod tests {
         );
     }
 
-    /// Issue #218's AC#1, target-tile half — the mirror of the test above:
-    /// standing on the ordinary floor tile `(1, 3)` directly north of the
-    /// pillow and pressing South is `COLLISION_IMPASSABLE` too, this time
-    /// via `gDirectionBlockedMetatileFuncs[DIR_SOUTH - 1]` —
-    /// `MetatileBehavior_IsNorthBlocked` applied to the *destination's*
-    /// behavior (`event_object_movement.c:4718`). The standing tile here is
-    /// plain floor, so only the target half can be responsible.
     #[test]
     fn the_beds_pillow_tile_cannot_be_entered_from_the_north() {
         let runtime = bed_pillow_runtime(3);
@@ -1245,12 +894,6 @@ mod tests {
         assert_eq!(player.position(), (1, 3));
     }
 
-    /// The other half of the bed's shape, and the reason
-    /// `MB_IMPASSABLE_SOUTH_AND_NORTH` is not just "impassable": east/west
-    /// traffic across the pillow is untouched, which is how the tile stays
-    /// reachable from the bed's side columns at all. A directional block
-    /// that leaked into the perpendicular axis would silently wall the bed
-    /// off entirely.
     #[test]
     fn the_beds_pillow_tile_stays_crossable_east_to_west() {
         let runtime = bed_pillow_runtime(3);
@@ -1274,18 +917,8 @@ mod tests {
         );
     }
 
-    /// `GetCollisionAtCoords`' ordering (`event_object_movement.c:4663-4668`):
-    /// `IsMetatileDirectionallyImpassable` shares the `COLLISION_IMPASSABLE`
-    /// arm with the grid's collision bits, *ahead* of
-    /// `IsElevationMismatchAt`'s separate `COLLISION_ELEVATION_MISMATCH`
-    /// arm. A tile that is both directionally blocked and elevation-
-    /// mismatched must therefore report `Impassable`, never
-    /// `ElevationMismatch` — the one place the two new checks' relative
-    /// position is observable in the returned value.
     #[test]
     fn directional_impassability_outranks_the_elevation_mismatch() {
-        // Pillow at elevation 7 against a player at elevation 3: mismatched
-        // *and* north-blocked.
         let runtime = bed_pillow_runtime(7);
         let mut player = PlayerState::new((1, 3), 3, Direction::South);
 
@@ -1298,10 +931,6 @@ mod tests {
         );
     }
 
-    /// `ObjectEventUpdateElevation` adopts `currentElevation` from the
-    /// arrival tile *including* `ELEVATION_TRANSITION` (0) — that 0 is the
-    /// wildcard letting the next step cross between levels (stairs/bridge
-    /// landings). A 3 → transition → 5 walk must therefore succeed.
     #[test]
     fn transition_tile_lets_the_next_step_cross_between_elevations() {
         let width = 5u16;
@@ -1309,8 +938,6 @@ mod tests {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
         for y in 0..height {
             for x in 0..width {
-                // Column x=2: elevation 3 at y=1, transition (0) at y=2,
-                // elevation 5 at y=3; everything else elevation 3.
                 let elevation = match (x, y) {
                     (2, 2) => 0,
                     (2, 3) => 5,
@@ -1373,18 +1000,12 @@ mod tests {
         assert_eq!(
             player.previous_elevation(),
             3,
-            "fixture precondition: a fresh player's previous_elevation starts \
-             equal to its spawn elevation, matching upstream's own spawn init"
+            "the constructor must align collision and render elevations"
         );
-        // Step onto the transition tile: allowed, elevation becomes the
-        // wildcard 0.
         let onto_transition =
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(matches!(onto_transition, StepOutcome::Advanced { .. }));
         assert_eq!(player.elevation(), 0);
-        // issue #218: `previousElevation` is *not* overwritten by a
-        // transition arrival -- it retains the last real elevation (3)
-        // across however many transition tiles the avatar crosses.
         assert_eq!(
             player.previous_elevation(),
             3,
@@ -1394,8 +1015,6 @@ mod tests {
         for _ in 0..WALK_FRAMES_PER_TILE {
             player.tick();
         }
-        // Step from the transition tile onto elevation 5: the wildcard
-        // permits it (upstream would block 3 → 5 directly).
         let onto_upper = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(matches!(onto_upper, StepOutcome::Advanced { .. }));
         assert_eq!(player.position(), (2, 3));
@@ -1408,12 +1027,6 @@ mod tests {
         );
     }
 
-    /// The exact bed-adjacent shape issue #218 reports: a raised elevation
-    /// sitting directly against the transition wildcard on *both* sides
-    /// (`3 → 0 → 4 → 0 → 3`), pinning that `previous_elevation` survives
-    /// two separate transition crossings without ever resetting to the
-    /// wildcard itself, and lands on the *second* real elevation (3) after
-    /// leaving the raised tile, not getting stuck on the first (4).
     #[test]
     fn previous_elevation_survives_a_raised_tile_flanked_by_transitions_on_both_sides() {
         fn step_south(player: &mut PlayerState, runtime: &MapRuntime<'_>) {
@@ -1432,8 +1045,6 @@ mod tests {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
         for y in 0..height {
             for x in 0..width {
-                // Column x=2, north to south: 3 (y=1), 0 (y=2), 4 (y=3),
-                // 0 (y=4), 3 (y=5) -- the bed's own 0 -> 4 -> 0 shape.
                 let elevation = match (x, y) {
                     (2, 2 | 4) => 0,
                     (2, 3) => 4,
@@ -1494,13 +1105,13 @@ mod tests {
 
         let mut player = PlayerState::new((2, 1), 3, Direction::South);
 
-        step_south(&mut player, &runtime); // (2,1) -> (2,2): onto the north transition tile.
+        step_south(&mut player, &runtime);
         assert_eq!((player.elevation(), player.previous_elevation()), (0, 3));
 
-        step_south(&mut player, &runtime); // (2,2) -> (2,3): onto the raised tile.
+        step_south(&mut player, &runtime);
         assert_eq!((player.elevation(), player.previous_elevation()), (4, 4));
 
-        step_south(&mut player, &runtime); // (2,3) -> (2,4): onto the south transition tile.
+        step_south(&mut player, &runtime);
         assert_eq!(
             (player.elevation(), player.previous_elevation()),
             (0, 4),
@@ -1508,17 +1119,10 @@ mod tests {
              reset by standing on the wildcard"
         );
 
-        step_south(&mut player, &runtime); // (2,4) -> (2,5): back onto ordinary elevation 3.
+        step_south(&mut player, &runtime);
         assert_eq!((player.elevation(), player.previous_elevation()), (3, 3));
     }
 
-    /// `ObjectEventUpdateElevation`'s early return: a multi-level tile on
-    /// *either* side of a step (not just the destination) leaves both
-    /// elevation fields untouched. Before this fix, [`PlayerState::step`]
-    /// only ever checked the *destination* cell for
-    /// [`super::super::collision::ELEVATION_MULTI_LEVEL`], so a step off a
-    /// multi-level origin onto an ordinary tile would have wrongly adopted
-    /// that tile's elevation.
     #[test]
     fn a_multi_level_origin_tile_skips_the_elevation_update_even_though_the_destination_is_ordinary(
     ) {
@@ -1527,8 +1131,6 @@ mod tests {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
         for y in 0..height {
             for x in 0..width {
-                // (2,2): multi-level (15), the tile the player starts on.
-                // (2,3): ordinary elevation 7, the step's destination.
                 let elevation = if (x, y) == (2, 2) {
                     super::super::collision::ELEVATION_MULTI_LEVEL
                 } else {
@@ -1587,9 +1189,6 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        // Standing on the multi-level tile itself, at the transition
-        // wildcard (so the mismatch check ahead of adoption can never be
-        // what blocks this step, regardless of the destination's elevation).
         let mut player = PlayerState::new((2, 2), 0, Direction::South);
         let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(
@@ -1685,10 +1284,6 @@ mod tests {
         assert_eq!(player.elevation(), 3);
     }
 
-    /// `GetCollisionAtCoords` tests the grid's collision bits ahead of the
-    /// elevation mismatch (see [`a_wall_outranks_an_object_event_on_the_same_tile`]);
-    /// a connection crossing must run the shared sequence in that same
-    /// order, not just the same-map branch.
     #[test]
     fn connection_collision_bit_outranks_elevation_mismatch() {
         let runtime = south_connected_runtime();
@@ -1717,14 +1312,6 @@ mod tests {
         assert_eq!(player.elevation(), 3);
     }
 
-    /// The narrowing [`PlayerState::step`]'s "# Collision" doc names: a
-    /// connection crossing never runs the local object-event check, because
-    /// a neighbour's object events are not reachable through
-    /// [`ConnectedMapData`]. This map's own event list places an object at
-    /// the same *numeric* coordinates as the neighbour's landing position —
-    /// if the crossing branch ever ran that check against this map's own
-    /// runtime (the only one it has), it would misread this unrelated
-    /// object as occupying the landing tile and wrongly block the crossing.
     #[test]
     fn connection_crossing_does_not_check_local_object_events() {
         let (bytes, mut header, _) = flat_runtime(5, 5, |_, _| 0);
@@ -1815,15 +1402,6 @@ mod tests {
         assert_eq!(player.position(), (2, 4));
     }
 
-    // -- Object-event collision (COLLISION_OBJECT_EVENT) ------------------
-    //
-    // Upstream `GetCollisionAtCoords`' last test,
-    // `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`,
-    // `:4724-4742`). See `PlayerState::step`'s own "# Collision" section.
-
-    /// A stationary object event at `(x, y, elevation)` with hide flag
-    /// `flag` (`"0"` for the never-hidden sentinel). Only the four fields
-    /// collision reads carry meaning; the rest are inert filler.
     fn object(local_id: u8, x: i16, y: i16, elevation: u8, flag: &'static str) -> ObjectEvent {
         ObjectEvent {
             local_id,
@@ -1841,8 +1419,6 @@ mod tests {
         }
     }
 
-    /// A leaked-`'static` 10x10 flat (elevation 3) map carrying `events`,
-    /// with `collision_at` deciding each cell's collision bits.
     fn runtime_with_events(
         events: &'static MapEvents,
         collision_at: impl Fn(u16, u16) -> u8,
@@ -1869,8 +1445,6 @@ mod tests {
         )
     }
 
-    /// [`runtime_with_events`] over a synthetic object-event list, on a map
-    /// with no walls anywhere.
     fn runtime_with_objects(object_events: &'static [ObjectEvent]) -> MapRuntime<'static> {
         let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
             id: assets::MapId("MAP_TEST"),
@@ -1883,30 +1457,17 @@ mod tests {
         runtime_with_events(events, |_, _| 0)
     }
 
-    /// The headline regression: a visible object event occupies its tile,
-    /// so a step into it is denied. Before this, holding a direction walked
-    /// the avatar straight through an NPC.
-    ///
-    /// Also pins the *turn* half, mirroring
-    /// [`collision_bit_blocks_the_step_and_leaves_position_unchanged`]:
-    /// `PlayerNotOnBikeCollide` (`field_player_avatar.c:1011-1015`) plays a
-    /// walk-in-place animation in the attempted direction, so the avatar
-    /// ends up facing what it bumped into -- an NPC blocks exactly like a
-    /// wall does, no more and no less.
     #[test]
     fn a_visible_object_event_blocks_the_step_and_leaves_the_player_facing_it() {
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
         let runtime = runtime_with_objects(objects);
 
-        // Facing North, so a fresh South press turns first (the ordinary
-        // CheckMovementInputNotOnBike rule -- unchanged by this fix).
         let mut player = PlayerState::new((2, 2), 3, Direction::North);
         assert_eq!(
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Turned(Direction::South)
         );
 
-        // Now the step itself: denied, with the avatar left facing the NPC.
         assert_eq!(
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Blocked {
@@ -1925,8 +1486,6 @@ mod tests {
             "a blocked step must not start a transition"
         );
 
-        // And it stays blocked while the direction is held -- not a
-        // one-frame hiccup the next poll walks through.
         for _ in 0..4 {
             assert!(matches!(
                 player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
@@ -1939,11 +1498,6 @@ mod tests {
         }
     }
 
-    /// The other half of the same rule: upstream scans *spawned* object
-    /// events, and `TrySpawnObjectEvents` skips any template whose hide
-    /// flag is set (`event_object_movement.c:1670-1672`) -- so a hidden NPC
-    /// is not there to collide with. Identical fixture to the test above,
-    /// only the flag differing.
     #[test]
     fn a_hidden_object_event_does_not_block_the_step() {
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(
@@ -1955,8 +1509,11 @@ mod tests {
         )]));
         let runtime = runtime_with_objects(objects);
         let mut data = EventData::new();
-        // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM (0x2F8).
-        data.flag_set(0x2F8).unwrap();
+        let hidden_npc_flag = assets::object_event_flags::resolve(
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
+        )
+        .expect("a bundled hide flag must resolve");
+        data.flag_set(hidden_npc_flag).unwrap();
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert_eq!(
@@ -1965,20 +1522,13 @@ mod tests {
                 from: (2, 2),
                 to: (2, 3),
             },
-            "a hidden template was never spawned upstream, so it cannot block"
+            "a hidden template does not occupy the map"
         );
         assert_eq!(player.position(), (2, 3));
     }
 
-    /// `AreElevationsCompatible` (`event_object_movement.c:7789-7797`): two
-    /// objects at different, concrete elevations do not collide -- and the
-    /// `ELEVATION_TRANSITION` (0) wildcard on either side means they do.
-    /// Note the comparison is mover-elevation vs. object-elevation, *not*
-    /// against the destination cell's ground elevation (which this fixture
-    /// holds at 3 throughout).
     #[test]
     fn object_event_collision_respects_the_elevation_wildcard() {
-        // Concrete 5 vs. the player's 3: incompatible, no collision.
         let upstairs: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 5, "0")]));
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -1991,8 +1541,6 @@ mod tests {
             StepOutcome::Advanced { .. }
         ));
 
-        // The same object at ELEVATION_TRANSITION: the wildcard makes every
-        // elevation compatible, so it collides.
         let transitional: &'static [ObjectEvent] = Box::leak(Box::new([object(
             1,
             2,
@@ -2015,11 +1563,6 @@ mod tests {
         );
     }
 
-    /// `GetCollisionAtCoords` tests the grid's collision bits *before*
-    /// `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`),
-    /// so a tile that is both walled and occupied reports
-    /// `COLLISION_IMPASSABLE`. Reordering the checks in
-    /// [`PlayerState::step`] fails here.
     #[test]
     fn a_wall_outranks_an_object_event_on_the_same_tile() {
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
@@ -2043,13 +1586,6 @@ mod tests {
         );
     }
 
-    /// `GetCollisionAtCoords` tests the elevation mismatch *before*
-    /// `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`),
-    /// so a tile that is both elevation-mismatched and occupied by an
-    /// object compatible with the player's own elevation reports
-    /// `COLLISION_ELEVATION_MISMATCH`, never `COLLISION_OBJECT_EVENT`.
-    /// Reordering the checks in [`PlayerState::try_start_resolved_step`]
-    /// fails here.
     #[test]
     fn elevation_mismatch_outranks_an_object_event_on_the_same_tile() {
         let width = 5u16;
@@ -2057,7 +1593,6 @@ mod tests {
         let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
         for y in 0..height {
             for x in 0..width {
-                // Every tile is elevation 3 except the one south of start (elevation 7).
                 let elevation = if x == 2 && y == 3 { 7 } else { 3 };
                 let raw = MetatileCell {
                     metatile_id: 1,
@@ -2095,8 +1630,6 @@ mod tests {
             battle_scene: BattleScene::Normal,
             connections: &[] as &'static [MapConnection],
         };
-        // At the player's own elevation (3), so if the object test ran
-        // first it would report `ObjectEvent` instead.
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
         let events = MapEvents {
             id: assets::MapId("MAP_TEST"),
@@ -2128,13 +1661,6 @@ mod tests {
         assert_eq!(player.position(), (2, 2));
     }
 
-    /// The finding-1/finding-2 intersection: templates stacked on one tile
-    /// with independent hide flags (the Birch lab's three starter balls, all
-    /// at `(6, 8)`). Testing visibility *after* picking the first positional
-    /// match would read the hidden first template, conclude "nothing there",
-    /// and let the player walk through the ball that is actually on screen.
-    /// Whether the tile blocks must depend on whether *any* template there is
-    /// visible, not on the first one declared.
     #[test]
     fn a_hidden_first_stack_blocks_only_while_some_template_on_the_tile_is_visible() {
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([
@@ -2155,8 +1681,6 @@ mod tests {
         ]));
         let runtime = runtime_with_objects(objects);
 
-        // Only the first is hidden: the second is on screen, so the tile is
-        // occupied.
         let mut data = EventData::new();
         let cyndaquil = assets::object_event_flags::resolve(
             "FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_CYNDAQUIL",
@@ -2179,9 +1703,6 @@ mod tests {
              first one declared there is hidden"
         );
 
-        // Hide the second one too and the tile frees up -- which is what
-        // makes the assertion above about *visibility*, not merely about
-        // scanning past the first entry.
         data.flag_set(totodile).unwrap();
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
@@ -2190,16 +1711,6 @@ mod tests {
         ));
     }
 
-    /// Real-data regression, no pack needed: the bundled
-    /// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` event table places Mom
-    /// (`OBJ_EVENT_GFX_MOM`) at `(2, 6)`
-    /// (`data/maps/LittlerootTown_BrendansHouse_1F/map.json`), and
-    /// `EventScript_ResetAllMapFlags` does *not* hide her, so on a fresh
-    /// save she is standing there. Walking north into her tile must stop the
-    /// player on `(2, 7)`, facing her -- the exact "holding Up walks through
-    /// Mom" bug this fixes. Only the map's real *event* data is used; the
-    /// layout under it is a synthetic open grid, so no extracted pack is
-    /// involved.
     #[test]
     fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
         let events = assets::MapEventsTable::new()
