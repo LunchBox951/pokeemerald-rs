@@ -1,9 +1,12 @@
 //! Local smoke tool: build a tiny hand-authored song and play it through the
 //! real `platform::AudioOutput` device.
 //!
-//! Not run in CI (examples are compiled, not executed, by `cargo test`); this
-//! is the manual "does sound actually come out?" check. On a headless machine
-//! with no audio device it prints a note and exits cleanly.
+//! `main` is a manual, not-run-in-CI "does sound actually come out?" check —
+//! on a headless machine with no audio device it prints a note and exits
+//! cleanly. Its `push_frame`/`wait_for_drain` retry-bounded helpers carry
+//! their own `#[cfg(test)]` unit tests below, and those DO run under `cargo
+//! test` (see this crate's `Cargo.toml`, which opts this example target into
+//! `test = true`).
 //!
 //! Run with: `cargo run -p audio --example play_song`.
 
@@ -14,18 +17,21 @@ use std::time::{Duration, Instant};
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
 use platform::AudioOutput;
 
-/// Ceiling on time spent retrying a single frame's push before treating the
-/// output stream as unrecoverably stalled. Comfortably longer than the
-/// ~306 ms the 4096-frame ring can absorb at [`MIXER_RATE`], but short
-/// enough that a dead callback fails fast instead of hanging this manual
-/// smoke command.
-const PUSH_MAX_WAIT: Duration = Duration::from_secs(1);
+/// Ring capacity, in frames, the demo opens the device with.
+const RING_CAPACITY_FRAMES: usize = 4096;
+
+/// Ceiling on time spent retrying a stuck push, or waiting for the tail to
+/// drain, before treating the output stream as unrecoverably stalled.
+/// Comfortably longer than the ~306 ms the ring can absorb at
+/// [`MIXER_RATE`], but short enough that a dead callback fails fast instead
+/// of hanging this manual smoke command.
+const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 
 fn main() -> ExitCode {
     let song = build_song();
     let mut seq = Sequencer::new(song);
 
-    let mut output = match AudioOutput::open(4096) {
+    let mut output = match AudioOutput::open(RING_CAPACITY_FRAMES) {
         Ok(output) => output,
         Err(err) => {
             println!("no audio device ({err}); nothing to play — this is expected in CI/headless");
@@ -36,11 +42,12 @@ fn main() -> ExitCode {
     println!("playing a short scale at {MIXER_RATE} Hz — Ctrl-C to stop");
 
     let producer = output.producer();
+    let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     let frame_samples = u32::try_from(audio::SAMPLES_PER_FRAME).expect("frame fits u32");
     let frame_period = Duration::from_secs_f64(f64::from(frame_samples) / f64::from(MIXER_RATE));
     let policy = RetryPolicy {
         interval: frame_period / 4,
-        max_wait: PUSH_MAX_WAIT,
+        max_wait: RETRY_MAX_WAIT,
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
@@ -61,25 +68,30 @@ fn main() -> ExitCode {
         }
         std::thread::sleep(frame_period);
     }
-    // Let the tail drain.
-    std::thread::sleep(Duration::from_millis(200));
-    let errors = output.stream_errors();
-    if errors > 0 {
-        eprintln!(
-            "audio playback stopped: {errors} asynchronous stream error(s) reported during the \
-             final drain"
-        );
+    // Wait for the ring to actually empty rather than assuming a fixed sleep
+    // was long enough — a callback that stopped consuming can otherwise
+    // leave samples permanently queued while this reports success.
+    if let Err(err) = wait_for_drain(
+        ring_capacity_samples,
+        &policy,
+        || producer.available_space(),
+        || output.stream_errors(),
+        Instant::now,
+        std::thread::sleep,
+    ) {
+        eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }
 
-/// How long [`push_frame`] may keep retrying a momentarily full ring before
-/// giving up.
+/// How long [`push_frame`] may keep retrying a momentarily full ring, or
+/// [`wait_for_drain`] may keep waiting for the ring to empty, before giving
+/// up.
 struct RetryPolicy {
-    /// Sleep between retries while the ring is only momentarily full.
+    /// Sleep between retries while progress hasn't happened yet.
     interval: Duration,
-    /// Hard ceiling on total time spent retrying a single frame.
+    /// Hard ceiling on total time spent waiting.
     max_wait: Duration,
 }
 
@@ -106,7 +118,7 @@ impl PushError {
             PushError::DeadlineExceeded { dropped } => format!(
                 "no progress queuing the ring buffer before the {:.1}s retry deadline; \
                  {dropped} sample(s) from the current frame were not queued",
-                PUSH_MAX_WAIT.as_secs_f64()
+                RETRY_MAX_WAIT.as_secs_f64()
             ),
         }
     }
@@ -168,6 +180,73 @@ fn push_frame(
     }
 }
 
+/// Why [`wait_for_drain`] gave up before confirming the ring emptied.
+#[derive(Clone, Copy)]
+enum DrainError {
+    /// The output stream's asynchronous error counter became nonzero while
+    /// samples were still queued and unplayed.
+    StreamStopped { errors: u64, remaining: usize },
+    /// No drain progress within `RetryPolicy::max_wait`, even though the
+    /// stream reports no errors — the same silent-stall case
+    /// [`PushError::DeadlineExceeded`] guards against, but for consumption
+    /// instead of production.
+    DeadlineExceeded { remaining: usize },
+}
+
+impl DrainError {
+    fn describe(&self) -> String {
+        match *self {
+            DrainError::StreamStopped { errors, remaining } => format!(
+                "{errors} asynchronous stream error(s) reported while {remaining} sample(s) were \
+                 still queued and unplayed"
+            ),
+            DrainError::DeadlineExceeded { remaining } => format!(
+                "no drain progress before the {:.1}s retry deadline; {remaining} sample(s) were \
+                 still queued and unplayed",
+                RETRY_MAX_WAIT.as_secs_f64()
+            ),
+        }
+    }
+}
+
+/// Wait for the ring to fully drain, bounded by `policy`.
+///
+/// Returns `Ok(())` once `available_space` reports every queued sample has
+/// been consumed (`capacity` free). Instead of assuming a fixed sleep was
+/// long enough, this gives up early — as soon as `stream_errors` reports
+/// the device callback has stopped draining the ring, or once
+/// `policy.max_wait` has elapsed with the ring still non-empty and no such
+/// signal — because a stopped callback must never be reported as a
+/// successful finish (see [`DrainError`]).
+///
+/// `available_space`, `stream_errors`, `now`, and `sleep` are injected so
+/// this can be exercised deterministically in tests without a real audio
+/// device or wall clock.
+fn wait_for_drain(
+    capacity: usize,
+    policy: &RetryPolicy,
+    mut available_space: impl FnMut() -> usize,
+    mut stream_errors: impl FnMut() -> u64,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    let deadline = now() + policy.max_wait;
+    loop {
+        let remaining = capacity.saturating_sub(available_space());
+        if remaining == 0 {
+            return Ok(());
+        }
+        let errors = stream_errors();
+        if errors > 0 {
+            return Err(DrainError::StreamStopped { errors, remaining });
+        }
+        if now() >= deadline {
+            return Err(DrainError::DeadlineExceeded { remaining });
+        }
+        sleep(policy.interval);
+    }
+}
+
 /// A short ascending scale played on a looping square-wave instrument.
 fn build_song() -> Song {
     // A 64-sample square wave; `freq` chosen so key 60 renders near unity.
@@ -208,14 +287,14 @@ mod tests {
 
     use platform::AudioOutput;
 
-    use super::{push_frame, PushError, RetryPolicy};
+    use super::{push_frame, wait_for_drain, DrainError, PushError, RetryPolicy};
 
     #[test]
     fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
         let push_calls = Cell::new(0_u32);
         let policy = RetryPolicy {
             interval: std::time::Duration::from_millis(1),
-            max_wait: std::time::Duration::from_secs(60),
+            max_wait: std::time::Duration::from_mins(1),
         };
         let samples = [0.0_f32; 4];
         let start = std::time::Instant::now();
@@ -305,5 +384,87 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn wait_for_drain_succeeds_immediately_once_the_ring_is_already_empty() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+
+        let result = wait_for_drain(
+            4,
+            &policy,
+            || 4, // fully free: nothing queued
+            || 0,
+            std::time::Instant::now,
+            |_| panic!("an already-empty ring must not need to retry"),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn wait_for_drain_reports_a_stream_error_instead_of_waiting_out_the_deadline() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_mins(1),
+        };
+        let start = std::time::Instant::now();
+
+        let result = wait_for_drain(
+            4,
+            &policy,
+            || 0, // the ring never drains
+            || 1, // already unhealthy
+            || start,
+            |_| panic!("a stream error must abort before any retry sleep"),
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(DrainError::StreamStopped {
+                    errors: 1,
+                    remaining: 4
+                })
+            ),
+            "expected a StreamStopped error naming every sample still queued"
+        );
+    }
+
+    #[test]
+    fn wait_for_drain_times_out_when_the_ring_never_empties_and_reports_no_stream_error() {
+        // A real (but headless) ring buffer, filled completely and never
+        // drained: `available_space` genuinely stays at 0 forever, the same
+        // as a device callback that stopped consuming without ever
+        // reporting a stream error. Checking only `stream_errors() == 0`
+        // here would declare success regardless — this is exactly the case
+        // that let a stopped callback pass as a successful finish.
+        let output = AudioOutput::null(1);
+        let producer = output.producer();
+        assert_eq!(producer.push(&[0.0; 2]), 2, "fill the null ring solid");
+
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(30),
+        };
+        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
+
+        let result = wait_for_drain(
+            2,
+            &policy,
+            || producer.available_space(),
+            || output.stream_errors(),
+            || *clock.borrow(),
+            |duration| *clock.borrow_mut() += duration,
+        );
+
+        assert!(
+            matches!(result, Err(DrainError::DeadlineExceeded { remaining: 2 })),
+            "a permanently full ring with no stream error must time out, not report success"
+        );
+        assert_eq!(output.stream_errors(), 0, "the null backend never errors");
     }
 }
