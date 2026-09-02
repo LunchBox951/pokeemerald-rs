@@ -86,6 +86,13 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
          feeds wild_faint_exp the *enemy's* base_exp and level: {events:?}"
     );
     assert_eq!(
+        battle.player().evs().speed,
+        1,
+        "MonGainEVs runs on this KO too, before the exp award -- \
+         Rattata's own Speed EV yield (species_info.h) lands on the player \
+         regardless of the wild mon's own level or HP"
+    );
+    assert_eq!(
         events.last(),
         Some(&BattleEvent::Ended(BattleOutcome::PlayerWon))
     );
