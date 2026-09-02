@@ -44,12 +44,14 @@ pub(crate) fn walk_count() -> usize {
     ADMISSION_WALK_COUNT.with(std::cell::Cell::get)
 }
 
+/// The OAM indices a scanline's cycle budget admits, walked once per scanline.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OamAdmission {
     admitted: [bool; MAX_OAM_ENTRIES],
 }
 
 impl OamAdmission {
+    /// Walks entries in OAM order until the scanline's cycle budget is spent.
     pub(crate) fn for_scanline(entries: &[OamEntry], y: usize, hblank_free_interval: bool) -> Self {
         Self::walk_with_remaining_cycles(entries, y, hblank_free_interval).0
     }
@@ -89,6 +91,7 @@ impl OamAdmission {
         (Self { admitted }, remaining_cycles)
     }
 
+    /// Whether the entry at `index` was admitted for this scanline.
     pub(crate) fn is_admitted(&self, index: usize) -> bool {
         self.admitted.get(index).copied().unwrap_or(false)
     }
@@ -128,8 +131,7 @@ fn sprite_list_cost(entry: &OamEntry) -> Option<i32> {
 mod tests {
     use super::{
         sprite_list_cost, OamAdmission, AFFINE_CYCLES_PER_COLUMN, AFFINE_ENTRY_BASE_CYCLES,
-        MAX_OAM_ENTRIES, NORMAL_SCANLINE_CYCLES, OAM_ENTRY_TRAVERSAL_CYCLES,
-        REGULAR_ENTRY_BASE_REDUCTION,
+        MAX_OAM_ENTRIES, REGULAR_ENTRY_BASE_REDUCTION,
     };
     use crate::{
         oam::{AffineMode, OamEntry, ObjShape},
@@ -373,7 +375,7 @@ mod tests {
 
     #[test]
     fn scanning_stops_at_the_physical_oam_entry_count() {
-        let capped = vec![entry_at_x(0, EIGHT_PIXEL_SQUARE_SIZE); MAX_OAM_ENTRIES];
+        let capped = vec![entry_at_x(0, EIGHT_PIXEL_SQUARE_SIZE); 128];
         let mut overlong = capped.clone();
         overlong.push(wide_entry());
 
@@ -382,16 +384,13 @@ mod tests {
         let (overlong_admission, overlong_remaining) =
             OamAdmission::walk_with_remaining_cycles(&overlong, 0, false);
 
-        let expected_remaining = NORMAL_SCANLINE_CYCLES
-            - i32::try_from(MAX_OAM_ENTRIES).unwrap() * (6 + OAM_ENTRY_TRAVERSAL_CYCLES)
-            + OAM_ENTRY_TRAVERSAL_CYCLES;
-        assert_eq!(capped_remaining, expected_remaining);
+        assert_eq!(capped_remaining, 188);
         assert_eq!(overlong_remaining, capped_remaining);
-        assert!((0..=MAX_OAM_ENTRIES).all(|index| {
+        assert!((0..=128).all(|index| {
             capped_admission.is_admitted(index) == overlong_admission.is_admitted(index)
         }));
-        assert!(capped_admission.is_admitted(MAX_OAM_ENTRIES - 1));
-        assert!(!overlong_admission.is_admitted(MAX_OAM_ENTRIES));
+        assert!(capped_admission.is_admitted(127));
+        assert!(!overlong_admission.is_admitted(128));
     }
 
     #[test]
