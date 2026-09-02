@@ -1,155 +1,188 @@
-use super::encode_song;
-use crate::extract::midi::compile::CompiledSong;
-use crate::extract::midi::error::MidiError;
-use crate::extract::midi::event::SongEvent;
+use super::*;
 
-fn sample_track() -> Vec<SongEvent> {
-    vec![
-        SongEvent::KeyShift(0),
-        SongEvent::Voice(14),
-        SongEvent::Volume(122),
-        SongEvent::Pan(-32),
-        SongEvent::Note {
-            key: 57,
-            velocity: 120,
-            gate: 48,
-        },
-        SongEvent::Wait(48),
-        SongEvent::Note {
-            key: 53,
-            velocity: 112,
-            gate: 0,
-        },
-        SongEvent::EndOfTie { key: 53 },
-        SongEvent::Bend(3),
-        SongEvent::BendRange(2),
-        SongEvent::Tune(-5),
-        SongEvent::Tempo(144),
-        SongEvent::Priority(1),
-        SongEvent::LfoSpeed(44),
-        SongEvent::LfoDelay(6),
-        SongEvent::Modulation(7),
-        SongEvent::ModType(0),
-        SongEvent::PseudoEchoVolume(10),
-        SongEvent::PseudoEchoLength(20),
-        SongEvent::Goto(3),
-        SongEvent::Fine,
-    ]
+fn encoded_event(event: &SongEvent) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    write_event(&mut bytes, event);
+    bytes
 }
 
-/// Pins the wire format byte-for-byte against
-/// `crates/assets::audio::song::Song::encode`'s documented layout — the two
-/// encoders are deliberately not shared code (module docs), so each side
-/// pins its own understanding of the format. The cross-crate half of this
-/// pin (decoding a real extracted pack's `audio/song/mus_title` payload back
-/// through `Song::decode`) lives in `crates/assets/src/pack/tests.rs`.
-#[test]
-fn encode_song_matches_the_documented_wire_format() {
-    let song = CompiledSong {
+fn song_with_tracks(tracks: Vec<Vec<SongEvent>>) -> CompiledSong {
+    CompiledSong {
         voicegroup_label: "title".to_owned(),
         priority: 3,
         reverb: Some(50),
-        tracks: vec![sample_track()],
-    };
-    let bytes =
-        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
+        tracks,
+    }
+}
 
-    let mut expected = Vec::new();
-    let id = "audio/voicegroup/title";
-    let id_len = u16::try_from(id.len()).expect("test id is tiny");
-    expected.extend_from_slice(&id_len.to_le_bytes());
-    expected.extend_from_slice(id.as_bytes());
-    expected.push(3); // priority
-    expected.push(1); // has reverb
-    expected.push(50); // reverb
-    expected.push(1); // track count
-    expected.extend_from_slice(&21u32.to_le_bytes()); // event count
-    expected.extend_from_slice(&[9, 0]); // KeyShift(0)
-    expected.extend_from_slice(&[3, 14]); // Voice(14)
-    expected.extend_from_slice(&[4, 122]); // Volume(122)
-    expected.extend_from_slice(&[5, (-32i8).to_ne_bytes()[0]]); // Pan(-32)
-    expected.extend_from_slice(&[1, 57, 120, 48]); // Note
-    expected.extend_from_slice(&[0, 48]); // Wait(48)
-    expected.extend_from_slice(&[1, 53, 112, 0]); // Note (tie start)
-    expected.extend_from_slice(&[2, 1, 53]); // EndOfTie { key: Some(53) }
-    expected.extend_from_slice(&[6, 3u8.to_ne_bytes()[0]]); // Bend(3)
-    expected.extend_from_slice(&[7, 2]); // BendRange(2)
-    expected.extend_from_slice(&[8, (-5i8).to_ne_bytes()[0]]); // Tune(-5)
-    expected.push(10); // Tempo tag
-    expected.extend_from_slice(&144u16.to_le_bytes());
-    expected.extend_from_slice(&[11, 1]); // Priority(1)
-    expected.extend_from_slice(&[12, 44]); // LfoSpeed(44)
-    expected.extend_from_slice(&[13, 6]); // LfoDelay(6)
-    expected.extend_from_slice(&[14, 7]); // Modulation(7)
-    expected.extend_from_slice(&[15, 0]); // ModType(0)
-    expected.extend_from_slice(&[18, 10]); // PseudoEchoVolume(10)
-    expected.extend_from_slice(&[19, 20]); // PseudoEchoLength(20)
-    expected.push(16); // Goto tag
-    expected.extend_from_slice(&3u32.to_le_bytes());
-    expected.push(17); // Fine
+fn push_expected_string(out: &mut Vec<u8>, value: &str) {
+    let byte_len = u16::try_from(value.len()).unwrap();
+    out.extend_from_slice(&byte_len.to_le_bytes());
+    out.extend_from_slice(value.as_bytes());
+}
 
-    assert_eq!(bytes, expected);
+fn push_expected_track(out: &mut Vec<u8>, events: &[(SongEvent, Vec<u8>)]) {
+    let event_count = u32::try_from(events.len()).unwrap();
+    out.extend_from_slice(&event_count.to_le_bytes());
+    for (_, encoded) in events {
+        out.extend_from_slice(encoded);
+    }
 }
 
 #[test]
-fn no_reverb_writes_a_false_flag_and_zero_byte() {
-    let song = CompiledSong {
-        voicegroup_label: "title".to_owned(),
-        priority: 0,
-        reverb: None,
-        tracks: vec![vec![SongEvent::Fine]],
-    };
-    let bytes =
-        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
-    let id_len = "audio/voicegroup/title".len();
-    // id (2 + id_len bytes), priority (1), has_reverb (1), reverb (1)
-    let reverb_flag_offset = 2 + id_len + 1;
-    assert_eq!(bytes[reverb_flag_offset], 0);
-    assert_eq!(bytes[reverb_flag_offset + 1], 0);
-}
-
-#[test]
-fn multiple_tracks_each_carry_their_own_event_count() {
-    let song = CompiledSong {
-        voicegroup_label: "title".to_owned(),
-        priority: 0,
-        reverb: None,
-        tracks: vec![
-            vec![SongEvent::Fine],
-            vec![SongEvent::Wait(1), SongEvent::Fine],
-        ],
-    };
-    let bytes =
-        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
-    let id_len = "audio/voicegroup/title".len();
-    let track_count_offset = 2 + id_len + 1 + 1 + 1;
-    // track_count (2), then per track: event_count: u32 LE followed by that
-    // many tagged events -- track 1's single `Fine` (tag 17), then track 2's
-    // `Wait(1)` (tag 0, ticks 1) followed by `Fine`.
+fn event_tags_match_the_asset_schema() {
     assert_eq!(
-        bytes[track_count_offset..],
-        [2, 1, 0, 0, 0, 17, 2, 0, 0, 0, 0, 1, 17]
+        [
+            EventTag::Wait.byte(),
+            EventTag::Note.byte(),
+            EventTag::EndOfTie.byte(),
+            EventTag::Voice.byte(),
+            EventTag::Volume.byte(),
+            EventTag::Pan.byte(),
+            EventTag::Bend.byte(),
+            EventTag::BendRange.byte(),
+            EventTag::Tune.byte(),
+            EventTag::KeyShift.byte(),
+            EventTag::Tempo.byte(),
+            EventTag::Priority.byte(),
+            EventTag::LfoSpeed.byte(),
+            EventTag::LfoDelay.byte(),
+            EventTag::Modulation.byte(),
+            EventTag::ModType.byte(),
+            EventTag::Goto.byte(),
+            EventTag::Fine.byte(),
+            EventTag::PseudoEchoVolume.byte(),
+            EventTag::PseudoEchoLength.byte(),
+        ],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,]
     );
 }
 
-/// More tracks than the `u8` track-count field can describe is a returned
-/// error, not a panic. 255 tracks is the last encodable count; 256 is the
-/// first that is not. Reachable only from a format-1 file with sixteen or
-/// more note-carrying `MTrk` chunks (16 channels each), once every channel
-/// in each chunk is playable, which is why the bound is the *wire format's*,
-/// not one upstream imposes — but the caller still gets a diagnostic it can
-/// attach a path to.
 #[test]
-fn more_tracks_than_the_u8_count_can_describe_is_an_error() {
-    let song = |count: usize| CompiledSong {
+fn every_event_variant_encodes_its_tag_and_payload() {
+    let cases = [
+        (SongEvent::Wait(48), vec![EventTag::Wait.byte(), 48]),
+        (
+            SongEvent::Note {
+                key: 57,
+                velocity: 120,
+                gate: 48,
+            },
+            vec![EventTag::Note.byte(), 57, 120, 48],
+        ),
+        (
+            SongEvent::EndOfTie { key: 53 },
+            vec![EventTag::EndOfTie.byte(), u8::from(true), 53],
+        ),
+        (SongEvent::Voice(14), vec![EventTag::Voice.byte(), 14]),
+        (SongEvent::Volume(122), vec![EventTag::Volume.byte(), 122]),
+        (
+            SongEvent::Pan(-32),
+            vec![EventTag::Pan.byte(), (-32_i8).to_le_bytes()[0]],
+        ),
+        (
+            SongEvent::Bend(3),
+            vec![EventTag::Bend.byte(), 3_i8.to_le_bytes()[0]],
+        ),
+        (SongEvent::BendRange(2), vec![EventTag::BendRange.byte(), 2]),
+        (
+            SongEvent::Tune(-5),
+            vec![EventTag::Tune.byte(), (-5_i8).to_le_bytes()[0]],
+        ),
+        (
+            SongEvent::KeyShift(-1),
+            vec![EventTag::KeyShift.byte(), (-1_i8).to_le_bytes()[0]],
+        ),
+        (
+            SongEvent::Tempo(144),
+            [vec![EventTag::Tempo.byte()], 144_u16.to_le_bytes().to_vec()].concat(),
+        ),
+        (SongEvent::Priority(1), vec![EventTag::Priority.byte(), 1]),
+        (SongEvent::LfoSpeed(44), vec![EventTag::LfoSpeed.byte(), 44]),
+        (SongEvent::LfoDelay(6), vec![EventTag::LfoDelay.byte(), 6]),
+        (
+            SongEvent::Modulation(7),
+            vec![EventTag::Modulation.byte(), 7],
+        ),
+        (SongEvent::ModType(0), vec![EventTag::ModType.byte(), 0]),
+        (
+            SongEvent::Goto(3),
+            [vec![EventTag::Goto.byte()], 3_u32.to_le_bytes().to_vec()].concat(),
+        ),
+        (SongEvent::Fine, vec![EventTag::Fine.byte()]),
+        (
+            SongEvent::PseudoEchoVolume(10),
+            vec![EventTag::PseudoEchoVolume.byte(), 10],
+        ),
+        (
+            SongEvent::PseudoEchoLength(20),
+            vec![EventTag::PseudoEchoLength.byte(), 20],
+        ),
+    ];
+
+    for (event, expected) in cases {
+        assert_eq!(encoded_event(&event), expected);
+    }
+}
+
+#[test]
+fn song_encoding_frames_metadata_and_each_track() {
+    let first_track = [
+        (SongEvent::KeyShift(0), vec![EventTag::KeyShift.byte(), 0]),
+        (SongEvent::Fine, vec![EventTag::Fine.byte()]),
+    ];
+    let second_track = [
+        (SongEvent::Wait(1), vec![EventTag::Wait.byte(), 1]),
+        (
+            SongEvent::Tempo(144),
+            [vec![EventTag::Tempo.byte()], 144_u16.to_le_bytes().to_vec()].concat(),
+        ),
+        (SongEvent::Fine, vec![EventTag::Fine.byte()]),
+    ];
+    let song = song_with_tracks(vec![
+        first_track.iter().map(|(event, _)| event.clone()).collect(),
+        second_track
+            .iter()
+            .map(|(event, _)| event.clone())
+            .collect(),
+    ]);
+
+    let mut expected = Vec::new();
+    push_expected_string(&mut expected, "audio/voicegroup/title");
+    expected.extend_from_slice(&[song.priority, u8::from(true), 50, 2]);
+    push_expected_track(&mut expected, &first_track);
+    push_expected_track(&mut expected, &second_track);
+
+    assert_eq!(encode_song(&song).unwrap(), expected);
+}
+
+#[test]
+fn absent_reverb_encodes_a_false_flag_and_zero_value() {
+    let song = CompiledSong {
         voicegroup_label: "title".to_owned(),
         priority: 0,
         reverb: None,
-        tracks: vec![vec![SongEvent::Fine]; count],
+        tracks: Vec::new(),
     };
-    assert!(encode_song(&song(255)).is_ok());
+    let mut expected = Vec::new();
+    push_expected_string(&mut expected, "audio/voicegroup/title");
+    expected.extend_from_slice(&[song.priority, u8::from(false), 0, 0]);
+
+    assert_eq!(encode_song(&song).unwrap(), expected);
+}
+
+#[test]
+fn track_count_must_fit_the_wire_field() {
+    let maximum_track_count = usize::from(u8::MAX);
+    let first_unrepresentable_track_count = maximum_track_count + 1;
+
+    assert!(encode_song(&song_with_tracks(vec![Vec::new(); maximum_track_count])).is_ok());
     assert_eq!(
-        encode_song(&song(256)).unwrap_err(),
-        MidiError::TooManyTracks(256)
+        encode_song(&song_with_tracks(vec![
+            Vec::new();
+            first_unrepresentable_track_count
+        ]))
+        .unwrap_err(),
+        MidiError::TooManyTracks(first_unrepresentable_track_count)
     );
 }
