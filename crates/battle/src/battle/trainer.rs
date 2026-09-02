@@ -81,6 +81,7 @@ pub fn build_trainer_pokemon(
     )
 }
 
+/// `gTrainerMoneyTable` in upstream order (`pokeemerald/src/battle_main.c:474-531`).
 const TRAINER_MONEY_TABLE: [(TrainerClass, u32); 55] = [
     (TrainerClass::TEAM_AQUA, 5),
     (TrainerClass::AQUA_ADMIN, 10),
@@ -139,7 +140,8 @@ const TRAINER_MONEY_TABLE: [(TrainerClass, u32); 55] = [
     (TrainerClass::WINSTRATE, 10),
 ];
 
-/// The prize multiplier for a trainer class absent from the money table.
+/// The prize multiplier for a trainer class absent from the money table:
+/// `gTrainerMoneyTable`'s `{0xFF, 5}` sentinel row (`battle_main.c:530`).
 pub const DEFAULT_MONEY_VALUE: u32 = 5;
 
 const BASE_PRIZE_MULTIPLIER: u32 = 4;
@@ -165,6 +167,8 @@ fn last_mon_level(party: TrainerParty) -> Option<u8> {
 
 /// Returns the single-battle prize money for defeating a trainer.
 ///
+/// `GetTrainerMoneyToGive` (`pokeemerald/src/battle_script_commands.c:5578`):
+/// `4 * lastMonLevel * classValue` with `moneyMultiplier` fixed at `1`.
 /// Empty parties pay nothing. Held-item and double-battle multipliers are not
 /// inputs because those battle modes are not modeled.
 #[must_use]
