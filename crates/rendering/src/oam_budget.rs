@@ -129,7 +129,7 @@ mod tests {
     use super::{
         sprite_list_cost, OamAdmission, AFFINE_CYCLES_PER_COLUMN, AFFINE_ENTRY_BASE_CYCLES,
         MAX_OAM_ENTRIES, NORMAL_SCANLINE_CYCLES, OAM_ENTRY_TRAVERSAL_CYCLES,
-        REGULAR_ENTRY_BASE_REDUCTION, SCREEN_WIDTH,
+        REGULAR_ENTRY_BASE_REDUCTION,
     };
     use crate::{
         oam::{AffineMode, OamEntry, ObjShape},
@@ -244,16 +244,9 @@ mod tests {
 
     #[test]
     fn entries_at_or_beyond_the_right_edge_are_rejected() {
-        assert!(sprite_list_cost(&entry_at_x(
-            i16::try_from(SCREEN_WIDTH - 1).unwrap(),
-            EIGHT_PIXEL_SQUARE_SIZE
-        ))
-        .is_some());
+        assert!(sprite_list_cost(&entry_at_x(239, EIGHT_PIXEL_SQUARE_SIZE)).is_some());
         assert_eq!(
-            sprite_list_cost(&entry_at_x(
-                i16::try_from(SCREEN_WIDTH).unwrap(),
-                EIGHT_PIXEL_SQUARE_SIZE
-            )),
+            sprite_list_cost(&entry_at_x(240, EIGHT_PIXEL_SQUARE_SIZE)),
             None
         );
         assert_eq!(
@@ -266,13 +259,7 @@ mod tests {
     fn right_edge_entries_cannot_displace_a_later_visible_entry() {
         const REJECTED_ENTRIES: usize = 100;
 
-        let mut entries = vec![
-            entry_at_x(
-                i16::try_from(SCREEN_WIDTH).unwrap(),
-                SIXTY_FOUR_PIXEL_SQUARE_SIZE
-            );
-            REJECTED_ENTRIES
-        ];
+        let mut entries = vec![entry_at_x(240, SIXTY_FOUR_PIXEL_SQUARE_SIZE); REJECTED_ENTRIES];
         entries.push(wide_entry());
 
         let (admission, remaining_cycles) =
