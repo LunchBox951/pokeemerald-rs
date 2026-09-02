@@ -79,9 +79,8 @@
 //! It is a separate entry point rather than another `bool` on
 //! [`Battle::new`] because a trainer battle carries *state* a wild one does
 //! not: the opponent's bench, the trainer's `aiFlags`, and the prize purse,
-//! all owned by [`trainer::TrainerContext`]. [`trainer`]'s module docs
-//! enumerate the five deltas and cite each one upstream; the two that change
-//! this module's control flow are:
+//! all owned by [`trainer::TrainerContext`]. Of the five deltas, the two that
+//! change this module's control flow are:
 //!
 //! - **Running is refused**, with [`BattleError::NoRunningFromTrainer`] —
 //!   a *different* upstream gate from `first_battle`'s

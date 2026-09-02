@@ -80,8 +80,8 @@
 //! *different* upstream gate from `first_battle`'s), a party opponent, a
 //! forced post-faint send-out in party order, `x1.5` experience
 //! ([`exp::trainer_faint_exp`]), and prize money on a win
-//! ([`battle::BattleEvent::MoneyGained`]) — are enumerated with their
-//! upstream citations in [`battle::trainer`]'s module docs. The opponent's
+//! ([`battle::BattleEvent::MoneyGained`]) — each carry their upstream
+//! citation beside the code that owns them. The opponent's
 //! move choice is upstream's real `AI_SCRIPT_*` scoring pipeline
 //! (`battle`'s private `trainer_ai` submodule): `AI_CheckBadMove`,
 //! `AI_TryToFaint`, `AI_CheckViability` and `AI_SetupFirstTurn`, narrowed to
