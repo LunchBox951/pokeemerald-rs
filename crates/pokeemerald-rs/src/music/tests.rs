@@ -1,11 +1,4 @@
-//! Unit tests for [`super`]/[`super::player`]: a synthetic, pack-free
-//! [`MusicPlayer`] round-trip (continuous playback, restart-on-finish, ring
-//! prefill sizing, neither underrun nor overrun when drained each frame, and
-//! the `FadeOutBGM` ramp), plus real-pack coverage of
-//! [`load_song_from_pack`] against `mus_title`.
-//!
-//! The ignored, env-gated mGBA reference comparison (Discussion #227's
-//! fidelity oracle) lives in [`oracle`] below.
+//! Covers packed-song conversion and frame-driven playback.
 
 use std::sync::Arc;
 
@@ -14,29 +7,18 @@ use platform::AudioOutput;
 
 use super::{load_song_from_pack, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
 
-/// The ring's capacity in interleaved samples, i.e. what
-/// `Producer::available_space` reports before anything is queued.
 const RING_CAPACITY_SAMPLES: usize = RING_CAPACITY_FRAMES * (AudioOutput::CHANNELS as usize);
 
-/// Drain everything currently queued in `player`'s ring, so the next
-/// [`MusicPlayer::advance_frame`] plus a one-frame drain reads back exactly
-/// the frame that call pushed.
 fn drain_everything(player: &mut MusicPlayer) {
     let queued = RING_CAPACITY_SAMPLES - player.ring_free_for_test();
     let mut sink = vec![0.0_f32; queued];
     player.drain_null_for_test(&mut sink);
 }
 
-/// A short, loud, tied square-ish wave -- loud enough that `push`ed frames
-/// are trivially distinguishable from silence.
 fn loud_wave() -> Arc<WaveData> {
     Arc::new(WaveData::one_shot(1 << 20, vec![100; 64]))
 }
 
-/// A song that loops forever via its own `Goto`, exactly like a real BGM
-/// (never reaching `Fine`) -- see `super`'s module docs on why continuous
-/// playback needs no extra loop-restart logic beyond a song's own jump
-/// commands.
 fn looping_song() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(
         loud_wave(),
@@ -55,8 +37,6 @@ fn looping_song() -> Song {
     Song::new(voices, vec![events], 150)
 }
 
-/// A song that reaches `Fine` quickly -- for
-/// [`a_finished_song_restarts_instead_of_falling_permanently_silent`].
 fn short_one_shot_song() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(
         loud_wave(),
@@ -75,7 +55,6 @@ fn short_one_shot_song() -> Song {
     Song::new(voices, vec![events], 150)
 }
 
-/// A finite song whose dry voice stops before its master-mix reverb tail.
 fn finite_reverbed_song() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(
         loud_wave(),
@@ -122,9 +101,6 @@ fn advance_frame_produces_audible_output_and_never_underruns_when_drained_each_f
     );
 }
 
-/// The prefill leaves roughly half the ring free (`super::player`'s module
-/// docs): headroom for game-loop/device clock drift, and half the latency a
-/// fill-to-the-brim prefill would add.
 #[test]
 fn start_prefills_about_half_the_ring_and_leaves_the_rest_as_headroom() {
     let output = AudioOutput::null(RING_CAPACITY_FRAMES);
@@ -152,17 +128,12 @@ fn start_prefills_about_half_the_ring_and_leaves_the_rest_as_headroom() {
     assert_eq!(player.overruns(), 0, "the prefill must never drop a sample");
 }
 
-/// The overrun counter (`super::player`'s "Stream health" docs) surfaces the
-/// `push` return value the player used to discard: a producer nobody drains
-/// fills the ring and then starts losing samples, and that has to be visible.
 #[test]
 fn overruns_count_the_samples_a_full_ring_drops() {
     let output = AudioOutput::null(RING_CAPACITY_FRAMES);
     let mut player = MusicPlayer::start(looping_song(), output).expect("null backend never errors");
     assert_eq!(player.overruns(), 0);
 
-    // Never drained: the ring fills, then every further push loses whatever
-    // does not fit.
     let free_at_start = player.ring_free_for_test();
     let frames_that_fit = free_at_start / Sequencer::FRAME_SAMPLES;
     for _ in 0..frames_that_fit {
@@ -195,18 +166,10 @@ fn overruns_count_the_samples_a_full_ring_drops() {
     );
 }
 
-/// [`MusicPlayer::fade_out`] reproduces `m4aMPlayFadeOut`'s schedule for
-/// upstream's title-screen speed of 4 (`title_screen.c:784`): the volume
-/// holds at 64/64 for the first 4 frames, then drops 4/64 every 4 frames,
-/// reaching zero -- and the fade's terminal "player paused" state -- on
-/// frame 64. See [`super::player`]'s `FadeOut` docs for the arithmetic.
-///
-/// Asserted against an identically-seeded unfaded player rather than against
-/// hand-picked amplitudes: both sequencers are deterministic, so every
-/// sample must be exactly the unfaded one scaled by that frame's gain.
 #[test]
 fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
-    /// 16 steps of 4/64, one every `TITLE_FADE_OUT_SPEED` frames.
+    const FULL_VOLUME: u32 = 64;
+    const VOLUME_PER_STEP: u32 = 4;
     const FADE_FRAMES: u32 = 64;
 
     let mut plain = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
@@ -218,7 +181,6 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
 
     assert!(!fading.fade_finished(), "no fade has been started yet");
     fading.fade_out(TITLE_FADE_OUT_SPEED);
-    // Idempotent: a second call must not restart the ramp at full volume.
     fading.fade_out(TITLE_FADE_OUT_SPEED);
 
     let mut plain_frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
@@ -230,11 +192,12 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
         plain.drain_null_for_test(&mut plain_frame);
         fading.drain_null_for_test(&mut fading_frame);
 
-        // `fadeOV` starts at 64 and loses 4 on every frame divisible by the
-        // speed (`m4a.c:715`), so `volX` is 64 - 4 * (frame / speed).
-        let vol_x = 64 - 4 * (frame / u32::from(TITLE_FADE_OUT_SPEED));
-        #[allow(clippy::cast_precision_loss)] // both sides are 0..=64.
-        let gain = vol_x as f32 / 64.0;
+        let volume = FULL_VOLUME - VOLUME_PER_STEP * (frame / u32::from(TITLE_FADE_OUT_SPEED));
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "fade volume values from zero through 64 are exact in f32"
+        )]
+        let gain = volume as f32 / FULL_VOLUME as f32;
         for (i, (&dry, &wet)) in plain_frame.iter().zip(&fading_frame).enumerate() {
             assert!(
                 (wet - dry * gain).abs() < 1e-6,
@@ -268,9 +231,6 @@ fn a_finished_song_restarts_instead_of_falling_permanently_silent() {
     let mut player =
         MusicPlayer::start(short_one_shot_song(), output).expect("null backend never errors");
 
-    // Advance well past when the short song's note (and its release tail)
-    // would have finished, draining every frame so the ring never just
-    // accumulates the prefill's own leftover audio.
     let mut drained = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
     let mut audible_after_expected_finish = false;
     for frame in 0..200 {
@@ -289,9 +249,6 @@ fn a_finished_song_restarts_instead_of_falling_permanently_silent() {
 #[test]
 fn finite_reverbed_song_restarts_only_after_tail_drains() {
     let song = finite_reverbed_song();
-    // Exactly one rendered frame fits, while the half-ring prefill target is
-    // too small for a frame. Playback and the reference therefore both begin
-    // at frame zero, with no queued prefill to account for.
     let capacity_frames = Sequencer::FRAME_SAMPLES / usize::from(AudioOutput::CHANNELS);
     let output = AudioOutput::null(capacity_frames);
     let mut player = MusicPlayer::start(song.clone(), output).expect("null backend never errors");
@@ -336,12 +293,6 @@ fn finite_reverbed_song_restarts_only_after_tail_drains() {
     );
 }
 
-/// Synthetic-pack coverage of [`load_song_from_pack`]'s conversion edges
-/// (PR #276 review): a minimal but *real* pack file -- the same on-disk
-/// format `cargo xtask extract` writes, built from the assets crate's own
-/// public encoders -- so the loader's CGB `fixed_rate` threading and its
-/// inherit-vs-explicit-zero reverb mapping are pinned in CI, not only on
-/// the ignored real-pack lane.
 mod synthetic_pack {
     use assets::{
         AssetPack, Envelope, ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId,
@@ -351,28 +302,30 @@ mod synthetic_pack {
 
     use crate::music::load_song_from_pack;
 
-    /// Serialize `entries` (id -> raw payload) into the pack container
-    /// format (`assets::pack::format`: magic, version, directory of Raw
-    /// entries, payloads) and write it to a per-test scratch path.
     fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
-        const RAW_KIND: u8 = 2;
-        // The reader binary-searches the directory, so ids must be sorted --
-        // the same determinism guarantee `xtask`'s writer upholds.
+        const PACK_MAGIC: &[u8; 8] = b"PKMRPACK";
+        const PACK_VERSION: u32 = 6;
+        const RAW_ENTRY_KIND: u8 = 2;
+
+        // AssetPack binary-searches directory entries by ID.
         let mut entries: Vec<&(&str, Vec<u8>)> = entries.iter().collect();
         entries.sort_by_key(|(id, _)| *id);
         let entries = entries;
-        let header_len = 8 + 4 + 4;
-        let dir_len: usize = entries.iter().map(|(id, _)| 2 + id.len() + 1 + 8 + 8).sum();
+        let header_len = PACK_MAGIC.len() + size_of::<u32>() * 2;
+        let dir_len: usize = entries
+            .iter()
+            .map(|(id, _)| size_of::<u16>() + id.len() + size_of::<u8>() + size_of::<u64>() * 2)
+            .sum();
         let mut payload_offset = header_len + dir_len;
 
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"PKMRPACK");
-        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(PACK_MAGIC);
+        bytes.extend_from_slice(&PACK_VERSION.to_le_bytes());
         bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
         for (id, payload) in &entries {
             bytes.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
             bytes.extend_from_slice(id.as_bytes());
-            bytes.push(RAW_KIND);
+            bytes.push(RAW_ENTRY_KIND);
             bytes.extend_from_slice(&(payload_offset as u64).to_le_bytes());
             bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
             payload_offset += payload.len();
@@ -398,10 +351,7 @@ mod synthetic_pack {
         }
     }
 
-    /// A voicegroup whose first four slots exercise every CGB kind that
-    /// carries `TONEDATA_TYPE_FIX`, `fixed_rate` alternating true/false so
-    /// both a dropped flag and an invented one fail the assertions below.
-    fn fix_voicegroup(wave_id: &str) -> VoiceGroup {
+    fn fixed_rate_voicegroup(wave_id: &str) -> VoiceGroup {
         VoiceGroup::new(vec![
             VoiceEntry::Square1(Square1Voice {
                 base_key: 60,
@@ -447,17 +397,13 @@ mod synthetic_pack {
             test_name,
             &[
                 ("audio/song/fixtest", song.encode()),
-                (vg_id, fix_voicegroup(wave_id).encode()),
+                (vg_id, fixed_rate_voicegroup(wave_id).encode()),
                 (wave_id, sample.encode()),
             ],
         );
         AssetPack::load(&path).expect("the synthetic pack must parse")
     }
 
-    /// The `TONEDATA_TYPE_FIX` tag must survive the asset -> engine
-    /// conversion for every CGB kind that carries it (`convert_square1`,
-    /// `convert_square2`, `convert_programmable_wave`) -- and must not be
-    /// invented where the instrument left it clear.
     #[test]
     fn cgb_fixed_rate_tags_survive_loading() {
         let pack = pack_with_song("fixed-rate", None);
@@ -495,7 +441,6 @@ mod synthetic_pack {
         }
     }
 
-    /// A one-track synthetic pack whose song header carries `priority`.
     fn pack_with_priority(test_name: &str, priority: u8) -> AssetPack {
         let vg_id = "audio/voicegroup/fixtest";
         let wave_id = "audio/sample/fixtest_wave";
@@ -506,16 +451,13 @@ mod synthetic_pack {
             test_name,
             &[
                 ("audio/song/fixtest", song.encode()),
-                (vg_id, fix_voicegroup(wave_id).encode()),
+                (vg_id, fixed_rate_voicegroup(wave_id).encode()),
                 (wave_id, sample.encode()),
             ],
         );
         AssetPack::load(&path).expect("the synthetic pack must parse")
     }
 
-    /// `SongHeader::priority` is the base term of every note's effective
-    /// note-on priority (`m4a_1.s:1628`..`:1633`), so it has to survive the
-    /// pack -> engine conversion rather than being dropped at the boundary.
     #[test]
     fn loading_carries_the_header_priority_into_the_runtime_song() {
         let plain = load_song_from_pack(&pack_with_priority("prio-zero", 0), "fixtest")
@@ -527,11 +469,6 @@ mod synthetic_pack {
         assert_eq!(raised.priority(), 200);
     }
 
-    /// [`load_song_from_pack`] must preserve the header's three reverb
-    /// states distinctly: unset stays *no override* (inherit at start
-    /// time), explicit `0` stays an explicit disable, and a real level
-    /// carries through -- the `unwrap_or(0)` collapse this distinction
-    /// replaced must not come back.
     #[test]
     fn loading_preserves_the_inherit_vs_explicit_zero_reverb_distinction() {
         let unset = load_song_from_pack(&pack_with_song("reverb-unset", None), "fixtest")
@@ -552,28 +489,21 @@ mod synthetic_pack {
     }
 }
 
-/// Real-pack coverage of [`load_song_from_pack`] (S-3, issue #185): resolves
-/// `mus_title` end to end (voicegroup indirection, samples, reverb) and
-/// proves the result behaves like continuous BGM -- audible, self-looping,
-/// never reaching `Sequencer::is_finished`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
+    const TITLE_REVERB_LEVEL: u8 = 50;
+    const PLAYBACK_PROBE_FRAMES: usize = 300;
+
     let pack = assets::AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
 
-    // `-R50` in `pokeemerald/sound/songs/midi/midi.cfg`'s `mus_title.mid`
-    // entry (cited in this crate's `music` module docs).
-    assert_eq!(song.reverb(), 50);
+    assert_eq!(song.reverb(), TITLE_REVERB_LEVEL);
 
     let mut seq = Sequencer::new(song);
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
     let mut any_audible = false;
-    // A few seconds of frames: long enough for the real song's intro to
-    // start sounding, nowhere near long enough to reach a real BGM's loop
-    // point if it had one -- the point here is "does not finish", not
-    // "audible on every single frame" (rests are legitimate).
-    for _ in 0..300 {
+    for _ in 0..PLAYBACK_PROBE_FRAMES {
         seq.render_frame(&mut buffer);
         if buffer.iter().any(|&s| s != 0.0) {
             any_audible = true;
@@ -586,57 +516,20 @@ fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
     assert!(any_audible, "mus_title must actually produce sound");
 }
 
-/// The ignored, env-gated end-to-end fidelity oracle (Discussion #227's
-/// owner decision): compares this crate's native offline PCM render of
-/// `mus_title` -- before any device resampling -- against a local mGBA
-/// reference capture that is never committed to the repository (asset
-/// policy, Discussion #71).
-///
-/// # Producing a reference capture
-///
-/// 1. Build `mgba` (pinned by `init.sh`, or any recent mGBA) and a Pokémon
-///    Emerald ROM (not shipped by this project -- BYO, same policy as every
-///    other real-pack/real-ROM tool in this repo).
-/// 2. Boot to the title screen and let `MUS_TITLE` play; use mGBA's
-///    "Record audio" feature (`Tools > Record A/V` or the equivalent CLI
-///    front end) to capture raw PCM at its native output rate.
-/// 3. Convert the capture to headerless, interleaved-stereo `f32` PCM at
-///    exactly [`audio::pitch::MIXER_RATE`] (13379 Hz) -- e.g.
-///    `ffmpeg -i capture.wav -ar 13379 -ac 2 -f f32le title_ref.pcm`. This
-///    must be the *native* mGBA render rate resampled down to the engine's
-///    own mixer rate, not mGBA's host-audio-driver output rate, so both
-///    sides are compared before either one's own device resampling.
-/// 4. Point `POKEEMERALD_RS_MGBA_TITLE_PCM` at the resulting file and run
-///    `cargo test -p pokeemerald-rs --ignored mgba_reference -- --nocapture`.
-///
-/// # Alignment and tolerance
-///
-/// The two renders are not guaranteed to start at the same absolute sample
-/// (mGBA's own boot sequence differs from where this render starts): try
-/// every offset in the first
-/// [`ALIGNMENT_SEARCH_WINDOW`](oracle::ALIGNMENT_SEARCH_WINDOW) samples of
-/// the reference and keep the one whose
-/// [`COMPARE_WINDOW`](oracle::COMPARE_WINDOW)-sample RMS error against the
-/// native render is lowest, then report that offset's error. (Minimum RMS
-/// error, not maximum cross-correlation: with both renders at the same
-/// nominal amplitude the two pick the same offset, and the error is the
-/// quantity the tolerance below is expressed in, so there is no reason to
-/// compute a second statistic.) Every offset compares the *same* number of
-/// samples, so a late offset cannot win by comparing a shorter tail; the
-/// captures are length-checked up front instead.
-///
-/// Tolerance is relative to the reference's own energy, not an absolute
-/// number: the native render must sit within
-/// [`RMS_ERROR_FRACTION`](oracle::RMS_ERROR_FRACTION) of the reference's RMS
-/// over the compared window, and the reference itself must be louder than
-/// [`MIN_REFERENCE_RMS`](oracle::MIN_REFERENCE_RMS) so a silent or
-/// near-silent capture fails loudly rather than passing trivially. Not
-/// sample-exact (`(behavioral-fidelity)`: player-audible result, not byte
-/// parity). The fraction is a deliberately generous placeholder that still
-/// catches a grossly wrong render (silence, garbage, wrong pitch); per
-/// Discussion #227's decision it must be re-derived and re-documented
-/// against the *first* real reference comparison run.
 mod oracle {
+    //! Compares an offline `mus_title` render with a local mGBA capture.
+    //!
+    //! Capture the title music with the configured mGBA build, then convert it
+    //! to headerless interleaved-stereo `f32` PCM at the engine mixer rate:
+    //! `ffmpeg -i capture.wav -ar 13379 -ac 2 -f f32le title_ref.pcm`.
+    //! Set `POKEEMERALD_RS_MGBA_TITLE_PCM` to that file and run
+    //! `cargo test -p pokeemerald-rs --ignored mgba_reference -- --nocapture`.
+    //!
+    //! The comparison searches the first two seconds of the reference for the
+    //! five-second left-channel window with the lowest RMS error. It rejects
+    //! silent references and treats error above 25% of the reference RMS as
+    //! gross behavioural divergence, not sample-exact inequality.
+
     use std::env;
     use std::fs;
 
@@ -644,21 +537,13 @@ mod oracle {
 
     use super::load_song_from_pack;
 
-    /// How far into the reference to search for the best-aligning offset.
-    pub(super) const ALIGNMENT_SEARCH_WINDOW: usize = MIXER_RATE as usize * 2; // 2 seconds
-    /// How many aligned samples every candidate offset compares -- fixed, so
-    /// all offsets are scored on equal terms.
-    pub(super) const COMPARE_WINDOW: usize = MIXER_RATE as usize * 5; // 5 seconds
-    /// Placeholder tolerance (module docs), as a fraction of the reference
-    /// window's own RMS: re-derive from the first real mGBA comparison and
-    /// replace this constant (and this comment) with the justified value.
-    pub(super) const RMS_ERROR_FRACTION: f64 = 0.25;
-    /// Floor on the reference window's RMS. Below this the capture is
-    /// effectively silent, every relative tolerance becomes meaningless, and
-    /// the comparison is worthless -- so it fails instead of passing.
-    pub(super) const MIN_REFERENCE_RMS: f64 = 1e-4;
+    const ALIGNMENT_SEARCH_SECONDS: usize = 2;
+    const COMPARE_SECONDS: usize = 5;
+    const ALIGNMENT_SEARCH_WINDOW: usize = MIXER_RATE as usize * ALIGNMENT_SEARCH_SECONDS;
+    const COMPARE_WINDOW: usize = MIXER_RATE as usize * COMPARE_SECONDS;
+    const MAX_RMS_ERROR_FRACTION: f64 = 0.25;
+    const MIN_REFERENCE_RMS: f64 = 1e-4;
 
-    /// Read a headerless, interleaved-stereo `f32` PCM file.
     fn read_pcm_f32(path: &str) -> Vec<f32> {
         let bytes = fs::read(path).unwrap_or_else(|e| panic!("reading `{path}`: {e}"));
         bytes
@@ -667,23 +552,17 @@ mod oracle {
             .collect()
     }
 
-    /// Root-mean-square of a slice.
     fn rms(xs: &[f32]) -> f64 {
         assert!(!xs.is_empty(), "RMS of an empty window");
         let sum_sq: f64 = xs.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
-        #[allow(clippy::cast_precision_loss)] // a handful of seconds of samples.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the fixed comparison windows are exactly representable in f64"
+        )]
         let mean = sum_sq / xs.len() as f64;
         mean.sqrt()
     }
 
-    /// RMS error between `reference[offset..]` and `candidate`, over exactly
-    /// [`COMPARE_WINDOW`] samples.
-    ///
-    /// # Panics
-    ///
-    /// If either side is too short for a full window at `offset` -- callers
-    /// are expected to have length-checked already, so this is a bug, not a
-    /// short capture.
     fn rms_error(reference: &[f32], candidate: &[f32], offset: usize) -> f64 {
         assert!(
             reference.len() >= offset + COMPARE_WINDOW && candidate.len() >= COMPARE_WINDOW,
@@ -695,24 +574,14 @@ mod oracle {
                 diff * diff
             })
             .sum();
-        #[allow(clippy::cast_precision_loss)] // `COMPARE_WINDOW` is a handful of seconds.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the fixed comparison window is exactly representable in f64"
+        )]
         let mean = sum_sq / COMPARE_WINDOW as f64;
         mean.sqrt()
     }
 
-    /// Search `0..ALIGNMENT_SEARCH_WINDOW` for the offset into `reference`
-    /// with the lowest RMS error against `candidate`'s start.
-    ///
-    /// Each offset's error is computed exactly once into a `Vec` before the
-    /// minimum is taken: `min_by` re-evaluates both sides of every
-    /// comparison, which would double an already
-    /// `ALIGNMENT_SEARCH_WINDOW * COMPARE_WINDOW`-sized scan (order 10^9
-    /// float operations, in a debug binary).
-    ///
-    /// # Panics
-    ///
-    /// If `reference` is shorter than `ALIGNMENT_SEARCH_WINDOW +
-    /// COMPARE_WINDOW`, or `candidate` shorter than `COMPARE_WINDOW`.
     fn best_alignment(reference: &[f32], candidate: &[f32]) -> usize {
         assert!(
             reference.len() >= ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW,
@@ -727,15 +596,15 @@ mod oracle {
             "native render is too short: {} samples per channel, need {COMPARE_WINDOW}",
             candidate.len()
         );
-        let errors: Vec<f64> = (0..ALIGNMENT_SEARCH_WINDOW)
-            .map(|offset| rms_error(reference, candidate, offset))
-            .collect();
-        errors
-            .iter()
-            .enumerate()
+        (0..ALIGNMENT_SEARCH_WINDOW)
+            .map(|offset| (offset, rms_error(reference, candidate, offset)))
             .min_by(|(_, a), (_, b)| a.partial_cmp(b).expect("RMS error is always finite"))
             .map(|(offset, _)| offset)
             .expect("ALIGNMENT_SEARCH_WINDOW is nonzero")
+    }
+
+    fn left_channel(interleaved_stereo: &[f32]) -> Vec<f32> {
+        interleaved_stereo.iter().copied().step_by(2).collect()
     }
 
     #[test]
@@ -758,11 +627,10 @@ mod oracle {
             (ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW).div_ceil(audio::SAMPLES_PER_FRAME);
         let mut native = vec![0.0_f32; native_frames * Sequencer::FRAME_SAMPLES];
         seq.mix_into(&mut native);
-        // Left channel only, matching `rms_error`/`read_pcm_f32`'s layout.
-        let native_left: Vec<f32> = native.iter().copied().step_by(2).collect();
+        let native_left = left_channel(&native);
 
         let reference = read_pcm_f32(&path);
-        let reference_left: Vec<f32> = reference.iter().copied().step_by(2).collect();
+        let reference_left = left_channel(&reference);
 
         let offset = best_alignment(&reference_left, &native_left);
         let error = rms_error(&reference_left, &native_left, offset);
@@ -772,11 +640,11 @@ mod oracle {
             "the reference capture's aligned window is silent (RMS {reference_rms:.3e} at offset \
              {offset}): it captured no audio, so there is nothing to compare against"
         );
-        let tolerance = RMS_ERROR_FRACTION * reference_rms;
+        let tolerance = MAX_RMS_ERROR_FRACTION * reference_rms;
         assert!(
             error < tolerance,
             "native render diverges from the mGBA reference: RMS error {error:.4} at aligned \
-             offset {offset} exceeds {RMS_ERROR_FRACTION} of the reference's own RMS \
+             offset {offset} exceeds {MAX_RMS_ERROR_FRACTION} of the reference's own RMS \
              {reference_rms:.4} (tolerance {tolerance:.4})"
         );
     }

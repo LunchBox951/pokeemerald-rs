@@ -5,7 +5,7 @@
 //! Sibling of [`crate::flow::first_battle`], and split from it the same way
 //! issue #221 split that module from [`crate::flow::wild_encounter`]: the
 //! battle *rules* live in the `battle` crate
-//! ([`battle::Battle::new_trainer`] and [`battle::trainer`]'s module docs).
+//! ([`battle::Battle::new_trainer`]).
 //! The *construction* — `CreateNPCTrainerParty`'s seeded personalities and
 //! fixed IVs, plus the headless one-turn-per-frame driver — used to live
 //! here too, but issue #264 (I-5 follow-up) needed the exact same
