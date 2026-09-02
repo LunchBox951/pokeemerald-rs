@@ -34,11 +34,13 @@ thread_local! {
     static ADMISSION_WALK_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Zeroes this thread's count of admission walks.
 #[cfg(test)]
 pub(crate) fn reset_walk_count() {
     ADMISSION_WALK_COUNT.with(|count| count.set(0));
 }
 
+/// How many admission walks this thread has run since the last reset.
 #[cfg(test)]
 pub(crate) fn walk_count() -> usize {
     ADMISSION_WALK_COUNT.with(std::cell::Cell::get)
