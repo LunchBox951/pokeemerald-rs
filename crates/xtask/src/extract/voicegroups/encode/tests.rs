@@ -17,7 +17,7 @@ fn assert_single_slot_encoding(slot: VoiceSlot, mut expected_slot: Vec<u8>) {
     };
     let mut expected_group = vec![1];
     expected_group.append(&mut expected_slot);
-    assert_eq!(encode_voice_group(&group), expected_group);
+    assert_eq!(encode_voice_group(&group).unwrap(), expected_group);
 }
 
 fn push_id(out: &mut Vec<u8>, id: &str) {
@@ -290,5 +290,27 @@ fn a_multi_slot_group_writes_the_count_then_each_slot_in_order() {
     expected.extend_from_slice(&[0, 0, 0, 0]);
     expected.push(DirectSoundModeTag::from(DirectSoundMode::Fixed).byte());
     expected.push(VoiceSlotTag::Empty.byte());
-    assert_eq!(encode_voice_group(&group), expected);
+    assert_eq!(encode_voice_group(&group).unwrap(), expected);
+}
+
+#[test]
+fn an_oversize_id_returns_a_typed_extraction_error_instead_of_panicking() {
+    let too_long_sample_id = "x".repeat(usize::from(u16::MAX) + 1);
+    let group = ResolvedVoiceGroup {
+        label: "demo".to_owned(),
+        slots: vec![VoiceSlot::DirectSound {
+            base_key: 60,
+            pan: None,
+            sample_id: too_long_sample_id.clone(),
+            envelope: envelope(0, 0, 0, 0),
+            mode: DirectSoundMode::Resampled,
+        }],
+    };
+
+    let err = encode_voice_group(&group).unwrap_err();
+    assert!(matches!(
+        err,
+        ExtractError::VoiceGroupIdTooLong { group, actual }
+            if group == "demo" && actual == too_long_sample_id.len()
+    ));
 }

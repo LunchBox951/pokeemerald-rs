@@ -164,6 +164,18 @@ pub enum ExtractError {
     /// that itself carries further indirection, or an over-long
     /// group/table). Carries the resolver error.
     VoiceGroup(VoiceGroupError),
+    /// Encoding a resolved voicegroup found a referenced pack id (a sample,
+    /// child group, or key-split-table id, all generated from upstream
+    /// symbol names — see `extract::voicegroups::resolve`'s "Sample id
+    /// scheme" docs) whose UTF-8 byte length does not fit the asset pack's
+    /// `u16` length prefix (`extract::voicegroups::encode`'s module docs).
+    /// Carries the owning voicegroup's label and the id's actual length.
+    VoiceGroupIdTooLong {
+        /// The label of the voicegroup being encoded.
+        group: String,
+        /// The offending id's actual UTF-8 byte length.
+        actual: usize,
+    },
     /// `sound/songs/midi/midi.cfg` had no entry for the requested song, or
     /// that entry was malformed. Carries the manifest's path and the parse
     /// error.
@@ -286,6 +298,12 @@ impl fmt::Display for ExtractError {
                 second_path.display()
             ),
             Self::VoiceGroup(err) => write!(f, "{err}"),
+            Self::VoiceGroupIdTooLong { group, actual } => write!(
+                f,
+                "voicegroup `{group}` references a pack id of {actual} bytes: the pack format's \
+                 id length field is a u16, so it cannot exceed {}",
+                u16::MAX
+            ),
             Self::MidiCfg(path, err) => {
                 write!(f, "midi.cfg `{}`: {err}", path.display())
             }
