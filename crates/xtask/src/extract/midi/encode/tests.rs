@@ -187,12 +187,7 @@ fn track_count_must_fit_the_wire_field() {
     );
 }
 
-/// A `midi.cfg` `-G` label is unbounded (`super::super::cfg`'s `apply_flag`
-/// copies it verbatim), so it can name a voicegroup pack id
-/// (`audio/voicegroup/` plus the label) no `u16` byte-length prefix can
-/// describe. The same class of wire-format bound as the track count above:
-/// the longest id that still fits encodes; one byte more is a returned error
-/// the caller can attach a path to, not a panic.
+/// `midi.cfg`'s `-G` label is unbounded (`super::super::cfg::apply_flag`).
 #[test]
 fn voicegroup_pack_id_length_must_fit_the_wire_field() {
     let song_with_label = |voicegroup_label: String| CompiledSong {
