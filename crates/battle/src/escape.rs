@@ -1,4 +1,8 @@
 //! Escape odds for wild single battles.
+//!
+//! Upstream refuses Run at action selection for `BATTLE_TYPE_FIRST_BATTLE`
+//! (`pokeemerald/src/battle_main.c:4339`-`:4344`), so the caller rejects it
+//! with [`crate::error::BattleError::RunForbidden`] and never reaches this formula.
 
 use crate::damage::BattleRng;
 
