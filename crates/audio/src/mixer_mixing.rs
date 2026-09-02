@@ -130,17 +130,18 @@ fn negative_sum_clips_to_minus_one() {
 }
 
 #[test]
-fn note_off_track_stops_only_the_first_matching_voice() {
+fn note_off_track_stops_only_the_newest_matching_voice() {
     const TRACK: usize = 0;
     const REPEATED_KEY: u8 = 60;
     const OTHER_KEY: u8 = 64;
 
     let mut mixer = Mixer::default();
+    // Panned apart so the assertions can tell WHICH matching voice stopped.
     mixer.add_voice(keyed_voice(
         50,
         TRACK,
         REPEATED_KEY,
-        FULL_TRACK_VOLUME,
+        MUTED_TRACK_VOLUME,
         FULL_TRACK_VOLUME,
     ));
     mixer.add_voice(keyed_voice(
@@ -148,19 +149,31 @@ fn note_off_track_stops_only_the_first_matching_voice() {
         TRACK,
         REPEATED_KEY,
         FULL_TRACK_VOLUME,
-        FULL_TRACK_VOLUME,
+        MUTED_TRACK_VOLUME,
     ));
     mixer.add_voice(keyed_voice(
         50,
         TRACK,
         OTHER_KEY,
-        FULL_TRACK_VOLUME,
-        FULL_TRACK_VOLUME,
+        MUTED_TRACK_VOLUME,
+        MUTED_TRACK_VOLUME,
     ));
     mixer.note_off_track(TRACK, REPEATED_KEY);
     let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
     mixer.mix_frame(&mut out);
+    let left_energy: f32 = out.iter().step_by(2).map(|sample| sample.abs()).sum();
+    let right_energy: f32 = out
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .map(|sample| sample.abs())
+        .sum();
     assert_eq!(mixer.voice_count(), 2);
+    assert!(left_energy > 0.0, "the older matching voice keeps sounding");
+    assert_eq!(
+        right_energy, 0.0,
+        "the newest matching voice is the one that stops"
+    );
 }
 
 #[test]
