@@ -9,6 +9,11 @@ use super::compile::CompiledSong;
 use super::error::MidiError;
 use super::event::SongEvent;
 
+/// Prefix prepended to a `midi.cfg` voicegroup label to form its pack id
+/// (`crate::extract`'s "Asset id scheme" docs), and counted toward the
+/// wire-format string's `u16` byte-length bound alongside the label itself.
+const VOICEGROUP_PACK_ID_PREFIX: &str = "audio/voicegroup/";
+
 #[derive(Clone, Copy)]
 #[repr(u8)]
 enum EventTag {
@@ -40,11 +45,12 @@ impl EventTag {
     }
 }
 
-fn write_string(out: &mut Vec<u8>, value: &str) {
-    let byte_len = u16::try_from(value.len())
-        .expect("every pack id this pipeline generates fits in a u16 length");
+fn write_string(out: &mut Vec<u8>, value: &str) -> Result<(), MidiError> {
+    let byte_len =
+        u16::try_from(value.len()).map_err(|_| MidiError::VoiceGroupPackIdTooLong(value.len()))?;
     out.extend_from_slice(&byte_len.to_le_bytes());
     out.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn write_tagged_u8(out: &mut Vec<u8>, tag: EventTag, value: u8) {
@@ -110,15 +116,17 @@ fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) {
 /// # Errors
 ///
 /// Returns [`MidiError::TooManyTracks`] when the track count does not fit the
-/// schema's `u8` field.
+/// schema's `u8` field, or [`MidiError::VoiceGroupPackIdTooLong`] when the
+/// encoded voicegroup pack id does not fit the schema's `u16` string-length
+/// field.
 pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
     let track_count =
         u8::try_from(song.tracks.len()).map_err(|_| MidiError::TooManyTracks(song.tracks.len()))?;
     let mut out = Vec::new();
     write_string(
         &mut out,
-        &format!("audio/voicegroup/{}", song.voicegroup_label),
-    );
+        &format!("{VOICEGROUP_PACK_ID_PREFIX}{}", song.voicegroup_label),
+    )?;
     out.extend_from_slice(&[
         song.priority,
         u8::from(song.reverb.is_some()),

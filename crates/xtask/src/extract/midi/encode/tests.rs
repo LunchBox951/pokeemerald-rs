@@ -186,3 +186,26 @@ fn track_count_must_fit_the_wire_field() {
         MidiError::TooManyTracks(first_unrepresentable_track_count)
     );
 }
+
+/// A `midi.cfg` `-G` label is unbounded (`super::super::cfg`'s `apply_flag`
+/// copies it verbatim), so it can name a voicegroup pack id
+/// (`audio/voicegroup/` plus the label) no `u16` byte-length prefix can
+/// describe. The same class of wire-format bound as the track count above:
+/// the longest id that still fits encodes; one byte more is a returned error
+/// the caller can attach a path to, not a panic.
+#[test]
+fn voicegroup_pack_id_length_must_fit_the_wire_field() {
+    let song_with_label = |voicegroup_label: String| CompiledSong {
+        voicegroup_label,
+        priority: 0,
+        reverb: None,
+        tracks: Vec::new(),
+    };
+    let longest_label_len = usize::from(u16::MAX) - "audio/voicegroup/".len();
+
+    assert!(encode_song(&song_with_label("v".repeat(longest_label_len))).is_ok());
+    assert_eq!(
+        encode_song(&song_with_label("v".repeat(longest_label_len + 1))).unwrap_err(),
+        MidiError::VoiceGroupPackIdTooLong(usize::from(u16::MAX) + 1)
+    );
+}
