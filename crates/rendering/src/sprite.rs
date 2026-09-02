@@ -270,6 +270,16 @@ impl<'a> SpriteLayer<'a> {
         // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
         // exactly when the pixel has been written by an opaque texel.
         const UNWRITTEN_ORDER: u8 = u8::MAX;
+        // Reject a coordinate outside the visible framebuffer before it ever
+        // reaches admission or sampling — `footprint`'s `i32` round-trips
+        // below only hold for a genuine framebuffer coordinate, and an
+        // unchecked out-of-range `usize` (e.g. `1usize << 32` on a 64-bit
+        // target) can alias back to an in-bounds `i32` by truncation. Mirrors
+        // [`Framebuffer::pixel`](crate::framebuffer::Framebuffer::pixel)'s
+        // own compare-before-use idiom.
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
+            return None;
+        }
         let mut order = UNWRITTEN_ORDER;
         let mut color: Option<Rgb888> = None;
         let mut semi_transparent = false;
@@ -358,6 +368,11 @@ impl<'a> SpriteLayer<'a> {
     /// `Normal`-mode entry at the same position would be dropped from
     /// visible resolution.
     fn objwin_mask_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+        // Same out-of-framebuffer rejection as
+        // [`resolve_pixel_inner`](Self::resolve_pixel_inner) — see its docs.
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
+            return false;
+        }
         self.with_admission(y, |admission| {
             self.entries.iter().enumerate().any(|(index, entry)| {
                 if !admission.is_admitted(index) || entry.mode() != ObjMode::Window {
@@ -426,13 +441,16 @@ impl<'a> SpriteLayer<'a> {
     /// boundary) for a trailing mosaic sample; [`MosaicSize::snap_local`]
     /// clamps it back before it reaches [`sample_local`](Self::sample_local).
     ///
-    /// `x`/`y` are always framebuffer coordinates (`<240`, `<160`), sprite
-    /// dimensions never exceed 64, and OBJ mosaic block sizes never exceed
-    /// 16 (`MosaicSize`'s 4-bit register field), so the `i32` round-trips
-    /// below — including the mosaic-extended `dx` — never truncate, wrap, or
-    /// lose their sign in practice; the `#[allow]`s document that, rather
-    /// than threading `TryFrom` through arithmetic that cannot actually fail
-    /// here.
+    /// `x`/`y` are framebuffer coordinates (`<240`, `<160`) — enforced by
+    /// [`resolve_pixel_inner`](Self::resolve_pixel_inner) and
+    /// [`objwin_mask_inner`](Self::objwin_mask_inner), the only callers that
+    /// reach this method, both of which reject an out-of-framebuffer `(x,
+    /// y)` before admission or sampling. Sprite dimensions never exceed 64,
+    /// and OBJ mosaic block sizes never exceed 16 (`MosaicSize`'s 4-bit
+    /// register field), so the `i32` round-trips below — including the
+    /// mosaic-extended `dx` — never truncate, wrap, or lose their sign; the
+    /// `#[allow]`s document that, rather than threading `TryFrom` through
+    /// arithmetic that cannot actually fail here.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -1433,5 +1451,145 @@ mod tests {
         // slot, which is all a row-major compositor ever needs.
         let _ = layer.resolve_pixel(0, 0);
         assert_eq!(crate::oam_budget::walk_count(), 3);
+    }
+
+    /// A query coordinate outside the visible framebuffer must miss even a
+    /// sprite whose *raw* (unclipped) footprint reaches past the edge —
+    /// proving the rejection is a real framebuffer-bounds check rather than
+    /// an already-off-footprint miss a sprite fixed at the origin could not
+    /// distinguish (`#803`). All four public query methods share this
+    /// contract through their two inner paths.
+    #[test]
+    fn queries_at_the_framebuffer_edge_miss_a_sprite_whose_raw_footprint_reaches_past_it() {
+        let (tileset, palette) = opaque_and_transparent_tiles();
+
+        // X: an 8x8 sprite at x=236 has a raw footprint of columns 236..244,
+        // straddling x=240 (`Framebuffer::WIDTH`). Without the framebuffer
+        // guard, `footprint`'s dx = 240 - 236 = 4 < 8 would hit.
+        let x_edge_entry = |mode: ObjMode| {
+            OamEntry::new(
+                236,
+                0,
+                0,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0, // 8x8
+                0,
+                true,
+            )
+            .with_mode(mode)
+        };
+        let x_entries = [x_edge_entry(ObjMode::Normal)];
+        let x_layer = SpriteLayer::new(&x_entries, &tileset, &tileset, &palette);
+        assert!(
+            x_layer.resolve_pixel(239, 0).is_some(),
+            "control: x=239 is the sprite's last on-screen column"
+        );
+        assert_eq!(
+            x_layer.resolve_pixel(Framebuffer::WIDTH, 0),
+            None,
+            "x == WIDTH is off-screen despite the raw footprint (236..244) reaching it"
+        );
+        assert_eq!(
+            x_layer.resolve_pixel_with_mosaic(Framebuffer::WIDTH, 0, MosaicSize::NONE),
+            None
+        );
+        let x_objwin_entries = [x_edge_entry(ObjMode::Window)];
+        let x_objwin_layer = SpriteLayer::new(&x_objwin_entries, &tileset, &tileset, &palette);
+        assert!(
+            x_objwin_layer.objwin_mask(239, 0),
+            "control: x=239 is the sprite's last on-screen column"
+        );
+        assert!(
+            !x_objwin_layer.objwin_mask(Framebuffer::WIDTH, 0),
+            "x == WIDTH"
+        );
+        assert!(!x_objwin_layer.objwin_mask_with_mosaic(Framebuffer::WIDTH, 0, MosaicSize::NONE));
+
+        // Y: an 8x16 (Vertical, size 0) sprite at y=155 has a raw footprint
+        // of rows 155..171, straddling y=160 (`Framebuffer::HEIGHT`).
+        // Without the guard, dy = 160 - 155 = 5 < 16 would hit.
+        let y_edge_entry = |mode: ObjMode| {
+            OamEntry::new(
+                0,
+                155,
+                0,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Vertical,
+                0, // 8x16
+                0,
+                true,
+            )
+            .with_mode(mode)
+        };
+        let y_entries = [y_edge_entry(ObjMode::Normal)];
+        let y_layer = SpriteLayer::new(&y_entries, &tileset, &tileset, &palette);
+        assert!(
+            y_layer.resolve_pixel(0, 159).is_some(),
+            "control: y=159 is the sprite's last on-screen row"
+        );
+        assert_eq!(
+            y_layer.resolve_pixel(0, Framebuffer::HEIGHT),
+            None,
+            "y == HEIGHT is off-screen despite the raw footprint (155..171) reaching it"
+        );
+        assert_eq!(
+            y_layer.resolve_pixel_with_mosaic(0, Framebuffer::HEIGHT, MosaicSize::NONE),
+            None
+        );
+        let y_objwin_entries = [y_edge_entry(ObjMode::Window)];
+        let y_objwin_layer = SpriteLayer::new(&y_objwin_entries, &tileset, &tileset, &palette);
+        assert!(
+            y_objwin_layer.objwin_mask(0, 159),
+            "control: y=159 is the sprite's last on-screen row"
+        );
+        assert!(
+            !y_objwin_layer.objwin_mask(0, Framebuffer::HEIGHT),
+            "y == HEIGHT"
+        );
+        assert!(!y_objwin_layer.objwin_mask_with_mosaic(0, Framebuffer::HEIGHT, MosaicSize::NONE));
+    }
+
+    /// `1usize << 32` truncates to `0i32` on a 64-bit target, so an
+    /// unchecked cast would alias this coordinate onto the visible origin
+    /// (`#803`). All four public query methods must still report a miss.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn queries_far_outside_the_framebuffer_miss_a_sprite_at_the_origin() {
+        const FAR: usize = 1 << 32;
+
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let entries = [square_8x8(0, 0, 0)]; // opaque tile 0 at the origin
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert!(layer.resolve_pixel(0, 0).is_some(), "sprite at the origin");
+
+        for (x, y) in [(FAR, 0), (0, FAR)] {
+            assert_eq!(layer.resolve_pixel(x, y), None, "column/row 1 << 32");
+            assert_eq!(
+                layer.resolve_pixel_with_mosaic(x, y, MosaicSize::NONE),
+                None,
+                "column/row 1 << 32, with mosaic"
+            );
+        }
+
+        let objwin_entries = [square_8x8(0, 0, 0).with_mode(ObjMode::Window)];
+        let objwin_layer = SpriteLayer::new(&objwin_entries, &tileset, &tileset, &palette);
+        assert!(
+            objwin_layer.objwin_mask(0, 0),
+            "OBJWIN sprite at the origin"
+        );
+        for (x, y) in [(FAR, 0), (0, FAR)] {
+            assert!(!objwin_layer.objwin_mask(x, y), "column/row 1 << 32");
+            assert!(
+                !objwin_layer.objwin_mask_with_mosaic(x, y, MosaicSize::NONE),
+                "column/row 1 << 32, with mosaic"
+            );
+        }
     }
 }
