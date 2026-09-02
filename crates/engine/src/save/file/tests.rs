@@ -333,6 +333,120 @@ fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
 }
 
 #[test]
+fn directories_to_create_lists_only_the_missing_levels_outermost_first() {
+    let dir = TempDir::new("missing-levels");
+    let target = dir.join("one").join("two").join("three");
+
+    assert_eq!(
+        SaveFile::directories_to_create(&target),
+        vec![dir.join("one"), dir.join("one").join("two"), target.clone(),],
+        "every level below the existing scratch root is missing"
+    );
+
+    std::fs::create_dir_all(dir.join("one")).unwrap();
+    assert_eq!(
+        SaveFile::directories_to_create(&target),
+        vec![dir.join("one").join("two"), target.clone()],
+        "an already-created level must drop out of the missing list"
+    );
+
+    std::fs::create_dir_all(&target).unwrap();
+    assert!(
+        SaveFile::directories_to_create(&target).is_empty(),
+        "a fully created path has nothing left to report"
+    );
+}
+
+#[test]
+fn locking_a_fresh_multi_level_root_syncs_every_created_levels_parent() {
+    let dir = TempDir::new("sync-created");
+    let file = SaveFile::at(dir.join("one").join("two").join(SAVE_FILE_NAME));
+
+    let synced = std::cell::RefCell::new(Vec::new());
+    let guard = file
+        .lock_with(|path| synced.borrow_mut().push(path.to_path_buf()))
+        .expect("a fresh multi-level root must be lockable");
+    drop(guard);
+
+    assert!(dir.join("one").join("two").is_dir());
+    assert_eq!(
+        synced.into_inner(),
+        vec![dir.path.clone(), dir.join("one")],
+        "each newly created level's own parent must be synced, outermost first -- \
+         syncing only the save's immediate parent leaves the created ancestors' \
+         directory entries unsynced, so they can vanish after a power loss"
+    );
+}
+
+#[test]
+fn locking_an_already_created_hierarchy_syncs_nothing() {
+    let dir = TempDir::new("sync-existing");
+    let file = SaveFile::at(dir.join("one").join("two").join(SAVE_FILE_NAME));
+    std::fs::create_dir_all(dir.join("one").join("two")).unwrap();
+
+    let synced = std::cell::RefCell::new(Vec::new());
+    let guard = file
+        .lock_with(|path| synced.borrow_mut().push(path.to_path_buf()))
+        .unwrap();
+    drop(guard);
+
+    assert!(
+        synced.into_inner().is_empty(),
+        "an already-created hierarchy must not be reported as newly created"
+    );
+}
+
+#[test]
+fn locking_synchronises_created_ancestors_only_once_the_lock_is_held() {
+    let dir = TempDir::new("sync-order");
+    let path = dir.join("nested").join("deeper").join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+
+    let synced_while_locked = std::cell::Cell::new(false);
+    let guard = file
+        .lock_with(|_created_level_parent| {
+            let probe = std::fs::OpenOptions::new()
+                .write(true)
+                .open(expected_sibling_path(&path, ".lock"))
+                .expect("the lock file must already exist while ancestors are synced");
+            synced_while_locked.set(matches!(
+                probe.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+        })
+        .expect("locking must create the missing hierarchy");
+    drop(guard);
+
+    assert!(
+        synced_while_locked.get(),
+        "created ancestors must be synced only after this call holds the exclusive lock -- \
+         syncing before locking would let a second, concurrent locker see those same \
+         ancestors as already existing, skip synchronising them itself, and report a \
+         successful save before either locker had made them durable"
+    );
+}
+
+#[test]
+fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
+    let dir = TempDir::new("lock-mkdir");
+    let path = dir.join("nested").join("deeper").join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+
+    let guard = file
+        .lock()
+        .expect("locking must create the missing hierarchy");
+    assert!(path.parent().unwrap().is_dir());
+    assert!(expected_sibling_path(&path, ".lock").exists());
+
+    let (store, _, _) = saved_store();
+    file.write(&store).unwrap();
+    drop(guard);
+
+    let reloaded = file.read().unwrap().expect("the file was just written");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+#[test]
 fn the_save_lock_excludes_a_second_locker_until_dropped() {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
