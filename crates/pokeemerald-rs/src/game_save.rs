@@ -1,8 +1,7 @@
 //! Boot-time save loading and in-session persistence.
 //!
-//! `engine::save` owns the flash-image format, validation, and slot rotation.
-//! This module owns the session-level rules: boot classification, save
-//! lineage, overwrite consent, and protection against concurrent stale writes.
+//! `engine::save` owns the flash-image format; this module owns the session rules:
+//! boot classification, save lineage, overwrite consent, and stale-writer refusal.
 //!
 //! An unreadable image latches upstream's `SAVE_STATUS_NO_FLASH`, so [`SaveSlot`]
 //! disables saving for the session like `TrySavingData` (`save.c:765-771, 871-879`).
@@ -88,9 +87,8 @@ pub(crate) enum StoreOutcome {
 
 /// The source of unmodelled bytes retained when serializing a save.
 ///
-/// The port retains unmodelled bytes in the disk image rather than live RAM.
-/// New-game writes must therefore clear that base on every attempt, while a
-/// continued session carries its loaded base forward.
+/// Unmodelled bytes live in the disk image, so a new-game write clears that base
+/// on every attempt while a continued session carries its loaded base forward.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaveLineage {
     /// The session started a new adventure and retains no previous save data.
@@ -173,9 +171,8 @@ impl SaveSlot {
 
     /// Loads the current save for boot.
     ///
-    /// Read failures are logged and returned as [`SaveFileStatus::NoFlash`]
-    /// because boot has no error-reporting path and must not overwrite a file
-    /// it could not read.
+    /// Read failures log and return [`SaveFileStatus::NoFlash`]: boot has no
+    /// error path and must never overwrite a file it could not read.
     pub(crate) fn load(&mut self) -> SavedGame {
         let Some(file) = &self.file else {
             self.session_status = Some(SaveFileStatus::NoFlash);
