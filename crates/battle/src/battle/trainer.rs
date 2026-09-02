@@ -2,9 +2,9 @@
 //!
 //! Trainer construction receives a fixed personality and scales each party
 //! entry's IV byte, so it consumes RNG only while rolling non-shiny
-//! original-trainer IDs. [`ensure_trainer_party_startable`] is the preflight that
-//! `Battle::new_trainer` runs before any draw; [`build_trainer_pokemon`] itself
-//! draws before `Battle::new_trainer` can refuse an unexecutable move.
+//! original-trainer IDs. Callers run [`ensure_trainer_party_startable`] before
+//! [`build_trainer_pokemon`], as `flow::npc_trainer_battle` does: construction
+//! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
