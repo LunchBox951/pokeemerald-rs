@@ -237,15 +237,24 @@ impl Battle {
         // string (`battle_script_commands.c:3351`-`:3356`), so no event is
         // emitted either.
         if self.player.level() < MAX_LEVEL {
-            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
+            let defeated = self.dex.species(self.enemy.species())?;
             let level = self.enemy.level();
             // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) --
             // see `crate::exp`.
             let exp = if self.trainer().is_some() {
-                trainer_faint_exp(base_exp, level)
+                trainer_faint_exp(defeated.base_exp, level)
             } else {
-                wild_faint_exp(base_exp, level)
+                wild_faint_exp(defeated.base_exp, level)
             };
+            // `MonGainEVs` (`battle_script_commands.c:3420`) runs before the
+            // exp/level-up sequence, upstream's own order, so a level-up this
+            // turn snapshots the gain into `evs_at_last_level_up` for the
+            // save encoder's EV-aware block; the live recompute stays 0-EV
+            // (`battle::pokemon::evs`'s module docs).
+            // Gated by the same `MAX_LEVEL` check as the exp award: upstream
+            // skips `MonGainEVs` too for a recipient already at the cap
+            // (`:3351`-`:3356`).
+            self.player.gain_evs(defeated.ev_yield);
             let pending = self.player.apply_experience(&self.dex, exp)?;
             events.push(BattleEvent::ExpGained(exp));
             // A crossed level whose learnset move has no free slot parks
