@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use super::{
-    compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon, hp_hidden_by_load,
-    merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs, zero_ev_max_hp, PartyError,
-    MAIL_NONE,
+    clamp_i32, compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon,
+    hp_hidden_by_load, merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs,
+    zero_ev_max_hp, PartyError, MAIL_NONE,
 };
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
@@ -146,9 +146,11 @@ fn shedinja_fixture(level: u8) -> BattlePokemon {
 fn compute_levelled_up_stats_forces_shedinja_to_one_max_hp() {
     let dex = Dex::new();
     let mon = shedinja_fixture(50);
-    let evs_and_condition: [u8; engine::save::SUBSTRUCTURE_LEN] =
-        [252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    let stats = compute_levelled_up_stats(&dex, &mon, &evs_and_condition);
+    let evs = battle::Evs {
+        hp: 252,
+        ..battle::Evs::default()
+    };
+    let stats = compute_levelled_up_stats(&dex, &mon, evs);
     assert_eq!(stats.max_hp, 1);
 }
 
@@ -242,7 +244,11 @@ fn an_unchanged_shedinja_keeps_the_five_cached_stats_its_evs_have_outrun() {
     stored.hp = 40;
 
     let reloaded = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
-    let ev_aware = compute_levelled_up_stats(&dex, &reloaded, &substructures.evs_and_condition);
+    let ev_aware = compute_levelled_up_stats(
+        &dex,
+        &reloaded,
+        evs_from_substruct2(&substructures.evs_and_condition),
+    );
     assert!(
         ev_aware.attack > u32::from(stored.attack),
         "fixture sanity: a fresh EV-aware recompute really would move the \
@@ -482,7 +488,8 @@ fn save_fields_are_encoded_at_their_layout_offsets() {
     assert_eq!(
         substructures.evs_and_condition,
         [0; engine::save::SUBSTRUCTURE_LEN],
-        "no EVs are modelled, so the EV substructure is written all-zero"
+        "this fixture never gained EVs, so the EV substructure is written \
+         all-zero"
     );
     assert_eq!(
         u16::from_le_bytes(
@@ -498,6 +505,176 @@ fn save_fields_are_encoded_at_their_layout_offsets() {
     );
 }
 
+/// A fresh game's provisional starter has no backing save record at all
+/// (`SaveBlock1::player_party` starts empty), so a starter that gains EVs
+/// and levels up in its first battle, before that first save ever runs,
+/// must still be filed with `CalculateMonStats`'s own EV-aware stat block
+/// through `to_save_pokemon` (a direct first save) and
+/// `merge_into_save_pokemon`'s own no-backing-record fallback alike.
+#[test]
+fn to_save_pokemon_files_ev_aware_stats_after_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = treecko_fixture().with_evs(battle::Evs {
+        hp: 252,
+        attack: 252,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    let species = dex.species(mon.species()).unwrap();
+    let created_at_level = mon.created_at_level();
+
+    // The in-battle level-up that makes the EV-aware recompute apply
+    // (`to_save_pokemon`'s own doc comment): `Battle::settle_win_reward`
+    // awards EVs before applying experience, so a KO that does both sees
+    // its own gain here exactly as a real battle would.
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, created_at_level + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(
+        mon.level(),
+        created_at_level + 1,
+        "fixture sanity: the level moved"
+    );
+
+    let zero_ev_max_hp = mon.stats().max_hp;
+    let ev_aware = battle::compute_stats_with_evs(
+        mon.species(),
+        species,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    );
+    assert!(
+        ev_aware.max_hp > zero_ev_max_hp,
+        "fixture sanity: 252 HP EVs really do move CALC_STAT's own max HP \
+         at this level, so retaining the live 0-EV cache would be an \
+         observable regression"
+    );
+    assert_eq!(
+        mon.current_hp(),
+        zero_ev_max_hp,
+        "fixture sanity: the level-up grew current HP by the 0-EV delta \
+         alone (`battle`'s own module docs), so the mon is still at its own \
+         (0-EV) full health"
+    );
+
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        ev_aware.max_hp,
+        "a mon with no backing save record must be filed with its real \
+         EV-aware stat block, not the live 0-EV cache"
+    );
+    assert_eq!(
+        saved.hp, saved.max_hp,
+        "a mon that is full health under the live 0-EV cache must still be \
+         filed at full under the wider EV-aware maximum this encoder just \
+         computed -- not damaged by the gap between the two floors"
+    );
+
+    // The exact path a fresh game's first save takes: no backing record at
+    // all (`SaveBlock1::player_party[0]` starts at `Pokemon::default()`, an
+    // empty `SPECIES_NONE` slot), so `merge_into_save_pokemon`'s
+    // `backing_substructures` check fails and it falls back to
+    // `to_save_pokemon` internally.
+    let mut offset = 0;
+    let merged = merge_into_save_pokemon(&dex, &mon, &Pokemon::default(), &mut offset);
+    assert_eq!(
+        u32::from(merged.max_hp),
+        ev_aware.max_hp,
+        "the fresh-game fallback path must match the direct encoder"
+    );
+    assert_eq!(
+        merged.hp, merged.max_hp,
+        "the fallback path must file the same full-health record the \
+         direct encoder does"
+    );
+    assert_eq!(
+        offset,
+        clamp_i32(ev_aware.max_hp.saturating_sub(zero_ev_max_hp)),
+        "the fallback must seed hp_hidden_by_load with the gap the record \
+         it just wrote opened over the live 0-EV floor, not leave it at 0 \
+         -- otherwise the very next same-session save, taking the retained \
+         fast path, would re-measure this same full-health lead against \
+         the retained EV-aware maximum with no gap to translate by and \
+         file it damaged"
+    );
+
+    // That next same-session save: species and level are unchanged, so
+    // `merge_into_save_pokemon` takes the retained fast path against the
+    // record `merged` just became, trusting the offset above rather than
+    // re-deriving it. Saving twice must file the same bytes (module docs).
+    let resaved = merge_into_save_pokemon(&dex, &mon, &merged, &mut offset);
+    assert_eq!(resaved.max_hp, merged.max_hp);
+    assert_eq!(
+        resaved.hp, resaved.max_hp,
+        "a second, unchanged-state save must still file the lead at full, \
+         not flip it to damaged because the carried offset was lost"
+    );
+}
+
+/// The counterpart the fix above must not overreach on: `MonGainEVs` only
+/// ever writes the EV bytes, and nothing recomputes the cached stat block
+/// until an actual `CalculateMonStats` call, which the battle controller
+/// makes only on a level-up. A mon that gained real EVs but has not levelled
+/// up since `BattlePokemon::new` built it must stay filed at the stale
+/// `0`-EV block that cache actually holds, not cash the EVs in a save early.
+#[test]
+fn to_save_pokemon_keeps_the_stale_cache_when_no_level_up_happened_yet() {
+    let dex = Dex::new();
+    let mon = treecko_fixture().with_evs(battle::Evs {
+        hp: 252,
+        ..battle::Evs::default()
+    });
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level(),
+        "fixture sanity: no level-up happened"
+    );
+
+    let ev_aware = battle::compute_stats_with_evs(
+        mon.species(),
+        dex.species(mon.species()).unwrap(),
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    );
+    assert!(
+        ev_aware.max_hp > mon.stats().max_hp,
+        "fixture sanity: the EVs really would move CALC_STAT's own max HP, \
+         so filing the live 0-EV cache instead is an observable choice, not \
+         a coincidence"
+    );
+
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        mon.stats().max_hp,
+        "no upstream CalculateMonStats call has happened yet, so the filed \
+         block must stay the live 0-EV one"
+    );
+    assert_eq!(
+        saved.hp, saved.max_hp,
+        "the live cache's own full health, filed unmodified"
+    );
+
+    let mut offset = 0;
+    let merged = merge_into_save_pokemon(&dex, &mon, &Pokemon::default(), &mut offset);
+    assert_eq!(u32::from(merged.max_hp), mon.stats().max_hp);
+    assert_eq!(
+        offset, 0,
+        "no gap opened over the live floor, so nothing to carry forward"
+    );
+}
+
+/// A trailing `MOVE_NONE` slot is an *empty* slot upstream, not a known
+/// move -- a decoder that carried it through would build a battler
+/// `BattlePokemon::new` refuses outright.
 #[test]
 fn empty_move_slots_are_dropped_rather_than_decoded_as_moves() {
     let dex = Dex::new();
@@ -973,6 +1150,10 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     );
     assert_ne!(merged.hp, stored.hp, "fixture sanity: the damage is real");
 
+    // The recomputed block is EV-aware -- fed the fixture's own retained EV
+    // bytes through `CalculateMonStats`'s formula, not the battler's `0`-EV
+    // `lead.stats()` cache: only this save-time recompute is EV-aware, the
+    // live cache stays `0`-EV for the whole battle.
     let expected = recompute(lead.level(), retained_evs());
     assert_eq!(
         merged.max_hp,
@@ -1016,6 +1197,12 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
         &after.attacks[EXPECTED_ATTACK_PP_OFFSET..],
         &stored.box_data.substructures().unwrap().attacks[EXPECTED_ATTACK_PP_OFFSET..],
         "fixture sanity: the spent PP is real"
+    );
+    assert_eq!(
+        after.evs_and_condition[0..6],
+        RETAINED_EVS_AND_CONDITION[0..6],
+        "the record's own retained EVs round-trip back out \
+         unchanged -- nothing in this session called `gain_evs`"
     );
 
     let mut expected_reloaded = lead.clone();
@@ -1380,6 +1567,13 @@ fn an_inconsistent_level_byte_still_saves_a_full_health_ev_trained_lead_at_full(
     stored.max_hp = u16::try_from(ev_aware_at_13.max_hp).unwrap();
     stored.hp = stored.max_hp;
 
+    // The growth word says level 14, contradicting the `level` byte just set
+    // above -- upstream's own `GetLevelFromMonExp` reconciles this on load,
+    // and so does `from_save_pokemon`, before any offset is measured. One
+    // level, not a larger jump: past this point the model's `0`-EV maximum
+    // crosses the fixture's own stored (EV-aware) maximum, and
+    // `from_save_pokemon`'s own clamp would pin `current_hp` there -- a
+    // residual gap, not the mismatched-offset defect this fixture targets.
     let level_14 = assets::experience_for_level(treecko.growth_rate, 14).unwrap();
     let mut substructures = stored.box_data.substructures().unwrap();
     substructures.growth[EXPECTED_GROWTH_EXPERIENCE].copy_from_slice(&level_14.to_le_bytes());
@@ -1559,5 +1753,304 @@ fn a_live_lead_is_never_saved_as_fainted_when_the_ev_gap_shrinks() {
         merged.hp, 1,
         "a live battler saves at least 1 -- a 0 here would come back from \
          the next load as a fainted lead the session never fainted"
+    );
+}
+
+/// End to end: a KO that both awards EVs and crosses a level
+/// this same turn must file *both* -- the newly gained EV byte, and a stat
+/// block computed with it rather than the record's stale, pre-KO one.
+/// Without both, a KO that grants a level and crosses an `ev/4` boundary
+/// files lower stats than upstream and loses the newly earned EVs.
+#[test]
+fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
+    let dex = Dex::new();
+    let lead = treecko_fixture(); // Treecko, level 12.
+    let treecko = dex.species(lead.species()).unwrap();
+
+    // Attack EV starts one short of the next `ev / 4` unit (3 -> floor 0).
+    let mut stored = to_save_pokemon(&dex, &lead);
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.evs_and_condition[1] = 3;
+    stored.box_data.set_substructures(&substructures);
+
+    let mut battler = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    assert_eq!(
+        battler.evs().attack,
+        3,
+        "fixture sanity: the loaded EV round-trips"
+    );
+
+    // The KO: `BattlePokemon::gain_evs` before `apply_experience` --
+    // `Battle::settle_win_reward`'s own order (module docs) -- against a
+    // real species' real yield (Poochyena, species 286, Attack yield 1),
+    // crossing the `ev / 4` boundary (3 -> 4 -> floor 1).
+    let poochyena = dex.species(assets::SpeciesId(286)).unwrap();
+    assert_eq!(
+        poochyena.ev_yield.attack, 1,
+        "fixture sanity: Poochyena's real upstream Attack yield"
+    );
+    battler.gain_evs(poochyena.ev_yield);
+    assert_eq!(
+        battler.evs().attack,
+        4,
+        "fixture sanity: the ev/4 boundary is crossed"
+    );
+
+    let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
+    battler
+        .apply_experience(&dex, level_13 - battler.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(
+        battler.level(),
+        13,
+        "fixture sanity: the same KO also crossed a level"
+    );
+
+    let mut offset = hp_hidden_by_load(&dex, &stored, &battler);
+    let merged = merge_into_save_pokemon(&dex, &battler, &stored, &mut offset);
+    let after = merged.box_data.substructures().unwrap();
+
+    assert_eq!(
+        after.evs_and_condition[1], 4,
+        "the KO's own EV gain is not lost -- it is filed, not the stale \
+         pre-KO byte"
+    );
+
+    let filed_with_the_gain = battle::compute_stats_with_evs(
+        battler.species(),
+        treecko,
+        13,
+        battler.nature(),
+        battler.ivs(),
+        battle::Evs {
+            attack: 4,
+            ..battle::Evs::default()
+        },
+    );
+    let filed_without_the_gain = battle::compute_stats_with_evs(
+        battler.species(),
+        treecko,
+        13,
+        battler.nature(),
+        battler.ivs(),
+        battle::Evs {
+            attack: 3,
+            ..battle::Evs::default()
+        },
+    );
+    assert_ne!(
+        filed_with_the_gain.attack, filed_without_the_gain.attack,
+        "fixture sanity: the ev/4 boundary crossing really does move the \
+         formula's own output, or the assertion below would be vacuous"
+    );
+    assert_eq!(
+        merged.attack,
+        u16::try_from(filed_with_the_gain.attack).unwrap(),
+        "the level-up save carries the battle's own EV yield -- not the \
+         weaker stale pre-KO stat block"
+    );
+}
+
+/// Upstream only refreshes the
+/// cached stat block inside the level-up sequence itself
+/// (`Cmd_getexp` case 5's `CalculateMonStats`); a later KO's own
+/// `MonGainEVs` call (`battle_script_commands.c:3420`) never touches it. A
+/// level-up in one battle followed by EV gains in a later battle, with no
+/// second level-up, must therefore file the level-up's own block -- not one
+/// inflated by the later EVs.
+#[test]
+fn save_time_recompute_uses_the_evs_the_level_up_saw_not_later_gains() {
+    const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    };
+    let dex = Dex::new();
+    let mut mon = treecko_fixture();
+    let species = dex.species(mon.species()).unwrap();
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    let evs_at_level_up = mon.evs();
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, mon.created_at_level() + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(mon.level(), mon.created_at_level() + 1);
+    let block_upstream_would_have_cached = battle::compute_stats_with_evs(
+        mon.species(),
+        species,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        evs_at_level_up,
+    );
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    assert_eq!(mon.level(), mon.created_at_level() + 1);
+    assert!(
+        battle::compute_stats_with_evs(
+            mon.species(),
+            species,
+            mon.level(),
+            mon.nature(),
+            mon.ivs(),
+            mon.evs()
+        )
+        .max_hp
+            > block_upstream_would_have_cached.max_hp
+    );
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        block_upstream_would_have_cached.max_hp,
+        "the filed block must be the one the level-up's own CalculateMonStats produced"
+    );
+}
+
+/// The same property reached through
+/// [`merge_into_save_pokemon`] too: a mon loaded from a backing record, then
+/// levelled up and only *later* KO'd for more EVs with no second level-up,
+/// must file the level-up's own block on the next merge -- not one inflated
+/// by the later gains -- exactly as [`to_save_pokemon`]'s own regression
+/// above.
+#[test]
+fn merge_into_save_pokemon_uses_the_evs_the_level_up_saw_not_later_gains() {
+    const HP_ONLY_YIELD: assets::EvYield = assets::EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    };
+    let dex = Dex::new();
+    let mut mon = treecko_fixture();
+    let species = dex.species(mon.species()).unwrap();
+    // The backing record this merge overlays onto -- filed before any EVs
+    // or level-up, so the recompute branch below has something to compare
+    // its own species/level against.
+    let base = to_save_pokemon(&dex, &mon);
+
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    let evs_at_level_up = mon.evs();
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, mon.created_at_level() + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level() + 1,
+        "fixture sanity: the level moved"
+    );
+    let block_upstream_would_have_cached = battle::compute_stats_with_evs(
+        mon.species(),
+        species,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        evs_at_level_up,
+    );
+
+    // A later battle's own KOs, no further level-up.
+    for _ in 0..30 {
+        mon.gain_evs(HP_ONLY_YIELD);
+    }
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level() + 1,
+        "fixture sanity: still no second level-up"
+    );
+
+    let mut offset = hp_hidden_by_load(&dex, &base, &mon);
+    let merged = merge_into_save_pokemon(&dex, &mon, &base, &mut offset);
+
+    assert_eq!(
+        u32::from(merged.max_hp),
+        block_upstream_would_have_cached.max_hp,
+        "merge_into_save_pokemon must file the level-up's own cached block, \
+         not one inflated by the later EV gains"
+    );
+}
+
+/// An in-battle
+/// level-up must not leave [`battle::BattlePokemon::stats`] EV-aware for
+/// the rest of the session. `hp_hidden_by_load`'s whole rebase system
+/// assumes the live model's own maximum is *always* the `0`-EV floor
+/// ([`zero_ev_max_hp`]) -- if a level-up instead recomputes it EV-aware,
+/// the retained branch's later merge adds the hidden-EV offset on top of a
+/// `current_hp` that is already real, double-counting it and silently
+/// healing away damage the session actually took.
+#[test]
+fn a_retained_branch_after_an_in_battle_level_up_does_not_double_count_the_hidden_ev_gap() {
+    let dex = Dex::new();
+    let lead = treecko_fixture(); // Treecko, level 12, 0 EVs.
+    let treecko = dex.species(lead.species()).unwrap();
+
+    // A real HP EV investment, as if trained in an earlier session -- HP
+    // specifically, since `hp_hidden_by_load`/`zero_ev_max_hp` measure the
+    // gap over the `0`-EV *max_hp* floor, which only the HP EV moves.
+    let mut stored = to_save_pokemon(&dex, &lead);
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.evs_and_condition[0] = 252;
+    stored.box_data.set_substructures(&substructures);
+
+    let mut battler = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    assert_eq!(battler.evs().hp, 252, "fixture sanity: the EV round-trips");
+
+    // Level up in-battle -- no KO EV gain this time, isolating the
+    // level-up path from the award path.
+    let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
+    battler
+        .apply_experience(&dex, level_13 - battler.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(battler.level(), 13, "fixture sanity: the mon levelled up");
+
+    // Save once, so the stored record catches up to the new level -- an
+    // ordinary mid-session save.
+    let mut offset = hp_hidden_by_load(&dex, &stored, &battler);
+    let saved_once = merge_into_save_pokemon(&dex, &battler, &stored, &mut offset);
+    assert_eq!(
+        saved_once.level, 13,
+        "fixture sanity: the stored record now matches the new level"
+    );
+
+    // A later KO gains a few more EVs without crossing another level -- the
+    // retained branch's own territory (module docs). The stored record's
+    // own maximum (real, EV-aware, from the save above) sits above the
+    // `0`-EV floor at level 13, so the hidden-offset measurement below is
+    // nonzero.
+    battler.gain_evs(assets::EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    let mut offset2 = hp_hidden_by_load(&dex, &saved_once, &battler);
+    assert_ne!(
+        offset2, 0,
+        "fixture sanity: the retained maximum really is above the 0-EV \
+         floor, or the double-count this test targets could not manifest"
+    );
+
+    // Real damage taken in a subsequent battle, after the second save's
+    // own snapshot was measured.
+    battler.apply_damage(10);
+
+    let merged = merge_into_save_pokemon(&dex, &battler, &saved_once, &mut offset2);
+    assert_eq!(
+        merged.hp,
+        merged.max_hp - 10,
+        "the 10 points of real damage must survive the save -- not be \
+         silently healed by adding the hidden EV gap on top of a \
+         current_hp that is already real"
     );
 }
