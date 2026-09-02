@@ -401,8 +401,8 @@ enum BattleKind {
     /// ([`crate::escape`]'s module docs), and the wild opponent's AI-branch
     /// move choice (`opponent_ai::choose_enemy_action_first_battle`).
     FirstBattle,
-    /// `BATTLE_TYPE_TRAINER` (issue #237): see [`trainer`]'s module docs for
-    /// the five things this changes and where each one lives.
+    /// `BATTLE_TYPE_TRAINER` (issue #237): a party opponent with AI flags and a
+    /// prize purse, owned by [`trainer::TrainerContext`].
     Trainer(TrainerContext),
 }
 
@@ -518,9 +518,7 @@ impl Battle {
     /// `party[0]` is the mon the trainer leads with (upstream sends out
     /// party slot `0`; there is no lead-choice step for an NPC) and
     /// everything after it becomes the bench
-    /// [`trainer::TrainerContext::send_out_next`] draws from. See
-    /// [`trainer`]'s module docs for the five deltas from a wild battle and
-    /// where each is implemented.
+    /// [`trainer::TrainerContext::send_out_next`] draws from.
     ///
     /// # Two screens, both before the first draw
     ///

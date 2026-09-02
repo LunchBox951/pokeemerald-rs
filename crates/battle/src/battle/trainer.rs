@@ -2,8 +2,9 @@
 //!
 //! Trainer construction receives a fixed personality and scales each party
 //! entry's IV byte, so it consumes RNG only while rolling non-shiny
-//! original-trainer IDs. Unsupported parties are screened before construction
-//! to leave the shared RNG stream unchanged.
+//! original-trainer IDs. [`ensure_trainer_party_startable`] is the preflight that
+//! `Battle::new_trainer` runs before any draw; [`build_trainer_pokemon`] itself
+//! draws before `Battle::new_trainer` can refuse an unexecutable move.
 
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
@@ -80,118 +81,62 @@ pub fn build_trainer_pokemon(
     )
 }
 
-const TRAINER_CLASS_HIKER: TrainerClass = TrainerClass(0x02);
-const TRAINER_CLASS_TEAM_AQUA: TrainerClass = TrainerClass(0x03);
-const TRAINER_CLASS_PKMN_BREEDER: TrainerClass = TrainerClass(0x04);
-const TRAINER_CLASS_COOLTRAINER: TrainerClass = TrainerClass(0x05);
-const TRAINER_CLASS_BIRD_KEEPER: TrainerClass = TrainerClass(0x06);
-const TRAINER_CLASS_COLLECTOR: TrainerClass = TrainerClass(0x07);
-const TRAINER_CLASS_SWIMMER_M: TrainerClass = TrainerClass(0x08);
-const TRAINER_CLASS_TEAM_MAGMA: TrainerClass = TrainerClass(0x09);
-const TRAINER_CLASS_EXPERT: TrainerClass = TrainerClass(0x0a);
-const TRAINER_CLASS_AQUA_ADMIN: TrainerClass = TrainerClass(0x0b);
-const TRAINER_CLASS_BLACK_BELT: TrainerClass = TrainerClass(0x0c);
-const TRAINER_CLASS_AQUA_LEADER: TrainerClass = TrainerClass(0x0d);
-const TRAINER_CLASS_HEX_MANIAC: TrainerClass = TrainerClass(0x0e);
-const TRAINER_CLASS_AROMA_LADY: TrainerClass = TrainerClass(0x0f);
-const TRAINER_CLASS_RUIN_MANIAC: TrainerClass = TrainerClass(0x10);
-const TRAINER_CLASS_INTERVIEWER: TrainerClass = TrainerClass(0x11);
-const TRAINER_CLASS_TUBER_F: TrainerClass = TrainerClass(0x12);
-const TRAINER_CLASS_TUBER_M: TrainerClass = TrainerClass(0x13);
-const TRAINER_CLASS_LADY: TrainerClass = TrainerClass(0x14);
-const TRAINER_CLASS_BEAUTY: TrainerClass = TrainerClass(0x15);
-const TRAINER_CLASS_RICH_BOY: TrainerClass = TrainerClass(0x16);
-const TRAINER_CLASS_POKEMANIAC: TrainerClass = TrainerClass(0x17);
-const TRAINER_CLASS_GUITARIST: TrainerClass = TrainerClass(0x18);
-const TRAINER_CLASS_KINDLER: TrainerClass = TrainerClass(0x19);
-const TRAINER_CLASS_CAMPER: TrainerClass = TrainerClass(0x1a);
-const TRAINER_CLASS_PICNICKER: TrainerClass = TrainerClass(0x1b);
-const TRAINER_CLASS_BUG_MANIAC: TrainerClass = TrainerClass(0x1c);
-const TRAINER_CLASS_PSYCHIC: TrainerClass = TrainerClass(0x1d);
-const TRAINER_CLASS_GENTLEMAN: TrainerClass = TrainerClass(0x1e);
-const TRAINER_CLASS_ELITE_FOUR: TrainerClass = TrainerClass(0x1f);
-const TRAINER_CLASS_LEADER: TrainerClass = TrainerClass(0x20);
-const TRAINER_CLASS_SCHOOL_KID: TrainerClass = TrainerClass(0x21);
-const TRAINER_CLASS_SR_AND_JR: TrainerClass = TrainerClass(0x22);
-const TRAINER_CLASS_WINSTRATE: TrainerClass = TrainerClass(0x23);
-const TRAINER_CLASS_POKEFAN: TrainerClass = TrainerClass(0x24);
-const TRAINER_CLASS_YOUNGSTER: TrainerClass = TrainerClass(0x25);
-const TRAINER_CLASS_CHAMPION: TrainerClass = TrainerClass(0x26);
-const TRAINER_CLASS_FISHERMAN: TrainerClass = TrainerClass(0x27);
-const TRAINER_CLASS_TRIATHLETE: TrainerClass = TrainerClass(0x28);
-const TRAINER_CLASS_DRAGON_TAMER: TrainerClass = TrainerClass(0x29);
-const TRAINER_CLASS_NINJA_BOY: TrainerClass = TrainerClass(0x2a);
-const TRAINER_CLASS_BATTLE_GIRL: TrainerClass = TrainerClass(0x2b);
-const TRAINER_CLASS_PARASOL_LADY: TrainerClass = TrainerClass(0x2c);
-const TRAINER_CLASS_SWIMMER_F: TrainerClass = TrainerClass(0x2d);
-const TRAINER_CLASS_TWINS: TrainerClass = TrainerClass(0x2e);
-const TRAINER_CLASS_SAILOR: TrainerClass = TrainerClass(0x2f);
-const TRAINER_CLASS_MAGMA_ADMIN: TrainerClass = TrainerClass(0x31);
-const TRAINER_CLASS_RIVAL: TrainerClass = TrainerClass(0x32);
-const TRAINER_CLASS_BUG_CATCHER: TrainerClass = TrainerClass(0x33);
-const TRAINER_CLASS_PKMN_RANGER: TrainerClass = TrainerClass(0x34);
-const TRAINER_CLASS_MAGMA_LEADER: TrainerClass = TrainerClass(0x35);
-const TRAINER_CLASS_LASS: TrainerClass = TrainerClass(0x36);
-const TRAINER_CLASS_YOUNG_COUPLE: TrainerClass = TrainerClass(0x37);
-const TRAINER_CLASS_OLD_COUPLE: TrainerClass = TrainerClass(0x38);
-const TRAINER_CLASS_SIS_AND_BRO: TrainerClass = TrainerClass(0x39);
-
 const TRAINER_MONEY_TABLE: [(TrainerClass, u32); 55] = [
-    (TRAINER_CLASS_TEAM_AQUA, 5),
-    (TRAINER_CLASS_AQUA_ADMIN, 10),
-    (TRAINER_CLASS_AQUA_LEADER, 20),
-    (TRAINER_CLASS_AROMA_LADY, 10),
-    (TRAINER_CLASS_RUIN_MANIAC, 15),
-    (TRAINER_CLASS_INTERVIEWER, 12),
-    (TRAINER_CLASS_TUBER_F, 1),
-    (TRAINER_CLASS_TUBER_M, 1),
-    (TRAINER_CLASS_SIS_AND_BRO, 3),
-    (TRAINER_CLASS_COOLTRAINER, 12),
-    (TRAINER_CLASS_HEX_MANIAC, 6),
-    (TRAINER_CLASS_LADY, 50),
-    (TRAINER_CLASS_BEAUTY, 20),
-    (TRAINER_CLASS_RICH_BOY, 50),
-    (TRAINER_CLASS_POKEMANIAC, 15),
-    (TRAINER_CLASS_SWIMMER_M, 2),
-    (TRAINER_CLASS_BLACK_BELT, 8),
-    (TRAINER_CLASS_GUITARIST, 8),
-    (TRAINER_CLASS_KINDLER, 8),
-    (TRAINER_CLASS_CAMPER, 4),
-    (TRAINER_CLASS_OLD_COUPLE, 10),
-    (TRAINER_CLASS_BUG_MANIAC, 15),
-    (TRAINER_CLASS_PSYCHIC, 6),
-    (TRAINER_CLASS_GENTLEMAN, 20),
-    (TRAINER_CLASS_ELITE_FOUR, 25),
-    (TRAINER_CLASS_LEADER, 25),
-    (TRAINER_CLASS_SCHOOL_KID, 5),
-    (TRAINER_CLASS_SR_AND_JR, 4),
-    (TRAINER_CLASS_POKEFAN, 20),
-    (TRAINER_CLASS_EXPERT, 10),
-    (TRAINER_CLASS_YOUNGSTER, 4),
-    (TRAINER_CLASS_CHAMPION, 50),
-    (TRAINER_CLASS_FISHERMAN, 10),
-    (TRAINER_CLASS_TRIATHLETE, 10),
-    (TRAINER_CLASS_DRAGON_TAMER, 12),
-    (TRAINER_CLASS_BIRD_KEEPER, 8),
-    (TRAINER_CLASS_NINJA_BOY, 3),
-    (TRAINER_CLASS_BATTLE_GIRL, 6),
-    (TRAINER_CLASS_PARASOL_LADY, 10),
-    (TRAINER_CLASS_SWIMMER_F, 2),
-    (TRAINER_CLASS_PICNICKER, 4),
-    (TRAINER_CLASS_TWINS, 3),
-    (TRAINER_CLASS_SAILOR, 8),
-    (TRAINER_CLASS_COLLECTOR, 15),
-    (TRAINER_CLASS_RIVAL, 15),
-    (TRAINER_CLASS_PKMN_BREEDER, 10),
-    (TRAINER_CLASS_PKMN_RANGER, 12),
-    (TRAINER_CLASS_TEAM_MAGMA, 5),
-    (TRAINER_CLASS_MAGMA_ADMIN, 10),
-    (TRAINER_CLASS_MAGMA_LEADER, 20),
-    (TRAINER_CLASS_LASS, 4),
-    (TRAINER_CLASS_BUG_CATCHER, 4),
-    (TRAINER_CLASS_HIKER, 10),
-    (TRAINER_CLASS_YOUNG_COUPLE, 8),
-    (TRAINER_CLASS_WINSTRATE, 10),
+    (TrainerClass::TEAM_AQUA, 5),
+    (TrainerClass::AQUA_ADMIN, 10),
+    (TrainerClass::AQUA_LEADER, 20),
+    (TrainerClass::AROMA_LADY, 10),
+    (TrainerClass::RUIN_MANIAC, 15),
+    (TrainerClass::INTERVIEWER, 12),
+    (TrainerClass::TUBER_F, 1),
+    (TrainerClass::TUBER_M, 1),
+    (TrainerClass::SIS_AND_BRO, 3),
+    (TrainerClass::COOLTRAINER, 12),
+    (TrainerClass::HEX_MANIAC, 6),
+    (TrainerClass::LADY, 50),
+    (TrainerClass::BEAUTY, 20),
+    (TrainerClass::RICH_BOY, 50),
+    (TrainerClass::POKEMANIAC, 15),
+    (TrainerClass::SWIMMER_M, 2),
+    (TrainerClass::BLACK_BELT, 8),
+    (TrainerClass::GUITARIST, 8),
+    (TrainerClass::KINDLER, 8),
+    (TrainerClass::CAMPER, 4),
+    (TrainerClass::OLD_COUPLE, 10),
+    (TrainerClass::BUG_MANIAC, 15),
+    (TrainerClass::PSYCHIC, 6),
+    (TrainerClass::GENTLEMAN, 20),
+    (TrainerClass::ELITE_FOUR, 25),
+    (TrainerClass::LEADER, 25),
+    (TrainerClass::SCHOOL_KID, 5),
+    (TrainerClass::SR_AND_JR, 4),
+    (TrainerClass::POKEFAN, 20),
+    (TrainerClass::EXPERT, 10),
+    (TrainerClass::YOUNGSTER, 4),
+    (TrainerClass::CHAMPION, 50),
+    (TrainerClass::FISHERMAN, 10),
+    (TrainerClass::TRIATHLETE, 10),
+    (TrainerClass::DRAGON_TAMER, 12),
+    (TrainerClass::BIRD_KEEPER, 8),
+    (TrainerClass::NINJA_BOY, 3),
+    (TrainerClass::BATTLE_GIRL, 6),
+    (TrainerClass::PARASOL_LADY, 10),
+    (TrainerClass::SWIMMER_F, 2),
+    (TrainerClass::PICNICKER, 4),
+    (TrainerClass::TWINS, 3),
+    (TrainerClass::SAILOR, 8),
+    (TrainerClass::COLLECTOR, 15),
+    (TrainerClass::RIVAL, 15),
+    (TrainerClass::PKMN_BREEDER, 10),
+    (TrainerClass::PKMN_RANGER, 12),
+    (TrainerClass::TEAM_MAGMA, 5),
+    (TrainerClass::MAGMA_ADMIN, 10),
+    (TrainerClass::MAGMA_LEADER, 20),
+    (TrainerClass::LASS, 4),
+    (TrainerClass::BUG_CATCHER, 4),
+    (TrainerClass::HIKER, 10),
+    (TrainerClass::YOUNG_COUPLE, 8),
+    (TrainerClass::WINSTRATE, 10),
 ];
 
 /// The prize multiplier for a trainer class absent from the money table.
@@ -291,9 +236,7 @@ impl TrainerContext {
     /// Removes and returns the next non-fainted member in party order.
     ///
     /// This models `OpponentHandleChoosePokemon`'s fallback scan, not its type-match
-    /// preference. Current reachable encounters cannot create a bench: rivals have
-    /// one member; Route 103's single-battle sight trainers fail before construction,
-    /// Miguel on held-item decoding and the other six on move preflight.
+    /// preference.
     pub(crate) fn send_out_next(&mut self) -> Option<BattlePokemon> {
         while !self.bench.is_empty() {
             let mon = self.bench.remove(0);
@@ -368,7 +311,7 @@ mod tests {
     use super::{
         build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, money_value_for_class,
         roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerPartyMon,
-        DEFAULT_MONEY_VALUE, SHINY_ODDS, TRAINER_CLASS_CHAMPION, TRAINER_CLASS_RIVAL,
+        DEFAULT_MONEY_VALUE, SHINY_ODDS,
     };
     use crate::dex::Dex;
     use crate::script_rng::SequenceRng;
@@ -467,7 +410,7 @@ mod tests {
     #[test]
     fn the_route_103_rival_pays_the_rival_class_prize_money() {
         let data = trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real TRAINER_* id");
-        assert_eq!(data.class, TRAINER_CLASS_RIVAL);
+        assert_eq!(data.class, TrainerClass::RIVAL);
         assert_eq!(money_value_for_class(data.class), 15);
         assert_eq!(trainer_money(data), 300);
     }
@@ -482,7 +425,7 @@ mod tests {
             money_value_for_class(TRAINER_CLASS_RS_PROTAG),
             DEFAULT_MONEY_VALUE
         );
-        assert_eq!(money_value_for_class(TRAINER_CLASS_CHAMPION), 50);
+        assert_eq!(money_value_for_class(TrainerClass::CHAMPION), 50);
     }
 
     #[test]
