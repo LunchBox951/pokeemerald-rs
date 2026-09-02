@@ -333,32 +333,19 @@ fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
 }
 
 #[test]
-fn directories_to_create_lists_only_the_missing_levels_outermost_first() {
-    let dir = TempDir::new("missing-levels");
-    let target = dir.join("one").join("two").join("three");
+fn ancestor_chain_lists_every_level_outermost_first() {
+    let dir = TempDir::new("ancestor-chain");
+    let target = dir.join("one").join("two");
 
-    assert_eq!(
-        SaveFile::directories_to_create(&target),
-        vec![dir.join("one"), dir.join("one").join("two"), target.clone(),],
-        "every level below the existing scratch root is missing"
-    );
-
-    std::fs::create_dir_all(dir.join("one")).unwrap();
-    assert_eq!(
-        SaveFile::directories_to_create(&target),
-        vec![dir.join("one").join("two"), target.clone()],
-        "an already-created level must drop out of the missing list"
-    );
-
-    std::fs::create_dir_all(&target).unwrap();
+    let chain = SaveFile::ancestor_chain(&target);
     assert!(
-        SaveFile::directories_to_create(&target).is_empty(),
-        "a fully created path has nothing left to report"
+        chain.ends_with(&[dir.path.clone(), dir.join("one"), target.clone()]),
+        "the chain must list dir, dir/one, and the target itself, outermost first: {chain:?}"
     );
 }
 
 #[test]
-fn locking_a_fresh_multi_level_root_syncs_every_created_levels_parent() {
+fn locking_a_fresh_multi_level_root_syncs_the_whole_ancestor_chain() {
     let dir = TempDir::new("sync-created");
     let file = SaveFile::at(dir.join("one").join("two").join(SAVE_FILE_NAME));
 
@@ -369,20 +356,53 @@ fn locking_a_fresh_multi_level_root_syncs_every_created_levels_parent() {
     drop(guard);
 
     assert!(dir.join("one").join("two").is_dir());
-    assert_eq!(
-        synced.into_inner(),
-        vec![dir.path.clone(), dir.join("one")],
-        "each newly created level's own parent must be synced, outermost first -- \
-         syncing only the save's immediate parent leaves the created ancestors' \
-         directory entries unsynced, so they can vanish after a power loss"
+    assert!(
+        synced
+            .into_inner()
+            .ends_with(&[dir.path.clone(), dir.join("one")]),
+        "on a first save, every ancestor must be synced, outermost first, ending with \
+         this save's own two new levels -- otherwise their directory entries can be \
+         unsynced and vanish after a power loss"
     );
 }
 
 #[test]
-fn locking_an_already_created_hierarchy_syncs_nothing() {
-    let dir = TempDir::new("sync-existing");
+fn a_locker_that_wins_the_race_syncs_ancestors_an_earlier_contender_left_unsynced() {
+    let dir = TempDir::new("race");
+    let path = dir.join("one").join("two").join(SAVE_FILE_NAME);
+
+    // An earlier contender created the hierarchy but was pre-empted before
+    // it could sync or lock -- its directories now exist on disk with
+    // nobody yet having synced them.
+    let first = SaveFile::at(&path);
+    first.create_parent_directory().unwrap();
+
+    let second = SaveFile::at(&path);
+    let synced = std::cell::RefCell::new(Vec::new());
+    let guard = second
+        .lock_with(|p| synced.borrow_mut().push(p.to_path_buf()))
+        .unwrap();
+    drop(guard);
+
+    assert!(
+        synced
+            .into_inner()
+            .ends_with(&[dir.path.clone(), dir.join("one")]),
+        "a locker must sync every ancestor of a first save regardless of who created \
+         it on disk -- otherwise an earlier contender's unsynced work can be reported \
+         as a successful save"
+    );
+}
+
+#[test]
+fn locking_after_a_successful_first_save_syncs_nothing_more() {
+    let dir = TempDir::new("sync-after-first-save");
     let file = SaveFile::at(dir.join("one").join("two").join(SAVE_FILE_NAME));
-    std::fs::create_dir_all(dir.join("one").join("two")).unwrap();
+    let (store, _, _) = saved_store();
+
+    let guard = file.lock().unwrap();
+    file.write(&store).unwrap();
+    drop(guard);
 
     let synced = std::cell::RefCell::new(Vec::new());
     let guard = file
@@ -392,19 +412,20 @@ fn locking_an_already_created_hierarchy_syncs_nothing() {
 
     assert!(
         synced.into_inner().is_empty(),
-        "an already-created hierarchy must not be reported as newly created"
+        "once a save file exists, this is no longer a first save, so ancestors must \
+         not be resynced on every subsequent lock"
     );
 }
 
 #[test]
-fn locking_synchronises_created_ancestors_only_once_the_lock_is_held() {
+fn locking_synchronises_ancestors_only_once_the_lock_is_held() {
     let dir = TempDir::new("sync-order");
     let path = dir.join("nested").join("deeper").join(SAVE_FILE_NAME);
     let file = SaveFile::at(&path);
 
     let synced_while_locked = std::cell::Cell::new(false);
     let guard = file
-        .lock_with(|_created_level_parent| {
+        .lock_with(|_ancestor_parent| {
             let probe = std::fs::OpenOptions::new()
                 .write(true)
                 .open(expected_sibling_path(&path, ".lock"))
@@ -419,9 +440,8 @@ fn locking_synchronises_created_ancestors_only_once_the_lock_is_held() {
 
     assert!(
         synced_while_locked.get(),
-        "created ancestors must be synced only after this call holds the exclusive lock -- \
-         syncing before locking would let a second, concurrent locker see those same \
-         ancestors as already existing, skip synchronising them itself, and report a \
+        "ancestors must be synced only after this call holds the exclusive lock -- \
+         syncing before locking would let a second, concurrent locker report a \
          successful save before either locker had made them durable"
     );
 }

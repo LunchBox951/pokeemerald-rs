@@ -274,10 +274,8 @@ impl SaveFile {
     ///
     /// The parent directory is synchronised after the rename when the host
     /// permits opening directories. That final synchronisation is best effort.
-    /// If this is the first save under a path whose ancestors did not yet
-    /// exist, every newly created ancestor's own parent is also synchronised,
-    /// outermost first, so the directory itself survives a power loss after a
-    /// reported success.
+    /// On a first save, every ancestor directory is synchronised too; see
+    /// [`SaveFile::ensure_parent_directory`].
     ///
     /// # Errors
     ///
@@ -326,17 +324,10 @@ impl SaveFile {
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
-    /// Production locks before it reads or writes, so a first save's parent
-    /// directory is usually created here rather than in [`SaveFile::write`].
-    /// Every ancestor this call creates is best-effort synchronised, outermost
-    /// first, but only once this lock is held: creating the directory has to
-    /// happen first, since the lock file itself lives there, but a second
-    /// locker's own scan would otherwise see those same ancestors as
-    /// pre-existing and skip synchronising them. Deferring the synchronising
-    /// until after locking means that second locker still blocks on
-    /// [`std::fs::File::lock`] until the first locker's synchronising -- and
-    /// with it the entire read-modify-write cycle -- has completed, so nobody
-    /// can report success before the ancestors this call created are durable.
+    /// On a first save, this creates the missing hierarchy and, once this
+    /// lock is held, best-effort synchronises every ancestor: synchronising
+    /// only after locking means a second locker blocks until that
+    /// synchronising -- not just directory creation -- has happened.
     ///
     /// # Errors
     ///
@@ -347,17 +338,12 @@ impl SaveFile {
         self.lock_with(Self::sync_directory_best_effort)
     }
 
-    /// As [`SaveFile::lock`], but synchronising each newly created ancestor's
-    /// parent through `sync_directory` instead of
-    /// [`SaveFile::sync_directory_best_effort`]. Kept separate so tests can
-    /// observe both which directories creation reports as new and that the
-    /// synchronising happens while the lock is held, without depending on a
-    /// real fsync's unobservable effect.
-    fn lock_with(
-        &self,
-        mut sync_directory: impl FnMut(&Path),
-    ) -> Result<SaveFileGuard, SaveFileError> {
-        let created = self.create_parent_directory()?;
+    /// As [`SaveFile::lock`], synchronising through `sync_directory` so
+    /// tests can observe both what gets synchronised and that it happens
+    /// only once the lock is held.
+    fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
+        let first_save = !self.exists();
+        let parent = self.create_parent_directory()?;
         let path = self.lock_path();
         let lock_error = |source: std::io::Error| SaveFileError::Lock {
             path: path.clone(),
@@ -370,76 +356,64 @@ impl SaveFile {
             .open(&path)
             .map_err(lock_error)?;
         file.lock().map_err(lock_error)?;
-        for level in &created {
-            sync_directory(Self::directory_containing(level));
+        if first_save {
+            if let Some(parent) = parent {
+                Self::sync_ancestor_chain(parent, sync_directory);
+            }
         }
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// Creates the save file's parent directory (and any missing ancestors),
-    /// then immediately best-effort synchronises every level this call
-    /// created, outermost first. [`SaveFile::write`] uses this directly: it
-    /// has no lock of its own to defer synchronising into, so on the rare
-    /// direct, unlocked first write, this is the best durability available.
-    /// [`SaveFile::lock`] instead calls [`SaveFile::create_parent_directory`]
-    /// and defers synchronising until the lock is held, closing the race
-    /// this immediate version cannot: production always locks before it
-    /// writes, so this path only ever runs when the lock already created
-    /// (and synchronised) every level.
+    /// Creates the save file's parent directory (and any missing
+    /// ancestors). On a first save, best-effort synchronises every
+    /// ancestor: which levels a `create_dir_all` actually created is not a
+    /// reliable signal once a concurrent caller might have created them
+    /// first, so durability cannot depend on it.
     fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
-        let created = self.create_parent_directory()?;
-        for level in &created {
-            Self::sync_directory_best_effort(Self::directory_containing(level));
+        let first_save = !self.exists();
+        let parent = self.create_parent_directory()?;
+        if first_save {
+            if let Some(parent) = parent {
+                Self::sync_ancestor_chain(parent, Self::sync_directory_best_effort);
+            }
         }
-        Ok(self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty()))
+        Ok(parent)
     }
 
-    /// Creates the save file's parent directory (and any missing ancestors)
-    /// and reports which levels this call created, outermost first, without
-    /// synchronising anything -- callers choose when synchronising is safe.
-    fn create_parent_directory(&self) -> Result<Vec<PathBuf>, SaveFileError> {
+    /// Creates the save file's parent directory and any missing ancestors,
+    /// without synchronising anything.
+    fn create_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
         let parent = self
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty());
-        let Some(parent) = parent else {
-            return Ok(Vec::new());
-        };
-        let created = Self::directories_to_create(parent);
-        std::fs::create_dir_all(parent).map_err(|source| SaveFileError::CreateDirectory {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        Ok(created)
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(parent).map_err(|source| SaveFileError::CreateDirectory {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(parent)
     }
 
-    /// The directory levels `create_dir_all(dir)` would need to create,
-    /// outermost first: every ancestor from the first missing level down to
-    /// `dir` itself. Empty when `dir` already exists.
-    ///
-    /// This walks the same path `create_dir_all` will, so a concurrent
-    /// creator can make the answer stale by the time creation runs. That
-    /// only ever widens which parents this call itself synchronises -- never
-    /// narrows it -- for [`SaveFile::write`]'s unlocked, immediate use.
-    /// [`SaveFile::lock`] additionally defers its synchronising until the
-    /// lock is held, so a concurrent locker that observes fewer levels as
-    /// missing here still cannot report success before the first locker's
-    /// synchronising has happened.
-    fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
-        let mut missing = Vec::new();
+    /// `dir` and every non-empty ancestor above it, outermost first.
+    fn ancestor_chain(dir: &Path) -> Vec<PathBuf> {
+        let mut levels = Vec::new();
         let mut current = Some(dir);
         while let Some(path) = current.filter(|path| !path.as_os_str().is_empty()) {
-            if path.is_dir() {
-                break;
-            }
-            missing.push(path.to_path_buf());
+            levels.push(path.to_path_buf());
             current = path.parent();
         }
-        missing.reverse();
-        missing
+        levels.reverse();
+        levels
+    }
+
+    /// Best-effort synchronises the containing directory of every level of
+    /// `dir`'s ancestor chain, outermost first.
+    fn sync_ancestor_chain(dir: &Path, mut sync_directory: impl FnMut(&Path)) {
+        for level in Self::ancestor_chain(dir) {
+            sync_directory(Self::directory_containing(&level));
+        }
     }
 
     /// The directory that `create_dir_all` records `level`'s entry in: its
