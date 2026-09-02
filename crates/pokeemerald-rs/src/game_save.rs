@@ -4,10 +4,8 @@
 //! This module owns the session-level rules: boot classification, save
 //! lineage, overwrite consent, and protection against concurrent stale writes.
 //!
-//! An unreadable image maps to upstream's `SAVE_STATUS_NO_FLASH`, not
-//! `SAVE_STATUS_CORRUPT`. `TrySavingData` refuses to write after that status
-//! (`pokeemerald/src/save.c:765-771, 871-879`), so [`SaveSlot`] disables saving
-//! for the rest of the session instead of risking an unreadable file.
+//! An unreadable image latches upstream's `SAVE_STATUS_NO_FLASH`, so [`SaveSlot`]
+//! disables saving for the session like `TrySavingData` (`save.c:765-771, 871-879`).
 
 use engine::save::{
     BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
@@ -53,11 +51,8 @@ impl SaveFileStatus {
 /// Blocks recovered during boot and the status that determines whether they
 /// are usable.
 ///
-/// The blocks are always present, even for [`SaveFileStatus::Empty`] or
-/// [`SaveFileStatus::Corrupt`], mirroring upstream's unconditionally
-/// populated `gSaveBlock1Ptr`/`gSaveBlock2Ptr`. Callers gate on
-/// [`SaveFileStatus::menu_shows_continue`], never on the blocks looking
-/// plausible.
+/// The blocks are always populated, like `gSaveBlock1Ptr`/`gSaveBlock2Ptr`; callers
+/// gate on [`SaveFileStatus::menu_shows_continue`], never on the blocks' plausibility.
 #[derive(Debug)]
 pub(crate) struct SavedGame {
     /// `gSaveFileStatus`.
