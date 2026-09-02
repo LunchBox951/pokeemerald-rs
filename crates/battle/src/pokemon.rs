@@ -1,10 +1,14 @@
 //! A Pokémon's owned battle state, stat calculation, HP, experience, and
 //! move slots.
 //!
-//! [`BattlePokemon`] does not retain EVs, held items, or non-volatile status.
-//! [`compute_stats_with_evs`] accepts EVs for save-data reconciliation without
-//! adding them to the battle model. [`pp_bonuses`] owns packed PP Up state,
-//! while [`learn`] owns level-up move decisions.
+//! [`BattlePokemon`] does not retain held items or non-volatile status.
+//! Shedinja's 1-HP special case *is* modelled — see
+//! [`calc_max_hp`].
+//!
+//! [`evs`] owns the whole EV surface: adoption, KO gains, and the one line
+//! [`BattlePokemon::stats`] refuses to cross because of them.
+//! [`pp_bonuses`] owns packed PP Up state, while [`learn`] owns level-up
+//! move decisions.
 
 use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
 
@@ -14,12 +18,14 @@ use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
 use crate::volatile::Volatiles;
 
+pub mod evs;
 pub mod learn;
 pub mod pp_bonuses;
 
 #[cfg(test)]
 mod tests;
 
+pub use evs::{Evs, MAX_PER_STAT_EVS, MAX_TOTAL_EVS};
 pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
 pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
@@ -102,26 +108,6 @@ impl Ivs {
     pub const fn is_valid(self) -> bool {
         self.first_invalid().is_none()
     }
-}
-
-/// Stored effort values for all six stats.
-///
-/// Each byte accepts `0..=255`. The stat formula divides by four, so values
-/// `252..=255` all provide the maximum contribution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Evs {
-    /// HP effort value.
-    pub hp: u8,
-    /// Attack effort value.
-    pub attack: u8,
-    /// Defense effort value.
-    pub defense: u8,
-    /// Speed effort value.
-    pub speed: u8,
-    /// Special Attack effort value.
-    pub sp_attack: u8,
-    /// Special Defense effort value.
-    pub sp_defense: u8,
 }
 
 /// Computed battle stats before applying [`StatStages`].
@@ -301,10 +287,16 @@ fn initial_ability_slot(base_stats: &BaseStats, personality: u32) -> u8 {
 /// Construction guarantees a valid species, level, IV set, and non-empty
 /// moveset of at most [`MAX_MON_MOVES`] real moves. Methods preserve those
 /// invariants while changing battle state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BattlePokemon {
     species: SpeciesId,
     level: u8,
+    /// The construction level, fixed for this instance's lifetime; the save
+    /// encoders compare it with [`BattlePokemon::level`] to detect a session
+    /// level-up.
+    ///
+    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
+    created_at_level: u8,
     nature: Nature,
     ivs: Ivs,
     personality: u32,
@@ -315,12 +307,73 @@ pub struct BattlePokemon {
     experience: u32,
     stats: Stats,
     current_hp: u32,
+    /// This mon's effort values -- see the [`evs`] module docs for the full
+    /// adoption/gain lifecycle and what carrying them does, and does not,
+    /// change.
+    evs: Evs,
+    /// [`Self::evs`] as of the last crossed level-up -- the set upstream's
+    /// `CalculateMonStats` cached at that event, which the save-time
+    /// recompute reads instead of the live [`Self::evs`]. [`Evs::default`]
+    /// until a level-up happens.
+    ///
+    /// Excluded from [`PartialEq`] (below): provenance, not battle identity.
+    evs_at_last_level_up: Evs,
     moves: Vec<MoveSlot>,
     pp_bonuses: PpBonuses,
     stages: StatStages,
     volatiles: Volatiles,
     pending_move_learn: Option<PendingMoveLearn>,
 }
+
+// Manual, rather than derived, so `created_at_level` and
+// `evs_at_last_level_up` (their own doc comments) can stay out of it without
+// a wrapper type.
+impl PartialEq for BattlePokemon {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            species,
+            level,
+            created_at_level: _,
+            nature,
+            ivs,
+            personality,
+            ability_slot,
+            original_trainer_id,
+            types,
+            base_stats,
+            experience,
+            stats,
+            current_hp,
+            evs,
+            evs_at_last_level_up: _,
+            moves,
+            pp_bonuses,
+            stages,
+            volatiles,
+            pending_move_learn,
+        } = self;
+        *species == other.species
+            && *level == other.level
+            && *nature == other.nature
+            && *ivs == other.ivs
+            && *personality == other.personality
+            && *ability_slot == other.ability_slot
+            && *original_trainer_id == other.original_trainer_id
+            && *types == other.types
+            && *base_stats == other.base_stats
+            && *experience == other.experience
+            && *stats == other.stats
+            && *current_hp == other.current_hp
+            && *evs == other.evs
+            && *moves == other.moves
+            && *pp_bonuses == other.pp_bonuses
+            && *stages == other.stages
+            && *volatiles == other.volatiles
+            && *pending_move_learn == other.pending_move_learn
+    }
+}
+
+impl Eq for BattlePokemon {}
 
 impl BattlePokemon {
     /// Validates inputs that do not depend on generated personality or IVs.
@@ -399,6 +452,7 @@ impl BattlePokemon {
         Ok(Self {
             species,
             level,
+            created_at_level: level,
             nature,
             ivs,
             personality,
@@ -409,6 +463,13 @@ impl BattlePokemon {
             experience,
             stats,
             current_hp: stats.max_hp,
+            // `CreateBoxMon` zeroes the box before writing the fields it
+            // sets, and the EV bytes are not one of them: a freshly built
+            // mon has no effort values. A saved one restores its own bytes
+            // through [`BattlePokemon::with_evs`].
+            evs: Evs::default(),
+            // No level-up has happened yet -- see the field's own doc.
+            evs_at_last_level_up: Evs::default(),
             moves: slots,
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
@@ -442,6 +503,13 @@ impl BattlePokemon {
     #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
+    }
+
+    /// The level [`BattlePokemon::new`] built this instance at — see
+    /// [`Self::created_at_level`]'s own field doc.
+    #[must_use]
+    pub const fn created_at_level(&self) -> u8 {
+        self.created_at_level
     }
 
     /// Accumulated experience on this species' growth curve.
@@ -616,20 +684,24 @@ impl BattlePokemon {
         self.volatiles = Volatiles::default();
     }
 
-    /// Applies earned experience one level threshold at a time.
-    ///
-    /// Each crossed level recalculates stats, preserves damage taken, and
-    /// processes that level's complete learnset without filtering unsupported
-    /// moves. A full moveset pauses the award and returns a
-    /// [`PendingMoveLearn`]; the caller must pass its decision to
-    /// [`BattlePokemon::resolve_move_learn`] before applying more experience.
-    /// Level and experience cap at [`MAX_LEVEL`]. EVs and friendship are not
-    /// part of this battle model and do not change.
+    /// Applies earned experience one level threshold at a time, capping both
+    /// level and total experience at [`MAX_LEVEL`]. Each crossed level
+    /// recalculates stats, preserves damage taken, and teaches that level's
+    /// complete learnset without filtering unsupported moves — a move this
+    /// crate cannot execute yet is still learned, exactly like upstream (see
+    /// [`BattlePokemon::walk_level_learnset`]). A full moveset pauses the
+    /// award and returns a [`PendingMoveLearn`]; the caller must pass its
+    /// decision to [`BattlePokemon::resolve_move_learn`] before applying more
+    /// experience. [`BattlePokemon::evs`] is not changed here —
+    /// [`BattlePokemon::gain_evs`] already folds a KO's award in before this
+    /// runs; friendship is still not part of this battle model
+    /// and does not change.
     ///
     /// # Errors
     ///
     /// Returns [`BattleError::MoveLearnPending`] without mutation when a move
-    /// decision is already pending.
+    /// decision is already pending — a second walk would overwrite the open
+    /// question and drop its unconsumed remainder.
     #[must_use = "a full moveset pauses the level-up walk for a player \
                   decision the mon now carries \
                   (`BattlePokemon::pending_move_learn`); ignoring the \
@@ -657,6 +729,18 @@ impl BattlePokemon {
         self.raise_level_to_experience();
     }
 
+    /// Raises the level (and stats, preserving damage taken) to match the
+    /// current experience total, returning `Some((old_level, new_level))`
+    /// when at least one threshold was crossed. Shared by the in-battle
+    /// award ([`BattlePokemon::apply_experience`], which then teaches the
+    /// crossed learnset moves) and the save decoder
+    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    ///
+    /// The stat recompute stays [`compute_stats`], never
+    /// [`compute_stats_with_evs`] -- see the [`evs`] module docs for why
+    /// [`BattlePokemon::stats`] must stay `0`-EV even here. A crossed level
+    /// also snapshots [`BattlePokemon::evs_at_last_level_up`] -- see that
+    /// field's own doc for what reads it and why.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -685,6 +769,7 @@ impl BattlePokemon {
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
+        self.evs_at_last_level_up = self.evs;
         Some((old_level, new_level))
     }
 
