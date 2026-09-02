@@ -1,93 +1,11 @@
-//! Multi-hit moves (S-6, issue #321): `BattleScript_EffectMultiHit` —
-//! `EFFECT_MULTI_HIT`, carried by Double Slap, Fury Attack, Pin Missile,
-//! Bullet Seed, Arm Thrust and friends.
+//! Admission and epilogue draws for variable-count multi-hit moves.
 //!
-//! The script (`pokeemerald/data/battle_scripts_1.s:604`-`:652`) is a
-//! prologue, a loop, and an epilogue. The prologue runs the attack canceler,
-//! **one** accuracy check (`:606` — a miss ends the whole move), the attack
-//! string, the PP deduction, and the hit-count roll (`setmultihitcounter 0`,
-//! `:609`). The loop body (`BattleScript_MultiHitLoop`, from `:612`) first
-//! bails out if either battler has no HP left (attacker → straight to the
-//! epilogue, target → to the hit-count string), then per iteration rolls the
-//! crit, computes damage, applies the type chart (`:620`-`:622`), leaves the
-//! loop early on a no-effect result (`:623`, **before** the damage roll at
-//! `:624`), applies the `85..=100%` roll and the damage, and loops while the
-//! counter has hits left (`:639`). The epilogue
-//! (`BattleScript_MultiHitEnd`, `:650`) spends **one**
-//! `seteffectwithchance` draw (`:651`) and then tries the target's faint.
-//!
-//! # Once vs. per hit — the whole reason this is its own pipeline
-//!
-//! | step | frequency |
-//! |---|---|
-//! | `accuracycheck` | **once**, before the loop (`:606`) — a multi-hit move lands all its hits or none of them |
-//! | `setmultihitcounter` | once (`:609`) |
-//! | `critcalc` | **per hit** (`:620`) — each hit rolls its own crit |
-//! | `damagecalc`/`typecalc`/`adjustnormaldamage` | **per hit** (`:621`-`:624`) — each hit rolls its own `85..=100%` |
-//! | `seteffectwithchance` | **once**, after the whole sequence (`:651`) |
-//!
-//! So a landed hit costs **2** ([`crate::hit::damage_core`]: crit + damage
-//! roll) around a fixed `1 + 1..2 + 1` of accuracy, hit count and effect
-//! chance. A 3-hit Double Slap costs **9 or 10**; a missed one costs **1**.
-//! Under either crit suppressor — the caller's `suppress_crit`, or a
-//! defender carrying Battle Armor / Shell Armor
-//! ([`crate::ability::suppresses_critical_hits`], issue #391) — each hit
-//! costs 1 instead of 2, so the same 3-hit Double Slap costs **6 or 7**.
-//!
-//! (`seteffectwithchance` running once at the end is also why Twineedle, the
-//! other user of this loop, poisons at most once rather than per hit — the
-//! `sMULTIHIT_EFFECT` byte is copied into `cEFFECT_CHOOSER` every iteration
-//! at `:619` but nothing consumes it until the end. Twineedle is a different
-//! effect id and is not executable here.)
-//!
-//! # The hit count is a *two*-draw scheme
-//!
-//! `Cmd_setmultihitcounter` (`src/battle_script_commands.c:7139`-`:7155`),
-//! for the `gBattlescriptCurrInstr[1] == 0` case this effect uses:
-//!
-//! ```text
-//! gMultiHitCounter = Random() & 3;
-//! if (gMultiHitCounter > 1)
-//!     gMultiHitCounter = (Random() & 3) + 2;
-//! else
-//!     gMultiHitCounter += 2;
-//! ```
-//!
-//! A first `Random() & 3` of `0` or `1` settles the count at 2 or 3 for
-//! **one** draw; `2` or `3` **redraws**, masks again, and adds 2 — i.e.
-//! 2..=5 — for **two** draws. The resulting distribution is the familiar
-//! 3/8, 3/8, 1/8, 1/8 over 2, 3, 4, 5 — but sampling that distribution
-//! directly would spend the wrong number of draws half the time, so
-//! [`roll_hit_count`] reproduces the *branch* `(behavioral-fidelity)`.
-//! Skill Link does not exist in Emerald; there is no ability branch here.
-//!
-//! # Stopping early
-//!
-//! Four of the loop's guards can end the sequence before the counter runs
-//! out, and each abandons the remaining hits **without spending their
-//! draws**:
-//!
-//! - `jumpifhasnohp BS_ATTACKER` (`:613`) and `jumpifhasnohp BS_TARGET`
-//!   (`:614`) — checked at the *top* of the next iteration rather than at
-//!   the moment of the KO, so the killing hit completes normally and "Hit N
-//!   time(s)!" reports the hits that landed;
-//! - `jumpifstatus BS_ATTACKER, STATUS1_SLEEP` (`:616`) — not modelled (no
-//!   status1 in this crate; issue #323), and unreachable, since a sleeping
-//!   battler's move is cancelled long before the script starts;
-//! - `jumpifmovehadnoeffect` (`:623`) — a mid-sequence immunity, which costs
-//!   that iteration its crit draw but **not** its damage roll, since it
-//!   jumps before `adjustnormaldamage`. Unreachable in practice: typing does
-//!   not change between hits, so an immune move is immune on hit 1;
-//! - `MOVE_RESULT_FOE_ENDURED` (`:638`) — Endure/Focus Band, neither
-//!   modelled.
-//!
-//! The two HP guards are the reachable ones, and [`resolve_multi_hit`]
-//! leaves them to the caller: the loop needs both battlers' live HP after
-//! each hit, and only [`crate::battle::Battle`] owns that. This module
-//! therefore covers the prologue and the trailing draw, and the caller runs
-//! [`crate::hit::damage_core`] once per hit in between — the split is why
-//! the loop's *interruptibility* stays honest instead of being flattened
-//! into a precomputed damage list.
+//! [`resolve_multi_hit`] validates the move, checks accuracy once, and rolls
+//! the hit limit. [`crate::battle::Battle`] owns the
+//! interruptible loop so it can read both battlers' live HP before each hit
+//! and avoid drawing work for hits that will not run. After that loop,
+//! [`spend_multi_hit_effect_chance_draw`] spends one trailing draw for the
+//! move, regardless of how many hits ran.
 
 use assets::{MoveEffect, MoveId};
 
@@ -99,69 +17,68 @@ use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
 
-/// `EFFECT_MULTI_HIT` (`include/constants/battle_move_effects.h:33`).
+const HIT_COUNT_OFFSET_MASK: u16 = 0b11;
+const HIT_COUNT_REDRAW_THRESHOLD: u8 = 2;
+
+/// The effect ID resolved by the variable-count multi-hit pipeline.
 pub const EFFECT_MULTI_HIT: MoveEffect = MoveEffect(29);
 
-/// The fewest hits `Cmd_setmultihitcounter`'s scheme can produce.
+/// The fewest hits a variable-count multi-hit move can attempt.
 pub const MIN_HITS: u8 = 2;
 
-/// The most hits it can produce.
+/// The most hits a variable-count multi-hit move can attempt.
 pub const MAX_HITS: u8 = 5;
 
-/// Whether `effect` runs `BattleScript_EffectMultiHit`.
+/// Returns whether `effect` uses the variable-count multi-hit pipeline.
 #[must_use]
 pub fn is_multi_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_MULTI_HIT
 }
 
-/// `Cmd_setmultihitcounter`'s `gBattlescriptCurrInstr[1] == 0` branch
-/// (`src/battle_script_commands.c:7147`-`:7151`), reproduced as the
-/// two-stage draw it is rather than as its output distribution — see the
-/// module docs.
-///
-/// Draws **1** when the first `Random() & 3` lands on `0` or `1`, and **2**
-/// otherwise. The result is always in [`MIN_HITS`]`..=`[`MAX_HITS`].
-#[must_use]
-pub fn roll_hit_count(rng: &mut impl BattleRng) -> u8 {
-    // No truncation suppression needed: the `& 3` mask bounds the u16 to
-    // 0..=3 before the narrowing.
-    let first = (rng.next_u16() & 3) as u8;
-    if first > 1 {
-        (rng.next_u16() & 3) as u8 + 2
-    } else {
-        first + 2
-    }
+fn draw_hit_count_offset(rng: &mut impl BattleRng) -> u8 {
+    (rng.next_u16() & HIT_COUNT_OFFSET_MASK) as u8
 }
 
-/// Whether [`resolve_multi_hit`] can resolve `move_id` — checked before any
-/// state or RNG is touched.
+/// Rolls a hit count from [`MIN_HITS`] through [`MAX_HITS`].
+///
+/// Emerald's variable-count branch redraws when its first two-bit result is
+/// at least two (`src/battle_script_commands.c:7147`-`:7151`). This function
+/// preserves that one-or-two-draw ordering instead of sampling the final
+/// distribution directly.
+#[must_use]
+pub fn roll_hit_count(rng: &mut impl BattleRng) -> u8 {
+    let first_hit_offset = draw_hit_count_offset(rng);
+    let hit_offset = if first_hit_offset < HIT_COUNT_REDRAW_THRESHOLD {
+        first_hit_offset
+    } else {
+        draw_hit_count_offset(rng)
+    };
+    MIN_HITS + hit_offset
+}
+
+/// Validates that `move_id` can enter the multi-hit pipeline without drawing.
 ///
 /// # Errors
 ///
 /// - [`BattleError::UnknownMove`] if `move_id` is not in `dex`.
-/// - [`BattleError::UnsupportedMoveEffect`] if its `EFFECT_*` is not
-///   [`EFFECT_MULTI_HIT`].
-/// - [`BattleError::UnsupportedMoveType`] for a `???`-typed move, which
-///   `Cmd_typecalc` could not classify.
+/// - [`BattleError::UnsupportedMoveEffect`] if it is not a variable-count
+///   multi-hit move.
+/// - [`BattleError::UnsupportedMoveType`] if its type cannot participate in
+///   battle calculations.
 pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
     ensure_resolvable_effect(dex, move_id, is_multi_hit_effect)
 }
 
-/// The prologue of `BattleScript_EffectMultiHit`: the one accuracy check
-/// (`:606`) and, if it passes, the hit-count roll (`:609`).
+/// Admits a multi-hit move with one accuracy draw, then rolls its hit limit.
 ///
-/// Returns `None` for a miss — **1 draw**, and the whole move is over.
-/// Returns `Some(hits)` otherwise, having spent **2 or 3** draws (accuracy
-/// plus [`roll_hit_count`]'s one or two).
-///
-/// The per-hit loop is deliberately *not* here (module docs); the caller
-/// runs [`crate::hit::damage_core`] per hit and then spends the single
-/// trailing draw with [`spend_multi_hit_effect_chance_draw`].
+/// Returns `None` after the accuracy draw on a miss. A successful admission
+/// returns the hit limit after one or two additional count draws. The caller
+/// must process hits against live battle state before spending the trailing
+/// draw with [`spend_multi_hit_effect_chance_draw`].
 ///
 /// # Errors
 ///
-/// Whatever [`ensure_resolvable`] reports; nothing is drawn before that
-/// check.
+/// Returns any error from [`ensure_resolvable`] without consuming RNG.
 pub fn resolve_multi_hit(
     dex: &Dex,
     move_id: MoveId,
@@ -170,26 +87,21 @@ pub fn resolve_multi_hit(
     rng: &mut impl BattleRng,
 ) -> Result<Option<u8>, BattleError> {
     ensure_resolvable(dex, move_id)?;
-    if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
+    let move_lands = accuracy_roll(dex, move_id, attacker, defender, rng)?;
+    if !move_lands {
         return Ok(None);
     }
-    Ok(Some(roll_hit_count(rng)))
+    let hit_limit = roll_hit_count(rng);
+    Ok(Some(hit_limit))
 }
 
-/// The single trailing `seteffectwithchance` at `:651`, which runs once per
-/// *move* rather than once per hit.
-///
-/// A named wrapper over [`crate::secondary::spend_effect_chance_draw`]
-/// rather than a bare call at the site, so the "once, not per hit" reason
-/// travels with it. `any_hit_had_effect` is the epilogue's view of
-/// `gMoveResultFlags`: `false` only when the sequence ended on the
-/// type-immune branch.
+/// Spends the move's single effect-chance draw after its hit loop finishes.
 ///
 /// # Errors
 ///
-/// Whatever [`crate::secondary::spend_effect_chance_draw`] reports — never
-/// [`BattleError::UnportedSecondaryEffect`] for an `EFFECT_MULTI_HIT` move,
-/// which is not a [`crate::secondary`] trampoline.
+/// Returns any error from [`spend_effect_chance_draw`]. Variable-count
+/// multi-hit moves have no ported secondary-effect trampoline, so their draw
+/// is discarded.
 pub fn spend_multi_hit_effect_chance_draw(
     dex: &Dex,
     move_id: MoveId,
