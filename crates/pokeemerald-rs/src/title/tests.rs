@@ -269,9 +269,10 @@ fn regular_tilemap_from_raw_reports_a_distinct_count_when_short_by_one_byte() {
     let TitleSceneError::Render(RenderError::TilemapSizeMismatch { expected, actual }) = err else {
         panic!("expected a TilemapSizeMismatch error, got {err:?}");
     };
-    assert_ne!(
-        actual, expected,
-        "an odd short byte count must not report the same count as the valid length"
+    assert_eq!(expected, 1024);
+    assert_eq!(
+        actual, 1023,
+        "a 2,047-byte map reports the whole entries it holds"
     );
 }
 
