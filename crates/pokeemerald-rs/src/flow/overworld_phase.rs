@@ -236,8 +236,15 @@ pub(crate) struct OverworldPhase {
     /// fired encounter is logged and dropped in it
     /// (`crate::flow::wild_encounter`'s module docs). The battle writes the
     /// mon back here when it ends, so damage taken persists into the
-    /// overworld the way `gPlayerParty[0]` does.
+    /// overworld the way `gPlayerParty[gBattlerPartyIndexes[0]]` does --
+    /// see [`Self::party_lead_slot`] for which saved slot that is.
     pub(super) party_lead: Option<battle::BattlePokemon>,
+    /// The saved slot [`Self::party_lead`] was decoded from --
+    /// `SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`
+    /// (`pokeemerald/src/battle_controllers.c:604`). Write-back
+    /// ([`Self::copy_party_and_objects_to_save`]) and [`Self::white_out`]'s
+    /// heal both target this index, not always slot 0.
+    pub(super) party_lead_slot: usize,
     /// The current-HP points [`crate::party`]'s load clamp hid from
     /// [`Self::party_lead`] (`party::hp_hidden_by_load`): measured when the
     /// lead is decoded from the save, added back by the merge on every
@@ -649,6 +656,9 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            // Overwritten immediately below by `copy_party_and_objects_from_save`;
+            // `0` here is only ever the value a genuinely empty party needs.
+            party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             // Overwritten immediately below, once `copy_party_and_objects_from_save`
             // has actually looked at the save's party count and bytes; `false`
@@ -797,6 +807,9 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            // A new game's lead, once `Self::load_default` grants one, is
+            // always the fresh starter written into slot 0.
+            party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             // `Self::from_saved`'s load path never runs for a new game, so
             // there is no retained-undecodable slot to carry -- see
@@ -991,6 +1004,10 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+/// Continue's active-battler selection ([`party::select_active_battler`])
+/// against both battle handoffs and the write-back merge that follows.
+#[cfg(test)]
+mod fainted_lead_party_tests;
 /// `first_battle_conclusion`'s tests (issue #251) -- the same per-area split
 /// `route103_rival_tests`' own doc comment explains.
 #[cfg(test)]
