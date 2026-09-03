@@ -515,6 +515,31 @@ mod tests {
     }
 
     #[test]
+    fn stone_evolution_parameters_pin_raw_item_ids() {
+        let table = EvolutionTable::new();
+        assert_eq!(table.get(SpeciesId::VULPIX).unwrap()[0].method.param(), 95);
+        assert_eq!(table.get(SpeciesId::EEVEE).unwrap()[1].method.param(), 97);
+        assert_eq!(table.get(SpeciesId::GLOOM).unwrap()[0].method.param(), 98);
+    }
+
+    #[test]
+    fn trade_item_evolution_parameters_pin_raw_item_ids() {
+        let table = EvolutionTable::new();
+        assert_eq!(
+            table.get(SpeciesId::CLAMPERL).unwrap()[0].method.param(),
+            192
+        );
+        assert_eq!(
+            table.get(SpeciesId::CLAMPERL).unwrap()[1].method.param(),
+            193
+        );
+        assert_eq!(
+            table.get(SpeciesId::PORYGON).unwrap()[0].method.param(),
+            218
+        );
+    }
+
+    #[test]
     fn method_ids_and_parameters_match_stored_values() {
         assert_eq!(EvoMethod::Friendship.method_id(), 1);
         assert_eq!(EvoMethod::FriendshipDay.method_id(), 2);
