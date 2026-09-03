@@ -256,8 +256,8 @@ impl SaveSlot {
             if let (Some(session_counter), Some(session_base)) =
                 (self.session_counter, &self.session_base)
             {
-                // Boot fell back past a damaged newest generation, so the
-                // session's base wins (tests::healing_a_damaged_newest_slot_*).
+                // The reload above fell back past a generation damaged since
+                // the session read it (tests::healing_a_damaged_newest_slot_*).
                 if counter_is_ahead(disk_counter, session_counter) {
                     store.restore_base(session_base.clone());
                 }
