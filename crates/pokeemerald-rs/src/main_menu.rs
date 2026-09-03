@@ -36,6 +36,14 @@
 //! upstream's regardless (six tiles tall, table below), so the block can be
 //! filled in later without moving anything.
 //!
+//! Also undecoded: `gSaveBlock2Ptr->optionsWindowFrameType`
+//! (`main_menu.c:2191-2193`), the field every main-menu box (not just
+//! `CONTINUE`'s) borders with. [`MainMenuScene::from_pack_with_window_frame`]
+//! accepts it and [`crate::flow::advance_scene`]'s production caller threads
+//! it through, but `engine::save::SaveBlock2` doesn't decode that field from
+//! a save's bytes yet (its modelled subset is above), so every real save
+//! still renders [`FRAME_ID`] until it does.
+//!
 //! `OPTION`'s own destination screen (`ACTION_OPTION`, `main_menu.c:1070`)
 //! is a separate, not-yet-built settings screen;
 //! [`crate::flow::advance_scene`] swallows an A press on
@@ -59,10 +67,10 @@
 //! The two lists are *not* the same boxes relabelled: with a save present
 //! the whole menu sits lower and the first box is three times as tall.
 //! [`draw_item`] fills each content rect, then
-//! draws [`AssetPack::text_window_frame`]'s (frame [`FRAME_ID`]) selectable
-//! border (`window::border_tiles`, matching upstream's own
-//! `DrawMainMenuWindowBorder` -- see `engine::text::window`'s module docs)
-//! around the label glyphs.
+//! draws [`AssetPack::text_window_frame`]'s selectable border for the
+//! scene's own window frame (`window::border_tiles`, matching upstream's
+//! own `DrawMainMenuWindowBorder` -- see `engine::text::window`'s module
+//! docs) around the label glyphs.
 //! Labels print at the window-local pixel origin upstream's own
 //! `AddTextPrinterParameterized3(_, FONT_NORMAL, 0, 1, ...)` calls use
 //! (`main_menu.c:786-787`): `x=0`, `y=1`, not a hand-picked inset.
@@ -179,12 +187,15 @@ const DARKEN_EVY: u8 = 7;
 const TILE_PX: i32 = 8;
 const _: () = assert!(msgwin::TILE_SIZE == 8);
 
-/// `text_window_frame`'s zero-based selectable-frame id this menu uses:
+/// `text_window_frame`'s zero-based selectable-frame id this scene falls
+/// back to when no per-save option is threaded through
+/// [`MainMenuScene::from_pack_with_window_frame`]:
 /// `GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType)`
 /// (`main_menu.c:2191-2193`) reads the player's chosen window-frame option,
 /// which is `0` (`WINDOW_FRAME_TYPE_0`) for a zeroed, fresh save block --
-/// exactly the state this crate's no-save path is always in (module docs).
-const FRAME_ID: u8 = 0;
+/// and, until `engine::save::SaveBlock2` decodes that field (module docs'
+/// "Not modelled" section), every real save too.
+pub(crate) const FRAME_ID: u8 = 0;
 
 /// The pack id [`MainMenuScene::from_pack`] reads for BG palette bank 0's
 /// index 0 -- the visible backdrop colour everywhere no window covers
@@ -294,19 +305,37 @@ pub struct MainMenuScene {
 }
 
 impl MainMenuScene {
-    /// Decode the window frame, the BG0 backdrop colour, and `menu_type`'s
-    /// item labels out of an already-loaded `pack`.
+    /// [`Self::from_pack_with_window_frame`], falling back to [`FRAME_ID`]
+    /// when no per-save window-frame option is available (module docs'
+    /// "Not modelled" section).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::from_pack_with_window_frame`].
+    pub fn from_pack(
+        pack: &AssetPack,
+        menu_type: MainMenuType,
+    ) -> Result<Self, MainMenuSceneError> {
+        Self::from_pack_with_window_frame(pack, menu_type, FRAME_ID)
+    }
+
+    /// Decode `window_frame`'s text-window border, the BG0 backdrop
+    /// colour, and `menu_type`'s item labels out of an already-loaded
+    /// `pack`. `window_frame` is `gSaveBlock2Ptr->optionsWindowFrameType`,
+    /// read by `GetWindowFrameTilesPal` for every main-menu box
+    /// (`pokeemerald/src/main_menu.c:2191-2193`).
     ///
     /// # Errors
     ///
     /// [`MainMenuSceneError::Pack`] if the pack or the needed frame/font/
     /// palette entries are missing; [`MainMenuSceneError::Font`] if the
     /// font sheet doesn't decode (unreachable against a real pack).
-    pub fn from_pack(
+    pub fn from_pack_with_window_frame(
         pack: &AssetPack,
         menu_type: MainMenuType,
+        window_frame: u8,
     ) -> Result<Self, MainMenuSceneError> {
-        let frame = FrameAssets::from_handle(pack.text_window_frame(FRAME_ID)?);
+        let frame = FrameAssets::from_handle(pack.text_window_frame(window_frame)?);
         let background = textbox::palette_colors(pack.palette(BACKGROUND_PALETTE_ID)?)
             .first()
             .copied()
@@ -519,17 +548,35 @@ fn darken_outside(fb: &mut Framebuffer, bg0: &textbox::Coverage, rect: (i32, i32
     }
 }
 
-/// Load the pack from its default location and build `menu_type`'s menu out
-/// of it in one step -- mirrors [`crate::title::load_default`].
+/// [`load_default_with_window_frame`], falling back to [`FRAME_ID`] when no
+/// per-save window-frame option is available (module docs' "Not modelled"
+/// section).
+///
+/// # Errors
+///
+/// See [`load_default_with_window_frame`].
+pub fn load_default(menu_type: MainMenuType) -> Result<MainMenuScene, MainMenuSceneError> {
+    load_default_with_window_frame(menu_type, FRAME_ID)
+}
+
+/// Load the pack from its default location and build `menu_type`'s menu,
+/// bordered with `window_frame`, out of it in one step -- mirrors
+/// [`crate::title::load_default`]; see
+/// [`MainMenuScene::from_pack_with_window_frame`] for what `window_frame`
+/// means.
 ///
 /// # Errors
 ///
 /// [`MainMenuSceneError::Pack`] with [`MainMenuSceneError::is_pack_missing`]
 /// true if no pack has been extracted yet; see
-/// [`MainMenuScene::from_pack`] for the other (real-pack-only) error cases.
-pub fn load_default(menu_type: MainMenuType) -> Result<MainMenuScene, MainMenuSceneError> {
+/// [`MainMenuScene::from_pack_with_window_frame`] for the other
+/// (real-pack-only) error cases.
+pub fn load_default_with_window_frame(
+    menu_type: MainMenuType,
+    window_frame: u8,
+) -> Result<MainMenuScene, MainMenuSceneError> {
     let pack = AssetPack::load_default()?;
-    MainMenuScene::from_pack(&pack, menu_type)
+    MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame)
 }
 
 /// Drive a throwaway [`Printer`] at [`TextSpeed::Instant`] to completion over

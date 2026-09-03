@@ -335,7 +335,18 @@ pub(crate) fn advance_scene(
                 // observable result is identical: the menu shown is the one
                 // the save on disk selects.
                 let saved = save_slot.load();
-                match main_menu::load_default(menu_type_for(&saved)) {
+                // `gSaveBlock2Ptr->optionsWindowFrameType` borders every
+                // main-menu box (`main_menu.c:2191-2193`,
+                // `main_menu::MainMenuScene::from_pack_with_window_frame`'s
+                // own contract), but `engine::save::SaveBlock2` doesn't
+                // decode that field yet -- only name/gender/trainer id/
+                // encryption key are modelled -- so `saved.block2` cannot
+                // supply it; `FRAME_ID` is the correct value regardless
+                // until it does (a fresh save's own zeroed default).
+                match main_menu::load_default_with_window_frame(
+                    menu_type_for(&saved),
+                    main_menu::FRAME_ID,
+                ) {
                     Ok(menu) => {
                         let state = MainMenuState { scene: menu, saved };
                         let frame = state.scene.compose_frame();

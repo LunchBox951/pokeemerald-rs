@@ -343,10 +343,12 @@ fn palette_meta(color_count: u16) -> Vec<u8> {
 /// A minimal pack covering exactly what [`super::MainMenuScene::from_pack`]
 /// needs: a 24x24 (3x3-tile) selectable window frame (every ring tile
 /// opaque, palette index 1, so the border is trivially distinguishable from
-/// both the content fill and the backdrop), a `font/normal/glyphs` sheet
-/// whose every pixel is `font_index`, and a `interface/palette/main_menu_bg`
-/// whose index 0 is a colour distinct from both the content fill white and
-/// the border colour.
+/// both the content fill and the backdrop), a second selectable frame
+/// (`WINDOW_FRAME_TYPE_5`) identical in shape but a distinct colour so
+/// [`load_synthetic_scene_of_with_window_frame`] can prove which of the two
+/// a scene drew, a `font/normal/glyphs` sheet whose every pixel is
+/// `font_index`, and a `interface/palette/main_menu_bg` whose index 0 is a
+/// colour distinct from both the content fill white and the border colour.
 ///
 /// `font_index` picks the fixture flavour: `0` (transparent everywhere)
 /// keeps every label pixel showing the *fill* underneath, so the
@@ -363,13 +365,22 @@ fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     // is simplest and correct here: `border_tiles` only ever draws pixels
     // from within the sheet's own tile cells, and this fixture never reads
     // interior (non-ring) tiles.
-    let frame_pixels = vec![1u8; 24 * 24];
+    let frame0_pixels = vec![1u8; 24 * 24];
 
     // Palette bank: index 0 transparent (unused by `blit_frame_tiles`),
     // index 1 a distinct bright green, rest black.
-    let mut frame_palette = vec![0u8; 32];
+    let mut frame0_palette = vec![0u8; 32];
     let green = rendering::Bgr555::from_channels(0, 31, 0).raw();
-    frame_palette[2..4].copy_from_slice(&green.to_le_bytes());
+    frame0_palette[2..4].copy_from_slice(&green.to_le_bytes());
+
+    // A second selectable frame -- `WINDOW_FRAME_TYPE_5`, source file
+    // `6.png` -- identical in shape but bright red at index 1, so which of
+    // the 20 `sWindowFrames` entries a scene drew is readable from one
+    // border pixel.
+    let frame5_pixels = vec![1u8; 24 * 24];
+    let mut frame5_palette = vec![0u8; 32];
+    let red = rendering::Bgr555::from_channels(31, 0, 0).raw();
+    frame5_palette[2..4].copy_from_slice(&red.to_le_bytes());
 
     // Font sheet: every pixel `font_index` (see the doc comment above).
     let font_pixels =
@@ -385,13 +396,25 @@ fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
             id: "text-window/image/1",
             kind_tag: 0,
             meta: image_meta(24, 24, 4),
-            payload: frame_pixels,
+            payload: frame0_pixels,
         },
         Entry {
             id: "text-window/palette/1",
             kind_tag: 1,
             meta: palette_meta(16),
-            payload: frame_palette,
+            payload: frame0_palette,
+        },
+        Entry {
+            id: "text-window/image/6",
+            kind_tag: 0,
+            meta: image_meta(24, 24, 4),
+            payload: frame5_pixels,
+        },
+        Entry {
+            id: "text-window/palette/6",
+            kind_tag: 1,
+            meta: palette_meta(16),
+            payload: frame5_palette,
         },
         Entry {
             id: "font/normal/glyphs",
@@ -435,26 +458,43 @@ fn load_synthetic_scene() -> MainMenuScene {
 /// [`load_synthetic_scene`], for whichever item list is under test (the
 /// `HAS_SAVED_GAME` cases live in [`super::saved_game_tests`]).
 pub(super) fn load_synthetic_scene_of(menu_type: MainMenuType) -> MainMenuScene {
-    load_synthetic_scene_inner(0, menu_type)
+    load_synthetic_scene_inner(0, menu_type, super::FRAME_ID)
+}
+
+/// [`load_synthetic_scene_of`], with an explicit `window_frame` instead of
+/// [`super::FRAME_ID`] -- proves
+/// [`super::MainMenuScene::from_pack_with_window_frame`] actually threads
+/// `window_frame` through to the composed border, rather than a fixed
+/// default (the `HAS_SAVED_GAME` case lives in
+/// [`super::saved_game_tests`]).
+pub(super) fn load_synthetic_scene_of_with_window_frame(
+    menu_type: MainMenuType,
+    window_frame: u8,
+) -> MainMenuScene {
+    load_synthetic_scene_inner(0, menu_type, window_frame)
 }
 
 /// [`load_synthetic_scene`], with the font-sheet flavour spelled out (see
 /// [`synthetic_main_menu_pack_bytes`]'s doc comment for what each
 /// `font_index` pins).
 fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
-    load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame)
+    load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame, super::FRAME_ID)
 }
 
-fn load_synthetic_scene_inner(font_index: u8, menu_type: MainMenuType) -> MainMenuScene {
+fn load_synthetic_scene_inner(
+    font_index: u8,
+    menu_type: MainMenuType,
+    window_frame: u8,
+) -> MainMenuScene {
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}.pack",
+        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}-{window_frame}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
     let temp_pack = TempPackGuard::new(path);
     std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(font_index)).unwrap();
     let pack = AssetPack::load(temp_pack.path()).unwrap();
-    MainMenuScene::from_pack(&pack, menu_type).unwrap()
+    MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame).unwrap()
 }
 
 #[test]
