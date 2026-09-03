@@ -10,10 +10,11 @@
 //! [`super::events`]'s vocabulary.
 //!
 //! Each pipeline reproduces one upstream battle script — the ordinary
-//! `BattleScript_EffectHit` ([`crate::hit`]) and the
-//! `BattleScript_EffectStatUp`/`StatDown` family ([`crate::stat_change`]) —
-//! so a slice that widens move-effect breadth adds a pipeline here without
-//! touching turn flow or the event vocabulary.
+//! `BattleScript_EffectHit` ([`crate::hit`]), the
+//! `BattleScript_EffectStatUp`/`StatDown` family ([`crate::stat_change`]),
+//! and `BattleScript_EffectParalyze` ([`crate::paralyze`]) — so a slice that
+//! widens move-effect breadth adds a pipeline here without touching turn
+//! flow or the event vocabulary.
 
 use assets::MoveId;
 
@@ -25,11 +26,13 @@ use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::multi_hit::is_multi_hit_effect;
+use crate::paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
 use crate::pokemon::MAX_LEVEL;
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
 };
+use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattleOutcome};
 
@@ -40,7 +43,7 @@ impl Battle {
     /// mon, pushing the resulting events and ending the battle if the
     /// target faints.
     ///
-    /// Dispatches on the move's `EFFECT_*` to one of six pipelines — this
+    /// Dispatches on the move's `EFFECT_*` to one of seven pipelines — this
     /// crate's execution boundary (crate root docs, and
     /// [`super::ensure_executable`] for the screen that guarantees the
     /// dispatch is total):
@@ -52,15 +55,16 @@ impl Battle {
     /// | [`crate::fixed_damage::is_fixed_damage_effect`] | `execute_fixed_damage_move` | `_Sonicboom` / `_DragonRage` / `_LevelDamage` |
     /// | [`crate::multi_hit::is_multi_hit_effect`] | `execute_multi_hit_move` | `BattleScript_EffectMultiHit` |
     /// | [`crate::flag_move::is_flag_move_effect`] | `execute_flag_move` | `_Splash` / `_FocusEnergy` / `_Charge` |
+    /// | [`crate::paralyze::is_paralyze_effect`] | `execute_paralyze_move` | `BattleScript_EffectParalyze` |
     /// | *otherwise* | `execute_hit_move` | `BattleScript_EffectHit` |
     ///
     /// Every move that reaches here already passed
     /// [`super::ensure_executable`] (at [`Battle::new`] for the opposing
     /// side, at `validate_player_move` for the player's), so at most one of
-    /// the five `is_*` checks holds and the fallthrough is the hit pipeline
+    /// the six `is_*` checks holds and the fallthrough is the hit pipeline
     /// — which then re-runs its own `ensure_resolvable` and would still
     /// refuse anything that slipped past. ([`crate::damage::STRUGGLE`] needs
-    /// no case of its own: `EFFECT_RECOIL` matches none of the five, so it
+    /// no case of its own: `EFFECT_RECOIL` matches none of the six, so it
     /// falls through to the hit pipeline, which accepts it — though
     /// `ensure_executable` refuses it before the turn engine ever gets
     /// there.)
@@ -82,6 +86,8 @@ impl Battle {
             self.execute_multi_hit_move(attacker_is_player, move_id, rng, events)
         } else if is_flag_move_effect(effect) {
             self.execute_flag_move(attacker_is_player, move_id, events)
+        } else if is_paralyze_effect(effect) {
+            self.execute_paralyze_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }
@@ -197,19 +203,24 @@ impl Battle {
         events.push(BattleEvent::Fainted {
             by_player: fainted_is_player,
         });
-        // `cleareffectsonfaint`'s `FaintClearSetData` half
-        // (`battle_script_commands.c:3063`-`:3076`,
-        // `src/battle_main.c:3264`-`:3270`) clears the fainted battler's
-        // battle-only stages and volatiles ahead of `getexp` in the same
-        // script (`data/battle_scripts_1.s:2813`-`:2827`) -- so none of
-        // the corpse's accumulated scratch state reaches this crate's own
-        // exp step, issue #322.
+        // `Cmd_cleareffectsonfaint` (`battle_script_commands.c:3063`-`:3076`)
+        // clears the fainted battler's battle-only stages and volatiles --
+        // its `FaintClearSetData` half, `src/battle_main.c:3264`-`:3270` --
+        // ahead of `getexp` in the same script
+        // (`data/battle_scripts_1.s:2813`-`:2827`) -- so none of the
+        // corpse's accumulated scratch state reaches this crate's own exp
+        // step, issue #322 -- and, its own leading `hp == 0` branch, zeroes
+        // `status1` (`:3063`-`:3068`): a fainted battler leaves battle
+        // cured, unlike a surviving one, whose paralysis outlives the win
+        // ([`crate::pokemon::BattlePokemon::clear_battle_scratch`]'s own
+        // doc explains why that method alone must not do this).
         let corpse = if fainted_is_player {
             &mut self.player
         } else {
             &mut self.enemy
         };
         corpse.clear_battle_scratch();
+        corpse.set_status1(Status1::Healthy);
         if fainted_is_player {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
@@ -375,6 +386,63 @@ impl Battle {
                         move_id,
                         stat,
                     },
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The paralysis half of [`Self::execute_move`]'s dispatch —
+    /// [`crate::paralyze::resolve_paralyze_move`]'s pipeline
+    /// (`BattleScript_EffectParalyze`, Thunder Wave/Stun Spore/Glare).
+    ///
+    /// Always targets the other battler: a single-battle assumption already
+    /// shared by [`Self::execute_stat_change_move`]'s lowering half.
+    fn execute_paralyze_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = if attacker_is_player {
+                (&self.player, &self.enemy)
+            } else {
+                (&self.enemy, &self.player)
+            };
+            resolve_paralyze_move(&self.dex, move_id, attacker, defender, rng)?
+        };
+
+        match outcome {
+            ParalyzeOutcome::Immune => {
+                events.push(BattleEvent::NoEffect {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ParalyzeOutcome::AlreadyParalysed => {
+                events.push(BattleEvent::AlreadyParalyzed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ParalyzeOutcome::Miss => {
+                events.push(BattleEvent::Missed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ParalyzeOutcome::Applied => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                defender.set_status1(Status1::Paralysed);
+                events.push(BattleEvent::Paralyzed {
+                    by_player: attacker_is_player,
+                    move_id,
                 });
             }
         }

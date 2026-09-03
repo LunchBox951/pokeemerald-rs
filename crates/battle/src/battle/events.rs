@@ -41,6 +41,14 @@ pub enum BattleEvent {
         /// The move with no PP remaining.
         move_id: MoveId,
     },
+    /// A paralysed battler's full-paralysis draw cancelled its chosen move
+    /// before any PP was spent.
+    FullyParalyzed {
+        /// Whether the player's battler was cancelled.
+        by_player: bool,
+        /// The move that was never attempted.
+        move_id: MoveId,
+    },
     /// A move connected, but the target's typing made it ineffective.
     NoEffect {
         /// Whether the player used the move.
@@ -181,6 +189,21 @@ pub enum BattleEvent {
         move_id: MoveId,
         /// The user's affected stat.
         stat: ChangedStat,
+    },
+    /// A move inflicted [`crate::status1::Status1::Paralysed`] on its target.
+    Paralyzed {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted paralysis.
+        move_id: MoveId,
+    },
+    /// A move's target already carried [`crate::status1::Status1::Paralysed`],
+    /// so no accuracy draw occurred.
+    AlreadyParalyzed {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that targeted the already-paralysed battler.
+        move_id: MoveId,
     },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {

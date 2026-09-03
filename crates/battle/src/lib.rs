@@ -28,7 +28,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the six pipelines
+//! one of the battle scripts this crate reproduces — the seven pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script | added by |
@@ -39,6 +39,7 @@
 //! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) | #321 |
 //! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) | #321 |
 //! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) | #321 |
+//! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) | this slice |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -184,15 +185,30 @@
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above)
 //! and the four stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
-//! guard left unmodelled) — held items, non-volatile status conditions and
-//! confusion (issue #323), weather, multi/double
-//! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
-//! why those are a documented boundary rather than dead code), and the
-//! move effects the six pipelines still do not cover — Defense Curl (flag
-//! *and* stat raise, so it belongs with the stat-change family), the
-//! secondary-effect trampolines ([`secondary::SECONDARY_TRAMPOLINES`]
-//! lists all 31), recoil, OHKO, Counter, Bide, Leech Seed and the rest of
-//! the end-of-turn residual family, and so on.
+//! guard left unmodelled) — held items, every primary status but
+//! [`status1::Status1::Paralysed`] (poison, confusion, sleep, freeze, burn,
+//! toxic — see [`status1`]'s module docs), weather, multi/double
+//! battles, Limber/Mist/Substitute/Safeguard/Protect (see [`stat_change`]'s
+//! and [`paralyze`]'s module docs for why those are a documented boundary
+//! rather than dead code), and the move effects the seven pipelines still do
+//! not cover — Defense Curl (flag *and* stat raise, so it belongs with the
+//! stat-change family), the secondary-effect trampolines
+//! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, none of them
+//! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
+//! recoil, OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
+//! residual family, and so on.
+//!
+//! This slice adds [`status1::Status1`] — [`pokemon::BattlePokemon`]'s
+//! primary status, distinct from [`volatile::Volatiles`] — modelling
+//! [`status1::Status1::Healthy`] and [`status1::Status1::Paralysed`].
+//! [`paralyze`] is the seventh [`battle::Battle::execute_move`] pipeline
+//! (`BattleScript_EffectParalyze`: Thunder Wave, Stun Spore, Glare), whose
+//! type/status guards run before the accuracy draw. [`status1::Status1`]
+//! also gates every mover through [`battle::Battle::act`]'s full-paralysis
+//! draw, ported from `AtkCanceler_UnableToUseMove`'s `CANCELER_PARALYZED`
+//! branch and ordered ahead of PP deduction and the no-PP abort, and
+//! quarters [`pokemon::BattlePokemon::speed_for_turn_order`] after stat-stage
+//! scaling.
 
 pub mod ability;
 pub mod accuracy;
@@ -210,10 +226,12 @@ pub mod hit;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
+pub mod paralyze;
 pub mod pokemon;
 pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
+pub mod status1;
 pub mod turn_order;
 pub mod volatile;
 pub mod wild;
@@ -241,6 +259,7 @@ pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
+pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
 pub use pokemon::{
     calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
     MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
@@ -254,6 +273,7 @@ pub use stat_change::{
     WHITE_SMOKE,
 };
 pub use stat_stage::StatStage;
+pub use status1::Status1;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,

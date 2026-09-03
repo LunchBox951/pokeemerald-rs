@@ -13,11 +13,18 @@
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
-//! language, mail, non-volatile status, the egg bit, and contest condition
-//! (`PokemonSubstruct2`'s trailing six bytes). [`to_save_pokemon`], which has
-//! no record to retain them from, writes upstream's own `CreateMon` default
-//! for each instead; friendship is derived from the species' base
-//! friendship, matching `CreateBoxMon`.
+//! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
+//! trailing six bytes). [`to_save_pokemon`], which has no record to retain
+//! them from, writes upstream's own `CreateMon` default for each instead;
+//! friendship is derived from the species' base friendship, matching
+//! `CreateBoxMon`.
+//!
+//! Non-volatile status is likewise retained rather than merged: `battle`
+//! now models [`battle::Status1::Paralysed`] in-battle, but neither encoder
+//! reads or writes it, so a battler paralysed this session keeps the
+//! backing record's own stored status word through an ordinary save exactly
+//! as before -- wiring that overlay is a later slice's boundary, not this
+//! one's.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
