@@ -36,14 +36,6 @@
 //! upstream's regardless (six tiles tall, table below), so the block can be
 //! filled in later without moving anything.
 //!
-//! Also undecoded: `gSaveBlock2Ptr->optionsWindowFrameType`
-//! (`main_menu.c:2191-2193`), the field every main-menu box (not just
-//! `CONTINUE`'s) borders with. [`MainMenuScene::from_pack_with_window_frame`]
-//! accepts it and [`crate::flow::advance_scene`]'s production caller threads
-//! it through, but `engine::save::SaveBlock2` doesn't decode that field from
-//! a save's bytes yet (its modelled subset is above), so every real save
-//! still renders [`FRAME_ID`] until it does.
-//!
 //! `OPTION`'s own destination screen (`ACTION_OPTION`, `main_menu.c:1070`)
 //! is a separate, not-yet-built settings screen;
 //! [`crate::flow::advance_scene`] swallows an A press on
@@ -192,10 +184,8 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 /// [`MainMenuScene::from_pack_with_window_frame`]:
 /// `GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType)`
 /// (`main_menu.c:2191-2193`) reads the player's chosen window-frame option,
-/// which is `0` (`WINDOW_FRAME_TYPE_0`) for a zeroed, fresh save block --
-/// and, until `engine::save::SaveBlock2` decodes that field (module docs'
-/// "Not modelled" section), every real save too.
-pub(crate) const FRAME_ID: u8 = 0;
+/// which is `0` (`WINDOW_FRAME_TYPE_0`) for a zeroed, fresh save block.
+const FRAME_ID: u8 = 0;
 
 /// The pack id [`MainMenuScene::from_pack`] reads for BG palette bank 0's
 /// index 0 -- the visible backdrop colour everywhere no window covers
@@ -306,8 +296,7 @@ pub struct MainMenuScene {
 
 impl MainMenuScene {
     /// [`Self::from_pack_with_window_frame`], falling back to [`FRAME_ID`]
-    /// when no per-save window-frame option is available (module docs'
-    /// "Not modelled" section).
+    /// when no per-save window-frame option is available.
     ///
     /// # Errors
     ///
@@ -549,8 +538,7 @@ fn darken_outside(fb: &mut Framebuffer, bg0: &textbox::Coverage, rect: (i32, i32
 }
 
 /// [`load_default_with_window_frame`], falling back to [`FRAME_ID`] when no
-/// per-save window-frame option is available (module docs' "Not modelled"
-/// section).
+/// per-save window-frame option is available.
 ///
 /// # Errors
 ///

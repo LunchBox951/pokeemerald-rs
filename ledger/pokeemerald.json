@@ -18094,7 +18094,7 @@
           "status": "rewritten"
         },
         "SaveBlockPartyMoneyWarpOffsets": {
-          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, and vars implemented in full-size zero-filled payloads",
+          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsWindowFrameType implemented in full-size zero-filled payloads",
           "rust_target": "crates/engine/src/save/block.rs",
           "spec": "S-5",
           "status": "rewritten"

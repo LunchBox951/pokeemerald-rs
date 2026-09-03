@@ -5,10 +5,10 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed, AnimatedTitle,
-    AppScene, MainMenuAction, MainMenuState,
+    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed,
+    window_frame_for, AnimatedTitle, AppScene, MainMenuAction, MainMenuState,
 };
-use crate::game_save::SaveSlot;
+use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
 use crate::main_menu::{MainMenuItem, MainMenuType};
 use crate::new_game;
@@ -270,6 +270,44 @@ fn menu_action_maps_each_item_to_its_upstream_action() {
         MainMenuAction::None,
         "A on OPTION must not launch anything -- ACTION_OPTION's screen \
          is not built yet (issue #216 scope notes)"
+    );
+}
+
+/// Issue #795: `advance_scene`'s `Title` -> `MainMenu` transition threads
+/// `window_frame_for(&saved)` into main-menu construction, so which border
+/// a given boot verdict produces is pinned here on the pure decision
+/// function too -- the same pack-less treatment [`menu_type_for`]'s own doc
+/// comment already gives the menu-type half of that same call.
+#[test]
+fn window_frame_for_reads_the_saved_blocks_own_option() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let fresh = SavedGame {
+        status: SaveFileStatus::Empty,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2::default(),
+    };
+    assert_eq!(
+        window_frame_for(&fresh),
+        0,
+        "a zeroed, fresh save block's own optionsWindowFrameType is 0 \
+         (WINDOW_FRAME_TYPE_0)"
+    );
+
+    let saved = SavedGame {
+        status: SaveFileStatus::Ok,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_window_frame_type: 12,
+            ..SaveBlock2::default()
+        },
+    };
+    assert_eq!(
+        window_frame_for(&saved),
+        12,
+        "a continued save's own recovered optionsWindowFrameType must not \
+         be discarded for a hardcoded default"
     );
 }
 
