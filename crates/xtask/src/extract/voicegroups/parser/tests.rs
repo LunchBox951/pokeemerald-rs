@@ -83,12 +83,32 @@ voice_group demo
         }
         other => panic!("expected ProgrammableWave, got {other:?}"),
     }
+    match &group.slots[8] {
+        RawSlot::ProgrammableWave {
+            wave_symbol,
+            fixed_rate,
+            ..
+        } => {
+            assert_eq!(wave_symbol, "ProgrammableWaveData_2");
+            assert!(fixed_rate);
+        }
+        other => panic!("expected ProgrammableWave, got {other:?}"),
+    }
     match &group.slots[9] {
         RawSlot::Noise {
             fixed_rate, period, ..
         } => {
             assert!(!fixed_rate);
             assert_eq!(*period, 0);
+        }
+        other => panic!("expected Noise, got {other:?}"),
+    }
+    match &group.slots[10] {
+        RawSlot::Noise {
+            fixed_rate, period, ..
+        } => {
+            assert!(fixed_rate);
+            assert_eq!(*period, 1);
         }
         other => panic!("expected Noise, got {other:?}"),
     }

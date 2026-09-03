@@ -116,6 +116,8 @@ pub enum PackWriteError {
     DuplicateId(String),
     /// An id is empty or cannot fit in the directory's `u16` length field.
     InvalidId(String),
+    /// The queued entry count does not fit the header's `u32` entry count field.
+    EntryCountUnrepresentable(usize),
 }
 
 impl fmt::Display for PackWriteError {
@@ -123,20 +125,18 @@ impl fmt::Display for PackWriteError {
         match self {
             Self::DuplicateId(id) => write!(f, "duplicate asset id `{id}`"),
             Self::InvalidId(id) => write!(f, "invalid asset id `{id}` (empty or too long)"),
+            Self::EntryCountUnrepresentable(count) => write!(
+                f,
+                "pack has {count} entries, more than the format's u32 entry count field can represent"
+            ),
         }
     }
 }
 
 impl std::error::Error for PackWriteError {}
 
-fn wrapping_entry_count_field(entry_count: usize) -> u32 {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the u32 wire field contains the low 32 bits of the usize count"
-    )]
-    {
-        entry_count as u32
-    }
+fn entry_count_field(entry_count: usize) -> Result<u32, PackWriteError> {
+    u32::try_from(entry_count).map_err(|_| PackWriteError::EntryCountUnrepresentable(entry_count))
 }
 
 /// Collects assets and serializes a deterministic pack.
@@ -169,8 +169,11 @@ impl PackWriter {
     ///
     /// [`PackWriteError::DuplicateId`] if two entries share an id;
     /// [`PackWriteError::InvalidId`] if an id is empty or exceeds
-    /// `u16::MAX` bytes.
+    /// `u16::MAX` bytes; [`PackWriteError::EntryCountUnrepresentable`] if
+    /// the queued entry count exceeds `u32::MAX`.
     pub fn finish(mut self) -> Result<Vec<u8>, PackWriteError> {
+        let entry_count = entry_count_field(self.entries.len())?;
+
         self.entries.sort_by(|a, b| a.id.cmp(&b.id));
 
         for adjacent_entries in self.entries.windows(2) {
@@ -187,7 +190,6 @@ impl PackWriter {
         let directory_size: usize = self.entries.iter().map(PackEntry::directory_size).sum();
         let first_payload_offset = PACK_HEADER_SIZE + directory_size;
         let payload_size: usize = self.entries.iter().map(|entry| entry.payload.len()).sum();
-        let entry_count = wrapping_entry_count_field(self.entries.len());
 
         let mut output = Vec::with_capacity(first_payload_offset + payload_size);
         output.extend_from_slice(&MAGIC);
@@ -213,8 +215,8 @@ mod tests {
     use std::mem::size_of;
 
     use super::{
-        wrapping_entry_count_field, PackEntry, PackKind, PackWriteError, PackWriter,
-        FORMAT_VERSION, ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
+        entry_count_field, PackEntry, PackKind, PackWriteError, PackWriter, FORMAT_VERSION,
+        ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
     };
 
     #[test]
@@ -307,12 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn entry_count_field_keeps_the_low_u32_bits() {
+    fn entry_count_must_fit_the_wire_field() {
         let largest_entry_count = usize::try_from(u32::MAX).unwrap();
-        assert_eq!(wrapping_entry_count_field(largest_entry_count), u32::MAX);
+        assert_eq!(entry_count_field(largest_entry_count), Ok(u32::MAX));
 
         if let Some(unrepresentable) = largest_entry_count.checked_add(1) {
-            assert_eq!(wrapping_entry_count_field(unrepresentable), 0);
+            assert_eq!(
+                entry_count_field(unrepresentable),
+                Err(PackWriteError::EntryCountUnrepresentable(unrepresentable))
+            );
         }
     }
 

@@ -51,9 +51,10 @@ pub enum ExtractError {
     /// narrowed with a truncating cast instead of rejected outright. Carries
     /// the source path and the actual colour count.
     PaletteColorCountUnrepresentable(PathBuf, usize),
-    /// Assembling the final pack failed (duplicate or invalid id — an
+    /// Assembling the final pack failed: a duplicate or invalid id (an
     /// internal bug in this pipeline's manifest, since every id is
-    /// generated here, not user-supplied).
+    /// generated here, not user-supplied), or an entry count the pack
+    /// header's `u32` field cannot represent.
     Pack(PackWriteError),
     /// `data/layouts/layouts.json` failed to parse. Carries its path and
     /// the parser error.

@@ -5,6 +5,9 @@ const KEY_SPLIT_START: u8 = 36;
 const VOICE_GROUP_SLOT_COUNT_BYTE: usize = 0;
 const FIRST_SLOT_KIND_BYTE: usize = 1;
 const FIRST_KEY_SPLIT_TABLE_LENGTH_BYTE: usize = 3;
+const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
+const FIRST_SQUARE1_DUTY_BYTE: usize = 5;
+const FIRST_SQUARE2_DUTY_BYTE: usize = 4;
 
 fn sample_envelope() -> Envelope {
     Envelope {
@@ -450,5 +453,114 @@ fn decode_rejects_trailing_bytes() {
     assert_eq!(
         VoiceGroup::decode(&bytes).unwrap_err(),
         AudioError::TrailingBytes(1)
+    );
+}
+
+fn direct_sound_with_pan(pan: Option<u8>) -> VoiceEntry {
+    VoiceEntry::DirectSound(DirectSoundVoice {
+        base_key: 60,
+        pan,
+        sample: SampleId("audio/sample/x".to_owned()),
+        envelope: sample_envelope(),
+        mode: DirectSoundMode::Resampled,
+    })
+}
+
+#[test]
+fn pan_override_boundaries_are_accepted_by_the_constructor_and_decode() {
+    for pan in [1u8, 127] {
+        let group = VoiceGroup::new(vec![direct_sound_with_pan(Some(pan))]).unwrap();
+        let decoded = VoiceGroup::decode(&group.encode()).unwrap();
+        assert_eq!(decoded, group);
+        match &decoded.slots()[0] {
+            VoiceEntry::DirectSound(v) => assert_eq!(v.pan, Some(pan)),
+            other => panic!("expected a DirectSound slot, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn pan_out_of_range_is_rejected_at_construction() {
+    for pan in [128u8, 200, u8::MAX] {
+        let err = VoiceGroup::new(vec![direct_sound_with_pan(Some(pan))]).unwrap_err();
+        assert_eq!(err, AudioError::PanOverrideOutOfRange(pan));
+    }
+}
+
+/// A pan byte above `127` aliases an in-domain value once `0x80 | pan` reaches
+/// `audio::rhythm_pan_from_pan_sweep` (`Some(200)` pans as `Some(72)`), so decode rejects it.
+#[test]
+fn decode_rejects_out_of_range_pan() {
+    let group = VoiceGroup::new(vec![direct_sound_with_pan(Some(64))]).unwrap();
+    let mut bytes = group.encode();
+    bytes[FIRST_DIRECT_SOUND_PAN_BYTE] = 128;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::PanOverrideOutOfRange(128))
+    );
+}
+
+fn square1_with_duty(duty: u8) -> VoiceEntry {
+    VoiceEntry::Square1(Square1Voice {
+        base_key: 60,
+        length: 0,
+        sweep: 0,
+        duty,
+        envelope: sample_envelope(),
+        fixed_rate: false,
+    })
+}
+
+fn square2_with_duty(duty: u8) -> VoiceEntry {
+    VoiceEntry::Square2(Square2Voice {
+        base_key: 60,
+        length: 0,
+        duty,
+        envelope: sample_envelope(),
+        fixed_rate: false,
+    })
+}
+
+#[test]
+fn square_duty_boundaries_are_accepted_by_the_constructor_and_decode() {
+    for duty in [0u8, 3] {
+        let group =
+            VoiceGroup::new(vec![square1_with_duty(duty), square2_with_duty(duty)]).unwrap();
+        assert_eq!(VoiceGroup::decode(&group.encode()).unwrap(), group);
+    }
+}
+
+#[test]
+fn square_duty_out_of_range_is_rejected_at_construction() {
+    for duty in [4u8, 255] {
+        assert_eq!(
+            VoiceGroup::new(vec![square1_with_duty(duty)]).unwrap_err(),
+            AudioError::SquareDutyOutOfRange(duty)
+        );
+        assert_eq!(
+            VoiceGroup::new(vec![square2_with_duty(duty)]).unwrap_err(),
+            AudioError::SquareDutyOutOfRange(duty)
+        );
+    }
+}
+
+/// A duty byte above `3` aliases an in-domain value once
+/// `audio::psg::SquareDuty::from_register` masks it with `0b11`, so decode rejects it.
+#[test]
+fn decode_rejects_out_of_range_square_duty() {
+    let square1 = VoiceGroup::new(vec![square1_with_duty(2)]).unwrap();
+    let mut bytes = square1.encode();
+    bytes[FIRST_SQUARE1_DUTY_BYTE] = 4;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::SquareDutyOutOfRange(4))
+    );
+
+    let square2 = VoiceGroup::new(vec![square2_with_duty(2)]).unwrap();
+    let mut bytes = square2.encode();
+    bytes[FIRST_SQUARE2_DUTY_BYTE] = 4;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::SquareDutyOutOfRange(4))
     );
 }
