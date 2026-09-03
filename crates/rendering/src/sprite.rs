@@ -416,6 +416,12 @@ impl<'a> SpriteLayer<'a> {
     /// gets either extension — a non-mosaic entry always uses
     /// [`MosaicSize::NONE`], at which both are a no-op.
     ///
+    /// An [`ObjMode::Window`] entry ignores its own mosaic bit entirely
+    /// (also [`MosaicSize::NONE`]): mgba selects the unconditional
+    /// non-mosaic loop whenever `FLAG_OBJWIN` is set, for both Regular and
+    /// affine sprites, before even checking `mosaicH`
+    /// (software-obj.c:344-345/360-361 regular, :287-288/303-304 affine).
+    ///
     /// A [`Regular`](AffineMode::Regular) entry snaps the mosaic-block
     /// origin back into the footprint before sampling
     /// ([`MosaicSize::snap_local`]), matching mgba's `SPRITE_MOSAIC_LOOP`
@@ -431,7 +437,7 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        let mosaic = if entry.mosaic() {
+        let mosaic = if entry.mosaic() && entry.mode() != ObjMode::Window {
             mosaic
         } else {
             MosaicSize::NONE
@@ -1462,6 +1468,72 @@ mod tests {
                     .map(|p| p.color),
                 Some(colors[3].to_rgb888()),
                 "screen x = {x} samples source col 5"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_objwin_mask_ignores_obj_mosaic() {
+        // Same x = 2, mosaicH = 4 geometry as the affine mosaic tests above,
+        // but `ObjMode::Window`. mgba selects the unconditional non-mosaic
+        // `SPRITE_TRANSFORMED_LOOP(_, OBJWIN)` whenever `FLAG_OBJWIN` is set
+        // (software-obj.c:287-288/303-304), never the mosaic-holding loop —
+        // so a mosaic-enabled OBJWIN entry's mask must match its non-mosaic
+        // mask exactly, pixel for pixel.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01;
+        bytes[1] = 0x02;
+        bytes[3] = 0x03;
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+        let entries = [entry(2, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let mosaic = MosaicSize::new(4, 1);
+        for x in 0..16 {
+            assert_eq!(
+                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask(x, 0),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_objwin_mask_ignores_obj_mosaic() {
+        // Regular-sprite counterpart: mgba's regular loop selects the same
+        // unconditional non-mosaic `SPRITE_NORMAL_LOOP(_, OBJWIN)` whenever
+        // `FLAG_OBJWIN` is set (software-obj.c:344-345/360-361), so a
+        // mosaic-enabled Regular `ObjMode::Window` entry must also ignore
+        // its own mosaic bit for the mask.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01;
+        bytes[1] = 0x02;
+        bytes[3] = 0x03;
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+        let entries = [entry(2, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(4, 1);
+        for x in 0..16 {
+            assert_eq!(
+                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask(x, 0),
+                "screen x = {x}"
             );
         }
     }
