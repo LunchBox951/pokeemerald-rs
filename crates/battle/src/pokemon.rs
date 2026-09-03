@@ -707,7 +707,11 @@ impl BattlePokemon {
     /// branch zeroes `status1` (`battle_script_commands.c:3063`-`:3077`), a
     /// narrower precondition than "this battler is leaving battle" that this
     /// one shared method cannot express for both of its callers at once.
-    /// [`BattlePokemon::heal`] is the faithful cure path instead.
+    /// [`BattlePokemon::heal`] is the faithful cure path for a survivor; a
+    /// corpse's own `hp == 0` clear is its faint-settlement caller's own
+    /// explicit [`BattlePokemon::set_status1`] call, right alongside this
+    /// method (`crate::battle::execute::Battle::settle_faint`, the
+    /// double-faint arm of `crate::battle::execute::pipelines`).
     pub fn clear_battle_scratch(&mut self) {
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();

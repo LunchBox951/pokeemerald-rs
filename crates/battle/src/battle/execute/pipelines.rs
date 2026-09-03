@@ -38,6 +38,7 @@ use crate::fixed_damage::resolve_fixed_damage_move;
 use crate::flag_move::{resolve_flag_move, FlagMoveOutcome};
 use crate::hit::{damage_before_roll, HitOutcome};
 use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
+use crate::status1::Status1;
 
 use super::{Battle, BattleEvent, BattleOutcome};
 
@@ -157,12 +158,11 @@ impl Battle {
                 by_player: !attacker_is_player,
             });
         }
-        // `cleareffectsonfaint`'s `FaintClearSetData` half clears the
-        // corpse's battle-only stages and volatiles before any reward or
-        // outcome settles -- `settle_faint` does this for every other
-        // pipeline, and this custom double-faint settlement must match it
-        // for each battler that went down
-        // (`battle_script_commands.c:3063`-`:3076`).
+        // `Cmd_cleareffectsonfaint` clears the corpse's battle-only stages,
+        // volatiles, and primary status before any reward or outcome
+        // settles -- `settle_faint` does this for every other pipeline, and
+        // this custom double-faint settlement must match it for each
+        // battler that went down (`battle_script_commands.c:3063`-`:3076`).
         for (fainted, is_player) in [
             (attacker_fainted, attacker_is_player),
             (target_fainted, !attacker_is_player),
@@ -174,6 +174,7 @@ impl Battle {
                     &mut self.enemy
                 };
                 corpse.clear_battle_scratch();
+                corpse.set_status1(Status1::Healthy);
             }
         }
         let player_fainted = if attacker_is_player {

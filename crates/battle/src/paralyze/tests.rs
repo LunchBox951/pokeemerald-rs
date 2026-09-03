@@ -86,7 +86,7 @@ fn a_ground_type_defender_is_immune_and_the_guard_draws_nothing() {
     let mut rng = SequenceRng::new([]);
     let outcome =
         resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
-    assert_eq!(outcome, ParalyzeOutcome::Failed);
+    assert_eq!(outcome, ParalyzeOutcome::Immune);
     assert_eq!(
         rng.draws(),
         0,

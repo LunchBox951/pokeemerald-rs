@@ -203,19 +203,24 @@ impl Battle {
         events.push(BattleEvent::Fainted {
             by_player: fainted_is_player,
         });
-        // `cleareffectsonfaint`'s `FaintClearSetData` half
-        // (`battle_script_commands.c:3063`-`:3076`,
-        // `src/battle_main.c:3264`-`:3270`) clears the fainted battler's
-        // battle-only stages and volatiles ahead of `getexp` in the same
-        // script (`data/battle_scripts_1.s:2813`-`:2827`) -- so none of
-        // the corpse's accumulated scratch state reaches this crate's own
-        // exp step, issue #322.
+        // `Cmd_cleareffectsonfaint` (`battle_script_commands.c:3063`-`:3076`)
+        // clears the fainted battler's battle-only stages and volatiles --
+        // its `FaintClearSetData` half, `src/battle_main.c:3264`-`:3270` --
+        // ahead of `getexp` in the same script
+        // (`data/battle_scripts_1.s:2813`-`:2827`) -- so none of the
+        // corpse's accumulated scratch state reaches this crate's own exp
+        // step, issue #322 -- and, its own leading `hp == 0` branch, zeroes
+        // `status1` (`:3063`-`:3068`): a fainted battler leaves battle
+        // cured, unlike a surviving one, whose paralysis outlives the win
+        // ([`crate::pokemon::BattlePokemon::clear_battle_scratch`]'s own
+        // doc explains why that method alone must not do this).
         let corpse = if fainted_is_player {
             &mut self.player
         } else {
             &mut self.enemy
         };
         corpse.clear_battle_scratch();
+        corpse.set_status1(Status1::Healthy);
         if fainted_is_player {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
@@ -410,8 +415,8 @@ impl Battle {
         };
 
         match outcome {
-            ParalyzeOutcome::Failed => {
-                events.push(BattleEvent::ButItFailed {
+            ParalyzeOutcome::Immune => {
+                events.push(BattleEvent::NoEffect {
                     by_player: attacker_is_player,
                     move_id,
                 });

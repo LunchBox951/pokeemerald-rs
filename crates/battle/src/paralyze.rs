@@ -9,6 +9,17 @@
 //! `seteffectprimary`, not `seteffectwithchance`, so a landed hit spends no
 //! further draw.
 //!
+//! The type-immunity guard's `jumpifmovehadnoeffect` lands on
+//! `BattleScript_ButItFailed` (`:1014`), but that script only *adds*
+//! `MOVE_RESULT_FAILED` to the `MOVE_RESULT_DOESNT_AFFECT_FOE` bit
+//! `typecalc` already set (`battle_script_commands.c:1327`,
+//! `:2058`-`:2061`); with both bits set and `MOVE_RESULT_MISSED` clear,
+//! `Cmd_resultmessage` still reports the "doesn't affect" string
+//! (`:2090`-`:2093`), the same as an ordinary immune hit. [`ParalyzeOutcome::Immune`]
+//! is named, and mapped to [`crate::battle::BattleEvent::NoEffect`], to
+//! match that resolved message rather than the script label it exits
+//! through.
+//!
 //! Not ported: `jumpifability BS_TARGET, ABILITY_LIMBER` (`:1011`, no
 //! ability-guard modelled here), `jumpifstatus2 BS_TARGET,
 //! STATUS2_SUBSTITUTE` (`:1012`, no Substitute), and `jumpifsideaffecting
@@ -58,8 +69,8 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// The result of resolving an [`EFFECT_PARALYZE`] move, before any mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParalyzeOutcome {
-    /// The move failed: the defender's typing is immune to it.
-    Failed,
+    /// The defender's typing is immune to the move.
+    Immune,
     /// The defender already carries [`Status1::Paralysed`].
     AlreadyParalysed,
     /// The move missed its accuracy check.
@@ -96,7 +107,7 @@ pub fn resolve_paralyze_move(
         .ok_or(BattleError::UnsupportedMoveType(move_id))?;
 
     if defender_is_immune(move_type, defender) {
-        return Ok(ParalyzeOutcome::Failed);
+        return Ok(ParalyzeOutcome::Immune);
     }
     if defender.status1().is_paralysed() {
         return Ok(ParalyzeOutcome::AlreadyParalysed);
