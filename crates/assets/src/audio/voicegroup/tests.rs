@@ -5,13 +5,8 @@ const KEY_SPLIT_START: u8 = 36;
 const VOICE_GROUP_SLOT_COUNT_BYTE: usize = 0;
 const FIRST_SLOT_KIND_BYTE: usize = 1;
 const FIRST_KEY_SPLIT_TABLE_LENGTH_BYTE: usize = 3;
-// count(1) + kind(1) + base_key(1) + pan(1) -- see VoiceEntry::write's DirectSound arm.
 const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
-// count(1) + kind(1) + base_key(1) + length(1) + sweep(1) + duty(1) -- see
-// VoiceEntry::write's Square1 arm.
 const FIRST_SQUARE1_DUTY_BYTE: usize = 5;
-// count(1) + kind(1) + base_key(1) + length(1) + duty(1) -- see VoiceEntry::write's
-// Square2 arm.
 const FIRST_SQUARE2_DUTY_BYTE: usize = 4;
 
 fn sample_envelope() -> Envelope {
@@ -498,10 +493,8 @@ fn pan_out_of_range_is_rejected_at_construction() {
     }
 }
 
-/// A decoded pan byte above `127` is not merely unvalidated -- it aliases
-/// with an in-domain value once the rhythm path reconstructs `0x80 | pan`
-/// (`crate::music::rhythm_pan_of`), so `Some(200)` would pan identically to
-/// `Some(72)`. Decode must reject it rather than admit the alias.
+/// A pan byte above `127` aliases an in-domain value once `0x80 | pan` reaches
+/// `audio::rhythm_pan_from_pan_sweep` (`Some(200)` pans as `Some(72)`), so decode rejects it.
 #[test]
 fn decode_rejects_out_of_range_pan() {
     let group = VoiceGroup::new(vec![direct_sound_with_pan(Some(64))]).unwrap();
