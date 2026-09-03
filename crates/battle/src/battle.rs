@@ -157,6 +157,15 @@
 //! [`crate::hit`]'s draw table for the ordinary-hit shapes (including
 //! Struggle's no-effect-chance-draw exception).
 //!
+//! **Each mover's action** also opens with [`Battle::act`]'s full-paralysis
+//! check, ahead of every draw above: a healthy mover draws nothing there,
+//! while a paralysed one draws exactly **1** and, on a hit, the move never
+//! reaches its own script at all — no PP, no further draw. `BattleScript_
+//! EffectParalyze` (Thunder Wave, Stun Spore, Glare) itself draws **0** when
+//! typing or an existing status stops it before `accuracycheck`, or **1**
+//! otherwise (miss or a landed, drawless `seteffectprimary`); see
+//! [`crate::paralyze`]'s module docs.
+//!
 //! # What the wild opponent chooses
 //!
 //! `OpponentHandleChooseMove` (`src/battle_controller_opponent.c:1551`) takes
@@ -177,10 +186,11 @@
 //! PP for, and upstream then **fails the move at `Cmd_attackcanceler`**, the
 //! first command of the hit script (`battle_script_commands.c:934`-`:939`):
 //! control jumps to `BattleScript_NoPPForMove` ("But no PP left!") and on to
-//! `MoveEnd` — no RNG draw, no damage, no deduction. `Cmd_ppreduce`'s own
-//! 0-PP guard (`:1230`) never sees this case; it exists for the paths that
-//! legitimately reach `ppreduce` without PP (Struggle, multi-turn
-//! continuations), none of which are modelled here.
+//! `MoveEnd` — no RNG draw, no damage, no deduction (unless the picked
+//! battler's own full-paralysis draw cancels it first — see [`Battle::act`]).
+//! `Cmd_ppreduce`'s own 0-PP guard (`:1230`) never sees this case; it exists
+//! for the paths that legitimately reach `ppreduce` without PP (Struggle,
+//! multi-turn continuations), none of which are modelled here.
 //! [`BattleEvent::FailedNoPp`] reproduces the abort. Struggle enters only
 //! when **every** slot is unusable: `AreAllMovesUnusable`
 //! (`battle_util.c:1125`-`:1140`) then forces it at selection time — before
@@ -235,8 +245,10 @@ use crate::escape::try_run_from_battle;
 use crate::fixed_damage;
 use crate::flag_move;
 use crate::multi_hit;
+use crate::paralyze;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
 use crate::stat_change;
+use crate::status1::draws_full_paralysis;
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -300,7 +312,7 @@ pub enum BattleOutcome {
 /// slot each turn, so no pipeline behind [`Battle::execute_move`] ever sees a
 /// move it would have to guess at.
 ///
-/// Six pipelines are accepted as of issue #321, tried in this order:
+/// Seven pipelines are accepted, tried in this order:
 ///
 /// | pipeline | script | added by |
 /// |---|---|---|
@@ -310,8 +322,9 @@ pub enum BattleOutcome {
 /// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` | #321 |
 /// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` | #321 |
 /// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` | #321 |
+/// | [`crate::paralyze`] | `BattleScript_EffectParalyze` | this slice |
 ///
-/// The order is a *diagnostics* choice, not a semantic one: the six
+/// The order is a *diagnostics* choice, not a semantic one: the seven
 /// allow-lists are disjoint (each is a set of `EFFECT_*` ids, and no id
 /// appears in two), so at most one can accept. The hit pipeline goes first
 /// so its richer errors — [`BattleError::NonDamagingMove`],
@@ -344,7 +357,8 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
                 || drain::ensure_resolvable(dex, move_id).is_ok()
                 || fixed_damage::ensure_resolvable(dex, move_id).is_ok()
                 || multi_hit::ensure_resolvable(dex, move_id).is_ok()
-                || flag_move::ensure_resolvable(dex, move_id).is_ok();
+                || flag_move::ensure_resolvable(dex, move_id).is_ok()
+                || paralyze::ensure_resolvable(dex, move_id).is_ok();
             if accepted {
                 Ok(())
             } else {
@@ -411,16 +425,13 @@ impl Battle {
     /// "intro" step to advance through.
     ///
     /// The *wild* moveset is checked here, before any state exists and
-    /// before the first draw: every move the wild mon knows must be one
-    /// [`ensure_executable`] accepts — either [`crate::hit::resolve_hit`]'s
-    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-changing
-    /// one (the whole `BattleScript_EffectStatUp`/`EffectStatDown` family,
-    /// both raising and lowering, widened by issue #322) — because its
-    /// rejection loop picks mid-turn and can land on any slot — discovering
-    /// an unsupported move *then* would mean a turn that has already
-    /// consumed shared-RNG draws failing with no events to show for it. The
-    /// player's moveset is deliberately *not* screened; each chosen slot is
-    /// validated per turn
+    /// before the first draw: every move the wild mon knows must be one of
+    /// the pipelines [`ensure_executable`] composes (its own docs list all
+    /// seven) accepts — because its rejection loop picks mid-turn and can
+    /// land on any slot — discovering an unsupported move *then* would mean
+    /// a turn that has already consumed shared-RNG draws failing with no
+    /// events to show for it. The player's moveset is deliberately *not*
+    /// screened; each chosen slot is validated per turn
     /// instead, before any draw, so [`Battle::take_turn`] can still reject a
     /// player pick with [`BattleError::NonDamagingMove`] /
     /// [`BattleError::UnsupportedMoveEffect`].
@@ -436,10 +447,11 @@ impl Battle {
     /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
     /// (see that variant's docs), or whatever [`ensure_executable`] reports
     /// for the first unsupported move in the **wild mon's** moveset — a
-    /// `0`-power status move outside the modelled
-    /// `BattleScript_EffectStatUp`/`EffectStatDown` family (raises and
-    /// drops alike, [`BattleError::NonDamagingMove`]) or a move whose effect
-    /// runs some other battle script ([`BattleError::UnsupportedMoveEffect`]),
+    /// `0`-power status move outside every modelled `0`-power family (the
+    /// `BattleScript_EffectStatUp`/`EffectStatDown` family and
+    /// `BattleScript_EffectParalyze`, [`BattleError::NonDamagingMove`]) or a
+    /// move whose effect runs some other battle script
+    /// ([`BattleError::UnsupportedMoveEffect`]),
     /// which includes [`crate::damage::STRUGGLE`]: the turn engine never
     /// applies its `EFFECT_RECOIL` half. Only the wild moveset is screened
     /// here, because its rejection loop can land on any slot; the *player's*
@@ -477,8 +489,8 @@ impl Battle {
         // Only the *wild* side needs every slot executable up front: its
         // rejection loop ignores everything but `MOVE_NONE`, so any slot
         // can come up mid-turn, after draws. The player's moveset may still
-        // carry a move neither pipeline covers (a status move beyond the
-        // stat-changing family, say); the player's *chosen* slot is
+        // carry a move no pipeline covers (a status move outside every
+        // modelled family, say); the player's *chosen* slot is
         // validated per turn instead, before any draw
         // (`validate_player_move`), so an unsupported pick is rejected
         // without disturbing the stream and another action can be chosen.
@@ -492,7 +504,13 @@ impl Battle {
         // before turn 1's own turn-number draw (module docs, "RNG draw
         // order"). The ordering itself is discarded — turn 1 re-resolves it
         // with the real chosen moves.
-        let _ = resolve_order(0, 0, player.effective_speed(), enemy.effective_speed(), rng);
+        let _ = resolve_order(
+            0,
+            0,
+            player.speed_for_turn_order(),
+            enemy.speed_for_turn_order(),
+            rng,
+        );
         Ok(Self {
             dex,
             player,
@@ -592,7 +610,13 @@ impl Battle {
         let random_turn_number = rng.next_u16();
         // The same `TryDoEventsBeforeFirstTurn` seeding draw `Battle::new`
         // takes; see its docs and the module docs' "RNG draw order".
-        let _ = resolve_order(0, 0, player.effective_speed(), enemy.effective_speed(), rng);
+        let _ = resolve_order(
+            0,
+            0,
+            player.speed_for_turn_order(),
+            enemy.speed_for_turn_order(),
+            rng,
+        );
         Ok(Self {
             dex,
             player,
@@ -771,7 +795,7 @@ impl Battle {
     /// menu could have offered (out of range, out of PP, or the `MOVE_NONE`
     /// placeholder that `CheckMoveLimitations` rules out —
     /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`) — and, this
-    /// slice's own boundary, a known move neither pipeline can execute
+    /// slice's own boundary, a known move no pipeline can execute
     /// ([`ensure_executable`], which also rejects Struggle for its
     /// unmodelled recoil).
     /// Construction deliberately allows such moves in unselected player
@@ -1017,8 +1041,8 @@ impl Battle {
         let order = resolve_order(
             player_priority,
             enemy_priority,
-            self.player.effective_speed(),
-            self.enemy.effective_speed(),
+            self.player.speed_for_turn_order(),
+            self.enemy.speed_for_turn_order(),
             rng,
         );
 
@@ -1163,22 +1187,30 @@ impl Battle {
         self.finish(events, BattleOutcome::PlayerWon);
     }
 
-    /// One mover's whole action: `Cmd_attackcanceler`'s no-PP abort, PP
-    /// bookkeeping, then hit resolution.
+    /// One mover's whole action: `Cmd_attackcanceler`'s full-paralysis draw,
+    /// then its no-PP abort, PP bookkeeping, then hit resolution.
     ///
     /// `attackcanceler` is the **first** command of the hit script
     /// (`BattleScript_HitFromAtkCanceler`, `data/battle_scripts_1.s:241`),
-    /// and a 0-PP slot aborts there (`battle_script_commands.c:934`-`:939`):
-    /// control jumps to `BattleScript_NoPPForMove`, which prints "But no PP
-    /// left!" and goes to `MoveEnd` — zero RNG draws, zero damage, and no
-    /// deduction, since `ppreduce` is never reached. The abort is
+    /// and it calls `AtkCanceler_UnableToUseMove` before ever testing PP
+    /// (`battle_script_commands.c:930` vs `:934`): the paralysis branch
+    /// (`CANCELER_PARALYZED`, `battle_util.c:2188`-`:2199`) draws once and,
+    /// on a `Random() % 4 == 0` hit, cancels the move outright — control
+    /// never reaches `ppreduce`, so a fully paralysed mover keeps every PP
+    /// it started the turn with. Only then does the no-PP abort apply: a
+    /// 0-PP slot jumps to `BattleScript_NoPPForMove`
+    /// (`battle_script_commands.c:934`-`:939`), printing "But no PP left!"
+    /// and going to `MoveEnd` — zero RNG draws, zero damage, and no
+    /// deduction, since `ppreduce` is never reached either. That abort is
     /// unconditional in this slice's world: of its escape hatches, Struggle
     /// cannot be a picked slot here, `HITMARKER_ALLOW_NO_PP` is never set
     /// anywhere upstream (only tested at `:934` and cleared at `:942`), and
     /// the `HITMARKER_NO_ATTACKSTRING` / `STATUS2_MULTIPLETURNS` multi-turn
-    /// continuations are not modelled. Only the wild side can reach it —
-    /// the player's slot is pre-validated against upstream's selection menu
-    /// — and it emits [`BattleEvent::FailedNoPp`] `(behavioral-fidelity)`.
+    /// continuations are not modelled. Only the wild side can reach the
+    /// no-PP abort — the player's slot is pre-validated against upstream's
+    /// selection menu — and it emits [`BattleEvent::FailedNoPp`]; either
+    /// side can reach the full-paralysis cancel, which emits
+    /// [`BattleEvent::FullyParalyzed`] `(behavioral-fidelity)`.
     ///
     /// Always called with a real move slot: the two cases that are *not* a
     /// real move — the forced-Struggle fallback and (`first_battle` only)
@@ -1192,6 +1224,18 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        let attacker_status1 = if is_player {
+            self.player.status1()
+        } else {
+            self.enemy.status1()
+        };
+        if draws_full_paralysis(attacker_status1, rng) {
+            events.push(BattleEvent::FullyParalyzed {
+                by_player: is_player,
+                move_id,
+            });
+            return Ok(());
+        }
         if is_player {
             self.player.deduct_pp(slot)?;
         } else if self.enemy.moves()[slot].pp == 0 {
@@ -1213,9 +1257,11 @@ impl Battle {
     /// # Errors
     ///
     /// [`BattleError::UnsupportedMoveEffect`] carrying [`STRUGGLE`] for
-    /// [`EnemyAction::Struggle`]: the all-slots-spent forced fallback has to
-    /// act, and this slice cannot execute Struggle — the honest stop, at the
-    /// same point upstream's forced Struggle would begin executing.
+    /// [`EnemyAction::Struggle`] once its own full-paralysis draw does not
+    /// cancel it: the all-slots-spent forced fallback has to act, and this
+    /// slice cannot execute Struggle — the honest stop, at the same point
+    /// upstream's forced Struggle would begin executing (after
+    /// `attackcanceler`, not before it).
     fn enemy_acts(
         &mut self,
         action: EnemyAction,
@@ -1226,7 +1272,23 @@ impl Battle {
             EnemyAction::Move(slot) => {
                 self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
             }
-            EnemyAction::Struggle => Err(BattleError::UnsupportedMoveEffect(STRUGGLE)),
+            // Struggle still shares `BattleScript_HitFromAtkCanceler`
+            // (`data/battle_scripts_1.s:241`-`:247`) with every ordinary
+            // move, so a paralysed enemy forced into it draws the same
+            // full-paralysis check `Battle::act` runs for a real move slot,
+            // ahead of the honest stop below -- the point this slice's own
+            // Struggle gap actually begins.
+            EnemyAction::Struggle => {
+                if draws_full_paralysis(self.enemy.status1(), rng) {
+                    events.push(BattleEvent::FullyParalyzed {
+                        by_player: false,
+                        move_id: STRUGGLE,
+                    });
+                    Ok(())
+                } else {
+                    Err(BattleError::UnsupportedMoveEffect(STRUGGLE))
+                }
+            }
             // HandleAction_Run's non-player branch (`battle_util.c:524`-
             // `:537`): no escape formula, no RNG draw, no PP touched --
             // fleeing simply ends the battle.

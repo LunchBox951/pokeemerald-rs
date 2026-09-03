@@ -14,6 +14,8 @@ mod lifecycle;
 mod move_resolution;
 #[path = "turn_engine/move_selection.rs"]
 mod move_selection;
+#[path = "turn_engine/paralysis.rs"]
+mod paralysis;
 #[path = "turn_engine/pipelines.rs"]
 mod pipelines;
 #[path = "turn_engine/stat_changes.rs"]
