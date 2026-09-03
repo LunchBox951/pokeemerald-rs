@@ -1,5 +1,4 @@
-//! Pins issue #793: wild and scripted first-battle opponents must carry the
-//! save owner's OT id (`OT_ID_PLAYER_ID`, `pokemon.c:2305` and
+//! Wild and scripted first-battle opponents carry the save owner's OT id (`OT_ID_PLAYER_ID`, `pokemon.c:2305` and
 //! `src/battle_controllers.c:70`), not zero and not the party lead's own id.
 
 use engine::overworld::wild_encounter::WildEncounter;

@@ -1009,7 +1009,7 @@ mod input_tests;
 /// reach (`pub(crate)`, not `pub(super)` to `overworld_phase`).
 #[cfg(test)]
 mod oldale_reposition_tests;
-/// Wild and scripted first-battle opponent OT-id assignment (issue #793).
+/// Wild and scripted first-battle opponents carry the save owner's OT id.
 #[cfg(test)]
 mod opponent_ot_id_tests;
 /// `route103_rival_trigger`'s tests (issue #248) -- already split out as
