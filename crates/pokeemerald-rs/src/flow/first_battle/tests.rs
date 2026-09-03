@@ -23,6 +23,10 @@ const MAX_HEADLESS_TURNS: usize = 200;
 const IV_BIT_MASK: u16 = 0x1F;
 const SP_DEFENSE_IV_SHIFT: u32 = 10;
 
+/// A placeholder save-owner id for scenarios that exercise something other
+/// than opponent OT assignment (`opponent_ot_id_tests` pins that directly).
+const TEST_PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+
 fn max_iv_player_mon(species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     let ivs = Ivs {
         hp: battle::MAX_IV,
@@ -47,7 +51,8 @@ fn max_iv_player_mon(species: SpeciesId, level: u8, moves: Vec<MoveId>) -> Battl
 fn start_first_battle_builds_the_fixed_opponent_with_first_battle_rules() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
-    let mut battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let mut battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
 
     assert_eq!(FIRST_BATTLE_OPPONENT_SPECIES, ZIGZAGOON);
     assert_eq!(FIRST_BATTLE_OPPONENT_LEVEL, SCRIPTED_OPPONENT_LEVEL);
@@ -80,7 +85,8 @@ fn start_first_battle_builds_the_fixed_opponent_with_first_battle_rules() {
 fn start_first_battle_preserves_the_frame_free_upstream_rng_order() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
-    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
 
     let mut expected_rng = Rng::new(DEFAULT_RNG_SEED);
     let expected_personality = expected_rng.next_u32();
@@ -112,7 +118,8 @@ fn start_first_battle_preserves_the_frame_free_upstream_rng_order() {
 fn advance_first_battle_plays_to_a_terminal_outcome_without_ever_running() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
-    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
 
     let mut battle_slot = Some(battle);
     let mut player_lead = None;
@@ -146,7 +153,8 @@ fn advance_first_battle_plays_to_a_terminal_outcome_without_ever_running() {
 fn advance_first_battle_clears_stat_stages_after_growl_modifies_them() {
     let mut rng = Rng::new(GROWL_SCENARIO_RNG_SEED);
     let lead = max_iv_player_mon(TREECKO, GROWL_SCENARIO_PLAYER_LEVEL, vec![POUND]);
-    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
 
     let mut battle_slot = Some(battle);
     let mut player_lead = None;
@@ -197,7 +205,8 @@ fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
     }
     assert_eq!(lead.moves()[FIRST_MOVE_SLOT].pp, 0);
 
-    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
     let mut battle_slot = Some(battle);
     let mut player_lead = None;
 
