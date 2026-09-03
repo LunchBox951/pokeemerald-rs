@@ -58,6 +58,10 @@ pub(crate) enum VoiceGroupError {
         starting_note: u8,
         slot_count: usize,
     },
+    PackIdTooLong {
+        group: String,
+        id_len: usize,
+    },
     UnindexedLinkOrderFile(String),
 }
 
@@ -167,6 +171,12 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: starting_note {starting_note} + {slot_count} slots \
                  exceeds the maximum of {}",
                 super::VOICE_SLOT_COUNT
+            ),
+            Self::PackIdTooLong { group, id_len } => write!(
+                f,
+                "voicegroup `{group}`: referenced pack id of {id_len} bytes exceeds the pack \
+                 format's u16 id length field maximum of {}",
+                u16::MAX
             ),
             Self::UnindexedLinkOrderFile(path) => write!(
                 f,
