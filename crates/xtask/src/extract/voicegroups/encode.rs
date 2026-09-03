@@ -52,8 +52,10 @@ impl From<DirectSoundMode> for DirectSoundModeTag {
 }
 
 fn write_id(out: &mut Vec<u8>, id: &str) {
-    let byte_len = u16::try_from(id.len())
-        .expect("every pack id this pipeline generates fits in a u16 length");
+    // resolve::checked_pack_id rejects an over-long id against this same u16
+    // prefix while its source group is known; unreachable for resolved slots.
+    let byte_len =
+        u16::try_from(id.len()).expect("resolver-checked pack id fits the u16 length prefix");
     out.extend_from_slice(&byte_len.to_le_bytes());
     out.extend_from_slice(id.as_bytes());
 }
@@ -70,8 +72,11 @@ fn write_envelope(out: &mut Vec<u8>, envelope: Envelope) {
 #[must_use]
 pub(super) fn encode_voice_group(group: &ResolvedVoiceGroup) -> Vec<u8> {
     let mut out = Vec::new();
+    // Resolver::resolve_group (via resolve::pad_to_128) normalizes every
+    // emitted group to exactly VOICE_SLOT_COUNT (128) slots, well under
+    // u8::MAX; unreachable barring a change to VOICE_SLOT_COUNT itself.
     let slot_count = u8::try_from(group.slots.len())
-        .expect("resolved voicegroups contain exactly VOICE_SLOT_COUNT slots");
+        .expect("resolver-normalized VOICE_SLOT_COUNT is representable as u8");
     out.push(slot_count);
     for slot in &group.slots {
         encode_slot(&mut out, slot);
@@ -160,8 +165,12 @@ fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot) {
         } => {
             out.push(VoiceSlotTag::KeySplit.byte());
             out.push(*starting_note);
+            // parser::finish_keysplit_block rejects any expanded key-split
+            // table longer than VOICE_SLOT_COUNT (128) before it is ever
+            // stored, well under u8::MAX; unreachable barring a change to
+            // VOICE_SLOT_COUNT itself.
             let table_len = u8::try_from(table.len())
-                .expect("resolved key-split tables contain at most VOICE_SLOT_COUNT entries");
+                .expect("parser-bounded key-split table length is representable as u8");
             out.push(table_len);
             out.extend_from_slice(table);
             write_id(out, children_id);

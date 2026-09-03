@@ -533,3 +533,78 @@ fn a_key_split_rhythm_child_never_gets_link_adjacency_overflow_even_if_under_dec
         assert_eq!(*slot, VoiceSlot::Empty);
     }
 }
+
+#[test]
+fn a_sample_id_too_long_for_the_pack_id_length_field_is_a_hard_error() {
+    let raw = groups(vec![raw_group(
+        "top",
+        0,
+        vec![direct_sound(&"x".repeat(usize::from(u16::MAX)))],
+    )]);
+    let err = resolve_voice_groups("top", &raw, &no_keysplit_tables()).unwrap_err();
+    assert_eq!(
+        err,
+        VoiceGroupError::PackIdTooLong {
+            group: "top".to_owned(),
+            id_len: "audio/sample/direct-sound/".len() + usize::from(u16::MAX),
+        }
+    );
+}
+
+#[test]
+fn a_borrowed_slots_oversize_sample_id_names_the_successor_not_the_borrower() {
+    let raw = groups(vec![
+        raw_group("top", 0, vec![direct_sound("top_own")]),
+        raw_group(
+            "next",
+            0,
+            vec![direct_sound(&"x".repeat(usize::from(u16::MAX)))],
+        ),
+    ]);
+    let link_successors = vec!["next".to_owned()];
+    let err = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        VoiceGroupError::PackIdTooLong {
+            group: "next".to_owned(),
+            id_len: "audio/sample/direct-sound/".len() + usize::from(u16::MAX),
+        }
+    );
+}
+
+#[test]
+fn a_borrowed_indirection_slots_oversize_child_id_names_the_successor_not_the_borrower() {
+    let long_child = "c".repeat(usize::from(u16::MAX));
+    let raw = groups(vec![
+        raw_group("top", 0, vec![]),
+        raw_group(
+            "next",
+            0,
+            vec![RawSlot::Rhythm {
+                child_label: long_child.clone(),
+            }],
+        ),
+        raw_group(&long_child, 0, vec![direct_sound("hit")]),
+    ]);
+    let link_successors = vec!["next".to_owned()];
+    let err = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        VoiceGroupError::PackIdTooLong {
+            group: "next".to_owned(),
+            id_len: "audio/voicegroup/".len() + usize::from(u16::MAX),
+        }
+    );
+}

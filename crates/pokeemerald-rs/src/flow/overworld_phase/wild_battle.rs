@@ -111,7 +111,8 @@ impl OverworldPhase {
             eprintln!("wild encounter: no party mon yet -- no battle to start");
             return;
         };
-        match wild_encounter::start_wild_battle(lead, encounter, &mut self.rng) {
+        let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
+        match wild_encounter::start_wild_battle(lead, encounter, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
                 self.wild_battle = Some(battle);
