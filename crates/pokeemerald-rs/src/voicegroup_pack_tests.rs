@@ -46,6 +46,9 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
     // `intro.inc` links right after `title.inc` (`xtask::extract::voicegroups`
     // docs); slot `TITLE_DECLARED_SLOT_COUNT` is intro.inc:2, the highest slot is intro.inc:40.
     const TITLE_DECLARED_SLOT_COUNT: usize = 89;
+    // A program byte addresses 128 slots (`ply_voice`, `src/m4a_1.s`); pinned
+    // apart from `assets::VOICE_SLOT_COUNT` so a schema change cannot move it.
+    const UPSTREAM_ADDRESSABLE_SLOT_COUNT: usize = 128;
 
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
@@ -60,7 +63,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
     }
 
     assert_eq!(
-        title.slot(assets::VOICE_SLOT_COUNT - 1),
+        title.slot(UPSTREAM_ADDRESSABLE_SLOT_COUNT - 1),
         Some(&VoiceEntry::Square1(assets::Square1Voice {
             base_key: 60,
             length: 0,
@@ -75,7 +78,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
             fixed_rate: false,
         }))
     );
-    assert!(title.slot(assets::VOICE_SLOT_COUNT).is_none());
+    assert!(title.slot(UPSTREAM_ADDRESSABLE_SLOT_COUNT).is_none());
 }
 
 #[test]
