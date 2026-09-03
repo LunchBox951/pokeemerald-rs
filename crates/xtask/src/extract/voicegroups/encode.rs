@@ -5,7 +5,6 @@
 //! little-endian byte length. A zero `DirectSound` pan byte means no override;
 //! the parser never produces an explicit zero override.
 
-use super::super::ExtractError;
 use super::parser::{DirectSoundMode, Envelope};
 use super::resolve::{ResolvedVoiceGroup, VoiceSlot};
 
@@ -52,14 +51,13 @@ impl From<DirectSoundMode> for DirectSoundModeTag {
     }
 }
 
-fn write_id(out: &mut Vec<u8>, id: &str, group_label: &str) -> Result<(), ExtractError> {
-    let byte_len = u16::try_from(id.len()).map_err(|_| ExtractError::VoiceGroupIdTooLong {
-        group: group_label.to_owned(),
-        actual: id.len(),
-    })?;
+fn write_id(out: &mut Vec<u8>, id: &str) {
+    // resolve::checked_pack_id rejects an over-long id against this same u16
+    // prefix while its source group is known; unreachable for resolved slots.
+    let byte_len =
+        u16::try_from(id.len()).expect("resolver-checked pack id fits the u16 length prefix");
     out.extend_from_slice(&byte_len.to_le_bytes());
     out.extend_from_slice(id.as_bytes());
-    Ok(())
 }
 
 fn write_envelope(out: &mut Vec<u8>, envelope: Envelope) {
@@ -71,10 +69,8 @@ fn write_envelope(out: &mut Vec<u8>, envelope: Envelope) {
     ]);
 }
 
-/// Encodes `group` into the asset pack's voicegroup schema. Returns
-/// [`ExtractError::VoiceGroupIdTooLong`] if a referenced sample, child
-/// group, or key-split-table id exceeds the schema's `u16` length prefix.
-pub(super) fn encode_voice_group(group: &ResolvedVoiceGroup) -> Result<Vec<u8>, ExtractError> {
+#[must_use]
+pub(super) fn encode_voice_group(group: &ResolvedVoiceGroup) -> Vec<u8> {
     let mut out = Vec::new();
     // Resolver::resolve_group (via resolve::pad_to_128) normalizes every
     // emitted group to exactly VOICE_SLOT_COUNT (128) slots, well under
@@ -83,12 +79,12 @@ pub(super) fn encode_voice_group(group: &ResolvedVoiceGroup) -> Result<Vec<u8>, 
         .expect("resolver-normalized VOICE_SLOT_COUNT is representable as u8");
     out.push(slot_count);
     for slot in &group.slots {
-        encode_slot(&mut out, slot, &group.label)?;
+        encode_slot(&mut out, slot);
     }
-    Ok(out)
+    out
 }
 
-fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot, group_label: &str) -> Result<(), ExtractError> {
+fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot) {
     match slot {
         VoiceSlot::DirectSound {
             base_key,
@@ -100,7 +96,7 @@ fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot, group_label: &str) -> Result
             out.push(VoiceSlotTag::DirectSound.byte());
             out.push(*base_key);
             out.push(pan.unwrap_or(0));
-            write_id(out, sample_id, group_label)?;
+            write_id(out, sample_id);
             write_envelope(out, *envelope);
             out.push(DirectSoundModeTag::from(*mode).byte());
         }
@@ -144,7 +140,7 @@ fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot, group_label: &str) -> Result
             out.push(VoiceSlotTag::ProgrammableWave.byte());
             out.push(*base_key);
             out.push(*length);
-            write_id(out, wave_id, group_label)?;
+            write_id(out, wave_id);
             write_envelope(out, *envelope);
             out.push(u8::from(*fixed_rate));
         }
@@ -177,15 +173,14 @@ fn encode_slot(out: &mut Vec<u8>, slot: &VoiceSlot, group_label: &str) -> Result
                 .expect("parser-bounded key-split table length is representable as u8");
             out.push(table_len);
             out.extend_from_slice(table);
-            write_id(out, children_id, group_label)?;
+            write_id(out, children_id);
         }
         VoiceSlot::Rhythm { children_id } => {
             out.push(VoiceSlotTag::Rhythm.byte());
-            write_id(out, children_id, group_label)?;
+            write_id(out, children_id);
         }
         VoiceSlot::Empty => out.push(VoiceSlotTag::Empty.byte()),
     }
-    Ok(())
 }
 
 #[cfg(test)]

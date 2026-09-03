@@ -163,11 +163,10 @@ pub(super) fn extract_voicegroups(
     .map_err(ExtractError::VoiceGroup)?;
 
     for group in &resolved_groups {
-        let payload = encode::encode_voice_group(group)?;
         writer.push(PackEntry {
             id: resolve::voice_group_pack_id(&group.label),
             kind: PackKind::Raw,
-            payload,
+            payload: encode::encode_voice_group(group),
         });
     }
     Ok(())
