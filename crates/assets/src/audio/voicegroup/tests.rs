@@ -466,9 +466,6 @@ fn direct_sound_with_pan(pan: Option<u8>) -> VoiceEntry {
     })
 }
 
-/// `1` and `127` are the documented ends of the pan override domain
-/// ([`DirectSoundVoice::pan`]); both must round-trip through construction and
-/// decoding unchanged.
 #[test]
 fn pan_override_boundaries_are_accepted_by_the_constructor_and_decode() {
     for pan in [1u8, 127] {
@@ -482,9 +479,6 @@ fn pan_override_boundaries_are_accepted_by_the_constructor_and_decode() {
     }
 }
 
-/// A pan byte one past the documented `1..=127` domain must be rejected by
-/// the constructor, the same way `Some(0)` already is (see
-/// `pan_zero_is_rejected_at_construction` above).
 #[test]
 fn pan_out_of_range_is_rejected_at_construction() {
     for pan in [128u8, 200, u8::MAX] {
@@ -527,9 +521,6 @@ fn square2_with_duty(duty: u8) -> VoiceEntry {
     })
 }
 
-/// `0` and `3` are the documented ends of the duty domain
-/// ([`Square1Voice::duty`], [`Square2Voice::duty`]); both channels must
-/// accept both boundaries.
 #[test]
 fn square_duty_boundaries_are_accepted_by_the_constructor_and_decode() {
     for duty in [0u8, 3] {
@@ -539,8 +530,6 @@ fn square_duty_boundaries_are_accepted_by_the_constructor_and_decode() {
     }
 }
 
-/// A duty byte one past the documented `0..=3` domain must be rejected by
-/// the constructor for both square channels.
 #[test]
 fn square_duty_out_of_range_is_rejected_at_construction() {
     for duty in [4u8, 255] {
@@ -555,11 +544,8 @@ fn square_duty_out_of_range_is_rejected_at_construction() {
     }
 }
 
-/// A decoded duty byte above `3` is not merely unvalidated -- it aliases
-/// with an in-domain value once `audio::psg::SquareDuty::from_register`
-/// masks it with `0b11`, so a decoded `4` would play identically to `0`.
-/// Decode must reject it rather than admit the alias, for both square
-/// channels.
+/// A duty byte above `3` aliases an in-domain value once
+/// `audio::psg::SquareDuty::from_register` masks it with `0b11`, so decode rejects it.
 #[test]
 fn decode_rejects_out_of_range_square_duty() {
     let square1 = VoiceGroup::new(vec![square1_with_duty(2)]).unwrap();
