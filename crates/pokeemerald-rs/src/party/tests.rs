@@ -2,8 +2,8 @@ use std::ops::Range;
 
 use super::{
     clamp_i32, compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon,
-    hp_hidden_by_load, merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs,
-    zero_ev_max_hp, PartyError, MAIL_NONE,
+    hp_hidden_by_load, merge_into_save_pokemon, pack_ivs, select_active_battler, to_save_pokemon,
+    unpack_ivs, zero_ev_max_hp, PartyError, MAIL_NONE,
 };
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
@@ -2053,4 +2053,70 @@ fn a_retained_branch_after_an_in_battle_level_up_does_not_double_count_the_hidde
          silently healed by adding the hidden EV gap on top of a \
          current_hp that is already real"
     );
+}
+
+/// Sets the secure-region egg flag on an already-encoded record, the same
+/// decode/OR/re-encode shape `the_merge_rewrites_the_iv_word_around_the_egg_bit`
+/// uses.
+fn as_egg(mut record: Pokemon) -> Pokemon {
+    let mut substructures = record.box_data.substructures().unwrap();
+    let iv_word = u32::from_le_bytes(
+        substructures.misc[EXPECTED_MISC_IV_WORD]
+            .try_into()
+            .unwrap(),
+    );
+    substructures.misc[EXPECTED_MISC_IV_WORD]
+        .copy_from_slice(&(iv_word | EXPECTED_IS_EGG_BIT).to_le_bytes());
+    record.box_data.set_substructures(&substructures);
+    record
+}
+
+#[test]
+fn select_active_battler_skips_a_fainted_slot_0_for_a_healthy_slot_1() {
+    let dex = Dex::new();
+    let mut fainted = treecko_fixture();
+    fainted.apply_damage(u32::MAX);
+    let healthy = torchic_before_learning_peck();
+    let party = [
+        to_save_pokemon(&dex, &fainted),
+        to_save_pokemon(&dex, &healthy),
+    ];
+
+    let (slot, selected) = select_active_battler(&dex, &party).expect("slot 1 is usable");
+    assert_eq!(slot, 1);
+    assert_eq!(selected.species(), healthy.species());
+}
+
+#[test]
+fn select_active_battler_skips_an_egg_slot_0_for_a_healthy_slot_1() {
+    let dex = Dex::new();
+    let egg = as_egg(to_save_pokemon(&dex, &treecko_fixture()));
+    let healthy = torchic_before_learning_peck();
+    let party = [egg, to_save_pokemon(&dex, &healthy)];
+
+    let (slot, selected) = select_active_battler(&dex, &party).expect("slot 1 is usable");
+    assert_eq!(slot, 1);
+    assert_eq!(selected.species(), healthy.species());
+}
+
+#[test]
+fn select_active_battler_falls_back_to_a_fainted_slot_0_when_nothing_is_usable() {
+    let dex = Dex::new();
+    let mut fainted = treecko_fixture();
+    fainted.apply_damage(u32::MAX);
+    let party = [to_save_pokemon(&dex, &fainted)];
+
+    let (slot, selected) = select_active_battler(&dex, &party)
+        .expect("slot 0's own decode still succeeds, fainted or not");
+    assert_eq!(slot, 0);
+    assert!(selected.is_fainted());
+}
+
+#[test]
+fn select_active_battler_surfaces_slot_0s_decode_error_when_nothing_is_usable() {
+    let dex = Dex::new();
+    let party = [Pokemon::default()];
+
+    let err = select_active_battler(&dex, &party).expect_err("SPECIES_NONE is not a fightable mon");
+    assert!(matches!(err, PartyError::Battler(_)), "{err}");
 }

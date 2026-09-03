@@ -530,6 +530,49 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     Ok(mon)
 }
 
+/// Whether `record`'s secure-region IV word carries Emerald's egg flag,
+/// checked ahead of decode since [`from_save_pokemon`] itself does not
+/// reject an egg.
+fn record_is_egg(record: &Pokemon) -> bool {
+    record
+        .box_data
+        .substructures()
+        .is_ok_and(|substructures| read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT != 0)
+}
+
+/// Selects which saved slot is the active battler on continue: the first
+/// non-egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
+/// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
+/// called by `InitBattleControllers` at `:97`). Falls back to slot 0's own
+/// decode when nothing qualifies, fainted or egg alike.
+///
+/// # Errors
+///
+/// Returns slot 0's [`PartyError`] when nothing qualifies and slot 0 will
+/// not decode either.
+///
+/// # Panics
+///
+/// Panics if `party` is empty; callers only pass a nonzero-count slice.
+pub(crate) fn select_active_battler(
+    dex: &Dex,
+    party: &[Pokemon],
+) -> Result<(usize, BattlePokemon), PartyError> {
+    for (slot, record) in party.iter().enumerate() {
+        if record_is_egg(record) {
+            continue;
+        }
+        match from_save_pokemon(dex, record) {
+            Ok(mon) if !mon.is_fainted() => return Ok((slot, mon)),
+            Ok(_) => {}
+            // Logged, not just discarded: a later slot winning the scan
+            // must not hide that an earlier one's bytes would not decode.
+            Err(err) => eprintln!("continue: slot {slot}'s record {err} -- skipped"),
+        }
+    }
+    from_save_pokemon(dex, &party[0]).map(|mon| (0, mon))
+}
+
 fn read_u16(bytes: &[u8], range: Range<usize>) -> u16 {
     let field = bytes[range]
         .try_into()

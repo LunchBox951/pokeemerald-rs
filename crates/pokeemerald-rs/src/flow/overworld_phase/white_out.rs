@@ -138,20 +138,22 @@ impl OverworldPhase {
         // SetMoney(&gSaveBlock1Ptr->money, GetMoney(&gSaveBlock1Ptr->money) / 2);
         self.save1.money /= 2;
 
-        // HealPlayerParty() -- this port's one modeled party slot.
+        // HealPlayerParty() -- this port's one modeled party slot, at
+        // whichever index continue selected ([`OverworldPhase::party_lead_slot`]).
         if let Some(lead) = self.party_lead.as_mut() {
             let dex = Dex::new();
+            let slot = self.party_lead_slot;
             match lead.heal(&dex) {
                 Ok(()) => {
                     // `MON_DATA_STATUS`: the battle model has no status field, so clear the
                     // retained save record at the transition boundary where upstream heals it.
-                    self.save1.player_party[0].status = 0;
+                    self.save1.player_party[slot].status = 0;
                     // `MON_DATA_HP`: the heal fills the battler to the model's 0-EV
                     // maximum, but the retained record's maximum may carry an EV
                     // contribution above it. Upstream restores to MAX_HP
                     // (`script_pokemon_util.c:39-42`), so complete that here too --
                     // otherwise the next merge files a fully healed lead as damaged.
-                    self.save1.player_party[0].hp = self.save1.player_party[0].max_hp;
+                    self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
                     // The record's hp no longer matches what the (healed) battler
                     // will report, so re-measure the load offset the merge adds
                     // back onto it -- [`crate::party::hp_hidden_by_load`], fed the
@@ -161,7 +163,7 @@ impl OverworldPhase {
                     // levelled up since the load that first measured its offset
                     // (a battle won, then lost, on the way to this white-out), and
                     // `lead.stats().max_hp` is the `0`-EV floor at the battler's
-                    // *current* level, while `self.save1.player_party[0].max_hp`
+                    // *current* level, while `self.save1.player_party[slot].max_hp`
                     // here is still the retained maximum at the record's own
                     // (unchanged) `level` byte -- comparing the two would measure
                     // a gap between mismatched levels. `hp_hidden_by_load` instead
@@ -173,7 +175,7 @@ impl OverworldPhase {
                     // gap `F(mon.level()) - F(base.level)` this mismatch drops is
                     // real HP the next merge could never recover).
                     self.lead_hp_hidden_by_load =
-                        crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[0], lead);
+                        crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], lead);
                 }
                 Err(error) => {
                     eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
