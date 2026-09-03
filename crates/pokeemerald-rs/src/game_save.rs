@@ -202,8 +202,8 @@ impl SaveSlot {
 
     /// Persists the current blocks using this session's [`SaveLineage`].
     ///
-    /// The write is refused if the disk contains progress newer than this
-    /// session loaded.
+    /// Each write rereads the file and derives its rotation from that image;
+    /// it is refused if the disk holds progress newer than this session loaded.
     ///
     /// # Errors
     ///
