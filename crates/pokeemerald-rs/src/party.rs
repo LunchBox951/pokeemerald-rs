@@ -76,6 +76,9 @@ pub(crate) enum PartyError {
     Substructures(engine::save::PokemonError),
     /// The decoded species, level, or moveset was not battle-ready.
     Battler(battle::BattleError),
+    /// The record is an egg -- never a battler, upstream's own
+    /// `SetBattlePartyIds` egg exclusion (`pokeemerald/src/battle_controllers.c:601-602`).
+    Egg,
 }
 
 impl std::fmt::Display for PartyError {
@@ -83,6 +86,7 @@ impl std::fmt::Display for PartyError {
         match self {
             Self::Substructures(err) => write!(f, "saved party member: {err}"),
             Self::Battler(err) => write!(f, "saved party member: {err}"),
+            Self::Egg => write!(f, "saved party member: is an egg"),
         }
     }
 }
@@ -544,12 +548,14 @@ fn record_is_egg(record: &Pokemon) -> bool {
 /// non-egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
 /// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
 /// called by `InitBattleControllers` at `:97`). Falls back to slot 0's own
-/// decode when nothing qualifies, fainted or egg alike.
+/// decode when nothing qualifies, fainted or not -- but never to an egg
+/// (`PartyError::Egg`): an egg is not a battler upstream either, so an
+/// egg-only party fails closed the same way an all-fainted one does.
 ///
 /// # Errors
 ///
-/// Returns slot 0's [`PartyError`] when nothing qualifies and slot 0 will
-/// not decode either.
+/// Returns slot 0's [`PartyError`] when nothing qualifies and slot 0 is
+/// itself unusable, whether that is a decode failure or an egg.
 ///
 /// # Panics
 ///
@@ -569,6 +575,9 @@ pub(crate) fn select_active_battler(
             // must not hide that an earlier one's bytes would not decode.
             Err(err) => eprintln!("continue: slot {slot}'s record {err} -- skipped"),
         }
+    }
+    if record_is_egg(&party[0]) {
+        return Err(PartyError::Egg);
     }
     from_save_pokemon(dex, &party[0]).map(|mon| (0, mon))
 }

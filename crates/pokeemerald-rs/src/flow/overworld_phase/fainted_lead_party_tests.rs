@@ -178,3 +178,73 @@ fn a_won_trainer_battle_merges_write_back_into_the_selected_slot() {
         "the won battle must have spent the merged slot's PP"
     );
 }
+
+/// Sets the secure-region egg flag on an already-encoded record.
+fn as_egg(mut record: engine::save::Pokemon) -> engine::save::Pokemon {
+    let mut substructures = record.box_data.substructures().unwrap();
+    let iv_word = u32::from_le_bytes(substructures.misc[4..8].try_into().unwrap());
+    substructures.misc[4..8].copy_from_slice(&(iv_word | (1 << 30)).to_le_bytes());
+    record.box_data.set_substructures(&substructures);
+    record
+}
+
+/// A party whose only healthy record is an egg has no usable member, so it
+/// must fail closed exactly as an all-fainted party does: an egg is not a
+/// battler (`SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
+#[test]
+fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
+    let dex = Dex::new();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 2;
+    seed.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(
+        &dex,
+        &new_game::provisional_starter(),
+    ));
+    seed.save1.player_party[1] = crate::party::to_save_pokemon(&dex, &fainted_starter());
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+
+    phase.begin_wild_battle(Some(WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    }));
+
+    assert!(
+        phase.wild_battle.is_none(),
+        "an egg must not be sent into a wild battle"
+    );
+}
+
+/// The white-out heal must land in the slot continue selected, not slot 0:
+/// a hardcoded `player_party[0]` write would heal the fainted record the
+/// player never sent out and leave the battler that actually lost damaged.
+#[test]
+fn a_white_out_heals_the_selected_slot_and_leaves_the_unselected_lead_untouched() {
+    const STORED_STATUS: u32 = 0x40;
+
+    let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
+    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+
+    phase.save1.player_party[0].status = STORED_STATUS;
+    phase.save1.player_party[1].status = STORED_STATUS;
+    phase.save1.player_party[1].hp = 1;
+    let slot0_before = phase.save1.player_party[0];
+
+    phase.white_out();
+
+    assert_eq!(
+        phase.save1.player_party[0], slot0_before,
+        "the unselected slot 0 record must not be touched by the heal"
+    );
+    let healed = phase.save1.player_party[1];
+    assert_eq!(healed.status, 0, "the selected slot's status must clear");
+    assert_eq!(
+        healed.hp, healed.max_hp,
+        "the selected slot must be filled to its retained maximum"
+    );
+}
