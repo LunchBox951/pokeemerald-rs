@@ -212,12 +212,14 @@ impl DrainError {
 /// Wait for the ring to fully drain, bounded by `policy`.
 ///
 /// Returns `Ok(())` once `available_space` reports every queued sample has
-/// been consumed (`capacity` free). Instead of assuming a fixed sleep was
-/// long enough, this gives up early — as soon as `stream_errors` reports
-/// the device callback has stopped draining the ring, or once
-/// `policy.max_wait` has elapsed with the ring still non-empty and no such
-/// signal — because a stopped callback must never be reported as a
-/// successful finish (see [`DrainError`]).
+/// been consumed (`capacity` free) with no asynchronous stream error.
+/// Instead of assuming a fixed sleep was long enough, this gives up early —
+/// as soon as `stream_errors` reports the device callback has stopped
+/// draining the ring, or once `policy.max_wait` has elapsed with the ring
+/// still non-empty and no such signal — because a stopped callback must
+/// never be reported as a successful finish, even one that raced the last
+/// samples out of the ring before the callback stopped (see
+/// [`DrainError`]).
 ///
 /// `available_space`, `stream_errors`, `now`, and `sleep` are injected so
 /// this can be exercised deterministically in tests without a real audio
@@ -232,13 +234,18 @@ fn wait_for_drain(
 ) -> Result<(), DrainError> {
     let deadline = now() + policy.max_wait;
     loop {
+        // Read `available_space` before `stream_errors`, not after: an error
+        // the callback raises in the same instant it drains the last sample
+        // must still be visible here. Reading errors first could observe a
+        // stale, pre-drain value and then see the freshly-emptied ring,
+        // reporting success for a stream that had already gone unhealthy.
         let remaining = capacity.saturating_sub(available_space());
-        if remaining == 0 {
-            return Ok(());
-        }
         let errors = stream_errors();
         if errors > 0 {
             return Err(DrainError::StreamStopped { errors, remaining });
+        }
+        if remaining == 0 {
+            return Ok(());
         }
         if now() >= deadline {
             return Err(DrainError::DeadlineExceeded { remaining });
@@ -403,6 +410,78 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn an_empty_ring_with_a_stream_error_is_not_a_successful_finish() {
+        // A callback that dequeues the last samples and then reports an
+        // asynchronous device failure must not read as a successful drain
+        // just because the ring happens to be empty.
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_mins(1),
+        };
+        let start = std::time::Instant::now();
+
+        let result = wait_for_drain(
+            4,
+            &policy,
+            || 4, // fully free: the ring drained
+            || 1, // but the stream is already unhealthy
+            || start,
+            |_| panic!("a stream error must abort before any retry sleep"),
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(DrainError::StreamStopped {
+                    errors: 1,
+                    remaining: 0
+                })
+            ),
+            "an empty ring must not mask a reported stream error"
+        );
+    }
+
+    #[test]
+    fn an_error_that_lands_exactly_as_the_ring_reports_empty_is_still_caught() {
+        // The real race this guards: the callback drains the last sample and
+        // raises a stream error in the same instant. Here `available_space`
+        // itself is what makes the error visible, so a `stream_errors` read
+        // taken *before* `available_space` would still observe the old,
+        // healthy count and wrongly report success once it sees the ring
+        // empty.
+        let errors = Rc::new(Cell::new(0_u64));
+        let errors_probe = Rc::clone(&errors);
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_mins(1),
+        };
+        let start = std::time::Instant::now();
+
+        let result = wait_for_drain(
+            4,
+            &policy,
+            move || {
+                errors_probe.set(1);
+                4 // fully free: the ring drained in the same instant
+            },
+            move || errors.get(),
+            || start,
+            |_| panic!("a stream error must abort before any retry sleep"),
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(DrainError::StreamStopped {
+                    errors: 1,
+                    remaining: 0
+                })
+            ),
+            "an error surfacing exactly as the ring empties must not be missed"
+        );
     }
 
     #[test]
