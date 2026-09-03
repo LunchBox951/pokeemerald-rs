@@ -26927,7 +26927,7 @@
           "status": "rewritten"
         },
         "save_menu": {
-          "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, and HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
+          "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4), and MainMenu_FormatSavegameText's own border selection (GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType), now decoded and forwarded from the loaded save instead of hardcoded). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-6",
           "status": "stubbed"

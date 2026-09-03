@@ -10,7 +10,7 @@ use super::{
 };
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
-use crate::main_menu::{MainMenuItem, MainMenuType};
+use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuType};
 use crate::new_game;
 use platform::{ButtonState, Buttons};
 
@@ -177,6 +177,69 @@ fn title_a_or_start_button_transitions_to_main_menu() {
         // picks `HAS_NO_SAVED_GAME` (`main_menu.c:661-665`).
         assert_eq!(state.scene.menu_type(), MainMenuType::NoSavedGame);
     }
+}
+
+/// Issue #795: `advance_scene`'s own `Title` -> `MainMenu` transition --
+/// not a hand-called construction helper -- must border the menu with a
+/// continued save's own `optionsWindowFrameType`
+/// (`gSaveBlock2Ptr->optionsWindowFrameType`, read by
+/// `GetWindowFrameTilesPal` for every main-menu box,
+/// `main_menu.c:2191-2193`), not a hardcoded default. Closes the loop
+/// [`crate::flow::save_continue_tests::a_saved_games_own_window_frame_choice_borders_its_main_menu`]
+/// cannot without a real pack: that test proves the construction API and
+/// the real save round trip separately, against a synthetic pack; this one
+/// drives the actual production call site end to end, against a real pack
+/// (both `TitleScene` and `main_menu::load_default_with_window_frame` read
+/// from it).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame() {
+    use super::save_continue_tests::{new_game_phase, save_from_the_start_menu};
+
+    const SAVED_WINDOW_FRAME: u8 = 5;
+
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let temp = TempSave::new("real-pack-window-frame");
+    let mut save_slot = temp.slot();
+    let mut phase = new_game_phase();
+    // A mid-game options change, mirroring
+    // `save_continue_tests`' own fixture: not the zeroed fresh-save
+    // default `new_game::init_save_blocks` starts every session with.
+    phase.save2.options_window_frame_type = SAVED_WINDOW_FRAME;
+    save_from_the_start_menu(&mut phase, &mut save_slot);
+
+    let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene: title_scene,
+        tick: 0,
+        presented: false,
+    }));
+
+    let (next, frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
+    let AppScene::MainMenu(state) = next else {
+        panic!("A on the title screen must transition to the main menu");
+    };
+    assert_eq!(
+        state.scene.menu_type(),
+        MainMenuType::SavedGame,
+        "a save just written must be offerable as CONTINUE"
+    );
+
+    let expected = MainMenuScene::from_pack_with_window_frame(
+        &pack,
+        MainMenuType::SavedGame,
+        SAVED_WINDOW_FRAME,
+    )
+    .expect("run `cargo xtask extract` first")
+    .compose_frame();
+
+    assert_eq!(
+        *frame, *expected,
+        "advance_scene's own Title -> MainMenu transition must border the \
+         menu with the save's own optionsWindowFrameType, not a hardcoded \
+         default"
+    );
 }
 
 /// I-3 scene-flow test: title screen, no advance press -> stays on title
