@@ -35,11 +35,16 @@ fn consume_unmodelled_held_item_draw(rng: &mut Rng) {
 
 /// Builds Emerald's scripted first-battle opponent and starts the battle.
 ///
+/// `player_trainer_id` is the save owner's id, not the party lead's --
+/// upstream's `CreateMon(&gEnemyParty[0], SPECIES_ZIGZAGOON, ..., OT_ID_PLAYER_ID, 0)`
+/// (`src/battle_controllers.c:70`) stores `gSaveBlock2Ptr->playerTrainerId`.
+///
 /// # Errors
 ///
 /// Returns opponent-construction or battle-initialization errors.
 pub fn start_first_battle(
     player_lead: BattlePokemon,
+    player_trainer_id: u32,
     rng: &mut Rng,
 ) -> Result<Battle, BattleError> {
     let dex = Dex::new();
@@ -51,7 +56,8 @@ pub fn start_first_battle(
         FIRST_BATTLE_OPPONENT_LEVEL,
         opponent_moves,
         &mut SharedRng::new(rng),
-    )?;
+    )?
+    .with_original_trainer_id(player_trainer_id);
     consume_unmodelled_held_item_draw(rng);
 
     let is_scripted_first_battle = true;
