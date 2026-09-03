@@ -227,6 +227,9 @@ impl<'a> SpriteLayer<'a> {
     /// The returned [`SpritePixel::priority`] is therefore the best order
     /// among *all* covering sprites, which may be a different sprite than the
     /// one that supplied [`SpritePixel::color`] `(behavioral-fidelity)`.
+    ///
+    /// Returns `None` for a coordinate outside the visible framebuffer
+    /// (`x >= Framebuffer::WIDTH` or `y >= Framebuffer::HEIGHT`).
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
         self.resolve_pixel_inner(x, y, MosaicSize::NONE)
@@ -343,7 +346,8 @@ impl<'a> SpriteLayer<'a> {
     /// draws an opaque texel at `(x, y)` — the per-pixel `OBJWIN` mask that
     /// [`crate::window::WindowConfig::classify`] consults. `OBJWIN` entries
     /// never contribute a display pixel themselves (see [`ObjMode`]'s docs),
-    /// only this mask.
+    /// only this mask. `false` for a coordinate outside the visible
+    /// framebuffer (`x >= Framebuffer::WIDTH` or `y >= Framebuffer::HEIGHT`).
     #[must_use]
     pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
         self.objwin_mask_inner(x, y, MosaicSize::NONE)
