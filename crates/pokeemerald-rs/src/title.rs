@@ -644,7 +644,25 @@ fn title_palette_from_refs(logo: PaletteRef<'_>, rayquaza_clouds: PaletteRef<'_>
     Palette::new(colors)
 }
 
+/// Entry count to report for a wrong-length raw tilemap; rounds toward the valid count from
+/// whichever side `len` falls on, so it never equals `expected_bytes`'s entry count.
+fn reported_entry_count(len: usize, expected_bytes: usize) -> usize {
+    if len < expected_bytes {
+        len / 2
+    } else {
+        len.div_ceil(2)
+    }
+}
+
 fn regular_tilemap_from_raw(raw: &[u8]) -> Result<Tilemap, TitleSceneError> {
+    let expected_entries = BG_DIM_TILES * BG_DIM_TILES;
+    let expected_bytes = expected_entries * 2;
+    if raw.len() != expected_bytes {
+        return Err(TitleSceneError::from(RenderError::TilemapSizeMismatch {
+            expected: expected_entries,
+            actual: reported_entry_count(raw.len(), expected_bytes),
+        }));
+    }
     let entries: Vec<ScreenEntry> = raw
         .chunks_exact(2)
         .map(|b| ScreenEntry::from_raw(u16::from_le_bytes([b[0], b[1]])))
