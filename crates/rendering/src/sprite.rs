@@ -403,21 +403,27 @@ impl<'a> SpriteLayer<'a> {
     ///
     /// A composition of [`footprint`](Self::footprint) (does the *raw*
     /// coordinate land on the sprite, or its mosaic-extended trailing block,
-    /// and where) and [`sample_local`](Self::sample_local) (fetch the texel
-    /// at a footprint-local offset). For a mosaic-enabled entry the sampled
-    /// texel comes from the mosaic block origin, clamped back into the
-    /// footprint ([`MosaicSize::snap_local`]); keeping the footprint test on
-    /// the raw coordinate (rather than a screen-space-snapped one) is what
-    /// avoids the pre-fix transparent leading band when the sprite's
-    /// top/left edge is not block-aligned — the block straddling the edge
-    /// now replicates the edge column/row instead of being discarded
-    /// `(behavioral-fidelity)`. Symmetrically, `footprint` extends the raw
-    /// *right* edge out to the next H mosaic boundary
-    /// ([`MosaicSize::round_trailing_edge`]) so the trailing partial block
-    /// also finishes instead of being cut short at the raw sprite edge. Only
-    /// an entry with its own OBJ mosaic bit set gets either extension — a
-    /// non-mosaic entry always uses [`MosaicSize::NONE`], at which both are a
-    /// no-op.
+    /// and where) and a per-affine-mode sample of the texel at that
+    /// footprint-local offset. Keeping the footprint test on the raw
+    /// coordinate (rather than a screen-space-snapped one) is what avoids
+    /// the pre-fix transparent leading band when the sprite's top/left edge
+    /// is not block-aligned — the block straddling the edge now replicates
+    /// or extends the edge instead of being discarded `(behavioral-fidelity)`.
+    /// Symmetrically, `footprint` extends the raw *right* edge out to the
+    /// next H mosaic boundary ([`MosaicSize::round_trailing_edge`]) so the
+    /// trailing partial block also finishes instead of being cut short at
+    /// the raw sprite edge. Only an entry with its own OBJ mosaic bit set
+    /// gets either extension — a non-mosaic entry always uses
+    /// [`MosaicSize::NONE`], at which both are a no-op.
+    ///
+    /// A [`Regular`](AffineMode::Regular) entry snaps the mosaic-block
+    /// origin back into the footprint before sampling
+    /// ([`MosaicSize::snap_local`]), matching mgba's `SPRITE_MOSAIC_LOOP`
+    /// edge clamp. An affine entry instead holds the *transformed* source
+    /// position across a block — see
+    /// [`sample_affine_local`](Self::sample_affine_local), which mgba
+    /// selects through a distinct macro rather than sharing the regular
+    /// loop's clamp.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
@@ -433,8 +439,12 @@ impl<'a> SpriteLayer<'a> {
         let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
             return Texel::Outside;
         };
-        let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-        self.sample_local(entry, lx, ly)
+        if matches!(entry.affine(), AffineMode::Regular) {
+            let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+            self.sample_local(entry, lx, ly)
+        } else {
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic)
+        }
     }
 
     /// Whether framebuffer coordinate `(x, y)` lands on `entry`'s footprint —
@@ -442,8 +452,12 @@ impl<'a> SpriteLayer<'a> {
     /// H mosaic-block boundary when `mosaic` is not [`MosaicSize::NONE`] — and
     /// if so its footprint-local offset `(dx, dy)`. `dx` is `< bounding box`
     /// for a raw-footprint hit, but can run past it (up to the mosaic-block
-    /// boundary) for a trailing mosaic sample; [`MosaicSize::snap_local`]
-    /// clamps it back before it reaches [`sample_local`](Self::sample_local).
+    /// boundary) for a trailing mosaic sample; a
+    /// [`Regular`](AffineMode::Regular) entry's [`MosaicSize::snap_local`]
+    /// clamps it back before it reaches [`sample_local`](Self::sample_local),
+    /// while an affine entry's [`sample_affine_local`](Self::sample_affine_local)
+    /// transforms the oversized `dx` and rejects it after, unclamped, per
+    /// mgba's transformed mosaic loop.
     ///
     /// `x`/`y` are framebuffer coordinates (`<240`, `<160`) — enforced by
     /// [`resolve_pixel_inner`](Self::resolve_pixel_inner) and
@@ -478,12 +492,14 @@ impl<'a> SpriteLayer<'a> {
         // offset+clip. A raw miss past the right edge (`dx >= width`) is not
         // necessarily a footprint miss: OBJ mosaic draws through to the next
         // H mosaic-block boundary past the raw edge (mgba's `SPRITE_MOSAIC_LOOP`
-        // `condition` rounding, software-obj.c:320-325), so accept it there
-        // too — `sample_entry_mosaic`'s `snap_local` clamps the oversized
-        // `dx` back to the edge column before it is ever used to index a
-        // tile. At `MosaicSize::NONE` (or a raw-footprint hit) this extension
-        // is a no-op: only an entry with its own mosaic bit set reaches this
-        // branch with a non-`NONE` `mosaic` (`sample_entry_mosaic`).
+        // and `SPRITE_TRANSFORMED_MOSAIC_LOOP` share this `condition` rounding,
+        // software-obj.c:236-239, 320-325), so accept it there too —
+        // `sample_entry_mosaic` resolves the oversized `dx` per affine mode
+        // (`sample_local`'s edge clamp or `sample_affine_local`'s
+        // transform-then-reject). At `MosaicSize::NONE` (or a raw-footprint
+        // hit) this extension is a no-op: only an entry with its own mosaic
+        // bit set reaches this branch with a non-`NONE` `mosaic`
+        // (`sample_entry_mosaic`).
         let entry_x = i32::from(entry.x());
         let dx = x as i32 - entry_x;
         if dx < 0 {
@@ -507,31 +523,19 @@ impl<'a> SpriteLayer<'a> {
         Some((dx as usize, dy))
     }
 
-    /// Fetch the texel at footprint-local offset `(dx, dy)` (both already
-    /// known to be inside the bounding box, e.g. from
-    /// [`footprint`](Self::footprint)). Applies affine projection or H/V
-    /// flip and tile addressing.
+    /// Fetch a [`Regular`](AffineMode::Regular) entry's texel at
+    /// footprint-local offset `(dx, dy)` (both already known to be inside
+    /// the bounding box, e.g. from [`footprint`](Self::footprint)). Applies
+    /// H/V flip and tile addressing; an affine entry never reaches this
+    /// method — see [`sample_affine_local`](Self::sample_affine_local).
     #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
     fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
         const DIM: usize = BitDepth::TILE_DIM;
+        debug_assert!(
+            matches!(entry.affine(), AffineMode::Regular),
+            "sample_local is only called for Regular OamEntry values"
+        );
         let (width, height) = entry.bounding_box();
-
-        if !matches!(entry.affine(), AffineMode::Regular) {
-            // Affine (and affine-double-size) sampling is a genuinely
-            // different texture-space projection — h/v flip do not apply
-            // (the matrix supplies any mirroring; oam.rs's module docs) —
-            // handled by sprite_affine.rs, kept out of this already-large
-            // module.
-            return sprite_affine::sample_texel(
-                entry,
-                self.matrices,
-                self.tileset_4bpp,
-                self.tileset_8bpp,
-                self.palette,
-                dx,
-                dy,
-            );
-        }
 
         // H/V flip mirrors the whole sprite footprint, not each tile
         // independently (unlike a BG ScreenEntry's per-tile flip bits).
@@ -570,6 +574,64 @@ impl<'a> SpriteLayer<'a> {
         };
         Texel::Opaque(color.to_rgb888())
     }
+
+    /// Fetch an affine (or affine-double-size) entry's texel at
+    /// footprint-local offset `(dx, dy)`, honoring OBJ mosaic. H/V flip does
+    /// not apply (the matrix supplies any mirroring; oam.rs's module docs),
+    /// so this stays out of [`sample_local`](Self::sample_local) and defers
+    /// to `sprite_affine.rs`, kept out of this already-large module.
+    ///
+    /// mgba selects a distinct macro for affine mosaic,
+    /// `SPRITE_TRANSFORMED_MOSAIC_LOOP`, rather than the regular sprite
+    /// loop's pre-transform edge clamp: the vertical component is still the
+    /// screen-space block clamp both loops share (mgba snaps the *scanline*
+    /// before either loop runs), so `ly` reuses
+    /// [`MosaicSize::snap_local`]'s y component; the horizontal component
+    /// instead holds the *transformed* source position across a
+    /// screen-space block. At [`MosaicSize::NONE`] every column is its own
+    /// block, so `local_x` reduces to the raw `dx` mgba's non-mosaic
+    /// `SPRITE_TRANSFORMED_LOOP` would use.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "x < Framebuffer::WIDTH, so the mosaic block origin fits in i32"
+    )]
+    fn sample_affine_local(
+        &self,
+        entry: &OamEntry,
+        dx: usize,
+        dy: usize,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Texel {
+        let (_, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+
+        // mgba seeds the transformed accumulator at source position `inX - 1`
+        // (one column before the first drawn pixel, `software-obj.c:241`)
+        // and its mosaic loop only refreshes the held position at a block
+        // boundary (`:53,59-62`); a leading block whose screen-space origin
+        // falls before the sprite's own left edge never reaches a refresh
+        // point within it, so it keeps that seed (`local_x == -1`) instead
+        // of the (nonexistent, negative) block origin.
+        let entry_x = i32::from(entry.x());
+        let block_origin_x = mosaic.snap(x, y).0 as i32;
+        let local_x = if block_origin_x >= entry_x {
+            block_origin_x - entry_x
+        } else {
+            -1
+        };
+
+        sprite_affine::sample_texel(
+            entry,
+            self.matrices,
+            self.tileset_4bpp,
+            self.tileset_8bpp,
+            self.palette,
+            local_x,
+            ly,
+        )
+    }
 }
 
 /// One sampled sprite texel: outside the footprint (or missing tile),
@@ -591,9 +653,10 @@ pub(crate) enum Texel {
 #[cfg(test)]
 mod tests {
     use super::SpriteLayer;
+    use crate::affine::AffineMatrix;
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
-    use crate::oam::{OamEntry, ObjMode, ObjShape};
+    use crate::oam::{AffineMode, OamEntry, ObjMode, ObjShape};
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
 
@@ -1248,6 +1311,159 @@ mod tests {
             None,
             "screen x = 6 is past the rounded trailing block and must not be covered"
         );
+    }
+
+    #[test]
+    fn mosaic_sprite_leading_partial_block_is_unaffected_by_the_affine_split() {
+        // Guard for the affine/regular split in `sample_entry_mosaic` and
+        // `sample_affine_local`: the same x = 2, mosaicH = 4 geometry as
+        // `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
+        // on a `Regular` entry must still replicate the edge column — the
+        // new affine dispatch must leave this path untouched.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
+        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
+        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [entry(2, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(4, 1);
+
+        for x in [2, 3] {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[1].to_rgb888()),
+                "regular-sprite leading block still replicates the edge column"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_mosaic_leading_partial_block_leaves_the_source_unwritten() {
+        // Same geometry as `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
+        // (8x8 OBJ at screen x = 2, mosaicH = 4, so the screen-aligned block
+        // [0,4) straddles the sprite's left edge) but affine with the
+        // identity matrix. mgba's `SPRITE_TRANSFORMED_MOSAIC_LOOP`
+        // (software-obj.c:49-70) holds the transform from one column before
+        // the footprint for a block whose screen-space origin precedes the
+        // sprite's edge, instead of the regular loop's edge clamp; for this
+        // geometry that transforms to source col -1, outside the texture, so
+        // the block draws nothing at all rather than replicating col 0.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
+        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
+        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [entry(2, 0, true)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let mosaic = MosaicSize::new(4, 1);
+
+        for x in [2, 3] {
+            assert_eq!(
+                layer.resolve_pixel_with_mosaic(x, 0, mosaic),
+                None,
+                "screen x = {x}: the leading block holds the transform one \
+                 column before the footprint, out of source bounds here, so \
+                 it must stay unwritten instead of replicating col 0"
+            );
+        }
+        for x in 4..=7 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[2].to_rgb888()),
+                "screen x = {x} samples source col 2"
+            );
+        }
+        for x in 8..=11 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[3].to_rgb888()),
+                "screen x = {x} samples source col 6"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_mosaic_leading_partial_block_holds_the_transform_not_the_footprint_edge() {
+        // Same x = 2, mosaicH = 4 geometry, but a non-identity (2x magnify)
+        // matrix, showing the held position tracks the matrix rather than
+        // coincidentally landing out of bounds. Row 2 (this matrix maps row
+        // 0 to source row 2) is marked at column 0 (yellow — what clamping
+        // to the footprint edge, local col 0, would sample) and columns 1,
+        // 3, 5 (red/green/blue — the transformed positions this test
+        // expects for the leading, interior, and trailing blocks).
+        let mut bytes = [0u8; 32];
+        let row2 = 2 * (BitDepth::TILE_DIM / 2);
+        bytes[row2] = 0x14; // col 0 -> index 4 (yellow), col 1 -> index 1 (red)
+        bytes[row2 + 1] = 0x20; // col 3 -> index 2 (green)
+        bytes[row2 + 2] = 0x30; // col 5 -> index 3 (blue)
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        colors[4] = Bgr555::from_channels(0x1F, 0x1F, 0);
+        let palette = Palette::new(colors);
+
+        let entries = [entry(2, 0, true)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let magnify = AffineMatrix::ONE / 2;
+        let matrices = [AffineMatrix::new(magnify, 0, 0, magnify)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let mosaic = MosaicSize::new(4, 1);
+
+        for x in [2, 3] {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[1].to_rgb888()),
+                "screen x = {x} holds the transform at source col 1, not the \
+                 clamped footprint edge (col 0, yellow)"
+            );
+        }
+        for x in 4..=7 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[2].to_rgb888()),
+                "screen x = {x} samples source col 3"
+            );
+        }
+        for x in 8..=11 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[3].to_rgb888()),
+                "screen x = {x} samples source col 5"
+            );
+        }
     }
 
     #[test]
