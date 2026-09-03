@@ -184,18 +184,18 @@ impl Sweep {
             return SweepResult::Unchanged;
         }
         self.ticks_until_step = self.period_ticks;
-        if self.shift == 0 {
-            // Known divergence: mGBA still computes the shift-0 doubling and
-            // disables the channel when that reaches 2048; only the write-back
-            // is gated on a non-zero shift (mgba/src/gb/audio.c:975..:986).
-            // Returning early instead means a shift-0 upward sweep never
-            // retires a high-frequency channel-1 note here.
-            return SweepResult::Unchanged;
-        }
 
         let Some(frequency) = self.next_frequency() else {
             return SweepResult::Disable;
         };
+
+        if self.shift == 0 {
+            // A shift-0 calculation still overflows and disables the channel
+            // above; only the write-back of a successful calculation is
+            // gated on a non-zero shift (mgba/src/gb/audio.c:975-986).
+            return SweepResult::Unchanged;
+        }
+
         self.shadow_frequency = frequency;
 
         // Hardware checks the next upward calculation before playing this one
@@ -546,6 +546,15 @@ mod tests {
     fn zero_shift_sweep_ticks_without_changing_frequency() {
         let mut sweep = sweep(1, SweepDirection::Increase, 0, 100);
         assert_eq!(sweep.tick(), SweepResult::Unchanged);
+    }
+
+    #[test]
+    fn zero_shift_upward_sweep_disables_the_channel_when_the_doubling_overflows() {
+        // A shift-0 upward sweep still computes `frequency + (frequency >> 0)`,
+        // and 2048 or higher retires channel 1; only the write-back is gated on
+        // a non-zero shift (mgba/src/gb/audio.c:965-990).
+        let mut sweep = sweep(1, SweepDirection::Increase, 0, 1024);
+        assert_eq!(sweep.tick(), SweepResult::Disable);
     }
 
     #[test]
