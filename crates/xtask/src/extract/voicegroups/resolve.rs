@@ -82,8 +82,20 @@ pub(super) struct ResolvedVoiceGroup {
     pub slots: Vec<VoiceSlot>,
 }
 
+/// The asset pack stores every id behind a `u16` byte-length prefix, so an
+/// over-long one is rejected here, while `group` still names its source.
+fn checked_pack_id(id: String, group: &str) -> Result<String, VoiceGroupError> {
+    if u16::try_from(id.len()).is_err() {
+        return Err(VoiceGroupError::PackIdTooLong {
+            group: group.to_owned(),
+            id_len: id.len(),
+        });
+    }
+    Ok(id)
+}
+
 fn direct_sound_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGroupError> {
-    symbol
+    let id = symbol
         .strip_prefix(DIRECT_SOUND_SAMPLE_PREFIX)
         .filter(|name| !name.is_empty())
         .map(|name| format!("audio/sample/direct-sound/{name}"))
@@ -91,7 +103,8 @@ fn direct_sound_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGrou
             group: group.to_owned(),
             reference: symbol.to_owned(),
             expected_prefix: DIRECT_SOUND_SAMPLE_PREFIX,
-        })
+        })?;
+    checked_pack_id(id, group)
 }
 
 fn programmable_wave_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGroupError> {
@@ -110,7 +123,7 @@ fn programmable_wave_sample_id(symbol: &str, group: &str) -> Result<String, Voic
                 group: group.to_owned(),
                 reference: symbol.to_owned(),
             })?;
-    Ok(format!("audio/sample/programmable-wave/{index:02}"))
+    checked_pack_id(format!("audio/sample/programmable-wave/{index:02}"), group)
 }
 
 pub(super) fn voice_group_pack_id(label: &str) -> String {
@@ -392,7 +405,7 @@ impl<'a> Resolver<'a> {
             .transpose()?;
 
         self.resolve_group(child_label, GroupRole::IndirectionTarget)?;
-        let children_id = voice_group_pack_id(child_label);
+        let children_id = checked_pack_id(voice_group_pack_id(child_label), parent_label)?;
         Ok(match key_split_table {
             Some(table) => VoiceSlot::KeySplit {
                 starting_note: table.starting_note,

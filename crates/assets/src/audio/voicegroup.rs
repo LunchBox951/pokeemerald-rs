@@ -65,7 +65,8 @@ pub enum DirectSoundMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectSoundVoice {
     pub base_key: u8,
-    /// Overrides the track pan. `None` inherits it; zero is not encodable as an override.
+    /// Overrides the track pan with a selector in `1..=127`. `None` inherits
+    /// the track pan; zero is not encodable as an override.
     pub pan: Option<u8>,
     /// The [`super::sample::Sample::DirectSound`] this voice plays.
     pub sample: SampleId,
@@ -96,6 +97,7 @@ pub struct Square2Voice {
     pub base_key: u8,
     /// Hardware sound-length counter.
     pub length: u8,
+    /// Duty cycle selector, `0..=3`.
     pub duty: u8,
     pub envelope: Envelope,
     pub fixed_rate: bool,
@@ -277,6 +279,8 @@ impl From<DirectSoundModeTag> for DirectSoundMode {
 }
 
 const NO_PAN_OVERRIDE: u8 = 0;
+const MAX_PAN_OVERRIDE: u8 = 127;
+const MAX_SQUARE_DUTY: u8 = 3;
 
 fn write_pan(w: &mut Writer, pan: Option<u8>) {
     w.u8(pan.unwrap_or(NO_PAN_OVERRIDE));
@@ -290,8 +294,16 @@ fn read_pan(r: &mut Reader<'_>) -> Result<Option<u8>, AudioError> {
 }
 
 fn check_pan_override(pan: Option<u8>) -> Result<(), AudioError> {
-    if pan == Some(NO_PAN_OVERRIDE) {
-        return Err(AudioError::PanOverrideZero);
+    match pan {
+        Some(NO_PAN_OVERRIDE) => Err(AudioError::PanOverrideZero),
+        Some(p) if p > MAX_PAN_OVERRIDE => Err(AudioError::PanOverrideOutOfRange(p)),
+        _ => Ok(()),
+    }
+}
+
+fn check_square_duty(duty: u8) -> Result<(), AudioError> {
+    if duty > MAX_SQUARE_DUTY {
+        return Err(AudioError::SquareDutyOutOfRange(duty));
     }
     Ok(())
 }
@@ -463,7 +475,10 @@ impl VoiceGroup {
     ///
     /// Returns [`AudioError::TooManyVoiceSlots`] when the group exceeds
     /// [`VOICE_SLOT_COUNT`], [`AudioError::IdTooLong`] when a referenced id
-    /// cannot be encoded, or [`AudioError::PanOverrideZero`] for `Some(0)` pan.
+    /// cannot be encoded, [`AudioError::PanOverrideZero`] for `Some(0)` pan,
+    /// [`AudioError::PanOverrideOutOfRange`] for a pan override outside
+    /// `1..=127`, or [`AudioError::SquareDutyOutOfRange`] for a square duty
+    /// selector outside `0..=3`.
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
             return Err(AudioError::TooManyVoiceSlots(slots.len()));
@@ -477,10 +492,9 @@ impl VoiceGroup {
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
                 VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
-                VoiceEntry::Square1(_)
-                | VoiceEntry::Square2(_)
-                | VoiceEntry::Noise(_)
-                | VoiceEntry::Empty => {}
+                VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
+                VoiceEntry::Square2(v) => check_square_duty(v.duty)?,
+                VoiceEntry::Noise(_) | VoiceEntry::Empty => {}
             }
         }
         Ok(Self { slots })
@@ -517,12 +531,14 @@ impl VoiceGroup {
         w.into_bytes()
     }
 
-    /// Decodes one complete asset-pack voicegroup without resolving referenced ids.
+    /// Decodes and validates one complete asset-pack voicegroup without
+    /// resolving referenced ids.
     ///
     /// # Errors
     ///
     /// Returns an [`AudioError`] for malformed data, invalid tags or ids,
-    /// out-of-range counts, or trailing bytes.
+    /// out-of-range counts, an out-of-domain pan or square duty selector
+    /// (see [`Self::new`]), or trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let count = usize::from(r.u8()?);
@@ -534,7 +550,7 @@ impl VoiceGroup {
             slots.push(VoiceEntry::read(&mut r)?);
         }
         r.expect_eof()?;
-        Ok(Self { slots })
+        Self::new(slots)
     }
 }
 
