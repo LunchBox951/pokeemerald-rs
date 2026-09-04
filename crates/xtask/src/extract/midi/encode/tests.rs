@@ -187,6 +187,19 @@ fn track_count_must_fit_the_wire_field() {
     );
 }
 
+#[test]
+fn track_event_count_must_fit_the_wire_field() {
+    let largest_representable_count = usize::try_from(u32::MAX).unwrap();
+    assert_eq!(event_count_field(largest_representable_count), Ok(u32::MAX));
+
+    if let Some(unrepresentable_count) = largest_representable_count.checked_add(1) {
+        assert_eq!(
+            event_count_field(unrepresentable_count),
+            Err(MidiError::TooManyTrackEvents(unrepresentable_count))
+        );
+    }
+}
+
 /// `midi.cfg`'s `-G` label is unbounded (`super::super::cfg::apply_flag`).
 #[test]
 fn voicegroup_pack_id_length_must_fit_the_wire_field() {
