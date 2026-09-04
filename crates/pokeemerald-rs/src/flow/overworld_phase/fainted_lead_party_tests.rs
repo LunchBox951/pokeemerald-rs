@@ -220,11 +220,16 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     );
 }
 
-/// The white-out heal must land in the slot continue selected, not slot 0:
-/// a hardcoded `player_party[0]` write would heal the fainted record the
-/// player never sent out and leave the battler that actually lost damaged.
+/// The white-out heal reaches every occupied slot, not just the one
+/// continue selected: `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`)
+/// loops the whole saved party, so a hardcoded `player_party[party_lead_slot]`-only
+/// write would leave a fainted slot the player never sent out still
+/// fainted. With every slot healed, the active-battler selection is
+/// re-run too (`SetBattlePartyIds`'s own re-scan) -- an earlier slot the
+/// continue-time scan skipped as fainted may now be the first usable one
+/// again.
 #[test]
-fn a_white_out_heals_the_selected_slot_and_leaves_the_unselected_lead_untouched() {
+fn a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     const STORED_STATUS: u32 = 0x40;
 
     let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
@@ -233,18 +238,64 @@ fn a_white_out_heals_the_selected_slot_and_leaves_the_unselected_lead_untouched(
     phase.save1.player_party[0].status = STORED_STATUS;
     phase.save1.player_party[1].status = STORED_STATUS;
     phase.save1.player_party[1].hp = 1;
-    let slot0_before = phase.save1.player_party[0];
 
     phase.white_out();
 
+    let unselected = phase.save1.player_party[0];
     assert_eq!(
-        phase.save1.player_party[0], slot0_before,
-        "the unselected slot 0 record must not be touched by the heal"
+        unselected.status, 0,
+        "an unselected slot's status must clear too"
     );
-    let healed = phase.save1.player_party[1];
-    assert_eq!(healed.status, 0, "the selected slot's status must clear");
     assert_eq!(
-        healed.hp, healed.max_hp,
+        unselected.hp, unselected.max_hp,
+        "an unselected slot must be filled to its retained maximum too"
+    );
+    let selected = phase.save1.player_party[1];
+    assert_eq!(selected.status, 0, "the selected slot's status must clear");
+    assert_eq!(
+        selected.hp, selected.max_hp,
         "the selected slot must be filled to its retained maximum"
+    );
+    assert_eq!(
+        phase.party_lead_slot, 0,
+        "with slot 0 healed too, it is the first usable slot again"
+    );
+    assert!(
+        !phase
+            .party_lead
+            .as_ref()
+            .expect("a usable member was reselected")
+            .is_fainted(),
+        "the reselected lead must not be fainted"
+    );
+}
+
+/// A fainted, unselected slot must come back at full HP after a
+/// white-out (`HealPlayerParty` loops every occupied member, module docs
+/// on [`super::white_out`]), and a fresh continue must then send it out
+/// again as the first usable member (`SetBattlePartyIds`'s own re-scan).
+#[test]
+fn a_white_out_heals_every_occupied_party_member() {
+    let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
+    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+    assert_eq!(phase.save1.player_party[0].hp, 0, "setup: slot 0 fainted");
+
+    phase.white_out();
+
+    let unselected = phase.save1.player_party[0];
+    assert_eq!(
+        unselected.hp, unselected.max_hp,
+        "HealPlayerParty restores every occupied member's HP, not just the battler's"
+    );
+
+    let continued = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        phase.map_id,
+        phase.save1.clone(),
+        phase.save2.clone(),
+    );
+    assert_eq!(
+        continued.party_lead_slot, 0,
+        "with the whole party healed, SetBattlePartyIds sends out slot 0 again"
     );
 }

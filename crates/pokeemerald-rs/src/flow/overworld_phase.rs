@@ -280,14 +280,16 @@ pub(crate) struct OverworldPhase {
     /// counterpart) put a `Some` back -- but none of them can run while
     /// this flag is true: every one of those handoffs bails out unless the
     /// lead is already `Some`, and the flag is only ever set when the
-    /// decode left none. So the flag's production *write sites* remain
-    /// exactly two: this load path, and [`Self::load_default`]'s
-    /// provisional-starter grant, a deliberate new-game identity change
-    /// that starts from [`Self::new`]'s `false` and never runs the load
-    /// path at all -- which makes that second write a no-op, `false` onto
-    /// `false`, spelled out only so a future new-game path cannot inherit
-    /// a set flag. The only production transition that *changes* the
-    /// value is this load path's error arm.
+    /// decode left none. So the flag's production *write sites* are: this
+    /// load path; [`Self::load_default`]'s provisional-starter grant, a
+    /// deliberate new-game identity change that starts from [`Self::new`]'s
+    /// `false` and never runs the load path at all -- which makes that
+    /// write a no-op, `false` onto `false`, spelled out only so a future
+    /// new-game path cannot inherit a set flag; and [`Self::white_out`]'s
+    /// active-battler re-scan, a no-op for the same reason -- no battle,
+    /// and so no white-out, can run while this flag is true, since every
+    /// battle handoff above bails out with no lead. The only production
+    /// transition that *changes* the value is this load path's error arm.
     /// [`Self::copy_party_and_objects_to_save`] reads this
     /// flag, not the save bytes, to decide whether the no-lead arm may zero
     /// `player_party[0]` -- upstream's `SavePlayerParty`
