@@ -324,10 +324,8 @@ impl SaveFile {
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
-    /// On a first save, this creates the missing hierarchy and, once this
-    /// lock is held, best-effort synchronises every ancestor: synchronising
-    /// only after locking means a second locker blocks until that
-    /// synchronising -- not just directory creation -- has happened.
+    /// On a first save, creates the missing hierarchy and best-effort
+    /// synchronises every ancestor while the lock is held.
     ///
     /// # Errors
     ///
@@ -363,11 +361,8 @@ impl SaveFile {
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// Creates the save file's parent directory (and any missing
-    /// ancestors). On a first save, best-effort synchronises every
-    /// ancestor: which levels a `create_dir_all` actually created is not a
-    /// reliable signal once a concurrent caller might have created them
-    /// first, so durability cannot depend on it.
+    /// Creates the save file's parent directory and any missing ancestors;
+    /// on a first save, best-effort synchronises every ancestor.
     fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
@@ -407,9 +402,8 @@ impl SaveFile {
         levels
     }
 
-    /// Best-effort synchronises the containing directory of every level of
-    /// `dir`'s ancestor chain, outermost first, skipping any level with no
-    /// containing directory to synchronise.
+    /// Best-effort synchronises the containing directory of each level of
+    /// `dir`'s ancestor chain, outermost first.
     fn sync_ancestor_chain(dir: &Path, mut sync_directory: impl FnMut(&Path)) {
         for level in Self::ancestor_chain(dir) {
             if let Some(containing) = Self::directory_containing(&level) {
