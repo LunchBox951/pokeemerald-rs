@@ -29,14 +29,29 @@ impl AffineTilemap {
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::AffineTilemapSizeMismatch`] unless the tile-index
-    /// count equals `width_tiles * height_tiles`.
+    /// Returns [`RenderError::AffineTilemapDimensionsInvalid`] when the tile
+    /// area or either axis's pixel extent (`width_tiles` or `height_tiles`
+    /// times the tile side length) overflows `usize`. Returns
+    /// [`RenderError::AffineTilemapSizeMismatch`] unless the tile-index count
+    /// equals `width_tiles * height_tiles`.
     pub fn new(
         width_tiles: usize,
         height_tiles: usize,
         tile_indices: Vec<u8>,
     ) -> Result<Self, RenderError> {
-        let expected = width_tiles * height_tiles;
+        let dimensions_invalid = || RenderError::AffineTilemapDimensionsInvalid {
+            width_tiles,
+            height_tiles,
+        };
+        let expected = width_tiles
+            .checked_mul(height_tiles)
+            .ok_or_else(dimensions_invalid)?;
+        width_tiles
+            .checked_mul(BitDepth::TILE_DIM)
+            .ok_or_else(dimensions_invalid)?;
+        height_tiles
+            .checked_mul(BitDepth::TILE_DIM)
+            .ok_or_else(dimensions_invalid)?;
         if tile_indices.len() != expected {
             return Err(RenderError::AffineTilemapSizeMismatch {
                 expected,
@@ -142,7 +157,7 @@ impl<'a> AffineBgLayer<'a> {
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss,
-        reason = "framebuffer and texture dimensions fit in i32, and sampled pixels are nonnegative"
+        reason = "framebuffer dimensions and screen coordinates fit in i32, and sampled pixels are nonnegative"
     )]
     pub(crate) fn sample_pixel(
         &self,
@@ -153,17 +168,20 @@ impl<'a> AffineBgLayer<'a> {
         screen_x: usize,
         screen_y: usize,
     ) -> Option<Rgb888> {
-        let texture_width = self.tilemap.width_tiles() * BitDepth::TILE_DIM;
-        let texture_height = self.tilemap.height_tiles() * BitDepth::TILE_DIM;
-        if texture_width == 0 || texture_height == 0 {
+        let width_tiles = self.tilemap.width_tiles();
+        let height_tiles = self.tilemap.height_tiles();
+        if width_tiles == 0 || height_tiles == 0 {
             return None;
         }
+        let texture_width = width_tiles.checked_mul(BitDepth::TILE_DIM)?;
+        let texture_height = height_tiles.checked_mul(BitDepth::TILE_DIM)?;
 
         let (tx, ty) = matrix.apply(screen_x as i32, screen_y as i32);
         let tex_x = reference_x.wrapping_add(tx) >> AffineMatrix::FRAC_BITS;
         let tex_y = reference_y.wrapping_add(ty) >> AffineMatrix::FRAC_BITS;
 
-        let (texture_width, texture_height) = (texture_width as i32, texture_height as i32);
+        let texture_width = i32::try_from(texture_width).ok()?;
+        let texture_height = i32::try_from(texture_height).ok()?;
         let (sample_x, sample_y) = match overflow {
             Overflow::Wrap => (
                 tex_x.rem_euclid(texture_width),
@@ -394,6 +412,45 @@ mod tests {
     }
 
     #[test]
+    fn affine_tilemap_new_returns_an_error_when_the_area_overflows() {
+        assert_eq!(
+            AffineTilemap::new(usize::MAX, 2, Vec::new()).unwrap_err(),
+            crate::error::RenderError::AffineTilemapDimensionsInvalid {
+                width_tiles: usize::MAX,
+                height_tiles: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn affine_tilemap_new_returns_an_error_when_a_pixel_extent_overflows() {
+        let overflowing_pixel_width_tiles = usize::MAX / BitDepth::TILE_DIM + 1;
+        for (width_tiles, height_tiles) in [
+            (overflowing_pixel_width_tiles, 0),
+            (0, overflowing_pixel_width_tiles),
+        ] {
+            assert_eq!(
+                AffineTilemap::new(width_tiles, height_tiles, Vec::new()).unwrap_err(),
+                crate::error::RenderError::AffineTilemapDimensionsInvalid {
+                    width_tiles,
+                    height_tiles,
+                },
+                "({width_tiles}, {height_tiles}) should have been rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn affine_tilemap_new_allows_zero_area_when_the_pixel_extent_fits() {
+        let max_pixel_width_tiles = usize::MAX / BitDepth::TILE_DIM;
+        for (width_tiles, height_tiles) in [(max_pixel_width_tiles, 0), (0, max_pixel_width_tiles)]
+        {
+            let tilemap = AffineTilemap::new(width_tiles, height_tiles, Vec::new()).unwrap();
+            assert!(tilemap.tile_index(0, 0).is_none());
+        }
+    }
+
+    #[test]
     fn affine_tilemap_entry_out_of_range_is_none() {
         let tilemap = marked_2x2_affine_tilemap();
         assert!(tilemap.tile_index(TILEMAP_WIDTH_TILES, 0).is_none());
@@ -402,6 +459,46 @@ mod tests {
             tilemap.tile_index(TILEMAP_WIDTH_TILES - 1, TILEMAP_HEIGHT_TILES - 1),
             Some(u8::try_from(TILE_COUNT - 1).unwrap())
         );
+    }
+
+    #[test]
+    fn huge_dimensions_never_reach_an_overflowing_pixel_size() {
+        let (tileset, palette) = marked_8bpp_tileset_and_palette();
+        let overflowing_pixel_width_tiles = usize::MAX / BitDepth::TILE_DIM + 1;
+        for (width_tiles, height_tiles) in [
+            (overflowing_pixel_width_tiles, 0),
+            (0, overflowing_pixel_width_tiles),
+            (usize::MAX, 2),
+        ] {
+            let Ok(tilemap) = AffineTilemap::new(width_tiles, height_tiles, Vec::new()) else {
+                continue;
+            };
+            let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+            let mut fb = Framebuffer::new();
+            let backdrop = crate::palette::Rgb888 { r: 4, g: 5, b: 6 };
+            fb.fill(backdrop);
+            layer.composite(&mut fb, AffineMatrix::IDENTITY, 0, 0, Overflow::Wrap);
+            assert_eq!(fb.pixel(0, 0), Some(backdrop));
+        }
+    }
+
+    #[test]
+    fn sample_pixel_never_panics_when_a_pixel_extent_exceeds_i32() {
+        // `AffineTilemap::new` accepts this width (its pixel extent fits `usize`), but reaching
+        // it there would need a 512 MiB tile-index vec, so this pins sample_pixel's own `i32`
+        // boundary directly: 2^29 tiles * TILE_DIM (8) == 2^32, which wraps to 0 under `as i32`.
+        let (tileset, palette) = marked_8bpp_tileset_and_palette();
+        let tilemap = AffineTilemap {
+            width_tiles: 1 << 29,
+            height_tiles: 1,
+            tile_indices: Vec::new(),
+        };
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+        let mut fb = Framebuffer::new();
+        let backdrop = crate::palette::Rgb888 { r: 7, g: 8, b: 9 };
+        fb.fill(backdrop);
+        layer.composite(&mut fb, AffineMatrix::IDENTITY, 0, 0, Overflow::Wrap);
+        assert_eq!(fb.pixel(0, 0), Some(backdrop));
     }
 
     #[test]
