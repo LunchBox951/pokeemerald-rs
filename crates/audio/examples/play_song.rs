@@ -26,8 +26,10 @@ const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 /// the resampler's one-frame lookahead and scheduler jitter.
 const DEVICE_TAIL_MARGIN: Duration = Duration::from_millis(50);
 
-/// The tail wait when the device advertises no callback size at all: longer
-/// than any common callback buffer, short enough not to drag the smoke run.
+/// Floor on the tail, and the whole tail when the device advertises no
+/// callback size. The advertised size bounds one callback slice, not the
+/// host pipeline's presentation latency (cpal's ALSA path keeps two periods
+/// queued behind the callback), so a small callback never shortens this.
 const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 
 /// Ceiling on the derived tail. A backend's advertised maximum is the largest
@@ -244,17 +246,17 @@ fn wait_for_drain(
 
 /// How long the device may still be playing after the ring reads empty:
 /// its largest advertised callback buffer at its own rate, plus
-/// [`DEVICE_TAIL_MARGIN`], capped at [`DEVICE_TAIL_MAX`];
-/// [`DEVICE_TAIL_FALLBACK`] when it advertises none. An empty ring only
-/// means the callback took the samples, and dropping `AudioOutput` closes
-/// the stream rather than draining it.
+/// [`DEVICE_TAIL_MARGIN`], clamped between [`DEVICE_TAIL_FALLBACK`] and
+/// [`DEVICE_TAIL_MAX`]; the floor alone when it advertises none. An empty
+/// ring only means the callback took the samples, and dropping
+/// `AudioOutput` closes the stream rather than draining it.
 fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32) -> Duration {
     match max_callback_frames {
         Some(frames) if device_sample_rate > 0 => {
             let frames = u32::try_from(frames).unwrap_or(u32::MAX);
             let buffered =
                 Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate));
-            (buffered + DEVICE_TAIL_MARGIN).min(DEVICE_TAIL_MAX)
+            (buffered + DEVICE_TAIL_MARGIN).clamp(DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MAX)
         }
         _ => DEVICE_TAIL_FALLBACK,
     }
@@ -617,6 +619,17 @@ mod tests {
     fn an_unknown_callback_bound_falls_back_to_the_fixed_tail() {
         assert_eq!(device_tail_wait(None, 48_000), DEVICE_TAIL_FALLBACK);
         assert_eq!(device_tail_wait(Some(4_096), 0), DEVICE_TAIL_FALLBACK);
+    }
+
+    #[test]
+    fn the_derived_tail_never_undercuts_the_conservative_floor() {
+        // The advertised callback size bounds one callback slice, not the
+        // host pipeline's presentation latency: cpal opens the stream with
+        // `BufferSize::Default` and its ALSA path then keeps DEFAULT_PERIODS
+        // (2) periods queued behind the callback, while JACK advertises
+        // min == max == its period. A device advertising 512 frames at 48 kHz
+        // must therefore still wait out at least the fixed fallback.
+        assert!(device_tail_wait(Some(512), 48_000) >= DEVICE_TAIL_FALLBACK);
     }
 
     #[test]
