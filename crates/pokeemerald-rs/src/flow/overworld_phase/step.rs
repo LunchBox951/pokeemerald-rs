@@ -36,8 +36,9 @@ use super::OverworldPhase;
 
 /// [`OverworldPhase::tick`]'s overflow target (issue #852): every configured
 /// tileset-animation cadence divides upstream's 256-tick counter period
-/// (`pokeemerald/src/tileset_anims.c:564-569`), so this tick already reads
-/// as latched to every region, unlike a fresh room's own 0.
+/// (wrap at `pokeemerald/src/tileset_anims.c:589-590`, set to 256 by
+/// `:621`/`:628`), so this tick already reads as latched to every region,
+/// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 
 impl OverworldPhase {

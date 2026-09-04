@@ -240,13 +240,12 @@ fn wrapping_the_tileset_animation_tick_lands_on_the_upstream_period_not_zero() {
     }
 }
 
-/// Issue #852's other tick-advance call site: [`OverworldPhase::advance_start_menu_frame`]
-/// (`start_menu.rs`) keeps the animation running while the field start menu
-/// owns the frame, exactly as [`OverworldPhase::step`] does while a dialog
-/// does -- and used its own `wrapping_add(1)`, missed by the first pass at
-/// this fix. A synthetic already-open menu
-/// ([`crate::start_menu::synthetic_start_menu`]) needs no local pack, so
-/// this reaches the real wrap without one.
+/// Issue #852: [`OverworldPhase::advance_start_menu_frame`] (`start_menu.rs`)
+/// keeps the animation running while the field start menu owns the frame,
+/// exactly as [`OverworldPhase::step`] does while a dialog does, and both
+/// call sites must wrap `tick` to the same already-latched tick. A synthetic
+/// already-open menu ([`crate::start_menu::synthetic_start_menu`]) needs no
+/// local pack, so this reaches the real wrap without one.
 #[test]
 fn wrapping_the_tick_through_the_start_menu_frame_also_lands_on_the_upstream_period() {
     let temp = crate::flow::tests::TempSave::new("start-menu-tick-wrap-852");
