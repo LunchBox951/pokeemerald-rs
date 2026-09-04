@@ -463,10 +463,6 @@ mod tests {
         assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
     }
 
-    /// [`TrainerType::SeeAllDirections`]/[`TrainerType::Buried`] are not
-    /// modelled (module docs): even a trivially in-range, facing,
-    /// unobstructed setup must report `false` once `trainer_type` is not
-    /// [`TrainerType::Normal`].
     #[test]
     fn non_normal_trainer_types_are_never_seen() {
         let hdr = header(&[]);
