@@ -27,6 +27,12 @@ const RING_CAPACITY_FRAMES: usize = 4096;
 /// of hanging this manual smoke command.
 const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 
+/// An empty ring only means the callback took the samples; the device has not
+/// played them yet, and dropping `AudioOutput` closes the stream rather than
+/// draining it. Hold it open this long afterwards so the last note is not
+/// clipped.
+const DEVICE_TAIL_WAIT: Duration = Duration::from_millis(200);
+
 fn main() -> ExitCode {
     let song = build_song();
     let mut seq = Sequencer::new(song);
@@ -82,6 +88,7 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
+    std::thread::sleep(DEVICE_TAIL_WAIT);
     ExitCode::SUCCESS
 }
 
