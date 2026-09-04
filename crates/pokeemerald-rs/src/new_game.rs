@@ -133,6 +133,11 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
         player_gender: DEFAULT_PLAYER_GENDER,
         player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         encryption_key: 0,
+        // `WINDOW_FRAME_TYPE_0`: a zeroed, freshly-initialized save block's
+        // own `optionsWindowFrameType` (`pokeemerald/include/global.h:520`),
+        // matching every other unmodeled option bit this block also leaves
+        // zeroed.
+        options_window_frame_type: 0,
     };
 
     let spawn = WarpData {
