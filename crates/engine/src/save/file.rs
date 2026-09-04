@@ -412,11 +412,8 @@ impl SaveFile {
         }
     }
 
-    /// The directory that `create_dir_all` records `level`'s entry in: its
-    /// parent, `.` for a bare relative name with no parent component, or
-    /// `None` for a level that already exists rather than being created --
-    /// the filesystem root, a Windows drive prefix, or a `.`/`..` component
-    /// -- which has no entry to record.
+    /// The directory holding `level`'s entry: its parent, `.` for a bare
+    /// relative name, or `None` for a root, drive prefix, or `.`/`..` level.
     fn directory_containing(level: &Path) -> Option<&Path> {
         use std::path::Component;
 
