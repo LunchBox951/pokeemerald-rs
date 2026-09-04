@@ -577,3 +577,45 @@ fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_sp
     assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
     assert_eq!(phase.save2.encryption_key, 0);
 }
+
+/// Upstream re-clears the save blocks after a corrupt verdict:
+/// `CB2_InitCopyrightScreenAfterBootup` calls `Sav2_ClearSetDefault()` when
+/// `gSaveFileStatus` is `SAVE_STATUS_EMPTY`/`SAVE_STATUS_CORRUPT`
+/// (`intro.c:1154-1156`), and `SetDefaultOptions` puts
+/// `optionsWindowFrameType` back to 0 (`new_game.c:91-98`). A corrupt boot
+/// still recovers a checksum-valid `SaveBlock2` here, so the no-save main
+/// menu must not wear that save's border. `SAVE_STATUS_ERROR` is not cleared
+/// upstream -- one slot loaded intact -- so its recovered border survives.
+#[test]
+fn a_corrupt_boot_falls_back_to_the_default_window_frame() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let recovered = SaveBlock2 {
+        options_window_frame_type: 5,
+        ..SaveBlock2::default()
+    };
+
+    let corrupt = SavedGame {
+        status: SaveFileStatus::Corrupt,
+        block1: SaveBlock1::default(),
+        block2: recovered.clone(),
+    };
+    assert_eq!(
+        window_frame_for(&corrupt),
+        0,
+        "a corrupt boot clears SaveBlock2 and re-defaults the option \
+         (intro.c:1154-1156 -> new_game.c:91-98)"
+    );
+
+    let one_bad_slot = SavedGame {
+        status: SaveFileStatus::Error,
+        block1: SaveBlock1::default(),
+        block2: recovered,
+    };
+    assert_eq!(
+        window_frame_for(&one_bad_slot),
+        5,
+        "SAVE_STATUS_ERROR loaded an intact slot and is never cleared"
+    );
+}

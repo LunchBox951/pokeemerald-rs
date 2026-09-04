@@ -180,7 +180,13 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
 /// border a given boot verdict produces is pinned by a pack-less test too,
 /// the same [`menu_type_for`] already is.
 const fn window_frame_for(saved: &SavedGame) -> u8 {
-    saved.block2.options_window_frame_type
+    if saved.status.boot_clears_save_block2() {
+        // `SetDefaultOptions` (`new_game.c:94`) puts the cleared block's
+        // frame back to 0 even when a checksum-valid block was recovered.
+        0
+    } else {
+        saved.block2.options_window_frame_type
+    }
 }
 
 /// Which of upstream's `ACTION_*` values confirming `item` maps to
