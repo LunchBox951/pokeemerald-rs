@@ -3,10 +3,8 @@
 //!
 //! `main` is a manual, not-run-in-CI "does sound actually come out?" check —
 //! on a headless machine with no audio device it prints a note and exits
-//! cleanly. Its `push_frame`/`wait_for_drain` retry-bounded helpers carry
-//! their own `#[cfg(test)]` unit tests below, and those DO run under `cargo
-//! test` (see this crate's `Cargo.toml`, which opts this example target into
-//! `test = true`).
+//! cleanly. The helper tests below do run under `cargo test`; see this
+//! crate's `Cargo.toml`.
 //!
 //! Run with: `cargo run -p audio --example play_song`.
 
@@ -17,14 +15,11 @@ use std::time::{Duration, Instant};
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
 use platform::AudioOutput;
 
-/// Ring capacity, in frames, the demo opens the device with.
 const RING_CAPACITY_FRAMES: usize = 4096;
 
-/// Ceiling on time spent retrying a stuck push, or waiting for the tail to
-/// drain, before treating the output stream as unrecoverably stalled.
-/// Comfortably longer than the ~306 ms the ring can absorb at
-/// [`MIXER_RATE`], but short enough that a dead callback fails fast instead
-/// of hanging this manual smoke command.
+/// Comfortably longer than the ~306 ms the ring can absorb at [`MIXER_RATE`],
+/// but short enough that a dead callback fails fast instead of hanging this
+/// manual smoke command.
 const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 
 /// An empty ring only means the callback took the samples; the device has not
@@ -74,9 +69,6 @@ fn main() -> ExitCode {
         }
         std::thread::sleep(frame_period);
     }
-    // Wait for the ring to actually empty rather than assuming a fixed sleep
-    // was long enough — a callback that stopped consuming can otherwise
-    // leave samples permanently queued while this reports success.
     if let Err(err) = wait_for_drain(
         ring_capacity_samples,
         &policy,
@@ -92,26 +84,19 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// How long [`push_frame`] may keep retrying a momentarily full ring, or
-/// [`wait_for_drain`] may keep waiting for the ring to empty, before giving
-/// up.
+/// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
 struct RetryPolicy {
-    /// Sleep between retries while progress hasn't happened yet.
     interval: Duration,
-    /// Hard ceiling on total time spent waiting.
     max_wait: Duration,
 }
 
 /// Why [`push_frame`] gave up before queuing every sample.
 #[derive(Clone, Copy)]
 enum PushError {
-    /// The output stream's asynchronous error counter became nonzero: the
-    /// device callback has stopped draining the ring, so no amount of
-    /// further retrying can help (see `AudioOutput::stream_errors`).
+    /// `AudioOutput::stream_errors` went nonzero: the device callback has
+    /// stopped draining the ring, so retrying cannot help.
     StreamStopped { errors: u64, dropped: usize },
-    /// No progress within `RetryPolicy::max_wait`, even though the stream
-    /// reports no errors — e.g. consumption stalled without a visible
-    /// stream-error signal.
+    /// `RetryPolicy::max_wait` elapsed with no stream error reported.
     DeadlineExceeded { dropped: usize },
 }
 
@@ -131,21 +116,13 @@ impl PushError {
     }
 }
 
-/// Push all of `samples` via `push`, retrying while the ring is only
-/// momentarily full, bounded by `policy`.
+/// Push all of `samples` via `push`, retrying a momentarily full ring within
+/// `policy`.
 ///
-/// Returns `Ok(())` once every sample is queued. Gives up early — instead of
-/// spinning forever — as soon as `stream_errors` reports the async device
-/// callback has stopped draining the ring, or once `policy.max_wait` has
-/// elapsed with no such signal. Either way the unqueued tail is dropped, not
-/// queued or blocked on further: the same accounting rule
-/// [`platform::Producer::push`] documents, and the one production's
-/// `MusicPlayer::advance_frame` applies to a single push instead of a retry
-/// loop.
-///
-/// `push`, `stream_errors`, `now`, and `sleep` are injected so this can be
-/// exercised deterministically in tests without a real audio device or wall
-/// clock.
+/// On either error the unqueued tail is dropped rather than blocked on — the
+/// accounting rule [`platform::Producer::push`] documents. `push`,
+/// `stream_errors`, `now`, and `sleep` are injected so the tests below need
+/// no audio device or wall clock.
 fn push_frame(
     samples: &[f32],
     policy: &RetryPolicy,
@@ -168,9 +145,9 @@ fn push_frame(
         if queued >= samples.len() {
             return Ok(());
         }
-        // Re-check right away: an async error can land between the check
-        // above and this push completing, and reporting it now is more
-        // specific than letting the loop fall through to a deadline.
+        // Re-check: an async error can land between the check above and this
+        // push completing, and naming it beats falling through to the
+        // deadline.
         let errors = stream_errors();
         if errors > 0 {
             return Err(PushError::StreamStopped {
@@ -190,13 +167,10 @@ fn push_frame(
 /// Why [`wait_for_drain`] gave up before confirming the ring emptied.
 #[derive(Clone, Copy)]
 enum DrainError {
-    /// The output stream's asynchronous error counter became nonzero while
-    /// samples were still queued and unplayed.
+    /// `AudioOutput::stream_errors` went nonzero while samples were still
+    /// queued and unplayed.
     StreamStopped { errors: u64, remaining: usize },
-    /// No drain progress within `RetryPolicy::max_wait`, even though the
-    /// stream reports no errors — the same silent-stall case
-    /// [`PushError::DeadlineExceeded`] guards against, but for consumption
-    /// instead of production.
+    /// `RetryPolicy::max_wait` elapsed with no stream error reported.
     DeadlineExceeded { remaining: usize },
 }
 
@@ -216,21 +190,12 @@ impl DrainError {
     }
 }
 
-/// Wait for the ring to fully drain, bounded by `policy`.
+/// Wait, within `policy`, for `available_space` to report the ring fully
+/// drained.
 ///
-/// Returns `Ok(())` once `available_space` reports every queued sample has
-/// been consumed (`capacity` free) with no asynchronous stream error.
-/// Instead of assuming a fixed sleep was long enough, this gives up early —
-/// as soon as `stream_errors` reports the device callback has stopped
-/// draining the ring, or once `policy.max_wait` has elapsed with the ring
-/// still non-empty and no such signal — because a stopped callback must
-/// never be reported as a successful finish, even one that raced the last
-/// samples out of the ring before the callback stopped (see
-/// [`DrainError`]).
-///
-/// `available_space`, `stream_errors`, `now`, and `sleep` are injected so
-/// this can be exercised deterministically in tests without a real audio
-/// device or wall clock.
+/// A stopped callback must never read as a successful finish, so a nonzero
+/// `stream_errors` outranks an empty ring — hence the read order below.
+/// Callbacks are injected as in [`push_frame`].
 fn wait_for_drain(
     capacity: usize,
     policy: &RetryPolicy,
@@ -241,11 +206,9 @@ fn wait_for_drain(
 ) -> Result<(), DrainError> {
     let deadline = now() + policy.max_wait;
     loop {
-        // Read `available_space` before `stream_errors`, not after: an error
-        // the callback raises in the same instant it drains the last sample
-        // must still be visible here. Reading errors first could observe a
-        // stale, pre-drain value and then see the freshly-emptied ring,
-        // reporting success for a stream that had already gone unhealthy.
+        // Read `available_space` before `stream_errors`: reading errors
+        // first could pair a stale, pre-drain count with the freshly-emptied
+        // ring and report success for a stream that had gone unhealthy.
         let remaining = capacity.saturating_sub(available_space());
         let errors = stream_errors();
         if errors > 0 {
