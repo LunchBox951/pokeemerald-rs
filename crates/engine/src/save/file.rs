@@ -274,6 +274,8 @@ impl SaveFile {
     ///
     /// The parent directory is synchronised after the rename when the host
     /// permits opening directories. That final synchronisation is best effort.
+    /// On a first save, every ancestor directory is synchronised too; see
+    /// [`SaveFile::ensure_parent_directory`].
     ///
     /// # Errors
     ///
@@ -322,13 +324,23 @@ impl SaveFile {
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
+    /// On a first save, creates the missing hierarchy and best-effort
+    /// synchronises every ancestor while the lock is held.
+    ///
     /// # Errors
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Lock`] if the lock file could not be
     /// created or locked.
     pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
-        self.ensure_parent_directory()?;
+        self.lock_with(Self::sync_directory_best_effort)
+    }
+
+    /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
+    /// rather than always [`SaveFile::sync_directory_best_effort`].
+    fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
+        let first_save = !self.exists();
+        let parent = self.create_parent_directory()?;
         let path = self.lock_path();
         let lock_error = |source: std::io::Error| SaveFileError::Lock {
             path: path.clone(),
@@ -341,10 +353,30 @@ impl SaveFile {
             .open(&path)
             .map_err(lock_error)?;
         file.lock().map_err(lock_error)?;
+        if first_save {
+            if let Some(parent) = parent {
+                Self::sync_ancestor_chain(parent, sync_directory);
+            }
+        }
         Ok(SaveFileGuard { _lock_file: file })
     }
 
+    /// Creates the save file's parent directory and any missing ancestors;
+    /// on a first save, best-effort synchronises every ancestor.
     fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
+        let first_save = !self.exists();
+        let parent = self.create_parent_directory()?;
+        if first_save {
+            if let Some(parent) = parent {
+                Self::sync_ancestor_chain(parent, Self::sync_directory_best_effort);
+            }
+        }
+        Ok(parent)
+    }
+
+    /// Creates the save file's parent directory and any missing ancestors,
+    /// without synchronising anything.
+    fn create_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
         let parent = self
             .path
             .parent()
@@ -356,6 +388,50 @@ impl SaveFile {
             })?;
         }
         Ok(parent)
+    }
+
+    /// `dir` and every non-empty ancestor above it, outermost first.
+    fn ancestor_chain(dir: &Path) -> Vec<PathBuf> {
+        let mut levels = Vec::new();
+        let mut current = Some(dir);
+        while let Some(path) = current.filter(|path| !path.as_os_str().is_empty()) {
+            levels.push(path.to_path_buf());
+            current = path.parent();
+        }
+        levels.reverse();
+        levels
+    }
+
+    /// Best-effort synchronises the containing directory of each level of
+    /// `dir`'s ancestor chain, outermost first.
+    fn sync_ancestor_chain(dir: &Path, mut sync_directory: impl FnMut(&Path)) {
+        for level in Self::ancestor_chain(dir) {
+            if let Some(containing) = Self::directory_containing(&level) {
+                sync_directory(containing);
+            }
+        }
+    }
+
+    /// The directory holding `level`'s entry: its parent, `.` for a bare
+    /// relative name, or `None` for a root, drive prefix, or `.`/`..` level.
+    fn directory_containing(level: &Path) -> Option<&Path> {
+        use std::path::Component;
+
+        match level.components().next_back() {
+            Some(Component::Normal(_)) => Some(
+                level
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .unwrap_or_else(|| Path::new(".")),
+            ),
+            None
+            | Some(
+                Component::RootDir
+                | Component::Prefix(_)
+                | Component::CurDir
+                | Component::ParentDir,
+            ) => None,
+        }
     }
 
     fn lock_path(&self) -> PathBuf {
