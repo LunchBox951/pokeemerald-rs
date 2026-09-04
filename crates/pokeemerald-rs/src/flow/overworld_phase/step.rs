@@ -34,7 +34,23 @@ use super::input::{advance_or_skip_for_preempt, held_direction};
 use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::OverworldPhase;
 
+/// [`OverworldPhase::tick`]'s overflow target (issue #852): every configured
+/// tileset-animation cadence divides upstream's 256-tick counter period
+/// (`pokeemerald/src/tileset_anims.c:564-569`), so this tick already reads
+/// as latched to every region, unlike a fresh room's own 0.
+const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
+
 impl OverworldPhase {
+    /// Advance [`OverworldPhase::tick`] by one frame, wrapping past
+    /// `u32::MAX` to [`TILESET_ANIM_WRAP_PERIOD`] rather than 0 (see that
+    /// constant's own doc comment). Shared by [`OverworldPhase::step`] and
+    /// [`OverworldPhase::advance_start_menu_frame`] (issue #852) so a second,
+    /// independent `wrapping_add` at either call site can never reintroduce
+    /// this same bug.
+    pub(super) fn advance_tileset_anim_tick(&mut self) {
+        self.tick = self.tick.checked_add(1).unwrap_or(TILESET_ANIM_WRAP_PERIOD);
+    }
+
     /// Advance the player by one frame: a held D-pad direction (module
     /// docs' [`held_direction`]) attempts a step/turn against a
     /// [`engine::overworld::MapRuntime`] rebuilt fresh this call (mirroring
@@ -251,7 +267,7 @@ impl OverworldPhase {
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
         // unconditionally, before the dialog early-return below.
-        self.tick = self.tick.wrapping_add(1);
+        self.advance_tileset_anim_tick();
 
         // A wild battle, the Route 101 scripted first battle (issue #231,
         // `super::first_battle_trigger`), the Route 103 rival battle (issue
