@@ -45,6 +45,12 @@ pub enum AudioError {
     LoopStartOutOfRange { loop_start: u32, sample_count: u32 },
     /// A zero pan override cannot round-trip because zero encodes no override.
     PanOverrideZero,
+    /// A `DirectSound` pan override exceeds the documented `1..=127` domain.
+    /// The value is the out-of-range override byte.
+    PanOverrideOutOfRange(u8),
+    /// A CGB square duty selector exceeds the documented `0..=3` domain. The
+    /// value is the out-of-range duty byte.
+    SquareDutyOutOfRange(u8),
     /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
     /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
@@ -117,6 +123,16 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack voicegroup: a DirectSound pan override of Some(0) is \
                  indistinguishable from no override on the wire; use None"
+            ),
+            Self::PanOverrideOutOfRange(pan) => write!(
+                f,
+                "audio-pack voicegroup: a DirectSound pan override of {pan} is \
+                 outside the valid range 1..=127"
+            ),
+            Self::SquareDutyOutOfRange(duty) => write!(
+                f,
+                "audio-pack voicegroup: a square duty cycle selector of {duty} \
+                 is outside the valid range 0..=3"
             ),
             Self::UnknownMemAccOp(byte) => {
                 write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")

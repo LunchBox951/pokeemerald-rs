@@ -101,6 +101,27 @@ fn effects_select_literal_or_attacker_level_damage() {
 }
 
 #[test]
+fn dragon_rage_and_sonic_boom_deal_the_game_defined_forty_and_twenty() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 23, vec![DRAGON_RAGE, SONIC_BOOM]);
+    let defender = mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
+
+    for (move_id, expected_damage) in [(DRAGON_RAGE, 40), (SONIC_BOOM, 20)] {
+        let mut rng = SequenceRng::new(LANDED_FIXED_DAMAGE_DRAWS);
+        let outcome =
+            resolve_fixed_damage_move(&dex, move_id, &attacker, &defender, &mut rng).unwrap();
+
+        assert_eq!(
+            outcome,
+            HitOutcome::Hit {
+                damage: expected_damage,
+                is_critical: false,
+            }
+        );
+    }
+}
+
+#[test]
 fn literal_damage_ignores_attacker_and_defender_stats() {
     let dex = Dex::new();
     let weak_attacker = mon(&dex, BULBASAUR, 5, vec![SONIC_BOOM]);

@@ -255,6 +255,28 @@ fn regular_tilemap_from_raw_rejects_wrong_length() {
 }
 
 #[test]
+fn regular_tilemap_from_raw_rejects_an_odd_trailing_byte() {
+    let err = regular_tilemap_from_raw(&[0u8; 2 * 32 * 32 + 1]).unwrap_err();
+    assert!(matches!(
+        err,
+        TitleSceneError::Render(RenderError::TilemapSizeMismatch { .. })
+    ));
+}
+
+#[test]
+fn regular_tilemap_from_raw_reports_a_distinct_count_when_short_by_one_byte() {
+    let err = regular_tilemap_from_raw(&[0u8; 2 * 32 * 32 - 1]).unwrap_err();
+    let TitleSceneError::Render(RenderError::TilemapSizeMismatch { expected, actual }) = err else {
+        panic!("expected a TilemapSizeMismatch error, got {err:?}");
+    };
+    assert_eq!(expected, 1024);
+    assert_eq!(
+        actual, 1023,
+        "a 2,047-byte map reports the whole entries it holds"
+    );
+}
+
+#[test]
 fn affine_tilemap_from_raw_decodes_flat_tile_indices() {
     let mut bytes = vec![0u8; 32 * 32];
     bytes[0] = 42;
