@@ -153,20 +153,8 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// Enter the release phase. Returns whether this transition is itself
-    /// upstream's release-start volume write, which on channels 1, 2, and 4
-    /// re-triggers the hardware channel (`pokeemerald/src/m4a.c:1060-1069`
-    /// sets `CGB_CHANNEL_MO_VOL` only when `release != 0`; a zero release
-    /// instead falls through to [`Self::step`]'s pseudo-echo transition on
-    /// the very next call, which reports its own retrigger).
-    ///
-    /// A repeat call while already releasing (or beyond it) reports no
-    /// retrigger and leaves the release timer alone: upstream's
-    /// `SOUND_CHANNEL_SF_STOP`-and-`SF_ENV` branch clears `SF_ENV` the one
-    /// time it fires (`m4a.c:1062`), so a second note-off the same tick — or
-    /// the gate timer expiring after an explicit note-off already landed —
-    /// finds that branch's condition false and never re-applies the write
-    /// (`m4a.c:1060`).
+    /// Enter the release phase, reporting whether release itself is the
+    /// retrigger-worthy volume write, once only (`m4a.c:1060-1069,1062`).
     pub fn note_off(&mut self) -> bool {
         let already_releasing =
             !matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
@@ -195,15 +183,9 @@ impl CgbEnvelope {
     /// or two iterations, so production rendering drives the envelope through
     /// `step_frame` rather than calling this directly (module docs).
     ///
-    /// Returns whether this iteration crossed one of upstream's three
-    /// `step`-reachable `CGB_CHANNEL_MO_VOL` phase transitions —
-    /// attack-to-decay (`m4a.c:1150-1158`), decay-to-sustain
-    /// (`m4a.c:1125-1137`), pseudo-echo start (`m4a.c:1090-1099`); release
-    /// start is [`Self::note_off`]'s own transition instead. The periodic
-    /// sustain refresh ([`Self::sustain_step`]) and ordinary in-phase
-    /// decrements never retrigger, matching upstream, which sets `modify`
-    /// only at these sites. [`crate::cgb_voice::Oscillator::retrigger`]'s
-    /// doc has the hardware mechanism this return value drives.
+    /// Returns whether this iteration crossed a retrigger-worthy
+    /// `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`; see
+    /// [`crate::cgb_voice::Oscillator::retrigger`]).
     pub fn step(&mut self) -> bool {
         match self.phase {
             Phase::Attack => self.attack_step(),
@@ -234,11 +216,8 @@ impl CgbEnvelope {
     /// other transition — note-on/note-off held frames included — falls
     /// through to that check normally and can be doubled.
     ///
-    /// Returns whether either iteration retriggered ([`Self::step`]'s doc):
-    /// upstream applies at most one hardware write per `CgbSound` channel
-    /// iteration regardless of how many times `envelope_step_repeat` looped
-    /// (`m4a.c:1206-1226` runs once, after the loop), so a retrigger in
-    /// either iteration this frame folds into one trigger event.
+    /// Returns whether either iteration retriggered: upstream applies at
+    /// most one hardware write per `CgbSound` iteration (`m4a.c:1206-1226`).
     pub(crate) fn step_frame(&mut self, extra_iteration: bool) -> bool {
         let retriggered = self.step();
         if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
@@ -280,11 +259,8 @@ impl CgbEnvelope {
         }
     }
 
-    /// Enter decay, or skip straight to sustain when `decay == 0`
-    /// (`m4a.c:1140-1144`). Returns whether entering decay is itself the
-    /// attack-to-decay volume write (`m4a.c:1150-1158`): only when `decay !=
-    /// 0`, matching upstream gating `CGB_CHANNEL_MO_VOL` on `envelopeCounter`
-    /// being nonzero after the assignment.
+    /// Enter decay, reporting whether this is the attack-to-decay
+    /// volume write (`m4a.c:1140-1158`).
     fn enter_decay(&mut self) -> bool {
         if self.adsr.decay == 0 {
             return self.enter_sustain_start();
@@ -310,10 +286,8 @@ impl CgbEnvelope {
         }
     }
 
-    /// Enter sustain, or skip straight to the pseudo-echo transition when
-    /// `sustain == 0` (`m4a.c:1126-1129`). Returns whether entering sustain
-    /// is itself the decay-to-sustain volume write (`m4a.c:1131-1137`): only
-    /// when `sustain != 0`.
+    /// Enter sustain, reporting whether this is the decay-to-sustain
+    /// volume write (`m4a.c:1126-1137`).
     fn enter_sustain_start(&mut self) -> bool {
         if self.adsr.sustain == 0 {
             return self.enter_pseudo_echo_or_silence();
@@ -347,16 +321,9 @@ impl CgbEnvelope {
     }
 
     /// Enter the pseudo-echo tail, or silence outright when its floor is
-    /// zero. A zero floor instead reaches upstream's `CgbOscOff`
-    /// (`m4a.c:1100-1103`, `:857-875`), a hard channel-off on a different
-    /// path than the `CGB_CHANNEL_MO_VOL` apply block
-    /// (`m4a.c:1206-1226`) — `CgbOscOff` does write `NRx4 = 0x80` for
-    /// channels 1 and 4, which is itself a hardware trigger, but the voice
-    /// retires in the same call ([`Self::silence`]) and renders no further
-    /// samples, so resetting sweep/LFSR state nothing will read again would
-    /// be an unobservable no-op; the caller does not apply it. Returns
-    /// whether entering the tail is itself the pseudo-echo-start volume
-    /// write (`m4a.c:1090-1099`): only when the floor is nonzero.
+    /// zero, reporting whether entering the tail is the pseudo-echo-start
+    /// volume write (`m4a.c:1090-1103`; see [`crate::cgb_voice::Oscillator::retrigger`]
+    /// for why silence is not).
     fn enter_pseudo_echo_or_silence(&mut self) -> bool {
         let floor = cgb_echo_floor(self.goal, self.echo_volume);
         if floor == 0 {

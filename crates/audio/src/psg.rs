@@ -171,12 +171,9 @@ impl Sweep {
             && self.next_frequency().is_none()
     }
 
-    /// Reloads the shadow frequency and timer from a hardware trigger,
-    /// without touching shift, direction, or period (`_resetSweep`,
-    /// `mgba/src/gb/audio.c:863-867`, and the shadow reload at
-    /// `mgba/src/gb/audio.c:182`). Callers must still recheck
-    /// [`Self::overflows_at_trigger`] afterward, matching the immediate
-    /// recheck at `mgba/src/gb/audio.c:184-186`.
+    /// Reloads the shadow frequency and timer from a hardware trigger
+    /// (`mgba/src/gb/audio.c:182,863-867`); recheck
+    /// [`Self::overflows_at_trigger`] after (`:184-186`).
     pub(crate) fn retrigger(&mut self, freq_reg: u16) {
         self.shadow_frequency = freq_reg.min(MAX_FREQUENCY_REGISTER);
         self.ticks_until_step = self.period_ticks;
@@ -269,18 +266,8 @@ impl SquareChannel {
         self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
     }
 
-    /// Reloads the sweep shadow frequency and timer from this channel's
-    /// *current* played frequency and reruns the overflow check
-    /// (`mgba/src/gb/audio.c:180-186`), exactly as at note-on (`Self::new`);
-    /// a no-op when there is no `sweep` (channel 2). Upstream's apply issues
-    /// this trigger write twice for channel 1 when NR10's direction bit is
-    /// clear (`pokeemerald/src/m4a.c:1219-1225`), but the only write that
-    /// can change the frequency register runs earlier in the same
-    /// `CgbSound` iteration (`m4a.c:1185-1226`), so a second reload from the
-    /// same register reaches the same shadow and overflow verdict as the
-    /// first — applying it once reproduces the doubled write's effect.
-    ///
-    /// Returns whether the channel still plays after the trigger.
+    /// Reloads the sweep shadow/timer from the current played frequency
+    /// and reruns the overflow check (`mgba/src/gb/audio.c:180-186`).
     #[must_use]
     pub fn retrigger(&mut self) -> bool {
         let Some(sweep) = self.sweep.as_mut() else {
@@ -456,13 +443,8 @@ impl NoiseChannel {
         self.step_delta = NoiseControl::from_byte(byte).step_delta;
     }
 
-    /// Resets the LFSR and restarts its clocking from a fresh interval,
-    /// exactly as at note-on (`Self::from_control_byte`), matching the
-    /// trigger also resetting the hardware's last-event timestamp
-    /// (`mgba/src/gb/audio.c:374,381-382`) rather than leaving the next
-    /// shift wherever this channel's fractional clock phase happened to
-    /// be; clock rate and width stay whatever the last [`Self::retune`]
-    /// set.
+    /// Resets the LFSR and clock phase, exactly as at note-on
+    /// (`mgba/src/gb/audio.c:374,381-382`).
     pub fn retrigger(&mut self) {
         self.phase = 0;
         self.lfsr = 0;

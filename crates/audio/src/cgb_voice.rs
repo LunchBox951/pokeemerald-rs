@@ -104,17 +104,22 @@ impl Oscillator {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
 
-    /// Re-applies the oscillator-level hardware trigger side effect an
-    /// envelope-volume write causes on channels 1 and 4
-    /// (`pokeemerald/src/m4a.c:1219-1226`, the non-wave `MO_VOL` apply
-    /// block): [`SquareChannel::retrigger`] reloads channel 1's sweep
-    /// shadow/timer and rechecks overflow; [`NoiseChannel::retrigger`]
-    /// resets channel 4's LFSR. Channel 2 has neither a sweep nor an LFSR,
-    /// so it is a no-op there, and the wave channel's own trigger fires only
-    /// once, at note-on, never on a later envelope transition
-    /// (`m4a.c:1209-1218`: `channels->n4`'s bit 7 is consumed and cleared
-    /// the first time this block runs for channel 3), so it is a no-op here
-    /// too. Returns whether the channel still plays after the trigger.
+    /// Re-applies the hardware trigger side effect a `CGB_CHANNEL_MO_VOL`
+    /// write causes on channels 1 and 4 (`pokeemerald/src/m4a.c:1219-1226`):
+    /// [`SquareChannel::retrigger`] reloads the sweep shadow/timer and
+    /// rechecks overflow; [`NoiseChannel::retrigger`] resets the LFSR.
+    /// Channel 2 has neither and is a no-op, as is the wave channel, whose
+    /// own trigger fires only once, at note-on (`m4a.c:1209-1218`).
+    /// Upstream issues this write twice for channel 1 when NR10's direction
+    /// bit is clear (`m4a.c:1223-1225`); applying it once here reproduces
+    /// the doubled write, since no other write can change the frequency
+    /// register in between (`m4a.c:1185-1226`). A transition into silence
+    /// with no echo floor reaches upstream's `CgbOscOff` instead
+    /// (`m4a.c:857-875,1100-1103`) and never calls this: the voice retires
+    /// in the same call and renders nothing further, so the state a real
+    /// trigger would reset here is never read again.
+    ///
+    /// Returns whether the channel still plays after the trigger.
     fn retrigger(&mut self) -> bool {
         match self {
             Self::Square(square) => square.retrigger(),
@@ -268,19 +273,8 @@ pub struct CgbVoice {
     gate: Gate,
     identity: VoiceIdentity,
     dac_correction: DacCorrection,
-    /// A retrigger [`Self::note_off`], [`Self::tick_gate`], or
-    /// [`Self::set_track_volume`] owes the oscillator, applied at the next
-    /// [`Self::begin_frame`] rather than immediately. Upstream applies a
-    /// tick's pitch writes (section 3,
-    /// `m4a.c:1185-1202`) before that same `CgbSound` call's volume/trigger
-    /// write (section 4, `m4a.c:1206-1226`) regardless of the order the
-    /// sequencer issued the underlying commands; `begin_frame` runs after
-    /// every per-tick command this render frame
-    /// (`Sequencer::do_tick`/`Self::set_track_pitch` precede
-    /// `Mixer::mix_frame`/`Self::begin_frame` in `Sequencer::render_frame`),
-    /// so deferring here reloads the sweep shadow from the frequency this
-    /// tick actually ends on, not a stale one from before a same-tick pitch
-    /// bend.
+    /// A retrigger owed to the oscillator, applied at the next
+    /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
     pending_retrigger: bool,
 }
 
@@ -560,38 +554,24 @@ impl CgbVoice {
         }
     }
 
-    /// Request note-off immediately. A nonzero release period makes this
-    /// itself the release-start volume write that retriggers channels 1 and
-    /// 4 ([`CgbEnvelope::note_off`]'s doc); [`Self::begin_frame`], not this
-    /// call, applies it (see this voice's `pending_retrigger` field).
+    /// Request note-off immediately; may owe the oscillator a retrigger
+    /// ([`CgbEnvelope::note_off`]'s doc).
     pub fn note_off(&mut self) {
         if self.envelope.note_off() {
             self.pending_retrigger = true;
         }
     }
 
-    /// Re-applies [`Oscillator::retrigger`]'s hardware trigger side effect,
-    /// retiring the envelope immediately when the trigger disables the
-    /// channel outright (channel 1's sweep overflow check,
-    /// `mgba/src/gb/audio.c:184-186`) — matching `mgba` clearing
-    /// `playingCh1` within the same trigger, before this frame renders a
-    /// sample.
+    /// Applies [`Oscillator::retrigger`], retiring the envelope when the
+    /// trigger disables the channel (`mgba/src/gb/audio.c:184-186`).
     fn apply_retrigger(&mut self) {
         if !self.oscillator.retrigger() {
             self.envelope.retire();
         }
     }
 
-    /// Update base volume, panning, and envelope goal from the owning
-    /// track. This is itself a retrigger: upstream marks a live CGB
-    /// channel `CGB_CHANNEL_MO_VOL` on the same `MPT_FLG_VOLCHG`-flagged
-    /// tick a volume/pan command or tremolo LFO step runs
-    /// (`m4a_1.s:1391-1400`), applied through the identical non-wave
-    /// trigger write an envelope phase transition uses
-    /// (`m4a.c:1206-1226`); [`crate::sequencer::Sequencer`]'s own call
-    /// sites already match that flag's frequency (an explicit volume/pan
-    /// command every time, a tremolo step only when its value changes), so
-    /// applying a retrigger on every call here reproduces it exactly.
+    /// Update base volume, panning, and envelope goal; itself a retrigger,
+    /// matching upstream's live volume/pan write (`m4a_1.s:1391-1400`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_from_track(vol_mr, vol_ml);
         self.envelope
@@ -606,12 +586,8 @@ impl CgbVoice {
         self.oscillator.retune(note_key, pit_m, self.dac_correction);
     }
 
-    /// Advance the software envelope and prepare gain for one render frame.
-    /// A note-off already owed a retrigger this frame (this voice's
-    /// `pending_retrigger` field), or a phase transition the software
-    /// envelope crosses this frame, retriggers the oscillator
-    /// ([`Oscillator::retrigger`]'s doc) before gain is computed, so a
-    /// channel-1 overflow silences this same frame.
+    /// Advance the software envelope and prepare gain for one render
+    /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
         let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
