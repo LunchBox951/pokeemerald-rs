@@ -387,6 +387,16 @@ pub(crate) struct OverworldPhase {
     /// [`Self::rival_battle`] (issue #248): cleared at trigger time, set
     /// only on a real reported outcome.
     rival_battle_outcome: Option<battle::BattleOutcome>,
+    /// Which [`assets::trainers::TrainerId`] [`Self::rival_battle`] is being
+    /// fought against, if any -- [`Self::sight_trainer_id`]'s sibling, for
+    /// the same reason: `SetBattledTrainersFlags`'s real effect
+    /// (`route103_rival_trigger`'s own neighbouring `TRAINER_FLAGS_START`
+    /// doc comment) needs the id back at battle-end, and
+    /// [`Self::begin_route103_rival_battle`] only has it at trigger time.
+    /// Set the instant the battle starts, cleared the instant it ends (win,
+    /// loss, or abort alike), so it is never stale once
+    /// [`Self::rival_battle`] is `None` again.
+    rival_trainer_id: Option<assets::trainers::TrainerId>,
     /// A Route 103 sight-trainer battle currently being played out, if any
     /// (issue #264) -- [`Self::rival_battle`]'s sibling, in its own field for
     /// the same reason: [`sight_trainer_trigger`] starts it via
@@ -670,6 +680,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
@@ -818,6 +829,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,

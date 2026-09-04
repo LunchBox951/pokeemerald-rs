@@ -54,6 +54,13 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `FLAG_HIDE_ROUTE_103_RIVAL` (`include/constants/flags.h:772`).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
+/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`) -- independently
+/// transcribed here too, the same convention [`VAR_OBJ_GFX_ID_0`]'s own doc
+/// comment explains. `SetBattledTrainersFlags`'s real effect
+/// (`src/battle_setup.c:1245-1250`, called from `CB2_EndTrainerBattle`'s
+/// non-defeat branch at `:1340-1348`).
+const TRAINER_FLAGS_START: u16 = 0x500;
+
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
 /// transcribed here too, the same convention [`VAR_OBJ_GFX_ID_0`]'s own doc
 /// comment explains. A fresh phase's `EventData` defaults every var to `0`
@@ -381,8 +388,12 @@ fn the_trigger_never_fires_off_route_103() {
 
 /// Item (e) of the issue's own test list: a concluded [`BattleOutcome::PlayerWon`]
 /// battle retains its outcome, writes the lead back, sets
-/// [`FLAG_HIDE_ROUTE_103_RIVAL`], and the rival is no longer
-/// interactable/visible -- so the fight cannot be re-triggered.
+/// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's own
+/// `TRAINER_FLAGS_START + id` defeated flag (`CB2_EndTrainerBattle`'s
+/// non-defeat branch calls both `RivalEnd`'s `removeobject` and
+/// `SetBattledTrainersFlags`, `src/battle_setup.c:1245-1250, 1340-1348` --
+/// issue #843), and the rival is no longer interactable/visible -- so the
+/// fight cannot be re-triggered.
 #[test]
 fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
     let mut phase = route_103_phase_facing_the_rival();
@@ -420,6 +431,16 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
         crate::new_game::STARTING_MONEY + reward,
         "a win must credit the trainer's prize money to the wallet (AddMoney)"
     );
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(TRAINER_FLAGS_START + trainer.0),
+        Ok(true),
+        "SetBattledTrainersFlags' real effect (src/battle_setup.c:1245-1250) -- a won trainer \
+         battle must set the fought trainer's own defeated flag, not just the rival's bespoke \
+         hide flag (issue #843)"
+    );
 
     // The rival is no longer even *found* by the facing lookup, so a fresh
     // A press finds nothing to interact with -- the fight cannot restart.
@@ -451,6 +472,62 @@ fn winning_the_rival_battle_saturates_money_at_the_upstream_cap() {
         999_999,
         "a reward that would cross MAX_MONEY must clamp to it, not wrap or overshoot"
     );
+}
+
+/// [`route103_rival::route103_rival_for`]'s full six-entry table
+/// (`route103_rival.rs:191-199`), not just the fresh-save default: whichever
+/// of the six `TRAINER_*_ROUTE_103_*` ids a playthrough actually fights, a
+/// win must set that exact trainer's own `TRAINER_FLAGS_START + id` flag
+/// (`SetBattledTrainersFlags`, `src/battle_setup.c:1245-1250`) -- the same
+/// contract [`winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable`]
+/// pins for the default id alone.
+#[test]
+fn winning_the_rival_battle_sets_the_exact_fought_trainers_defeated_flag_for_every_starter_and_gender(
+) {
+    use crate::flow::route103_rival::{route103_rival_for, PlayerStarter, Rival};
+
+    let combinations = [
+        (PlayerGender::Male, 0, PlayerStarter::Treecko),
+        (PlayerGender::Male, 1, PlayerStarter::Torchic),
+        (PlayerGender::Male, 2, PlayerStarter::Mudkip),
+        (PlayerGender::Female, 0, PlayerStarter::Treecko),
+        (PlayerGender::Female, 1, PlayerStarter::Torchic),
+        (PlayerGender::Female, 2, PlayerStarter::Mudkip),
+    ];
+    for (gender, starter_var, starter) in combinations {
+        let mut phase = route_103_phase_facing_the_rival();
+        phase.save2.player_gender = gender;
+        phase
+            .save1
+            .event_data
+            .var_set(VAR_STARTER_MON, starter_var)
+            .expect("VAR_STARTER_MON is an ordinary var id");
+        phase.party_lead = Some(overwhelming_treecko_lead());
+        phase.step(pressed(Buttons::A));
+        assert!(
+            phase.is_rival_battle_active(),
+            "setup: the battle started for {gender:?}/starter {starter_var}"
+        );
+
+        let outcome = play_out_rival_battle(&mut phase, 32);
+        assert_eq!(
+            outcome,
+            Some(BattleOutcome::PlayerWon),
+            "setup: must win for {gender:?}/starter {starter_var}"
+        );
+
+        let rival = Rival::for_gender(gender).expect("setup: Male/Female always has a rival");
+        let trainer = route103_rival_for(rival, starter);
+        assert_eq!(
+            phase
+                .save1()
+                .event_data
+                .flag_get(TRAINER_FLAGS_START + trainer.0),
+            Ok(true),
+            "trainer {trainer:?}'s own defeated flag must be set for {gender:?}/starter \
+             {starter_var}"
+        );
+    }
 }
 
 /// **Replaces** the former `losing_the_rival_battle_does_not_hide_the_rival`
@@ -502,6 +579,21 @@ fn losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear
         Ok(false),
         "a loss must not remove the rival -- upstream's `RivalEnd` branch is never reached \
          on a loss either"
+    );
+    // `SetBattledTrainersFlags` sits in `CB2_EndTrainerBattle`'s non-defeat
+    // branch, the same branch `RivalEnd`'s own effect is gated behind, so a
+    // loss must not set it either (issue #843).
+    let trainer = crate::flow::route103_rival::route103_rival_for(
+        crate::flow::route103_rival::Rival::May,
+        crate::flow::route103_rival::PlayerStarter::Treecko,
+    );
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(TRAINER_FLAGS_START + trainer.0),
+        Ok(false),
+        "a loss must not set the fought trainer's generic defeated flag either"
     );
     assert_eq!(
         phase.save1().money,
