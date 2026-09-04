@@ -416,14 +416,24 @@ impl<'a> SpriteLayer<'a> {
     /// gets either extension — a non-mosaic entry always uses
     /// [`MosaicSize::NONE`], at which both are a no-op.
     ///
-    /// An [`ObjMode::Window`] entry ignores its own mosaic bit entirely
-    /// (also [`MosaicSize::NONE`]): mgba selects the unconditional
-    /// non-mosaic loop whenever `FLAG_OBJWIN` is set, for both Regular and
-    /// affine sprites, before even checking `mosaicH`
-    /// (software-obj.c:344-345/360-361 regular, :287-288/303-304 affine).
+    /// An [`ObjMode::Window`] entry keeps vertical OBJ mosaic but not
+    /// horizontal: mgba snaps the *source row* before dispatch, keyed only
+    /// on the sprite's own mosaic bit
+    /// (`GBAVideoSoftwareRendererPreprocessSpriteLayer`,
+    /// video-software.c:1027,1042-1050) — never on `FLAG_OBJWIN` — but then
+    /// selects the plain, non-block-holding sprite loop whenever
+    /// `FLAG_OBJWIN` is set, for both Regular and affine sprites
+    /// (software-obj.c:287-288/303-304 affine, :344-345/360-361 regular).
+    /// That plain loop also never clamps its column to the bounding box
+    /// (mgba's raw `inX`/`localX` walk), so [`footprint`](Self::footprint)'s
+    /// mosaic-rounded trailing extension (still computed unconditionally,
+    /// before mgba's `FLAG_OBJWIN` dispatch — software-obj.c:233-239
+    /// affine, :320-325 regular) reaches sampling unclamped:
+    /// [`MosaicSize::vertical_only`] keeps the vertical row snap while
+    /// leaving every sampled column exactly where `footprint` put it.
     ///
-    /// A [`Regular`](AffineMode::Regular) entry snaps the mosaic-block
-    /// origin back into the footprint before sampling
+    /// A [`Regular`](AffineMode::Regular) entry otherwise snaps the
+    /// mosaic-block origin back into the footprint before sampling
     /// ([`MosaicSize::snap_local`]), matching mgba's `SPRITE_MOSAIC_LOOP`
     /// edge clamp. An affine entry instead holds the *transformed* source
     /// position across a block — see
@@ -437,7 +447,7 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        let mosaic = if entry.mosaic() && entry.mode() != ObjMode::Window {
+        let mosaic = if entry.mosaic() {
             mosaic
         } else {
             MosaicSize::NONE
@@ -445,7 +455,15 @@ impl<'a> SpriteLayer<'a> {
         let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
             return Texel::Outside;
         };
-        if matches!(entry.affine(), AffineMode::Regular) {
+        if entry.mode() == ObjMode::Window {
+            let vertical_only = mosaic.vertical_only();
+            if matches!(entry.affine(), AffineMode::Regular) {
+                let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
+                self.sample_local(entry, dx, ly)
+            } else {
+                self.sample_affine_local(entry, dx, dy, x, y, vertical_only)
+            }
+        } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
             self.sample_local(entry, lx, ly)
         } else {
@@ -530,9 +548,13 @@ impl<'a> SpriteLayer<'a> {
     }
 
     /// Fetch a [`Regular`](AffineMode::Regular) entry's texel at
-    /// footprint-local offset `(dx, dy)` (both already known to be inside
-    /// the bounding box, e.g. from [`footprint`](Self::footprint)). Applies
-    /// H/V flip and tile addressing; an affine entry never reaches this
+    /// footprint-local offset `(dx, dy)`. `dy` is always inside the bounding
+    /// box (from [`footprint`](Self::footprint)); `dx` usually is too, but
+    /// an [`ObjMode::Window`] entry's mosaic-rounded trailing block
+    /// (`sample_entry_mosaic`) can push it past `width - 1` — mgba's
+    /// unclamped `inX` for that case reads on into the next in-VRAM tile,
+    /// which the tile-index wrap below reproduces unclamped. Applies H/V
+    /// flip and tile addressing; an affine entry never reaches this
     /// method — see [`sample_affine_local`](Self::sample_affine_local).
     #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
     fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
@@ -544,8 +566,17 @@ impl<'a> SpriteLayer<'a> {
         let (width, height) = entry.bounding_box();
 
         // H/V flip mirrors the whole sprite footprint, not each tile
-        // independently (unlike a BG ScreenEntry's per-tile flip bits).
-        let local_col = if entry.h_flip() { width - 1 - dx } else { dx };
+        // independently (unlike a BG ScreenEntry's per-tile flip bits). The
+        // h_flip branch saturates instead of subtracting outright: mgba's
+        // own h-flip loop would walk `inX` negative for the OBJ-window
+        // out-of-bounds `dx` above (an out-of-spec wrapped VRAM read no
+        // caller exercises), so this clamps to the sprite's own leftmost
+        // column instead of replicating that read.
+        let local_col = if entry.h_flip() {
+            (width - 1).saturating_sub(dx)
+        } else {
+            dx
+        };
         let local_row = if entry.v_flip() { height - 1 - dy } else { dy };
 
         let tiles_per_row = width / DIM;
@@ -1473,13 +1504,17 @@ mod tests {
     }
 
     #[test]
-    fn affine_objwin_mask_ignores_obj_mosaic() {
+    fn affine_objwin_mask_ignores_horizontal_obj_mosaic() {
         // Same x = 2, mosaicH = 4 geometry as the affine mosaic tests above,
         // but `ObjMode::Window`. mgba selects the unconditional non-mosaic
         // `SPRITE_TRANSFORMED_LOOP(_, OBJWIN)` whenever `FLAG_OBJWIN` is set
         // (software-obj.c:287-288/303-304), never the mosaic-holding loop —
         // so a mosaic-enabled OBJWIN entry's mask must match its non-mosaic
-        // mask exactly, pixel for pixel.
+        // mask exactly, pixel for pixel. This test's mosaic is vertically a
+        // no-op (v = 1); it isolates the horizontal block hold mgba's
+        // OBJWIN loop skips, not the vertical row snap mgba's preprocess
+        // step still applies (see
+        // `objwin_mask_still_applies_vertical_obj_mosaic`).
         let mut bytes = [0u8; 32];
         bytes[0] = 0x01;
         bytes[1] = 0x02;
@@ -1508,12 +1543,60 @@ mod tests {
     }
 
     #[test]
-    fn regular_objwin_mask_ignores_obj_mosaic() {
-        // Regular-sprite counterpart: mgba's regular loop selects the same
-        // unconditional non-mosaic `SPRITE_NORMAL_LOOP(_, OBJWIN)` whenever
-        // `FLAG_OBJWIN` is set (software-obj.c:344-345/360-361), so a
-        // mosaic-enabled Regular `ObjMode::Window` entry must also ignore
-        // its own mosaic bit for the mask.
+    fn regular_objwin_mask_keeps_the_mosaic_rounded_draw_condition() {
+        // Pinned mgba rounds `condition` up to the next H mosaic boundary
+        // for any mosaic-bit sprite *before* the FLAG_OBJWIN dispatch
+        // (software-obj.c:318-325), then runs SPRITE_NORMAL_LOOP(_, OBJWIN)
+        // out to that rounded condition with an unclamped `inX`
+        // (software-obj.c:8-14, 344-345). An 8x8 OBJWIN entry at x = 2 with
+        // mosaicH = 4 therefore has condition = round_up(10, 4) = 12, and
+        // screen x = 10, 11 sample inX = 8, 9 -> the tile after the
+        // sprite's own (xBase = 32), masking wherever that tile is opaque.
+        // Screen x = 12 is past the rounded condition and must stay clear.
+        let mut bytes = [0u8; 64];
+        for byte in &mut bytes[..32] {
+            *byte = 0x11; // tile 0: opaque everywhere.
+        }
+        bytes[32] = 0x11; // tile 1: row 0 cols 0 and 1 opaque.
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
+        let palette = Palette::new(colors);
+        let entries = [entry(2, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(4, 1);
+
+        for x in 2..10 {
+            assert!(
+                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                "screen x = {x} is inside the raw footprint"
+            );
+        }
+        for x in [10, 11] {
+            assert!(
+                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                "screen x = {x} is inside the mosaic-rounded draw condition"
+            );
+        }
+        assert!(
+            !layer.objwin_mask_with_mosaic(12, 0, mosaic),
+            "screen x = 12 is past the rounded draw condition"
+        );
+    }
+
+    #[test]
+    fn regular_objwin_mask_ignores_horizontal_obj_mosaic() {
+        // Regular-sprite counterpart to the affine case below: mgba's
+        // regular loop selects the same unconditional non-mosaic
+        // `SPRITE_NORMAL_LOOP(_, OBJWIN)` whenever `FLAG_OBJWIN` is set
+        // (software-obj.c:344-345/360-361), so a mosaic-enabled Regular
+        // `ObjMode::Window` entry's mask must match its non-mosaic mask —
+        // this test's mosaic is vertically a no-op (v = 1), so it isolates
+        // the horizontal per-block hold/clamp mgba's OBJWIN loop skips, not
+        // the vertical row snap mgba's preprocess step still applies (see
+        // `objwin_mask_still_applies_vertical_obj_mosaic`).
         let mut bytes = [0u8; 32];
         bytes[0] = 0x01;
         bytes[1] = 0x02;
@@ -1536,6 +1619,36 @@ mod tests {
                 "screen x = {x}"
             );
         }
+    }
+
+    #[test]
+    fn objwin_mask_still_applies_vertical_obj_mosaic() {
+        // mgba snaps a mosaic-enabled sprite's source row *before* dispatch,
+        // in `GBAVideoSoftwareRendererPreprocessSpriteLayer`
+        // (video-software.c:1027,1042-1050): `localY = mosaicY` is keyed only
+        // on the sprite's own mosaic bit and `mosaicV > 1`, never on its OBJ
+        // mode, and that snapped row is what `PreprocessSprite` turns into
+        // `inY` (software-obj.c:212). `FLAG_OBJWIN` only skips the
+        // *horizontal* mosaic loop (:344-345/360-361). So an OBJWIN entry
+        // must still read its mosaic-snapped row.
+        //
+        // 8x8 Regular OBJWIN entry at (0, 0) with V mosaic 4. Column 0 is
+        // index 0 (transparent) on row 0 and index 2 (opaque) on row 1, so
+        // screen row 1 snaps back to source row 0 and the mask must clear.
+        let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
+        let palette = quadrant_palette();
+        let entries = [entry(0, 0, true)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        // Control: without mosaic, screen row 1 reads source row 1 (opaque).
+        assert!(layer.objwin_mask_with_mosaic(0, 1, MosaicSize::NONE));
+
+        assert!(
+            !layer.objwin_mask_with_mosaic(0, 1, MosaicSize::new(1, 4)),
+            "vertical mosaic must snap screen row 1 back to transparent source row 0"
+        );
     }
 
     #[test]

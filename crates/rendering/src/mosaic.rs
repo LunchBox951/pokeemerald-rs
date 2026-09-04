@@ -85,6 +85,22 @@ impl MosaicSize {
         }
     }
 
+    /// Returns a copy with the horizontal dimension neutralized (`1`, a
+    /// one-pixel block) and the vertical dimension unchanged.
+    ///
+    /// Lets a caller keep vertical block snapping while leaving every
+    /// column exactly where it already was — see
+    /// `crate::sprite::SpriteLayer::sample_entry_mosaic`'s `ObjMode::Window`
+    /// branch for the mGBA-fidelity contract this exists for
+    /// `(behavioral-fidelity)`.
+    #[must_use]
+    pub const fn vertical_only(&self) -> Self {
+        Self {
+            h: Self::MIN_DIMENSION,
+            v: self.v,
+        }
+    }
+
     /// Extends a sprite's raw right edge to the next horizontal block boundary.
     ///
     /// Negative edges use Rust's truncating remainder, matching mGBA's
