@@ -80,7 +80,14 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
-    std::thread::sleep(DEVICE_TAIL_WAIT);
+    if let Err(err) = wait_for_device_tail(
+        DEVICE_TAIL_WAIT,
+        || output.stream_errors(),
+        std::thread::sleep,
+    ) {
+        eprintln!("audio playback stopped: {}", err.describe());
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 
@@ -172,6 +179,9 @@ enum DrainError {
     StreamStopped { errors: u64, remaining: usize },
     /// `RetryPolicy::max_wait` elapsed with no stream error reported.
     DeadlineExceeded { remaining: usize },
+    /// `AudioOutput::stream_errors` went nonzero after the ring emptied,
+    /// while the device was still playing its final buffer.
+    StreamStoppedDuringTail { errors: u64 },
 }
 
 impl DrainError {
@@ -180,6 +190,10 @@ impl DrainError {
             DrainError::StreamStopped { errors, remaining } => format!(
                 "{errors} asynchronous stream error(s) reported while {remaining} sample(s) were \
                  still queued and unplayed"
+            ),
+            DrainError::StreamStoppedDuringTail { errors } => format!(
+                "{errors} asynchronous stream error(s) reported while the device played its \
+                 final buffer"
             ),
             DrainError::DeadlineExceeded { remaining } => format!(
                 "no drain progress before the {:.1}s retry deadline; {remaining} sample(s) were \
@@ -224,6 +238,20 @@ fn wait_for_drain(
     }
 }
 
+/// Hold the stream open for `tail`, then re-read `stream_errors`: a device
+/// error during the tail still means the last buffer never played.
+fn wait_for_device_tail(
+    tail: Duration,
+    mut stream_errors: impl FnMut() -> u64,
+    mut sleep: impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    sleep(tail);
+    match stream_errors() {
+        0 => Ok(()),
+        errors => Err(DrainError::StreamStoppedDuringTail { errors }),
+    }
+}
+
 /// A short ascending scale played on a looping square-wave instrument.
 fn build_song() -> Song {
     // A 64-sample square wave; `freq` chosen so key 60 renders near unity.
@@ -264,7 +292,9 @@ mod tests {
 
     use platform::AudioOutput;
 
-    use super::{push_frame, wait_for_drain, DrainError, PushError, RetryPolicy};
+    use super::{
+        push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError, RetryPolicy,
+    };
 
     #[test]
     fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
@@ -515,5 +545,36 @@ mod tests {
             "a permanently full ring with no stream error must time out, not report success"
         );
         assert_eq!(output.stream_errors(), 0, "the null backend never errors");
+    }
+
+    #[test]
+    fn a_stream_error_during_the_device_tail_is_not_a_successful_finish() {
+        let mut slept = Vec::new();
+        let mut errors_seen = 0_u64;
+
+        let result = wait_for_device_tail(
+            std::time::Duration::from_millis(200),
+            || {
+                // The disconnect lands while the device plays its last buffer:
+                // the counter is clean when the drain ended and nonzero after
+                // the tail wait.
+                errors_seen += 1;
+                errors_seen
+            },
+            |d| slept.push(d),
+        );
+
+        assert_eq!(slept, [std::time::Duration::from_millis(200)]);
+        assert!(matches!(
+            result,
+            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+        ));
+    }
+
+    #[test]
+    fn a_clean_device_tail_finishes_successfully() {
+        let result = wait_for_device_tail(std::time::Duration::from_millis(200), || 0, |_| {});
+
+        assert!(result.is_ok());
     }
 }
