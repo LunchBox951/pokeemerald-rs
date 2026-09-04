@@ -205,6 +205,16 @@ pub enum BattleEvent {
         /// The move that targeted the already-paralysed battler.
         move_id: MoveId,
     },
+    /// A paralysis move exited through `BattleScript_LimberProtected`
+    /// (`data/battle_scripts_1.s:1034`-`:1038`): the target's
+    /// [`AbilityId::LIMBER`] blocked the move before `typecalc` or the
+    /// accuracy draw.
+    LimberProtected {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move the ability blocked.
+        move_id: MoveId,
+    },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
         /// The replacement's species.

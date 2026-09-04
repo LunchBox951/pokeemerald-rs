@@ -143,3 +143,43 @@ fn a_landed_hit_applies_paralysis_with_a_single_draw_and_does_not_mutate() {
         "resolve_paralyze_move reports the outcome; the caller applies it"
     );
 }
+
+/// `SPECIES_PERSIAN`: Normal, and Limber in its only ability slot.
+const PERSIAN: SpeciesId = SpeciesId(53);
+
+#[test]
+fn a_limber_defender_is_protected_before_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, PERSIAN, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), assets::species::AbilityId::LIMBER);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_ne!(
+        outcome,
+        ParalyzeOutcome::Applied,
+        "jumpifability BS_TARGET, ABILITY_LIMBER exits the script (data/battle_scripts_1.s:1011)"
+    );
+    assert_eq!(
+        rng.draws(),
+        0,
+        "the Limber guard precedes typecalc and accuracycheck"
+    );
+}
+
+#[test]
+fn a_limber_defender_reports_the_limber_protected_outcome() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, PERSIAN, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::LimberProtected,
+        "BattleScript_LimberProtected (data/battle_scripts_1.s:1034-1038) is its own exit, \
+         distinct from the type-immunity exit"
+    );
+}

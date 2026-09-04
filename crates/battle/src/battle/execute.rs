@@ -415,6 +415,12 @@ impl Battle {
         };
 
         match outcome {
+            ParalyzeOutcome::LimberProtected => {
+                events.push(BattleEvent::LimberProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
             ParalyzeOutcome::Immune => {
                 events.push(BattleEvent::NoEffect {
                     by_player: attacker_is_player,

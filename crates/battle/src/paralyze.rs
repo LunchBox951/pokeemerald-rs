@@ -2,7 +2,8 @@
 //! Stun Spore, Glare).
 //!
 //! `data/battle_scripts_1.s:1007`-`:1032`: `attackcanceler`, `attackstring`,
-//! `ppreduce`, then `typecalc`'s type-immunity guard, then the two
+//! `ppreduce`, then the `jumpifability BS_TARGET, ABILITY_LIMBER` guard
+//! (`:1011`), then `typecalc`'s type-immunity guard, then the two
 //! `jumpifstatus` status guards, and only then `accuracycheck`. The guards
 //! run before the accuracy draw and consume no randomness of their own; a
 //! successful check writes [`crate::status1::Status1::Paralysed`] with
@@ -20,17 +21,23 @@
 //! match that resolved message rather than the script label it exits
 //! through.
 //!
-//! Not ported: `jumpifability BS_TARGET, ABILITY_LIMBER` (`:1011`, no
-//! ability-guard modelled here), `jumpifstatus2 BS_TARGET,
-//! STATUS2_SUBSTITUTE` (`:1012`, no Substitute), and `jumpifsideaffecting
-//! BS_TARGET, SIDE_STATUS_SAFEGUARD` (`:1018`, no side conditions) — each is
-//! simply absent from this module, so none can newly fire before the checks
-//! this module does run. The `STATUS1_ANY` guard at `:1016` (any *other*
-//! primary status blocks a second one) is likewise never reached: this crate
-//! has no primary status besides [`crate::status1::Status1::Paralysed`] to
-//! be already carrying.
+//! `ABILITY_LIMBER` exits through `BattleScript_LimberProtected` (`:1034`-
+//! `:1038`) instead, a distinct script that never reaches `typecalc` or
+//! `accuracycheck`; unlike the immune exit above, its own printed message
+//! (`gPRLZPreventionStringIds[B_MSG_ABILITY_PREVENTS_MOVE_STATUS]`,
+//! `src/battle_message.c:1223`) names the ability, so it keeps its own
+//! [`ParalyzeOutcome::LimberProtected`] outcome rather than collapsing into
+//! [`ParalyzeOutcome::Immune`].
+//!
+//! Not ported: `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE` (`:1012`, no
+//! Substitute), and `jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD`
+//! (`:1018`, no side conditions) — each is simply absent from this module,
+//! so neither can newly fire before the checks this module does run. The
+//! `STATUS1_ANY` guard at `:1016` (any *other* primary status blocks a
+//! second one) is likewise never reached: this crate has no primary status
+//! besides [`crate::status1::Status1::Paralysed`] to be already carrying.
 
-use assets::{MoveEffect, MoveId, Type};
+use assets::{AbilityId, MoveEffect, MoveId, Type};
 
 use crate::accuracy::accuracy_check;
 use crate::damage::{apply_dual_type_effectiveness, BattleRng};
@@ -69,6 +76,8 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// The result of resolving an [`EFFECT_PARALYZE`] move, before any mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParalyzeOutcome {
+    /// The defender's ability is [`AbilityId::LIMBER`].
+    LimberProtected,
     /// The defender's typing is immune to the move.
     Immune,
     /// The defender already carries [`Status1::Paralysed`].
@@ -82,9 +91,10 @@ pub enum ParalyzeOutcome {
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// The type-immunity and already-paralysed guards precede the accuracy draw
-/// and consume no randomness; a landed hit needs only that one draw, since
-/// `seteffectprimary` inflicts the status unconditionally once reached.
+/// The Limber, type-immunity, and already-paralysed guards precede the
+/// accuracy draw and consume no randomness; a landed hit needs only that one
+/// draw, since `seteffectprimary` inflicts the status unconditionally once
+/// reached.
 ///
 /// # Errors
 ///
@@ -99,6 +109,13 @@ pub fn resolve_paralyze_move(
     rng: &mut impl BattleRng,
 ) -> Result<ParalyzeOutcome, BattleError> {
     ensure_resolvable(dex, move_id)?;
+
+    // `jumpifability BS_TARGET, ABILITY_LIMBER` (`data/battle_scripts_1.s:1011`)
+    // exits before `typecalc` runs, so this precedes even the move-type lookup
+    // below.
+    if defender.ability() == AbilityId::LIMBER {
+        return Ok(ParalyzeOutcome::LimberProtected);
+    }
 
     let move_data = dex.move_data(move_id)?;
     let move_type = move_data
