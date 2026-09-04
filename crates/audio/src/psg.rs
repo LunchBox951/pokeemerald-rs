@@ -171,6 +171,17 @@ impl Sweep {
             && self.next_frequency().is_none()
     }
 
+    /// Reloads the shadow frequency and timer from a hardware trigger,
+    /// without touching shift, direction, or period (`_resetSweep`,
+    /// `mgba/src/gb/audio.c:863-867`, and the shadow reload at
+    /// `mgba/src/gb/audio.c:182`). Callers must still recheck
+    /// [`Self::overflows_at_trigger`] afterward, matching the immediate
+    /// recheck at `mgba/src/gb/audio.c:184-186`.
+    pub(crate) fn retrigger(&mut self, freq_reg: u16) {
+        self.shadow_frequency = freq_reg.min(MAX_FREQUENCY_REGISTER);
+        self.ticks_until_step = self.period_ticks;
+    }
+
     /// Advances the sweep by one 128 Hz tick.
     pub fn tick(&mut self) -> SweepResult {
         if self.period_ticks == 0 {
@@ -217,6 +228,7 @@ pub struct SquareChannel {
     duty: SquareDuty,
     phase: u32,
     step_delta: u32,
+    freq_reg: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
 }
@@ -231,6 +243,7 @@ impl SquareChannel {
             duty: SquareDuty::from_register(duty),
             phase: 0,
             step_delta: 0,
+            freq_reg: 0,
             sweep,
             disabled_at_trigger,
         };
@@ -251,8 +264,30 @@ impl SquareChannel {
 
     /// Retunes the channel from an 11-bit frequency register value.
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        self.freq_reg = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
+    }
+
+    /// Reloads the sweep shadow frequency and timer from this channel's
+    /// *current* played frequency and reruns the overflow check
+    /// (`mgba/src/gb/audio.c:180-186`), exactly as at note-on (`Self::new`);
+    /// a no-op when there is no `sweep` (channel 2). Upstream's apply issues
+    /// this trigger write twice for channel 1 when NR10's direction bit is
+    /// clear (`pokeemerald/src/m4a.c:1219-1225`), but the only write that
+    /// can change the frequency register runs earlier in the same
+    /// `CgbSound` iteration (`m4a.c:1185-1226`), so a second reload from the
+    /// same register reaches the same shadow and overflow verdict as the
+    /// first — applying it once reproduces the doubled write's effect.
+    ///
+    /// Returns whether the channel still plays after the trigger.
+    #[must_use]
+    pub fn retrigger(&mut self) -> bool {
+        let Some(sweep) = self.sweep.as_mut() else {
+            return true;
+        };
+        sweep.retrigger(self.freq_reg);
+        !sweep.overflows_at_trigger()
     }
 
     /// Advances channel 1's sweep, returning `false` when it disables the channel.
@@ -421,6 +456,19 @@ impl NoiseChannel {
         self.step_delta = NoiseControl::from_byte(byte).step_delta;
     }
 
+    /// Resets the LFSR and restarts its clocking from a fresh interval,
+    /// exactly as at note-on (`Self::from_control_byte`), matching the
+    /// trigger also resetting the hardware's last-event timestamp
+    /// (`mgba/src/gb/audio.c:374,381-382`) rather than leaving the next
+    /// shift wherever this channel's fractional clock phase happened to
+    /// be; clock rate and width stay whatever the last [`Self::retune`]
+    /// set.
+    pub fn retrigger(&mut self) {
+        self.phase = 0;
+        self.lfsr = 0;
+        self.shift_lfsr();
+    }
+
     fn shift_lfsr(&mut self) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
@@ -434,6 +482,11 @@ impl NoiseChannel {
     #[cfg(test)]
     pub(crate) fn is_narrow(&self) -> bool {
         self.width == LfsrWidth::SevenBit
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lfsr(&self) -> u16 {
+        self.lfsr
     }
 
     /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
