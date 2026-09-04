@@ -270,14 +270,13 @@ pub struct App {
     /// equivalent is flash plus the `gSaveCounter`/`gLastWrittenSector`
     /// globals.
     save_slot: SaveSlot,
-    /// This session's title-screen BGM (S-3, issue #185): `Some` for exactly
-    /// as long as [`AppScene::Title`] is the active scene (see
-    /// [`Self::advance_music`]) and a pack/audio device were both available
-    /// at boot -- `None` otherwise, including for every headless `App` this
-    /// module's other constructors build, which never attempt to open one.
-    /// Best-effort by design: a missing pack or audio device silences the
-    /// BGM rather than failing the whole boot (module docs' "log-or-ignore
-    /// is fine" policy, matching issue #70's precedent for input).
+    /// This session's title-screen BGM (S-3, issue #185): `Some` from boot
+    /// through [`AppScene::Title`] and its post-title fade/drain (see
+    /// [`Self::advance_music`]), given a pack/audio device were both
+    /// available at boot -- `None` otherwise, including for every headless
+    /// `App` this module's other constructors build. Best-effort: a missing
+    /// pack or audio device silences the BGM rather than failing the whole
+    /// boot (module docs' "log-or-ignore is fine" policy, issue #70).
     music: Option<MusicPlayer>,
     /// This session's carried-forward reverb level ([`MusicContext`]'s own
     /// docs), threaded through every [`Self::start_title_music`] call so a
@@ -567,21 +566,14 @@ impl App {
     /// `SetMainCallback2(CB2_GoToMainMenu)` (`:786`), so the BGM keeps
     /// playing, quieter each step, across the palette fade into the main
     /// menu. [`MusicPlayer::fade_out`] models `m4aMPlayFadeOut`'s schedule
-    /// (see its own docs for the arithmetic and the one divergence); this
-    /// method keeps the player alive and ticking until
-    /// [`MusicPlayer::fade_finished`] reports upstream's terminal
-    /// "stop every track, pause the player" state, and only then drops it
-    /// (tearing the stream down -- [`Self::music`]'s field docs).
+    /// (see its own docs for the arithmetic and the one divergence).
+    ///
+    /// Once [`MusicPlayer::fade_finished`], this stops rendering new frames
+    /// and keeps the player alive until [`MusicPlayer::drained`] confirms
+    /// the queued tail played, only then dropping it (issue #458).
     ///
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.
-    ///
-    /// Dropping the player also discards whatever the ring still buffers
-    /// (~half its capacity, ≈9 game frames), so the audible tail truncates
-    /// around 8/64 (≈-18 dB) of the schedule rather than reaching exact
-    /// silence -- inherent to any buffered producer, and strictly quieter
-    /// than the last samples the device would otherwise play; revisit by
-    /// draining the ring before the drop if the tail ever matters.
     ///
     /// A no-op throughout when [`Self::music`] is already `None` (no
     /// pack/audio device at boot, or a headless `App` that never requested
@@ -593,9 +585,12 @@ impl App {
         if !matches!(self.scene, Some(AppScene::Title(_))) {
             music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
         }
-        music.advance_frame();
         if music.fade_finished() {
-            self.music = None;
+            if music.drained() {
+                self.music = None;
+            }
+        } else {
+            music.advance_frame();
         }
     }
 
@@ -722,6 +717,12 @@ impl App {
     /// music is playing.
     fn music_underruns_for_test(&self) -> Option<u64> {
         self.music.as_ref().map(MusicPlayer::underruns)
+    }
+
+    /// Test-only: this session's ring free-space in samples, or `None` if no
+    /// music is playing.
+    fn music_ring_free_for_test(&self) -> Option<usize> {
+        self.music.as_ref().map(MusicPlayer::ring_free_for_test)
     }
 }
 

@@ -26,6 +26,13 @@ const FADE_VOL_STEP: i32 = 4 << FADE_VOL_SHIFT;
 /// Frames between title-music fade steps.
 pub const TITLE_FADE_OUT_SPEED: u16 = 4;
 
+/// Bounds [`MusicPlayer::drained`]'s wait for a `ring_capacity`-sample ring
+/// to empty: twice the frames a full ring needs to drain at one rendered
+/// frame per game frame, so a stalled consumer cannot wait forever.
+fn max_drain_wait_frames(ring_capacity: usize) -> usize {
+    2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)
+}
+
 /// Audio state inherited by songs started in the same session.
 ///
 /// Songs without a reverb override inherit the most recently resolved level,
@@ -98,6 +105,14 @@ pub struct MusicPlayer {
     overruns: u64,
     fade: Option<FadeOut>,
     resolved_reverb: u8,
+    /// Total ring capacity in samples for [`Self::drained`], read from the
+    /// fresh, unconsumed `output` this instance was started with -- same
+    /// precondition `prefill` already relies on.
+    ring_capacity: usize,
+    /// [`Self::drained`]'s poll bound, from [`max_drain_wait_frames`].
+    max_drain_wait_frames: usize,
+    /// [`Self::drained`]'s poll count since the fade finished.
+    drain_wait_frames: usize,
 }
 
 impl MusicPlayer {
@@ -173,6 +188,7 @@ impl MusicPlayer {
             reverb_level,
         );
         let producer = output.producer();
+        let ring_capacity = producer.available_space();
         let overruns = prefill(&mut sequencer, &producer);
         start_output(&mut output)?;
         context.master_reverb = reverb_level;
@@ -184,6 +200,9 @@ impl MusicPlayer {
             overruns,
             fade: None,
             resolved_reverb: reverb_level,
+            ring_capacity,
+            max_drain_wait_frames: max_drain_wait_frames(ring_capacity),
+            drain_wait_frames: 0,
         })
     }
 
@@ -227,6 +246,20 @@ impl MusicPlayer {
     #[must_use]
     pub fn fade_finished(&self) -> bool {
         self.fade.is_some_and(|fade| fade.finished)
+    }
+
+    /// Whether it is now safe to drop this player without truncating the
+    /// fade's tail: the ring has drained, the stream errored
+    /// ([`AudioOutput::stream_errors`]), or a bounded poll count elapsed.
+    /// Counts one poll per call; meaningful only once [`Self::fade_finished`].
+    #[must_use]
+    pub fn drained(&mut self) -> bool {
+        if self.producer.available_space() >= self.ring_capacity || self.output.stream_errors() > 0
+        {
+            return true;
+        }
+        self.drain_wait_frames += 1;
+        self.drain_wait_frames >= self.max_drain_wait_frames
     }
 
     /// Returns the number of samples replaced with silence after an underrun.
