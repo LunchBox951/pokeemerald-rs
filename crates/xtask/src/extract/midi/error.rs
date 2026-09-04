@@ -12,6 +12,9 @@ pub(crate) enum MidiError {
     TickOverflow(u32),
     /// The compiled track count does not fit the song schema.
     TooManyTracks(usize),
+    /// A compiled track's event count does not fit the song schema's `u32`
+    /// event-count field.
+    TooManyTrackEvents(usize),
     /// The encoded voicegroup pack id (the `audio/voicegroup/` prefix plus
     /// the configured label) does not fit the song schema's `u16`
     /// string-length field. Carries the id's UTF-8 byte length.
@@ -76,6 +79,10 @@ impl fmt::Display for MidiError {
             Self::TooManyTracks(count) => write!(
                 f,
                 "compiled song has {count} tracks, more than the schema's u8 track count allows"
+            ),
+            Self::TooManyTrackEvents(count) => write!(
+                f,
+                "compiled track has {count} events, more than the schema's u32 event count allows"
             ),
             Self::VoiceGroupPackIdTooLong(byte_len) => write!(
                 f,
