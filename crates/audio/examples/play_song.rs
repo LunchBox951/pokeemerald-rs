@@ -22,11 +22,13 @@ const RING_CAPACITY_FRAMES: usize = 4096;
 /// manual smoke command.
 const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 
-/// An empty ring only means the callback took the samples; the device has not
-/// played them yet, and dropping `AudioOutput` closes the stream rather than
-/// draining it. Hold it open this long afterwards so the last note is not
-/// clipped.
-const DEVICE_TAIL_WAIT: Duration = Duration::from_millis(200);
+/// Added to the device's own callback bound in [`device_tail_wait`] to cover
+/// the resampler's one-frame lookahead and scheduler jitter.
+const DEVICE_TAIL_MARGIN: Duration = Duration::from_millis(50);
+
+/// The tail wait when the device advertises no callback size at all: longer
+/// than any common callback buffer, short enough not to drag the smoke run.
+const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 
 fn main() -> ExitCode {
     let song = build_song();
@@ -80,11 +82,8 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
-    if let Err(err) = wait_for_device_tail(
-        DEVICE_TAIL_WAIT,
-        || output.stream_errors(),
-        std::thread::sleep,
-    ) {
+    let tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
+    if let Err(err) = wait_for_device_tail(tail, || output.stream_errors(), std::thread::sleep) {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
@@ -238,6 +237,22 @@ fn wait_for_drain(
     }
 }
 
+/// How long the device may still be playing after the ring reads empty:
+/// its largest advertised callback buffer at its own rate, plus
+/// [`DEVICE_TAIL_MARGIN`]; [`DEVICE_TAIL_FALLBACK`] when it advertises none.
+/// An empty ring only means the callback took the samples, and dropping
+/// `AudioOutput` closes the stream rather than draining it.
+fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32) -> Duration {
+    match max_callback_frames {
+        Some(frames) if device_sample_rate > 0 => {
+            let frames = u32::try_from(frames).unwrap_or(u32::MAX);
+            Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
+                + DEVICE_TAIL_MARGIN
+        }
+        _ => DEVICE_TAIL_FALLBACK,
+    }
+}
+
 /// Hold the stream open for `tail`, then re-read `stream_errors`: a device
 /// error during the tail still means the last buffer never played.
 fn wait_for_device_tail(
@@ -293,7 +308,8 @@ mod tests {
     use platform::AudioOutput;
 
     use super::{
-        push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError, RetryPolicy,
+        device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError,
+        RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
     };
 
     #[test]
@@ -576,5 +592,23 @@ mod tests {
         let result = wait_for_device_tail(std::time::Duration::from_millis(200), || 0, |_| {});
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn the_device_tail_is_derived_from_the_advertised_callback_bound() {
+        // 24 000 frames at 48 kHz is half a second of queued audio: longer
+        // than the fixed fallback, which would have clipped it.
+        let tail = device_tail_wait(Some(24_000), 48_000);
+        assert_eq!(
+            tail,
+            std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN
+        );
+        assert!(tail > DEVICE_TAIL_FALLBACK);
+    }
+
+    #[test]
+    fn an_unknown_callback_bound_falls_back_to_the_fixed_tail() {
+        assert_eq!(device_tail_wait(None, 48_000), DEVICE_TAIL_FALLBACK);
+        assert_eq!(device_tail_wait(Some(4_096), 0), DEVICE_TAIL_FALLBACK);
     }
 }
