@@ -251,9 +251,6 @@ mod tests {
         }
     }
 
-    /// Binds a `width`x`height` grid of `bytes` (little-endian packed
-    /// cells) and `primary_attributes` to a fresh runtime over `header` and
-    /// `events`.
     fn runtime_with_grid<'a>(
         header: &'a MapHeader,
         events: &'a MapEvents,
