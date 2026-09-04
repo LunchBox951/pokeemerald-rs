@@ -103,6 +103,33 @@ impl Oscillator {
     fn disabled_at_trigger(&self) -> bool {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
+
+    /// Re-applies the hardware trigger side effect a `CGB_CHANNEL_MO_VOL`
+    /// write causes on channels 1 and 4 (`pokeemerald/src/m4a.c:1219-1226`):
+    /// [`SquareChannel::retrigger`] reloads the sweep shadow/timer and
+    /// rechecks overflow; [`NoiseChannel::retrigger`] resets the LFSR.
+    /// Channel 2 has neither and is a no-op, as is the wave channel, whose
+    /// own trigger fires only once, at note-on (`m4a.c:1209-1218`).
+    /// Upstream issues this write twice for channel 1 when NR10's direction
+    /// bit is clear (`m4a.c:1223-1225`); applying it once here reproduces
+    /// the doubled write, since no other write can change the frequency
+    /// register in between (`m4a.c:1185-1226`). A transition into silence
+    /// with no echo floor reaches upstream's `CgbOscOff` instead
+    /// (`m4a.c:857-875,1100-1103`) and never calls this: the voice retires
+    /// in the same call and renders nothing further, so the state a real
+    /// trigger would reset here is never read again.
+    ///
+    /// Returns whether the channel still plays after the trigger.
+    fn retrigger(&mut self) -> bool {
+        match self {
+            Self::Square(square) => square.retrigger(),
+            Self::Wave(_) => true,
+            Self::Noise(noise) => {
+                noise.retrigger();
+                true
+            }
+        }
+    }
 }
 
 fn noise_control_byte(note_key: u8, lfsr_width_selector: u8) -> u8 {
@@ -246,6 +273,9 @@ pub struct CgbVoice {
     gate: Gate,
     identity: VoiceIdentity,
     dac_correction: DacCorrection,
+    /// A retrigger owed to the oscillator, applied at the next
+    /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
+    pending_retrigger: bool,
 }
 
 impl CgbVoice {
@@ -455,6 +485,7 @@ impl CgbVoice {
             gate: Gate::new(gate_time),
             identity: VoiceIdentity::new(track, midi_key),
             dac_correction,
+            pending_retrigger: false,
         }
     }
 
@@ -518,21 +549,34 @@ impl CgbVoice {
 
     /// Advance the note-off gate by one sequencer tick.
     pub fn tick_gate(&mut self) {
-        if self.gate.tick() {
-            self.envelope.note_off();
+        if self.gate.tick() && self.envelope.note_off() {
+            self.pending_retrigger = true;
         }
     }
 
-    /// Request note-off immediately.
+    /// Request note-off immediately; may owe the oscillator a retrigger
+    /// ([`CgbEnvelope::note_off`]'s doc).
     pub fn note_off(&mut self) {
-        self.envelope.note_off();
+        if self.envelope.note_off() {
+            self.pending_retrigger = true;
+        }
     }
 
-    /// Update base volume, panning, and envelope goal from the owning track.
+    /// Applies [`Oscillator::retrigger`], retiring the envelope when the
+    /// trigger disables the channel (`mgba/src/gb/audio.c:184-186`).
+    fn apply_retrigger(&mut self) {
+        if !self.oscillator.retrigger() {
+            self.envelope.retire();
+        }
+    }
+
+    /// Update base volume, panning, and envelope goal; itself a retrigger,
+    /// matching upstream's live volume/pan write (`m4a_1.s:1391-1400`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_from_track(vol_mr, vol_ml);
         self.envelope
             .set_goal(self.adsr, self.routing.envelope_goal());
+        self.pending_retrigger = true;
     }
 
     /// Retune from the owning track while preserving note identity and noise width.
@@ -542,9 +586,14 @@ impl CgbVoice {
         self.oscillator.retune(note_key, pit_m, self.dac_correction);
     }
 
-    /// Advance the software envelope and prepare gain for one render frame.
+    /// Advance the software envelope and prepare gain for one render
+    /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
-        self.envelope.step_frame(extra_envelope_iteration);
+        let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
+        let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
+        if retriggered_by_note_off || retriggered_by_transition {
+            self.apply_retrigger();
+        }
         let envelope_gain = self.oscillator.envelope_gain_256(self.envelope.volume());
         let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
         self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
@@ -585,6 +634,13 @@ impl CgbVoice {
     pub(crate) fn sweep_frequency(&self) -> Option<u16> {
         match &self.oscillator {
             Oscillator::Square(s) => s.sweep_frequency(),
+            _ => None,
+        }
+    }
+
+    fn noise_lfsr(&self) -> Option<u16> {
+        match &self.oscillator {
+            Oscillator::Noise(n) => Some(n.lfsr()),
             _ => None,
         }
     }
@@ -768,6 +824,53 @@ mod tests {
         let octave_up = 12;
         narrow.set_track_pitch(octave_up, 0);
         assert_eq!(narrow.noise_is_narrow(), Some(true));
+    }
+
+    #[test]
+    fn release_start_volume_write_retriggers_the_noise_lfsr() {
+        // An envelope phase transition is itself a volume write, and
+        // upstream applies every one of them, on channels 1, 2, and 4, by
+        // rewriting NRx2 and re-triggering NRx4 with bit 7 set
+        // (`m4a.c:1060-1069` for release start specifically,
+        // `m4a.c:1219-1226` for the apply). A channel-4 trigger resets the
+        // LFSR (`mgba/src/gb/audio.c:374`), so the release-start transition
+        // must restart the noise sequence from its note-on state, even
+        // though the note has been playing (and thus walking its LFSR
+        // forward) for several frames.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: MAX_MASTER_VOLUME,
+            release: 4,
+        };
+        let mut voice = noise_voice(adsr, WIDE_NOISE, TestNote::default());
+        let at_note_on = voice.noise_lfsr();
+
+        let mut acc = vec![(0i32, 0i32); 64];
+        for _ in 0..3 {
+            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.render(&mut acc, &[]);
+        }
+        let walked_away = voice.noise_lfsr();
+        assert_ne!(
+            walked_away, at_note_on,
+            "sanity: a sustained note must have walked the LFSR away from note-on"
+        );
+
+        voice.note_off();
+        assert_eq!(
+            voice.noise_lfsr(),
+            walked_away,
+            "sanity: note_off must not retrigger before the next begin_frame -- upstream applies \
+             a tick's writes inside the following CgbSound call, not synchronously"
+        );
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert_eq!(
+            voice.noise_lfsr(),
+            at_note_on,
+            "note_off's release-start volume write (release != 0) must retrigger channel 4 at \
+             the next begin_frame, clearing the LFSR"
+        );
     }
 
     #[test]
@@ -1109,6 +1212,116 @@ mod tests {
         assert!(
             !voice.is_active(),
             "the voice must retire once the sweep overflows"
+        );
+    }
+
+    #[test]
+    fn attack_to_decay_volume_write_retriggers_channel1_sweep_from_the_current_frequency() {
+        // An envelope phase transition is itself a volume write, and
+        // upstream applies every one of them, on channels 1, 2, and 4, by
+        // rewriting NRx2 and re-triggering NRx4 with bit 7 set
+        // (`m4a.c:1150-1158` for attack-to-decay specifically,
+        // `m4a.c:1219-1226` for the apply). A channel-1 trigger reloads the
+        // sweep shadow frequency from the channel's *current* played
+        // frequency and reruns the overflow check
+        // (`mgba/src/gb/audio.c:180-186`) -- not from whatever the shadow
+        // was left at, which matters once a mid-note pitch bend
+        // (`set_track_pitch`) has moved the played frequency away from it.
+        // A pitch bend alone does not retrigger (`m4a.c:1185-1202` writes
+        // NRx3/NRx4 without forcing the trigger bit), so a note built at a
+        // safe frequency and bent upward before its first envelope
+        // transition must still be caught by that transition's retrigger.
+        let safe_key: u8 = 48;
+        let overflow_prone_key: u8 = 120; // shares its overflow fixture with
+                                          // `square1_upward_sweep_overflow_is_born_dead`.
+        let mut voice = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            HALF_DUTY,
+            Some(upward_sweep(0, 1)),
+            CgbAdsr {
+                attack: 0,
+                decay: 1,
+                sustain: MAX_MASTER_VOLUME,
+                release: 0,
+            },
+            safe_key,
+            0,
+            FULL_TRACK_VOLUME,
+            FULL_TRACK_VOLUME,
+            FULL_VELOCITY,
+            0,
+            safe_key,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            voice.is_active(),
+            "constructed at a safe frequency, the sweep must not be born dead"
+        );
+
+        voice.set_track_pitch(i32::from(overflow_prone_key) - i32::from(safe_key), 0);
+        assert!(
+            voice.is_active(),
+            "a pitch bend alone must not retrigger the sweep"
+        );
+
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // attack==0 -> decay!=0: retriggers
+
+        assert!(
+            !voice.is_active(),
+            "the attack-to-decay volume write must retrigger channel 1, reloading the sweep \
+             shadow from the bent frequency and finding it overflows"
+        );
+    }
+
+    #[test]
+    fn live_track_volume_update_retriggers_channel1_sweep_from_the_current_frequency() {
+        // A live volume/pan update is itself an upstream volume write, not
+        // only an envelope phase transition: upstream marks a CGB channel
+        // `CGB_CHANNEL_MO_VOL` on the same `MPT_FLG_VOLCHG`-flagged tick a
+        // volume/pan command or tremolo step runs (`m4a_1.s:1391-1400`),
+        // applied through the identical non-wave trigger write
+        // (`m4a.c:1219-1226`).
+        let safe_key: u8 = 48;
+        let overflow_prone_key: u8 = 120;
+        let mut voice = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(0, 1)),
+            TestNote::at_key(safe_key),
+        );
+        // `CgbAdsr::flat()` still crosses one retrigger-worthy transition on
+        // its very first frame (attack and decay both instant, landing
+        // directly in sustain, `enter_sustain_start`'s doc) -- settle past
+        // it here so the frame under test isolates `set_track_volume`'s own
+        // retrigger from an envelope-transition one.
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert!(
+            voice.is_active(),
+            "the settling frame must not itself overflow"
+        );
+
+        voice.set_track_pitch(i32::from(overflow_prone_key) - i32::from(safe_key), 0);
+        assert!(
+            voice.is_active(),
+            "a pitch bend alone must not retrigger the sweep"
+        );
+
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        assert!(
+            voice.is_active(),
+            "sanity: set_track_volume must not retrigger before the next begin_frame"
+        );
+
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // now steady in sustain: no transition of
+                                                     // its own, so only set_track_volume's
+                                                     // pending retrigger can explain a silence
+
+        assert!(
+            !voice.is_active(),
+            "a live volume update must retrigger channel 1, reloading the sweep shadow from \
+             the bent frequency and finding it overflows"
         );
     }
 }

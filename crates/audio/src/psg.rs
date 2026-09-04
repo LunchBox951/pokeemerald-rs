@@ -171,6 +171,14 @@ impl Sweep {
             && self.next_frequency().is_none()
     }
 
+    /// Reloads the shadow frequency and timer from a hardware trigger
+    /// (`mgba/src/gb/audio.c:182,863-867`); recheck
+    /// [`Self::overflows_at_trigger`] after (`:184-186`).
+    pub(crate) fn retrigger(&mut self, freq_reg: u16) {
+        self.shadow_frequency = freq_reg.min(MAX_FREQUENCY_REGISTER);
+        self.ticks_until_step = self.period_ticks;
+    }
+
     /// Advances the sweep by one 128 Hz tick.
     pub fn tick(&mut self) -> SweepResult {
         if self.period_ticks == 0 {
@@ -217,6 +225,7 @@ pub struct SquareChannel {
     duty: SquareDuty,
     phase: u32,
     step_delta: u32,
+    freq_reg: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
 }
@@ -231,6 +240,7 @@ impl SquareChannel {
             duty: SquareDuty::from_register(duty),
             phase: 0,
             step_delta: 0,
+            freq_reg: 0,
             sweep,
             disabled_at_trigger,
         };
@@ -251,8 +261,20 @@ impl SquareChannel {
 
     /// Retunes the channel from an 11-bit frequency register value.
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        self.freq_reg = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
+    }
+
+    /// Reloads the sweep shadow/timer from the current played frequency
+    /// and reruns the overflow check (`mgba/src/gb/audio.c:180-186`).
+    #[must_use]
+    pub fn retrigger(&mut self) -> bool {
+        let Some(sweep) = self.sweep.as_mut() else {
+            return true;
+        };
+        sweep.retrigger(self.freq_reg);
+        !sweep.overflows_at_trigger()
     }
 
     /// Advances channel 1's sweep, returning `false` when it disables the channel.
@@ -421,6 +443,14 @@ impl NoiseChannel {
         self.step_delta = NoiseControl::from_byte(byte).step_delta;
     }
 
+    /// Resets the LFSR and clock phase, exactly as at note-on
+    /// (`mgba/src/gb/audio.c:374,381-382`).
+    pub fn retrigger(&mut self) {
+        self.phase = 0;
+        self.lfsr = 0;
+        self.shift_lfsr();
+    }
+
     fn shift_lfsr(&mut self) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
@@ -434,6 +464,11 @@ impl NoiseChannel {
     #[cfg(test)]
     pub(crate) fn is_narrow(&self) -> bool {
         self.width == LfsrWidth::SevenBit
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lfsr(&self) -> u16 {
+        self.lfsr
     }
 
     /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
