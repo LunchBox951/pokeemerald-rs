@@ -30,6 +30,11 @@ const DEVICE_TAIL_MARGIN: Duration = Duration::from_millis(50);
 /// than any common callback buffer, short enough not to drag the smoke run.
 const DEVICE_TAIL_FALLBACK: Duration = Duration::from_millis(200);
 
+/// Ceiling on the derived tail. A backend's advertised maximum is the largest
+/// buffer it *supports*, not the default it selects, and can run to seconds;
+/// this keeps a manual smoke run from looking hung after the last note.
+const DEVICE_TAIL_MAX: Duration = Duration::from_secs(1);
+
 fn main() -> ExitCode {
     let song = build_song();
     let mut seq = Sequencer::new(song);
@@ -239,15 +244,17 @@ fn wait_for_drain(
 
 /// How long the device may still be playing after the ring reads empty:
 /// its largest advertised callback buffer at its own rate, plus
-/// [`DEVICE_TAIL_MARGIN`]; [`DEVICE_TAIL_FALLBACK`] when it advertises none.
-/// An empty ring only means the callback took the samples, and dropping
-/// `AudioOutput` closes the stream rather than draining it.
+/// [`DEVICE_TAIL_MARGIN`], capped at [`DEVICE_TAIL_MAX`];
+/// [`DEVICE_TAIL_FALLBACK`] when it advertises none. An empty ring only
+/// means the callback took the samples, and dropping `AudioOutput` closes
+/// the stream rather than draining it.
 fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32) -> Duration {
     match max_callback_frames {
         Some(frames) if device_sample_rate > 0 => {
             let frames = u32::try_from(frames).unwrap_or(u32::MAX);
-            Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate))
-                + DEVICE_TAIL_MARGIN
+            let buffered =
+                Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate));
+            (buffered + DEVICE_TAIL_MARGIN).min(DEVICE_TAIL_MAX)
         }
         _ => DEVICE_TAIL_FALLBACK,
     }
@@ -309,7 +316,7 @@ mod tests {
 
     use super::{
         device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError,
-        RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
+        RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -610,5 +617,13 @@ mod tests {
     fn an_unknown_callback_bound_falls_back_to_the_fixed_tail() {
         assert_eq!(device_tail_wait(None, 48_000), DEVICE_TAIL_FALLBACK);
         assert_eq!(device_tail_wait(Some(4_096), 0), DEVICE_TAIL_FALLBACK);
+    }
+
+    #[test]
+    fn an_oversized_advertised_buffer_is_capped_rather_than_slept_out() {
+        // ALSA-style backends advertise maxima of seconds; the *selected*
+        // callback buffer is far smaller, so waiting the maximum would look
+        // like a hang.
+        assert_eq!(device_tail_wait(Some(480_000), 48_000), DEVICE_TAIL_MAX);
     }
 }
