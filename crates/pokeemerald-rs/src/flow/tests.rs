@@ -5,12 +5,12 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed, AnimatedTitle,
-    AppScene, MainMenuAction, MainMenuState,
+    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed,
+    window_frame_for, AnimatedTitle, AppScene, MainMenuAction, MainMenuState,
 };
-use crate::game_save::SaveSlot;
+use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
-use crate::main_menu::{MainMenuItem, MainMenuType};
+use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuType};
 use crate::new_game;
 use platform::{ButtonState, Buttons};
 
@@ -179,6 +179,69 @@ fn title_a_or_start_button_transitions_to_main_menu() {
     }
 }
 
+/// Issue #795: `advance_scene`'s own `Title` -> `MainMenu` transition --
+/// not a hand-called construction helper -- must border the menu with a
+/// continued save's own `optionsWindowFrameType`
+/// (`gSaveBlock2Ptr->optionsWindowFrameType`, read by
+/// `GetWindowFrameTilesPal` for every main-menu box,
+/// `main_menu.c:2191-2193`), not a hardcoded default. Closes the loop
+/// [`crate::flow::save_continue_tests::a_saved_games_own_window_frame_choice_borders_its_main_menu`]
+/// cannot without a real pack: that test proves the construction API and
+/// the real save round trip separately, against a synthetic pack; this one
+/// drives the actual production call site end to end, against a real pack
+/// (both `TitleScene` and `main_menu::load_default_with_window_frame` read
+/// from it).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame() {
+    use super::save_continue_tests::{new_game_phase, save_from_the_start_menu};
+
+    const SAVED_WINDOW_FRAME: u8 = 5;
+
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
+
+    let temp = TempSave::new("real-pack-window-frame");
+    let mut save_slot = temp.slot();
+    let mut phase = new_game_phase();
+    // A mid-game options change, mirroring
+    // `save_continue_tests`' own fixture: not the zeroed fresh-save
+    // default `new_game::init_save_blocks` starts every session with.
+    phase.save2.options_window_frame_type = SAVED_WINDOW_FRAME;
+    save_from_the_start_menu(&mut phase, &mut save_slot);
+
+    let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene: title_scene,
+        tick: 0,
+        presented: false,
+    }));
+
+    let (next, frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
+    let AppScene::MainMenu(state) = next else {
+        panic!("A on the title screen must transition to the main menu");
+    };
+    assert_eq!(
+        state.scene.menu_type(),
+        MainMenuType::SavedGame,
+        "a save just written must be offerable as CONTINUE"
+    );
+
+    let expected = MainMenuScene::from_pack_with_window_frame(
+        &pack,
+        MainMenuType::SavedGame,
+        SAVED_WINDOW_FRAME,
+    )
+    .expect("run `cargo xtask extract` first")
+    .compose_frame();
+
+    assert_eq!(
+        *frame, *expected,
+        "advance_scene's own Title -> MainMenu transition must border the \
+         menu with the save's own optionsWindowFrameType, not a hardcoded \
+         default"
+    );
+}
+
 /// I-3 scene-flow test: title screen, no advance press -> stays on title
 /// and keeps animating (the pre-I-3 animated-title behaviour must
 /// survive the state-machine refactor unchanged).
@@ -270,6 +333,44 @@ fn menu_action_maps_each_item_to_its_upstream_action() {
         MainMenuAction::None,
         "A on OPTION must not launch anything -- ACTION_OPTION's screen \
          is not built yet (issue #216 scope notes)"
+    );
+}
+
+/// Issue #795: `advance_scene`'s `Title` -> `MainMenu` transition threads
+/// `window_frame_for(&saved)` into main-menu construction, so which border
+/// a given boot verdict produces is pinned here on the pure decision
+/// function too -- the same pack-less treatment [`menu_type_for`]'s own doc
+/// comment already gives the menu-type half of that same call.
+#[test]
+fn window_frame_for_reads_the_saved_blocks_own_option() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let fresh = SavedGame {
+        status: SaveFileStatus::Empty,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2::default(),
+    };
+    assert_eq!(
+        window_frame_for(&fresh),
+        0,
+        "a zeroed, fresh save block's own optionsWindowFrameType is 0 \
+         (WINDOW_FRAME_TYPE_0)"
+    );
+
+    let saved = SavedGame {
+        status: SaveFileStatus::Ok,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_window_frame_type: 12,
+            ..SaveBlock2::default()
+        },
+    };
+    assert_eq!(
+        window_frame_for(&saved),
+        12,
+        "a continued save's own recovered optionsWindowFrameType must not \
+         be discarded for a hardcoded default"
     );
 }
 
@@ -475,4 +576,46 @@ fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_sp
     assert_eq!(phase.save1.location.map_num, new_game::SPAWN_MAP_NUM);
     assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
     assert_eq!(phase.save2.encryption_key, 0);
+}
+
+/// Upstream re-clears the save blocks after a corrupt verdict:
+/// `CB2_InitCopyrightScreenAfterBootup` calls `Sav2_ClearSetDefault()` when
+/// `gSaveFileStatus` is `SAVE_STATUS_EMPTY`/`SAVE_STATUS_CORRUPT`
+/// (`intro.c:1154-1156`), and `SetDefaultOptions` puts
+/// `optionsWindowFrameType` back to 0 (`new_game.c:91-98`). A corrupt boot
+/// still recovers a checksum-valid `SaveBlock2` here, so the no-save main
+/// menu must not wear that save's border. `SAVE_STATUS_ERROR` is not cleared
+/// upstream -- one slot loaded intact -- so its recovered border survives.
+#[test]
+fn a_corrupt_boot_falls_back_to_the_default_window_frame() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let recovered = SaveBlock2 {
+        options_window_frame_type: 5,
+        ..SaveBlock2::default()
+    };
+
+    let corrupt = SavedGame {
+        status: SaveFileStatus::Corrupt,
+        block1: SaveBlock1::default(),
+        block2: recovered.clone(),
+    };
+    assert_eq!(
+        window_frame_for(&corrupt),
+        0,
+        "a corrupt boot clears SaveBlock2 and re-defaults the option \
+         (intro.c:1154-1156 -> new_game.c:91-98)"
+    );
+
+    let one_bad_slot = SavedGame {
+        status: SaveFileStatus::Error,
+        block1: SaveBlock1::default(),
+        block2: recovered,
+    };
+    assert_eq!(
+        window_frame_for(&one_bad_slot),
+        5,
+        "SAVE_STATUS_ERROR loaded an intact slot and is never cleared"
+    );
 }
