@@ -51,9 +51,9 @@ const DEVICE_TAIL_MARGIN_MILLIS: usize = 50;
 /// advertises no callback bound at all.
 const DEVICE_TAIL_FLOOR_MILLIS: usize = 200;
 
-/// Ceiling for [`device_tail_millis`]: an advertised bound is a maximum the
-/// device may never reach, so an outsized one must not hold the title -> main
-/// menu transition open for as long as it claims.
+/// Ceiling for [`device_tail_millis`]: the advertised bound is an unvalidated
+/// device-reported `u32`, so an outsized one must not hold the audio device
+/// open for as long as it claims.
 const DEVICE_TAIL_MAX_MILLIS: usize = 1_000;
 
 /// [`DEVICE_TAIL_FLOOR_MILLIS`] in game frames, the wait every device gets at
