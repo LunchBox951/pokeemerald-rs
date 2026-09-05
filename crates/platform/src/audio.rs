@@ -105,6 +105,9 @@ pub struct AudioOutput {
     /// stream's error closure; a nonzero value means the stream is unhealthy.
     /// Always zero for the null backend, which owns no `cpal` stream.
     stream_errors: Arc<AtomicU64>,
+    /// `max_buffer_frames` of the negotiated config; `0` for the null backend
+    /// and for a device advertising no concrete range.
+    max_callback_frames: usize,
 }
 
 impl AudioOutput {
@@ -185,6 +188,7 @@ impl AudioOutput {
             channels,
             running: false,
             stream_errors,
+            max_callback_frames: max_buffer_frames(&config),
         })
     }
 
@@ -205,6 +209,7 @@ impl AudioOutput {
             channels: Self::CHANNELS,
             running: false,
             stream_errors: Arc::new(AtomicU64::new(0)),
+            max_callback_frames: 0,
         }
     }
 
@@ -267,6 +272,20 @@ impl AudioOutput {
         self.channels
     }
 
+    /// The largest callback buffer the device advertises, in frames at
+    /// [`Self::device_sample_rate`], or `None` when it advertises no concrete
+    /// range. Once the ring reads empty, at most this much audio (plus the
+    /// resampler's one-frame lookahead) is still queued in the device, so a
+    /// caller that wants the tail heard before dropping the stream waits it
+    /// out from this bound. Always `None` for the null backend.
+    #[must_use]
+    pub fn max_callback_frames(&self) -> Option<usize> {
+        match self.max_callback_frames {
+            0 => None,
+            frames => Some(frames),
+        }
+    }
+
     /// A cloneable producer handle for filling the ring buffer with
     /// rendered PCM. See [`crate::ring::Producer`].
     #[must_use]
@@ -293,6 +312,13 @@ impl AudioOutput {
     #[must_use]
     pub fn stream_errors(&self) -> u64 {
         self.stream_errors.load(Ordering::Relaxed)
+    }
+
+    /// Records one asynchronous stream error as the `cpal` error closure in
+    /// `build_stream` does, so a null-backend test can stand in for a device.
+    #[doc(hidden)]
+    pub fn record_stream_error_for_test(&self) {
+        self.stream_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
@@ -498,6 +524,7 @@ mod tests {
         assert_eq!(output.sample_rate(), 13_379);
         assert_eq!(output.sample_rate(), AudioOutput::M4A_MIXER_RATE);
         assert_eq!(output.device_sample_rate(), AudioOutput::M4A_MIXER_RATE);
+        assert_eq!(output.max_callback_frames(), None);
         assert_eq!(output.channels(), AudioOutput::CHANNELS);
         assert!(!output.is_running());
         // The null backend owns no cpal stream, so it never records errors.

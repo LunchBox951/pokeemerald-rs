@@ -24,7 +24,9 @@ mod player;
 #[cfg(test)]
 mod tests;
 
-pub use player::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
+pub use player::{
+    MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_FRAMES, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED,
+};
 
 // `m4a_tables.c:252` and `:253` assign these XCMD subcommand IDs.
 const XCMD_PSEUDO_ECHO_VOLUME: u8 = 0x08;

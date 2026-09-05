@@ -9,7 +9,9 @@
 //! This also scales reverb already in the mix and ends its tail sooner than
 //! applying the fade before the original feedback loop.
 
-use audio::{Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
+use audio::{
+    Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES, MIXER_RATE, SAMPLES_PER_FRAME,
+};
 use platform::{AudioOutput, PlatformError, Producer};
 
 use super::MusicError;
@@ -25,6 +27,79 @@ const FADE_VOL_STEP: i32 = 4 << FADE_VOL_SHIFT;
 
 /// Frames between title-music fade steps.
 pub const TITLE_FADE_OUT_SPEED: u16 = 4;
+
+/// Bounds [`MusicPlayer::drained`]'s wait for a `ring_capacity`-sample ring
+/// to empty, so a stalled consumer cannot hold the transition open forever:
+/// twice the frames a full ring needs to drain at one rendered frame per game
+/// frame, but never fewer than `device_tail_frames`.
+///
+/// The ring-only figure assumes the consumer drains about as often as the
+/// game renders. A device whose callback period outlasts it leaves the ring
+/// nonempty until its next callback -- a healthy stream waiting its turn, not
+/// a stalled one -- so the same bound that decides how long that device's
+/// buffers take to sound also floors the wait for them to be taken.
+fn max_drain_wait_frames(ring_capacity: usize, device_tail_frames: usize) -> usize {
+    (2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)).max(device_tail_frames)
+}
+
+/// Added to the device's advertised callback bound in [`device_tail_millis`]
+/// for the queueing between a callback returning and its samples sounding,
+/// which the advertisement does not describe.
+const DEVICE_TAIL_MARGIN_MILLIS: usize = 50;
+
+/// Floor for [`device_tail_millis`], and the whole wait for a device that
+/// advertises no callback bound at all.
+const DEVICE_TAIL_FLOOR_MILLIS: usize = 200;
+
+/// Ceiling for [`device_tail_millis`]: the advertised bound is an unvalidated
+/// device-reported `u32`, so an outsized one must not hold the audio device
+/// open for as long as it claims.
+const DEVICE_TAIL_MAX_MILLIS: usize = 1_000;
+
+/// [`DEVICE_TAIL_FLOOR_MILLIS`] in game frames, the wait every device gets at
+/// least.
+pub const DEVICE_TAIL_FLOOR_FRAMES: usize = game_frames_in(DEVICE_TAIL_FLOOR_MILLIS);
+
+/// How long a healthy stream stays open past its empty ring, for the samples
+/// the callback already took to sound.
+///
+/// The transport reports no playback position and caps no latency --
+/// `build_stream` opens the device's default buffer size -- so this is
+/// derived, not measured: the largest callback buffer the device advertises,
+/// at its own rate, plus [`DEVICE_TAIL_MARGIN_MILLIS`], held between
+/// [`DEVICE_TAIL_FLOOR_MILLIS`] and [`DEVICE_TAIL_MAX_MILLIS`]. A device
+/// advertising no concrete range, or no rate, gets the floor.
+fn device_tail_millis(max_callback_frames: Option<usize>, device_sample_rate: u32) -> usize {
+    let (Some(frames), rate @ 1..) = (max_callback_frames, u64::from(device_sample_rate)) else {
+        return DEVICE_TAIL_FLOOR_MILLIS;
+    };
+    let buffered = u64::try_from(frames)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(1000)
+        / rate;
+    usize::try_from(buffered)
+        .unwrap_or(usize::MAX)
+        .saturating_add(DEVICE_TAIL_MARGIN_MILLIS)
+        .clamp(DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MAX_MILLIS)
+}
+
+/// How long a healthy stream may leave the ring nonempty between callbacks,
+/// the floor [`max_drain_wait_frames`] takes: the derived device tail, or
+/// [`DEVICE_TAIL_MAX_MILLIS`] for a device advertising no bound, whose
+/// cadence is unknown rather than short.
+fn callback_cadence_frames(max_callback_frames: Option<usize>, device_sample_rate: u32) -> usize {
+    match (max_callback_frames, device_sample_rate) {
+        (Some(_), 1..) => {
+            game_frames_in(device_tail_millis(max_callback_frames, device_sample_rate))
+        }
+        _ => game_frames_in(DEVICE_TAIL_MAX_MILLIS),
+    }
+}
+
+/// `millis` as whole game frames, the unit [`MusicPlayer::drained`] polls in.
+const fn game_frames_in(millis: usize) -> usize {
+    (millis * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME)
+}
 
 /// Audio state inherited by songs started in the same session.
 ///
@@ -98,6 +173,21 @@ pub struct MusicPlayer {
     overruns: u64,
     fade: Option<FadeOut>,
     resolved_reverb: u8,
+    /// The ring's fixed total size in samples, which [`Self::drained`]
+    /// compares free space against to decide the ring is empty. Read from the
+    /// ring itself, not from the free space at construction, so a caller that
+    /// queued through [`AudioOutput::producer`] before starting cannot make a
+    /// still-queued ring read as drained.
+    ring_capacity: usize,
+    /// [`Self::drained`]'s poll bound, from [`max_drain_wait_frames`].
+    max_drain_wait_frames: usize,
+    /// [`Self::drained`]'s poll count since the fade finished.
+    drain_wait_frames: usize,
+    /// [`Self::drained`]'s poll count since the ring first read empty.
+    device_tail_frames: usize,
+    /// [`Self::drained`]'s device-tail bound, from [`device_tail_millis`] for
+    /// the output this instance was started with.
+    max_device_tail_frames: usize,
 }
 
 impl MusicPlayer {
@@ -173,6 +263,11 @@ impl MusicPlayer {
             reverb_level,
         );
         let producer = output.producer();
+        let ring_capacity = producer.capacity();
+        let advertised = output.max_callback_frames();
+        let rate = output.device_sample_rate();
+        let device_tail = game_frames_in(device_tail_millis(advertised, rate));
+        let cadence = callback_cadence_frames(advertised, rate);
         let overruns = prefill(&mut sequencer, &producer);
         start_output(&mut output)?;
         context.master_reverb = reverb_level;
@@ -184,6 +279,11 @@ impl MusicPlayer {
             overruns,
             fade: None,
             resolved_reverb: reverb_level,
+            ring_capacity,
+            max_drain_wait_frames: max_drain_wait_frames(ring_capacity, cadence),
+            drain_wait_frames: 0,
+            device_tail_frames: 0,
+            max_device_tail_frames: device_tail,
         })
     }
 
@@ -229,6 +329,31 @@ impl MusicPlayer {
         self.fade.is_some_and(|fade| fade.finished)
     }
 
+    /// Whether it is now safe to drop this player, which closes the output
+    /// stream where it stands rather than playing out what it holds.
+    ///
+    /// An empty ring only proves the output callback took the last samples,
+    /// so a healthy stream is held further frames for them to sound --
+    /// [`device_tail_millis`] for this output's own device, not a fixed wait.
+    /// An elapsed [`max_drain_wait_frames`] bound answers `true` while the
+    /// ring stays nonempty, so a consumer that never takes the fade cannot
+    /// hold the device open; a stream error is not read, since cpal's ALSA
+    /// worker reports a recoverable XRUN through the same counter and keeps
+    /// running. Counts one poll per call. A ring seen empty clears the
+    /// stall count, and a ring that refills restarts the device tail;
+    /// meaningful only once [`Self::fade_finished`].
+    #[must_use]
+    pub fn drained(&mut self) -> bool {
+        if self.producer.available_space() >= self.ring_capacity {
+            self.drain_wait_frames = 0;
+            self.device_tail_frames += 1;
+            return self.device_tail_frames > self.max_device_tail_frames;
+        }
+        self.device_tail_frames = 0;
+        self.drain_wait_frames += 1;
+        self.drain_wait_frames >= self.max_drain_wait_frames
+    }
+
     /// Returns the number of samples replaced with silence after an underrun.
     #[must_use]
     pub fn underruns(&self) -> u64 {
@@ -271,6 +396,10 @@ impl MusicPlayer {
     pub(crate) fn ring_free_for_test(&self) -> usize {
         self.producer.available_space()
     }
+
+    pub(crate) fn ring_capacity_for_test(&self) -> usize {
+        self.ring_capacity
+    }
 }
 
 #[cfg(test)]
@@ -280,7 +409,11 @@ mod tests {
     use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
     use platform::{AudioOutput, PlatformError};
 
-    use super::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES};
+    use super::{
+        callback_cadence_frames, device_tail_millis, game_frames_in, max_drain_wait_frames,
+        MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_FRAMES, DEVICE_TAIL_FLOOR_MILLIS,
+        DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS, RING_CAPACITY_FRAMES,
+    };
 
     fn short_song_without_its_own_reverb() -> Song {
         let wave = Arc::new(WaveData::one_shot(1 << 20, vec![100; 64]));
@@ -308,6 +441,247 @@ mod tests {
             }
         }
         false
+    }
+
+    /// A device that advertises no concrete buffer range says nothing about
+    /// its latency, so the floor is the whole wait.
+    #[test]
+    fn an_unadvertised_callback_bound_waits_the_floor() {
+        assert_eq!(device_tail_millis(None, 48_000), DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// A rate of zero cannot turn a frame count into a duration; the floor
+    /// stands rather than a division by zero or a nonsense wait.
+    #[test]
+    fn a_rateless_device_waits_the_floor() {
+        assert_eq!(device_tail_millis(Some(4_096), 0), DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// A small callback buffer derives a wait under the floor, and the floor
+    /// wins: the advertised bound covers the callback, not the OS queueing
+    /// behind it.
+    #[test]
+    fn a_short_callback_bound_still_waits_the_floor() {
+        assert_eq!(
+            device_tail_millis(Some(512), 48_000),
+            DEVICE_TAIL_FLOOR_MILLIS
+        );
+    }
+
+    /// A callback buffer that outlasts the floor widens the wait rather
+    /// than letting it expire mid-buffer.
+    #[test]
+    fn a_callback_bound_past_the_floor_widens_the_wait() {
+        let tail = device_tail_millis(Some(24_000), 48_000);
+        assert_eq!(tail, 500 + DEVICE_TAIL_MARGIN_MILLIS);
+        assert!(tail > DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// An advertised maximum the device may never reach must not hold the
+    /// title -> main menu transition open for as long as it claims.
+    #[test]
+    fn an_outsized_callback_bound_is_capped() {
+        assert_eq!(
+            device_tail_millis(Some(480_000), 48_000),
+            DEVICE_TAIL_MAX_MILLIS
+        );
+    }
+
+    /// The pre-empty bound governs a ring that has not drained yet. Derived
+    /// from the ring alone it assumes the consumer drains about as often as
+    /// the game renders: at the production ring that expires after 38 game
+    /// frames, roughly 0.64 s. A device whose callback period outlasts that
+    /// leaves the ring nonempty until its next callback, so the bound must
+    /// widen to that device's tail rather than call a healthy stream stalled
+    /// and drop the queued fade.
+    #[test]
+    fn a_long_advertised_callback_widens_the_pre_empty_bound() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let ring_only = max_drain_wait_frames(ring_capacity, 0);
+        let device_tail = game_frames_in(device_tail_millis(Some(48_000), 48_000));
+
+        assert!(
+            device_tail > ring_only,
+            "a one-second callback bound must outlast the {ring_only}-frame ring-only figure, \
+             or this test proves nothing"
+        );
+        assert_eq!(
+            max_drain_wait_frames(ring_capacity, device_tail),
+            device_tail,
+            "the pre-empty bound must cover the device's own callback cadence"
+        );
+    }
+
+    /// A device advertising no callback bound has an unknown cadence, not a
+    /// short one, so the pre-empty wait takes the cap rather than the ring's
+    /// own figure.
+    #[test]
+    fn an_unadvertised_callback_bounds_the_pre_empty_wait_at_the_cap() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let ring_only = max_drain_wait_frames(ring_capacity, 0);
+        let cadence = callback_cadence_frames(None, 48_000);
+
+        assert_eq!(cadence, game_frames_in(DEVICE_TAIL_MAX_MILLIS));
+        assert!(cadence > ring_only);
+        assert_eq!(max_drain_wait_frames(ring_capacity, cadence), cadence);
+    }
+
+    /// A short advertised callback leaves the ring's own figure in charge.
+    #[test]
+    fn a_short_advertised_callback_leaves_the_pre_empty_bound_on_the_ring() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let cadence = callback_cadence_frames(Some(512), 48_000);
+
+        assert_eq!(cadence, DEVICE_TAIL_FLOOR_FRAMES);
+        assert_eq!(
+            max_drain_wait_frames(ring_capacity, cadence),
+            max_drain_wait_frames(ring_capacity, 0)
+        );
+    }
+
+    /// [`MusicPlayer::start`] is public and takes any [`AudioOutput`], so a
+    /// caller may have queued through [`AudioOutput::producer`] first. The
+    /// ring's capacity is what `drained` compares against to call the ring
+    /// empty, so it must come from the ring rather than from the free space
+    /// left at construction -- otherwise those pre-queued samples set the
+    /// bar low and their own tail could be dropped undelivered.
+    #[test]
+    fn a_pre_queued_producer_still_records_the_full_ring_capacity() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+
+        let output = AudioOutput::null(RING_FRAMES);
+        let queued = output.producer().push(&[0.25; 64]);
+        assert_eq!(queued, 64, "the null ring must accept this priming push");
+
+        let player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+
+        assert_eq!(
+            player.ring_capacity_for_test(),
+            full_ring,
+            "capacity must be the ring's own, not the free space a pre-queued producer left"
+        );
+    }
+
+    /// A producer clone retained from before [`MusicPlayer::start`] can
+    /// refill the ring after `drained` has seen it empty; the device tail
+    /// then restarts from the latest drain rather than resuming its count.
+    #[test]
+    fn a_ring_that_refills_restarts_the_device_tail() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let retained = output.producer();
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let mut sink = vec![0.0_f32; full_ring];
+        let tail = player.max_device_tail_frames;
+        assert!(
+            tail > 2,
+            "the null backend's floor must leave room for a partial count"
+        );
+
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring is empty"
+        );
+        for _ in 0..tail - 1 {
+            assert!(!player.drained(), "still inside the device tail");
+        }
+
+        assert_eq!(
+            retained.push(&[0.25; 64]),
+            64,
+            "the retained producer refills the ring"
+        );
+        assert!(!player.drained(), "a nonempty ring is never drained");
+        player.drain_null_for_test(&mut sink);
+
+        let mut polls_after_refill = 0;
+        while !player.drained() {
+            polls_after_refill += 1;
+            assert!(polls_after_refill <= tail + 1, "the device tail is bounded");
+        }
+        assert_eq!(
+            polls_after_refill, tail,
+            "the tail must run in full from the latest drain, not resume the earlier count"
+        );
+    }
+
+    /// cpal's ALSA worker reports a recoverable XRUN through the error
+    /// callback, then re-prepares and keeps running, so `stream_errors`
+    /// counts errors the stream survived. One must not drop the queued fade.
+    #[test]
+    fn a_recovered_stream_error_still_drains_the_queued_fade() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let queued = full_ring - player.ring_free_for_test();
+        assert!(queued > 0, "the prefill must leave samples to drain");
+
+        player.output.record_stream_error_for_test();
+
+        assert!(
+            !player.drained(),
+            "a recovered stream error must not drop {queued} queued samples unplayed"
+        );
+    }
+
+    /// The pre-empty bound guards against a consumer that never takes the
+    /// queued fade. An empty ring disproves that stall, so audio a retained
+    /// producer queues afterwards gets its own wait rather than the remainder
+    /// of a bound the disproven suspicion already spent.
+    #[test]
+    fn a_ring_that_refills_after_a_full_drain_gets_a_fresh_drain_wait() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let retained = output.producer();
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let mut sink = vec![0.0_f32; full_ring];
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring starts empty"
+        );
+
+        let bound = player.max_drain_wait_frames;
+        assert_eq!(
+            retained.push(&[0.25; 64]),
+            64,
+            "the ring holds queued audio"
+        );
+        for _ in 0..bound - 1 {
+            assert!(!player.drained(), "the pre-empty bound has not elapsed yet");
+        }
+
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "the consumer took everything"
+        );
+        assert!(
+            !player.drained(),
+            "an empty ring is still inside the device tail"
+        );
+
+        assert_eq!(
+            retained.push(&[0.5; 64]),
+            64,
+            "the retained producer refills the ring"
+        );
+        assert!(
+            !player.drained(),
+            "the refilled queue must get its own wait, not be dropped on the poll that sees it"
+        );
     }
 
     #[test]
