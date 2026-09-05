@@ -172,11 +172,13 @@ pub(crate) struct OverworldPhase {
     /// [`OverworldScene::compose`]'s `tick` for tileset tile animation
     /// cadence -- this port's counterpart to
     /// [`crate::flow::AnimatedTitle`]'s own `tick` field. Incremented once
-    /// per [`Self::step`] call (module docs on why that, not
-    /// [`Self::compose_frame`], is the right place -- background tile
-    /// animation keeps running even while [`Self::dialog`] freezes movement,
-    /// mirroring upstream's `UpdateTilesetAnimations` running every `VBlank`
-    /// regardless of message-box state) and reset to 0 in
+    /// per frame by [`Self::advance_tileset_anim_tick`], called from both
+    /// [`Self::step`] and [`Self::advance_start_menu_frame`] (module docs on
+    /// why that, not [`Self::compose_frame`], is the right place --
+    /// background tile animation keeps running even while [`Self::dialog`]
+    /// or an open start menu freezes movement, mirroring upstream's
+    /// `UpdateTilesetAnimations` running every `VBlank` regardless of
+    /// message-box state) and reset to 0 in
     /// [`Self::load_default`]/[`Self::warp_to`] only, matching upstream's
     /// own `InitTilesetAnimations` reset points (full map loads,
     /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --

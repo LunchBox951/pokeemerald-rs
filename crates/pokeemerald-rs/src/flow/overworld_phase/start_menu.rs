@@ -114,7 +114,7 @@ impl OverworldPhase {
         // and this method runs *instead of* it -- including on the frame
         // the menu opens on, which `ShowStartMenu` consumes upstream too
         // (`ProcessPlayerFieldInput` returns TRUE).
-        self.tick = self.tick.wrapping_add(1);
+        self.advance_tileset_anim_tick();
 
         let Some(mut menu) = open_menu else {
             return true;
