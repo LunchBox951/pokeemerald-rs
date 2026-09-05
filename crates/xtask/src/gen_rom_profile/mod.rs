@@ -398,13 +398,12 @@ fn temp_sibling(path: &Path) -> PathBuf {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let salt = RandomState::new().build_hasher().finish();
-    let mut name = std::ffi::OsString::from(".");
-    name.push(
-        path.file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("profile")),
-    );
-    name.push(format!(".{}.{nanos:x}.{salt:x}.tmp", std::process::id()));
-    path.with_file_name(name)
+    // A fixed prefix keeps the name inside any component limit the output's
+    // own basename already fits; the uniqueness fields carry no basename.
+    path.with_file_name(format!(
+        ".profile.{}.{nanos:x}.{salt:x}.tmp",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]
