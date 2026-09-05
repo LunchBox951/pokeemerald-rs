@@ -139,6 +139,18 @@ fn parse_byte(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupEr
         .map_err(|_| malformed_voice_slot(group, line))
 }
 
+/// The largest `DirectSound` pan override the asset schema accepts (see
+/// `crates/assets::audio::voicegroup`'s private `MAX_PAN_OVERRIDE`,
+/// duplicated here rather than shared -- this extraction pipeline never
+/// depends on `crates/assets`, matching `crate::extract::BORDER_BLOCK_BYTES`'s
+/// documented decoupling from the same crate).
+const MAX_PAN_OVERRIDE: u8 = 127;
+
+/// The largest square duty selector the asset schema accepts (see
+/// `crates/assets::audio::voicegroup`'s private `MAX_SQUARE_DUTY`, mirrored
+/// for the same reason as [`MAX_PAN_OVERRIDE`]).
+const MAX_SQUARE_DUTY: u8 = 3;
+
 fn parse_optional_pan(
     operand: &str,
     group: &str,
@@ -146,7 +158,24 @@ fn parse_optional_pan(
 ) -> Result<Option<u8>, VoiceGroupError> {
     const NO_PAN_OVERRIDE: u8 = 0;
     let pan = parse_byte(operand, group, line)?;
+    if pan > MAX_PAN_OVERRIDE {
+        return Err(VoiceGroupError::PanOverrideOutOfRange {
+            group: group.to_owned(),
+            pan,
+        });
+    }
     Ok((pan != NO_PAN_OVERRIDE).then_some(pan))
+}
+
+fn parse_square_duty(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupError> {
+    let duty = parse_byte(operand, group, line)?;
+    if duty > MAX_SQUARE_DUTY {
+        return Err(VoiceGroupError::SquareDutyOutOfRange {
+            group: group.to_owned(),
+            duty,
+        });
+    }
+    Ok(duty)
 }
 
 fn parse_envelope(
@@ -212,7 +241,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
                 base_key: parse_byte(base_key, group, line)?,
                 length: parse_byte(length, group, line)?,
                 sweep: parse_byte(sweep, group, line)?,
-                duty: parse_byte(duty, group, line)?,
+                duty: parse_square_duty(duty, group, line)?,
                 envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
@@ -224,7 +253,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             Ok(RawSlot::Square2 {
                 base_key: parse_byte(base_key, group, line)?,
                 length: parse_byte(length, group, line)?,
-                duty: parse_byte(duty, group, line)?,
+                duty: parse_square_duty(duty, group, line)?,
                 envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })

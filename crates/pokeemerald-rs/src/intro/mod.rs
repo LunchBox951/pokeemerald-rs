@@ -408,6 +408,8 @@ impl IntroScene {
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished
             | TickEvent::AwaitingClear
+            | TickEvent::AwaitingPress
+            | TickEvent::PressAccepted
             | TickEvent::Paused
             | TickEvent::PauseFinished => {}
         }
