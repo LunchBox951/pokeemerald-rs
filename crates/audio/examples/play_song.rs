@@ -26,6 +26,10 @@ const RETRY_MAX_WAIT: Duration = Duration::from_secs(1);
 /// the resampler's one-frame lookahead and scheduler jitter.
 const DEVICE_TAIL_MARGIN: Duration = Duration::from_millis(50);
 
+/// Callback periods the host keeps queued behind the one being filled:
+/// cpal's ALSA path holds two, and no supported host holds more.
+const HOST_QUEUED_PERIODS: u32 = 2;
+
 /// Floor on the tail, and the whole tail when the device advertises no
 /// callback size. The advertised size bounds one callback slice, not the
 /// host pipeline's presentation latency (cpal's ALSA path keeps two periods
@@ -245,8 +249,8 @@ fn wait_for_drain(
 }
 
 /// How long the device may still be playing after the ring reads empty:
-/// its largest advertised callback buffer at its own rate, plus
-/// [`DEVICE_TAIL_MARGIN`], clamped between [`DEVICE_TAIL_FALLBACK`] and
+/// [`HOST_QUEUED_PERIODS`] of its largest advertised callback buffer at its
+/// own rate, plus [`DEVICE_TAIL_MARGIN`], clamped between [`DEVICE_TAIL_FALLBACK`] and
 /// [`DEVICE_TAIL_MAX`]; the floor alone when it advertises none. An empty
 /// ring only means the callback took the samples, and dropping
 /// `AudioOutput` closes the stream rather than draining it.
@@ -254,8 +258,8 @@ fn device_tail_wait(max_callback_frames: Option<usize>, device_sample_rate: u32)
     match max_callback_frames {
         Some(frames) if device_sample_rate > 0 => {
             let frames = u32::try_from(frames).unwrap_or(u32::MAX);
-            let buffered =
-                Duration::from_secs_f64(f64::from(frames) / f64::from(device_sample_rate));
+            let queued = f64::from(frames) * f64::from(HOST_QUEUED_PERIODS);
+            let buffered = Duration::from_secs_f64(queued / f64::from(device_sample_rate));
             (buffered + DEVICE_TAIL_MARGIN).clamp(DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MAX)
         }
         _ => DEVICE_TAIL_FALLBACK,
@@ -605,14 +609,26 @@ mod tests {
 
     #[test]
     fn the_device_tail_is_derived_from_the_advertised_callback_bound() {
-        // 24 000 frames at 48 kHz is half a second of queued audio: longer
-        // than the fixed fallback, which would have clipped it.
-        let tail = device_tail_wait(Some(24_000), 48_000);
+        // 12 000 frames at 48 kHz is a quarter second per period, so the
+        // host's two queued periods hold half a second: longer than the
+        // fixed fallback, which would have clipped it.
+        let tail = device_tail_wait(Some(12_000), 48_000);
         assert_eq!(
             tail,
             std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN
         );
         assert!(tail > DEVICE_TAIL_FALLBACK);
+    }
+
+    #[test]
+    fn the_device_tail_covers_every_queued_host_period() {
+        // A 160 ms period exceeds the fallback on its own only once the
+        // second queued period is counted.
+        let tail = device_tail_wait(Some(7_680), 48_000);
+        assert_eq!(
+            tail,
+            std::time::Duration::from_millis(320) + DEVICE_TAIL_MARGIN
+        );
     }
 
     #[test]
