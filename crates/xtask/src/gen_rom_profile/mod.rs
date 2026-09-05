@@ -62,7 +62,11 @@ mod text_window;
 mod tilesets;
 mod title;
 
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use rom_import::{select_profile, Rom};
 
@@ -359,7 +363,14 @@ fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
     }
 
     let temp = temp_sibling(path);
-    std::fs::write(&temp, module).map_err(failed)?;
+    // Exclusive create, so a name two runs somehow both chose fails here
+    // instead of putting both of them on one file.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| file.write_all(module.as_bytes()))
+        .map_err(failed)?;
     std::fs::rename(&temp, path).map_err(|err| {
         // The rename is the only step that publishes anything, so a failure
         // here leaves the old profile in place; the temporary file would
@@ -372,21 +383,25 @@ fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
 /// A scratch name beside `path`, in the same directory so the rename that
 /// follows it stays within one filesystem.
 ///
-/// The process id and a counter keep two concurrent runs (or one run and a
-/// leftover from a killed one) off each other's name. Not a security
-/// boundary — this is a developer tool writing into a checkout — just
-/// enough to keep the tool from tripping over itself.
+/// The clock reading and a fresh `RandomState` hash are what keep two
+/// concurrent runs off each other's name; a process id alone does not, since
+/// two runs in separate PID namespaces over one checkout can carry the same
+/// one. `import_rom`'s destination names its temporary the same way.
+///
+/// Not a security boundary — this is a developer tool writing into a
+/// checkout — and [`write_module`]'s exclusive create is what makes a
+/// collision an error rather than two writers on one file.
 fn temp_sibling(path: &Path) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let salt = RandomState::new().build_hasher().finish();
     let mut name = std::ffi::OsString::from(".");
     name.push(
         path.file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new("profile")),
     );
-    name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+    name.push(format!(".{}.{nanos:x}.{salt:x}.tmp", std::process::id()));
     path.with_file_name(name)
 }
 
