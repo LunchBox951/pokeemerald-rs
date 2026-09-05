@@ -35,8 +35,9 @@ pub enum RenderError {
         height_tiles: usize,
     },
 
-    /// An affine tilemap's tile area or per-axis pixel extent (`width_tiles`
-    /// or `height_tiles` times the tile side length) overflows `usize`.
+    /// An affine tilemap's tile area overflows `usize`, or a per-axis pixel
+    /// extent (`width_tiles` or `height_tiles` times the tile side length)
+    /// leaves the signed texture coordinates affine sampling addresses.
     AffineTilemapDimensionsInvalid {
         /// Supplied width in tiles.
         width_tiles: usize,
@@ -78,7 +79,7 @@ impl fmt::Display for RenderError {
                 height_tiles,
             } => write!(
                 f,
-                "affine tilemap dimensions {width_tiles}x{height_tiles} overflow usize"
+                "affine tilemap dimensions {width_tiles}x{height_tiles} are not addressable"
             ),
             Self::AffineTilemapSizeMismatch { expected, actual } => write!(
                 f,
