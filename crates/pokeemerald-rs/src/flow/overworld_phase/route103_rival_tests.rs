@@ -54,11 +54,8 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `FLAG_HIDE_ROUTE_103_RIVAL` (`include/constants/flags.h:772`).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
-/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`) -- independently
-/// transcribed here too, the same convention [`VAR_OBJ_GFX_ID_0`]'s own doc
-/// comment explains. `SetBattledTrainersFlags`'s real effect
-/// (`src/battle_setup.c:1245-1250`, called from `CB2_EndTrainerBattle`'s
-/// non-defeat branch at `:1340-1348`).
+/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`), transcribed
+/// like [`VAR_OBJ_GFX_ID_0`].
 const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
@@ -388,12 +385,9 @@ fn the_trigger_never_fires_off_route_103() {
 
 /// Item (e) of the issue's own test list: a concluded [`BattleOutcome::PlayerWon`]
 /// battle retains its outcome, writes the lead back, sets
-/// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's own
-/// `TRAINER_FLAGS_START + id` defeated flag (`CB2_EndTrainerBattle`'s
-/// non-defeat branch calls both `RivalEnd`'s `removeobject` and
-/// `SetBattledTrainersFlags`, `src/battle_setup.c:1245-1250, 1340-1348` --
-/// issue #843), and the rival is no longer interactable/visible -- so the
-/// fight cannot be re-triggered.
+/// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's
+/// [`TRAINER_FLAGS_START`] defeated flag, and the rival is no longer
+/// interactable/visible -- so the fight cannot be re-triggered.
 #[test]
 fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
     let mut phase = route_103_phase_facing_the_rival();

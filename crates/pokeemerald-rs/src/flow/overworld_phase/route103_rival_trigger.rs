@@ -82,19 +82,11 @@
 //!    into. All recorded on the ledger's `Route103_EventScript_RivalEnd`
 //!    coverage, not silently dropped.
 //!
-//! # The generic trainer-defeated flag (issue #843)
+//! # The generic trainer-defeated flag
 //!
-//! `RivalEnd`'s `removeobject` is not the only write a win produces:
-//! `CB2_EndTrainerBattle`'s own non-defeat branch
-//! (`src/battle_setup.c:1340-1348`) calls `SetBattledTrainersFlags` before
-//! `RivalEnd` ever runs, setting `TRAINER_FLAGS_START + trainerId`
-//! (`:1245-1250`) -- a second, independent effect of the *same* callback,
-//! not one of `RivalEnd`'s own seven unmodelled lines above.
-//! [`advance_route103_rival_battle_frame`] sets it alongside
-//! [`FLAG_HIDE_ROUTE_103_RIVAL`] on the same
-//! [`battle::BattleOutcome::PlayerWon`], the write
-//! [`super::sight_trainer_trigger`] already models for its own sight
-//! trainers (that module's own `TRAINER_FLAGS_START` doc comment).
+//! A win also sets `TRAINER_FLAGS_START + trainerId`: `CB2_EndTrainerBattle`'s
+//! non-defeat branch calls `SetBattledTrainersFlags`
+//! (`src/battle_setup.c:1245-1250`, `:1340-1348`) before `RivalEnd` runs.
 //!
 //! # The loss decision (issue #261: now the real one)
 //!
@@ -218,13 +210,9 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// (module docs).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
-/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`) -- the base of
-/// the per-trainer "already fought" flag range `SetBattledTrainersFlags`
-/// writes (`src/battle_setup.c:1245-1250`) from `CB2_EndTrainerBattle`'s
-/// non-defeat branch (`:1340-1348`), independently transcribed here the
-/// same way [`VAR_OBJ_GFX_ID_0`]'s own doc comment explains -- see
-/// [`super::sight_trainer_trigger`]'s own neighbouring `TRAINER_FLAGS_START`
-/// for the sibling trigger that already models this write (issue #843).
+/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): base of the
+/// per-trainer defeated-flag range `SetBattledTrainersFlags` writes
+/// (`src/battle_setup.c:1245-1250`); transcribed like [`VAR_OBJ_GFX_ID_0`].
 const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
@@ -416,14 +404,9 @@ impl OverworldPhase {
     /// [`super::first_battle_trigger::OverworldPhase::advance_first_battle_frame`]'s
     /// shape with two additions on
     /// [`battle::BattleOutcome::PlayerWon`]: sets
-    /// [`FLAG_HIDE_ROUTE_103_RIVAL`] -- the load-bearing write module docs'
-    /// "The loss decision (issue #261: now the real one)" section explains
-    /// -- and, alongside it, [`TRAINER_FLAGS_START`]` + `[`Self::rival_trainer_id`]
-    /// ([`TRAINER_FLAGS_START`]'s own doc comment;
-    /// [`super::sight_trainer_trigger::OverworldPhase::advance_sight_trainer_battle_frame`]
-    /// already models it for its sibling trigger). Neither write happens on
-    /// any other outcome, on purpose -- matching `CB2_EndTrainerBattle`'s
-    /// own non-defeat/defeat `if`/`else if` split.
+    /// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's
+    /// [`TRAINER_FLAGS_START`] flag, on no other outcome -- matching
+    /// `CB2_EndTrainerBattle`'s non-defeat/defeat `if`/`else if` split.
     pub(super) fn advance_route103_rival_battle_frame(&mut self) -> bool {
         if self.rival_battle.is_none() {
             return false;
