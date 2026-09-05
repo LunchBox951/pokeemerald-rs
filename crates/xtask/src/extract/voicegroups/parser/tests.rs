@@ -205,6 +205,67 @@ fn a_non_numeric_operand_is_malformed() {
 }
 
 #[test]
+fn a_direct_sound_pan_above_the_schema_maximum_is_rejected() {
+    let text = "\
+voice_group demo
+\tvoice_directsound 60, 128, DirectSoundWaveData_test, 255, 0, 255, 0
+";
+    assert_eq!(
+        parse_voice_group(text),
+        Err(VoiceGroupError::PanOverrideOutOfRange {
+            group: "demo".to_owned(),
+            pan: 128,
+        })
+    );
+}
+
+#[test]
+fn the_maximum_direct_sound_pan_override_is_accepted() {
+    let text = "\
+voice_group demo
+\tvoice_directsound 60, 127, DirectSoundWaveData_test, 255, 0, 255, 0
+";
+    let group = parse_voice_group(text).unwrap();
+    assert!(matches!(
+        group.slots.as_slice(),
+        [RawSlot::DirectSound { pan: Some(127), .. }]
+    ));
+}
+
+#[test]
+fn square_duties_above_the_schema_maximum_are_rejected() {
+    let square1 = "voice_group demo\n\tvoice_square_1 60, 0, 0, 4, 0, 0, 15, 0\n";
+    let square2 = "voice_group demo\n\tvoice_square_2 60, 0, 4, 0, 0, 15, 0\n";
+    for text in [square1, square2] {
+        assert_eq!(
+            parse_voice_group(text),
+            Err(VoiceGroupError::SquareDutyOutOfRange {
+                group: "demo".to_owned(),
+                duty: 4,
+            }),
+            "expected an out-of-domain duty to be rejected: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_maximum_square_duty_is_accepted_for_both_channels() {
+    let text = "\
+voice_group demo
+\tvoice_square_1 60, 0, 0, 3, 0, 0, 15, 0
+\tvoice_square_2 60, 0, 3, 0, 0, 15, 0
+";
+    let group = parse_voice_group(text).unwrap();
+    assert!(matches!(
+        group.slots.as_slice(),
+        [
+            RawSlot::Square1 { duty: 3, .. },
+            RawSlot::Square2 { duty: 3, .. },
+        ]
+    ));
+}
+
+#[test]
 fn an_unrecognized_macro_is_rejected() {
     let text = "voice_group demo\n\tvoice_bogus 1, 2, 3\n";
     assert_eq!(

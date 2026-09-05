@@ -13,3 +13,10 @@ workspace = true
 # the smoke test/example feeds a rendered sequence through that producer API.
 # `platform` is an in-workspace crate, not a new external dependency.
 platform = { path = "../platform" }
+
+[[example]]
+name = "play_song"
+path = "examples/play_song.rs"
+# Examples default to `test = false`; this one carries `#[cfg(test)]` unit
+# tests on its retry-bound helpers that `cargo test` must actually run.
+test = true

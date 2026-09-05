@@ -102,10 +102,10 @@ impl BattlePokemon {
     ) -> Option<PendingMoveLearn> {
         let learnset = LevelUpLearnsets::new().get(self.species)?;
         for (learnset_index, entry) in learnset.iter().enumerate().skip(start_at_entry) {
-            if entry.level != level {
+            if entry.level() != level {
                 continue;
             }
-            let move_id = entry.move_id;
+            let move_id = entry.move_id();
             let already_known = self.moves.iter().any(|slot| slot.move_id == move_id);
             if already_known {
                 continue;

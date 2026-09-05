@@ -10,7 +10,7 @@ use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
-use assets::{MoveEffect, MoveId, MoveTarget, SpeciesId};
+use assets::{MoveEffect, MoveId, MoveNames, MoveTarget, SpeciesId};
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -585,4 +585,67 @@ fn stat_change_magnitude_names_exactly_the_two_upstream_values() {
         direction: StatChangeDirection::Lower,
     };
     assert_eq!(lower_two.delta(), -2);
+}
+
+/// Anchors each `STAT_CHANGE_EFFECTS` row to a canonically named move and asserts the exact
+/// stat, magnitude, and direction upstream assigns it, then asserts every row was reached.
+#[test]
+fn every_table_row_maps_its_canonical_move_to_the_exact_stat_and_magnitude() {
+    use ChangedStat::{Accuracy, Attack, Defense, Evasion, SpAttack, SpDefense, Speed};
+    use StatChangeDirection::{Lower, Raise};
+    use StatChangeMagnitude::{One, Two};
+
+    // Move-to-effect assignment cited by its line in `pokeemerald/src/data/battle_moves.h`.
+    const ANCHORS: [(&str, ChangedStat, StatChangeMagnitude, StatChangeDirection); 18] = [
+        ("MEDITATE", Attack, One, Raise),       // battle_moves.h:1251
+        ("HARDEN", Defense, One, Raise),        // battle_moves.h:1381
+        ("GROWTH", SpAttack, One, Raise),       // battle_moves.h:965
+        ("DOUBLE TEAM", Evasion, One, Raise),   // battle_moves.h:1355
+        ("GROWL", Attack, One, Lower),          // battle_moves.h:588
+        ("TAIL WHIP", Defense, One, Lower),     // battle_moves.h:510
+        ("STRING SHOT", Speed, One, Lower),     // battle_moves.h:1056
+        ("SAND-ATTACK", Accuracy, One, Lower),  // battle_moves.h:367
+        ("SWEET SCENT", Evasion, One, Lower),   // battle_moves.h:2993
+        ("SWORDS DANCE", Attack, Two, Raise),   // battle_moves.h:185
+        ("BARRIER", Defense, Two, Raise),       // battle_moves.h:1459
+        ("AGILITY", Speed, Two, Raise),         // battle_moves.h:1264
+        ("TAIL GLOW", SpAttack, Two, Raise),    // battle_moves.h:3825
+        ("AMNESIA", SpDefense, Two, Raise),     // battle_moves.h:1732
+        ("CHARM", Attack, Two, Lower),          // battle_moves.h:2655
+        ("SCREECH", Defense, Two, Lower),       // battle_moves.h:1342
+        ("SCARY FACE", Speed, Two, Lower),      // battle_moves.h:2395
+        ("METAL SOUND", SpDefense, Two, Lower), // battle_moves.h:4150
+    ];
+
+    let dex = Dex::new();
+    let move_names = MoveNames::new();
+    let mut reached = Vec::with_capacity(ANCHORS.len());
+
+    for (name, stat, magnitude, direction) in ANCHORS {
+        let move_id = (FIRST_MOVE_ID..=LAST_EMERALD_MOVE_ID)
+            .map(MoveId)
+            .find(|&move_id| move_names.name(move_id) == Ok(name))
+            .unwrap_or_else(|| panic!("canonical move name {name:?} is absent from the table"));
+        let effect = dex.move_data(move_id).unwrap().effect;
+
+        assert_eq!(
+            stat_change_for_effect(effect),
+            Some(StatChangeEffect {
+                stat,
+                magnitude,
+                direction
+            }),
+            "{name} ({move_id:?}, effect {}) must map to its canonical stat and magnitude",
+            effect.0
+        );
+        reached.push(effect);
+    }
+
+    for (effect, _) in STAT_CHANGE_EFFECTS {
+        assert!(
+            reached.contains(&effect),
+            "effect {} has no canonical move anchoring its stat and magnitude",
+            effect.0
+        );
+    }
 }

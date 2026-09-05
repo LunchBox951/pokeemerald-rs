@@ -102,13 +102,17 @@ fn write_event(out: &mut Vec<u8>, event: &SongEvent) {
     }
 }
 
-fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) {
-    let event_count = u32::try_from(track.len())
-        .expect("every compiled track this pipeline can hold fits in a u32 event count");
+fn event_count_field(event_count: usize) -> Result<u32, MidiError> {
+    u32::try_from(event_count).map_err(|_| MidiError::TooManyTrackEvents(event_count))
+}
+
+fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) -> Result<(), MidiError> {
+    let event_count = event_count_field(track.len())?;
     out.extend_from_slice(&event_count.to_le_bytes());
     for event in track {
         write_event(out, event);
     }
+    Ok(())
 }
 
 /// Encodes a compiled song in the asset pack's song schema.
@@ -116,9 +120,10 @@ fn write_track(out: &mut Vec<u8>, track: &[SongEvent]) {
 /// # Errors
 ///
 /// Returns [`MidiError::TooManyTracks`] when the track count does not fit the
-/// schema's `u8` field, or [`MidiError::VoiceGroupPackIdTooLong`] when the
+/// schema's `u8` field, [`MidiError::VoiceGroupPackIdTooLong`] when the
 /// encoded voicegroup pack id does not fit the schema's `u16` string-length
-/// field.
+/// field, or [`MidiError::TooManyTrackEvents`] when a track's event count
+/// does not fit the schema's `u32` field.
 pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
     let track_count =
         u8::try_from(song.tracks.len()).map_err(|_| MidiError::TooManyTracks(song.tracks.len()))?;
@@ -134,7 +139,7 @@ pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
         track_count,
     ]);
     for track in &song.tracks {
-        write_track(&mut out, track);
+        write_track(&mut out, track)?;
     }
     Ok(out)
 }

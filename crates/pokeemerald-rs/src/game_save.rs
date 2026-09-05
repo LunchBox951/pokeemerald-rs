@@ -45,6 +45,18 @@ impl SaveFileStatus {
             Self::Empty | Self::Corrupt | Self::NoFlash => false,
         }
     }
+
+    /// Whether boot re-clears `SaveBlock2` and re-defaults its options after
+    /// this verdict: `CB2_InitCopyrightScreenAfterBootup` calls
+    /// `Sav2_ClearSetDefault` for `SAVE_STATUS_EMPTY` and
+    /// `SAVE_STATUS_CORRUPT` only (`pokeemerald/src/intro.c:1154-1156`), so
+    /// `Error`'s one intact slot keeps its recovered options.
+    pub(crate) const fn boot_clears_save_block2(self) -> bool {
+        match self {
+            Self::Empty | Self::Corrupt => true,
+            Self::Ok | Self::Error | Self::NoFlash => false,
+        }
+    }
 }
 
 /// Blocks recovered during boot and the status that determines whether they
