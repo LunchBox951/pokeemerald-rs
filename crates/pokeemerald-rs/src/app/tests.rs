@@ -418,11 +418,9 @@ fn leaving_the_title_scene_fades_the_attached_music_player_out_before_stopping_i
     );
 }
 
-/// Regression test for issue #458: the ring must be *fully* drained -- not
-/// merely "the fade math says silent" -- before [`App::advance_music`] drops
-/// the player, or the still-buffered tail is truncated. Fails against the
-/// pre-fix code, which drops the player the instant the fade reaches
-/// silence while the ring still holds roughly half its prefilled capacity.
+/// The ring must be fully drained, not merely silent by the fade math,
+/// before [`App::advance_music`] drops the player, or the still-buffered
+/// tail is truncated.
 ///
 /// Deliberately opens a non-default ring capacity (not
 /// [`crate::music::RING_CAPACITY_FRAMES`]) so this also catches a fix that

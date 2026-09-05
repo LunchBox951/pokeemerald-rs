@@ -468,9 +468,8 @@ mod tests {
         );
     }
 
-    /// The case the fixed 200 ms wait got wrong: a high-latency
-    /// configuration whose own callback buffer outlasts the floor must widen
-    /// the wait rather than expire mid-buffer.
+    /// A callback buffer that outlasts the floor widens the wait rather
+    /// than letting it expire mid-buffer.
     #[test]
     fn a_callback_bound_past_the_floor_widens_the_wait() {
         let tail = device_tail_millis(Some(24_000), 48_000);
