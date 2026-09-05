@@ -508,9 +508,32 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
 }
 
 #[test]
-fn a_failed_write_leaves_no_temporary_beside_the_output() {
-    // The rename is the only publishing step, so a failure must not leave
-    // scratch files in the developer's checkout.
+fn a_failed_publish_leaves_no_temporary_beside_the_output() {
+    // A directory at the output path makes the rename fail after the
+    // temporary is written; the write and rename share one cleanup.
+    let dir = scratch("failed-publish-leaves-no-litter");
+    let out = dir.join("bpee_rev0.rs");
+    std::fs::create_dir_all(&out).expect("the colliding directory");
+    let result = super::write_module(&out, "pub const GENERATED: u32 = 0;\n");
+    assert!(
+        matches!(result, Err(super::GenRomProfileError::WriteFailed { .. })),
+        "{result:?}"
+    );
+
+    let stray: Vec<_> = std::fs::read_dir(&dir)
+        .expect("listing")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| name != "bpee_rev0.rs")
+        .collect();
+    assert!(stray.is_empty(), "{stray:?}");
+
+    let _ = std::fs::remove_dir(&out);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn a_successful_write_leaves_only_the_output() {
     let dir = scratch("write-leaves-no-litter");
     let out = dir.join("bpee_rev0.rs");
     super::write_module(&out, "pub const GENERATED: u32 = 0;\n").expect("the module writes");

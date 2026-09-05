@@ -365,19 +365,21 @@ fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
     let temp = temp_sibling(path);
     // Exclusive create, so a name two runs somehow both chose fails here
     // instead of putting both of them on one file.
-    std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temp)
-        .and_then(|mut file| file.write_all(module.as_bytes()))
         .map_err(failed)?;
-    std::fs::rename(&temp, path).map_err(|err| {
-        // The rename is the only step that publishes anything, so a failure
-        // here leaves the old profile in place; the temporary file would
-        // just be litter beside it.
-        let _ = std::fs::remove_file(&temp);
-        failed(err)
-    })
+    // The rename is the only step that publishes anything, so a failure at
+    // or before it leaves the old profile in place and the temporary file
+    // would be litter beside it.
+    file.write_all(module.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&temp, path))
+        .map_err(|err| {
+            let _ = std::fs::remove_file(&temp);
+            failed(err)
+        })
 }
 
 /// A scratch name beside `path`, in the same directory so the rename that

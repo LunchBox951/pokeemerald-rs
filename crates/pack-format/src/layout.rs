@@ -53,7 +53,8 @@ pub enum EntryKind {
         /// Number of colours.
         color_count: u16,
     },
-    /// Opaque bytes, copied verbatim from an upstream source file.
+    /// Bytes the container does not interpret; each id family's schema
+    /// belongs to its owning `assets` type (crate docs).
     Raw,
 }
 
