@@ -207,18 +207,13 @@ fn step_advances_the_tileset_animation_tick_once_per_frame_even_behind_a_dialog(
     );
 }
 
-/// Issue #852: wrapping [`OverworldPhase::tick`] past `u32::MAX` must land on
-/// `step::TILESET_ANIM_WRAP_PERIOD` (256), not 0. `wrapping_add`'s 0 reads to
-/// `tileset_anims::latched_frame` as a genuinely fresh room -- every region
-/// pre-first-fire, so [`crate::overworld::OverworldScene::compose`] would
-/// revert them all to base art for a frame -- while 256 is a tick every
-/// configured region has already latched by (`tileset_anims`'s own module
-/// docs: every cadence divides the upstream 256-tick counter period), so it
-/// reads as "long since fired" instead. No local pack needed: `synthetic_phase`
-/// already fabricates real `general`-tileset animation frames
-/// (`crate::overworld::tests::synthetic_scene`'s doc comment), so `phase.tick`
-/// alone is the fix boundary this test drives -- pre-fix, the asserts below
-/// see 0, 1, 2, ... instead of 256, 257, 258, ....
+/// Wrapping [`OverworldPhase::tick`] past `u32::MAX` lands on
+/// `step::TILESET_ANIM_WRAP_PERIOD` (256), not 0: tick 0 reads to
+/// `tileset_anims::latched_frame` as a fresh room with no region fired yet,
+/// while 256 is a tick every configured cadence has already latched by
+/// (`tileset_anims` module docs). `synthetic_phase` fabricates real
+/// `general`-tileset animation frames, so `phase.tick` alone drives the
+/// boundary.
 #[test]
 fn wrapping_the_tileset_animation_tick_lands_on_the_upstream_period_not_zero() {
     let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
