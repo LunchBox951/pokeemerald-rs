@@ -203,3 +203,60 @@ fn a_synchronize_defender_is_refused_before_the_accuracy_draw() {
     );
     assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
 }
+
+#[test]
+fn an_already_paralysed_synchronize_defender_is_admitted_not_refused() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let mut defender = mon(&dex, RALTS, 10, vec![TACKLE]);
+    defender.set_status1(Status1::Paralysed);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::AlreadyParalysed,
+        "jumpifstatus BS_TARGET, STATUS1_PARALYSIS exits before seteffectprimary \
+         (data/battle_scripts_1.s:1015), so Synchronize never arms"
+    );
+    assert_eq!(rng.draws(), 0, "the exit precedes accuracycheck");
+}
+
+/// Why [`ensure_admissible`]'s type-immunity arm carries no fixture: no
+/// Synchronize holder in the species table is immune to a paralyze move, so
+/// the guard that would admit one is unreachable through real data.
+#[test]
+fn no_synchronize_holder_is_type_immune_to_a_paralyze_move() {
+    use assets::{Effectiveness, SpeciesTable};
+
+    let dex = Dex::new();
+    let table = SpeciesTable::new();
+    let mut holders = 0;
+    for raw in 0..u16::try_from(SpeciesTable::LEN).unwrap() {
+        let Some(info) = table.get(SpeciesId(raw)) else {
+            continue;
+        };
+        if !info.abilities.contains(&assets::AbilityId::SYNCHRONIZE) {
+            continue;
+        }
+        holders += 1;
+        for move_id in [THUNDER_WAVE, STUN_SPORE, GLARE] {
+            let move_type = dex
+                .move_data(move_id)
+                .unwrap()
+                .move_type
+                .battle_type()
+                .unwrap();
+            assert!(
+                info.types
+                    .iter()
+                    .all(|&t| dex.effectiveness(move_type, t) != Effectiveness::NoEffect),
+                "species {raw} fields Synchronize and resists move {move_id:?} outright"
+            );
+        }
+    }
+    assert!(
+        holders > 0,
+        "the scan must actually find Synchronize holders"
+    );
+}

@@ -511,3 +511,36 @@ fn a_synchronize_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
     assert_eq!(battle.enemy().status1(), Status1::Healthy);
     assert_eq!(battle.player().status1(), Status1::Healthy);
 }
+
+/// `ppreduce` (`data/battle_scripts_1.s:1010`) runs ahead of every guard, so
+/// the already-paralysed exit still costs PP — and, reaching that exit before
+/// `seteffectprimary`, never arms Synchronize for the refusal to catch.
+#[test]
+fn an_already_paralysed_synchronize_defender_spends_pp_and_reports_the_status() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let mut enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Paralysed);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let pp_before = battle.player().moves()[0].pp;
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("the pick is admitted: this interaction is fully modelled");
+
+    assert_eq!(
+        events[0],
+        BattleEvent::AlreadyParalyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        pp_before - 1,
+        "ppreduce precedes the guard that ended the move"
+    );
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+}
