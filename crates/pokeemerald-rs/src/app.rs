@@ -569,8 +569,9 @@ impl App {
     /// (see its own docs for the arithmetic and the one divergence).
     ///
     /// Once [`MusicPlayer::fade_finished`], this stops rendering new frames
-    /// and keeps the player alive until [`MusicPlayer::drained`] confirms
-    /// the queued tail played, only then dropping it (issue #458).
+    /// and keeps the player alive until [`MusicPlayer::drained`] reports the
+    /// queued tail both out of the ring and sounded by the device, only then
+    /// dropping it (issue #458).
     ///
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.

@@ -468,6 +468,56 @@ fn every_queued_fade_frame_reaches_the_consumer_before_the_player_is_dropped() {
     );
 }
 
+/// An empty ring means the output callback took the samples, not that the
+/// device sounded them, and dropping the player closes the stream where it
+/// stands instead of playing out its callback and OS buffers. So
+/// [`App::advance_music`] must hold a healthy player past the empty ring for
+/// [`crate::music::DEVICE_TAIL_FRAMES`] rather than dropping it on the first
+/// empty poll, which would still cut the quietest end of the fade on a real
+/// backend. The null backend sounds every sample the instant it is removed,
+/// so this pins the policy the real device needs.
+#[test]
+fn the_fading_player_outlives_its_empty_ring_by_the_device_tail() {
+    const RING_CAPACITY_FRAMES: usize = 512;
+    /// Bounds the test itself so a regression that never drops the player
+    /// fails loudly instead of looping forever.
+    const STEP_BUDGET: usize = 500;
+
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let full_ring = RING_CAPACITY_FRAMES * usize::from(platform::AudioOutput::CHANNELS);
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    let mut steps_survived_with_an_empty_ring = 0_usize;
+    let mut dropped = false;
+
+    for _ in 0..STEP_BUDGET {
+        let ring_was_empty = app.music_ring_free_for_test() == Some(full_ring);
+        app.step().expect("headless step never errors");
+        if !app.has_music_for_test() {
+            dropped = true;
+            break;
+        }
+        if ring_was_empty {
+            steps_survived_with_an_empty_ring += 1;
+        }
+        app.drain_music_for_test(&mut drained);
+    }
+
+    assert!(
+        dropped,
+        "the device tail is bounded: the player must still be dropped within {STEP_BUDGET} steps"
+    );
+    assert_eq!(
+        steps_survived_with_an_empty_ring,
+        crate::music::DEVICE_TAIL_FRAMES,
+        "advance_music must keep the stream open for the whole device tail after the ring reads          empty, so the buffers the callback already took can sound before the drop"
+    );
+}
+
 /// The sustained half: while `AppScene::Title` stays active, repeated
 /// [`App::step`] calls must keep pushing audio without underrunning when
 /// drained at the same cadence. Needs the real pack, like every other

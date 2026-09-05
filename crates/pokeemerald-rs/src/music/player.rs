@@ -9,7 +9,9 @@
 //! This also scales reverb already in the mix and ends its tail sooner than
 //! applying the fade before the original feedback loop.
 
-use audio::{Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
+use audio::{
+    Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES, MIXER_RATE, SAMPLES_PER_FRAME,
+};
 use platform::{AudioOutput, PlatformError, Producer};
 
 use super::MusicError;
@@ -32,6 +34,16 @@ pub const TITLE_FADE_OUT_SPEED: u16 = 4;
 fn max_drain_wait_frames(ring_capacity: usize) -> usize {
     2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)
 }
+
+/// Milliseconds a healthy stream stays open past its empty ring, chosen
+/// above the callback and OS buffering any desktop backend adds between
+/// taking a sample and sounding it.
+const DEVICE_TAIL_MILLIS: usize = 200;
+
+/// [`DEVICE_TAIL_MILLIS`] as whole game frames, the unit
+/// [`MusicPlayer::drained`] is polled in.
+pub const DEVICE_TAIL_FRAMES: usize =
+    (DEVICE_TAIL_MILLIS * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME);
 
 /// Audio state inherited by songs started in the same session.
 ///
@@ -113,6 +125,8 @@ pub struct MusicPlayer {
     max_drain_wait_frames: usize,
     /// [`Self::drained`]'s poll count since the fade finished.
     drain_wait_frames: usize,
+    /// [`Self::drained`]'s poll count since the ring first read empty.
+    device_tail_frames: usize,
 }
 
 impl MusicPlayer {
@@ -203,6 +217,7 @@ impl MusicPlayer {
             ring_capacity,
             max_drain_wait_frames: max_drain_wait_frames(ring_capacity),
             drain_wait_frames: 0,
+            device_tail_frames: 0,
         })
     }
 
@@ -248,15 +263,24 @@ impl MusicPlayer {
         self.fade.is_some_and(|fade| fade.finished)
     }
 
-    /// Whether it is now safe to drop this player without truncating the
-    /// fade's tail: the ring has drained, the stream errored
-    /// ([`AudioOutput::stream_errors`]), or a bounded poll count elapsed.
-    /// Counts one poll per call; meaningful only once [`Self::fade_finished`].
+    /// Whether it is now safe to drop this player, which closes the output
+    /// stream where it stands rather than playing out what it holds.
+    ///
+    /// An empty ring only proves the output callback took the last samples,
+    /// so a healthy stream is held [`DEVICE_TAIL_FRAMES`] further frames for
+    /// the callback and OS buffers to sound. A reported stream error
+    /// ([`AudioOutput::stream_errors`]) or an elapsed
+    /// [`max_drain_wait_frames`] bound answers `true` at once: neither has a
+    /// tail left to play. Counts one poll per call; meaningful only once
+    /// [`Self::fade_finished`].
     #[must_use]
     pub fn drained(&mut self) -> bool {
-        if self.producer.available_space() >= self.ring_capacity || self.output.stream_errors() > 0
-        {
+        if self.output.stream_errors() > 0 {
             return true;
+        }
+        if self.producer.available_space() >= self.ring_capacity {
+            self.device_tail_frames += 1;
+            return self.device_tail_frames > DEVICE_TAIL_FRAMES;
         }
         self.drain_wait_frames += 1;
         self.drain_wait_frames >= self.max_drain_wait_frames
