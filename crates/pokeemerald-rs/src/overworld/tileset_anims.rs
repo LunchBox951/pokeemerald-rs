@@ -412,6 +412,76 @@ mod tests {
         }
     }
 
+    /// Issue #852: `OverworldPhase::step` wraps its `u32` tick counter to
+    /// 256 (`step::TILESET_ANIM_WRAP_PERIOD`), not 0, specifically so
+    /// `latched_frame` keeps reporting a region's already-dispatched frame
+    /// instead of `None`. Pins that contrast for every configured region,
+    /// not just the general tileset's flower: `latched_frame(0, ..)` is
+    /// `None` (a genuinely fresh room, nothing has fired yet) while
+    /// `latched_frame(256, ..)` already selects the same frame
+    /// `latched_frame(256 + cycle, ..)` does, `cycle` being a whole multiple
+    /// of the region's own cadence period
+    /// (`every_configured_cycle_divides_the_literal_256_tick_upstream_period`
+    /// above).
+    #[test]
+    fn latched_frame_treats_256_as_already_latched_for_every_configured_region() {
+        for spec in GENERAL_REGIONS.iter().chain(BUILDING_REGIONS.iter()) {
+            let (phase, interval, frames) = cadence(spec);
+            assert_eq!(
+                latched_frame(0, phase, interval, frames),
+                None,
+                "{}: a genuinely fresh room must show base art, not a stale wrap frame",
+                spec.asset_name
+            );
+            assert!(
+                latched_frame(256, phase, interval, frames).is_some(),
+                "{}: tick 256 -- the u32 tick's wrap target -- must already be latched",
+                spec.asset_name
+            );
+            let cycle = interval * frames as u64;
+            assert_eq!(
+                latched_frame(256, phase, interval, frames),
+                latched_frame(256 + cycle, phase, interval, frames),
+                "{}: 256 and 256 plus one whole cycle must select the same frame",
+                spec.asset_name
+            );
+        }
+    }
+
+    /// Issue #852, at the `patch` level: the wrap-safe tick 256 must
+    /// actually overwrite the region's tiles, not merely report a latched
+    /// frame index -- `OverworldScene::compose` clones fresh base tiles
+    /// every frame (`overworld/mod.rs`'s `compose` doc comment), so a
+    /// region `patch` skips renders as base art regardless of what
+    /// `latched_frame` alone would say.
+    #[test]
+    fn patch_overwrites_base_art_at_the_wrapped_ticks_period_boundary() {
+        let tile_len = BitDepth::Bpp4.tile_byte_len();
+        let base = vec![0u8; 2 * tile_len];
+        let tiles = AnimatedTileset {
+            regions: vec![LoadedAnimationRegion {
+                start_tile: 0,
+                fire_phase: 0,
+                fire_interval: 16,
+                frames_in_sequence: vec![vec![0xAA; 2 * tile_len], vec![0xBB; 2 * tile_len]],
+            }],
+        };
+
+        let mut at_zero = base.clone();
+        tiles.patch(&mut at_zero, 0);
+        assert_eq!(
+            at_zero, base,
+            "tick 0 must leave a fresh room's base art untouched"
+        );
+
+        let mut at_wrap_target = base.clone();
+        tiles.patch(&mut at_wrap_target, 256);
+        assert_ne!(
+            at_wrap_target, base,
+            "tick 256 -- the wrap target -- must show the region's latched frame, not base art"
+        );
+    }
+
     fn empty_pack() -> AssetPack {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&assets::pack::MAGIC);

@@ -207,6 +207,58 @@ fn step_advances_the_tileset_animation_tick_once_per_frame_even_behind_a_dialog(
     );
 }
 
+/// Wrapping [`OverworldPhase::tick`] past `u32::MAX` lands on
+/// `step::TILESET_ANIM_WRAP_PERIOD` (256), not 0: tick 0 reads to
+/// `tileset_anims::latched_frame` as a fresh room with no region fired yet,
+/// while 256 is a tick every configured cadence has already latched by
+/// (`tileset_anims` module docs). `synthetic_phase` fabricates real
+/// `general`-tileset animation frames, so `phase.tick` alone drives the
+/// boundary.
+#[test]
+fn wrapping_the_tileset_animation_tick_lands_on_the_upstream_period_not_zero() {
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    phase.tick = u32::MAX;
+
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.tick, 256,
+        "the tick that wraps past u32::MAX must land where tick 256 already is, \
+         not back at the fresh-room tick 0"
+    );
+
+    for expected in 257..=261u32 {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.tick, expected,
+            "counting must resume normally from the wrap target"
+        );
+    }
+}
+
+/// Issue #852: [`OverworldPhase::advance_start_menu_frame`] (`start_menu.rs`)
+/// keeps the animation running while the field start menu owns the frame,
+/// exactly as [`OverworldPhase::step`] does while a dialog does, and both
+/// call sites must wrap `tick` to the same already-latched tick. A synthetic
+/// already-open menu ([`crate::start_menu::synthetic_start_menu`]) needs no
+/// local pack, so this reaches the real wrap without one.
+#[test]
+fn wrapping_the_tick_through_the_start_menu_frame_also_lands_on_the_upstream_period() {
+    let temp = crate::flow::tests::TempSave::new("start-menu-tick-wrap-852");
+    let mut save_slot = temp.slot();
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    phase.start_menu = Some(crate::start_menu::synthetic_start_menu());
+    phase.tick = u32::MAX;
+
+    assert!(
+        phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot),
+        "an already-open menu must keep owning the frame"
+    );
+    assert_eq!(
+        phase.tick, 256,
+        "the start-menu frame path must wrap the same way step() does, not back to 0"
+    );
+}
+
 /// The other half of the [`OverworldPhase`] tick wiring (issue #160): every
 /// map (re)load restarts the room's animation counter at 0, mirroring
 /// upstream's `InitTilesetAnimations` call sites

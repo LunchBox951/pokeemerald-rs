@@ -35,6 +35,16 @@ pub enum RenderError {
         height_tiles: usize,
     },
 
+    /// An affine tilemap's tile area overflows `usize`, or a per-axis pixel
+    /// extent (`width_tiles` or `height_tiles` times the tile side length)
+    /// leaves the signed texture coordinates affine sampling addresses.
+    AffineTilemapDimensionsInvalid {
+        /// Supplied width in tiles.
+        width_tiles: usize,
+        /// Supplied height in tiles.
+        height_tiles: usize,
+    },
+
     /// An affine tilemap's tile-index count does not match its area.
     AffineTilemapSizeMismatch {
         /// Tile-index count required by the dimensions.
@@ -63,6 +73,13 @@ impl fmt::Display for RenderError {
                 f,
                 "tilemap dimensions {width_tiles}x{height_tiles} are not a valid single- or \
                  multi-screenblock size"
+            ),
+            Self::AffineTilemapDimensionsInvalid {
+                width_tiles,
+                height_tiles,
+            } => write!(
+                f,
+                "affine tilemap dimensions {width_tiles}x{height_tiles} are not addressable"
             ),
             Self::AffineTilemapSizeMismatch { expected, actual } => write!(
                 f,
@@ -104,5 +121,13 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("33"));
         assert!(msg.contains('1'));
+
+        let err = RenderError::AffineTilemapDimensionsInvalid {
+            width_tiles: usize::MAX,
+            height_tiles: 2,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains(&usize::MAX.to_string()));
+        assert!(msg.contains('2'));
     }
 }
