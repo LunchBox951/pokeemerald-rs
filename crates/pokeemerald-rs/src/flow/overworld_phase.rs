@@ -387,6 +387,10 @@ pub(crate) struct OverworldPhase {
     /// [`Self::rival_battle`] (issue #248): cleared at trigger time, set
     /// only on a real reported outcome.
     rival_battle_outcome: Option<battle::BattleOutcome>,
+    /// The trainer [`Self::rival_battle`] is fought against, held from
+    /// battle start to battle end so the win can set its defeated flag;
+    /// [`Self::sight_trainer_id`]'s sibling.
+    rival_trainer_id: Option<assets::trainers::TrainerId>,
     /// A Route 103 sight-trainer battle currently being played out, if any
     /// (issue #264) -- [`Self::rival_battle`]'s sibling, in its own field for
     /// the same reason: [`sight_trainer_trigger`] starts it via
@@ -670,6 +674,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
@@ -818,6 +823,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
