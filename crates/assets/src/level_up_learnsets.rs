@@ -17,31 +17,82 @@ pub const SPECIES_COUNT: usize = CANONICAL_SPECIES_COUNT;
 
 const MOVE_ID_BITS: u16 = 9;
 const MOVE_ID_MASK: u16 = (1 << MOVE_ID_BITS) - 1;
-#[cfg(test)]
 const MAX_PACKED_LEVEL: u8 = (u16::MAX >> MOVE_ID_BITS) as u8;
-#[cfg(test)]
 const PACKED_END: u16 = u16::MAX;
 
 /// One move learned at a particular level.
+///
+/// `level` and `move_id` always fit the packed format's seven- and nine-bit
+/// fields, and their combination never collides with the all-ones terminator:
+/// every constructor enforces all three, so [`LevelUpMove::packed`] never
+/// loses bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LevelUpMove {
-    /// The level at which the move is learned.
-    pub level: u8,
-    /// The move learned.
-    pub move_id: MoveId,
+    level: u8,
+    move_id: MoveId,
 }
 
 impl LevelUpMove {
-    const fn new(level: u8, move_id: MoveId) -> Self {
+    /// Builds an entry, or `None` if `level` or `move_id` overflow the packed
+    /// format's seven- and nine-bit fields, or their combination packs to the
+    /// all-ones terminator.
+    #[must_use]
+    pub const fn new(level: u8, move_id: MoveId) -> Option<Self> {
+        if level > MAX_PACKED_LEVEL || move_id.index() > MOVE_ID_MASK {
+            return None;
+        }
+        if level == MAX_PACKED_LEVEL && move_id.index() == MOVE_ID_MASK {
+            return None;
+        }
+        Some(Self { level, move_id })
+    }
+
+    /// Builds an entry from source data already known to fit the packed
+    /// format; only this module's own compile-time table may call it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `level` or `move_id` overflow the packed format's seven- and
+    /// nine-bit fields, or if their combination packs to the all-ones
+    /// terminator.
+    const fn checked(level: u8, move_id: MoveId) -> Self {
+        assert!(
+            level <= MAX_PACKED_LEVEL,
+            "level overflows the packed format's 7-bit field"
+        );
+        assert!(
+            move_id.index() <= MOVE_ID_MASK,
+            "move_id overflows the packed format's 9-bit field"
+        );
+        assert!(
+            level != MAX_PACKED_LEVEL || move_id.index() != MOVE_ID_MASK,
+            "level and move_id together collide with the packed all-ones terminator"
+        );
         Self { level, move_id }
     }
 
-    /// Decodes one packed entry. The all-ones terminator is not an entry.
+    /// The level at which the move is learned.
     #[must_use]
-    pub const fn from_packed(packed: u16) -> Self {
-        Self {
-            level: (packed >> MOVE_ID_BITS) as u8,
-            move_id: MoveId(packed & MOVE_ID_MASK),
+    pub const fn level(self) -> u8 {
+        self.level
+    }
+
+    /// The move learned.
+    #[must_use]
+    pub const fn move_id(self) -> MoveId {
+        self.move_id
+    }
+
+    /// Decodes one packed entry, or `None` for the all-ones terminator.
+    #[must_use]
+    pub const fn from_packed(packed: u16) -> Option<Self> {
+        if packed == PACKED_END {
+            None
+        } else {
+            Some(Self {
+                level: (packed >> MOVE_ID_BITS) as u8,
+                move_id: MoveId(packed & MOVE_ID_MASK),
+            })
         }
     }
 
@@ -54,7 +105,7 @@ impl LevelUpMove {
 
 macro_rules! learn {
     ($level:literal, $move_id:ident) => {
-        LevelUpMove::new($level, MoveId::$move_id)
+        LevelUpMove::checked($level, MoveId::$move_id)
     };
 }
 
@@ -5261,8 +5312,8 @@ impl Default for LevelUpLearnsets {
 #[cfg(test)]
 mod tests {
     use super::{
-        LevelUpLearnsets, LevelUpMove, LEARNSET_SPECIES, MAX_PACKED_LEVEL, PACKED_END,
-        SPECIES_COUNT,
+        LevelUpLearnsets, LevelUpMove, LEARNSET_SPECIES, MAX_PACKED_LEVEL, MOVE_ID_MASK,
+        PACKED_END, SPECIES_COUNT,
     };
     use crate::battle_moves::MoveId;
     use crate::error::AssetError;
@@ -5326,17 +5377,17 @@ mod tests {
     #[test]
     fn bulbasaur_learnset_matches_the_canonical_sequence() {
         let expected = [
-            LevelUpMove::new(1, EXPECTED_MOVE_TACKLE),
-            LevelUpMove::new(4, EXPECTED_MOVE_GROWL),
-            LevelUpMove::new(7, EXPECTED_MOVE_LEECH_SEED),
-            LevelUpMove::new(10, EXPECTED_MOVE_VINE_WHIP),
-            LevelUpMove::new(15, EXPECTED_MOVE_POISON_POWDER),
-            LevelUpMove::new(15, EXPECTED_MOVE_SLEEP_POWDER),
-            LevelUpMove::new(20, EXPECTED_MOVE_RAZOR_LEAF),
-            LevelUpMove::new(25, EXPECTED_MOVE_SWEET_SCENT),
-            LevelUpMove::new(32, EXPECTED_MOVE_GROWTH),
-            LevelUpMove::new(39, EXPECTED_MOVE_SYNTHESIS),
-            LevelUpMove::new(46, EXPECTED_MOVE_SOLAR_BEAM),
+            LevelUpMove::checked(1, EXPECTED_MOVE_TACKLE),
+            LevelUpMove::checked(4, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(7, EXPECTED_MOVE_LEECH_SEED),
+            LevelUpMove::checked(10, EXPECTED_MOVE_VINE_WHIP),
+            LevelUpMove::checked(15, EXPECTED_MOVE_POISON_POWDER),
+            LevelUpMove::checked(15, EXPECTED_MOVE_SLEEP_POWDER),
+            LevelUpMove::checked(20, EXPECTED_MOVE_RAZOR_LEAF),
+            LevelUpMove::checked(25, EXPECTED_MOVE_SWEET_SCENT),
+            LevelUpMove::checked(32, EXPECTED_MOVE_GROWTH),
+            LevelUpMove::checked(39, EXPECTED_MOVE_SYNTHESIS),
+            LevelUpMove::checked(46, EXPECTED_MOVE_SOLAR_BEAM),
         ];
         assert_eq!(
             LevelUpLearnsets::new()
@@ -5352,23 +5403,23 @@ mod tests {
         let reserved = learnsets.learnset(EXPECTED_SPECIES_NONE).unwrap();
         let bulbasaur = learnsets.learnset(EXPECTED_SPECIES_BULBASAUR).unwrap();
         assert!(std::ptr::eq(reserved, bulbasaur));
-        assert_eq!(reserved[0].move_id, EXPECTED_MOVE_TACKLE);
+        assert_eq!(reserved[0].move_id(), EXPECTED_MOVE_TACKLE);
     }
 
     #[test]
     fn pikachu_learnset_preserves_equal_level_order() {
         let expected = [
-            LevelUpMove::new(1, EXPECTED_MOVE_THUNDER_SHOCK),
-            LevelUpMove::new(1, EXPECTED_MOVE_GROWL),
-            LevelUpMove::new(6, EXPECTED_MOVE_TAIL_WHIP),
-            LevelUpMove::new(8, EXPECTED_MOVE_THUNDER_WAVE),
-            LevelUpMove::new(11, EXPECTED_MOVE_QUICK_ATTACK),
-            LevelUpMove::new(15, EXPECTED_MOVE_DOUBLE_TEAM),
-            LevelUpMove::new(20, EXPECTED_MOVE_SLAM),
-            LevelUpMove::new(26, EXPECTED_MOVE_THUNDERBOLT),
-            LevelUpMove::new(33, EXPECTED_MOVE_AGILITY),
-            LevelUpMove::new(41, EXPECTED_MOVE_THUNDER),
-            LevelUpMove::new(50, EXPECTED_MOVE_LIGHT_SCREEN),
+            LevelUpMove::checked(1, EXPECTED_MOVE_THUNDER_SHOCK),
+            LevelUpMove::checked(1, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(6, EXPECTED_MOVE_TAIL_WHIP),
+            LevelUpMove::checked(8, EXPECTED_MOVE_THUNDER_WAVE),
+            LevelUpMove::checked(11, EXPECTED_MOVE_QUICK_ATTACK),
+            LevelUpMove::checked(15, EXPECTED_MOVE_DOUBLE_TEAM),
+            LevelUpMove::checked(20, EXPECTED_MOVE_SLAM),
+            LevelUpMove::checked(26, EXPECTED_MOVE_THUNDERBOLT),
+            LevelUpMove::checked(33, EXPECTED_MOVE_AGILITY),
+            LevelUpMove::checked(41, EXPECTED_MOVE_THUNDER),
+            LevelUpMove::checked(50, EXPECTED_MOVE_LIGHT_SCREEN),
         ];
         assert_eq!(
             LevelUpLearnsets::new()
@@ -5381,18 +5432,18 @@ mod tests {
     #[test]
     fn chimecho_occupies_the_final_species_slot() {
         let expected = [
-            LevelUpMove::new(1, EXPECTED_MOVE_WRAP),
-            LevelUpMove::new(6, EXPECTED_MOVE_GROWL),
-            LevelUpMove::new(9, EXPECTED_MOVE_ASTONISH),
-            LevelUpMove::new(14, EXPECTED_MOVE_CONFUSION),
-            LevelUpMove::new(17, EXPECTED_MOVE_TAKE_DOWN),
-            LevelUpMove::new(22, EXPECTED_MOVE_UPROAR),
-            LevelUpMove::new(25, EXPECTED_MOVE_YAWN),
-            LevelUpMove::new(30, EXPECTED_MOVE_PSYWAVE),
-            LevelUpMove::new(33, EXPECTED_MOVE_DOUBLE_EDGE),
-            LevelUpMove::new(38, EXPECTED_MOVE_HEAL_BELL),
-            LevelUpMove::new(41, EXPECTED_MOVE_SAFEGUARD),
-            LevelUpMove::new(46, EXPECTED_MOVE_PSYCHIC),
+            LevelUpMove::checked(1, EXPECTED_MOVE_WRAP),
+            LevelUpMove::checked(6, EXPECTED_MOVE_GROWL),
+            LevelUpMove::checked(9, EXPECTED_MOVE_ASTONISH),
+            LevelUpMove::checked(14, EXPECTED_MOVE_CONFUSION),
+            LevelUpMove::checked(17, EXPECTED_MOVE_TAKE_DOWN),
+            LevelUpMove::checked(22, EXPECTED_MOVE_UPROAR),
+            LevelUpMove::checked(25, EXPECTED_MOVE_YAWN),
+            LevelUpMove::checked(30, EXPECTED_MOVE_PSYWAVE),
+            LevelUpMove::checked(33, EXPECTED_MOVE_DOUBLE_EDGE),
+            LevelUpMove::checked(38, EXPECTED_MOVE_HEAL_BELL),
+            LevelUpMove::checked(41, EXPECTED_MOVE_SAFEGUARD),
+            LevelUpMove::checked(46, EXPECTED_MOVE_PSYCHIC),
         ];
         assert_eq!(
             LevelUpLearnsets::new()
@@ -5419,26 +5470,83 @@ mod tests {
 
     #[test]
     fn packed_encoding_preserves_every_entry() {
-        let poison_powder = LevelUpMove::new(15, EXPECTED_MOVE_POISON_POWDER);
+        let poison_powder = LevelUpMove::checked(15, EXPECTED_MOVE_POISON_POWDER);
         assert_eq!(
             poison_powder.packed(),
             EXPECTED_PACKED_LEVEL_15_POISON_POWDER
         );
         assert_eq!(
             LevelUpMove::from_packed(EXPECTED_PACKED_LEVEL_15_POISON_POWDER),
-            poison_powder,
+            Some(poison_powder),
         );
 
         for entry in LevelUpLearnsets::new().iter().flatten() {
             let packed = entry.packed();
             assert_ne!(packed, PACKED_END, "entry collides with the terminator");
             assert!(
-                entry.level <= MAX_PACKED_LEVEL,
+                entry.level() <= MAX_PACKED_LEVEL,
                 "level {} exceeds the packed level field",
-                entry.level
+                entry.level()
             );
-            assert_eq!(LevelUpMove::from_packed(packed), *entry);
+            assert_eq!(LevelUpMove::from_packed(packed), Some(*entry));
         }
+    }
+
+    #[test]
+    fn terminator_is_not_decoded_as_an_entry() {
+        assert_eq!(LevelUpMove::from_packed(PACKED_END), None);
+    }
+
+    #[test]
+    fn new_rejects_a_level_beyond_the_packed_width() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL + 1, EXPECTED_MOVE_TACKLE),
+            None,
+        );
+    }
+
+    #[test]
+    fn new_rejects_a_move_id_beyond_the_packed_width() {
+        assert_eq!(LevelUpMove::new(1, MoveId(MOVE_ID_MASK + 1)), None);
+    }
+
+    #[test]
+    fn new_rejects_the_combination_that_collides_with_the_terminator() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK)),
+            None,
+        );
+    }
+
+    #[test]
+    fn new_accepts_the_widest_non_colliding_combinations() {
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK - 1)),
+            Some(LevelUpMove::checked(
+                MAX_PACKED_LEVEL,
+                MoveId(MOVE_ID_MASK - 1)
+            )),
+        );
+        assert_eq!(
+            LevelUpMove::new(MAX_PACKED_LEVEL - 1, MoveId(MOVE_ID_MASK)),
+            Some(LevelUpMove::checked(
+                MAX_PACKED_LEVEL - 1,
+                MoveId(MOVE_ID_MASK)
+            )),
+        );
+    }
+
+    #[test]
+    fn packed_round_trips_every_constructible_entry() {
+        let max_level = LevelUpMove::checked(MAX_PACKED_LEVEL, MoveId(MOVE_ID_MASK - 1));
+        let max_move = LevelUpMove::checked(MAX_PACKED_LEVEL - 1, MoveId(MOVE_ID_MASK));
+        assert_eq!(
+            [
+                LevelUpMove::from_packed(max_level.packed()),
+                LevelUpMove::from_packed(max_move.packed()),
+            ],
+            [Some(max_level), Some(max_move)],
+        );
     }
 
     #[test]
@@ -5449,10 +5557,10 @@ mod tests {
             assert!(!entries.is_empty(), "species {id} has an empty learnset");
             for pair in entries.windows(2) {
                 assert!(
-                    pair[0].level <= pair[1].level,
+                    pair[0].level() <= pair[1].level(),
                     "species {id} learnset not level-ordered: {} then {}",
-                    pair[0].level,
-                    pair[1].level,
+                    pair[0].level(),
+                    pair[1].level(),
                 );
             }
         }
