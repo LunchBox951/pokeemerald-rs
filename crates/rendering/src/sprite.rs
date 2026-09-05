@@ -552,11 +552,23 @@ impl<'a> SpriteLayer<'a> {
     /// box (from [`footprint`](Self::footprint)); `dx` usually is too, but
     /// an [`ObjMode::Window`] entry's mosaic-rounded trailing block
     /// (`sample_entry_mosaic`) can push it past `width - 1` — mgba's
-    /// unclamped `inX` for that case reads on into the next in-VRAM tile,
-    /// which the tile-index wrap below reproduces unclamped. Applies H/V
-    /// flip and tile addressing; an affine entry never reaches this
-    /// method — see [`sample_affine_local`](Self::sample_affine_local).
-    #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
+    /// unclamped `inX` for that case addresses on past the sprite's own
+    /// tiles, forwards into the next in-VRAM tile or, under H flip,
+    /// backwards into the previous one, which the signed column and
+    /// tile-index wrap below reproduce in both directions. Applies H/V flip
+    /// and tile addressing; an affine entry never reaches this method — see
+    /// [`sample_affine_local`](Self::sample_affine_local).
+    ///
+    /// Sprite dimensions never exceed 64 and an OBJ mosaic block never
+    /// exceeds 16 (`MosaicSize`'s 4-bit register field), so the signed
+    /// column spans `-16..80` and the tile offset `-2..72`, so the casts
+    /// below neither truncate nor wrap; only the derived tile index is meant
+    /// to (`OamEntry::tile_index` is a 10-bit field).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "documented above: every value here is bounded well inside i16"
+    )]
     fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
         const DIM: usize = BitDepth::TILE_DIM;
         debug_assert!(
@@ -567,30 +579,30 @@ impl<'a> SpriteLayer<'a> {
 
         // H/V flip mirrors the whole sprite footprint, not each tile
         // independently (unlike a BG ScreenEntry's per-tile flip bits). The
-        // h_flip branch saturates instead of subtracting outright: mgba's
-        // own h-flip loop would walk `inX` negative for the OBJ-window
-        // out-of-bounds `dx` above (an out-of-spec wrapped VRAM read no
-        // caller exercises), so this clamps to the sprite's own leftmost
-        // column instead of replicating that read.
+        // mirrored column is signed because an OBJ-window trailing block's
+        // `dx` can exceed `width - 1`: mgba's h-flip walk decrements a raw
+        // `inX` straight past 0 into negative source columns, addressing the
+        // tiles *before* the sprite's own exactly as the unflipped walk
+        // addresses those after it.
         let local_col = if entry.h_flip() {
-            (width - 1).saturating_sub(dx)
+            width as i32 - 1 - dx as i32
         } else {
-            dx
+            dx as i32
         };
         let local_row = if entry.v_flip() { height - 1 - dy } else { dy };
 
         let tiles_per_row = width / DIM;
-        let tile_col = local_col / DIM;
+        let tile_col = local_col.div_euclid(DIM as i32);
         let tile_row = local_row / DIM;
-        let tile_offset = (tile_row * tiles_per_row + tile_col) as u16;
+        let tile_offset = (tile_row * tiles_per_row) as i32 + tile_col;
         // A multi-tile sprite's derived tile index wraps within the 32 KiB
         // OBJ VRAM window (mgba's `(xBase + charBase) & maskLo` byte-address
-        // wrap), so a base index near the end of OBJ tile space rolls over to
-        // the start rather than reading past it — the mask depends on bit
-        // depth (see [`BitDepth::obj_tile_index_mask`]).
+        // wrap), so a base index near either end of OBJ tile space rolls over
+        // rather than reading past it — the mask depends on bit depth (see
+        // [`BitDepth::obj_tile_index_mask`]).
         let bit_depth = entry.bit_depth();
-        let tile_idx =
-            entry.tile_index().wrapping_add(tile_offset) & bit_depth.obj_tile_index_mask();
+        let tile_idx = entry.tile_index().wrapping_add_signed(tile_offset as i16)
+            & bit_depth.obj_tile_index_mask();
 
         let tileset = match bit_depth {
             BitDepth::Bpp4 => self.tileset_4bpp,
@@ -599,7 +611,7 @@ impl<'a> SpriteLayer<'a> {
         let Some(tile) = tileset.tile(tile_idx) else {
             return Texel::Outside;
         };
-        let index = tile.index(local_col % DIM, local_row % DIM);
+        let index = tile.index(local_col.rem_euclid(DIM as i32) as usize, local_row % DIM);
         // Palette index 0 is transparent, in every bank and for 8bpp, same
         // as a regular BG (see bg.rs's sample_pixel).
         if index == 0 {
@@ -1580,6 +1592,66 @@ mod tests {
                 "screen x = {x} is inside the mosaic-rounded draw condition"
             );
         }
+        assert!(
+            !layer.objwin_mask_with_mosaic(12, 0, mosaic),
+            "screen x = 12 is past the rounded draw condition"
+        );
+    }
+
+    #[test]
+    fn flipped_regular_objwin_mask_wraps_the_mosaic_tail_below_the_sprite_tiles() {
+        // H-flip mirror of the test above. mgba's regular loop seeds a
+        // flipped sprite at `inX = width - inX - 1` and steps it by -1
+        // (software-obj.c:328-334), so the OBJWIN loop's unclamped walk runs
+        // `inX` negative across the mosaic-rounded tail and its `xBase`
+        // addresses the tiles *below* the sprite's own, wrapped in the 32 KiB
+        // OBJ window, exactly as the unflipped walk addresses those above.
+        // 8x8 OBJWIN entry at x = 2, tile 1, mosaicH = 4: condition rounds to
+        // 12, and screen x = 10, 11 reach source columns -1 and -2 -> tile 0,
+        // columns 7 and 6. Column 7 is opaque and column 6 is not, so the two
+        // tail pixels disagree — a clamp to the sprite's own leftmost column
+        // would mask both.
+        let mut bytes = [0u8; 64];
+        bytes[3] = 0x10; // tile 0 row 0: col 6 transparent, col 7 opaque.
+        for byte in &mut bytes[32..] {
+            *byte = 0x11; // tile 1 (the sprite's own): opaque everywhere.
+        }
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
+        let palette = Palette::new(colors);
+        let entries = [OamEntry::new(
+            2,
+            0,
+            1, // tile index
+            0,
+            BitDepth::Bpp4,
+            true, // h_flip
+            false,
+            ObjShape::Square,
+            0, // 8x8
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)
+        .with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(4, 1);
+
+        for x in 2..10 {
+            assert!(
+                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                "screen x = {x} is inside the raw footprint"
+            );
+        }
+        assert!(
+            layer.objwin_mask_with_mosaic(10, 0, mosaic),
+            "screen x = 10 reaches source column -1: tile 0 column 7, opaque"
+        );
+        assert!(
+            !layer.objwin_mask_with_mosaic(11, 0, mosaic),
+            "screen x = 11 reaches source column -2: tile 0 column 6, transparent"
+        );
         assert!(
             !layer.objwin_mask_with_mosaic(12, 0, mosaic),
             "screen x = 12 is past the rounded draw condition"
