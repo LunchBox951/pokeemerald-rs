@@ -335,16 +335,17 @@ impl MusicPlayer {
     /// An empty ring only proves the output callback took the last samples,
     /// so a healthy stream is held further frames for them to sound --
     /// [`device_tail_millis`] for this output's own device, not a fixed wait.
-    /// A reported stream error ([`AudioOutput::stream_errors`]) or an elapsed
-    /// [`max_drain_wait_frames`] bound answers `true` at once: neither has a
-    /// tail left to play. Counts one poll per call, and a ring that refills
-    /// restarts the device tail; meaningful only once [`Self::fade_finished`].
+    /// An elapsed [`max_drain_wait_frames`] bound answers `true` while the
+    /// ring stays nonempty, so a consumer that never takes the fade cannot
+    /// hold the device open; a stream error is not read, since cpal's ALSA
+    /// worker reports a recoverable XRUN through the same counter and keeps
+    /// running. Counts one poll per call. A ring seen empty clears the
+    /// stall count, and a ring that refills restarts the device tail;
+    /// meaningful only once [`Self::fade_finished`].
     #[must_use]
     pub fn drained(&mut self) -> bool {
-        if self.output.stream_errors() > 0 {
-            return true;
-        }
         if self.producer.available_space() >= self.ring_capacity {
+            self.drain_wait_frames = 0;
             self.device_tail_frames += 1;
             return self.device_tail_frames > self.max_device_tail_frames;
         }
@@ -608,6 +609,79 @@ mod tests {
         assert_eq!(
             polls_after_refill, tail,
             "the tail must run in full from the latest drain, not resume the earlier count"
+        );
+    }
+
+    /// cpal's ALSA worker reports a recoverable XRUN through the error
+    /// callback, then re-prepares and keeps running, so `stream_errors`
+    /// counts errors the stream survived. One must not drop the queued fade.
+    #[test]
+    fn a_recovered_stream_error_still_drains_the_queued_fade() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let queued = full_ring - player.ring_free_for_test();
+        assert!(queued > 0, "the prefill must leave samples to drain");
+
+        player.output.record_stream_error_for_test();
+
+        assert!(
+            !player.drained(),
+            "a recovered stream error must not drop {queued} queued samples unplayed"
+        );
+    }
+
+    /// The pre-empty bound guards against a consumer that never takes the
+    /// queued fade. An empty ring disproves that stall, so audio a retained
+    /// producer queues afterwards gets its own wait rather than the remainder
+    /// of a bound the disproven suspicion already spent.
+    #[test]
+    fn a_ring_that_refills_after_a_full_drain_gets_a_fresh_drain_wait() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let retained = output.producer();
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let mut sink = vec![0.0_f32; full_ring];
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring starts empty"
+        );
+
+        let bound = player.max_drain_wait_frames;
+        assert_eq!(
+            retained.push(&[0.25; 64]),
+            64,
+            "the ring holds queued audio"
+        );
+        for _ in 0..bound - 1 {
+            assert!(!player.drained(), "the pre-empty bound has not elapsed yet");
+        }
+
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "the consumer took everything"
+        );
+        assert!(
+            !player.drained(),
+            "an empty ring is still inside the device tail"
+        );
+
+        assert_eq!(
+            retained.push(&[0.5; 64]),
+            64,
+            "the retained producer refills the ring"
+        );
+        assert!(
+            !player.drained(),
+            "the refilled queue must get its own wait, not be dropped on the poll that sees it"
         );
     }
 
