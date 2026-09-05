@@ -337,8 +337,8 @@ impl MusicPlayer {
     /// [`device_tail_millis`] for this output's own device, not a fixed wait.
     /// A reported stream error ([`AudioOutput::stream_errors`]) or an elapsed
     /// [`max_drain_wait_frames`] bound answers `true` at once: neither has a
-    /// tail left to play. Counts one poll per call; meaningful only once
-    /// [`Self::fade_finished`].
+    /// tail left to play. Counts one poll per call, and a ring that refills
+    /// restarts the device tail; meaningful only once [`Self::fade_finished`].
     #[must_use]
     pub fn drained(&mut self) -> bool {
         if self.output.stream_errors() > 0 {
@@ -348,6 +348,7 @@ impl MusicPlayer {
             self.device_tail_frames += 1;
             return self.device_tail_frames > self.max_device_tail_frames;
         }
+        self.device_tail_frames = 0;
         self.drain_wait_frames += 1;
         self.drain_wait_frames >= self.max_drain_wait_frames
     }
@@ -560,6 +561,53 @@ mod tests {
             player.ring_capacity_for_test(),
             full_ring,
             "capacity must be the ring's own, not the free space a pre-queued producer left"
+        );
+    }
+
+    /// A producer clone retained from before [`MusicPlayer::start`] can
+    /// refill the ring after `drained` has seen it empty; the device tail
+    /// then restarts from the latest drain rather than resuming its count.
+    #[test]
+    fn a_ring_that_refills_restarts_the_device_tail() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let retained = output.producer();
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let mut sink = vec![0.0_f32; full_ring];
+        let tail = player.max_device_tail_frames;
+        assert!(
+            tail > 2,
+            "the null backend's floor must leave room for a partial count"
+        );
+
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring is empty"
+        );
+        for _ in 0..tail - 1 {
+            assert!(!player.drained(), "still inside the device tail");
+        }
+
+        assert_eq!(
+            retained.push(&[0.25; 64]),
+            64,
+            "the retained producer refills the ring"
+        );
+        assert!(!player.drained(), "a nonempty ring is never drained");
+        player.drain_null_for_test(&mut sink);
+
+        let mut polls_after_refill = 0;
+        while !player.drained() {
+            polls_after_refill += 1;
+            assert!(polls_after_refill <= tail + 1, "the device tail is bounded");
+        }
+        assert_eq!(
+            polls_after_refill, tail,
+            "the tail must run in full from the latest drain, not resume the earlier count"
         );
     }
 
