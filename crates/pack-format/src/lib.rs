@@ -35,10 +35,21 @@
 //!   row-major (see `xtask::extract::png`).
 //! - **Palette**: `color_count * 2` bytes, one GBA-native packed BGR555
 //!   `u16` (little-endian) per colour (see `xtask::extract::jasc_pal`).
-//! - **Raw**: opaque bytes, copied verbatim from the upstream source file
-//!   (used for content the extract pipeline doesn't decode, e.g.
-//!   `metatiles.bin` — see `xtask::extract`'s module docs for the exact
-//!   list).
+//! - **Raw**: opaque *to this container*. The writer validates nothing and
+//!   [`parse_directory`]'s reader hands the bytes back unread, so the schema
+//!   a payload must hold is not defined here — it belongs to the asset type
+//!   in `crates/assets` that decodes that id family, and a backend owes that
+//!   encoding rather than whatever bytes its own source happened to store.
+//!   `audio/song/*`, `audio/sample/*`, and `audio/voicegroup/*` carry
+//!   `assets::audio`'s `Song`/`Sample`/`VoiceGroup` `encode` output, read
+//!   back through the matching `AssetPack` accessor's `decode`;
+//!   `tileset/*/metatiles`, the `map`/`border` layout grids, and
+//!   `metatile_attributes` carry the little-endian cell arrays
+//!   `assets::map_layouts` and `assets::metatile_attributes` define, which
+//!   upstream happens to ship as flat files of the same bytes — which is
+//!   why the decomp backend can copy those through and the ROM backend
+//!   cannot. See `xtask::extract`'s module docs for the id families that
+//!   pipeline writes.
 //!
 //! # Determinism
 //!
