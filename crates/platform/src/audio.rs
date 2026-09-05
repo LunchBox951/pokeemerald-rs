@@ -274,10 +274,10 @@ impl AudioOutput {
 
     /// The largest callback buffer the device advertises, in frames at
     /// [`Self::device_sample_rate`], or `None` when it advertises no concrete
-    /// range. Once the ring reads empty, at most this much audio (plus the
-    /// resampler's one-frame lookahead) is still queued in the device, so a
-    /// caller that wants the tail heard before dropping the stream waits it
-    /// out from this bound. Always `None` for the null backend.
+    /// range. It bounds one callback period only, not the periods the host
+    /// keeps queued behind it, so a caller waiting for the tail to sound
+    /// derives its wait from this bound rather than sleeping it verbatim.
+    /// Always `None` for the null backend.
     #[must_use]
     pub fn max_callback_frames(&self) -> Option<usize> {
         match self.max_callback_frames {
