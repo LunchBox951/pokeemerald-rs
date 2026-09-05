@@ -73,49 +73,59 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
     apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
 }
 
-/// Refuses an [`EFFECT_PARALYZE`] move that would newly paralyse a Synchronize
-/// holder, whose reflection back onto the attacker this slice does not model.
+/// Refuses an [`EFFECT_PARALYZE`] move that would newly paralyse a defender
+/// whose ability this slice cannot follow past the infliction.
 ///
-/// Synchronize is armed only where `SetMoveEffect` actually writes the status
-/// (`src/battle_script_commands.c:2502`-`:2511`) and fires at
-/// `MOVEEND_SYNCHRONIZE_TARGET` (`:4275`-`:4277`,
-/// `src/battle_util.c:2971`-`:2985`), so every guard
+/// Only a status that actually lands wakes either ability, so every guard
 /// `BattleScript_EffectParalyze` runs before `seteffectprimary`
 /// (`data/battle_scripts_1.s:1011`-`:1017`: Limber, `typecalc`, and the
 /// already-statused exits) leaves the interaction fully modelled and is
-/// admitted here. An attacker already carrying a primary status is admitted
-/// too: the reflection re-enters `SetMoveEffect` against it
-/// (`gEffectBattler = gBattlerAttacker`, `:2241`) and its paralysis case
-/// leaves `statusChanged` false (`:2422`-`:2423`), writing nothing. Only
-/// `accuracycheck` cannot be consulted, since answering it would spend the
-/// draw this refusal exists to protect.
+/// admitted here. `accuracycheck` is the one preceding guard the refusal
+/// cannot consult, since answering it would spend the draw it exists to
+/// protect.
+///
+/// * Synchronize reflects the status back onto the attacker
+///   (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_script_commands.c:4275`-`:4277`
+///   via `src/battle_util.c:2971`-`:2985`). An attacker already carrying a
+///   primary status is admitted: the reflection re-enters `SetMoveEffect`
+///   against it (`gEffectBattler = gBattlerAttacker`, `:2241`) and the
+///   paralysis case leaves `statusChanged` false (`:2422`-`:2423`).
+/// * Shed Skin rolls a one-in-three cure every end of turn while its holder is
+///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`) — a
+///   draw [`crate::battle::Battle`]'s residual pass does not make, so the
+///   shared stream would diverge for the rest of the battle.
 ///
 /// # Errors
 ///
-/// [`BattleError::UnportedAbilityInteraction`] when the move would reach
-/// `seteffectprimary` against a Synchronize defender with a reflection target
-/// left to status.
+/// [`BattleError::UnportedAbilityInteraction`], carrying the offending
+/// ability, when the move would reach `seteffectprimary` against one.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<(), BattleError> {
-    if defender.ability() != AbilityId::SYNCHRONIZE
-        || attacker.status1().is_paralysed()
-        || ensure_resolvable(dex, move_id).is_err()
-    {
+    if ensure_resolvable(dex, move_id).is_err() {
         return Ok(());
     }
     let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
         return Ok(());
     };
-    if defender_is_immune(move_type, defender) || defender.status1().is_paralysed() {
+    if defender.ability() == AbilityId::LIMBER
+        || defender_is_immune(move_type, defender)
+        || defender.status1().is_paralysed()
+    {
         return Ok(());
     }
-    Err(BattleError::UnportedAbilityInteraction(
-        AbilityId::SYNCHRONIZE,
-    ))
+    match defender.ability() {
+        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SHED_SKIN,
+        )),
+        AbilityId::SYNCHRONIZE if !attacker.status1().is_paralysed() => Err(
+            BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
+        ),
+        _ => Ok(()),
+    }
 }
 
 /// The result of resolving an [`EFFECT_PARALYZE`] move, before any mutation.

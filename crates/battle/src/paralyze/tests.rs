@@ -278,3 +278,39 @@ fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
+
+/// `SPECIES_SEVIPER`: Poison, and Shed Skin in its primary ability slot.
+const SEVIPER: SpeciesId = SpeciesId(379);
+
+#[test]
+fn a_shed_skin_defender_is_refused_before_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, SEVIPER, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), assets::AbilityId::SHED_SKIN);
+    let mut rng = SequenceRng::new([0]);
+    let refused =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    assert_eq!(
+        refused,
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN),
+        "the unmodelled end-turn cure roll fails closed"
+    );
+    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+}
+
+#[test]
+fn an_already_paralysed_shed_skin_defender_is_admitted_not_refused() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let mut defender = mon(&dex, SEVIPER, 10, vec![TACKLE]);
+    defender.set_status1(Status1::Paralysed);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::AlreadyParalysed,
+        "this move applies nothing, so it is not what made Shed Skin reachable"
+    );
+}

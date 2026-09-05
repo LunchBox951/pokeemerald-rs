@@ -496,7 +496,15 @@ impl Battle {
         // without disturbing the stream and another action can be chosen.
         for slot in enemy.moves() {
             ensure_executable(&dex, slot.move_id)?;
-            paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+            // A spent slot aborts at `Cmd_attackcanceler`'s no-PP jump
+            // (`battle_script_commands.c:934`-`:939`), never reaching
+            // `seteffectprimary`, so it carries no ability interaction.
+            // A spent slot aborts at `Cmd_attackcanceler`'s no-PP jump
+            // (`battle_script_commands.c:934`-`:939`), never reaching
+            // `seteffectprimary`, so it carries no ability interaction.
+            if slot.pp > 0 {
+                paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+            }
         }
         let random_turn_number = rng.next_u16();
         // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
@@ -604,7 +612,9 @@ impl Battle {
         for mon in &party {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
-                paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
+                if slot.pp > 0 {
+                    paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
+                }
             }
         }
 

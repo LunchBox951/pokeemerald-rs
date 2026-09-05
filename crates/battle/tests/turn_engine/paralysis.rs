@@ -597,3 +597,58 @@ fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
         );
     }
 }
+
+/// `SPECIES_SEVIPER`: Poison, Shed Skin in its primary ability slot.
+const SEVIPER: u16 = 379;
+
+/// Shed Skin rolls a one-in-three cure every end of turn while its holder is
+/// statused (`src/battle_util.c:2620`-`:2621`), a draw this engine's residual
+/// pass does not make — so the paralysis that would start those rolls is
+/// refused, before the turn's first draw.
+#[test]
+fn a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let pp_before = battle.player().moves()[0].pp;
+    let draws_before = rng.draws();
+
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap_err();
+
+    assert_eq!(
+        rejected.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+    );
+    assert!(rejected.events().is_empty());
+    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
+    assert_eq!(battle.player().moves()[0].pp, pp_before, "no PP is spent");
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+}
+
+/// A spent slot never reaches `seteffectprimary` — `Cmd_attackcanceler` aborts
+/// it at `battle_script_commands.c:934`-`:939` — so it carries no ability
+/// interaction to screen, and the battle must still start.
+#[test]
+fn a_depleted_enemy_paralyze_slot_does_not_block_a_synchronize_lead() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(player.ability(), assets::AbilityId::SYNCHRONIZE);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE, TACKLE]);
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    assert_eq!(enemy.moves()[0].pp, 0, "fixture sanity: slot 0 is spent");
+
+    let mut rng = SequenceRng::new([0; 4]);
+    let battle = Battle::new(dex, player, enemy, false, &mut rng);
+
+    assert!(
+        battle.is_ok(),
+        "a spent Thunder Wave cannot paralyse the Synchronize lead: {:?}",
+        battle.err()
+    );
+}
