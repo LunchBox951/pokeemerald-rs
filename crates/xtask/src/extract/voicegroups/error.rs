@@ -8,6 +8,14 @@ pub(crate) enum VoiceGroupError {
         group: String,
         line: String,
     },
+    PanOverrideOutOfRange {
+        group: String,
+        pan: u8,
+    },
+    SquareDutyOutOfRange {
+        group: String,
+        duty: u8,
+    },
     UnknownVoiceMacro {
         group: String,
         macro_name: String,
@@ -58,6 +66,10 @@ pub(crate) enum VoiceGroupError {
         starting_note: u8,
         slot_count: usize,
     },
+    PackIdTooLong {
+        group: String,
+        id_len: usize,
+    },
     UnindexedLinkOrderFile(String),
 }
 
@@ -80,6 +92,16 @@ impl fmt::Display for VoiceGroupError {
             Self::MalformedVoiceSlot { group, line } => {
                 write!(f, "voicegroup `{group}`: malformed line: `{line}`")
             }
+            Self::PanOverrideOutOfRange { group, pan } => write!(
+                f,
+                "voicegroup `{group}`: DirectSound pan override {pan} is outside the valid \
+                 range 1..=127"
+            ),
+            Self::SquareDutyOutOfRange { group, duty } => write!(
+                f,
+                "voicegroup `{group}`: square duty cycle selector {duty} is outside the valid \
+                 range 0..=3"
+            ),
             Self::UnknownVoiceMacro { group, macro_name } => {
                 write!(f, "voicegroup `{group}`: unrecognized macro `{macro_name}`")
             }
@@ -167,6 +189,12 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: starting_note {starting_note} + {slot_count} slots \
                  exceeds the maximum of {}",
                 super::VOICE_SLOT_COUNT
+            ),
+            Self::PackIdTooLong { group, id_len } => write!(
+                f,
+                "voicegroup `{group}`: referenced pack id of {id_len} bytes exceeds the pack \
+                 format's u16 id length field maximum of {}",
+                u16::MAX
             ),
             Self::UnindexedLinkOrderFile(path) => write!(
                 f,

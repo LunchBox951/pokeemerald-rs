@@ -68,9 +68,10 @@ pub enum ExtractError {
     /// reshapes underneath this pipeline, since the decoders here produce
     /// well-formed input. Carries the source path and the shape error.
     EntryShape(PathBuf, EntryShapeError),
-    /// Assembling the final pack failed (duplicate or invalid id — an
+    /// Assembling the final pack failed: a duplicate or invalid id (an
     /// internal bug in this pipeline's manifest, since every id is
-    /// generated here, not user-supplied).
+    /// generated here, not user-supplied), or an entry count the pack
+    /// header's `u32` field cannot represent.
     Pack(PackWriteError),
     /// `data/layouts/layouts.json` failed to parse. Carries its path and
     /// the parser error.

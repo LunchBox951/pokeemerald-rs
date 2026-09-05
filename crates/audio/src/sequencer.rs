@@ -58,6 +58,14 @@ const DEFAULT_TRACK_VOLUME: u8 = 127;
 /// Default pitch-bend range (`track->bendRange = 2`, `m4a_1.s:1223`).
 const DEFAULT_BEND_RANGE: u8 = 2;
 
+/// Default LFO rate (`track->lfoSpeed = 0x16`, `m4a_1.s:1226`); harmless
+/// while `mod_depth` defaults to `0` (`m4a_1.s:1288`).
+const DEFAULT_LFO_SPEED: u8 = 22;
+
+/// Max nested `PATT` depth (`track->patternStack`'s capacity, `ply_patt`,
+/// `m4a_1.s:851`).
+const MAX_PATTERN_DEPTH: usize = 3;
+
 /// The instrument volume scaler `volX` (`0x40`, set at track init).
 const VOL_X: u32 = 0x40;
 
@@ -143,25 +151,20 @@ struct TrackState {
     /// The LFO's current signed output (`track->modM`), folded into pitch or
     /// volume depending on `mod_type`.
     mod_m: i8,
-    /// Saved return cursors for nested `PATT` calls (`track->patternStack`,
-    /// max depth 3 — `ply_patt`, `m4a_1.s:851`).
-    pattern_stack: [usize; 3],
-    /// Current `PATT` nesting depth, `0..=3` (`track->patternLevel`).
+    /// Saved return cursors for nested `PATT` calls (`track->patternStack`).
+    pattern_stack: [usize; MAX_PATTERN_DEPTH],
+    /// Current `PATT` nesting depth, `0..=MAX_PATTERN_DEPTH` (`track->patternLevel`).
     pattern_level: u8,
     /// `REPT`'s in-progress repeat counter (`track->repN`).
     rep_n: u8,
-    /// Active pseudo-echo volume (`xIECV`, `track->pseudoEchoVolume`),
-    /// copied into every subsequently started voice on this track
-    /// (`m4a_1.s:1757`..`:1758`). Voices already started keep whatever value
-    /// they captured at their own note-on.
+    /// Active pseudo-echo volume (`xIECV`, `track->pseudoEchoVolume`);
+    /// applies only to voices started after it last changed (`m4a_1.s:1757`..`:1758`).
     pseudo_echo_volume: u8,
     /// Active pseudo-echo length (`xIECL`, `track->pseudoEchoLength`); see
     /// [`Self::pseudo_echo_volume`].
     pseudo_echo_length: u8,
-    /// This track's own note priority (`PRIO`, `track->priority`). Added to
-    /// the song header's priority and saturated at `0xFF` to give each new
-    /// note its effective note-on priority (`m4a_1.s:1628`..`:1633`); see
-    /// [`Sequencer::note_priority`].
+    /// This track's own note priority (`PRIO`, `track->priority`); combined
+    /// into each new note's effective priority by [`Sequencer::note_priority`].
     priority: u8,
 }
 
@@ -183,27 +186,18 @@ impl TrackState {
             key: 0,
             mod_depth: 0,
             mod_type: 0,
-            // Upstream track init seeds `lfoSpeed = 0x16` (`m4a_1.s:1226`,
-            // `movs r0, 0x16`), a sibling of the `bendRange = 2` / `volX = 0x40`
-            // defaults already mirrored above. Modulation still gates on
-            // `mod_depth > 0` (`m4a_1.s:1288`), so this default alone never
-            // makes a silent track wobble.
-            lfo_speed: 22,
+            lfo_speed: DEFAULT_LFO_SPEED,
             lfo_delay: 0,
             lfo_delay_c: 0,
             lfo_speed_c: 0,
             mod_m: 0,
-            pattern_stack: [0; 3],
+            pattern_stack: [0; MAX_PATTERN_DEPTH],
             pattern_level: 0,
             rep_n: 0,
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
-            // Track init zeroes `priority`: `MPlayMain`'s `MPT_FLG_START`
-            // arm clears the whole track struct with `Clear64byte`
-            // (`m4a_1.s:1219`, mirrored by `m4aMPlayImmInit`,
-            // `m4a.c:241`..`:243`) and restores only the handful of non-zero
-            // defaults beside it. Only `PRIO` raises it again, so a song's
-            // header priority alone drives note-on ranking until then.
+            // Zeroed with the rest of a freshly cleared track (`Clear64byte`,
+            // `m4a_1.s:1219`); only `PRIO` raises it again.
             priority: 0,
         }
     }
@@ -248,19 +242,14 @@ impl Sequencer {
     }
 
     /// Build a sequencer with an explicit master volume, voice cap, and
-    /// resolved reverb level, overriding `song`'s own header value.
-    ///
-    /// Used by the player crate to carry a session's previously configured
-    /// master reverb level across a song whose header left reverb unset
-    /// (`SongHeader::reverb`'s SET bit, `m4a_internal.h:12`..`:13`;
+    /// resolved reverb level, overriding `song`'s own header value (the SET
+    /// bit in `SongHeader::reverb`, `m4a_internal.h:12`..`:13`;
     /// `m4a.c:661`..`:662`).
     ///
-    /// `reverb_level`'s domain is `0..=127` (`SOUND_MODE_REVERB_VAL`,
-    /// `m4a_internal.h:12`); a larger value is clamped, the same bound
-    /// [`Song::with_reverb`] enforces at the header-ingest boundary --
-    /// upstream itself masks the byte (`soundInfo->reverb = temp &
-    /// SOUND_MODE_REVERB_VAL`, `m4a.c:445`), so no caller-supplied level may
-    /// push the comb feedback past the canonical range.
+    /// `reverb_level` clamps to `0..=127` (`SOUND_MODE_REVERB_VAL`,
+    /// `m4a_internal.h:12`), the same bound [`Song::with_reverb`] enforces
+    /// at the header-ingest boundary; upstream itself masks the byte
+    /// (`soundInfo->reverb = temp & SOUND_MODE_REVERB_VAL`, `m4a.c:445`).
     #[must_use]
     pub fn with_resolved_reverb(
         song: Song,
@@ -310,8 +299,8 @@ impl Sequencer {
     }
 
     /// Render whole frames into `out`, whose length must be a multiple of
-    /// [`Self::FRAME_SAMPLES`]. Deterministic and device-free — the offline
-    /// rendering path unit tests assert against.
+    /// [`Self::FRAME_SAMPLES`]. Deterministic and device-free: no wall-clock
+    /// or host-audio dependency.
     ///
     /// # Panics
     ///
@@ -332,13 +321,11 @@ impl Sequencer {
     ///
     /// # Overflow
     ///
-    /// `tempo_c += tempo_i` never overflows its `u16`s: the loop below
-    /// always leaves `tempo_c < TEMPO_UNIT` (149 at most), and both
-    /// `tempo_i` ingestion points ([`Song::new`]'s initial tempo,
-    /// [`Event::Tempo`]'s runtime assignment in [`Self::handle_event`])
-    /// clamp to [`MAX_TEMPO_BPM`] (510) — `149 + 510` is nowhere near
-    /// `u16::MAX` (#404). The asserts document that invariant rather than
-    /// re-derive it at runtime.
+    /// `tempo_c += tempo_i` never overflows its `u16`s: the loop below always
+    /// leaves `tempo_c < TEMPO_UNIT` (149 at most), and every `tempo_i`
+    /// ingestion point ([`Song::new`]'s initial tempo, [`Event::Tempo`]'s
+    /// runtime assignment in [`Self::handle_event`]) clamps to
+    /// [`MAX_TEMPO_BPM`] (510) — `149 + 510` stays far under `u16::MAX`.
     fn advance_frame(&mut self) {
         debug_assert!(self.tempo_c < TEMPO_UNIT);
         debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
@@ -349,7 +336,6 @@ impl Sequencer {
         }
     }
 
-    /// One sequencer tick: gate countdown, then command processing per track.
     fn do_tick(&mut self) {
         self.mixer.tick_gates();
         // Disjoint field borrows so each track can touch the shared mixer
@@ -391,11 +377,8 @@ impl Sequencer {
                     break;
                 }
                 if track.cursor >= events.len() {
-                    // A command-aligned stream with no trailing `FINE` is
-                    // accepted as a clean end (`decode_track` allows it), but
-                    // that acceptance must still honor `ply_fine`'s cleanup:
-                    // release every still-ON voice this track owns so tied
-                    // and looping notes don't sound forever.
+                    // A stream lacking `FINE` still ends cleanly
+                    // (`decode_track` allows it), but must still honor `ply_fine`'s voice-release cleanup.
                     mixer.release_track(track_id);
                     track.ended = true;
                     break;
@@ -411,9 +394,8 @@ impl Sequencer {
 
         if track.wait > 0 {
             track.wait -= 1;
-            // MPlayMain runs the LFO update on the same tick it consumes a
-            // wait (`m4a_1.s:1279`..`:1330`), for every track still holding
-            // a note — not only on the tick a `Wait` command was issued.
+            // LFO fires every wait-consuming tick, not only when `Wait` was
+            // first issued (`m4a_1.s:1279`..`:1330`).
             Self::apply_lfo(track, mixer, track_id);
         }
     }
@@ -1206,6 +1188,17 @@ mod tests {
     }
 
     #[test]
+    fn track_state_new_uses_the_documented_defaults() {
+        let track = TrackState::new();
+        assert_eq!(track.vol, DEFAULT_TRACK_VOLUME);
+        assert_eq!(track.bend_range, DEFAULT_BEND_RANGE);
+        assert_eq!(track.lfo_speed, DEFAULT_LFO_SPEED);
+        assert_eq!(track.pan, 0);
+        assert_eq!(track.priority, 0);
+        assert!(!track.ended);
+    }
+
+    #[test]
     fn silent_song_renders_zero() {
         let song = test_song(vec![vec![Event::Fine]], 150);
         let mut seq = Sequencer::new(song);
@@ -1236,6 +1229,14 @@ mod tests {
         // The note is on this frame: audible output.
         assert!(out.iter().any(|&s| s.abs() > 0.0));
         assert_eq!(seq.voice_count(), 1);
+
+        for _ in 0..64 {
+            seq.render_frame(&mut out);
+        }
+        assert!(
+            seq.is_finished(),
+            "the wait must drain and FINE must end the track"
+        );
     }
 
     #[test]
@@ -1340,9 +1341,17 @@ mod tests {
         let song = test_song(vec![track], 150);
         let mut seq = Sequencer::new(song);
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.voice_count(),
+            1,
+            "the note must start before its gate can release it"
+        );
+
         // One tick per frame at tempo 150; gate 2 releases after ~2 ticks and
         // the flat envelope (release 0) then retires the voice quickly.
-        for _ in 0..8 {
+        for _ in 0..7 {
             seq.render_frame(&mut out);
         }
         assert_eq!(seq.voice_count(), 0);
@@ -1992,8 +2001,35 @@ mod tests {
     }
 
     #[test]
+    fn advance_frame_ticks_only_on_the_frame_that_crosses_tempo_unit() {
+        // Tempo 100 needs two frames to cross TEMPO_UNIT (150): the first
+        // leaves tempo_c short with no tick fired, so the pending Wait(5) is
+        // still undecoded; the second crosses it, decodes the Wait, and
+        // immediately consumes one tick of it.
+        let track = vec![Event::Wait(5), Event::Fine];
+        let mut seq = Sequencer::new(test_song(vec![track], 100));
+
+        seq.advance_frame();
+        assert_eq!(seq.tempo_c, 100, "one frame below TEMPO_UNIT must not tick");
+        assert_eq!(
+            seq.tracks[0].wait, 0,
+            "no tick fired, so the track hasn't run yet"
+        );
+
+        seq.advance_frame();
+        assert_eq!(
+            seq.tempo_c, 50,
+            "the crossing frame ticks once, dropping tempo_c by TEMPO_UNIT"
+        );
+        assert_eq!(
+            seq.tracks[0].wait, 4,
+            "the same tick decoded Wait(5) and consumed one unit"
+        );
+    }
+
+    #[test]
     fn tempo_event_is_clamped_before_it_can_overflow_the_accumulator() {
-        // #404: `tempo_c += tempo_i` (`advance_frame`) is unguarded, so an
+        // `tempo_c += tempo_i` (`advance_frame`) is unguarded, so an
         // out-of-domain `Event::Tempo` -- one a malformed asset pack could
         // carry, since `SongEvent::Tempo` round-trips an unbounded on-disk
         // `u16` -- must never reach `tempo_i` un-clamped.
@@ -2005,11 +2041,10 @@ mod tests {
         );
 
         // Drive tempo_c to the highest value `advance_frame`'s drain loop
-        // ever leaves behind (`TEMPO_UNIT - 1`) and take one more frame: the
-        // exact edge this issue reported. Before the fix, an unclamped
-        // `tempo_i` of `u16::MAX` overflowed this addition (panicking in a
-        // checked build, silently wrapping in release); the clamp above
-        // keeps the sum (`149 + 510 = 659`) nowhere near `u16::MAX`.
+        // ever leaves behind (`TEMPO_UNIT - 1`) and take one more frame: an
+        // unclamped `tempo_i` of `u16::MAX` would overflow this addition,
+        // but the clamp above keeps the sum (`149 + 510 = 659`) nowhere
+        // near `u16::MAX`.
         seq.tempo_c = TEMPO_UNIT - 1;
         seq.advance_frame();
         assert_eq!(seq.tempo_c, (TEMPO_UNIT - 1 + MAX_TEMPO_BPM) % TEMPO_UNIT);
@@ -2068,7 +2103,12 @@ mod tests {
         let mut seq = Sequencer::new(song);
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES * 3];
         seq.mix_into(&mut out);
-        assert!(out.iter().any(|&s| s.abs() > 0.0));
+        for (i, frame) in out.chunks(Sequencer::FRAME_SAMPLES).enumerate() {
+            assert!(
+                frame.iter().any(|&s| s.abs() > 0.0),
+                "frame {i} of 3 must carry the held note's audio"
+            );
+        }
     }
 
     /// A song whose instrument reads a wave at frequency `0`, so a tied voice
@@ -2124,8 +2164,8 @@ mod tests {
     #[test]
     fn fine_releases_a_tied_voice_and_the_song_finishes() {
         // A tied note (gate 0) never auto-releases; the freq-0 wave never
-        // exhausts. Before the fix, FINE only marked the track ended, leaving
-        // the voice sounding forever so `is_finished()` never returned true.
+        // exhausts, so only FINE's explicit voice release can let
+        // `is_finished()` return true.
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -2152,9 +2192,7 @@ mod tests {
         // key60 vel127 (gate 0, tied); W02 -- then the stream simply runs
         // out. `decode_track` accepts this as a clean end (no `Event::Fine`
         // appears at all), so that acceptance must still release the tied
-        // voice the same way `Event::Fine` does. Before the fix, reaching
-        // `cursor == events.len()` only set `track.ended`, leaving the
-        // looping voice sounding forever.
+        // voice the same way `Event::Fine` does.
         let bytes = [0xBD, 0x00, 0xCF, 60, 127, 0x82];
         let events = decode_track(&bytes).unwrap();
         assert!(
@@ -2297,6 +2335,18 @@ mod tests {
         let song = test_song(vec![vec![Event::Fine]], 150);
         let mut seq = Sequencer::new(song);
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES + 1];
+        seq.mix_into(&mut out);
+    }
+
+    #[test]
+    #[should_panic(expected = "multiple of FRAME_SAMPLES")]
+    fn mix_into_rejects_an_empty_buffer() {
+        // `0` is a multiple of FRAME_SAMPLES arithmetically, but the
+        // contract demands a POSITIVE multiple: an empty buffer must panic
+        // too, not silently render nothing.
+        let song = test_song(vec![vec![Event::Fine]], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out: Vec<f32> = vec![];
         seq.mix_into(&mut out);
     }
 
@@ -2949,18 +2999,19 @@ mod tests {
     /// `255` must behave as `127`, never as unclamped comb feedback.
     #[test]
     fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
-        let song = || {
-            Song::new(
-                vec![Instrument::CgbSquare1(SquareTone {
-                    duty: 2,
-                    sweep: 0,
-                    adsr: CgbAdsr::flat(),
-                    fixed_rate: false,
-                })],
-                vec![cgb_test_track()],
-                150,
-            )
+        let track = || {
+            vec![
+                Event::Voice(0),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ]
         };
+        let song = || test_song(vec![track()], 150);
         let mut clamped = Sequencer::with_resolved_reverb(song(), 15, 8, 255);
         let mut canonical = Sequencer::with_resolved_reverb(song(), 15, 8, 127);
         let mut a = vec![0.0; Sequencer::FRAME_SAMPLES];

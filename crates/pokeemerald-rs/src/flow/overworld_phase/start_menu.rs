@@ -114,7 +114,7 @@ impl OverworldPhase {
         // and this method runs *instead of* it -- including on the frame
         // the menu opens on, which `ShowStartMenu` consumes upstream too
         // (`ProcessPlayerFieldInput` returns TRUE).
-        self.tick = self.tick.wrapping_add(1);
+        self.advance_tileset_anim_tick();
 
         let Some(mut menu) = open_menu else {
             return true;
@@ -401,7 +401,7 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// It selects the *medium entry point*, and nothing about the bytes.
     /// `SAVE_NORMAL` and `SAVE_OVERWRITE_DIFFERENT_FILE` differ upstream
     /// only by the Hall of Fame erase this port has no counterpart for
-    /// ([`crate::game_save::SaveSlot::store`]'s docs); what separates a new
+    /// ([`SaveMode::OverwriteDifferentFile`]'s docs); what separates a new
     /// game's write from a continue's is
     /// [`OverworldPhase::save_lineage`] -- the *session's* property, read
     /// here for every arm alike. Deriving it from `mode` instead is what

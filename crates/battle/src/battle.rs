@@ -79,9 +79,8 @@
 //! It is a separate entry point rather than another `bool` on
 //! [`Battle::new`] because a trainer battle carries *state* a wild one does
 //! not: the opponent's bench, the trainer's `aiFlags`, and the prize purse,
-//! all owned by [`trainer::TrainerContext`]. [`trainer`]'s module docs
-//! enumerate the five deltas and cite each one upstream; the two that change
-//! this module's control flow are:
+//! all owned by [`trainer::TrainerContext`]. Of the five deltas, the two that
+//! change this module's control flow are:
 //!
 //! - **Running is refused**, with [`BattleError::NoRunningFromTrainer`] —
 //!   a *different* upstream gate from `first_battle`'s
@@ -402,8 +401,8 @@ enum BattleKind {
     /// ([`crate::escape`]'s module docs), and the wild opponent's AI-branch
     /// move choice (`opponent_ai::choose_enemy_action_first_battle`).
     FirstBattle,
-    /// `BATTLE_TYPE_TRAINER` (issue #237): see [`trainer`]'s module docs for
-    /// the five things this changes and where each one lives.
+    /// `BATTLE_TYPE_TRAINER` (issue #237): a party opponent with AI flags and a
+    /// prize purse, owned by [`trainer::TrainerContext`].
     Trainer(TrainerContext),
 }
 
@@ -519,9 +518,7 @@ impl Battle {
     /// `party[0]` is the mon the trainer leads with (upstream sends out
     /// party slot `0`; there is no lead-choice step for an NPC) and
     /// everything after it becomes the bench
-    /// [`trainer::TrainerContext::send_out_next`] draws from. See
-    /// [`trainer`]'s module docs for the five deltas from a wild battle and
-    /// where each is implemented.
+    /// [`trainer::TrainerContext::send_out_next`] draws from.
     ///
     /// # Two screens, both before the first draw
     ///

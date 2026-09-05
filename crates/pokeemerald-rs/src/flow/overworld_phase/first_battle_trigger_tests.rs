@@ -420,8 +420,10 @@ fn the_trigger_draws_off_the_phases_single_shared_stream() {
     // anything of its own before handing off, the enemy's rolled identity
     // (and the stream's final position) would disagree.
     let mut reference = Rng::new(SEED);
-    let expected = crate::flow::first_battle::start_first_battle(lead, &mut reference)
-        .expect("the same construction must succeed off a reference stream");
+    let player_trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+    let expected =
+        crate::flow::first_battle::start_first_battle(lead, player_trainer_id, &mut reference)
+            .expect("the same construction must succeed off a reference stream");
     assert_eq!(battle.enemy().personality(), expected.enemy().personality());
     assert_eq!(battle.enemy().ivs(), expected.enemy().ivs());
     assert_eq!(
@@ -742,8 +744,13 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
         "and the grass roll it outranks must never have happened"
     );
     let mut reference = Rng::new(SEED);
-    crate::flow::first_battle::start_first_battle(new_game::provisional_starter(), &mut reference)
-        .expect("the same construction must succeed off a reference stream");
+    let player_trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+    crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        player_trainer_id,
+        &mut reference,
+    )
+    .expect("the same construction must succeed off a reference stream");
     assert_eq!(
         phase.rng.state(),
         reference.state(),

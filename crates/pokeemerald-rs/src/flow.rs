@@ -175,6 +175,20 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
+/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`), as a
+/// pure decision the `Title` -> `MainMenu` transition acts on -- so which
+/// border a given boot verdict produces is pinned by a pack-less test too,
+/// the same [`menu_type_for`] already is.
+const fn window_frame_for(saved: &SavedGame) -> u8 {
+    if saved.status.boot_clears_save_block2() {
+        // `SetDefaultOptions` (`new_game.c:94`) puts the cleared block's
+        // frame back to 0 even when a checksum-valid block was recovered.
+        0
+    } else {
+        saved.block2.options_window_frame_type
+    }
+}
+
 /// Which of upstream's `ACTION_*` values confirming `item` maps to
 /// (`HandleMainMenuInput`'s per-menu-type action switch,
 /// `main_menu.c:955-983`), restricted to the actions this port can perform.
@@ -284,6 +298,54 @@ fn log_game_continued(phase: &OverworldPhase) {
     );
 }
 
+/// The `Title` -> `MainMenu` half of [`advance_scene`]'s `AppScene::Title`
+/// arm, split out so that arm stays under the lint's line budget
+/// `(oop-boundaries)`: reads `save_slot`, builds the menu bordered with the
+/// save's own window frame, and returns the next scene and its first frame
+/// on success -- upstream reads the save before the title screen ever
+/// draws, in `CB2_InitCopyrightScreenAfterBootup` (`src/intro.c:1147-1159`),
+/// and parks the verdict in `gSaveFileStatus` for `Task_MainMenuCheckSaveFile`
+/// to branch on later. This port has no copyright screen and no globals
+/// `(oop-boundaries)`, so the load happens at the one moment its result is
+/// first needed -- building the menu -- and travels onward as a value in
+/// `MainMenuState`. The observable result is identical: the menu shown is
+/// the one the save on disk selects.
+///
+/// Returns `None`, after logging, if the pack load fails -- the caller stays
+/// on the title screen. The hint covers both failure shapes operators
+/// actually hit: no pack built at all (`PackError::NotFound`), and -- easy
+/// to mistake for a code bug -- a pack built before this screen existed,
+/// whose directory has no `interface/palette/main_menu_bg` entry
+/// (`PackError::UnknownAsset`). Both are fixed by rebuilding the pack by
+/// whichever route built it in the first place -- a player has no decomp
+/// checkout to extract from; neither changes what the error *is*.
+fn title_to_main_menu(
+    pack_source: crate::pack_source::PackSource,
+    save_slot: &mut SaveSlot,
+) -> Option<(AppScene, Box<Frame>)> {
+    let saved = save_slot.load();
+    match main_menu::load_with_window_frame(
+        pack_source,
+        menu_type_for(&saved),
+        window_frame_for(&saved),
+    ) {
+        Ok(menu) => {
+            let state = MainMenuState { scene: menu, saved };
+            let frame = state.scene.compose_frame();
+            Some((AppScene::MainMenu(Box::new(state)), frame))
+        }
+        Err(err) => {
+            eprintln!(
+                "main menu: {err} -- staying on the title screen; a pack built \
+                 before this screen existed is missing its entries: players \
+                 rebuild it with `pokeemerald-rs --import-rom <path to your \
+                 Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+            );
+            None
+        }
+    }
+}
+
 /// Advance `scene` by exactly one frame given this frame's `buttons`,
 /// returning the (possibly transitioned) next scene and the frame it
 /// composed -- the pure state-transition core of
@@ -332,38 +394,8 @@ pub(crate) fn advance_scene(
             title.presented = true;
 
             if title_advance_pressed(buttons) {
-                // Upstream reads the save before the title screen ever
-                // draws, in `CB2_InitCopyrightScreenAfterBootup`
-                // (`src/intro.c:1147-1159`), and parks the verdict in
-                // `gSaveFileStatus` for `Task_MainMenuCheckSaveFile` to
-                // branch on later. This port has no copyright screen and no
-                // globals `(oop-boundaries)`, so the load happens at the one
-                // moment its result is first needed -- building the menu --
-                // and travels onward as a value in `MainMenuState`. The
-                // observable result is identical: the menu shown is the one
-                // the save on disk selects.
-                let saved = save_slot.load();
-                match main_menu::load(pack_source, menu_type_for(&saved)) {
-                    Ok(menu) => {
-                        let state = MainMenuState { scene: menu, saved };
-                        let frame = state.scene.compose_frame();
-                        return (AppScene::MainMenu(Box::new(state)), frame);
-                    }
-                    // The hint covers both failure shapes operators actually
-                    // hit: no pack built at all (`PackError::NotFound`),
-                    // and -- easy to mistake for a code bug -- a pack built
-                    // before this screen existed, whose directory has no
-                    // `interface/palette/main_menu_bg` entry
-                    // (`PackError::UnknownAsset`). Both are fixed by
-                    // rebuilding the pack by whichever route built it in
-                    // the first place -- a player has no decomp checkout to
-                    // extract from; neither changes what the error *is*.
-                    Err(err) => eprintln!(
-                        "main menu: {err} -- staying on the title screen; a pack built \
-                         before this screen existed is missing its entries: players \
-                         rebuild it with `pokeemerald-rs --import-rom <path to your \
-                         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
-                    ),
+                if let Some(result) = title_to_main_menu(pack_source, save_slot) {
+                    return result;
                 }
             }
 

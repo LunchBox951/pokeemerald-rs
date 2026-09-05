@@ -476,7 +476,8 @@ impl OverworldPhase {
             eprintln!("first battle: no party mon yet -- no battle to start");
             return;
         };
-        match first_battle::start_first_battle(lead, &mut self.rng) {
+        let player_trainer_id = u32::from_le_bytes(self.save2.player_trainer_id);
+        match first_battle::start_first_battle(lead, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
                 self.first_battle = Some(battle);

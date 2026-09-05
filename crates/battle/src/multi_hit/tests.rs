@@ -10,12 +10,22 @@ use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
 
-/// `MOVE_DOUBLE_SLAP` (power 15, accuracy 85, Normal).
 const DOUBLE_SLAP: MoveId = MoveId(3);
-/// `MOVE_FURY_ATTACK`, the same effect on a different move.
 const FURY_ATTACK: MoveId = MoveId(31);
-/// `MOVE_TACKLE`, the plain-hit control.
 const TACKLE: MoveId = MoveId(33);
+const BULBASAUR: SpeciesId = SpeciesId(1);
+const SQUIRTLE: SpeciesId = SpeciesId(7);
+const ANORITH: SpeciesId = SpeciesId(390);
+const TEST_LEVEL: u8 = 5;
+const ACCURACY_HIT_DRAW: u16 = 0;
+const DOUBLE_SLAP_MISS_DRAW: u16 = 85;
+const TWO_HIT_COUNT_DRAW: u16 = 0;
+const NON_CRITICAL_DRAW: u16 = 1;
+const FULL_DAMAGE_DRAW: u16 = 0;
+const TEST_PERSONALITY: u32 = 0;
+const ADMISSION_DRAWS_WITH_ONE_COUNT_ROLL: usize = 2;
+const ORDINARY_DRAWS_PER_HIT: usize = 2;
+const CRITICAL_SUPPRESSED_DRAWS_PER_HIT: usize = 1;
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -26,8 +36,8 @@ const MAX_IVS: Ivs = Ivs {
     sp_defense: 31,
 };
 
-fn mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-    BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves).unwrap()
+fn mon(dex: &Dex, species: SpeciesId, moves: Vec<MoveId>) -> BattlePokemon {
+    BattlePokemon::new(dex, species, TEST_LEVEL, MAX_IVS, TEST_PERSONALITY, moves).unwrap()
 }
 
 #[test]
@@ -44,109 +54,99 @@ fn only_effect_multi_hit_is_accepted() {
     );
 }
 
-/// `Cmd_setmultihitcounter`'s branch, draw for draw:
-///
-/// ```text
-/// gMultiHitCounter = Random() & 3;
-/// if (gMultiHitCounter > 1) gMultiHitCounter = (Random() & 3) + 2;
-/// else                      gMultiHitCounter += 2;
-/// ```
-///
-/// A first mask of `0`/`1` settles at 2/3 for **one** draw; `2`/`3` redraws
-/// and adds 2 for **two**. Sampling the 3/8-3/8-1/8-1/8 distribution
-/// directly would produce the same counts with the wrong draw spend half the
-/// time, which is exactly the defect this test exists to catch.
 #[test]
-fn the_hit_count_reproduces_the_two_stage_draw_shape() {
-    // One-draw branch: first mask 0 -> 2 hits, 1 -> 3 hits.
-    for (first, hits) in [(0u16, 2u8), (1, 3)] {
-        let mut rng = SequenceRng::new([first]);
-        assert_eq!(roll_hit_count(&mut rng), hits);
-        assert_eq!(rng.draws(), 1, "mask {first} must not redraw");
+fn hit_count_offsets_zero_and_one_settle_in_one_draw() {
+    for (first_hit_offset, expected_hits) in [(0u16, 2u8), (1, 3)] {
+        let mut rng = SequenceRng::new([first_hit_offset]);
+        assert_eq!(roll_hit_count(&mut rng), expected_hits);
+        assert_eq!(rng.draws(), 1, "offset {first_hit_offset} must settle");
     }
-    // Two-draw branch: first mask 2 or 3 discards its own value entirely and
-    // the *second* mask decides, `+2`.
-    for first in [2u16, 3] {
-        for (second, hits) in [(0u16, 2u8), (1, 3), (2, 4), (3, 5)] {
-            let mut rng = SequenceRng::new([first, second]);
-            assert_eq!(roll_hit_count(&mut rng), hits, "{first} then {second}");
+}
+
+#[test]
+fn hit_count_offsets_two_and_three_redraw_before_setting_the_count() {
+    for first_hit_offset in [2u16, 3] {
+        for (second_hit_offset, expected_hits) in [(0u16, 2u8), (1, 3), (2, 4), (3, 5)] {
+            let mut rng = SequenceRng::new([first_hit_offset, second_hit_offset]);
+            assert_eq!(
+                roll_hit_count(&mut rng),
+                expected_hits,
+                "offsets {first_hit_offset} then {second_hit_offset}"
+            );
             assert_eq!(rng.draws(), 2);
         }
     }
-    // The mask is `& 3`, so only the low two bits of the u16 matter -- a
-    // large draw is not a large hit count.
-    let mut rng = SequenceRng::new([0xFFFC]);
+}
+
+#[test]
+fn hit_count_uses_only_the_low_two_bits_of_each_draw() {
+    let draw_with_zero_low_bits = !0b11;
+    let mut rng = SequenceRng::new([draw_with_zero_low_bits]);
     assert_eq!(roll_hit_count(&mut rng), 2);
     assert_eq!(rng.draws(), 1);
 }
 
-/// Every reachable outcome is within `MIN_HITS..=MAX_HITS`, and the branch
-/// really produces upstream's 3/8, 3/8, 1/8, 1/8 shape over the 16 equally
-/// likely `(first, second)` low-bit pairs.
 #[test]
-fn the_hit_count_distribution_is_upstreams() {
-    let mut counts = [0u32; 6];
-    for first in 0u16..4 {
-        for second in 0u16..4 {
-            let mut rng = SequenceRng::new([first, second]);
+fn all_low_bit_pairs_produce_the_expected_hit_count_distribution() {
+    let mut counts = [0u32; MAX_HITS as usize + 1];
+    for first_hit_offset in 0u16..4 {
+        for second_hit_offset in 0u16..4 {
+            let mut rng = SequenceRng::new([first_hit_offset, second_hit_offset]);
             let hits = roll_hit_count(&mut rng);
             assert!((MIN_HITS..=MAX_HITS).contains(&hits));
-            // A one-draw branch ignores `second`, so it is counted once per
-            // `second` -- which is exactly the weighting the two-stage draw
-            // gives it.
             counts[hits as usize] += 1;
         }
     }
-    // 16 equally likely pairs: 2 and 3 land on 6/16 = 3/8 each, 4 and 5 on
-    // 2/16 = 1/8 each.
-    assert_eq!(counts[2], 6);
-    assert_eq!(counts[3], 6);
-    assert_eq!(counts[4], 2);
-    assert_eq!(counts[5], 2);
+    let expected_counts = [(2usize, 6u32), (3, 6), (4, 2), (5, 2)];
+    for (hits, expected_count) in expected_counts {
+        assert_eq!(counts[hits], expected_count, "{hits} hits");
+    }
 }
 
-/// The prologue: one accuracy check for the whole move, then the count roll.
-/// A miss ends it at **1** draw; a landing costs **2 or 3**.
 #[test]
-fn the_prologue_costs_one_draw_on_a_miss_and_two_or_three_otherwise() {
+fn admission_draws_accuracy_once_then_draws_the_hit_count() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 1, 5, vec![DOUBLE_SLAP]);
-    let defender = mon(&dex, 7, 5, vec![TACKLE]);
+    let attacker = mon(&dex, BULBASAUR, vec![DOUBLE_SLAP]);
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
 
-    // Double Slap's accuracy is 85: roll = draw % 100 + 1; 85 -> 86 > 85.
-    let mut rng = SequenceRng::new([85]);
+    let mut missed_move = SequenceRng::new([DOUBLE_SLAP_MISS_DRAW]);
     assert_eq!(
-        resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &defender, &mut rng).unwrap(),
+        resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &defender, &mut missed_move).unwrap(),
         None
     );
-    assert_eq!(
-        rng.draws(),
-        1,
-        "a multi-hit move misses all its hits at once"
-    );
+    assert_eq!(missed_move.draws(), 1);
 
-    // Landing, one-draw count branch: accuracy 0, mask 0 -> 2 hits.
-    let mut rng = SequenceRng::new([0, 0]);
+    let mut one_draw_hit_count = SequenceRng::new([ACCURACY_HIT_DRAW, TWO_HIT_COUNT_DRAW]);
     assert_eq!(
-        resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &defender, &mut rng).unwrap(),
+        resolve_multi_hit(
+            &dex,
+            DOUBLE_SLAP,
+            &attacker,
+            &defender,
+            &mut one_draw_hit_count
+        )
+        .unwrap(),
         Some(2)
     );
-    assert_eq!(rng.draws(), 2);
+    assert_eq!(one_draw_hit_count.draws(), 2);
 
-    // Landing, two-draw count branch: accuracy 0, mask 3 then mask 3 -> 5.
-    let mut rng = SequenceRng::new([0, 3, 3]);
+    let mut two_draw_hit_count = SequenceRng::new([ACCURACY_HIT_DRAW, 3, 3]);
     assert_eq!(
-        resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &defender, &mut rng).unwrap(),
+        resolve_multi_hit(
+            &dex,
+            DOUBLE_SLAP,
+            &attacker,
+            &defender,
+            &mut two_draw_hit_count
+        )
+        .unwrap(),
         Some(5)
     );
-    assert_eq!(rng.draws(), 3);
+    assert_eq!(two_draw_hit_count.draws(), 3);
 }
 
-/// The trailing `seteffectwithchance` runs **once per move**, not per hit,
-/// and is discarded for every `EFFECT_MULTI_HIT` move (none carries a
-/// secondary-effect chance).
 #[test]
-fn the_trailing_effect_chance_draw_is_one_per_move_and_is_discarded() {
+fn epilogue_discards_exactly_one_effect_chance_draw_per_move() {
     let dex = Dex::new();
     assert_eq!(
         dex.move_data(DOUBLE_SLAP).unwrap().secondary_effect_chance,
@@ -167,8 +167,8 @@ fn the_trailing_effect_chance_draw_is_one_per_move_and_is_discarded() {
 #[test]
 fn a_rejected_move_draws_nothing() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 1, 5, vec![DOUBLE_SLAP]);
-    let defender = mon(&dex, 7, 5, vec![TACKLE]);
+    let attacker = mon(&dex, BULBASAUR, vec![DOUBLE_SLAP]);
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
     let mut rng = SequenceRng::new([]);
     assert_eq!(
         resolve_multi_hit(&dex, TACKLE, &attacker, &defender, &mut rng),
@@ -177,47 +177,76 @@ fn a_rejected_move_draws_nothing() {
     assert_eq!(rng.draws(), 0);
 }
 
-/// The module docs say the per-hit loop lives in the caller, running
-/// [`crate::hit::damage_core`] once per landed hit. Battle Armor/Shell
-/// Armor's crit suppression (issue #391) lives inside that function, so a
-/// Battle Armor defender must drop **every processed hit** by one draw, not
-/// just the move as a whole -- this drives the loop the way the turn engine
-/// would and pins both shapes side by side.
 #[test]
 fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 1, 5, vec![DOUBLE_SLAP]);
+    let attacker = mon(&dex, BULBASAUR, vec![DOUBLE_SLAP]);
 
-    // Control: an ordinary defender costs 2 draws per hit (crit + damage
-    // roll) -- `crate::hit`'s plain shape.
-    let plain = mon(&dex, 7, 5, vec![TACKLE]); // Squirtle
-                                               // accuracy hit, mask 0 -> 2 hits, then 2x(crit, damage roll).
-    let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0]);
-    let hits = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &plain, &mut rng)
-        .unwrap()
-        .expect("accuracy roll 0 must land");
+    let ordinary_defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
+    let admission_draws = [ACCURACY_HIT_DRAW, TWO_HIT_COUNT_DRAW];
+    let ordinary_per_hit_draws = [
+        NON_CRITICAL_DRAW,
+        FULL_DAMAGE_DRAW,
+        NON_CRITICAL_DRAW,
+        FULL_DAMAGE_DRAW,
+    ];
+    let mut ordinary_rng =
+        SequenceRng::new(admission_draws.into_iter().chain(ordinary_per_hit_draws));
+    let hits = resolve_multi_hit(
+        &dex,
+        DOUBLE_SLAP,
+        &attacker,
+        &ordinary_defender,
+        &mut ordinary_rng,
+    )
+    .unwrap()
+    .expect("the scripted accuracy draw must land");
     assert_eq!(hits, 2);
     for _ in 0..hits {
-        damage_core(&dex, DOUBLE_SLAP, &attacker, &plain, false, &mut rng).unwrap();
+        damage_core(
+            &dex,
+            DOUBLE_SLAP,
+            &attacker,
+            &ordinary_defender,
+            false,
+            &mut ordinary_rng,
+        )
+        .unwrap();
     }
     assert_eq!(
-        rng.draws(),
-        2 + 2 * usize::from(hits),
-        "plain: 2 draws per hit"
+        ordinary_rng.draws(),
+        ADMISSION_DRAWS_WITH_ONE_COUNT_ROLL + ORDINARY_DRAWS_PER_HIT * usize::from(hits),
+        "ordinary defender: critical and damage draw per hit"
     );
 
-    // Battle Armor: the identical shape costs 1 draw per hit instead of 2,
-    // and every hit reports non-critical. The sequence has exactly
-    // `2 + hits` values, so a stray crit draw would run it out and panic.
-    let armored = mon(&dex, 390, 5, vec![TACKLE]); // Anorith, Battle Armor
-    assert!(suppresses_critical_hits(armored.ability()));
-    let mut rng = SequenceRng::new([0, 0, 0, 0]); // accuracy, hit count, 2x damage roll
-    let hits = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &armored, &mut rng)
-        .unwrap()
-        .expect("accuracy roll 0 must land");
+    let battle_armor_defender = mon(&dex, ANORITH, vec![TACKLE]);
+    assert!(suppresses_critical_hits(battle_armor_defender.ability()));
+    let damage_draws_without_critical_rolls = [FULL_DAMAGE_DRAW, FULL_DAMAGE_DRAW];
+    let mut battle_armor_rng = SequenceRng::new(
+        admission_draws
+            .into_iter()
+            .chain(damage_draws_without_critical_rolls),
+    );
+    let hits = resolve_multi_hit(
+        &dex,
+        DOUBLE_SLAP,
+        &attacker,
+        &battle_armor_defender,
+        &mut battle_armor_rng,
+    )
+    .unwrap()
+    .expect("the scripted accuracy draw must land");
     assert_eq!(hits, 2);
     for _ in 0..hits {
-        let outcome = damage_core(&dex, DOUBLE_SLAP, &attacker, &armored, false, &mut rng).unwrap();
+        let outcome = damage_core(
+            &dex,
+            DOUBLE_SLAP,
+            &attacker,
+            &battle_armor_defender,
+            false,
+            &mut battle_armor_rng,
+        )
+        .unwrap();
         assert!(
             matches!(
                 outcome,
@@ -230,8 +259,8 @@ fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
         );
     }
     assert_eq!(
-        rng.draws(),
-        2 + usize::from(hits),
-        "armored: one draw per hit, not two"
+        battle_armor_rng.draws(),
+        ADMISSION_DRAWS_WITH_ONE_COUNT_ROLL + CRITICAL_SUPPRESSED_DRAWS_PER_HIT * usize::from(hits),
+        "Battle Armor defender: damage draw only per hit"
     );
 }

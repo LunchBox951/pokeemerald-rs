@@ -184,18 +184,21 @@ impl Sweep {
             return SweepResult::Unchanged;
         }
         self.ticks_until_step = self.period_ticks;
-        if self.shift == 0 {
-            // Known divergence: mGBA still computes the shift-0 doubling and
-            // disables the channel when that reaches 2048; only the write-back
-            // is gated on a non-zero shift (mgba/src/gb/audio.c:975..:986).
-            // Returning early instead means a shift-0 upward sweep never
-            // retires a high-frequency channel-1 note here.
-            return SweepResult::Unchanged;
-        }
 
         let Some(frequency) = self.next_frequency() else {
             return SweepResult::Disable;
         };
+
+        // The increase branch's write-back is gated on a non-zero shift; the
+        // decrease branch always writes back (mgba/src/gb/audio.c:965-989).
+        let writes_back = match self.direction {
+            SweepDirection::Increase => self.shift != 0,
+            SweepDirection::Decrease => true,
+        };
+        if !writes_back {
+            return SweepResult::Unchanged;
+        }
+
         self.shadow_frequency = frequency;
 
         // Hardware checks the next upward calculation before playing this one
@@ -543,9 +546,24 @@ mod tests {
     }
 
     #[test]
-    fn zero_shift_sweep_ticks_without_changing_frequency() {
+    fn zero_shift_upward_sweep_ticks_without_changing_frequency() {
         let mut sweep = sweep(1, SweepDirection::Increase, 0, 100);
         assert_eq!(sweep.tick(), SweepResult::Unchanged);
+    }
+
+    #[test]
+    fn zero_shift_downward_sweep_writes_back_to_zero() {
+        let mut sweep = sweep(1, SweepDirection::Decrease, 0, 100);
+        assert_eq!(sweep.tick(), SweepResult::Changed(0));
+    }
+
+    #[test]
+    fn zero_shift_upward_sweep_disables_the_channel_when_the_doubling_overflows() {
+        // A shift-0 upward sweep still computes `frequency + (frequency >> 0)`,
+        // and 2048 or higher retires channel 1; only the write-back is gated on
+        // a non-zero shift (mgba/src/gb/audio.c:965-990).
+        let mut sweep = sweep(1, SweepDirection::Increase, 0, 1024);
+        assert_eq!(sweep.tick(), SweepResult::Disable);
     }
 
     #[test]

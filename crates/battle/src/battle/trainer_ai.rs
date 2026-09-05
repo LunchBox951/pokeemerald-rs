@@ -1,90 +1,8 @@
-//! The trainer opponent's action selection (S-6, issue #237): upstream's
-//! `AI_SCRIPT_*` scoring pipeline, narrowed to what the scripted Route 103
-//! rival battle actually exercises.
+//! Trainer AI admission and move scoring.
 //!
-//! Sibling of [`super::opponent_ai`], and split out for the same reason
-//! `(oop-boundaries)`: this decides what the enemy side does this turn from
-//! the two battlers plus the trainer's `gTrainers[].aiFlags`, and needs none
-//! of [`crate::battle::Battle`]'s turn-order/PP/event machinery. It hands
-//! back the same [`EnemyAction`] the wild paths do, so `Battle` never learns
-//! which selector produced it.
-//!
-//! # The pipeline, and the draws it costs
-//!
-//! `OpponentHandleChooseMove` (`src/battle_controller_opponent.c:1551`)
-//! routes `BATTLE_TYPE_TRAINER` to the AI branch at `:1563`, which is
-//! `BattleAI_SetupAIData(ALL_MOVES_MASK)` followed by
-//! `BattleAI_ChooseMoveOrAction` → `ChooseMoveOrAction_Singles`
-//! (`src/battle_ai_script_commands.c:396`). In order:
-//!
-//! 1. **`AreAllMovesUnusable`** (`battle_util.c:1125`, checked at
-//!    `battle_main.c:4184` *before* `ChooseMove` is emitted at all) forces
-//!    Struggle when every known slot is spent — [`EnemyAction::Struggle`],
-//!    **0 draws**. Identical rule and result to the two wild paths.
-//! 2. **`BattleAI_SetupAIData`** (`:312`) seeds each slot's score to `100`,
-//!    zeroes the score of any slot `CheckMoveLimitations` rules out (here:
-//!    `MOVE_NONE`, or `0` PP), and fills `simulatedRNG[0..4]` with
-//!    `100 - (Random() % 16)` — **4 draws, unconditional**.
-//!
-//!    Unlike [`super::opponent_ai::choose_enemy_action_first_battle`], which
-//!    burns those four values because `AI_FirstBattle` never reads them,
-//!    this path **keeps** them: `Cmd_if_can_faint` (`:1743`) and
-//!    `Cmd_get_how_powerful_move_is` (`:1174`) both scale their damage
-//!    estimate by `simulatedRNG[movesetIndex]`, and `AI_TryToFaint` runs
-//!    both. Burning them here would change which move the rival picks
-//!    `(behavioral-fidelity)`.
-//! 3. **Each set `aiFlags` bit, lowest first** (`:405`-`:412`: the `while
-//!    (aiFlags != 0) { if (aiFlags & 1) …; aiFlags >>= 1; }` shift loop),
-//!    running that script once per moveset index `0..4`
-//!    (`BattleAI_DoAIProcessing`, `:572`). A slot whose `moveConsidered`
-//!    reads as `0` — an unfilled slot, or one with `0` PP (`:582`-`:584`)
-//!    — has its score zeroed and its script skipped entirely, so it costs
-//!    no draws. The four modelled scripts are [`SCRIPT_CHECK_BAD_MOVE`],
-//!    [`SCRIPT_TRY_TO_FAINT`], [`SCRIPT_CHECK_VIABILITY`] and
-//!    [`SCRIPT_SETUP_FIRST_TURN`]; see each `run_*` function for its own
-//!    draw accounting.
-//! 4. **The tie-break** (`:423`-`:445`): pick uniformly among the slots
-//!    sharing the highest score, `Random() % numOfBestMoves` — **1 draw**,
-//!    unconditional, even when only one move ties.
-//!
-//! # How narrow "narrowed" is
-//!
-//! Two boundaries, both enforced rather than assumed, both checked before
-//! any draw (by [`crate::battle::Battle::new_trainer`], via
-//! [`ensure_supported_flags`] and [`ensure_scoreable`]):
-//!
-//! - **`aiFlags`**: only bits `0..=3` are modelled. The six Route 103 rival
-//!   entries set exactly `CHECK_BAD_MOVE | TRY_TO_FAINT | CHECK_VIABILITY`
-//!   — except `TRAINER_BRENDAN_ROUTE_103_TREECKO`, whose third bit is
-//!   `SETUP_FIRST_TURN` instead (`src/data/trainers.h:6280`-`:6290`), an
-//!   upstream inconsistency this port reproduces rather than smooths over.
-//! - **move effects**: only [`EFFECT_HIT`], `EFFECT_ATTACK_DOWN` and
-//!   `EFFECT_DEFENSE_DOWN` are scored. Every other effect takes a *different*
-//!   branch of at least one of the four scripts, several of which draw
-//!   (`AI_CV_HighCrit`, `AI_CV_Sleep`, …), so accepting one silently would
-//!   desynchronise the shared stream. This is deliberately narrower than
-//!   [`crate::hit::is_ordinary_hit_effect`]: `EFFECT_QUICK_ATTACK` and
-//!   `EFFECT_HIGH_CRITICAL` execute as plain hits but *score* differently
-//!   (`AI_TryToFaint_TryToEncourageQuickAttack`, `AI_CV_HighCrit`).
-//!
-//! Those two sets cover every level-5 starter moveset a Route 103 rival can
-//! field: Treecko's Pound + Leer, Torchic's Scratch + Growl, Mudkip's
-//! Tackle + Growl (`src/data/pokemon/level_up_learnsets.h:3572`, `:3623`,
-//! `:3676`).
-//!
-//! # Not modelled at all
-//!
-//! Abilities and held items, which several `AI_CheckBadMove` branches read
-//! (`get_ability AI_TARGET` for Volt Absorb / Water Absorb / Flash Fire /
-//! Wonder Guard / Levitate / Soundproof / Hyper Cutter / Clear Body /
-//! White Smoke). Issue #322 gave [`crate::pokemon::BattlePokemon`] an
-//! ability accessor and taught [`crate::stat_change`] to read Clear Body,
-//! but *this* module's `get_ability` reads are a separate, still-unmodelled
-//! set of branches — none of them draws, and none of the three starters has
-//! any ability that would take one, so they stay unreachable rather than
-//! wrong regardless. `AI_ACTION_WATCH` (Safari) and `AI_ACTION_FLEE`
-//! (`AI_FirstBattle`/`AI_Roaming`) are likewise not reachable from these
-//! four scripts.
+//! Route 103 trainers use four scoring scripts over three move effects. The
+//! admission functions reject other flags and effects before a battle starts
+//! because unmodelled scoring branches can consume different RNG draws.
 
 use assets::trainers::AiFlags;
 use assets::{MoveEffect, MoveId, Type, TypeChart};
@@ -98,61 +16,82 @@ use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
 use crate::stat_change::{EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN};
 use crate::stat_stage::StatStage;
 
-/// `EFFECT_HIT` (`include/constants/battle_move_effects.h:5`): the plain
-/// damaging effect Pound/Scratch/Tackle carry.
+const PERCENT_SCALE: u32 = 100;
+const AI_RANDOM_ROLL_MODULUS: u16 = 256;
+const SIMULATED_DAMAGE_VARIANCE: u16 = 16;
+const MINIMUM_DAMAGE: u32 = 1;
+const MINIMUM_DAMAGING_MOVE_POWER: u8 = 2;
+
+const INITIAL_MOVE_SCORE: i8 = 100;
+const UNUSABLE_MOVE_SCORE: i8 = 0;
+const STRONGLY_DISCOURAGE: i8 = -10;
+const SLIGHTLY_DISCOURAGE: i8 = -1;
+const DISCOURAGE: i8 = -2;
+const ENCOURAGE: i8 = 2;
+const STRONGLY_ENCOURAGE: i8 = 4;
+
+const QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD: u16 = 80;
+const STAT_DROP_DISCOURAGEMENT_THRESHOLD: u16 = 50;
+const FIRST_TURN_SETUP_BONUS_THRESHOLD: u16 = 80;
+const ATTACK_DROP_USER_HP_THRESHOLD: u32 = 90;
+const DEFENSE_DROP_USER_HP_THRESHOLD: u32 = 70;
+const STAT_DROP_TARGET_HP_THRESHOLD: u32 = 70;
+const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
+const FIRST_TURN: u8 = 0;
+
+const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
+const AI_EFFECTIVENESS_QUADRUPLE: u32 = 160;
+const AI_EFFECTIVENESS_QUADRUPLE_WITH_STAB: u32 = 240;
+
+/// The plain damaging move effect used by Pound, Scratch, and Tackle.
 pub const EFFECT_HIT: MoveEffect = MoveEffect(0);
 
-/// `AI_SCRIPT_CHECK_BAD_MOVE` (bit `0`).
-const SCRIPT_CHECK_BAD_MOVE: AiFlags = AiFlags::CHECK_BAD_MOVE;
-/// `AI_SCRIPT_TRY_TO_FAINT` (bit `1`).
-const SCRIPT_TRY_TO_FAINT: AiFlags = AiFlags::TRY_TO_FAINT;
-/// `AI_SCRIPT_CHECK_VIABILITY` (bit `2`).
-const SCRIPT_CHECK_VIABILITY: AiFlags = AiFlags::CHECK_VIABILITY;
-/// `AI_SCRIPT_SETUP_FIRST_TURN` (bit `3`).
-const SCRIPT_SETUP_FIRST_TURN: AiFlags = AiFlags::SETUP_FIRST_TURN;
+const SUPPORTED_AI_FLAGS: u32 = AiFlags::CHECK_BAD_MOVE.bits()
+    | AiFlags::TRY_TO_FAINT.bits()
+    | AiFlags::CHECK_VIABILITY.bits()
+    | AiFlags::SETUP_FIRST_TURN.bits();
 
-/// Every `aiFlags` bit [`choose_trainer_action`] knows how to run.
-const SUPPORTED_FLAGS: u32 = SCRIPT_CHECK_BAD_MOVE.bits()
-    | SCRIPT_TRY_TO_FAINT.bits()
-    | SCRIPT_CHECK_VIABILITY.bits()
-    | SCRIPT_SETUP_FIRST_TURN.bits();
-
-/// The `AI_EFFECTIVENESS_*` scale (`include/constants/battle_ai.h:18`-`:23`):
-/// `Cmd_if_type_effectiveness` seeds `gBattleMoveDamage` with the `x1` value
-/// and lets `TypeCalc` scale it.
-const AI_EFFECTIVENESS_X1: u32 = 40;
-/// `AI_EFFECTIVENESS_x4`.
-const AI_EFFECTIVENESS_X4: u32 = 160;
-
-/// `MOVE_POWER_OTHER` / `MOVE_NOT_MOST_POWERFUL` / `MOVE_MOST_POWERFUL`
-/// (`include/constants/battle_ai.h:33`-`:35`) — `get_how_powerful_move_is`'s
-/// three results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MovePower {
-    /// The move's power is `0`/`1`, or its effect is in
-    /// `sIgnoredPowerfulMoveEffects`.
-    Other,
-    /// Some other slot hits harder.
-    NotMostPowerful,
-    /// No other slot hits harder.
-    MostPowerful,
+enum ScoreableEffect {
+    Hit,
+    AttackDown,
+    DefenseDown,
 }
 
-/// Whether [`choose_trainer_action`] can score a move with this effect — the
-/// module docs' second boundary.
+impl ScoreableEffect {
+    const fn from_raw(effect: MoveEffect) -> Option<Self> {
+        if effect.0 == EFFECT_HIT.0 {
+            Some(Self::Hit)
+        } else if effect.0 == EFFECT_ATTACK_DOWN.0 {
+            Some(Self::AttackDown)
+        } else if effect.0 == EFFECT_DEFENSE_DOWN.0 {
+            Some(Self::DefenseDown)
+        } else {
+            None
+        }
+    }
+
+    const fn is_stat_drop(self) -> bool {
+        matches!(self, Self::AttackDown | Self::DefenseDown)
+    }
+}
+
 #[must_use]
-pub(crate) fn is_scoreable_effect(effect: MoveEffect) -> bool {
-    effect == EFFECT_HIT || effect == EFFECT_ATTACK_DOWN || effect == EFFECT_DEFENSE_DOWN
+pub(crate) const fn is_scoreable_effect(effect: MoveEffect) -> bool {
+    ScoreableEffect::from_raw(effect).is_some()
 }
 
-/// Screen one of a trainer party mon's moves against the effects this AI can
-/// score.
+fn scoreable_effect(dex: &Dex, move_id: MoveId) -> Result<ScoreableEffect, BattleError> {
+    ScoreableEffect::from_raw(dex.move_data(move_id)?.effect)
+        .ok_or(BattleError::UnscoreableMoveEffect(move_id))
+}
+
+/// Rejects a move whose effect the trainer AI cannot score.
 ///
 /// # Errors
 ///
-/// [`BattleError::UnknownMove`] if `move_id` is not in `dex`, or
-/// [`BattleError::UnscoreableMoveEffect`] if its `EFFECT_*` takes a script
-/// branch this module does not model (module docs).
+/// Returns [`BattleError::UnknownMove`] or
+/// [`BattleError::UnscoreableMoveEffect`].
 pub(crate) fn ensure_scoreable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
     if is_scoreable_effect(dex.move_data(move_id)?.effect) {
         Ok(())
@@ -161,61 +100,84 @@ pub(crate) fn ensure_scoreable(dex: &Dex, move_id: MoveId) -> Result<(), BattleE
     }
 }
 
-/// Screen a trainer's whole `aiFlags` bitset — the module docs' first
-/// boundary.
+/// Rejects trainer AI flags without a modelled scoring script.
 ///
 /// # Errors
 ///
-/// [`BattleError::UnsupportedAiFlags`] carrying the *unmodelled* bits only,
-/// so the error names exactly what would have to be added.
+/// Returns [`BattleError::UnsupportedAiFlags`] containing only the unsupported
+/// bits.
 pub(crate) const fn ensure_supported_flags(flags: AiFlags) -> Result<(), BattleError> {
-    let extra = flags.bits() & !SUPPORTED_FLAGS;
-    if extra == 0 {
+    let unsupported_bits = flags.bits() & !SUPPORTED_AI_FLAGS;
+    if unsupported_bits == 0 {
         Ok(())
     } else {
-        Err(BattleError::UnsupportedAiFlags(AiFlags(extra)))
+        Err(BattleError::UnsupportedAiFlags(AiFlags(unsupported_bits)))
     }
 }
 
-/// `AI_THINKING_STRUCT`'s per-turn scratch (`include/battle.h:176`-`:188`),
-/// reduced to the two fields these four scripts touch.
-struct Thinking {
-    /// `s8 score[MAX_MON_MOVES]`. Signed, and deliberately so: `Cmd_score`
-    /// (`battle_ai_script_commands.c:703`) adds the script byte — `0xF6` for
-    /// `score -10` — to an `s8`, so the addition wraps into `-128..=127`
-    /// before the `if (score < 0) score = 0` flatten. Reproduced with
-    /// [`i8::wrapping_add`] rather than saturating arithmetic.
-    score: [i8; MAX_MON_MOVES],
-    /// `u8 simulatedRNG[MAX_MON_MOVES]` — `100 - (Random() % 16)`, i.e.
-    /// `85..=100`, the percentage `if_can_faint`/`get_how_powerful_move_is`
-    /// scale their damage estimate by.
-    simulated_rng: [u32; MAX_MON_MOVES],
+struct MoveScores {
+    values: [i8; MAX_MON_MOVES],
+    simulated_damage_percent: [u32; MAX_MON_MOVES],
 }
 
-impl Thinking {
-    /// `Cmd_score` (`:703`): wrapping `s8` add, then flatten a negative to
-    /// `0`.
-    fn score(&mut self, index: usize, delta: i8) {
-        let updated = self.score[index].wrapping_add(delta);
-        self.score[index] = if updated < 0 { 0 } else { updated };
+impl MoveScores {
+    fn initialize(enemy: &BattlePokemon, rng: &mut impl BattleRng) -> Self {
+        let mut values = [UNUSABLE_MOVE_SCORE; MAX_MON_MOVES];
+        for (slot, score) in values.iter_mut().enumerate() {
+            if move_slot_can_be_scored(enemy, slot) {
+                *score = INITIAL_MOVE_SCORE;
+            }
+        }
+
+        let mut simulated_damage_percent = [0; MAX_MON_MOVES];
+        for percent in &mut simulated_damage_percent {
+            *percent = PERCENT_SCALE - u32::from(rng.next_u16() % SIMULATED_DAMAGE_VARIANCE);
+        }
+
+        Self {
+            values,
+            simulated_damage_percent,
+        }
+    }
+
+    /// Emerald adds score bytes as wrapping `i8` values before flooring a
+    /// negative result at zero (`src/battle_ai_script_commands.c:703`).
+    fn adjust(&mut self, slot: usize, delta: i8) {
+        self.values[slot] = self.values[slot]
+            .wrapping_add(delta)
+            .max(UNUSABLE_MOVE_SCORE);
+    }
+
+    fn discard(&mut self, slot: usize) {
+        self.values[slot] = UNUSABLE_MOVE_SCORE;
     }
 }
 
-/// The trainer opponent's action for this turn — the module docs' four-step
-/// pipeline, draw for draw.
+#[derive(Debug, Clone, Copy)]
+enum ScoringScript {
+    CheckBadMove,
+    TryToFaint,
+    CheckViability,
+    SetupFirstTurn,
+}
+
+const SCORING_SCRIPTS_IN_FLAG_ORDER: [(AiFlags, ScoringScript); 4] = [
+    (AiFlags::CHECK_BAD_MOVE, ScoringScript::CheckBadMove),
+    (AiFlags::TRY_TO_FAINT, ScoringScript::TryToFaint),
+    (AiFlags::CHECK_VIABILITY, ScoringScript::CheckViability),
+    (AiFlags::SETUP_FIRST_TURN, ScoringScript::SetupFirstTurn),
+];
+
+/// Chooses a trainer opponent's action after validating its AI flags.
 ///
-/// `turn_counter` is `gBattleResults.battleTurnCounter`
-/// (`battle_main.c:3995`-`:3998`: incremented by `BattleTurnPassed`, so `0`
-/// throughout turn 1), read only by `AI_SetupFirstTurn`'s `get_turn_count`.
+/// Scoring consumes four simulated-damage draws, runs enabled scripts in
+/// ascending flag order, and consumes one final tie-break draw. A trainer with
+/// no usable move returns Struggle without drawing.
 ///
 /// # Errors
 ///
-/// [`BattleError::UnsupportedAiFlags`] / [`BattleError::UnscoreableMoveEffect`]
-/// for a trainer or moveset outside the module docs' two boundaries, and
-/// [`BattleError::UnknownMove`] for a slot missing from `dex`. All three are
-/// unreachable from [`crate::battle::Battle::new_trainer`], which screens
-/// both boundaries before the battle starts; they exist so this function
-/// cannot silently mis-score if a future caller skips that screen.
+/// Returns an unsupported flag, move, or move-effect error if the caller did
+/// not run the trainer admission checks first.
 pub(crate) fn choose_trainer_action(
     dex: &Dex,
     enemy: &BattlePokemon,
@@ -226,248 +188,171 @@ pub(crate) fn choose_trainer_action(
 ) -> Result<EnemyAction, BattleError> {
     ensure_supported_flags(ai_flags)?;
 
-    // `AreAllMovesUnusable` diverts to Struggle through a selection script
-    // before `ChooseMove` is ever emitted -- no setup, no draws (identical
-    // to both wild paths).
-    if enemy.moves().iter().all(|slot| slot.pp == 0) {
+    if all_known_moves_are_spent(enemy) {
         return Ok(EnemyAction::Struggle);
     }
 
-    // `BattleAI_SetupAIData(ALL_MOVES_MASK)`.
-    let mut thinking = Thinking {
-        score: [0; MAX_MON_MOVES],
-        simulated_rng: [0; MAX_MON_MOVES],
-    };
-    for index in 0..MAX_MON_MOVES {
-        // Score 100 for every slot ALL_MOVES_MASK covers, then
-        // `CheckMoveLimitations` zeroing the ones that cannot be used --
-        // MOVE_LIMITATION_ZEROMOVE and MOVE_LIMITATION_PP, the same two
-        // rules `opponent_ai::selectable_slot` and the `pp == 0` screen
-        // already encode. Neither costs a draw.
-        thinking.score[index] = if usable(enemy, index) { 100 } else { 0 };
-    }
-    for slot in &mut thinking.simulated_rng {
-        // `simulatedRNG[i] = 100 - (Random() % 16)` (:341): four draws,
-        // unconditional, and -- unlike the first-battle path -- actually
-        // read (module docs).
-        *slot = 100 - u32::from(rng.next_u16() % 16);
-    }
-
-    // The aiFlags shift loop: lowest bit first, each script run once per
-    // moveset index.
-    for (bit, script) in [
-        (SCRIPT_CHECK_BAD_MOVE, Script::CheckBadMove),
-        (SCRIPT_TRY_TO_FAINT, Script::TryToFaint),
-        (SCRIPT_CHECK_VIABILITY, Script::CheckViability),
-        (SCRIPT_SETUP_FIRST_TURN, Script::SetupFirstTurn),
-    ] {
-        if !ai_flags.contains(bit) {
+    let mut scores = MoveScores::initialize(enemy, rng);
+    for (flag, script) in SCORING_SCRIPTS_IN_FLAG_ORDER {
+        if !ai_flags.contains(flag) {
             continue;
         }
-        for index in 0..MAX_MON_MOVES {
-            if !usable(enemy, index) {
-                // `BattleAI_DoAIProcessing`'s `moveConsidered == 0` arm
-                // (:593-:599): the score is zeroed and the script never
-                // runs, so no draw is spent on this slot.
-                thinking.score[index] = 0;
+
+        for slot in 0..MAX_MON_MOVES {
+            if !move_slot_can_be_scored(enemy, slot) {
+                scores.discard(slot);
                 continue;
             }
-            let move_id = enemy.moves()[index].move_id;
+
+            let move_id = enemy.moves()[slot].move_id;
             match script {
-                Script::CheckBadMove => {
-                    run_check_bad_move(dex, &mut thinking, index, move_id, enemy, player)?;
+                ScoringScript::CheckBadMove => {
+                    score_bad_move(dex, &mut scores, slot, move_id, enemy, player)?;
                 }
-                Script::TryToFaint => {
-                    run_try_to_faint(dex, &mut thinking, index, move_id, enemy, player, rng)?;
+                ScoringScript::TryToFaint => {
+                    score_try_to_faint(dex, &mut scores, slot, move_id, enemy, player, rng)?;
                 }
-                Script::CheckViability => {
-                    run_check_viability(dex, &mut thinking, index, move_id, enemy, player, rng)?;
+                ScoringScript::CheckViability => {
+                    score_viability(dex, &mut scores, slot, move_id, enemy, player, rng)?;
                 }
-                Script::SetupFirstTurn => {
-                    run_setup_first_turn(dex, &mut thinking, index, move_id, turn_counter, rng)?;
+                ScoringScript::SetupFirstTurn => {
+                    score_first_turn_setup(dex, &mut scores, slot, move_id, turn_counter, rng)?;
                 }
             }
         }
     }
 
-    Ok(EnemyAction::Move(tie_break(enemy, thinking.score, rng)))
+    let selected_slot = select_highest_scoring_move(enemy, scores.values, rng);
+    Ok(EnemyAction::Move(selected_slot))
 }
 
-/// Which of the four modelled `gBattleAI_ScriptsTable` entries to run.
-#[derive(Debug, Clone, Copy)]
-enum Script {
-    /// `AI_CheckBadMove` (`data/battle_ai_scripts.s:51`).
-    CheckBadMove,
-    /// `AI_TryToFaint` (`:2616`).
-    TryToFaint,
-    /// `AI_CheckViability` (`:652`).
-    CheckViability,
-    /// `AI_SetupFirstTurn` (`:2638`).
-    SetupFirstTurn,
+fn all_known_moves_are_spent(pokemon: &BattlePokemon) -> bool {
+    pokemon.moves().iter().all(|slot| slot.pp == 0)
 }
 
-/// `CheckMoveLimitations`' two modelled bits, as one question: a slot is
-/// usable when it holds a real move (`MOVE_LIMITATION_ZEROMOVE`) that still
-/// has PP (`MOVE_LIMITATION_PP`). Upstream's `moveConsidered` reads as `0`
-/// for either, which is what makes both zero the score.
-fn usable(enemy: &BattlePokemon, index: usize) -> bool {
-    selectable_slot(enemy.move_at(index)) && enemy.moves()[index].pp > 0
+fn move_slot_can_be_scored(pokemon: &BattlePokemon, slot: usize) -> bool {
+    selectable_slot(pokemon.move_at(slot)) && pokemon.moves()[slot].pp > 0
 }
 
-/// `ChooseMoveOrAction_Singles`' final tie-break (`:423`-`:445`),
-/// reproduced including its quirk: slot `0` seeds the candidate list
-/// **unconditionally**, before the `moves[i] != MOVE_NONE` guard that gates
-/// slots `1..4`, so an empty slot `0` still competes. Every mon this crate
-/// builds has a real move in slot `0` ([`BattlePokemon::new`] rejects an
-/// empty moveset), so the quirk is unreachable here — it is reproduced
-/// anyway rather than "simplified away", because the loop's shape is what
-/// decides how many candidates the final `Random()` is taken modulo.
-///
-/// Draws exactly once, even with a single candidate.
-fn tie_break(enemy: &BattlePokemon, score: [i8; MAX_MON_MOVES], rng: &mut impl BattleRng) -> usize {
-    let mut best = score[0];
-    let mut considered = vec![0usize];
-    for (index, slot_score) in score.iter().enumerate().skip(1) {
-        if !selectable_slot(enemy.move_at(index)) {
+/// Emerald admits slot zero before checking occupancy and always draws for the
+/// final tie-break (`src/battle_ai_script_commands.c:423`-`:445`).
+fn select_highest_scoring_move(
+    enemy: &BattlePokemon,
+    scores: [i8; MAX_MON_MOVES],
+    rng: &mut impl BattleRng,
+) -> usize {
+    let mut highest_score = scores[0];
+    let mut highest_scoring_slots = vec![0];
+
+    for (slot, score) in scores.iter().copied().enumerate().skip(1) {
+        if !selectable_slot(enemy.move_at(slot)) {
             continue;
         }
-        // Upstream runs the two tests in this order, not as an if/else: a
-        // slot that ties is appended, and a slot that beats the best resets
-        // the list. Both can never hold at once, so the order is only
-        // observable as the "in ruby, the order of these if statements is
-        // reversed" comment notes -- kept faithful regardless.
-        if best == *slot_score {
-            considered.push(index);
+        if score == highest_score {
+            highest_scoring_slots.push(slot);
         }
-        if best < *slot_score {
-            best = *slot_score;
-            considered = vec![index];
+        if score > highest_score {
+            highest_score = score;
+            highest_scoring_slots.clear();
+            highest_scoring_slots.push(slot);
         }
     }
-    considered[usize::from(rng.next_u16()) % considered.len()]
+
+    let selected = usize::from(rng.next_u16()) % highest_scoring_slots.len();
+    highest_scoring_slots[selected]
 }
 
-/// `100 * hp / maxHP`, the percentage every `if_hp_*` AI command computes
-/// (`Cmd_if_hp_more_than`, `battle_ai_script_commands.c:728`; truncating
-/// integer division, exactly as [`super::opponent_ai`]'s flee threshold).
-fn hp_percent(mon: &BattlePokemon) -> u32 {
-    100 * mon.current_hp() / mon.stats().max_hp
+fn current_hp_percent(pokemon: &BattlePokemon) -> u32 {
+    PERCENT_SCALE * pokemon.current_hp() / pokemon.stats().max_hp
 }
 
-/// `Cmd_if_type_effectiveness`' `AI_EFFECTIVENESS_*` value
-/// (`battle_ai_script_commands.c:1515`): seed `gBattleMoveDamage` with
-/// [`AI_EFFECTIVENESS_X1`] and run `TypeCalc` over it.
-///
-/// The mapping back onto the `AI_EFFECTIVENESS_*` constants
-/// (`120 -> x2`, `240 -> x4`, `30 -> x0_5`, `15 -> x0_25`) exists to fold
-/// the STAB multiply back out; only the `x4` comparison is used here, so
-/// only the two `x4`-producing values (`160` un-`STAB`bed, `240` `STAB`bed)
-/// are
-/// checked by [`is_quadruple_effective`].
-///
-/// **Upstream's "dual non-immunity glitch" is reproduced.** `TypeCalc` does
-/// not assign `gMoveResultFlags` (only `Cmd_typecalc` does), so this
-/// function's `MOVE_RESULT_DOESNT_AFFECT_FOE -> AI_EFFECTIVENESS_x0` arm
-/// (`:1548`) can never fire, and an immunity is only seen through the
-/// arithmetic: `ModulateDmgByType`'s `if (damage == 0 && multiplier != 0)
-/// damage = 1` floor (`battle_script_commands.c:1323`-`:1325`) *revives* a
-/// zeroed value the moment a second, non-immune type row applies. That is
-/// exactly what folding [`apply_type_effectiveness`] row by row does — which
-/// is why this uses the plain fold rather than
-/// [`crate::damage::apply_dual_type_effectiveness`], whose immunity override
-/// models the real damage path (where `Cmd_typecalc` *does* set the flag)
-/// and would therefore be wrong here.
-fn ai_type_fold(damage: u32, move_type: Type, defender_types: [Type; 2]) -> u32 {
-    let distinct = defender_types[1] != defender_types[0];
+fn random_roll_is_at_least(rng: &mut impl BattleRng, threshold: u16) -> bool {
+    rng.next_u16() % AI_RANDOM_ROLL_MODULUS >= threshold
+}
+
+/// Preserves Emerald's dual non-immunity glitch: its AI type command folds
+/// rows without carrying an immunity flag, so a later non-immune row can lift
+/// zero damage back to one (`src/battle_ai_script_commands.c:1515`-`:1556`).
+fn fold_ai_type_effectiveness(damage: u32, move_type: Type, defender_types: [Type; 2]) -> u32 {
+    let defender_has_two_types = defender_types[1] != defender_types[0];
     let mut damage = damage;
-    for &(attacker, defender, effectiveness) in TypeChart::rows() {
-        if attacker != move_type {
+
+    for &(attacker_type, defender_type, effectiveness) in TypeChart::rows() {
+        if attacker_type != move_type {
             continue;
         }
-        if defender != defender_types[0] && !(distinct && defender == defender_types[1]) {
-            continue;
+        let applies_to_defender = defender_type == defender_types[0]
+            || (defender_has_two_types && defender_type == defender_types[1]);
+        if applies_to_defender {
+            damage = apply_type_effectiveness(damage, effectiveness);
         }
-        damage = apply_type_effectiveness(damage, effectiveness);
     }
+
     damage
 }
 
-/// Whether the move reads as `AI_EFFECTIVENESS_x4` to
-/// `Cmd_if_type_effectiveness` — the only effectiveness comparison the four
-/// modelled scripts make with a non-`x0` value.
+fn ai_type_effectiveness(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<Option<u32>, BattleError> {
+    let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
+        return Ok(None);
+    };
+    let neutral_with_stab = apply_stab(
+        AI_EFFECTIVENESS_NEUTRAL,
+        has_stab(attacker.types(), move_id, move_type),
+    );
+    Ok(Some(fold_ai_type_effectiveness(
+        neutral_with_stab,
+        move_type,
+        defender.types(),
+    )))
+}
+
 fn is_quadruple_effective(
     dex: &Dex,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<bool, BattleError> {
-    let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
+    let Some(effectiveness) = ai_type_effectiveness(dex, move_id, attacker, defender)? else {
         return Ok(false);
     };
-    let stabbed = apply_stab(
-        AI_EFFECTIVENESS_X1,
-        has_stab(attacker.types(), move_id, move_type),
-    );
-    let folded = ai_type_fold(stabbed, move_type, defender.types());
-    // 160 is the un-STABbed x4 value; 240 is the STABbed one the command
-    // remaps to it (`:1541`).
-    Ok(folded == AI_EFFECTIVENESS_X4 || folded == 240)
+    Ok(matches!(
+        effectiveness,
+        AI_EFFECTIVENESS_QUADRUPLE | AI_EFFECTIVENESS_QUADRUPLE_WITH_STAB
+    ))
 }
 
-/// Whether the move reads as `AI_EFFECTIVENESS_x0` — a genuine immunity as
-/// the AI (mis)sees it, i.e. after [`ai_type_fold`]'s glitch.
-fn is_no_effect(
+fn has_no_effect(
     dex: &Dex,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<bool, BattleError> {
-    let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
-        return Ok(false);
-    };
-    let stabbed = apply_stab(
-        AI_EFFECTIVENESS_X1,
-        has_stab(attacker.types(), move_id, move_type),
-    );
-    Ok(ai_type_fold(stabbed, move_type, defender.types()) == 0)
+    Ok(ai_type_effectiveness(dex, move_id, attacker, defender)? == Some(0))
 }
 
-/// `AI_CalcDmg` + `TypeCalc` + the `simulatedRNG` scale — the damage
-/// estimate `Cmd_if_can_faint` (`:1743`) and `Cmd_get_how_powerful_move_is`
-/// (`:1174`) share.
-///
-/// `AI_CalcDmg` (`battle_script_commands.c:1306`) is
-/// `CalculateBaseDamage(...)` times `gCritMultiplier` and
-/// `gBattleScripting.dmgMultiplier`, both of which the two callers reset to
-/// `1` immediately beforehand — so it is exactly [`base_damage`] over the
-/// battlers' current stats and stages, with no crit and no Reflect/Light
-/// Screen/weather (none of which this crate models anyway). `TypeCalc` then
-/// applies STAB and the type rows ([`ai_type_fold`]), and the caller scales
-/// by `simulatedRNG[movesetIndex] / 100` and floors the result at `1`
-/// ("moves always do at least 1 damage").
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
-    simulated_rng: u32,
+    simulated_damage_percent: u32,
 ) -> Result<u32, BattleError> {
-    let mv = dex.move_data(move_id)?;
-    let Some(move_type) = mv.move_type.battle_type() else {
-        return Ok(1);
+    let move_data = dex.move_data(move_id)?;
+    let Some(move_type) = move_data.move_type.battle_type() else {
+        return Ok(MINIMUM_DAMAGE);
     };
     let category = MoveCategory::for_type(move_type);
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
-    // Huge Power / Pure Power double the raw stat before the stat-stage
-    // multiply below, exactly as `crate::hit::damage_before_roll` does for
-    // real damage -- see `crate::ability::huge_power_attack`'s docs. `AI_CalcDmg`
-    // calls the same `CalculateBaseDamage`, so the AI's estimate must apply
-    // it too or it will under-value a Huge Power/Pure Power attacker's move.
     let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
-        power: u32::from(mv.power),
+        power: u32::from(move_data.power),
         move_type,
         attack_stat,
         attack_stage,
@@ -478,9 +363,6 @@ fn estimated_damage(
         light_screen: false,
         weather: Weather::None,
         is_solar_beam: false,
-        // `AI_CalcDmg` calls the *same* `CalculateBaseDamage`
-        // (`battle_script_commands.c:1309`), so the AI sees the pinch boost
-        // exactly as the real damage step does (issue #321).
         attacker_pinch_boost: crate::ability::pinch_boosts_power(
             attacker.ability(),
             move_type,
@@ -490,212 +372,139 @@ fn estimated_damage(
     };
     let damage = base_damage(&input);
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
-    let damage = ai_type_fold(damage, move_type, defender.types());
-    Ok((damage * simulated_rng / 100).max(1))
+    let damage = fold_ai_type_effectiveness(damage, move_type, defender.types());
+    Ok((damage * simulated_damage_percent / PERCENT_SCALE).max(MINIMUM_DAMAGE))
 }
 
-/// `sIgnoredPowerfulMoveEffects` (`battle_ai_script_commands.c:266`-`:281`)
-/// membership, for the effects this module scores.
-///
-/// Neither [`EFFECT_HIT`] nor the two stat-down effects is in that list, so
-/// `get_how_powerful_move_is` decides purely on `power > 1` for them. The
-/// list is not transcribed: no move this AI can score is in it, and
-/// transcribing 20 unreachable ids would be dead data.
-const fn ignored_by_power_check(_effect: MoveEffect) -> bool {
-    false
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PowerComparison {
+    NotComparable,
+    WeakerThanAnotherMove,
+    Strongest,
 }
 
-/// `Cmd_get_how_powerful_move_is` (`:1174`): is the considered slot the
-/// hardest-hitting one this mon has?
-///
-/// Reproduces upstream's comparison exactly, including that it compares
-/// against `moveDmgs[movesetIndex]` (`0` for a `0`-power move) rather than
-/// re-deriving it, and that each *other* slot's estimate is scaled by
-/// **that slot's own** `simulatedRNG[checkedMove]` rather than the
-/// considered one's (`:1214`).
-fn how_powerful(
+fn compare_move_power(
     dex: &Dex,
-    thinking: &Thinking,
-    index: usize,
+    scores: &MoveScores,
+    considered_slot: usize,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
-) -> Result<MovePower, BattleError> {
-    let mv = dex.move_data(move_id)?;
-    if mv.power <= 1 || ignored_by_power_check(mv.effect) {
-        return Ok(MovePower::Other);
+) -> Result<PowerComparison, BattleError> {
+    if dex.move_data(move_id)?.power < MINIMUM_DAMAGING_MOVE_POWER {
+        return Ok(PowerComparison::NotComparable);
     }
-    let mut damages = [0u32; MAX_MON_MOVES];
-    for (slot, damage) in damages.iter_mut().enumerate() {
-        let Some(slot_move) = attacker.move_at(slot) else {
+
+    let mut damage_by_slot = [0; MAX_MON_MOVES];
+    for (slot, damage) in damage_by_slot.iter_mut().enumerate() {
+        let Some(candidate_move) = attacker.move_at(slot) else {
             continue;
         };
-        if !selectable_slot(Some(slot_move)) {
-            continue;
-        }
-        let slot_data = dex.move_data(slot_move)?;
-        if slot_data.power <= 1 || ignored_by_power_check(slot_data.effect) {
+        let candidate_data = dex.move_data(candidate_move)?;
+        if candidate_data.power < MINIMUM_DAMAGING_MOVE_POWER {
             continue;
         }
         *damage = estimated_damage(
             dex,
-            slot_move,
+            candidate_move,
             attacker,
             defender,
-            thinking.simulated_rng[slot],
+            scores.simulated_damage_percent[slot],
         )?;
     }
-    if damages.iter().any(|d| *d > damages[index]) {
-        Ok(MovePower::NotMostPowerful)
+
+    if damage_by_slot
+        .iter()
+        .any(|damage| *damage > damage_by_slot[considered_slot])
+    {
+        Ok(PowerComparison::WeakerThanAnotherMove)
     } else {
-        Ok(MovePower::MostPowerful)
+        Ok(PowerComparison::Strongest)
     }
 }
 
-/// `AI_CheckBadMove` (`data/battle_ai_scripts.s:51`), for the three scored
-/// effects. **Draws nothing** on any of the three paths.
-///
-/// - `if_target_is_ally` (`:52`) never fires in a single battle.
-/// - `if_move MOVE_FISSURE`/`MOVE_HORN_DRILL` (`:53`-`:54`) never fire: both
-///   are `EFFECT_OHKO`, outside this module's scored set.
-/// - `get_how_powerful_move_is` → `MOVE_POWER_OTHER` (`:56`) skips the
-///   type/ability block for the two `0`-power stat-down moves and falls
-///   straight to the effect switch.
-/// - For [`EFFECT_HIT`]: `if_type_effectiveness AI_EFFECTIVENESS_x0`
-///   (`:58`) is the one branch that can fire (`Score_Minus10`); the five
-///   `get_ability AI_TARGET` branches after it, and the Soundproof block at
-///   `:92`-`:102`, need abilities this crate does not model and that none of
-///   the three starters has (module docs). `EFFECT_HIT` is absent from the
-///   `if_effect` chain (`:104`-`:216`), so the script then ends unchanged.
-/// - For `EFFECT_ATTACK_DOWN` → `AI_CBM_AttackDown` (`:277`) and
-///   `EFFECT_DEFENSE_DOWN` → `AI_CBM_DefenseDown` (`:283`): `score -10` if
-///   the target's stage for that stat is already `MIN_STAT_STAGE`, then the
-///   Hyper Cutter / Clear Body / White Smoke ability checks (unmodelled,
-///   unreachable).
-fn run_check_bad_move(
+fn score_bad_move(
     dex: &Dex,
-    thinking: &mut Thinking,
-    index: usize,
+    scores: &mut MoveScores,
+    slot: usize,
     move_id: MoveId,
-    enemy: &BattlePokemon,
-    player: &BattlePokemon,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
 ) -> Result<(), BattleError> {
-    let effect = dex.move_data(move_id)?.effect;
-    if effect == EFFECT_HIT {
-        if is_no_effect(dex, move_id, enemy, player)? {
-            thinking.score(index, -10);
-        }
-        return Ok(());
-    }
-    let floored = if effect == EFFECT_ATTACK_DOWN {
-        player.stages().attack == StatStage::MIN
-    } else if effect == EFFECT_DEFENSE_DOWN {
-        player.stages().defense == StatStage::MIN
-    } else {
-        return Err(BattleError::UnscoreableMoveEffect(move_id));
+    let effect = scoreable_effect(dex, move_id)?;
+    let is_ineffective = match effect {
+        ScoreableEffect::Hit => has_no_effect(dex, move_id, user, target)?,
+        ScoreableEffect::AttackDown => target.stages().attack == StatStage::MIN,
+        ScoreableEffect::DefenseDown => target.stages().defense == StatStage::MIN,
     };
-    if floored {
-        thinking.score(index, -10);
+    if is_ineffective {
+        scores.adjust(slot, STRONGLY_DISCOURAGE);
     }
     Ok(())
 }
 
-/// `AI_TryToFaint` (`data/battle_ai_scripts.s:2616`).
-///
-/// ```text
-/// if_target_is_ally AI_Ret
-/// if_can_faint AI_TryToFaint_TryToEncourageQuickAttack
-/// get_how_powerful_move_is
-/// if_equal MOVE_NOT_MOST_POWERFUL, Score_Minus1
-/// if_type_effectiveness AI_EFFECTIVENESS_x4, AI_TryToFaint_DoubleSuperEffective
-/// end
-/// ```
-///
-/// **Draws 0 or 1.** The only `Random()` on this script is
-/// `AI_TryToFaint_DoubleSuperEffective`'s `if_random_less_than 80` (`:2625`),
-/// reached only when the move both *cannot* faint the target and reads as
-/// `x4` effective. A Normal-type move against a single-type starter can
-/// never be `x4`, so this battle never spends it — but the branch is
-/// modelled rather than asserted away, because a wrong draw count here would
-/// desynchronise every later roll `(behavioral-fidelity)`.
-///
-/// `if_can_faint` (`:1743`) is where the kept `simulatedRNG` values are
-/// read: a `0`/`1`-power move returns immediately (`power < 2`), and
-/// otherwise the estimate is compared against the target's **current** HP,
-/// so this branch genuinely fires once the player's mon is worn down —
-/// which is exactly when the rival stops using Growl and starts finishing
-/// the fight.
-fn run_try_to_faint(
+fn score_try_to_faint(
     dex: &Dex,
-    thinking: &mut Thinking,
-    index: usize,
+    scores: &mut MoveScores,
+    slot: usize,
     move_id: MoveId,
-    enemy: &BattlePokemon,
-    player: &BattlePokemon,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
-    let mv = dex.move_data(move_id)?;
-    if mv.power >= 2 {
-        let damage = estimated_damage(dex, move_id, enemy, player, thinking.simulated_rng[index])?;
-        if player.current_hp() <= damage {
-            // AI_TryToFaint_TryToEncourageQuickAttack (`:2629`): neither
-            // EFFECT_EXPLOSION nor EFFECT_QUICK_ATTACK is scoreable here, so
-            // the `if_not_effect EFFECT_QUICK_ATTACK` test always takes the
-            // ScoreUp4 branch.
-            thinking.score(index, 4);
+    let move_data = dex.move_data(move_id)?;
+    if move_data.power >= MINIMUM_DAMAGING_MOVE_POWER {
+        let damage = estimated_damage(
+            dex,
+            move_id,
+            user,
+            target,
+            scores.simulated_damage_percent[slot],
+        )?;
+        if target.current_hp() <= damage {
+            scores.adjust(slot, STRONGLY_ENCOURAGE);
             return Ok(());
         }
     }
-    if how_powerful(dex, thinking, index, move_id, enemy, player)? == MovePower::NotMostPowerful {
-        thinking.score(index, -1);
+
+    if compare_move_power(dex, scores, slot, move_id, user, target)?
+        == PowerComparison::WeakerThanAnotherMove
+    {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
         return Ok(());
     }
-    if is_quadruple_effective(dex, move_id, enemy, player)? {
-        // if_random_less_than 80: `Random() % 256 < 80` skips the bonus.
-        if rng.next_u16() % 256 >= 80 {
-            thinking.score(index, 2);
+
+    if is_quadruple_effective(dex, move_id, user, target)?
+        && random_roll_is_at_least(rng, QUADRUPLE_EFFECTIVENESS_BONUS_THRESHOLD)
+    {
+        scores.adjust(slot, ENCOURAGE);
+    }
+    Ok(())
+}
+
+fn score_viability(
+    dex: &Dex,
+    scores: &mut MoveScores,
+    slot: usize,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> Result<(), BattleError> {
+    match scoreable_effect(dex, move_id)? {
+        ScoreableEffect::Hit => {}
+        ScoreableEffect::AttackDown => {
+            score_attack_drop_viability(scores, slot, user, target, rng);
+        }
+        ScoreableEffect::DefenseDown => {
+            score_defense_drop_viability(scores, slot, user, target, rng);
         }
     }
     Ok(())
 }
 
-/// `AI_CheckViability` (`data/battle_ai_scripts.s:652`), for the three
-/// scored effects.
-///
-/// - [`EFFECT_HIT`] is absent from the whole `if_effect` chain
-///   (`:654`-`:777`), so the script ends immediately: **no draw, no change**.
-/// - `EFFECT_ATTACK_DOWN` → `AI_CV_AttackDown` (`:1090`) and
-///   `EFFECT_DEFENSE_DOWN` → `AI_CV_DefenseDown` (`:1124`) each draw
-///   **0, 1, or 2** times; see [`run_cv_attack_down`] /
-///   [`run_cv_defense_down`] for the exact branch conditions.
-fn run_check_viability(
-    dex: &Dex,
-    thinking: &mut Thinking,
-    index: usize,
-    move_id: MoveId,
-    enemy: &BattlePokemon,
-    player: &BattlePokemon,
-    rng: &mut impl BattleRng,
-) -> Result<(), BattleError> {
-    let effect = dex.move_data(move_id)?.effect;
-    if effect == EFFECT_HIT {
-        Ok(())
-    } else if effect == EFFECT_ATTACK_DOWN {
-        run_cv_attack_down(thinking, index, enemy, player, rng);
-        Ok(())
-    } else if effect == EFFECT_DEFENSE_DOWN {
-        run_cv_defense_down(thinking, index, enemy, player, rng);
-        Ok(())
-    } else {
-        Err(BattleError::UnscoreableMoveEffect(move_id))
-    }
-}
-
-/// `AI_CV_AttackDown_PhysicalTypeList` (`data/battle_ai_scripts.s:1115`-
-/// `:1121`) — "if the target is not of any type in this list then using the
-/// move may be discouraged", with upstream's own comment noting Flying,
-/// Poison and Ghost were left out. Transcribed as-is, omissions included
-/// `(behavioral-fidelity)`.
+/// Exact six-entry `AI_CV_AttackDown_PhysicalTypeList`. Emerald omits Flying,
+/// Poison, and Ghost (`data/battle_ai_scripts.s:1115`-`:1121`).
 const PHYSICAL_TYPE_LIST: [Type; 6] = [
     Type::Normal,
     Type::Fighting,
@@ -705,133 +514,80 @@ const PHYSICAL_TYPE_LIST: [Type; 6] = [
     Type::Steel,
 ];
 
-/// `AI_CV_AttackDown` (`data/battle_ai_scripts.s:1090`-`:1110`):
-///
-/// ```text
-/// if_stat_level_equal AI_TARGET, STAT_ATK, DEFAULT_STAT_STAGE, AttackDown3
-/// score -1
-/// if_hp_more_than AI_USER, 90, AttackDown2
-/// score -1
-/// AttackDown2:
-///   if_stat_level_more_than AI_TARGET, STAT_ATK, 3, AttackDown3
-///   if_random_less_than 50, AttackDown3     @ draw
-///   score -2
-/// AttackDown3:
-///   if_hp_more_than AI_TARGET, 70, AttackDown4
-///   score -2
-/// AttackDown4:
-///   get_target_type1 / if_in_bytes PhysicalTypeList, End
-///   get_target_type2 / if_in_bytes PhysicalTypeList, End
-///   if_random_less_than 50, End             @ draw
-///   score -2
-/// ```
-///
-/// So: on the very first Growl of a battle (target still at
-/// `DEFAULT_STAT_STAGE`) the first block is skipped entirely and the script
-/// draws **once** against a Grass/Fire/Water starter (none of which is in
-/// [`PHYSICAL_TYPE_LIST`]); once Attack has already been lowered *and* the
-/// stage has reached `3` or below, it draws **twice**.
-///
-/// `if_stat_level_*` compares upstream's raw `statStages` byte
-/// (`MIN_STAT_STAGE 0` … `DEFAULT_STAT_STAGE 6` … `MAX_STAT_STAGE 12`), which
-/// is [`StatStage::raw_index`] here — hence the literal `6` and `3` rather
-/// than this crate's signed offsets.
-fn run_cv_attack_down(
-    thinking: &mut Thinking,
-    index: usize,
-    enemy: &BattlePokemon,
-    player: &BattlePokemon,
+fn has_physical_type(pokemon: &BattlePokemon) -> bool {
+    pokemon
+        .types()
+        .iter()
+        .any(|pokemon_type| PHYSICAL_TYPE_LIST.contains(pokemon_type))
+}
+
+fn score_attack_drop_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
     rng: &mut impl BattleRng,
 ) {
-    let stage = player.stages().attack.raw_index();
-    if stage != 6 {
-        thinking.score(index, -1);
-        if hp_percent(enemy) <= 90 {
-            thinking.score(index, -1);
+    let attack_stage = target.stages().attack;
+    if attack_stage != StatStage::NEUTRAL {
+        scores.adjust(slot, SLIGHTLY_DISCOURAGE);
+        if current_hp_percent(user) <= ATTACK_DROP_USER_HP_THRESHOLD {
+            scores.adjust(slot, SLIGHTLY_DISCOURAGE);
         }
-        if stage <= 3 && rng.next_u16() % 256 >= 50 {
-            thinking.score(index, -2);
+        if attack_stage.offset() <= HEAVILY_LOWERED_STAT_STAGE
+            && random_roll_is_at_least(rng, STAT_DROP_DISCOURAGEMENT_THRESHOLD)
+        {
+            scores.adjust(slot, DISCOURAGE);
         }
     }
-    if hp_percent(player) <= 70 {
-        thinking.score(index, -2);
+
+    if current_hp_percent(target) <= STAT_DROP_TARGET_HP_THRESHOLD {
+        scores.adjust(slot, DISCOURAGE);
     }
-    let types = player.types();
-    let physical = PHYSICAL_TYPE_LIST.contains(&types[0]) || PHYSICAL_TYPE_LIST.contains(&types[1]);
-    if !physical && rng.next_u16() % 256 >= 50 {
-        thinking.score(index, -2);
+    if !has_physical_type(target)
+        && random_roll_is_at_least(rng, STAT_DROP_DISCOURAGEMENT_THRESHOLD)
+    {
+        scores.adjust(slot, DISCOURAGE);
     }
 }
 
-/// `AI_CV_DefenseDown` (`data/battle_ai_scripts.s:1124`-`:1134`):
-///
-/// ```text
-/// if_hp_less_than AI_USER, 70, DefenseDown2
-/// if_stat_level_more_than AI_TARGET, STAT_DEF, 3, DefenseDown3
-/// DefenseDown2:
-///   if_random_less_than 50, DefenseDown3    @ draw
-///   score -2
-/// DefenseDown3:
-///   if_hp_more_than AI_TARGET, 70, End
-///   score -2
-/// ```
-///
-/// A healthy user (`>= 70%`) facing a target whose Defense stage is still
-/// above `3` skips the draw entirely — which is the *opening* Leer of the
-/// Route 103 fight, so Treecko's first turn costs one fewer draw than
-/// Torchic's or Mudkip's opening Growl.
-fn run_cv_defense_down(
-    thinking: &mut Thinking,
-    index: usize,
-    enemy: &BattlePokemon,
-    player: &BattlePokemon,
+fn score_defense_drop_viability(
+    scores: &mut MoveScores,
+    slot: usize,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
     rng: &mut impl BattleRng,
 ) {
-    let skip_roll = hp_percent(enemy) >= 70 && player.stages().defense.raw_index() > 3;
-    if !skip_roll && rng.next_u16() % 256 >= 50 {
-        thinking.score(index, -2);
+    let user_is_healthy = current_hp_percent(user) >= DEFENSE_DROP_USER_HP_THRESHOLD;
+    let defense_is_not_heavily_lowered =
+        target.stages().defense.offset() > HEAVILY_LOWERED_STAT_STAGE;
+    let skip_discouragement_roll = user_is_healthy && defense_is_not_heavily_lowered;
+
+    if !skip_discouragement_roll && random_roll_is_at_least(rng, STAT_DROP_DISCOURAGEMENT_THRESHOLD)
+    {
+        scores.adjust(slot, DISCOURAGE);
     }
-    if hp_percent(player) <= 70 {
-        thinking.score(index, -2);
+    if current_hp_percent(target) <= STAT_DROP_TARGET_HP_THRESHOLD {
+        scores.adjust(slot, DISCOURAGE);
     }
 }
 
-/// `AI_SetupFirstTurn` (`data/battle_ai_scripts.s:2638`-`:2647`) — the third
-/// flag `TRAINER_BRENDAN_ROUTE_103_TREECKO` carries in place of
-/// `CHECK_VIABILITY`.
-///
-/// ```text
-/// if_target_is_ally AI_Ret
-/// get_turn_count
-/// if_not_equal 0, End
-/// get_considered_move_effect
-/// if_not_in_bytes SetupEffectsToEncourage, End
-/// if_random_less_than 80, End               @ draw
-/// score +2
-/// ```
-///
-/// `AI_SetupFirstTurn_SetupEffectsToEncourage` (`:2649`-`:2679`) lists the
-/// stat-*change* effects, both directions — `EFFECT_ATTACK_DOWN` and
-/// `EFFECT_DEFENSE_DOWN` are in it, [`EFFECT_HIT`] is not — so on turn 1
-/// only the stat-down slot draws, and from turn 2 onward the script draws
-/// nothing at all.
-fn run_setup_first_turn(
+fn score_first_turn_setup(
     dex: &Dex,
-    thinking: &mut Thinking,
-    index: usize,
+    scores: &mut MoveScores,
+    slot: usize,
     move_id: MoveId,
     turn_counter: u8,
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
-    if turn_counter != 0 {
+    if turn_counter != FIRST_TURN {
         return Ok(());
     }
-    let effect = dex.move_data(move_id)?.effect;
-    if effect != EFFECT_ATTACK_DOWN && effect != EFFECT_DEFENSE_DOWN {
+    if !scoreable_effect(dex, move_id)?.is_stat_drop() {
         return Ok(());
     }
-    if rng.next_u16() % 256 >= 80 {
-        thinking.score(index, 2);
+    if random_roll_is_at_least(rng, FIRST_TURN_SETUP_BONUS_THRESHOLD) {
+        scores.adjust(slot, ENCOURAGE);
     }
     Ok(())
 }
@@ -840,267 +596,310 @@ fn run_setup_first_turn(
 mod tests {
     use super::{
         choose_trainer_action, ensure_scoreable, ensure_supported_flags, estimated_damage,
-        is_scoreable_effect, EFFECT_HIT,
+        is_scoreable_effect, EFFECT_HIT, FIRST_TURN, FIRST_TURN_SETUP_BONUS_THRESHOLD,
+        PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::dex::Dex;
     use crate::error::BattleError;
-    use crate::pokemon::{BattlePokemon, Ivs};
+    use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};
     use crate::script_rng::SequenceRng;
     use assets::trainers::AiFlags;
     use assets::{MoveId, SpeciesId};
 
-    const TREECKO: u16 = 277;
-    const TORCHIC: u16 = 280;
-    const MUDKIP: u16 = 283;
+    const ROUTE_103_LEVEL: u8 = 5;
+    const DEFAULT_PERSONALITY: u32 = 0;
+    const SECOND_TURN: u8 = 1;
+    const HUGE_POWER_ABILITY_SLOT: u8 = 1;
+    const MAXIMUM_SIMULATED_DAMAGE_DRAW: u16 = 0;
+    const SELECT_FIRST_TIED_MOVE: u16 = 0;
+    const SELECT_SECOND_TIED_MOVE: u16 = 1;
+    const MAXIMUM_DAMAGE_ROLL: u16 = 0;
+
+    const TREECKO: SpeciesId = SpeciesId(277);
+    const TORCHIC: SpeciesId = SpeciesId(280);
+    const MUDKIP: SpeciesId = SpeciesId(283);
+    const MARILL: SpeciesId = SpeciesId(183);
+    const SQUIRTLE: SpeciesId = SpeciesId(7);
+
     const POUND: MoveId = MoveId(1);
-    const LEER: MoveId = MoveId(43);
     const SCRATCH: MoveId = MoveId(10);
+    const TACKLE: MoveId = MoveId(33);
+    const LEER: MoveId = MoveId(43);
     const GROWL: MoveId = MoveId(45);
     const EMBER: MoveId = MoveId(52);
 
-    /// `TRAINER_MAY_ROUTE_103_MUDKIP`'s flags.
-    fn route103_flags() -> AiFlags {
+    fn route_103_flags() -> AiFlags {
         AiFlags::CHECK_BAD_MOVE
             .union(AiFlags::TRY_TO_FAINT)
             .union(AiFlags::CHECK_VIABILITY)
     }
 
-    fn mon(species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
+    fn first_turn_setup_flags() -> AiFlags {
+        AiFlags::CHECK_BAD_MOVE
+            .union(AiFlags::TRY_TO_FAINT)
+            .union(AiFlags::SETUP_FIRST_TURN)
+    }
+
+    fn pokemon(species: SpeciesId, moves: Vec<MoveId>) -> BattlePokemon {
         BattlePokemon::new(
             &Dex::new(),
-            SpeciesId(species),
-            level,
+            species,
+            ROUTE_103_LEVEL,
             Ivs::default(),
-            0,
+            DEFAULT_PERSONALITY,
             moves,
         )
-        .expect("test mon must be dex-resident")
+        .expect("test Pokemon must be dex-resident")
+    }
+
+    fn spend_move(pokemon: &mut BattlePokemon, slot: usize) {
+        while pokemon.moves()[slot].pp > 0 {
+            pokemon.deduct_pp(slot).unwrap();
+        }
+    }
+
+    fn rng_with_maximum_simulated_damage(
+        subsequent_draws: impl IntoIterator<Item = u16>,
+    ) -> SequenceRng {
+        SequenceRng::new(
+            [MAXIMUM_SIMULATED_DAMAGE_DRAW; MAX_MON_MOVES]
+                .into_iter()
+                .chain(subsequent_draws),
+        )
     }
 
     #[test]
-    fn only_the_three_route_103_effects_are_scoreable() {
+    fn route_103_move_effects_are_scoreable_and_ember_is_not() {
         let dex = Dex::new();
+
         assert!(is_scoreable_effect(EFFECT_HIT));
         assert!(ensure_scoreable(&dex, POUND).is_ok());
         assert!(ensure_scoreable(&dex, GROWL).is_ok());
         assert!(ensure_scoreable(&dex, LEER).is_ok());
-        // Ember is EFFECT_BURN_HIT: a plain hit to `hit.rs`, but a different
-        // AI_CheckBadMove/AI_CheckViability branch -- and those branches draw.
         assert_eq!(
-            ensure_scoreable(&dex, EMBER).unwrap_err(),
-            BattleError::UnscoreableMoveEffect(EMBER)
+            ensure_scoreable(&dex, EMBER),
+            Err(BattleError::UnscoreableMoveEffect(EMBER))
         );
     }
 
     #[test]
     fn only_the_four_lowest_ai_script_bits_are_supported() {
-        assert!(ensure_supported_flags(route103_flags()).is_ok());
-        assert!(ensure_supported_flags(
-            AiFlags::CHECK_BAD_MOVE
-                .union(AiFlags::TRY_TO_FAINT)
-                .union(AiFlags::SETUP_FIRST_TURN)
-        )
-        .is_ok());
+        assert!(ensure_supported_flags(route_103_flags()).is_ok());
+        assert!(ensure_supported_flags(first_turn_setup_flags()).is_ok());
         assert_eq!(
-            ensure_supported_flags(AiFlags::CHECK_BAD_MOVE.union(AiFlags::RISKY)).unwrap_err(),
-            BattleError::UnsupportedAiFlags(AiFlags::RISKY),
-            "the error must name only the unmodelled bits"
+            ensure_supported_flags(AiFlags::CHECK_BAD_MOVE.union(AiFlags::RISKY)),
+            Err(BattleError::UnsupportedAiFlags(AiFlags::RISKY))
         );
     }
 
     #[test]
-    fn every_slot_spent_forces_struggle_before_any_draw() {
-        let mut enemy = mon(TORCHIC, 5, vec![SCRATCH, GROWL]);
+    fn every_spent_move_forces_struggle_without_drawing() {
+        let mut enemy = pokemon(TORCHIC, vec![SCRATCH, GROWL]);
         for slot in 0..enemy.moves().len() {
-            for _ in 0..enemy.moves()[slot].pp {
-                enemy.deduct_pp(slot).unwrap();
-            }
+            spend_move(&mut enemy, slot);
         }
-        let player = mon(TREECKO, 5, vec![POUND]);
+        let player = pokemon(TREECKO, vec![POUND]);
         let mut rng = SequenceRng::new([]);
+
         assert_eq!(
-            choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
-                .unwrap(),
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                route_103_flags(),
+                FIRST_TURN,
+                &mut rng,
+            )
+            .unwrap(),
             EnemyAction::Struggle
         );
-        assert_eq!(rng.draws(), 0, "AreAllMovesUnusable draws nothing");
+        assert_eq!(rng.draws(), 0);
     }
 
-    /// The opening turn of the real Route 103 fight, player-picked-Torchic
-    /// side: May's Mudkip (Tackle + Growl) against a full-HP Torchic.
-    ///
-    /// Draw accounting, in order:
-    /// * 4 -- `BattleAI_SetupAIData`'s `simulatedRNG` fill;
-    /// * `AI_CheckBadMove`: 0 (Tackle is not `x0` against Fire; Growl's
-    ///   target is at the default Attack stage);
-    /// * `AI_TryToFaint`: 0 (Tackle cannot faint a full-HP Torchic and is
-    ///   the most powerful slot; Growl is `0`-power and neither branch that
-    ///   draws applies);
-    /// * `AI_CheckViability`: 1 -- Tackle (`EFFECT_HIT`) is absent from the
-    ///   script, Growl reaches `AI_CV_AttackDown4`'s `if_random_less_than
-    ///   50` because Fire is not in the physical-type list;
-    /// * the tie-break: 1.
     #[test]
-    fn the_opening_turn_against_a_healthy_starter_costs_exactly_six_draws() {
-        let enemy = mon(MUDKIP, 5, vec![MoveId(33), GROWL]); // Tackle, Growl
-        let player = mon(TORCHIC, 5, vec![SCRATCH]);
-        // 4 setup draws, then AI_CV_AttackDown4's roll (>= 50 -> score -2),
-        // then a tie-break value selecting slot 0.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 200, 0]);
-        let action =
-            choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
-                .unwrap();
-        assert_eq!(rng.draws(), 6, "4 setup + 1 AI_CV_AttackDown + 1 tie-break");
-        // Growl took -2, so Tackle (still 100) is the sole best move and the
-        // tie-break is taken modulo 1.
+    fn opening_tackle_and_growl_cost_setup_viability_and_tie_break_draws() {
+        let enemy = pokemon(MUDKIP, vec![TACKLE, GROWL]);
+        let player = pokemon(TORCHIC, vec![SCRATCH]);
+        let mut rng = rng_with_maximum_simulated_damage([
+            STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+            SELECT_FIRST_TIED_MOVE,
+        ]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            route_103_flags(),
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
         assert_eq!(action, EnemyAction::Move(0));
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 2);
     }
 
-    /// The same turn with Leer instead of Growl: `AI_CV_DefenseDown`'s
-    /// healthy-user/high-stage shortcut skips its roll, so Brendan's
-    /// Treecko opens **one draw cheaper** than May's Mudkip does.
     #[test]
-    fn an_opening_leer_skips_the_check_viability_roll_that_growl_spends() {
-        let enemy = mon(TREECKO, 5, vec![POUND, LEER]);
-        let player = mon(MUDKIP, 5, vec![MoveId(33)]);
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
-        let action =
-            choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
-                .unwrap();
+    fn opening_leer_skips_the_viability_roll_and_ties_with_pound() {
+        let enemy = pokemon(TREECKO, vec![POUND, LEER]);
+        let player = pokemon(MUDKIP, vec![TACKLE]);
+        let mut choose_pound = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        let mut choose_leer = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+
         assert_eq!(
-            rng.draws(),
-            5,
-            "4 setup + 0 AI_CV_DefenseDown + 1 tie-break"
-        );
-        // Nothing moved either score, so both slots tie at 100 and the
-        // tie-break picks among two: `0 % 2 == 0`.
-        assert_eq!(action, EnemyAction::Move(0));
-        // ...and an odd tie-break value really does reach the other slot,
-        // proving the modulo is over 2 candidates and not 1.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1]);
-        assert_eq!(
-            choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
-                .unwrap(),
-            EnemyAction::Move(1)
-        );
-    }
-
-    /// `AI_TryToFaint`'s `if_can_faint` is the branch that decides the end
-    /// of the fight: once the player's mon is within one Tackle, the
-    /// damaging slot takes `+4` and wins the tie-break outright, however the
-    /// stat-down slot scored.
-    #[test]
-    fn a_finishable_target_pushes_the_damaging_move_ahead_of_the_stat_drop() {
-        let dex = Dex::new();
-        let enemy = mon(MUDKIP, 5, vec![MoveId(33), GROWL]);
-        let mut player = mon(TORCHIC, 5, vec![SCRATCH]);
-        // Leave exactly the AI's own estimate of Tackle's damage, so
-        // `hp <= gBattleMoveDamage` holds by equality -- the boundary
-        // upstream tests with `<=`.
-        let estimate = estimated_damage(&dex, MoveId(33), &enemy, &player, 100)
-            .expect("Tackle is dex-resident");
-        let max_hp = player.stats().max_hp;
-        player.apply_damage(max_hp - estimate);
-        assert_eq!(player.current_hp(), estimate);
-
-        // simulatedRNG must come out as 100 for slot 0: `100 - (v % 16)`, so
-        // draw a multiple of 16.
-        let mut rng = SequenceRng::new([16, 16, 16, 16, 200, 0]);
-        let action =
-            choose_trainer_action(&dex, &enemy, &player, route103_flags(), 0, &mut rng).unwrap();
-        assert_eq!(action, EnemyAction::Move(0), "the KO move must be chosen");
-    }
-
-    /// `AI_SetupFirstTurn` (the `TRAINER_BRENDAN_ROUTE_103_TREECKO` flag)
-    /// draws once for a stat-down slot on turn 1 and never again.
-    #[test]
-    fn setup_first_turn_draws_only_on_turn_one_and_only_for_the_stat_move() {
-        let flags = AiFlags::CHECK_BAD_MOVE
-            .union(AiFlags::TRY_TO_FAINT)
-            .union(AiFlags::SETUP_FIRST_TURN);
-        let enemy = mon(TREECKO, 5, vec![POUND, LEER]);
-        let player = mon(MUDKIP, 5, vec![MoveId(33)]);
-
-        // Turn 1: 4 setup + 1 AI_SetupFirstTurn (Leer only) + 1 tie-break.
-        // The roll is >= 80, so Leer takes +2 and wins outright.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 200, 0]);
-        assert_eq!(
-            choose_trainer_action(&Dex::new(), &enemy, &player, flags, 0, &mut rng).unwrap(),
-            EnemyAction::Move(1)
-        );
-        assert_eq!(rng.draws(), 6);
-
-        // Turn 2 (`battleTurnCounter == 1`): `if_not_equal 0` ends the
-        // script before its roll, so only setup + tie-break remain.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
-        assert_eq!(
-            choose_trainer_action(&Dex::new(), &enemy, &player, flags, 1, &mut rng).unwrap(),
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                route_103_flags(),
+                FIRST_TURN,
+                &mut choose_pound,
+            )
+            .unwrap(),
             EnemyAction::Move(0)
         );
-        assert_eq!(rng.draws(), 5);
-    }
-
-    #[test]
-    fn a_spent_slot_is_never_chosen_and_costs_no_script_draw() {
-        let mut enemy = mon(MUDKIP, 5, vec![MoveId(33), GROWL]);
-        for _ in 0..enemy.moves()[0].pp {
-            enemy.deduct_pp(0).unwrap(); // spend Tackle entirely
-        }
-        let player = mon(TORCHIC, 5, vec![SCRATCH]);
-        // Only Growl is scored: 4 setup + 1 AI_CV_AttackDown + 1 tie-break.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 200, 0]);
+        assert_eq!(choose_pound.draws(), MAX_MON_MOVES + 1);
         assert_eq!(
-            choose_trainer_action(&Dex::new(), &enemy, &player, route103_flags(), 0, &mut rng)
-                .unwrap(),
-            EnemyAction::Move(1),
-            "the spent slot scores 0, so the surviving slot is the only candidate"
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                route_103_flags(),
+                FIRST_TURN,
+                &mut choose_leer,
+            )
+            .unwrap(),
+            EnemyAction::Move(1)
         );
-        assert_eq!(rng.draws(), 6);
+        assert_eq!(choose_leer.draws(), MAX_MON_MOVES + 1);
     }
 
-    /// `AI_CalcDmg` calls the *same* `CalculateBaseDamage` the real damage
-    /// step does (`battle_script_commands.c:1309`), so a Huge Power
-    /// attacker's estimate must agree with what
-    /// [`crate::hit::damage_before_roll`] actually deals at the same "no
-    /// crit, best (100%) roll" conditions [`estimated_damage`] itself
-    /// assumes (issue #391: before this fix the AI under-valued a Huge
-    /// Power attacker's physical move by half).
     #[test]
-    fn huge_power_estimated_damage_agrees_with_the_real_damage_step() {
+    fn a_finishable_target_makes_tackle_outscore_growl() {
         let dex = Dex::new();
-        let attacker =
-            BattlePokemon::new(&dex, SpeciesId(183), 5, Ivs::default(), 0, vec![MoveId(33)])
-                .unwrap()
-                .with_ability_slot(1); // Marill, Huge Power
-        assert_eq!(attacker.ability(), crate::ability::HUGE_POWER);
-        let defender = mon(7, 5, vec![MoveId(33)]); // Squirtle
+        let enemy = pokemon(MUDKIP, vec![TACKLE, GROWL]);
+        let mut player = pokemon(TORCHIC, vec![SCRATCH]);
+        let estimate = estimated_damage(&dex, TACKLE, &enemy, &player, PERCENT_SCALE).unwrap();
+        player.apply_damage(player.stats().max_hp - estimate);
+        assert_eq!(player.current_hp(), estimate);
 
-        // The real step: no crit (suppressed, matching AI_CalcDmg's reset
-        // gCritMultiplier = 1), then the best-case 85..=100% roll.
-        let mut no_draws = SequenceRng::new([]);
-        let raw = crate::hit::damage_before_roll(
+        let mut rng = rng_with_maximum_simulated_damage([
+            STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+            SELECT_FIRST_TIED_MOVE,
+        ]);
+
+        assert_eq!(
+            choose_trainer_action(
+                &dex,
+                &enemy,
+                &player,
+                route_103_flags(),
+                FIRST_TURN,
+                &mut rng,
+            )
+            .unwrap(),
+            EnemyAction::Move(0)
+        );
+    }
+
+    #[test]
+    fn setup_first_turn_scores_stat_moves_only_on_turn_one() {
+        let enemy = pokemon(TREECKO, vec![POUND, LEER]);
+        let player = pokemon(MUDKIP, vec![TACKLE]);
+        let mut first_turn_rng = rng_with_maximum_simulated_damage([
+            FIRST_TURN_SETUP_BONUS_THRESHOLD,
+            SELECT_FIRST_TIED_MOVE,
+        ]);
+
+        assert_eq!(
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                first_turn_setup_flags(),
+                FIRST_TURN,
+                &mut first_turn_rng,
+            )
+            .unwrap(),
+            EnemyAction::Move(1)
+        );
+        assert_eq!(first_turn_rng.draws(), MAX_MON_MOVES + 2);
+
+        let mut second_turn_rng = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+        assert_eq!(
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                first_turn_setup_flags(),
+                SECOND_TURN,
+                &mut second_turn_rng,
+            )
+            .unwrap(),
+            EnemyAction::Move(0)
+        );
+        assert_eq!(second_turn_rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    #[test]
+    fn a_spent_move_is_neither_scored_nor_selected() {
+        let mut enemy = pokemon(MUDKIP, vec![TACKLE, GROWL]);
+        spend_move(&mut enemy, 0);
+        let player = pokemon(TORCHIC, vec![SCRATCH]);
+        let mut rng = rng_with_maximum_simulated_damage([
+            STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+            SELECT_FIRST_TIED_MOVE,
+        ]);
+
+        assert_eq!(
+            choose_trainer_action(
+                &Dex::new(),
+                &enemy,
+                &player,
+                route_103_flags(),
+                FIRST_TURN,
+                &mut rng,
+            )
+            .unwrap(),
+            EnemyAction::Move(1)
+        );
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 2);
+    }
+
+    #[test]
+    fn huge_power_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let attacker = BattlePokemon::new(
             &dex,
-            MoveId(33),
+            MARILL,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap()
+        .with_ability_slot(HUGE_POWER_ABILITY_SLOT);
+        assert_eq!(attacker.ability(), crate::ability::HUGE_POWER);
+        let defender = pokemon(SQUIRTLE, vec![TACKLE]);
+
+        let critical_hits_suppressed = true;
+        let mut no_draws = SequenceRng::new([]);
+        let damage_before_roll = crate::hit::damage_before_roll(
+            &dex,
+            TACKLE,
             &attacker,
             &defender,
-            true,
+            critical_hits_suppressed,
             &mut no_draws,
         )
         .unwrap();
-        let mut best_roll = SequenceRng::new([0]);
-        let real = crate::damage::apply_damage_roll(raw.damage, &mut best_roll);
+        let mut best_damage_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+        let real_damage =
+            crate::damage::apply_damage_roll(damage_before_roll.damage, &mut best_damage_roll);
+        let estimated_damage =
+            estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
 
-        // The AI's estimate: `simulated_rng = 100` reproduces the same
-        // "no randomness" reading `Cmd_if_can_faint`/
-        // `Cmd_get_how_powerful_move_is` feed it on a `simulatedRNG` value
-        // of exactly 100.
-        let estimate = estimated_damage(&dex, MoveId(33), &attacker, &defender, 100).unwrap();
-
-        assert_eq!(
-            estimate, real,
-            "the AI's estimate and the real damage step must apply Huge \
-             Power's doubling identically"
-        );
+        assert_eq!(estimated_damage, real_damage);
     }
 }

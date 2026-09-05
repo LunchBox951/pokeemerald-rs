@@ -64,6 +64,7 @@ fn the_start_menu_does_not_open_mid_battle() {
     )
     .expect("Treecko with Pound is in the dex");
     let mut rng = Rng::new(0x00C0_FFEE);
+    let player_trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
     let battle = super::wild_encounter::start_wild_battle(
         lead,
         WildEncounter {
@@ -71,6 +72,7 @@ fn the_start_menu_does_not_open_mid_battle() {
             level: 2,
             slot: 0,
         },
+        player_trainer_id,
         &mut rng,
     )
     .expect("a Wurmple encounter is fightable");
@@ -149,8 +151,13 @@ fn the_start_menu_does_not_open_mid_first_battle() {
 
     let mut phase = new_game_phase();
     let mut rng = Rng::new(0x00C0_FFEE);
-    let battle = super::first_battle::start_first_battle(new_game::provisional_starter(), &mut rng)
-        .expect("the scripted first battle constructs from the provisional starter");
+    let player_trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+    let battle = super::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        player_trainer_id,
+        &mut rng,
+    )
+    .expect("the scripted first battle constructs from the provisional starter");
     phase.first_battle = Some(battle);
     assert!(phase.in_battle());
 

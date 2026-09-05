@@ -73,11 +73,6 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     );
 }
 
-/// A turn-in-place never enters transit -- `PlayerState::tick` is a
-/// documented no-op while `transit_frames` is `None`
-/// (`PlayerState::tick`'s own doc comment), so the unconditional tick
-/// [`advance_player_one_frame`] always runs afterward must not somehow
-/// start (or otherwise disturb) a transit a plain turn never begins.
 #[test]
 fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     let runtime = flat_runtime(5, 5);

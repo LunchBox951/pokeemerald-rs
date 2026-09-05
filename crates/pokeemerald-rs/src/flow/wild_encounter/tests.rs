@@ -105,6 +105,10 @@ const ENCOUNTER_SEED: u32 = 17;
 /// `SPECIES_WURMPLE`, slot 0 of Route 101's land table.
 const WURMPLE: SpeciesId = SpeciesId(290);
 
+/// A placeholder save-owner id for scenarios that exercise something other
+/// than opponent OT assignment (`opponent_ot_id_tests` pins that directly).
+const TEST_PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+
 #[test]
 fn the_documented_seed_really_produces_the_documented_draws() {
     // Pins the constant above against the generator itself, so a future
@@ -267,7 +271,7 @@ fn a_route_101_encounter_fights_a_full_battle_to_a_faint() {
     // Level-50 Treecko with Pound; the wild moveset comes from the real
     // learnset inside `start_wild_battle`.
     let lead = player_mon(277, 50, vec![MoveId(1)]);
-    let mut battle = start_wild_battle(lead, encounter, &mut rng)
+    let mut battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("a Route 101 Wurmple must be fightable");
     assert_eq!(battle.enemy().species(), WURMPLE);
     assert_eq!(battle.enemy().level(), 2);
@@ -481,7 +485,7 @@ fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
     let mut lead = player_mon(277, 50, vec![MoveId(1)]);
     lead.stages_mut().speed = StatStage::new(-2).unwrap();
 
-    let battle = start_wild_battle(lead, encounter, &mut rng)
+    let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("a Route 101 Wurmple must be fightable");
     assert_eq!(
         battle.player().stages().speed,
@@ -535,7 +539,7 @@ fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
     lead.volatiles_mut().set_focus_energy();
     lead.volatiles_mut().set_charge();
 
-    let battle = start_wild_battle(lead, encounter, &mut rng)
+    let battle = start_wild_battle(lead, encounter, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("a Route 101 Wurmple must be fightable");
     assert!(
         battle.player().volatiles().focus_energy,

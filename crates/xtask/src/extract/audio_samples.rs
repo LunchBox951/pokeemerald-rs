@@ -279,6 +279,17 @@ mod tests {
         assert_eq!(bytes, expected);
     }
 
+    /// The schema tags are owned by `crates/assets`'s `Sample` wire format, so
+    /// the expected bytes here are literals that fail if a mirror constant drifts.
+    #[test]
+    fn encoders_write_the_literal_schema_kind_tags() {
+        assert_eq!(encode_direct_sound(0, None, &[])[0], 0);
+        assert_eq!(
+            encode_programmable_wave(&[0u8; PROGRAMMABLE_WAVE_SIZE])[0],
+            1
+        );
+    }
+
     #[test]
     fn encode_programmable_wave_matches_the_documented_wire_format() {
         let mut table = [0u8; PROGRAMMABLE_WAVE_SIZE];
