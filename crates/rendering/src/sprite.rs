@@ -594,16 +594,11 @@ impl<'a> SpriteLayer<'a> {
     /// so this stays out of [`sample_local`](Self::sample_local) and defers
     /// to `sprite_affine.rs`, kept out of this already-large module.
     ///
-    /// mgba selects a distinct macro for affine mosaic,
-    /// `SPRITE_TRANSFORMED_MOSAIC_LOOP`, rather than the regular sprite
-    /// loop's pre-transform edge clamp: the vertical component is still the
-    /// screen-space block clamp both loops share (mgba snaps the *scanline*
-    /// before either loop runs), so `ly` reuses
-    /// [`MosaicSize::snap_local`]'s y component; the horizontal component
-    /// instead holds the *transformed* source position across a
-    /// screen-space block. At [`MosaicSize::NONE`] every column is its own
-    /// block, so `local_x` reduces to the raw `dx` mgba's non-mosaic
-    /// `SPRITE_TRANSFORMED_LOOP` would use.
+    /// The row snaps like a regular entry's ([`MosaicSize::snap_local`]);
+    /// the column holds the transformed source position across a block, and
+    /// a leading block that starts before the sprite's edge holds the
+    /// column one before it (the ledger's `oam_mosaic` reason). At
+    /// [`MosaicSize::NONE`] `local_x` is the raw `dx`.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -620,13 +615,7 @@ impl<'a> SpriteLayer<'a> {
     ) -> Texel {
         let (_, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
 
-        // mgba seeds the transformed accumulator at source position `inX - 1`
-        // (one column before the first drawn pixel, `software-obj.c:241`)
-        // and its mosaic loop only refreshes the held position at a block
-        // boundary (`:53,59-62`); a leading block whose screen-space origin
-        // falls before the sprite's own left edge never reaches a refresh
-        // point within it, so it keeps that seed (`local_x == -1`) instead
-        // of the (nonexistent, negative) block origin.
+        // `software-obj.c:241` seeds the held column at `inX - 1`.
         let entry_x = i32::from(entry.x());
         let block_origin_x = mosaic.snap(x, y).0 as i32;
         let local_x = if block_origin_x >= entry_x {
