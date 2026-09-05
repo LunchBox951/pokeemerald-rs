@@ -172,11 +172,13 @@ pub(crate) struct OverworldPhase {
     /// [`OverworldScene::compose`]'s `tick` for tileset tile animation
     /// cadence -- this port's counterpart to
     /// [`crate::flow::AnimatedTitle`]'s own `tick` field. Incremented once
-    /// per [`Self::step`] call (module docs on why that, not
-    /// [`Self::compose_frame`], is the right place -- background tile
-    /// animation keeps running even while [`Self::dialog`] freezes movement,
-    /// mirroring upstream's `UpdateTilesetAnimations` running every `VBlank`
-    /// regardless of message-box state) and reset to 0 in
+    /// per frame by [`Self::advance_tileset_anim_tick`], called from both
+    /// [`Self::step`] and [`Self::advance_start_menu_frame`] (module docs on
+    /// why that, not [`Self::compose_frame`], is the right place --
+    /// background tile animation keeps running even while [`Self::dialog`]
+    /// or an open start menu freezes movement, mirroring upstream's
+    /// `UpdateTilesetAnimations` running every `VBlank` regardless of
+    /// message-box state) and reset to 0 in
     /// [`Self::load_default`]/[`Self::warp_to`] only, matching upstream's
     /// own `InitTilesetAnimations` reset points (full map loads,
     /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
@@ -387,6 +389,10 @@ pub(crate) struct OverworldPhase {
     /// [`Self::rival_battle`] (issue #248): cleared at trigger time, set
     /// only on a real reported outcome.
     rival_battle_outcome: Option<battle::BattleOutcome>,
+    /// The trainer [`Self::rival_battle`] is fought against, held from
+    /// battle start to battle end so the win can set its defeated flag;
+    /// [`Self::sight_trainer_id`]'s sibling.
+    rival_trainer_id: Option<assets::trainers::TrainerId>,
     /// A Route 103 sight-trainer battle currently being played out, if any
     /// (issue #264) -- [`Self::rival_battle`]'s sibling, in its own field for
     /// the same reason: [`sight_trainer_trigger`] starts it via
@@ -670,6 +676,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
@@ -818,6 +825,7 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            rival_trainer_id: None,
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,

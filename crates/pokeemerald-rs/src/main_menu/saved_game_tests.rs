@@ -9,7 +9,7 @@
 //! [`super::tests`]', imported rather than duplicated, so both lists are
 //! always exercised against exactly the same pack.
 
-use super::tests::{load_synthetic_scene_of, window_of};
+use super::tests::{load_synthetic_scene_of, load_synthetic_scene_of_with_window_frame, window_of};
 use super::{
     highlight_rect, ItemWindow, MainMenuItem, MainMenuScene, MainMenuType, HEADER_TEXT_BG,
 };
@@ -140,6 +140,27 @@ fn the_saved_game_menu_draws_three_boxes_at_the_upstream_rows() {
         fb.pixel(18, 34),
         Some(HEADER_TEXT_BG),
         "the saved-game list has CONTINUE's own interior there instead"
+    );
+}
+
+/// `MainMenu_FormatSavegameText`'s own box, and every other main-menu box,
+/// is bordered with `GetWindowFrameTilesPal(gSaveBlock2Ptr->
+/// optionsWindowFrameType)` (`main_menu.c:2191-2193`): the frame the player
+/// chose in the options menu, recovered from the save this menu is showing
+/// `CONTINUE` for -- not always `WINDOW_FRAME_TYPE_0`.
+#[test]
+fn the_saved_game_menu_draws_the_saves_own_window_frame() {
+    let scene = load_synthetic_scene_of_with_window_frame(MainMenuType::SavedGame, 5);
+    let fb = scene.compose();
+
+    // CONTINUE's top border row is tile row 0 (`MENU_TOP_WIN2` 1, minus the
+    // border's own tile) -> pixels 0..8, and CONTINUE is selected, so the
+    // border shows its frame's palette undarkened.
+    let frame5_red = rendering::Bgr555::from_channels(31, 0, 0).to_rgb888();
+    assert_eq!(
+        fb.pixel(18, 2),
+        Some(frame5_red),
+        "a save whose optionsWindowFrameType is 5 must draw frame 5's border"
     );
 }
 

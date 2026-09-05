@@ -50,6 +50,10 @@ pub const CHAR_BARD_WORD_DELIMIT: u8 = 0x37;
 /// Extended-control subcode for a one-byte frame delay.
 pub const EXT_CTRL_CODE_PAUSE: u8 = 0x08;
 
+/// Extended-control subcode that waits for a fresh A/B press before resuming
+/// (`pokeemerald/src/text.c:1013-1022,1167-1170`).
+pub const EXT_CTRL_CODE_PAUSE_UNTIL_PRESS: u8 = 0x09;
+
 /// Extended-control subcode that selects the Japanese font.
 pub const EXT_CTRL_CODE_JPN: u8 = 0x15;
 
@@ -796,6 +800,7 @@ mod tests {
         assert_eq!(EXT_CTRL_CODE_FONT, 0x06);
         assert_eq!(EXT_CTRL_CODE_RESET_FONT, 0x07);
         assert_eq!(EXT_CTRL_CODE_PAUSE, 0x08);
+        assert_eq!(EXT_CTRL_CODE_PAUSE_UNTIL_PRESS, 0x09);
         assert_eq!(EXT_CTRL_CODE_PLAY_BGM, 0x0B);
         assert_eq!(EXT_CTRL_CODE_ESCAPE, 0x0C);
         assert_eq!(EXT_CTRL_CODE_SHIFT_RIGHT, 0x0D);
@@ -863,6 +868,7 @@ mod tests {
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_BGM), 3);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_SE), 3);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_JPN), 1);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PAUSE_UNTIL_PRESS), 1);
         // RESUME_MUSIC (0x18) pinned by raw byte: it must stay zero-argument,
         // and no argument-bearing match arm may absorb it.
         assert_eq!(ext_ctrl_code_len(0x18), 1);
@@ -892,6 +898,31 @@ mod tests {
                 Token::End,
             ]
         );
+    }
+
+    /// `EXT_CTRL_CODE_PAUSE_UNTIL_PRESS` takes no argument bytes: the
+    /// following byte belongs to the next token, not this one.
+    #[test]
+    fn pause_until_press_decodes_with_zero_args() {
+        let bytes = [
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_PAUSE_UNTIL_PRESS,
+            char_to_byte('A').unwrap(),
+            EOS,
+        ];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_PAUSE_UNTIL_PRESS,
+                    args: vec![],
+                },
+                Token::Char('A'),
+                Token::End,
+            ]
+        );
+        assert_eq!(encode(&toks).unwrap(), bytes);
     }
 
     #[test]

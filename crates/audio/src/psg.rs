@@ -189,10 +189,13 @@ impl Sweep {
             return SweepResult::Disable;
         };
 
-        if self.shift == 0 {
-            // A shift-0 calculation still overflows and disables the channel
-            // above; only the write-back of a successful calculation is
-            // gated on a non-zero shift (mgba/src/gb/audio.c:975-986).
+        // The increase branch's write-back is gated on a non-zero shift; the
+        // decrease branch always writes back (mgba/src/gb/audio.c:965-989).
+        let writes_back = match self.direction {
+            SweepDirection::Increase => self.shift != 0,
+            SweepDirection::Decrease => true,
+        };
+        if !writes_back {
             return SweepResult::Unchanged;
         }
 
@@ -543,9 +546,15 @@ mod tests {
     }
 
     #[test]
-    fn zero_shift_sweep_ticks_without_changing_frequency() {
+    fn zero_shift_upward_sweep_ticks_without_changing_frequency() {
         let mut sweep = sweep(1, SweepDirection::Increase, 0, 100);
         assert_eq!(sweep.tick(), SweepResult::Unchanged);
+    }
+
+    #[test]
+    fn zero_shift_downward_sweep_writes_back_to_zero() {
+        let mut sweep = sweep(1, SweepDirection::Decrease, 0, 100);
+        assert_eq!(sweep.tick(), SweepResult::Changed(0));
     }
 
     #[test]

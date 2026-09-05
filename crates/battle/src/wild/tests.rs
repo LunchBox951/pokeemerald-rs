@@ -280,8 +280,8 @@ fn a_full_moveset_drops_the_oldest_move_first() {
             .expect("species is in the extracted learnset table");
         let mut all: Vec<MoveId> = Vec::new();
         for entry in learnset {
-            if entry.level <= 100 && !all.contains(&entry.move_id) {
-                all.push(entry.move_id);
+            if entry.level() <= 100 && !all.contains(&entry.move_id()) {
+                all.push(entry.move_id());
             }
         }
         assert_eq!(

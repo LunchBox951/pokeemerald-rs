@@ -175,6 +175,20 @@ const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
     }
 }
 
+/// `gSaveBlock2Ptr->optionsWindowFrameType` (`main_menu.c:2191-2193`), as a
+/// pure decision the `Title` -> `MainMenu` transition acts on -- so which
+/// border a given boot verdict produces is pinned by a pack-less test too,
+/// the same [`menu_type_for`] already is.
+const fn window_frame_for(saved: &SavedGame) -> u8 {
+    if saved.status.boot_clears_save_block2() {
+        // `SetDefaultOptions` (`new_game.c:94`) puts the cleared block's
+        // frame back to 0 even when a checksum-valid block was recovered.
+        0
+    } else {
+        saved.block2.options_window_frame_type
+    }
+}
+
 /// Which of upstream's `ACTION_*` values confirming `item` maps to
 /// (`HandleMainMenuInput`'s per-menu-type action switch,
 /// `main_menu.c:955-983`), restricted to the actions this port can perform.
@@ -335,7 +349,10 @@ pub(crate) fn advance_scene(
                 // observable result is identical: the menu shown is the one
                 // the save on disk selects.
                 let saved = save_slot.load();
-                match main_menu::load_default(menu_type_for(&saved)) {
+                match main_menu::load_default_with_window_frame(
+                    menu_type_for(&saved),
+                    window_frame_for(&saved),
+                ) {
                     Ok(menu) => {
                         let state = MainMenuState { scene: menu, saved };
                         let frame = state.scene.compose_frame();

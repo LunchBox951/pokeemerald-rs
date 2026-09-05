@@ -6,9 +6,14 @@ use crate::palette::Palette;
 use crate::sprite::Texel;
 use crate::tile::{BitDepth, Tileset};
 
-/// Samples an affine sprite at a bounding-box-local pixel.
+/// Samples an affine sprite at a footprint-local pixel.
 ///
-/// `dx` and `dy` must be within [`OamEntry::bounding_box`].
+/// `dy` must be within [`OamEntry::bounding_box`]. `local_x` is usually the
+/// same kind of bounding-box column, but a mosaic-enabled caller may also
+/// pass `-1` (a leading mosaic block held one column left of the sprite's
+/// edge) or a column past the bounding box (a mosaic-extended trailing
+/// block); both resolve through the ordinary out-of-source check below
+/// instead of a separate pre-transform bound.
 /// Missing matrices and transformed coordinates outside the nominal texture
 /// yield [`Texel::Outside`].
 ///
@@ -19,7 +24,7 @@ use crate::tile::{BitDepth, Tileset};
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    reason = "callers provide in-bounds coordinates, sprite bounding boxes are at most 128 by 128, and transformed coordinates are checked before unsigned conversion"
+    reason = "dy is caller-guaranteed in-bounds, sprite bounding boxes are at most 128 by 128, and transformed coordinates are checked before unsigned conversion"
 )]
 pub(crate) fn sample_texel(
     entry: &OamEntry,
@@ -27,7 +32,7 @@ pub(crate) fn sample_texel(
     tileset_4bpp: &Tileset,
     tileset_8bpp: &Tileset,
     palette: &Palette,
-    dx: usize,
+    local_x: i32,
     dy: usize,
 ) -> Texel {
     const FIXED_POINT_HALF: i32 = AffineMatrix::ONE as i32 / 2;
@@ -46,7 +51,7 @@ pub(crate) fn sample_texel(
 
     let (bounding_width, bounding_height) = entry.bounding_box();
     let screen_from_center = (
-        dx as i32 - bounding_width as i32 / 2,
+        local_x - bounding_width as i32 / 2,
         dy as i32 - bounding_height as i32 / 2,
     );
     let transformed = matrix.apply(screen_from_center.0, screen_from_center.1);
