@@ -57,7 +57,10 @@
 //!    fadedefaultbgm
 //!    ```
 //!
-//!    **Only `removeobject`'s real effect is ported.** `removeobject`
+//!    **Of `RivalEnd`'s own eight lines, only `removeobject`'s real effect
+//!    is ported** (the generic trainer-defeated flag below is a *separate*
+//!    win effect, from `CB2_EndTrainerBattle` rather than from this
+//!    script). `removeobject`
 //!    resolves to `RemoveObjectEventByLocalIdAndMap` ->
 //!    `RemoveObjectEvent`, whose only *persistent* observable trace is
 //!    `FlagSet(GetObjectEventFlagIdByObjectEventId(...))`
@@ -79,6 +82,12 @@
 //!    into. All recorded on the ledger's `Route103_EventScript_RivalEnd`
 //!    coverage, not silently dropped.
 //!
+//! # The generic trainer-defeated flag
+//!
+//! A win also sets `TRAINER_FLAGS_START + trainerId`: `CB2_EndTrainerBattle`'s
+//! non-defeat branch calls `SetBattledTrainersFlags`
+//! (`src/battle_setup.c:1245-1250`, `:1340-1348`) before `RivalEnd` runs.
+//!
 //! # The loss decision (issue #261: now the real one)
 //!
 //! Upstream's `trainerbattle_no_intro` never returns control to
@@ -87,17 +96,21 @@
 //! `IsPlayerDefeated` branch (`src/battle_setup.c:1327-1338`) instead routes
 //! to `CB2_WhiteOut`, which halves the player's money, heals the party, and
 //! warps to the last-used Pokémon Center -- so `RivalEnd`, and therefore
-//! `removeobject`, is simply never reached. [`advance_route103_rival_battle_frame`]
-//! now reproduces exactly that ordering: set [`FLAG_HIDE_ROUTE_103_RIVAL`] on
-//! [`battle::BattleOutcome::PlayerWon`] (`RivalEnd`'s own real effect,
-//! unaffected by this issue), or call
-//! [`super::white_out::OverworldPhase::white_out`] on
+//! `removeobject`, is simply never reached, and neither is
+//! `SetBattledTrainersFlags`, which sits in the non-defeat branch
+//! `CB2_EndTrainerBattle` never takes on a loss.
+//! [`advance_route103_rival_battle_frame`] now reproduces exactly that
+//! ordering: set both [`FLAG_HIDE_ROUTE_103_RIVAL`] and
+//! [`TRAINER_FLAGS_START`]` + `[`OverworldPhase::rival_trainer_id`] on
+//! [`battle::BattleOutcome::PlayerWon`] ("The generic trainer-defeated flag"
+//! section above, and `RivalEnd`'s own real effect, unaffected by this
+//! issue), or call [`super::white_out::OverworldPhase::white_out`] on
 //! [`battle::BattleOutcome::PlayerLost`] -- **not both**, mirroring upstream's
 //! own exclusive branches (`CB2_EndTrainerBattle`'s `if`/`else if`, module
-//! docs). The rival's own hide flag stays clear on a loss exactly as it does
-//! upstream (the branch that would set it is never reached), but the
-//! player is no longer standing next to it to find out: `white_out` warps
-//! them back to the last heal location before the frame ends, the same
+//! docs). Both flags stay clear on a loss exactly as they do upstream (the
+//! branch that would set either is never reached), but the player is no
+//! longer standing next to the rival to find out: `white_out` warps them
+//! back to the last heal location before the frame ends, the same
 //! displacement upstream's own white-out produces.
 //!
 //! **Formerly a fail-closed dead end, now fully retired.** Before issue
@@ -196,6 +209,11 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `Route103_EventScript_RivalEnd`'s `removeobject` actually performs
 /// (module docs).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+/// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): base of the
+/// per-trainer defeated-flag range `SetBattledTrainersFlags` writes
+/// (`src/battle_setup.c:1245-1250`); transcribed like [`VAR_OBJ_GFX_ID_0`].
+const TRAINER_FLAGS_START: u16 = 0x500;
 
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
 /// transcribed, the same "own transcription, not a shared constant"
@@ -329,6 +347,7 @@ impl OverworldPhase {
     /// screen only moves the refusal ahead of the party build's draws.
     pub(super) fn begin_route103_rival_battle(&mut self) {
         self.rival_battle_outcome = None;
+        self.rival_trainer_id = None;
         eprintln!(
             "route 103 rival: interaction trigger reached -- starting the scripted rival \
              battle (issue #248)"
@@ -365,6 +384,7 @@ impl OverworldPhase {
             Ok(battle) => {
                 self.party_lead = None;
                 self.rival_battle = Some(battle);
+                self.rival_trainer_id = Some(trainer);
                 // Mirrors `begin_first_battle`'s own
                 // `RestartWildEncounterImmunitySteps` call
                 // (`CB2_StartFirstBattle`-equivalent reasoning): unobservable
@@ -382,21 +402,22 @@ impl OverworldPhase {
     /// one -- the frame-ownership gate [`super::step::OverworldPhase::step`]
     /// defers to, mirroring
     /// [`super::first_battle_trigger::OverworldPhase::advance_first_battle_frame`]'s
-    /// shape with one addition: on
-    /// [`battle::BattleOutcome::PlayerWon`], sets
-    /// [`FLAG_HIDE_ROUTE_103_RIVAL`] -- the one load-bearing write module
-    /// docs' "The loss decision (issue #261: now the real one)" section
-    /// explains, and does *not* set it on any other outcome, on purpose.
+    /// shape with two additions on
+    /// [`battle::BattleOutcome::PlayerWon`]: sets
+    /// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's
+    /// [`TRAINER_FLAGS_START`] flag, on no other outcome -- matching
+    /// `CB2_EndTrainerBattle`'s non-defeat/defeat `if`/`else if` split.
     pub(super) fn advance_route103_rival_battle_frame(&mut self) -> bool {
         if self.rival_battle.is_none() {
             return false;
         }
-        if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
+        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.rival_battle,
             &mut self.party_lead,
             &mut self.save1.money,
             &mut self.rng,
-        ) {
+        );
+        if let Some(outcome) = outcome {
             eprintln!("route 103 rival: ended -- {outcome:?}");
             self.rival_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
@@ -405,6 +426,18 @@ impl OverworldPhase {
                         "route 103 rival: couldn't set FLAG_HIDE_ROUTE_103_RIVAL ({error}) -- \
                          the rival may remain interactable"
                     );
+                }
+                if let Some(trainer_id) = self.rival_trainer_id {
+                    if let Err(error) = self
+                        .save1
+                        .event_data
+                        .flag_set(TRAINER_FLAGS_START + trainer_id.0)
+                    {
+                        eprintln!(
+                            "route 103 rival: couldn't set trainer {trainer_id:?}'s defeated \
+                             flag ({error}) -- it may re-trigger"
+                        );
+                    }
                 }
             }
             // `CB2_EndTrainerBattle`'s `IsPlayerDefeated` branch
@@ -415,6 +448,15 @@ impl OverworldPhase {
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
+        }
+        // Cleared whenever the battle slot itself empties, not only on a
+        // reported outcome: `advance_npc_trainer_battle` can also end the
+        // battle with no outcome at all, on a failed turn
+        // (`npc_trainer_battle::finalize_battle_turn`'s own `turn_failed`
+        // abort) -- an id retained past that point would be stale the
+        // instant a fresh trigger reuses this field.
+        if self.rival_battle.is_none() {
+            self.rival_trainer_id = None;
         }
         true
     }

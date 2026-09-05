@@ -19,16 +19,16 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
     };
     let mut moves: Vec<MoveId> = Vec::with_capacity(MAX_MON_MOVES);
     for entry in learnset {
-        if entry.level > level {
+        if entry.level() > level {
             break;
         }
-        if moves.contains(&entry.move_id) {
+        if moves.contains(&entry.move_id()) {
             continue;
         }
         if moves.len() == MAX_MON_MOVES {
             moves.remove(0);
         }
-        moves.push(entry.move_id);
+        moves.push(entry.move_id());
     }
     moves
 }
