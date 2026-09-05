@@ -99,14 +99,12 @@
 
 mod dest;
 
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::SystemTime;
 
 use rom_import::{ImportError, ImportedPack};
 
@@ -446,7 +444,7 @@ fn import_to_with(
         });
     }
 
-    let temp_name = temp_name();
+    let temp_name = dest.temp_name();
     // Exclusive, and before the import runs: every byte is written through
     // this one handle, so nothing that happens during the import can make
     // the write land through another file. The directory entry itself is
@@ -658,43 +656,6 @@ fn undo_created_directories(created: &[PathBuf]) {
 /// exists; the rest says who left it there, on the rare occasion a crash
 /// between the create and the publish leaves one behind.
 const TEMP_PREFIX: &str = ".pokeemerald-rs-import";
-
-/// The name of the temporary file the pack is built in, beside the pack.
-///
-/// The file is created exclusively ([`Dest::create_new`]), so the name has
-/// one job: be one nothing else already
-/// holds. A process id alone is not that. It repeats across PID
-/// namespaces sharing one mounted directory, it is recycled after a kill
-/// that left a stale temporary file behind, and `/proc` hands it to
-/// anyone on the machine — so in a pack directory another account can
-/// write to, `.pokeemerald-rs-import.<pid>.tmp` is a name an attacker can
-/// pre-create as a link to a file of the player's. The clock's
-/// nanoseconds and a per-process counter go in with it: no pre-created
-/// name matches one, and covering a second of them is a billion files.
-///
-/// A collision that happens anyway is a refused import naming the path,
-/// never a write through someone else's link, and the next run picks a
-/// different name.
-///
-/// What is deliberately *not* in it is the pack's own name. A 240-byte
-/// basename is valid on every filesystem this ships to, and prefixing a
-/// temporary name with the whole of it pushed past the 255-byte limit for
-/// one component: `ENAMETOOLONG` on a name the player never typed, leaving
-/// a perfectly valid destination impossible to import to. A fixed prefix
-/// and three numbers is bounded whatever the pack is called, and the
-/// destination is not what makes the name unique anyway.
-fn temp_name() -> OsString {
-    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
-    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    OsString::from(format!(
-        "{TEMP_PREFIX}.{}.{nanos:x}.{sequence:x}.tmp",
-        std::process::id()
-    ))
-}
 
 #[cfg(test)]
 mod tests;

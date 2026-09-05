@@ -14,8 +14,8 @@ use rom_import::{ImportError, ImportedPack};
 
 use super::dest::Dest;
 use super::{
-    directories_to_create, import_to, import_to_with, pack_directory, pack_name, temp_name,
-    ImportOutcome, ImportRomError,
+    directories_to_create, import_to, import_to_with, pack_directory, pack_name, ImportOutcome,
+    ImportRomError,
 };
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
@@ -405,10 +405,12 @@ fn the_temp_name_is_a_bounded_name_in_the_packs_own_directory() {
     assert_eq!(pack_directory(pack_path), Path::new("/data/pokeemerald-rs"));
     let name = pack_name(pack_path).expect("the path names a file");
     assert_eq!(name, "pokeemerald.pack");
+    let dir = TempDir::new("temp-name-shape");
+    let dest = Dest::open(&dir.path).expect("the directory opens");
     // A basename, never a path: it is resolved against the pinned
     // directory, and the rename that publishes it stays inside that one
     // directory, which is what makes it atomic.
-    let temp = temp_name();
+    let temp = dest.temp_name();
     let temp = temp.to_str().expect("a UTF-8 name stays UTF-8");
     assert!(
         !temp.contains(std::path::MAIN_SEPARATOR),
@@ -434,8 +436,10 @@ fn no_two_temp_names_are_the_same() {
     // refused import. It also has to be a name nobody watching the process
     // can pre-create: the process id is on its own public and reusable,
     // which is why it is not the whole name.
-    let first = temp_name();
-    let second = temp_name();
+    let dir = TempDir::new("temp-name-uniqueness");
+    let dest = Dest::open(&dir.path).expect("the directory opens");
+    let first = dest.temp_name();
+    let second = dest.temp_name();
 
     assert_ne!(first, second);
     let predictable = format!("{}.{}.tmp", super::TEMP_PREFIX, std::process::id());

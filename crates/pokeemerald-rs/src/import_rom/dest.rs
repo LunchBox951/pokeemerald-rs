@@ -7,10 +7,52 @@
 //! [`super`]'s docs for why re-walking them is the hole this closes, and
 //! for what stays open off Unix.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
+
+// `import_rom::TEMP_PREFIX`'s own doc comment states what this is for.
+use super::TEMP_PREFIX;
+
+/// Build a fresh temporary pack name from `sequence`, this destination's own
+/// naming counter (`(oop-boundaries)`: scoped to the one [`Dest`] doing the
+/// import, not a process-wide global).
+///
+/// The file [`Dest::create_new`] makes from this name is created
+/// exclusively, so the name has one job: be one nothing else already holds.
+/// A process id alone is not that. It repeats across PID namespaces sharing
+/// one mounted directory, it is recycled after a kill that left a stale
+/// temporary file behind, and `/proc` hands it to anyone on the machine --
+/// so in a pack directory another account can write to,
+/// `.pokeemerald-rs-import.<pid>.tmp` is a name an attacker can pre-create
+/// as a link to a file of the player's. The clock's nanoseconds and this
+/// destination's own counter go in with it: no pre-created name matches
+/// one, and covering a second of them is a billion files.
+///
+/// A collision that happens anyway is a refused import naming the path,
+/// never a write through someone else's link, and the next run picks a
+/// different name.
+///
+/// What is deliberately *not* in it is the pack's own name. A 240-byte
+/// basename is valid on every filesystem this ships to, and prefixing a
+/// temporary name with the whole of it pushed past the 255-byte limit for
+/// one component: `ENAMETOOLONG` on a name the player never typed, leaving
+/// a perfectly valid destination impossible to import to. A fixed prefix
+/// and three numbers is bounded whatever the pack is called, and the
+/// destination is not what makes the name unique anyway.
+fn next_temp_name(sequence: &AtomicU64) -> OsString {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let sequence = sequence.fetch_add(1, Ordering::Relaxed);
+    OsString::from(format!(
+        "{TEMP_PREFIX}.{}.{nanos:x}.{sequence:x}.tmp",
+        std::process::id()
+    ))
+}
 
 /// Get `path`'s own directory entries onto the storage device, or give up.
 ///
@@ -54,6 +96,8 @@ pub(super) fn sync_directory(path: &Path) {
 pub(super) struct Dest {
     /// The open directory. Held for the life of the import.
     dir: std::os::fd::OwnedFd,
+    /// This destination's own temporary-name counter -- [`Self::temp_name`].
+    temp_sequence: AtomicU64,
 }
 
 #[cfg(unix)]
@@ -75,7 +119,17 @@ impl Dest {
                 | rustix::fs::OFlags::CLOEXEC,
             rustix::fs::Mode::empty(),
         )?;
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            temp_sequence: AtomicU64::new(0),
+        })
+    }
+
+    /// The name of the temporary file this import's pack is built in,
+    /// beside the pack -- see [`next_temp_name`] for why it looks the way
+    /// it does.
+    pub(super) fn temp_name(&self) -> OsString {
+        next_temp_name(&self.temp_sequence)
     }
 
     /// Whether `name`, inside this directory, is the open file `rom`.
@@ -193,6 +247,8 @@ impl Dest {
 pub(super) struct Dest {
     /// The directory path, re-resolved on every operation.
     dir: std::path::PathBuf,
+    /// This destination's own temporary-name counter -- [`Self::temp_name`].
+    temp_sequence: AtomicU64,
 }
 
 #[cfg(not(unix))]
@@ -212,7 +268,15 @@ impl Dest {
         }
         Ok(Self {
             dir: dir.to_path_buf(),
+            temp_sequence: AtomicU64::new(0),
         })
+    }
+
+    /// The name of the temporary file this import's pack is built in,
+    /// beside the pack -- see [`next_temp_name`] for why it looks the way
+    /// it does.
+    pub(super) fn temp_name(&self) -> OsString {
+        next_temp_name(&self.temp_sequence)
     }
 
     /// Whether `name`, inside this directory, is the open file `rom`.
