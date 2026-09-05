@@ -390,56 +390,20 @@ impl<'a> SpriteLayer<'a> {
         })
     }
 
-    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`:
-    /// [`Texel::Outside`] if `(x, y)` is beyond the sprite's footprint (or
-    /// its tile is absent from the tileset), [`Texel::Transparent`] on a
+    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`, honoring
+    /// its OBJ mosaic if set: [`Texel::Outside`] beyond the sprite's footprint
+    /// (or with its tile absent from the tileset), [`Texel::Transparent`] on a
     /// palette-index-0 texel, else [`Texel::Opaque`] with the resolved color.
     ///
-    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`, honoring
-    /// its OBJ mosaic if set: [`Texel::Outside`] if `(x, y)` is beyond the
-    /// sprite's footprint (or its tile is absent from the tileset),
-    /// [`Texel::Transparent`] on a palette-index-0 texel, else
-    /// [`Texel::Opaque`] with the resolved color.
-    ///
-    /// A composition of [`footprint`](Self::footprint) (does the *raw*
-    /// coordinate land on the sprite, or its mosaic-extended trailing block,
-    /// and where) and a per-affine-mode sample of the texel at that
-    /// footprint-local offset. Keeping the footprint test on the raw
-    /// coordinate (rather than a screen-space-snapped one) is what avoids
-    /// the pre-fix transparent leading band when the sprite's top/left edge
-    /// is not block-aligned — the block straddling the edge now replicates
-    /// or extends the edge instead of being discarded `(behavioral-fidelity)`.
-    /// Symmetrically, `footprint` extends the raw *right* edge out to the
-    /// next H mosaic boundary ([`MosaicSize::round_trailing_edge`]) so the
-    /// trailing partial block also finishes instead of being cut short at
-    /// the raw sprite edge. Only an entry with its own OBJ mosaic bit set
-    /// gets either extension — a non-mosaic entry always uses
-    /// [`MosaicSize::NONE`], at which both are a no-op.
-    ///
-    /// An [`ObjMode::Window`] entry keeps vertical OBJ mosaic but not
-    /// horizontal: mgba snaps the *source row* before dispatch, keyed only
-    /// on the sprite's own mosaic bit
-    /// (`GBAVideoSoftwareRendererPreprocessSpriteLayer`,
-    /// video-software.c:1027,1042-1050) — never on `FLAG_OBJWIN` — but then
-    /// selects the plain, non-block-holding sprite loop whenever
-    /// `FLAG_OBJWIN` is set, for both Regular and affine sprites
-    /// (software-obj.c:287-288/303-304 affine, :344-345/360-361 regular).
-    /// That plain loop also never clamps its column to the bounding box
-    /// (mgba's raw `inX`/`localX` walk), so [`footprint`](Self::footprint)'s
-    /// mosaic-rounded trailing extension (still computed unconditionally,
-    /// before mgba's `FLAG_OBJWIN` dispatch — software-obj.c:233-239
-    /// affine, :320-325 regular) reaches sampling unclamped:
-    /// [`MosaicSize::vertical_only`] keeps the vertical row snap while
-    /// leaving every sampled column exactly where `footprint` put it.
-    ///
-    /// A [`Regular`](AffineMode::Regular) entry otherwise snaps the
-    /// mosaic-block origin back into the footprint before sampling
-    /// ([`MosaicSize::snap_local`]), matching mgba's `SPRITE_MOSAIC_LOOP`
-    /// edge clamp. An affine entry instead holds the *transformed* source
-    /// position across a block — see
-    /// [`sample_affine_local`](Self::sample_affine_local), which mgba
-    /// selects through a distinct macro rather than sharing the regular
-    /// loop's clamp.
+    /// [`footprint`](Self::footprint) tests the raw coordinate and extends a
+    /// mosaic entry's trailing edge to the next block boundary. A
+    /// [`Regular`](AffineMode::Regular) entry then snaps the block origin
+    /// back into the footprint ([`MosaicSize::snap_local`]), an affine entry
+    /// holds the transformed source position across the block
+    /// ([`sample_affine_local`](Self::sample_affine_local)), and an
+    /// [`ObjMode::Window`] entry keeps only the vertical snap
+    /// ([`MosaicSize::vertical_only`]). The upstream contract behind each
+    /// branch is the ledger's `oam_mosaic` reason.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
