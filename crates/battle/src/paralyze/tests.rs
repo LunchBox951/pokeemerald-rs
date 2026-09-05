@@ -183,3 +183,23 @@ fn a_limber_defender_reports_the_limber_protected_outcome() {
          distinct from the type-immunity exit"
     );
 }
+
+/// `SPECIES_RALTS`: Psychic, and Synchronize in its primary ability slot.
+const RALTS: SpeciesId = SpeciesId(392);
+
+#[test]
+fn a_synchronize_defender_is_refused_before_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, RALTS, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), assets::AbilityId::SYNCHRONIZE);
+    let mut rng = SequenceRng::new([0]);
+    let refused =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    assert_eq!(
+        refused,
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE),
+        "the unmodelled MOVEEND_SYNCHRONIZE_TARGET reflection fails closed"
+    );
+    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+}

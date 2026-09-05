@@ -12,7 +12,9 @@
 
 use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE};
+use battle::{
+    Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE,
+};
 
 /// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
@@ -452,4 +454,60 @@ fn a_surviving_paralysed_winner_keeps_its_status_after_the_opponent_faints() {
         Status1::Paralysed,
         "the winner did not faint, so its own paralysis outlives the win"
     );
+}
+
+/// `SPECIES_RALTS`: Psychic (not immune to Thunder Wave), **Synchronize** in
+/// its primary ability slot, and a Route 102 wild encounter.
+const RALTS: u16 = 392;
+
+#[test]
+fn thunder_wave_against_a_synchronize_target_does_not_leave_the_attacker_unaffected() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::SYNCHRONIZE,
+        "fixture sanity: the primary slot fields Synchronize"
+    );
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let Ok(events) = battle.take_turn(PlayerAction::UseMove(0), &mut rng) else {
+        // Refusing the interaction outright also satisfies this contract.
+        return;
+    };
+    assert!(
+        !(battle.enemy().status1() == Status1::Paralysed
+            && battle.player().status1() == Status1::Healthy),
+        "Synchronize passes the paralysis back to the battler that inflicted it, so a landed \
+         Thunder Wave cannot leave the attacker healthy: {events:?}"
+    );
+}
+
+/// The boundary #783 draws around Synchronize: the reflection at
+/// `MOVEEND_SYNCHRONIZE_TARGET` is unmodelled, so the pick is refused where
+/// every other unplayable pick is — before the turn's first draw.
+#[test]
+fn a_synchronize_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let pp_before = battle.player().moves()[0].pp;
+    let draws_before = rng.draws();
+
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap_err();
+
+    assert_eq!(
+        rejected.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE)
+    );
+    assert!(rejected.events().is_empty());
+    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
+    assert_eq!(battle.player().moves()[0].pp, pp_before, "no PP is spent");
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+    assert_eq!(battle.player().status1(), Status1::Healthy);
 }

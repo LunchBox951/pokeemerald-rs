@@ -69,6 +69,31 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     ensure_resolvable_effect(dex, move_id, is_paralyze_effect)
 }
 
+/// Refuses an [`EFFECT_PARALYZE`] move aimed at a Synchronize holder, whose
+/// reflection back onto the attacker this slice does not model.
+///
+/// `MOVEEND_SYNCHRONIZE_TARGET` (`src/battle_script_commands.c:4275`-`:4277`)
+/// hands the status the infliction armed at `:2502`-`:2511` back to the
+/// battler that caused it (`src/battle_util.c:2971`-`:2985`), so paralysing
+/// the target alone would be a strictly wrong turn rather than a partial one.
+///
+/// # Errors
+///
+/// [`BattleError::UnportedAbilityInteraction`] for a Synchronize defender.
+/// Every other move and defender passes; the caller screens before drawing.
+pub fn ensure_admissible(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<(), BattleError> {
+    if ensure_resolvable(dex, move_id).is_ok() && defender.ability() == AbilityId::SYNCHRONIZE {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SYNCHRONIZE,
+        ));
+    }
+    Ok(())
+}
+
 fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
     apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
 }
@@ -91,16 +116,16 @@ pub enum ParalyzeOutcome {
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// The Limber, type-immunity, and already-paralysed guards precede the
-/// accuracy draw and consume no randomness; a landed hit needs only that one
-/// draw, since `seteffectprimary` inflicts the status unconditionally once
-/// reached.
+/// The Limber, Synchronize, type-immunity, and already-paralysed guards
+/// precede the accuracy draw and consume no randomness; a landed hit needs
+/// only that one draw, since `seteffectprimary` inflicts the status
+/// unconditionally once reached.
 ///
 /// # Errors
 ///
-/// Returns the errors documented by [`ensure_resolvable`], or
-/// [`BattleError::UnsupportedMoveType`] if the move has no combat type.
-/// Admission completes before any draw.
+/// Returns the errors documented by [`ensure_resolvable`] and
+/// [`ensure_admissible`], or [`BattleError::UnsupportedMoveType`] if the move
+/// has no combat type. Admission completes before any draw.
 pub fn resolve_paralyze_move(
     dex: &Dex,
     move_id: MoveId,
@@ -116,6 +141,9 @@ pub fn resolve_paralyze_move(
     if defender.ability() == AbilityId::LIMBER {
         return Ok(ParalyzeOutcome::LimberProtected);
     }
+    // The last line of defence behind the pre-turn screens, so no draw or
+    // status write can precede the refusal.
+    ensure_admissible(dex, move_id, defender)?;
 
     let move_data = dex.move_data(move_id)?;
     let move_type = move_data
