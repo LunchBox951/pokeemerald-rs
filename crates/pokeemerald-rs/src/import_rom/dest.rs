@@ -7,8 +7,10 @@
 //! [`super`]'s docs for why re-walking them is the hole this closes, and
 //! for what stays open off Unix.
 
+use std::collections::hash_map::RandomState;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
+use std::hash::{BuildHasher, Hasher};
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +34,17 @@ use super::TEMP_PREFIX;
 /// destination's own counter go in with it: no pre-created name matches
 /// one, and covering a second of them is a billion files.
 ///
+/// `sequence` alone only disambiguates repeat calls on the *same* `Dest` --
+/// every import opens a fresh one and calls this exactly once
+/// (`import_rom::import_to_with`), so in production `sequence` is always
+/// its own instance's first value. `salt` is what still tells two
+/// same-nanosecond calls apart across *separate* `Dest` instances (two
+/// import attempts racing in one process, or a test driving several): a
+/// freshly constructed [`RandomState`] reseeds per call from the same
+/// source `HashMap`'s own DoS-resistant randomization uses, so hashing
+/// nothing through it and taking the digest is a `std`-only source of a
+/// fresh, unpredictable 64 bits with no counter of its own to reset.
+///
 /// A collision that happens anyway is a refused import naming the path,
 /// never a write through someone else's link, and the next run picks a
 /// different name.
@@ -41,15 +54,16 @@ use super::TEMP_PREFIX;
 /// temporary name with the whole of it pushed past the 255-byte limit for
 /// one component: `ENAMETOOLONG` on a name the player never typed, leaving
 /// a perfectly valid destination impossible to import to. A fixed prefix
-/// and three numbers is bounded whatever the pack is called, and the
-/// destination is not what makes the name unique anyway.
+/// and a bounded run of hex numbers is bounded whatever the pack is
+/// called, and the destination is not what makes the name unique anyway.
 fn next_temp_name(sequence: &AtomicU64) -> OsString {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let sequence = sequence.fetch_add(1, Ordering::Relaxed);
+    let salt = RandomState::new().build_hasher().finish();
     OsString::from(format!(
-        "{TEMP_PREFIX}.{}.{nanos:x}.{sequence:x}.tmp",
+        "{TEMP_PREFIX}.{}.{nanos:x}.{sequence:x}.{salt:x}.tmp",
         std::process::id()
     ))
 }

@@ -452,6 +452,28 @@ fn no_two_temp_names_are_the_same() {
     }
 }
 
+#[test]
+fn no_two_temp_names_are_the_same_across_separate_dest_instances() {
+    // Every real import opens its own fresh `Dest` and calls `temp_name`
+    // exactly once (`import_to_with`), so `Dest`'s own counter alone is
+    // always its instance's first value in production: it cannot
+    // disambiguate two *separate* `Dest`s that land on the same clock
+    // reading (two racing import attempts, or -- as here -- two opened in
+    // immediate succession). The per-call random salt is what still must
+    // keep them apart.
+    let dir = TempDir::new("temp-name-uniqueness-cross-dest");
+    let first_dest = Dest::open(&dir.path).expect("the directory opens");
+    let second_dest = Dest::open(&dir.path).expect("the directory opens");
+
+    let first = first_dest.temp_name();
+    let second = second_dest.temp_name();
+
+    assert_ne!(
+        first, second,
+        "two freshly opened Dest instances must not hand out the same temp name"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_long_but_valid_pack_name_still_imports() {
