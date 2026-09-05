@@ -496,7 +496,7 @@ impl Battle {
         // without disturbing the stream and another action can be chosen.
         for slot in enemy.moves() {
             ensure_executable(&dex, slot.move_id)?;
-            paralyze::ensure_admissible(&dex, slot.move_id, &player)?;
+            paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
         }
         let random_turn_number = rng.next_u16();
         // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
@@ -604,7 +604,7 @@ impl Battle {
         for mon in &party {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
-                paralyze::ensure_admissible(&dex, slot.move_id, &player)?;
+                paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
             }
         }
 
@@ -817,7 +817,7 @@ impl Battle {
             return Err(BattleError::NoPpRemaining(index));
         }
         ensure_executable(&self.dex, slot.move_id)?;
-        paralyze::ensure_admissible(&self.dex, slot.move_id, &self.enemy)?;
+        paralyze::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         Ok(slot.move_id)
     }
 

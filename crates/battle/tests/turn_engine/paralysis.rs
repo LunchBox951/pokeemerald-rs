@@ -544,3 +544,56 @@ fn an_already_paralysed_synchronize_defender_spends_pp_and_reports_the_status() 
     );
     assert_eq!(battle.player().status1(), Status1::Healthy);
 }
+
+/// A paralysed attacker is admitted against a Synchronize defender: the
+/// reflection re-enters `SetMoveEffect` against a battler that already carries
+/// a primary status, whose paralysis case writes nothing
+/// (`src/battle_script_commands.c:2422`-`:2423`). The turn therefore runs the
+/// attack canceller like any other.
+#[test]
+fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
+    // A level-50 attacker outspeeds the level-5 defender even quartered, so it
+    // is the first mover and draw 3 -- its full-paralysis check -- decides the
+    // turn: a multiple of 4 cancels the move, anything else lets it through to
+    // a landing Thunder Wave. Draws 0..3 are the two turn numbers and the
+    // enemy's slot-0 pick; the rest feed accuracy and the enemy's Tackle.
+    for (paralysis_draw, cancelled) in [(4u16, true), (5u16, false)] {
+        let dex = Dex::new();
+        let mut player = max_iv_mon(&dex, RATTATA, 50, vec![THUNDER_WAVE]);
+        player.set_status1(Status1::Paralysed);
+        let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+        let mut rng = SequenceRng::new([0, 0, 0, paralysis_draw, 5, 5, 5, 5, 5, 5, 5, 5]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .expect("a paralysed attacker leaves Synchronize no target, so the pick is admitted");
+
+        let expected = if cancelled {
+            BattleEvent::FullyParalyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            }
+        } else {
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            }
+        };
+        assert_eq!(events[0], expected, "{events:?}");
+        assert_eq!(
+            battle.enemy().status1(),
+            if cancelled {
+                Status1::Healthy
+            } else {
+                Status1::Paralysed
+            },
+            "a cancelled move never reaches seteffectprimary"
+        );
+        assert_eq!(
+            battle.player().status1(),
+            Status1::Paralysed,
+            "the attacker's own status is never rewritten by the reflection"
+        );
+    }
+}

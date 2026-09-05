@@ -182,15 +182,18 @@
 //! them past `ensure_executable` and into
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
-//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above)
-//! and the four stat-drop guards — Clear Body, White Smoke, Keen Eye,
+//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above),
+//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]) and the four
+//! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled) — held items, every primary status but
 //! [`status1::Status1::Paralysed`] (poison, confusion, sleep, freeze, burn,
 //! toxic — see [`status1`]'s module docs), weather, multi/double
-//! battles, Limber/Mist/Substitute/Safeguard/Protect (see [`stat_change`]'s
-//! and [`paralyze`]'s module docs for why those are a documented boundary
-//! rather than dead code), and the move effects the seven pipelines still do
+//! battles, Mist/Substitute/Safeguard/Protect and Synchronize's status
+//! reflection ([`paralyze::ensure_admissible`] refuses it rather than
+//! half-applying it; see [`stat_change`]'s and [`paralyze`]'s module docs for
+//! why those are a documented boundary rather than dead code), and the move
+//! effects the seven pipelines still do
 //! not cover — Defense Curl (flag *and* stat raise, so it belongs with the
 //! stat-change family), the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, none of them

@@ -260,3 +260,21 @@ fn no_synchronize_holder_is_type_immune_to_a_paralyze_move() {
         "the scan must actually find Synchronize holders"
     );
 }
+
+#[test]
+fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
+    let dex = Dex::new();
+    let mut attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    attacker.set_status1(Status1::Paralysed);
+    let defender = mon(&dex, RALTS, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::Applied,
+        "the reflection's SetMoveEffect pass writes nothing to an already-statused \
+         attacker (src/battle_script_commands.c:2422-2423), so nothing is unmodelled"
+    );
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
+}

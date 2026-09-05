@@ -83,19 +83,28 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// `BattleScript_EffectParalyze` runs before `seteffectprimary`
 /// (`data/battle_scripts_1.s:1011`-`:1017`: Limber, `typecalc`, and the
 /// already-statused exits) leaves the interaction fully modelled and is
-/// admitted here. Only `accuracycheck` cannot be consulted, since answering it
-/// would spend the draw this refusal exists to protect.
+/// admitted here. An attacker already carrying a primary status is admitted
+/// too: the reflection re-enters `SetMoveEffect` against it
+/// (`gEffectBattler = gBattlerAttacker`, `:2241`) and its paralysis case
+/// leaves `statusChanged` false (`:2422`-`:2423`), writing nothing. Only
+/// `accuracycheck` cannot be consulted, since answering it would spend the
+/// draw this refusal exists to protect.
 ///
 /// # Errors
 ///
 /// [`BattleError::UnportedAbilityInteraction`] when the move would reach
-/// `seteffectprimary` against a Synchronize defender.
+/// `seteffectprimary` against a Synchronize defender with a reflection target
+/// left to status.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
+    attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<(), BattleError> {
-    if defender.ability() != AbilityId::SYNCHRONIZE || ensure_resolvable(dex, move_id).is_err() {
+    if defender.ability() != AbilityId::SYNCHRONIZE
+        || attacker.status1().is_paralysed()
+        || ensure_resolvable(dex, move_id).is_err()
+    {
         return Ok(());
     }
     let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
@@ -168,7 +177,7 @@ pub fn resolve_paralyze_move(
     // The last line of defence behind the pre-turn screens, at the script's
     // own position: every earlier exit is modelled, `accuracycheck` is not yet
     // paid for.
-    ensure_admissible(dex, move_id, defender)?;
+    ensure_admissible(dex, move_id, attacker, defender)?;
 
     if !accuracy_check(
         move_data.accuracy,
