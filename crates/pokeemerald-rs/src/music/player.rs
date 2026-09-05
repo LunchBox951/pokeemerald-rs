@@ -83,6 +83,19 @@ fn device_tail_millis(max_callback_frames: Option<usize>, device_sample_rate: u3
         .clamp(DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MAX_MILLIS)
 }
 
+/// How long a healthy stream may leave the ring nonempty between callbacks,
+/// the floor [`max_drain_wait_frames`] takes: the derived device tail, or
+/// [`DEVICE_TAIL_MAX_MILLIS`] for a device advertising no bound, whose
+/// cadence is unknown rather than short.
+fn callback_cadence_frames(max_callback_frames: Option<usize>, device_sample_rate: u32) -> usize {
+    match (max_callback_frames, device_sample_rate) {
+        (Some(_), 1..) => {
+            game_frames_in(device_tail_millis(max_callback_frames, device_sample_rate))
+        }
+        _ => game_frames_in(DEVICE_TAIL_MAX_MILLIS),
+    }
+}
+
 /// `millis` as whole game frames, the unit [`MusicPlayer::drained`] polls in.
 const fn game_frames_in(millis: usize) -> usize {
     (millis * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME)
@@ -251,10 +264,10 @@ impl MusicPlayer {
         );
         let producer = output.producer();
         let ring_capacity = producer.capacity();
-        let device_tail = game_frames_in(device_tail_millis(
-            output.max_callback_frames(),
-            output.device_sample_rate(),
-        ));
+        let advertised = output.max_callback_frames();
+        let rate = output.device_sample_rate();
+        let device_tail = game_frames_in(device_tail_millis(advertised, rate));
+        let cadence = callback_cadence_frames(advertised, rate);
         let overruns = prefill(&mut sequencer, &producer);
         start_output(&mut output)?;
         context.master_reverb = reverb_level;
@@ -267,7 +280,7 @@ impl MusicPlayer {
             fade: None,
             resolved_reverb: reverb_level,
             ring_capacity,
-            max_drain_wait_frames: max_drain_wait_frames(ring_capacity, device_tail),
+            max_drain_wait_frames: max_drain_wait_frames(ring_capacity, cadence),
             drain_wait_frames: 0,
             device_tail_frames: 0,
             max_device_tail_frames: device_tail,
@@ -395,9 +408,9 @@ mod tests {
     use platform::{AudioOutput, PlatformError};
 
     use super::{
-        device_tail_millis, game_frames_in, max_drain_wait_frames, MusicContext, MusicPlayer,
-        DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS,
-        RING_CAPACITY_FRAMES,
+        callback_cadence_frames, device_tail_millis, game_frames_in, max_drain_wait_frames,
+        MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_FRAMES, DEVICE_TAIL_FLOOR_MILLIS,
+        DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS, RING_CAPACITY_FRAMES,
     };
 
     fn short_song_without_its_own_reverb() -> Song {
@@ -498,16 +511,29 @@ mod tests {
         );
     }
 
-    /// A device advertising no callback bound gets the tail floor, which is
-    /// shorter than the production ring's own figure, so the ring still
-    /// governs: the null backend's bound is unchanged.
+    /// A device advertising no callback bound has an unknown cadence, not a
+    /// short one, so the pre-empty wait takes the cap rather than the ring's
+    /// own figure.
     #[test]
-    fn an_unadvertised_callback_leaves_the_pre_empty_bound_on_the_ring() {
+    fn an_unadvertised_callback_bounds_the_pre_empty_wait_at_the_cap() {
         let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
-        let device_tail = game_frames_in(device_tail_millis(None, 0));
+        let ring_only = max_drain_wait_frames(ring_capacity, 0);
+        let cadence = callback_cadence_frames(None, 48_000);
 
+        assert_eq!(cadence, game_frames_in(DEVICE_TAIL_MAX_MILLIS));
+        assert!(cadence > ring_only);
+        assert_eq!(max_drain_wait_frames(ring_capacity, cadence), cadence);
+    }
+
+    /// A short advertised callback leaves the ring's own figure in charge.
+    #[test]
+    fn a_short_advertised_callback_leaves_the_pre_empty_bound_on_the_ring() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let cadence = callback_cadence_frames(Some(512), 48_000);
+
+        assert_eq!(cadence, DEVICE_TAIL_FLOOR_FRAMES);
         assert_eq!(
-            max_drain_wait_frames(ring_capacity, device_tail),
+            max_drain_wait_frames(ring_capacity, cadence),
             max_drain_wait_frames(ring_capacity, 0)
         );
     }
