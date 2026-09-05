@@ -90,15 +90,16 @@ fn symbol_line(line: &str) -> Option<(u32, &str)> {
         return None;
     }
     let digits = addr.strip_prefix("0x")?;
-    // `ld` writes 64-bit addresses on some hosts; the low 32 bits are the
-    // cartridge address either way.
+    // `ld` writes 64-bit addresses on some hosts, zero-extending the 32-bit
+    // cartridge address rather than reusing its high bits for anything --
+    // so a value that does not fit `u32` is a genuinely different address,
+    // not a wider encoding of one that does, and must be rejected rather
+    // than masked down to a colliding low 32 bits.
     let value = u64::from_str_radix(digits, 16).ok()?;
     if !is_symbol_name(name) {
         return None;
     }
-    u32::try_from(value & 0xFFFF_FFFF)
-        .ok()
-        .map(|addr| (addr, name))
+    u32::try_from(value).ok().map(|addr| (addr, name))
 }
 
 /// Whether `name` looks like a linker symbol rather than a section or a
@@ -145,6 +146,19 @@ Memory Configuration
             ["gTilesetAlias_Petalburg", "gTileset_Petalburg"]
         );
         assert_eq!(map.symbols_at(0x0000_0000).len(), 0);
+    }
+
+    #[test]
+    fn an_address_with_nonzero_high_bits_is_rejected_not_masked() {
+        // High bits nonzero, unlike the zero-extended 64-bit-width case
+        // `symbol_lines_are_recognised_in_both_address_widths` covers:
+        // masking down to the low 32 bits would wrongly report this as a
+        // symbol at `0x083df704`, colliding with the real one there.
+        let map = SymbolMap::parse(
+            "                0x00000001083df704                gBogusOutOfRange\n",
+        );
+        assert!(map.symbols_at(0x083D_F704).is_empty());
+        assert!(map.is_empty());
     }
 
     #[test]
