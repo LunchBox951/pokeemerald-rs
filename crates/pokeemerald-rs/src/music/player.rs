@@ -160,9 +160,11 @@ pub struct MusicPlayer {
     overruns: u64,
     fade: Option<FadeOut>,
     resolved_reverb: u8,
-    /// Total ring capacity in samples for [`Self::drained`], read from the
-    /// fresh, unconsumed `output` this instance was started with -- same
-    /// precondition `prefill` already relies on.
+    /// The ring's fixed total size in samples, which [`Self::drained`]
+    /// compares free space against to decide the ring is empty. Read from the
+    /// ring itself, not from the free space at construction, so a caller that
+    /// queued through [`AudioOutput::producer`] before starting cannot make a
+    /// still-queued ring read as drained.
     ring_capacity: usize,
     /// [`Self::drained`]'s poll bound, from [`max_drain_wait_frames`].
     max_drain_wait_frames: usize,
@@ -248,7 +250,7 @@ impl MusicPlayer {
             reverb_level,
         );
         let producer = output.producer();
-        let ring_capacity = producer.available_space();
+        let ring_capacity = producer.capacity();
         let device_tail = game_frames_in(device_tail_millis(
             output.max_callback_frames(),
             output.device_sample_rate(),
@@ -379,6 +381,10 @@ impl MusicPlayer {
     pub(crate) fn ring_free_for_test(&self) -> usize {
         self.producer.available_space()
     }
+
+    pub(crate) fn ring_capacity_for_test(&self) -> usize {
+        self.ring_capacity
+    }
 }
 
 #[cfg(test)]
@@ -503,6 +509,31 @@ mod tests {
         assert_eq!(
             max_drain_wait_frames(ring_capacity, device_tail),
             max_drain_wait_frames(ring_capacity, 0)
+        );
+    }
+
+    /// [`MusicPlayer::start`] is public and takes any [`AudioOutput`], so a
+    /// caller may have queued through [`AudioOutput::producer`] first. The
+    /// ring's capacity is what `drained` compares against to call the ring
+    /// empty, so it must come from the ring rather than from the free space
+    /// left at construction -- otherwise those pre-queued samples set the
+    /// bar low and their own tail could be dropped undelivered.
+    #[test]
+    fn a_pre_queued_producer_still_records_the_full_ring_capacity() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+
+        let output = AudioOutput::null(RING_FRAMES);
+        let queued = output.producer().push(&[0.25; 64]);
+        assert_eq!(queued, 64, "the null ring must accept this priming push");
+
+        let player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+
+        assert_eq!(
+            player.ring_capacity_for_test(),
+            full_ring,
+            "capacity must be the ring's own, not the free space a pre-queued producer left"
         );
     }
 
