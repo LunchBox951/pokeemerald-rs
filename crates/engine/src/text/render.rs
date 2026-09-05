@@ -19,6 +19,7 @@ mod ext_ctrl {
     pub const SHIFT_DOWN: u8 = super::super::EXT_CTRL_CODE_SHIFT_DOWN;
     pub const SKIP: u8 = super::super::EXT_CTRL_CODE_SKIP;
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
+    pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
 }
 
 const EXTRA_SYMBOL_PAGE_START: u16 = 0x100;
@@ -135,6 +136,7 @@ enum PrinterState {
     AwaitingScroll,
     Scrolling { pixels_remaining: i32 },
     AwaitingClear,
+    AwaitingPress,
     Pause { frames_remaining: u8 },
     Finished,
 }
@@ -161,6 +163,10 @@ pub enum TickEvent {
     AwaitingClear,
     /// The page was confirmed and the cursor returned to its origin.
     Cleared,
+    /// `PAUSE_UNTIL_PRESS` is waiting for a new A or B press.
+    AwaitingPress,
+    /// The wait was satisfied; token handling resumes next frame.
+    PressAccepted,
     /// A pause consumed one frame.
     Paused,
     /// The pause completed; token handling resumes next frame.
@@ -251,9 +257,9 @@ impl<S: GlyphSource> Printer<S> {
 
     /// Advance the printer by exactly one frame.
     ///
-    /// New button presses confirm clear and scroll prompts. Pressing during a
-    /// reveal delay latches A/B speed-up when enabled; later held frames skip
-    /// remaining reveal delays.
+    /// New button presses confirm clear, scroll, and press-wait prompts.
+    /// Pressing during a reveal delay latches A/B speed-up when enabled;
+    /// later held frames skip remaining reveal delays.
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
@@ -288,6 +294,14 @@ impl<S: GlyphSource> Printer<S> {
                     TickEvent::Cleared
                 } else {
                     TickEvent::AwaitingClear
+                }
+            }
+            PrinterState::AwaitingPress => {
+                if input.confirm_pressed() {
+                    self.state = PrinterState::HandleChar;
+                    TickEvent::PressAccepted
+                } else {
+                    TickEvent::AwaitingPress
                 }
             }
             PrinterState::Pause { frames_remaining } => self.tick_pause(frames_remaining),
@@ -342,6 +356,12 @@ impl<S: GlyphSource> Printer<S> {
                     self.reveal_delay_frames_remaining = 0;
                     self.state = PrinterState::Pause { frames_remaining };
                     return self.tick_pause(frames_remaining);
+                }
+                // Non-auto-scroll `TextPrinterWait` only (`text.c:884-899`);
+                // auto-scroll is unmodelled in this port.
+                Token::ExtCtrl { sub, .. } if sub == ext_ctrl::PAUSE_UNTIL_PRESS => {
+                    self.state = PrinterState::AwaitingPress;
+                    return TickEvent::AwaitingPress;
                 }
                 Token::ExtCtrl { sub, args } => self.apply_extended_control(sub, &args),
                 ref other => glyph_id_for_token(other),
@@ -930,6 +950,98 @@ mod tests {
             panic!("expected printing to resume on the new page")
         };
         assert_eq!((g.x, g.y), (0, 1));
+    }
+
+    #[test]
+    fn pause_until_press_requires_a_new_press_and_preserves_the_cursor() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::EXT_CTRL_CODE_BEGIN,
+            super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
+
+        assert!(
+            matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)),
+            "the first glyph reveals before the wait"
+        );
+        let cursor_at_wait = printer.cursor();
+
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingPress);
+        let held_a = PrinterInput {
+            a_pressed: false,
+            b_pressed: false,
+            a_held: true,
+            b_held: false,
+        };
+        assert_eq!(
+            printer.tick(held_a),
+            TickEvent::AwaitingPress,
+            "a held button with no fresh edge must not release the wait"
+        );
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingPress,
+            "releasing the held button must not release the wait either"
+        );
+        assert_eq!(
+            printer.cursor(),
+            cursor_at_wait,
+            "waiting must not move the cursor"
+        );
+
+        assert_eq!(printer.tick(press_a()), TickEvent::PressAccepted);
+        assert_eq!(
+            printer.cursor(),
+            cursor_at_wait,
+            "accepting the press must not move the cursor"
+        );
+
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the next glyph the tick after the press was accepted")
+        };
+        assert_eq!(
+            (second.x, second.y),
+            (i32::from(NORMAL_A_ADVANCE_WIDTH), 1),
+            "advanced past the first glyph"
+        );
+    }
+
+    #[test]
+    fn mid_speed_pause_until_press_preserves_the_pending_reveal_delay() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::EXT_CTRL_CODE_BEGIN,
+            super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 1));
+
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        for _ in 0..3 {
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        }
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingPress);
+        assert_eq!(printer.tick(press_a()), TickEvent::PressAccepted);
+
+        // Unlike timed PAUSE, this control does not reset the reveal delay.
+        for _ in 0..3 {
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
+        }
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
     }
 
     #[test]

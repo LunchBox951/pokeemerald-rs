@@ -271,9 +271,9 @@ impl NpcDialog {
 
     /// Advance the dialog by exactly one frame. `input`'s pressed/held A and
     /// B bits are forwarded straight to the current [`Printer::tick`] --
-    /// both the confirm edge it consults while awaiting a scroll/clear (that
-    /// method's own doc comment) and, since this box opted into held-A/B
-    /// print speed-up ([`Self::new`]), the press/hold pair its
+    /// both the confirm edge it consults while awaiting a scroll/clear/press
+    /// prompt (that method's own doc comment) and, since this box opted into
+    /// held-A/B print speed-up ([`Self::new`]), the press/hold pair its
     /// [`engine::text::render`] module docs describe. Upstream's message box
     /// never distinguishes which button did either
     /// (`TextPrinterWaitWithDownArrow`'s `JOY_NEW(A_BUTTON | B_BUTTON)`,
@@ -322,6 +322,8 @@ impl NpcDialog {
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished
             | TickEvent::AwaitingClear
+            | TickEvent::AwaitingPress
+            | TickEvent::PressAccepted
             | TickEvent::Paused
             | TickEvent::PauseFinished => {}
         }
