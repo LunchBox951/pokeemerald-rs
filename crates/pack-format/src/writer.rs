@@ -140,7 +140,10 @@ impl PackWriter {
     // usual `len_without_is_empty` ask) would be genuinely dead code here
     // rather than real API surface.
     #[must_use]
-    #[allow(clippy::len_without_is_empty)]
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "an `is_empty` companion would be dead code: every caller pushes a fixed nonzero set first"
+    )]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
