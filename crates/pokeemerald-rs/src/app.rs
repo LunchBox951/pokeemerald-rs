@@ -570,8 +570,8 @@ impl App {
     ///
     /// Once [`MusicPlayer::fade_finished`], this stops rendering new frames
     /// and keeps the player alive until [`MusicPlayer::drained`] reports the
-    /// queued tail both out of the ring and sounded by the device, only then
-    /// dropping it (issue #458).
+    /// queued tail out of the ring and the device's own advertised buffering
+    /// waited out, only then dropping it (issue #458).
     ///
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.

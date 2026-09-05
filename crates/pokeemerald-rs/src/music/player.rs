@@ -35,15 +35,51 @@ fn max_drain_wait_frames(ring_capacity: usize) -> usize {
     2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)
 }
 
-/// Milliseconds a healthy stream stays open past its empty ring, chosen
-/// above the callback and OS buffering any desktop backend adds between
-/// taking a sample and sounding it.
-const DEVICE_TAIL_MILLIS: usize = 200;
+/// Added to the device's advertised callback bound in [`device_tail_millis`]
+/// for the queueing between a callback returning and its samples sounding,
+/// which the advertisement does not describe.
+const DEVICE_TAIL_MARGIN_MILLIS: usize = 50;
 
-/// [`DEVICE_TAIL_MILLIS`] as whole game frames, the unit
-/// [`MusicPlayer::drained`] is polled in.
-pub const DEVICE_TAIL_FRAMES: usize =
-    (DEVICE_TAIL_MILLIS * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME);
+/// Floor for [`device_tail_millis`], and the whole wait for a device that
+/// advertises no callback bound at all.
+const DEVICE_TAIL_FLOOR_MILLIS: usize = 200;
+
+/// Ceiling for [`device_tail_millis`]: an advertised bound is a maximum the
+/// device may never reach, so an outsized one must not hold the title -> main
+/// menu transition open for as long as it claims.
+const DEVICE_TAIL_MAX_MILLIS: usize = 1_000;
+
+/// [`DEVICE_TAIL_FLOOR_MILLIS`] in game frames, the wait every device gets at
+/// least.
+pub const DEVICE_TAIL_FLOOR_FRAMES: usize = game_frames_in(DEVICE_TAIL_FLOOR_MILLIS);
+
+/// How long a healthy stream stays open past its empty ring, for the samples
+/// the callback already took to sound.
+///
+/// The transport reports no playback position and caps no latency --
+/// `build_stream` opens the device's default buffer size -- so this is
+/// derived, not measured: the largest callback buffer the device advertises,
+/// at its own rate, plus [`DEVICE_TAIL_MARGIN_MILLIS`], held between
+/// [`DEVICE_TAIL_FLOOR_MILLIS`] and [`DEVICE_TAIL_MAX_MILLIS`]. A device
+/// advertising no concrete range, or no rate, gets the floor.
+fn device_tail_millis(max_callback_frames: Option<usize>, device_sample_rate: u32) -> usize {
+    let (Some(frames), rate @ 1..) = (max_callback_frames, u64::from(device_sample_rate)) else {
+        return DEVICE_TAIL_FLOOR_MILLIS;
+    };
+    let buffered = u64::try_from(frames)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(1000)
+        / rate;
+    usize::try_from(buffered)
+        .unwrap_or(usize::MAX)
+        .saturating_add(DEVICE_TAIL_MARGIN_MILLIS)
+        .clamp(DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MAX_MILLIS)
+}
+
+/// `millis` as whole game frames, the unit [`MusicPlayer::drained`] polls in.
+const fn game_frames_in(millis: usize) -> usize {
+    (millis * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME)
+}
 
 /// Audio state inherited by songs started in the same session.
 ///
@@ -127,6 +163,9 @@ pub struct MusicPlayer {
     drain_wait_frames: usize,
     /// [`Self::drained`]'s poll count since the ring first read empty.
     device_tail_frames: usize,
+    /// [`Self::drained`]'s device-tail bound, from [`device_tail_millis`] for
+    /// the output this instance was started with.
+    max_device_tail_frames: usize,
 }
 
 impl MusicPlayer {
@@ -203,6 +242,8 @@ impl MusicPlayer {
         );
         let producer = output.producer();
         let ring_capacity = producer.available_space();
+        let device_tail =
+            device_tail_millis(output.max_callback_frames(), output.device_sample_rate());
         let overruns = prefill(&mut sequencer, &producer);
         start_output(&mut output)?;
         context.master_reverb = reverb_level;
@@ -218,6 +259,7 @@ impl MusicPlayer {
             max_drain_wait_frames: max_drain_wait_frames(ring_capacity),
             drain_wait_frames: 0,
             device_tail_frames: 0,
+            max_device_tail_frames: game_frames_in(device_tail),
         })
     }
 
@@ -267,9 +309,9 @@ impl MusicPlayer {
     /// stream where it stands rather than playing out what it holds.
     ///
     /// An empty ring only proves the output callback took the last samples,
-    /// so a healthy stream is held [`DEVICE_TAIL_FRAMES`] further frames for
-    /// the callback and OS buffers to sound. A reported stream error
-    /// ([`AudioOutput::stream_errors`]) or an elapsed
+    /// so a healthy stream is held further frames for them to sound --
+    /// [`device_tail_millis`] for this output's own device, not a fixed wait.
+    /// A reported stream error ([`AudioOutput::stream_errors`]) or an elapsed
     /// [`max_drain_wait_frames`] bound answers `true` at once: neither has a
     /// tail left to play. Counts one poll per call; meaningful only once
     /// [`Self::fade_finished`].
@@ -280,7 +322,7 @@ impl MusicPlayer {
         }
         if self.producer.available_space() >= self.ring_capacity {
             self.device_tail_frames += 1;
-            return self.device_tail_frames > DEVICE_TAIL_FRAMES;
+            return self.device_tail_frames > self.max_device_tail_frames;
         }
         self.drain_wait_frames += 1;
         self.drain_wait_frames >= self.max_drain_wait_frames
@@ -337,7 +379,10 @@ mod tests {
     use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
     use platform::{AudioOutput, PlatformError};
 
-    use super::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES};
+    use super::{
+        device_tail_millis, MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_MILLIS,
+        DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS, RING_CAPACITY_FRAMES,
+    };
 
     fn short_song_without_its_own_reverb() -> Song {
         let wave = Arc::new(WaveData::one_shot(1 << 20, vec![100; 64]));
@@ -365,6 +410,51 @@ mod tests {
             }
         }
         false
+    }
+
+    /// A device that advertises no concrete buffer range says nothing about
+    /// its latency, so the floor is the whole wait.
+    #[test]
+    fn an_unadvertised_callback_bound_waits_the_floor() {
+        assert_eq!(device_tail_millis(None, 48_000), DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// A rate of zero cannot turn a frame count into a duration; the floor
+    /// stands rather than a division by zero or a nonsense wait.
+    #[test]
+    fn a_rateless_device_waits_the_floor() {
+        assert_eq!(device_tail_millis(Some(4_096), 0), DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// A small callback buffer derives a wait under the floor, and the floor
+    /// wins: the advertised bound covers the callback, not the OS queueing
+    /// behind it.
+    #[test]
+    fn a_short_callback_bound_still_waits_the_floor() {
+        assert_eq!(
+            device_tail_millis(Some(512), 48_000),
+            DEVICE_TAIL_FLOOR_MILLIS
+        );
+    }
+
+    /// The case the fixed 200 ms wait got wrong: a high-latency
+    /// configuration whose own callback buffer outlasts the floor must widen
+    /// the wait rather than expire mid-buffer.
+    #[test]
+    fn a_callback_bound_past_the_floor_widens_the_wait() {
+        let tail = device_tail_millis(Some(24_000), 48_000);
+        assert_eq!(tail, 500 + DEVICE_TAIL_MARGIN_MILLIS);
+        assert!(tail > DEVICE_TAIL_FLOOR_MILLIS);
+    }
+
+    /// An advertised maximum the device may never reach must not hold the
+    /// title -> main menu transition open for as long as it claims.
+    #[test]
+    fn an_outsized_callback_bound_is_capped() {
+        assert_eq!(
+            device_tail_millis(Some(480_000), 48_000),
+            DEVICE_TAIL_MAX_MILLIS
+        );
     }
 
     #[test]
