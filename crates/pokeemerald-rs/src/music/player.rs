@@ -29,10 +29,17 @@ const FADE_VOL_STEP: i32 = 4 << FADE_VOL_SHIFT;
 pub const TITLE_FADE_OUT_SPEED: u16 = 4;
 
 /// Bounds [`MusicPlayer::drained`]'s wait for a `ring_capacity`-sample ring
-/// to empty: twice the frames a full ring needs to drain at one rendered
-/// frame per game frame, so a stalled consumer cannot wait forever.
-fn max_drain_wait_frames(ring_capacity: usize) -> usize {
-    2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)
+/// to empty, so a stalled consumer cannot hold the transition open forever:
+/// twice the frames a full ring needs to drain at one rendered frame per game
+/// frame, but never fewer than `device_tail_frames`.
+///
+/// The ring-only figure assumes the consumer drains about as often as the
+/// game renders. A device whose callback period outlasts it leaves the ring
+/// nonempty until its next callback -- a healthy stream waiting its turn, not
+/// a stalled one -- so the same bound that decides how long that device's
+/// buffers take to sound also floors the wait for them to be taken.
+fn max_drain_wait_frames(ring_capacity: usize, device_tail_frames: usize) -> usize {
+    (2 * ring_capacity.div_ceil(Sequencer::FRAME_SAMPLES)).max(device_tail_frames)
 }
 
 /// Added to the device's advertised callback bound in [`device_tail_millis`]
@@ -242,8 +249,10 @@ impl MusicPlayer {
         );
         let producer = output.producer();
         let ring_capacity = producer.available_space();
-        let device_tail =
-            device_tail_millis(output.max_callback_frames(), output.device_sample_rate());
+        let device_tail = game_frames_in(device_tail_millis(
+            output.max_callback_frames(),
+            output.device_sample_rate(),
+        ));
         let overruns = prefill(&mut sequencer, &producer);
         start_output(&mut output)?;
         context.master_reverb = reverb_level;
@@ -256,10 +265,10 @@ impl MusicPlayer {
             fade: None,
             resolved_reverb: reverb_level,
             ring_capacity,
-            max_drain_wait_frames: max_drain_wait_frames(ring_capacity),
+            max_drain_wait_frames: max_drain_wait_frames(ring_capacity, device_tail),
             drain_wait_frames: 0,
             device_tail_frames: 0,
-            max_device_tail_frames: game_frames_in(device_tail),
+            max_device_tail_frames: device_tail,
         })
     }
 
@@ -380,8 +389,9 @@ mod tests {
     use platform::{AudioOutput, PlatformError};
 
     use super::{
-        device_tail_millis, MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_MILLIS,
-        DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS, RING_CAPACITY_FRAMES,
+        device_tail_millis, game_frames_in, max_drain_wait_frames, MusicContext, MusicPlayer,
+        DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS,
+        RING_CAPACITY_FRAMES,
     };
 
     fn short_song_without_its_own_reverb() -> Song {
@@ -454,6 +464,45 @@ mod tests {
         assert_eq!(
             device_tail_millis(Some(480_000), 48_000),
             DEVICE_TAIL_MAX_MILLIS
+        );
+    }
+
+    /// The pre-empty bound governs a ring that has not drained yet. Derived
+    /// from the ring alone it assumes the consumer drains about as often as
+    /// the game renders: at the production ring that expires after 38 game
+    /// frames, roughly 0.64 s. A device whose callback period outlasts that
+    /// leaves the ring nonempty until its next callback, so the bound must
+    /// widen to that device's tail rather than call a healthy stream stalled
+    /// and drop the queued fade.
+    #[test]
+    fn a_long_advertised_callback_widens_the_pre_empty_bound() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let ring_only = max_drain_wait_frames(ring_capacity, 0);
+        let device_tail = game_frames_in(device_tail_millis(Some(48_000), 48_000));
+
+        assert!(
+            device_tail > ring_only,
+            "a one-second callback bound must outlast the {ring_only}-frame ring-only figure, \
+             or this test proves nothing"
+        );
+        assert_eq!(
+            max_drain_wait_frames(ring_capacity, device_tail),
+            device_tail,
+            "the pre-empty bound must cover the device's own callback cadence"
+        );
+    }
+
+    /// A device advertising no callback bound gets the tail floor, which is
+    /// shorter than the production ring's own figure, so the ring still
+    /// governs: the null backend's bound is unchanged.
+    #[test]
+    fn an_unadvertised_callback_leaves_the_pre_empty_bound_on_the_ring() {
+        let ring_capacity = RING_CAPACITY_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let device_tail = game_frames_in(device_tail_millis(None, 0));
+
+        assert_eq!(
+            max_drain_wait_frames(ring_capacity, device_tail),
+            max_drain_wait_frames(ring_capacity, 0)
         );
     }
 
