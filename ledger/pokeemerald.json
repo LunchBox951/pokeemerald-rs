@@ -18094,7 +18094,7 @@
           "status": "rewritten"
         },
         "SaveBlockPartyMoneyWarpOffsets": {
-          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, and vars implemented in full-size zero-filled payloads",
+          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsWindowFrameType implemented in full-size zero-filled payloads",
           "rust_target": "crates/engine/src/save/block.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26927,7 +26927,7 @@
           "status": "rewritten"
         },
         "save_menu": {
-          "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, and HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
+          "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4), and MainMenu_FormatSavegameText's own border selection (GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType), now decoded and forwarded from the loaded save instead of hardcoded). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -28181,7 +28181,7 @@
           "status": "rewritten"
         },
         "TextPrinterWaitWithDownArrow": {
-          "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which Printer::tick now consumes directly: its AwaitingClear/AwaitingScroll states (upstream RENDER_STATE_CLEAR / RENDER_STATE_SCROLL_START, this prompt's two callers) advance on either button via PrinterInput::confirm_pressed, and OverworldPhase::step transcribes the same edge for NpcDialog::tick (crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs; issue #161 review -- previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) reads the same button pair. RunTextPrinter's hold-to-speed-up path (:944-953) is no longer just a cited neighbour: issue #393 rewrote it in this same printer (Printer::with_ab_speed_up_print plus PrinterInput's held bits), so it is covered by src/text.c#RenderText's own entry. Still stubbed rather than rewritten because of what remains unmodelled in *this* artifact -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
+          "reason": "TextPrinterWait's non-auto-scroll press wait (src/text.c:884-899, JOY_NEW(A_BUTTON | B_BUTTON)) is modelled directly: EXT_CTRL_CODE_PAUSE_UNTIL_PRESS's RENDER_STATE_WAIT transition (src/text.c:1013-1022,1167-1170) is PrinterState::AwaitingPress, which advances only on PrinterInput::confirm_pressed's fresh A/B edge (crates/engine/src/text/render.rs:360-364). TextPrinterWaitWithDownArrow's own JOY_NEW read for the scroll/clear prompts is likewise consumed via AwaitingClear/AwaitingScroll's confirm_pressed, and OverworldPhase::step forwards the same edge for NpcDialog::tick (crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs). RunTextPrinter's hold-to-speed-up path (src/text.c:944-953) is ported too, via Printer::with_ab_speed_up_print and PrinterInput's held bits, covered by src/text.c#RenderText's own entry. Still stubbed rather than rewritten because of what remains unmodelled in *this* artifact -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "I-3",
           "status": "stubbed"
