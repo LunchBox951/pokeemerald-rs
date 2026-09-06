@@ -299,3 +299,63 @@ fn a_white_out_heals_every_occupied_party_member() {
         "with the whole party healed, SetBattlePartyIds sends out slot 0 again"
     );
 }
+
+/// The first-battle conclusion's own `HealPlayerParty` reaches every
+/// occupied slot too, not just the one continue selected -- the same
+/// regression `a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one`
+/// pins for [`super::white_out::OverworldPhase::white_out`], now pinned for
+/// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]
+/// since both share
+/// [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`]
+/// rather than each healing only [`super::OverworldPhase::party_lead`].
+#[test]
+fn the_first_battle_conclusion_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
+    let mut phase = continued_phase_with_trailing_member(&new_game::provisional_starter());
+    assert_eq!(phase.party_lead_slot, 1, "setup: slot 1 was selected");
+    assert_eq!(phase.save1.player_party[0].hp, 0, "setup: slot 0 fainted");
+
+    phase.conclude_first_battle();
+
+    let unselected = phase.save1.player_party[0];
+    assert_eq!(
+        unselected.hp, unselected.max_hp,
+        "HealPlayerParty restores every occupied member's HP, not just the selected battler's"
+    );
+    assert_eq!(
+        phase.party_lead_slot, 0,
+        "with slot 0 healed too, it is the first usable slot again"
+    );
+}
+
+/// The single-member counterpart of the same regression: `HealPlayerParty`
+/// clears stored status for every occupied slot (`pokeemerald/src/script_pokemon_util.c:30-59`),
+/// so a one-member party's own saved record must not carry a stale status
+/// byte into the very next save, the same shape
+/// `white_out::tests::white_out_clears_stored_status_before_an_immediate_save`
+/// pins for [`super::white_out::OverworldPhase::white_out`].
+#[test]
+fn the_first_battle_conclusion_clears_the_stored_status_of_a_single_member_party() {
+    const STORED_STATUS: u32 = 0x40;
+
+    let mut phase = new_game_phase();
+    let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+    let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+    let mut stored = crate::party::to_save_pokemon(&Dex::new(), &lead);
+    stored.status = STORED_STATUS;
+    phase.save1.player_party_count = 1;
+    phase.save1.player_party[0] = stored;
+    phase.party_lead = Some(lead);
+    assert_ne!(
+        phase.save1.player_party[0].status, 0,
+        "setup: the saved record is statused"
+    );
+
+    phase.conclude_first_battle();
+    phase.copy_party_and_objects_to_save();
+
+    assert_eq!(
+        phase.save1.player_party[0].status, 0,
+        "the first-battle conclusion's HealPlayerParty must clear a single member's stored \
+         status too"
+    );
+}

@@ -62,12 +62,13 @@
 //! `CB2_EndWildBattle`, a trainer loss through `CB2_EndTrainerBattle` -- so
 //! both need the identical three-step transition. [`OverworldPhase::white_out`]
 //! is that one shared method rather than a duplicated one per driver
-//! `(oop-boundaries)`, and it is also the reusable home issue #251's future
-//! `special HealPlayerParty` script-command dispatch (a Pokémon Center
-//! visit, not a loss) will call into for its own heal half --
-//! [`battle::BattlePokemon::heal`] is written on the owned type both this
-//! module and that future one need, not folded into this method, for
-//! exactly that reason.
+//! `(oop-boundaries)`. Its heal step is itself
+//! [`OverworldPhase::heal_whole_party_and_reselect_lead`], a second,
+//! narrower level of the same sharing: issue #251's
+//! `special HealPlayerParty` dispatch
+//! (`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`,
+//! a scripted-battle heal, not a loss) calls that one routine directly
+//! rather than duplicating the every-slot heal and re-scan here.
 //!
 //! # What this retires
 //!
@@ -87,8 +88,9 @@
 //! `IsPlayerDefeated` branch and so never whites out -- which is why
 //! `lead_can_fight` survived past this issue, narrowed to that residual
 //! state. Issue #251's `first_battle_conclusion` closes it too (its own
-//! heal is not routed through *this* method -- see that module's docs for
-//! why: no money halving, no heal-location warp, just
+//! heal calls [`OverworldPhase::heal_whole_party_and_reselect_lead`]
+//! directly rather than routing through *this* method -- see that module's
+//! docs for why: no money halving, no heal-location warp, just
 //! `Route101_EventScript_BirchsBag`'s own narrower `HealPlayerParty` +
 //! warp-to-lab), which is why both fail-closed guards this section used to
 //! name are gone rather than merely narrowed further.
@@ -112,11 +114,13 @@ impl OverworldPhase {
     /// same as [`OverworldPhase::begin_wild_battle`]'s own defensive `None`
     /// arm).
     ///
-    /// Every occupied slot is healed too, then
-    /// [`crate::party::select_active_battler`] re-scans for the active
-    /// battler (that fn's own doc covers `SetBattlePartyIds`) -- merging
-    /// the outgoing lead first so reselection cannot drop its session
-    /// heal, EVs, or experience.
+    /// The heal itself, and the active-battler re-scan it requires, are
+    /// [`Self::heal_whole_party_and_reselect_lead`] -- this method's own
+    /// contribution is the money halving and the heal-location warp, the
+    /// two `HealPlayerParty`-adjacent steps `DoWhiteOut` runs that
+    /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]'s
+    /// own narrower `HealPlayerParty` call must not (that method's own docs
+    /// explain why).
     ///
     /// A `last_heal_location` that cannot be resolved to a known map -- in
     /// practice only a hand-edited save: even
@@ -139,6 +143,33 @@ impl OverworldPhase {
         // SetMoney(&gSaveBlock1Ptr->money, GetMoney(&gSaveBlock1Ptr->money) / 2);
         self.save1.money /= 2;
 
+        self.heal_whole_party_and_reselect_lead("white-out");
+
+        // SetWarpDestinationToLastHealLocation() + WarpIntoMap().
+        let heal_location = self.save1.last_heal_location;
+        let Some(map) = saved_map_id(heal_location) else {
+            eprintln!(
+                "white-out: last heal location {heal_location:?} does not name a known map -- \
+                 staying put"
+            );
+            return;
+        };
+        self.warp_to_position(map, heal_location.x, heal_location.y);
+    }
+
+    /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`):
+    /// full HP, full PP, and cleared status for every occupied party slot,
+    /// not just [`Self::party_lead`], followed by
+    /// [`crate::party::select_active_battler`]'s own upstream re-scan
+    /// (`SetBattlePartyIds`) for the active battler -- merging the outgoing
+    /// lead into its saved slot first so reselection cannot drop its
+    /// session heal, EVs, or experience. [`Self::white_out`] and
+    /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]
+    /// are upstream's only two `HealPlayerParty` call sites this port
+    /// models, and both share this one routine rather than each
+    /// duplicating it `(oop-boundaries)`; `context` only labels each
+    /// caller's own log lines (`"white-out"`, `"first battle"`).
+    pub(super) fn heal_whole_party_and_reselect_lead(&mut self, context: &str) {
         let dex = Dex::new();
         let stored_count =
             usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
@@ -167,7 +198,7 @@ impl OverworldPhase {
                 }
                 Err(error) => {
                     eprintln!(
-                        "white-out: couldn't fully heal the party lead's PP ({error}) -- HP and \
+                        "{context}: couldn't fully heal the party lead's PP ({error}) -- HP and \
                          status still cleared"
                     );
                 }
@@ -200,14 +231,14 @@ impl OverworldPhase {
                     }
                     Err(error) => {
                         eprintln!(
-                            "white-out: slot {slot} couldn't fully heal its PP ({error}) -- HP \
+                            "{context}: slot {slot} couldn't fully heal its PP ({error}) -- HP \
                              and status still cleared"
                         );
                     }
                 },
                 Err(error) => {
                     eprintln!(
-                        "white-out: slot {slot} {error} -- HP and status still cleared, PP left \
+                        "{context}: slot {slot} {error} -- HP and status still cleared, PP left \
                          as saved"
                     );
                 }
@@ -235,21 +266,10 @@ impl OverworldPhase {
                     }
                 }
                 Err(err) => {
-                    eprintln!("white-out: {err} -- keeping the previously selected slot");
+                    eprintln!("{context}: {err} -- keeping the previously selected slot");
                 }
             }
         }
-
-        // SetWarpDestinationToLastHealLocation() + WarpIntoMap().
-        let heal_location = self.save1.last_heal_location;
-        let Some(map) = saved_map_id(heal_location) else {
-            eprintln!(
-                "white-out: last heal location {heal_location:?} does not name a known map -- \
-                 staying put"
-            );
-            return;
-        };
-        self.warp_to_position(map, heal_location.x, heal_location.y);
     }
 }
 
