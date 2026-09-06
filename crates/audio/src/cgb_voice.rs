@@ -265,9 +265,9 @@ pub struct CgbVoice {
     /// A retrigger owed to the oscillator, applied at the next
     /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
     pending_retrigger: bool,
-    /// Set when a trigger's sweep overflow silences the hardware channel;
-    /// the envelope stays alive so a later safe trigger can revive it
-    /// (`Self::apply_retrigger`'s doc).
+    /// Set when a sweep overflow silences the hardware channel, whether at a
+    /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
+    /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
     hardware_muted: bool,
 }
 
@@ -606,7 +606,7 @@ impl CgbVoice {
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
                 if !self.oscillator.step_sweep_tick() {
-                    self.envelope.retire();
+                    self.hardware_muted = true;
                     break;
                 }
             }
@@ -1170,11 +1170,15 @@ mod tests {
     }
 
     #[test]
-    fn square1_sweep_overflow_retires_the_voice_mid_buffer() {
+    fn square1_sweep_overflow_mutes_the_voice_mid_buffer_until_the_next_safe_trigger() {
+        // A running sweep's overflow clears the channel-enable bit exactly as
+        // a trigger-time overflow does, and leaves the same later trigger able
+        // to revive it (`mgba/src/gb/audio.c:667-672`, `:180-186`).
+        let safe_key = 48;
         let mut voice = square_voice(
             CgbChannelNumber::Square1,
             Some(upward_sweep(1, 1)),
-            TestNote::at_key(48),
+            TestNote::at_key(safe_key),
         );
         assert!(
             voice.is_active(),
@@ -1198,8 +1202,25 @@ mod tests {
              at the buffer end"
         );
         assert!(
-            !voice.is_active(),
-            "the voice must retire once the sweep overflows"
+            voice.is_active(),
+            "the overflow mutes the hardware channel; the software voice lives on"
+        );
+        let mut still_muted = vec![(0i32, 0i32); 8];
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.render(&mut still_muted, &[]);
+        assert!(
+            still_muted.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the mute holds across frames until a trigger rechecks the sweep"
+        );
+
+        voice.set_track_pitch(0, 0);
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut revived = vec![(0i32, 0i32); 8];
+        voice.render(&mut revived, &[]);
+        assert!(
+            revived.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a later safe trigger must revive the muted voice, not find it retired"
         );
     }
 
