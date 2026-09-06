@@ -66,13 +66,13 @@ impl StatStage {
     ///
     /// Multiplication precedes integer division, matching `APPLY_STAT_MOD`
     /// (`pokeemerald/src/pokemon.c:3100`) when the ratio does not divide evenly.
-    /// The product widens through `u64` and saturates to `u32::MAX` if the
-    /// true result would not fit back.
+    /// The product widens through `u128` and saturates to `u32::MAX` if the
+    /// true result would not fit back. Use [`Self::apply_widened`] when the
+    /// caller keeps computing in a wider type.
     #[must_use]
     pub const fn apply(self, stat: u32) -> u32 {
-        let (numerator, denominator) = self.ratio();
-        let scaled = stat as u64 * numerator as u64 / denominator as u64;
-        if scaled > u32::MAX as u64 {
+        let scaled = self.scaled_u128(stat);
+        if scaled > u32::MAX as u128 {
             u32::MAX
         } else {
             #[expect(
@@ -82,6 +82,21 @@ impl StatStage {
             let narrowed = scaled as u32;
             narrowed
         }
+    }
+
+    /// Apply this stage to a base stat value without narrowing.
+    ///
+    /// A stage-scaled stat can exceed `u32::MAX` even when a caller's
+    /// further arithmetic on it would not; use this instead of
+    /// [`Self::apply`] to keep the true value in a widened chain.
+    #[must_use]
+    pub const fn apply_widened(self, stat: u32) -> u128 {
+        self.scaled_u128(stat)
+    }
+
+    const fn scaled_u128(self, stat: u32) -> u128 {
+        let (numerator, denominator) = self.ratio();
+        stat as u128 * numerator as u128 / denominator as u128
     }
 
     /// Add `delta`, clamping the result to [`Self::MIN`]`..=`[`Self::MAX`].
