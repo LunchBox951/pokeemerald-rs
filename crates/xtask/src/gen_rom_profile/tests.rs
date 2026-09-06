@@ -560,6 +560,9 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
     let out = dir.join("absent").join("..").join("emerald.gba");
+    // Windows collapses `..` lexically before touching the disk, so its
+    // pre-check already answers; the unanswerable case is a unix one.
+    #[cfg(unix)]
     assert!(
         !rom_import::overwrites_rom(&rom, &out),
         "the scenario under test is the one the pre-check cannot resolve"
