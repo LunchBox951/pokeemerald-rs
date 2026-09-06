@@ -28,8 +28,14 @@
 //! Payload region:
 //!   the concatenation of every entry's payload bytes, in directory order,
 //!   starting immediately after the last directory entry (so the first
-//!   entry's `offset` equals the header+directory size).
+//!   entry's `offset` equals the header+directory size) and ending at the
+//!   end of the file. No padding, no gaps, no trailing bytes.
 //! ```
+//!
+//! That arrangement is a structural contract rather than a writer
+//! convention: [`parse_directory`] rejects a pack whose payloads sit
+//! anywhere else, so slicing an entry's `offset`/`length` yields that
+//! entry's bytes and not whatever a corrupt offset pointed at.
 //!
 //! Payload shapes:
 //! - **Image**: `width * height` bytes, one palette-index byte per pixel,

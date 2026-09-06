@@ -1,16 +1,17 @@
 //! The read side: parse a pack's header and directory into
 //! [`DirectoryEntry`] values.
 //!
-//! Only the header and directory are parsed. The payload region is left
-//! alone: every entry carries the `offset`/`length` its payload occupies in
-//! the caller's own byte buffer, so a consumer slices bytes it already holds
+//! Only the header and directory are parsed. Payload bytes are never read:
+//! every entry carries the `offset`/`length` its payload occupies in the
+//! caller's own byte buffer, so a consumer slices bytes it already holds
 //! instead of this module copying them out (`crates/assets`'s `AssetPack`
 //! hands out borrowed views over exactly that buffer).
 //!
 //! Pack bytes are untrusted input. A developer's pack is produced locally by
 //! `cargo xtask extract`, but it is a plain file on disk that can be stale,
-//! truncated mid-write, or hand-built, so every field is bounds-checked and
-//! every failure is a typed [`PackReadError`] rather than a panic.
+//! truncated mid-write, or hand-built, so every field is bounds-checked, the
+//! directory is checked against the layout the format publishes, and every
+//! failure is a typed [`PackReadError`] rather than a panic.
 
 use std::fmt;
 
@@ -37,7 +38,8 @@ pub struct DirectoryEntry {
     pub kind: EntryKind,
     /// Absolute byte offset of the payload within the pack's bytes.
     /// [`parse_directory`] has already checked that `offset..offset + length`
-    /// is in bounds of the bytes it was handed.
+    /// is the region the format assigns this entry, so slicing it yields
+    /// this entry's payload and no other entry's bytes.
     pub offset: usize,
     /// The payload's length in bytes.
     pub length: usize,
@@ -61,6 +63,18 @@ pub enum PackReadError {
     /// entry's — the wire format requires ids strictly ascending and
     /// unique. Carries the offending id.
     UnsortedOrDuplicateId(String),
+    /// An entry's payload does not begin where the format puts it: the
+    /// payload region is the concatenation of every payload in directory
+    /// order, starting immediately after the directory (crate docs), so an
+    /// in-bounds offset that reaches into the header/directory, overlaps a
+    /// neighbour, or leaves a gap is still a corrupt pack. Carries the
+    /// offending id.
+    MisplacedPayload(String),
+    /// The file continued past the end of the last entry's payload. The
+    /// payload region ends the file, so a tail means bytes no directory
+    /// entry accounts for — an `entry_count` corrupted downwards reads this
+    /// way.
+    TrailingBytes,
 }
 
 impl fmt::Display for PackReadError {
@@ -75,6 +89,11 @@ impl fmt::Display for PackReadError {
             Self::UnsortedOrDuplicateId(id) => {
                 write!(f, "directory entry id `{id}` is out of order or duplicated")
             }
+            Self::MisplacedPayload(id) => write!(
+                f,
+                "directory entry id `{id}` has a payload outside the region the format assigns it"
+            ),
+            Self::TrailingBytes => write!(f, "bytes past the end of the payload region"),
         }
     }
 }
@@ -138,12 +157,41 @@ impl<'a> DirectoryReader<'a> {
     }
 }
 
+/// The payload region the format prescribes, checked against the one the
+/// directory declares: payloads concatenated in directory order from the
+/// first byte after the directory to the end of the file (crate docs).
+///
+/// Bounds-checking each range on its own is not enough. An in-bounds offset
+/// can still point into the header, overlap the previous payload, or skip a
+/// gap, and `AssetPack` would hand those unrelated bytes back as the asset
+/// the caller asked for instead of reporting a corrupt pack.
+fn check_payload_region(
+    entries: &[DirectoryEntry],
+    region_start: usize,
+    bytes_len: usize,
+) -> Result<(), PackReadError> {
+    let mut expected_offset = region_start;
+    for entry in entries {
+        if entry.offset != expected_offset {
+            return Err(PackReadError::MisplacedPayload(entry.id.clone()));
+        }
+        // Each entry's `offset + length` is already known in bounds, and
+        // this offset is that entry's, so the running end stays <= bytes_len.
+        expected_offset += entry.length;
+    }
+    if expected_offset != bytes_len {
+        return Err(PackReadError::TrailingBytes);
+    }
+    Ok(())
+}
+
 /// Parse the header and directory out of a pack file's bytes.
 ///
 /// Entries come back strictly ascending and unique by `id`, the order
 /// [`PackWriter::finish`](crate::PackWriter::finish) writes and the wire
 /// format requires — a consumer may binary-search the result without
-/// re-checking it.
+/// re-checking it. Each entry's `offset`/`length` is the region the format
+/// assigns it, not merely one that fits inside `bytes`.
 ///
 /// # Errors
 ///
@@ -152,10 +200,13 @@ impl<'a> DirectoryReader<'a> {
 /// [`FORMAT_VERSION`]; [`PackReadError::BadEntryKind`] on an unrecognized
 /// entry `kind` byte; [`PackReadError::UnsortedOrDuplicateId`] if an entry's
 /// id does not sort strictly after the previous entry's;
-/// [`PackReadError::Truncated`] if any field, id, or declared payload range
-/// runs past the end of `bytes` (a non-UTF-8 id reports as truncated too —
-/// the id length it declared cannot be trusted to have landed on a real
-/// field boundary).
+/// [`PackReadError::MisplacedPayload`] if an entry's payload does not begin
+/// where the previous one ended (the first immediately after the directory);
+/// [`PackReadError::TrailingBytes`] if `bytes` continues past the last
+/// payload; [`PackReadError::Truncated`] if any field, id, or declared
+/// payload range runs past the end of `bytes` (a non-UTF-8 id reports as
+/// truncated too — the id length it declared cannot be trusted to have
+/// landed on a real field boundary).
 pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadError> {
     let mut reader = DirectoryReader::new(bytes);
 
@@ -220,6 +271,8 @@ pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadErro
             length,
         });
     }
+
+    check_payload_region(&entries, reader.position, bytes.len())?;
 
     Ok(entries)
 }
@@ -335,6 +388,38 @@ mod tests {
             out.extend_from_slice(&e.payload);
         }
         out
+    }
+
+    /// Serialize `entries` as [`hand_built_pack`] does, then overwrite entry
+    /// `index`'s `offset` field, so a test can pin a payload somewhere the
+    /// format does not put it.
+    fn pack_with_payload_offset(entries: &[Fixture], index: usize, offset: usize) -> Vec<u8> {
+        let mut bytes = hand_built_pack(entries);
+        let mut field = 8 + 4 + 4;
+        for e in &entries[..index] {
+            field += 2 + e.id.len() + 1 + 8 + 8 + e.meta.len();
+        }
+        field += 2 + entries[index].id.len() + 1;
+        bytes[field..field + 8].copy_from_slice(&(offset as u64).to_le_bytes());
+        bytes
+    }
+
+    /// Two raw entries with distinct payloads, for the layout tests.
+    fn adjacent_raw_fixtures() -> Vec<Fixture> {
+        vec![
+            Fixture {
+                id: "a/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![1, 2],
+            },
+            Fixture {
+                id: "b/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![3, 4],
+            },
+        ]
     }
 
     /// One entry of each kind, ids already in sorted order.
@@ -502,6 +587,54 @@ mod tests {
         );
     }
 
+    /// An offset can fit inside the file and still name bytes that are not
+    /// this entry's payload. Each case below is in bounds, so only the
+    /// layout check rejects it.
+    #[test]
+    fn a_payload_outside_the_region_the_format_assigns_it_is_rejected() {
+        let fixtures = adjacent_raw_fixtures();
+        let first_offset = parse_directory(&hand_built_pack(&fixtures)).unwrap()[0].offset;
+
+        let into_the_header = pack_with_payload_offset(&fixtures, 0, 0);
+        assert_eq!(
+            parse_directory(&into_the_header),
+            Err(PackReadError::MisplacedPayload("a/raw".into()))
+        );
+
+        let gap_after_the_directory = pack_with_payload_offset(&fixtures, 0, first_offset + 1);
+        assert_eq!(
+            parse_directory(&gap_after_the_directory),
+            Err(PackReadError::MisplacedPayload("a/raw".into()))
+        );
+
+        let overlapping_its_neighbour = pack_with_payload_offset(&fixtures, 1, first_offset);
+        assert_eq!(
+            parse_directory(&overlapping_its_neighbour),
+            Err(PackReadError::MisplacedPayload("b/raw".into()))
+        );
+    }
+
+    /// The payload region ends the file, so a tail is a pack whose directory
+    /// does not account for every byte. An `entry_count` corrupted to zero
+    /// reads exactly this way: every entry check is skipped, and only the
+    /// trailing region reveals the directory that is still there.
+    #[test]
+    fn bytes_past_the_last_payload_are_rejected() {
+        let mut appended = fixture_pack();
+        appended.push(0);
+        assert_eq!(
+            parse_directory(&appended),
+            Err(PackReadError::TrailingBytes)
+        );
+
+        let mut no_entries_declared = fixture_pack();
+        no_entries_declared[12..16].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            parse_directory(&no_entries_declared),
+            Err(PackReadError::TrailingBytes)
+        );
+    }
+
     #[test]
     fn a_non_utf8_id_is_rejected() {
         let mut bytes = hand_built_pack(&[Fixture {
@@ -541,6 +674,14 @@ mod tests {
         assert_eq!(
             PackReadError::UnsortedOrDuplicateId("a/raw".into()).to_string(),
             "directory entry id `a/raw` is out of order or duplicated"
+        );
+        assert_eq!(
+            PackReadError::MisplacedPayload("a/raw".into()).to_string(),
+            "directory entry id `a/raw` has a payload outside the region the format assigns it"
+        );
+        assert_eq!(
+            PackReadError::TrailingBytes.to_string(),
+            "bytes past the end of the payload region"
         );
     }
 }

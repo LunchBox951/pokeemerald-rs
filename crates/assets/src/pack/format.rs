@@ -16,15 +16,19 @@ impl From<PackReadError> for PackError {
     /// One variant per distinguishable parse failure, so the loader's own
     /// diagnostics (which name the pack path and the command that rebuilds
     /// it) stay this crate's to word. A malformed directory —
-    /// [`PackReadError::Truncated`] or [`PackReadError::UnsortedOrDuplicateId`] —
-    /// collapses to [`PackError::Truncated`]: both mean the pack is not
-    /// well-formed, and neither carries a diagnostic worth this crate
-    /// wording differently.
+    /// [`PackReadError::Truncated`], [`PackReadError::UnsortedOrDuplicateId`],
+    /// [`PackReadError::MisplacedPayload`], or [`PackReadError::TrailingBytes`]
+    /// — collapses to [`PackError::Truncated`]: each means the pack is not
+    /// well-formed, and none carries a diagnostic worth this crate wording
+    /// differently.
     fn from(error: PackReadError) -> Self {
         match error {
             PackReadError::BadMagic => Self::BadMagic,
             PackReadError::UnsupportedVersion(version) => Self::UnsupportedVersion(version),
-            PackReadError::Truncated | PackReadError::UnsortedOrDuplicateId(_) => Self::Truncated,
+            PackReadError::Truncated
+            | PackReadError::UnsortedOrDuplicateId(_)
+            | PackReadError::MisplacedPayload(_)
+            | PackReadError::TrailingBytes => Self::Truncated,
             PackReadError::BadEntryKind(byte) => Self::BadEntryKind(byte),
         }
     }
