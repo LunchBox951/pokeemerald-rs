@@ -37,24 +37,46 @@ fn every_decoration_flag_id_is_settable() {
 /// extraction pipeline ever bundles another bedroom or secret base.
 #[test]
 fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
-    /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
-    /// mirrored here as `crate::overworld::npc`'s own tests mirror it (this
-    /// crate cannot depend on `xtask`; that module's
-    /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` is
-    /// the tripwire for the list itself growing).
-    const BUNDLED_MAPS: [&str; 6] = [
-        "MAP_LITTLEROOT_TOWN",
-        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-        "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+    /// The layouts `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
+    /// mirrored here as `assets::object_event_flags`'s own
+    /// `BUNDLED_LAYOUTS` mirrors it (this crate cannot depend on `xtask`;
+    /// that module's `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
+    /// is the tripwire for the list itself growing).
+    const BUNDLED_LAYOUTS: [&str; 10] = [
+        "LAYOUT_LITTLEROOT_TOWN",
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+        "LAYOUT_ROUTE101",
+        "LAYOUT_OLDALE_TOWN",
+        "LAYOUT_ROUTE103",
     ];
 
-    let table = assets::MapEventsTable::new();
-    let mut with_placeholders: Vec<MapId> = BUNDLED_MAPS
+    // Every map naming one of those layouts, derived rather than restated --
+    // the same derivation `assets::object_event_flags`'s own
+    // `BUNDLED_LAYOUTS`-driven test uses, so bundling a layout widens this
+    // sweep automatically instead of needing a second hand-maintained list.
+    let mut bundled_maps: Vec<MapId> = assets::MapHeaderTable::new()
         .iter()
-        .map(|m| MapId(m))
+        .filter(|header| BUNDLED_LAYOUTS.contains(&header.layout.name()))
+        .map(|header| header.id)
+        .collect();
+    bundled_maps.sort_unstable_by_key(|m| m.0);
+    assert_eq!(
+        bundled_maps.len(),
+        9,
+        "the ten bundled layouts cover nine maps (the lab's `_WITH_TABLE` \
+         variant is an alternate layout for a map already listed, not a map \
+         of its own)"
+    );
+
+    let table = assets::MapEventsTable::new();
+    let mut with_placeholders: Vec<MapId> = bundled_maps
+        .iter()
+        .copied()
         .filter(|map| {
             table.resolve(*map).is_ok_and(|events| {
                 events
