@@ -795,6 +795,10 @@ mod tests {
     /// - `crates/pokeemerald-rs/src/overworld/mod.rs`'s
     ///   `resolve_tileset_pack_name` (a new layout may name a sixth
     ///   tileset).
+    /// - `crates/pokeemerald-rs/src/flow/overworld_phase/decoration_tests.rs`'s
+    ///   `BUNDLED_LAYOUTS` mirror and the map count asserted beside it (its
+    ///   decoration-placeholder sweep examines only the maps that mirror
+    ///   names, so a layout missing from it is a map the sweep skips).
     #[test]
     fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
         let ids: Vec<&str> = LAYOUTS.iter().map(|(id, _)| *id).collect();
