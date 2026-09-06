@@ -159,15 +159,33 @@ impl Nature {
     /// Applies this nature's percentage modifier using truncating integer
     /// arithmetic.
     ///
-    /// The widened intermediate follows upstream's `BUGFIX` path and avoids an
-    /// overflow that only synthetic stats can reach (`src/pokemon.c:5878`).
+    /// Upstream's `BUGFIX` path widens its accumulator from `u16` to `u32`
+    /// before dividing (`src/pokemon.c:5878`); this port's `value` is already
+    /// `u32`, so the scaling product widens further to `u64` and saturates to
+    /// `u32::MAX` if the true result would not fit back.
     #[must_use]
     pub const fn modify_stat(self, stat: Stat, value: u32) -> u32 {
         match self.modifier(stat) {
-            1 => value * FAVOURED_PERCENT / PERCENT_SCALE,
-            -1 => value * DISFAVOURED_PERCENT / PERCENT_SCALE,
+            1 => scale_by_percent(value, FAVOURED_PERCENT),
+            -1 => scale_by_percent(value, DISFAVOURED_PERCENT),
             _ => value,
         }
+    }
+}
+
+/// Multiplies `value` by `percent`, divides by [`PERCENT_SCALE`], and
+/// saturates to `u32::MAX` if the widened result would not narrow back.
+const fn scale_by_percent(value: u32, percent: u32) -> u32 {
+    let scaled = value as u64 * percent as u64 / PERCENT_SCALE as u64;
+    if scaled > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "scaled is checked against u32::MAX above"
+        )]
+        let narrowed = scaled as u32;
+        narrowed
     }
 }
 
@@ -381,6 +399,27 @@ mod tests {
     fn modify_stat_truncates_like_upstream_integer_division() {
         assert_eq!(Nature::Adamant.modify_stat(Stat::Attack, 91), 100);
         assert_eq!(Nature::Adamant.modify_stat(Stat::SpAttack, 91), 81);
+    }
+
+    #[test]
+    fn modify_stat_keeps_a_representable_result_past_a_u32_overflowing_product() {
+        // 50_000_000 * 110 and * 90 both exceed u32::MAX before the divide.
+        assert_eq!(
+            Nature::Adamant.modify_stat(Stat::Attack, 50_000_000),
+            55_000_000
+        );
+        assert_eq!(
+            Nature::Adamant.modify_stat(Stat::SpAttack, 50_000_000),
+            45_000_000
+        );
+    }
+
+    #[test]
+    fn modify_stat_saturates_instead_of_overflowing_u32() {
+        assert_eq!(
+            Nature::Adamant.modify_stat(Stat::Attack, u32::MAX),
+            u32::MAX
+        );
     }
 
     #[test]
