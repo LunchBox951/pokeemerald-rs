@@ -1,11 +1,10 @@
 //! Where the pack lives at runtime.
 //!
-//! `AssetPack::default_path` used to derive the pack's location from
-//! `env!("CARGO_MANIFEST_DIR")`, the *build machine's* checkout. That is
-//! right for a developer running `cargo test` and wrong for every
-//! distributed binary, which would look for the pack on a CI runner's disk.
-//! Policy C (the shipped ROM importer) makes that a real user-facing path,
-//! so resolution moves here and gains the rungs a shipped binary needs.
+//! The compile-time checkout path (`env!("CARGO_MANIFEST_DIR")`) is the
+//! *build machine's*, right for a developer running `cargo test` and wrong
+//! for every distributed binary. The shipped ROM importer (Policy C) makes
+//! the pack a user-facing path, so resolution owns the rungs a shipped
+//! binary needs and falls back to the checkout last.
 //!
 //! Resolution is pure: [`resolve`] takes the environment, the executable's
 //! directory, and an existence predicate as arguments, so every rung and
