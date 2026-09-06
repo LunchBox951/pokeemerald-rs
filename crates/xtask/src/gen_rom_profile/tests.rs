@@ -482,15 +482,15 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
     // inode both names share.
     //
     // Exercised on Unix because that is where a hard link can be made in a
-    // test; the property under test is `write_module`'s, and it is the same
-    // on every platform.
+    // test; the property under test is `publish`'s, and it is the same on
+    // every platform.
     let dir = scratch("write-through-hard-link");
     let rom = dir.join("emerald.gba");
     let before = rom_shaped_file(&rom);
     let alias = dir.join("bpee_rev0.rs");
     std::fs::hard_link(&rom, &alias).expect("the alias links");
 
-    super::write_module(&alias, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
+    super::publish(&alias, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
 
     assert_eq!(
         std::fs::read(&rom).expect("the ROM survives"),
@@ -514,7 +514,7 @@ fn a_failed_publish_leaves_no_temporary_beside_the_output() {
     let dir = scratch("failed-publish-leaves-no-litter");
     let out = dir.join("bpee_rev0.rs");
     std::fs::create_dir_all(&out).expect("the colliding directory");
-    let result = super::write_module(&out, "pub const GENERATED: u32 = 0;\n");
+    let result = super::publish(&out, "pub const GENERATED: u32 = 0;\n");
     assert!(
         matches!(result, Err(super::GenRomProfileError::WriteFailed { .. })),
         "{result:?}"
@@ -536,7 +536,7 @@ fn a_failed_publish_leaves_no_temporary_beside_the_output() {
 fn a_successful_write_leaves_only_the_output() {
     let dir = scratch("write-leaves-no-litter");
     let out = dir.join("bpee_rev0.rs");
-    super::write_module(&out, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
+    super::publish(&out, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
 
     let stray: Vec<_> = std::fs::read_dir(&dir)
         .expect("listing")
@@ -547,5 +547,47 @@ fn a_successful_write_leaves_only_the_output() {
     assert!(stray.is_empty(), "{stray:?}");
 
     let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
+    // The alias the pre-check cannot answer: `absent/` does not exist when
+    // `run` asks, so `absent/..` resolves to nothing and the guard lets the
+    // path through. Creating that directory is what makes the output name
+    // the ROM, and the publishing rename is what would land on it.
+    let dir = scratch("out-reaches-rom-through-missing-dir");
+    let rom = dir.join("emerald.gba");
+    let before = rom_shaped_file(&rom);
+    let out = dir.join("absent").join("..").join("emerald.gba");
+    assert!(
+        !rom_import::overwrites_rom(&rom, &out),
+        "the scenario under test is the one the pre-check cannot resolve"
+    );
+
+    let err = super::write_module(&rom, &out, "pub const GENERATED: u32 = 0;\n")
+        .expect_err("an output that resolves to the ROM must be refused");
+
+    assert!(
+        matches!(err, GenRomProfileError::OutputIsRom { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&rom).expect("the ROM survives"),
+        before,
+        "the ROM must be byte-identical after a refused write"
+    );
+    // The refused write leaves the directory it had to create to ask the
+    // question, and nothing else: no module, no temporary beside the ROM.
+    let stray: Vec<_> = std::fs::read_dir(&dir)
+        .expect("listing")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| name != "emerald.gba" && name != "absent")
+        .collect();
+    assert!(stray.is_empty(), "{stray:?}");
+
+    let _ = std::fs::remove_dir(dir.join("absent"));
+    let _ = std::fs::remove_file(&rom);
     let _ = std::fs::remove_dir(&dir);
 }

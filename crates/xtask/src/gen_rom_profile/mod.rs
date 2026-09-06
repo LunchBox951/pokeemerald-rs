@@ -172,9 +172,11 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
         .out
         .clone()
         .unwrap_or_else(|| repo_root.join(PROFILE_RELATIVE_PATH));
-    // Refused before the search, not at the write: the answer cannot change
-    // during a run, and a developer who spelled one file two ways should
-    // hear about it before minutes of scanning, not after.
+    // Refused before the search, not only at the write: a developer who
+    // spelled one file two ways should hear about it before minutes of
+    // scanning, not after. Creating the output's directory is the one
+    // thing a run does that can change this answer, so `write_module`
+    // asks again on the far side of it.
     //
     // Before `select_profile` too, deliberately. The ROM is the one input
     // here that cannot be regenerated -- a developer's own cartridge dump,
@@ -234,7 +236,7 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
     let module = emit::module(&plan, &profile.sha1.to_string(), lines.len());
-    write_module(&out_path, &module)?;
+    write_module(&options.rom, &out_path, &module)?;
 
     Ok(GenReport {
         out_path,
@@ -335,33 +337,55 @@ fn describe(expectation: &SymbolExpectation) -> String {
     }
 }
 
-/// Write the generated module, creating its directory if needed.
+/// Create the output's directory, ask [`run`]'s question once more now
+/// that the answer can change, and publish the module.
 ///
-/// Through a sibling temporary file and a rename, never a truncating write
-/// onto `path`. Two reasons, and the second is why it is not merely tidy:
+/// `run` refuses an `--out` that names the ROM before the search starts,
+/// but it asks about the paths as they stand then. An output that reaches
+/// the ROM through a directory that does not exist yet and a `..`
+/// (`--out absent/../emerald.gba` beside the ROM) resolves to nothing, and
+/// `rom_import::overwrites_rom` answers `false` for what it cannot
+/// resolve. Creating the parent is what makes that path resolve, and it
+/// resolves to the ROM. So the guard runs again between that creation and
+/// the rename, the step that would land on the cartridge image.
+fn write_module(rom_path: &Path, path: &Path, module: &str) -> Result<(), GenRomProfileError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| GenRomProfileError::WriteFailed {
+            path: path.to_path_buf(),
+            reason: err.to_string(),
+        })?;
+    }
+    if rom_import::overwrites_rom(rom_path, path) {
+        return Err(GenRomProfileError::OutputIsRom {
+            rom_path: rom_path.to_path_buf(),
+            out_path: path.to_path_buf(),
+        });
+    }
+    publish(path, module)
+}
+
+/// Write the module through a sibling temporary file and a rename, never a
+/// truncating write onto `path`. Two reasons, and the second is why it is
+/// not merely tidy:
 ///
 /// 1. A run that dies mid-write leaves the previous profile intact instead
 ///    of a half-written module that will not compile — the same reason
 ///    `import_rom` and `engine`'s save writer publish by rename.
 /// 2. It replaces a *name*, so it cannot destroy a file reachable under
-///    another one. [`run`]'s guard catches an `--out` that resolves to the
-///    ROM, but `rom_import::overwrites_rom` cannot see a hard link off
-///    Unix (`std` exposes no file identity there). A truncating write
-///    through such an alias would destroy the cartridge image under every
-///    one of its names; a rename retires only the alias, and the ROM
-///    survives under the name `--rom` gave.
+///    another one. [`write_module`]'s guards catch an `--out` that
+///    resolves to the ROM, but `rom_import::overwrites_rom` cannot see a
+///    hard link off Unix (`std` exposes no file identity there). A
+///    truncating write through such an alias would destroy the cartridge
+///    image under every one of its names; a rename retires only the alias,
+///    and the ROM survives under the name `--rom` gave.
 ///
 /// Same directory on both sides, so the rename is atomic and never
 /// `EXDEV`.
-fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
+fn publish(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
     let failed = |err: std::io::Error| GenRomProfileError::WriteFailed {
         path: path.to_path_buf(),
         reason: err.to_string(),
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(failed)?;
-    }
-
     let temp = temp_sibling(path);
     // Exclusive create, so a name two runs somehow both chose fails here
     // instead of putting both of them on one file.
@@ -391,7 +415,7 @@ fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
 /// one. `import_rom`'s destination names its temporary the same way.
 ///
 /// Not a security boundary — this is a developer tool writing into a
-/// checkout — and [`write_module`]'s exclusive create is what makes a
+/// checkout — and [`publish`]'s exclusive create is what makes a
 /// collision an error rather than two writers on one file.
 fn temp_sibling(path: &Path) -> PathBuf {
     let nanos = SystemTime::now()
