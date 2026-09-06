@@ -21,7 +21,7 @@
 //!     offset:  u64                absolute byte offset of the payload
 //!     length:  u64                payload length in bytes
 //!     -- kind-specific fixed metadata --
-//!     Image:   width: u32, height: u32, bit_depth: u8
+//!     Image:   width: u32, height: u32, bit_depth: u8 (2, 4, or 8)
 //!     Palette: color_count: u16
 //!     Raw:     (none)
 //!

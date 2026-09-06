@@ -28,6 +28,11 @@ const IMAGE_KIND_TAG: u8 = 0;
 const PALETTE_KIND_TAG: u8 = 1;
 const RAW_KIND_TAG: u8 = 2;
 
+/// The image bit depths the format publishes ([`EntryKind::Image`]'s
+/// `bit_depth`). The payload is one byte per pixel at every one of them, so
+/// this is the closed set a consumer may see, not a size input.
+const IMAGE_BIT_DEPTHS: [u8; 3] = [2, 4, 8];
+
 /// One parsed directory entry: an id, its kind metadata, and where its
 /// payload lives in the pack's byte buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +67,11 @@ pub enum PackReadError {
     /// An entry's `kind` byte was not one of the three the format defines
     /// (0/1/2). Carries the offending byte.
     BadEntryKind(u8),
+    /// An [`EntryKind::Image`]'s `bit_depth` was not one of the depths the
+    /// format publishes (2, 4, or 8), so the entry declares metadata the
+    /// format does not allow and `AssetPack`'s `ImageRef` would carry a
+    /// depth its own documented domain excludes. Carries the offending byte.
+    BadImageBitDepth(u8),
     /// A directory entry's id did not sort strictly after the previous
     /// entry's — the wire format requires ids strictly ascending and
     /// unique. Carries the offending id.
@@ -95,6 +105,9 @@ impl fmt::Display for PackReadError {
             }
             Self::Truncated => write!(f, "truncated or corrupt"),
             Self::BadEntryKind(byte) => write!(f, "invalid entry kind byte `{byte}`"),
+            Self::BadImageBitDepth(depth) => {
+                write!(f, "invalid image bit depth `{depth}` (expected 2, 4, or 8)")
+            }
             Self::UnsortedOrDuplicateId(id) => {
                 write!(f, "directory entry id `{id}` is out of order or duplicated")
             }
@@ -240,7 +253,9 @@ fn check_payload_region(
 /// [`PackReadError::BadMagic`] if the leading 8 bytes are not [`MAGIC`];
 /// [`PackReadError::UnsupportedVersion`] if the version field is not
 /// [`FORMAT_VERSION`]; [`PackReadError::BadEntryKind`] on an unrecognized
-/// entry `kind` byte; [`PackReadError::UnsortedOrDuplicateId`] if an entry's
+/// entry `kind` byte; [`PackReadError::BadImageBitDepth`] on an image
+/// `bit_depth` the format does not publish;
+/// [`PackReadError::UnsortedOrDuplicateId`] if an entry's
 /// id does not sort strictly after the previous entry's;
 /// [`PackReadError::MisplacedPayload`] if an entry's payload does not begin
 /// where the previous one ended (the first immediately after the directory);
@@ -286,6 +301,9 @@ pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadErro
                 let width = reader.read_u32()?;
                 let height = reader.read_u32()?;
                 let bit_depth = reader.read_u8()?;
+                if !IMAGE_BIT_DEPTHS.contains(&bit_depth) {
+                    return Err(PackReadError::BadImageBitDepth(bit_depth));
+                }
                 EntryKind::Image {
                     width,
                     height,
@@ -730,6 +748,47 @@ mod tests {
         assert_eq!(parse_directory(&raw).unwrap()[0].length, 3);
     }
 
+    /// `bit_depth` names a closed set (2, 4, or 8 — [`EntryKind::Image`]),
+    /// and `AssetPack`'s `ImageRef` republishes that domain to every
+    /// consumer, so a byte outside it is a corrupt pack rather than a depth
+    /// to pass on. Each case below is otherwise well-formed, so only the
+    /// depth check rejects it.
+    #[test]
+    fn an_image_bit_depth_the_format_does_not_publish_is_rejected() {
+        let image_with_depth = |depth: u8| {
+            let mut meta = Vec::new();
+            meta.extend_from_slice(&2u32.to_le_bytes());
+            meta.extend_from_slice(&2u32.to_le_bytes());
+            meta.push(depth);
+            hand_built_pack(&[Fixture {
+                id: "a/image",
+                kind_tag: 0,
+                meta,
+                payload: vec![1, 2, 3, 4],
+            }])
+        };
+
+        for depth in [0, 1, 3, 16, u8::MAX] {
+            assert_eq!(
+                parse_directory(&image_with_depth(depth)),
+                Err(PackReadError::BadImageBitDepth(depth))
+            );
+        }
+
+        // The published depths all describe the same one-byte-per-pixel
+        // payload, so each parses back unchanged.
+        for depth in [2, 4, 8] {
+            assert_eq!(
+                parse_directory(&image_with_depth(depth)).unwrap()[0].kind,
+                EntryKind::Image {
+                    width: 2,
+                    height: 2,
+                    bit_depth: depth,
+                }
+            );
+        }
+    }
+
     /// A `width * height` that no payload could match must be rejected as
     /// the misshapen entry it is, rather than overflow the multiplication.
     #[test]
@@ -815,6 +874,10 @@ mod tests {
         assert_eq!(
             PackReadError::MisplacedPayload("a/raw".into()).to_string(),
             "directory entry id `a/raw` has a payload outside the region the format assigns it"
+        );
+        assert_eq!(
+            PackReadError::BadImageBitDepth(3).to_string(),
+            "invalid image bit depth `3` (expected 2, 4, or 8)"
         );
         assert_eq!(
             PackReadError::MisshapenPayload("a/image".into()).to_string(),

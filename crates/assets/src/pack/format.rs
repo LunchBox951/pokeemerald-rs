@@ -16,7 +16,8 @@ impl From<PackReadError> for PackError {
     /// One variant per distinguishable parse failure, so the loader's own
     /// diagnostics (which name the pack path and the command that rebuilds
     /// it) stay this crate's to word. A malformed directory —
-    /// [`PackReadError::Truncated`], [`PackReadError::UnsortedOrDuplicateId`],
+    /// [`PackReadError::Truncated`], [`PackReadError::BadImageBitDepth`],
+    /// [`PackReadError::UnsortedOrDuplicateId`],
     /// [`PackReadError::MisplacedPayload`], [`PackReadError::MisshapenPayload`],
     /// or [`PackReadError::TrailingBytes`]
     /// — collapses to [`PackError::Truncated`]: each means the pack is not
@@ -27,6 +28,7 @@ impl From<PackReadError> for PackError {
             PackReadError::BadMagic => Self::BadMagic,
             PackReadError::UnsupportedVersion(version) => Self::UnsupportedVersion(version),
             PackReadError::Truncated
+            | PackReadError::BadImageBitDepth(_)
             | PackReadError::UnsortedOrDuplicateId(_)
             | PackReadError::MisplacedPayload(_)
             | PackReadError::MisshapenPayload(_)
