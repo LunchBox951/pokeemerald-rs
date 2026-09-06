@@ -63,6 +63,10 @@ pub enum EntryShapeError {
     /// other packed tile format, and 1bpp/2bpp sources reach the pack
     /// already expanded to one byte per pixel. Carries the requested depth.
     UnsupportedBitDepth(u8),
+    /// An image bit depth outside the set the format publishes (2, 4, or 8)
+    /// was requested for a one-byte-per-pixel raster; the reader rejects
+    /// such a pack, so the writer refuses to produce it. Carries the depth.
+    UnpublishedImageBitDepth(u8),
     /// A metatile shape did not tile the image's 8x8 grid evenly (or had a
     /// zero side). Carries the requested metatile shape and the grid it had
     /// to divide, both in tiles.
@@ -97,6 +101,12 @@ impl fmt::Display for EntryShapeError {
             ),
             Self::UnsupportedBitDepth(depth) => {
                 write!(f, "unsupported tile bit depth {depth} (expected 4 or 8)")
+            }
+            Self::UnpublishedImageBitDepth(depth) => {
+                write!(
+                    f,
+                    "image bit depth {depth} is not one the format publishes (2, 4, or 8)"
+                )
             }
             Self::MetatileMisaligned {
                 metatile_width,
@@ -147,8 +157,9 @@ pub fn palette_entry(id: String, colors_bgr555: &[u16]) -> Result<PackEntry, Ent
 ///
 /// # Errors
 ///
-/// [`EntryShapeError::ImageSizeMismatch`] if `pixels.len()` is not exactly
-/// `width * height`.
+/// [`EntryShapeError::UnpublishedImageBitDepth`] if `bit_depth` is not 2, 4,
+/// or 8; [`EntryShapeError::ImageSizeMismatch`] if `pixels.len()` is not
+/// exactly `width * height`.
 pub fn image_entry(
     id: String,
     width: u32,
@@ -156,6 +167,9 @@ pub fn image_entry(
     bit_depth: u8,
     pixels: Vec<u8>,
 ) -> Result<PackEntry, EntryShapeError> {
+    if !matches!(bit_depth, 2 | 4 | 8) {
+        return Err(EntryShapeError::UnpublishedImageBitDepth(bit_depth));
+    }
     let expected = (width as usize).checked_mul(height as usize);
     if expected != Some(pixels.len()) {
         return Err(EntryShapeError::ImageSizeMismatch {

@@ -57,6 +57,23 @@ fn image_entry_keeps_the_raster_verbatim() {
 }
 
 #[test]
+fn image_entry_rejects_a_bit_depth_the_format_does_not_publish() {
+    for depth in [0, 1, 3, 5, 7, 16] {
+        assert_eq!(
+            image_entry("i".into(), 2, 3, depth, vec![0; 6]).unwrap_err(),
+            EntryShapeError::UnpublishedImageBitDepth(depth),
+            "depth {depth}"
+        );
+    }
+    for depth in [2, 4, 8] {
+        assert!(
+            image_entry("i".into(), 2, 3, depth, vec![0; 6]).is_ok(),
+            "depth {depth}"
+        );
+    }
+}
+
+#[test]
 fn image_entry_rejects_a_buffer_that_is_not_width_times_height() {
     assert_eq!(
         image_entry("i".into(), 2, 3, 4, vec![0; 5]).unwrap_err(),
