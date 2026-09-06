@@ -1,5 +1,6 @@
-//! Compiles `mus_title.mid` into the asset pack's backend-neutral song
-//! schema ([`event::SongEvent`]).
+//! Compiles `mus_title.mid` into the normalized compiler event model
+//! ([`event::SongEvent`]) that [`encode`] writes as the asset pack's
+//! backend-neutral song schema.
 //!
 //! # Scope: `mus_title` only, at its own compile flags
 //!
@@ -11,11 +12,12 @@
 //! closed ([`error::MidiError::NonExactGateTime`]/
 //! [`error::MidiError::UnsupportedClocksPerBeat`]) if a future caller ever
 //! points it at a `midi.cfg` entry that doesn't. See [`compile`]'s module
-//! docs for why each flag is required. `MEMACC` controllers
-//! ([`error::MidiError::UnsupportedMemAccController`]) fail closed in
-//! [`compile`] for every song; `mus_title.mid` carries none, and the
-//! schema's one `MEMACC` user, `mus_vs_trainer`, is a different song this
-//! compiler never touches.
+//! docs for why each flag is required. A `MEMACC` controller fails closed
+//! ([`error::MidiError::UnsupportedMemAccController`]) only on a playable
+//! channel; [`compile`] drops unplayable channels before reading their
+//! controllers at all. `mus_title.mid` carries none, and the pack schema's
+//! one `MEMACC` user, `mus_vs_trainer`, is a different song this compiler
+//! never touches.
 //!
 //! The compiler models every command family [`event::SongEvent`] can
 //! represent, including loop markers, which `mus_title.mid` itself never
@@ -117,8 +119,8 @@ mod tests {
     }
 
     /// Pins values hand-verified against a locally built `tools/mid2agb`
-    /// oracle: this compiler's own event order matches the oracle's
-    /// assembly listing for `mus_title_1` (not encoded wire bytes). See
+    /// oracle's assembly listing, not its encoded wire bytes: the slices and
+    /// aggregates asserted below, not the full event stream. See
     /// [`super::compile`]'s module docs for why `Wait` placement can still
     /// diverge from the oracle's own `Wnn` opcodes while representing the
     /// identical delay.
