@@ -1,6 +1,7 @@
 //! Tests for [`super::OverworldPhase::step`] and related stepping/collision
 //! behaviour.
 
+use super::step::InteractionOutcome;
 use super::test_support::*;
 use super::OverworldPhase;
 use crate::new_game;
@@ -93,6 +94,84 @@ fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
             "and only a fresh A edge interacts at all"
         );
     }
+}
+
+/// Issue #435 regression: a same-frame A-plus-direction press must resolve
+/// the interaction lookup against the PRE-movement facing, and a hit must
+/// preempt this frame's movement outright -- see [`OverworldPhase::step`]'s
+/// "NPC dialog routing" section for the upstream citations. Before this
+/// fix, a perpendicular direction held alongside A would turn the player
+/// before the interaction lookup ran, missing Mom.
+///
+/// `AssetPack::load_default` (needed to actually render a dialog box) is
+/// unavailable headless, so this checks the interaction lookup's own
+/// outcome directly (the same pattern
+/// `a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`
+/// uses) rather than `phase.dialog` -- the real-pack acceptance test in
+/// `frame_tests` already covers the box actually opening.
+#[test]
+fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player() {
+    // Two tiles east of Mom is too far; one tile east, facing west, is
+    // exactly adjacent (module docs' `ONE_F` fixture notes).
+    let start = PlayerState::new((3, 6), 3, Direction::West);
+    let mut phase = synthetic_phase(start, None);
+
+    {
+        let runtime = runtime_for(&phase);
+        // North is perpendicular to the player's West facing -- a step in
+        // that direction would turn the player away from Mom if movement
+        // ran first.
+        let outcome =
+            phase.interaction_tokens_this_frame(pressed(Buttons::A | Buttons::UP), &runtime);
+        assert!(
+            matches!(outcome, Some(InteractionOutcome::Dialog(_))),
+            "the pre-movement facing (still West) must find Mom and her recognized script, \
+             even with a perpendicular direction also pressed this frame"
+        );
+    }
+
+    // Drive the identical buttons through the real `step()` pipeline: the
+    // interaction must claim the frame before `advance_or_skip_for_preempt`
+    // can turn or step the player.
+    phase.step(pressed(Buttons::A | Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (3, 6),
+        "an interaction that fires this frame must preempt the step"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "and the turn too -- PlayerStep never runs once the interaction claims the frame"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation may have started either"
+    );
+}
+
+/// The complement: an A press with a direction held, but facing nothing,
+/// must still turn or step exactly as it did before this fix -- the
+/// preempt-movement path introduced for issue #435 must not fire when
+/// [`OverworldPhase::interaction_tokens_this_frame`] finds no object event.
+#[test]
+fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
+    // One tile further east than the fixture above: (3, 6) ahead is clear
+    // of visible object events (module docs' `ONE_F` fixture notes).
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert!(
+        phase.dialog.is_none(),
+        "no object event stands ahead of this tile -- nothing to interact with"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "an A press with no interaction to preempt movement must still let the direction turn \
+         the player, exactly as a direction alone would"
+    );
 }
 
 /// Headless counterpart to the real-pack acceptance test: while a dialog is
