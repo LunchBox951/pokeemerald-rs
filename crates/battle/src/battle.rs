@@ -235,6 +235,7 @@ use assets::trainers::TrainerId;
 use assets::MoveId;
 
 use crate::damage::{BattleRng, STRUGGLE};
+use crate::defense_curl;
 use crate::dex::Dex;
 use crate::drain;
 use crate::error::BattleError;
@@ -309,19 +310,20 @@ pub enum BattleOutcome {
 /// slot each turn, so no pipeline behind [`Battle::execute_move`] ever sees a
 /// move it would have to guess at.
 ///
-/// Seven pipelines are accepted, tried in this order:
+/// Eight pipelines are accepted, tried in this order:
 ///
-/// | pipeline | script | added by |
-/// |---|---|---|
-/// | [`crate::hit`] | `BattleScript_EffectHit` | #125 |
-/// | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` family | #199, widened by #322 |
-/// | [`crate::drain`] | `BattleScript_EffectAbsorb` | #321 |
-/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` | #321 |
-/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` | #321 |
-/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` | #321 |
-/// | [`crate::paralyze`] | `BattleScript_EffectParalyze` | this slice |
+/// | pipeline | script |
+/// |---|---|
+/// | [`crate::hit`] | `BattleScript_EffectHit` |
+/// | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` family |
+/// | [`crate::drain`] | `BattleScript_EffectAbsorb` |
+/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` |
+/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` |
+/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` |
+/// | [`crate::defense_curl`] | `_EffectDefenseCurl` |
+/// | [`crate::paralyze`] | `BattleScript_EffectParalyze` |
 ///
-/// The order is a *diagnostics* choice, not a semantic one: the seven
+/// The order is a *diagnostics* choice, not a semantic one: the eight
 /// allow-lists are disjoint (each is a set of `EFFECT_*` ids, and no id
 /// appears in two), so at most one can accept. The hit pipeline goes first
 /// so its richer errors — [`BattleError::NonDamagingMove`],
@@ -355,6 +357,7 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
                 || fixed_damage::ensure_resolvable(dex, move_id).is_ok()
                 || multi_hit::ensure_resolvable(dex, move_id).is_ok()
                 || flag_move::ensure_resolvable(dex, move_id).is_ok()
+                || defense_curl::ensure_resolvable(dex, move_id).is_ok()
                 || paralyze::ensure_resolvable(dex, move_id).is_ok();
             if accepted {
                 Ok(())
