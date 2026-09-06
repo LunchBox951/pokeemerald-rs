@@ -37,7 +37,8 @@
 //! anywhere else, so slicing an entry's `offset`/`length` yields that
 //! entry's bytes and not whatever a corrupt offset pointed at.
 //!
-//! Payload shapes:
+//! Payload shapes, which [`parse_directory`] enforces for the same reason
+//! and so a consumer may read a payload by the metadata beside it:
 //! - **Image**: `width * height` bytes, one palette-index byte per pixel,
 //!   row-major (see `xtask::extract::png`).
 //! - **Palette**: `color_count * 2` bytes, one GBA-native packed BGR555

@@ -57,6 +57,15 @@ fn message_box_pixels() -> Vec<u8> {
         .collect()
 }
 
+/// One entry of a hand-serialized fixture pack: an id, its kind tag, the
+/// kind-specific metadata bytes, and the payload.
+struct Entry {
+    id: &'static str,
+    kind_tag: u8,
+    meta: Vec<u8>,
+    payload: Vec<u8>,
+}
+
 /// Build a tiny, synthetic pack in memory (never real upstream art — per
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
@@ -66,13 +75,7 @@ fn message_box_pixels() -> Vec<u8> {
 // helper functions would just move the line count, not reduce it.
 #[allow(clippy::too_many_lines)]
 fn synthetic_pack() -> Vec<u8> {
-    struct Entry {
-        id: &'static str,
-        kind_tag: u8,
-        meta: Vec<u8>,
-        payload: Vec<u8>,
-    }
-    let mut entries = vec![
+    let entries = vec![
         Entry {
             id: "tileset/test/tiles",
             kind_tag: 0,
@@ -174,21 +177,6 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x0099, 0x00AA),
         },
-        // Frame source `4` declares the right 24x24 shape but carries only
-        // 3 payload bytes — the ImageRef pixel-count invariant would be
-        // false.
-        Entry {
-            id: "text-window/image/4",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
-            payload: vec![0, 1, 2],
-        },
-        Entry {
-            id: "text-window/palette/4",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
-            payload: text_window_palette_payload(0x00BB, 0x00CC),
-        },
         // Frame source `5` is a self-consistent 8x8 bitmap (payload
         // matches its declared dimensions) — but a border frame must be a
         // complete 3x3 grid of 8x8 tiles, i.e. exactly 24x24.
@@ -233,14 +221,6 @@ fn synthetic_pack() -> Vec<u8> {
             kind_tag: 1,
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x0055, 0x0066),
-        },
-        // Declares the right 16-colour metadata over a truncated 8-byte
-        // payload — metadata alone must not be trusted on read.
-        Entry {
-            id: "text-window/palette/text_pal2",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
-            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
         },
         // `AssetPack::song`/`voicegroup`/`sample` fixtures (issue #184):
         // one well-formed entry per accessor, referencing each other the
@@ -337,6 +317,13 @@ fn synthetic_pack() -> Vec<u8> {
             payload: vec![0xFF],
         },
     ];
+    pack_bytes(entries)
+}
+
+/// Serialize `entries` into a pack file's bytes by hand, without going
+/// through `pack_format::PackWriter`, so these tests pin the layout
+/// independently of the writer's own idea of it.
+fn pack_bytes(mut entries: Vec<Entry>) -> Vec<u8> {
     // Directory entries must be written in id-sorted order, exactly like
     // the real writer (`pack_format::PackWriter::finish`) -- sort here
     // rather than trusting the literal array order above, so
@@ -375,11 +362,16 @@ fn synthetic_pack() -> Vec<u8> {
 }
 
 fn write_synthetic_pack(dir_hint: &str) -> std::path::PathBuf {
+    write_pack(dir_hint, &synthetic_pack())
+}
+
+/// Put `bytes` where [`AssetPack::load`] can read them back as a pack file.
+fn write_pack(dir_hint: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-assets-pack-test-{dir_hint}-{}.pack",
         std::process::id()
     ));
-    std::fs::write(&path, synthetic_pack()).unwrap();
+    std::fs::write(&path, bytes).unwrap();
     path
 }
 
@@ -686,20 +678,6 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
         } if id == "text-window/palette/2"
     ));
 
-    // `text_pal2` declares the right 16-colour metadata over a truncated
-    // 8-byte payload — metadata alone must not be trusted, or
-    // `PaletteRef::colors()` (which walks the raw payload) would disagree
-    // with `color_count`.
-    let err = pack.text_window_extra_palette(2).unwrap_err();
-    assert!(matches!(
-        &err,
-        PackError::MalformedTextWindowPalette {
-            id,
-            color_count: 16,
-            byte_len: 8,
-        } if id == "text-window/palette/text_pal2"
-    ));
-
     // Frame id 2 selects source `3`: a valid 16-colour palette, but an
     // 8-bit-indexed tile bitmap holding pixel 16 — the read side must
     // reject the pair rather than hand a renderer an unmappable pixel.
@@ -711,20 +689,6 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
             pixel: 16,
             palette_len: 16,
         } if id == "text-window/image/3"
-    ));
-
-    // Frame id 3 selects source `4`: the right 24x24 shape over a 3-byte
-    // payload — the ImageRef pixel-count invariant would be false, so the
-    // typed accessor rejects it.
-    let err = pack.text_window_frame(3).unwrap_err();
-    assert!(matches!(
-        &err,
-        PackError::MalformedTextWindowImage {
-            id,
-            width: 24,
-            height: 24,
-            byte_len: 3,
-        } if id == "text-window/image/4"
     ));
 
     // Frame id 4 selects source `5`: a self-consistent 8x8 bitmap — but a
@@ -746,9 +710,48 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
     // the typed text-window accessors enforce the pairing invariants.
     assert!(pack.palette("text-window/palette/2").is_ok());
     assert!(pack.image("text-window/image/3").is_ok());
-    assert!(pack.image("text-window/image/4").is_ok());
 
     let _ = std::fs::remove_file(path);
+}
+
+/// A payload that contradicts the shape its own metadata declares never
+/// reaches an accessor: the format owns that invariant
+/// (`pack_format::parse_directory`), so the whole pack is refused at load
+/// rather than each typed accessor catching its own entry. `PaletteRef` and
+/// `ImageRef` promise those shapes to every consumer, and the ones outside
+/// the text-window family (the overworld's and the title screen's palette
+/// walks) read them without a second check.
+#[test]
+fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
+    let truncated_palette = write_pack(
+        "misshapen-palette",
+        &pack_bytes(vec![Entry {
+            id: "text-window/palette/text_pal2",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
+        }]),
+    );
+    assert!(matches!(
+        AssetPack::load(&truncated_palette).unwrap_err(),
+        PackError::Truncated
+    ));
+    let _ = std::fs::remove_file(truncated_palette);
+
+    let truncated_image = write_pack(
+        "misshapen-image",
+        &pack_bytes(vec![Entry {
+            id: "text-window/image/4",
+            kind_tag: 0,
+            meta: image_meta(24, 24, 4),
+            payload: vec![0, 1, 2],
+        }]),
+    );
+    assert!(matches!(
+        AssetPack::load(&truncated_image).unwrap_err(),
+        PackError::Truncated
+    ));
+    let _ = std::fs::remove_file(truncated_image);
 }
 
 #[test]

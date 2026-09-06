@@ -17,7 +17,8 @@ impl From<PackReadError> for PackError {
     /// diagnostics (which name the pack path and the command that rebuilds
     /// it) stay this crate's to word. A malformed directory —
     /// [`PackReadError::Truncated`], [`PackReadError::UnsortedOrDuplicateId`],
-    /// [`PackReadError::MisplacedPayload`], or [`PackReadError::TrailingBytes`]
+    /// [`PackReadError::MisplacedPayload`], [`PackReadError::MisshapenPayload`],
+    /// or [`PackReadError::TrailingBytes`]
     /// — collapses to [`PackError::Truncated`]: each means the pack is not
     /// well-formed, and none carries a diagnostic worth this crate wording
     /// differently.
@@ -28,6 +29,7 @@ impl From<PackReadError> for PackError {
             PackReadError::Truncated
             | PackReadError::UnsortedOrDuplicateId(_)
             | PackReadError::MisplacedPayload(_)
+            | PackReadError::MisshapenPayload(_)
             | PackReadError::TrailingBytes => Self::Truncated,
             PackReadError::BadEntryKind(byte) => Self::BadEntryKind(byte),
         }

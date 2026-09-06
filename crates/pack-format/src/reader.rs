@@ -41,7 +41,10 @@ pub struct DirectoryEntry {
     /// is the region the format assigns this entry, so slicing it yields
     /// this entry's payload and no other entry's bytes.
     pub offset: usize,
-    /// The payload's length in bytes.
+    /// The payload's length in bytes. For an [`EntryKind::Image`] or an
+    /// [`EntryKind::Palette`], [`parse_directory`] has already checked it
+    /// against the size `kind`'s own metadata addresses, so a consumer may
+    /// read the payload by that metadata.
     pub length: usize,
 }
 
@@ -70,6 +73,12 @@ pub enum PackReadError {
     /// neighbour, or leaves a gap is still a corrupt pack. Carries the
     /// offending id.
     MisplacedPayload(String),
+    /// An entry's payload is not the size its own kind metadata addresses:
+    /// an image holds `width * height` bytes and a palette `color_count * 2`
+    /// (crate docs), so a payload of any other length leaves the consumer a
+    /// view whose declared shape it does not carry. Carries the offending
+    /// id.
+    MisshapenPayload(String),
     /// The file continued past the end of the last entry's payload. The
     /// payload region ends the file, so a tail means bytes no directory
     /// entry accounts for — an `entry_count` corrupted downwards reads this
@@ -92,6 +101,10 @@ impl fmt::Display for PackReadError {
             Self::MisplacedPayload(id) => write!(
                 f,
                 "directory entry id `{id}` has a payload outside the region the format assigns it"
+            ),
+            Self::MisshapenPayload(id) => write!(
+                f,
+                "directory entry id `{id}` has a payload its own kind metadata does not address"
             ),
             Self::TrailingBytes => write!(f, "bytes past the end of the payload region"),
         }
@@ -157,6 +170,34 @@ impl<'a> DirectoryReader<'a> {
     }
 }
 
+/// The payload size an entry's own kind metadata addresses, checked against
+/// the size the entry declares: `width * height` bytes for an image,
+/// `color_count * 2` for a palette (crate docs). An [`EntryKind::Raw`]
+/// payload is opaque to this container, which promises nothing about its
+/// length.
+///
+/// Bounds-checking the range is not enough either. A range that fits the
+/// file can still be shorter or longer than the metadata beside it
+/// describes, and `AssetPack`'s `image`/`palette` views document exactly
+/// that shape to their consumers: a palette short of its `color_count`
+/// leaves the colours it does not carry at whatever the caller had, so a
+/// corrupt pack renders as a slightly wrong one instead of reporting
+/// itself.
+///
+/// The products cannot overflow: `u32 * u32` and `u16 * 2` both fit `u64`.
+fn check_payload_shape(entry: &DirectoryEntry) -> Result<(), PackReadError> {
+    let addressed = match entry.kind {
+        EntryKind::Image { width, height, .. } => u64::from(width) * u64::from(height),
+        EntryKind::Palette { color_count } => u64::from(color_count) * 2,
+        EntryKind::Raw => return Ok(()),
+    };
+    if u64::try_from(entry.length).is_ok_and(|length| length == addressed) {
+        Ok(())
+    } else {
+        Err(PackReadError::MisshapenPayload(entry.id.clone()))
+    }
+}
+
 /// The payload region the format prescribes, checked against the one the
 /// directory declares: payloads concatenated in directory order from the
 /// first byte after the directory to the end of the file (crate docs).
@@ -191,7 +232,8 @@ fn check_payload_region(
 /// [`PackWriter::finish`](crate::PackWriter::finish) writes and the wire
 /// format requires — a consumer may binary-search the result without
 /// re-checking it. Each entry's `offset`/`length` is the region the format
-/// assigns it, not merely one that fits inside `bytes`.
+/// assigns it, not merely one that fits inside `bytes`, and an image's or a
+/// palette's is the size its own metadata addresses.
 ///
 /// # Errors
 ///
@@ -202,6 +244,8 @@ fn check_payload_region(
 /// id does not sort strictly after the previous entry's;
 /// [`PackReadError::MisplacedPayload`] if an entry's payload does not begin
 /// where the previous one ended (the first immediately after the directory);
+/// [`PackReadError::MisshapenPayload`] if an image's or a palette's payload
+/// is not the size its own metadata addresses;
 /// [`PackReadError::TrailingBytes`] if `bytes` continues past the last
 /// payload; [`PackReadError::Truncated`] if any field, id, or declared
 /// payload range runs past the end of `bytes` (a non-UTF-8 id reports as
@@ -264,12 +308,14 @@ pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadErro
             return Err(PackReadError::Truncated);
         }
 
-        entries.push(DirectoryEntry {
+        let entry = DirectoryEntry {
             id,
             kind,
             offset,
             length,
-        });
+        };
+        check_payload_shape(&entry)?;
+        entries.push(entry);
     }
 
     check_payload_region(&entries, reader.position, bytes.len())?;
@@ -614,6 +660,97 @@ mod tests {
         );
     }
 
+    /// An image's `width`/`height` and a palette's `color_count` are the
+    /// shape its consumer reads the payload by, so a payload of any other
+    /// length is a corrupt pack however well the range itself fits. Each
+    /// case below is in bounds and correctly placed, so only the shape
+    /// check rejects it.
+    #[test]
+    fn a_payload_its_own_metadata_does_not_address_is_rejected() {
+        let mut image_meta = Vec::new();
+        image_meta.extend_from_slice(&2u32.to_le_bytes());
+        image_meta.extend_from_slice(&2u32.to_le_bytes());
+        image_meta.push(8);
+
+        let short_image = hand_built_pack(&[Fixture {
+            id: "a/image",
+            kind_tag: 0,
+            meta: image_meta.clone(),
+            payload: vec![1, 2, 3],
+        }]);
+        assert_eq!(
+            parse_directory(&short_image),
+            Err(PackReadError::MisshapenPayload("a/image".into()))
+        );
+
+        let long_image = hand_built_pack(&[Fixture {
+            id: "a/image",
+            kind_tag: 0,
+            meta: image_meta,
+            payload: vec![1, 2, 3, 4, 5],
+        }]);
+        assert_eq!(
+            parse_directory(&long_image),
+            Err(PackReadError::MisshapenPayload("a/image".into()))
+        );
+
+        // Two bytes per colour: 16 declared colours over 8 bytes would hand
+        // `PaletteRef` half a palette under a full one's `color_count`.
+        let short_palette = hand_built_pack(&[Fixture {
+            id: "b/palette",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: vec![0; 8],
+        }]);
+        assert_eq!(
+            parse_directory(&short_palette),
+            Err(PackReadError::MisshapenPayload("b/palette".into()))
+        );
+
+        // An odd payload cannot be a whole number of colours at all.
+        let odd_palette = hand_built_pack(&[Fixture {
+            id: "b/palette",
+            kind_tag: 1,
+            meta: 2u16.to_le_bytes().to_vec(),
+            payload: vec![0; 3],
+        }]);
+        assert_eq!(
+            parse_directory(&odd_palette),
+            Err(PackReadError::MisshapenPayload("b/palette".into()))
+        );
+
+        // A raw payload is opaque to this container, so no length of it is
+        // this format's to reject.
+        let raw = hand_built_pack(&[Fixture {
+            id: "c/raw",
+            kind_tag: 2,
+            meta: vec![],
+            payload: vec![9; 3],
+        }]);
+        assert_eq!(parse_directory(&raw).unwrap()[0].length, 3);
+    }
+
+    /// A `width * height` that no payload could match must be rejected as
+    /// the misshapen entry it is, rather than overflow the multiplication.
+    #[test]
+    fn image_dimensions_that_overflow_a_usize_are_rejected() {
+        let mut image_meta = Vec::new();
+        image_meta.extend_from_slice(&u32::MAX.to_le_bytes());
+        image_meta.extend_from_slice(&u32::MAX.to_le_bytes());
+        image_meta.push(8);
+
+        let bytes = hand_built_pack(&[Fixture {
+            id: "a/image",
+            kind_tag: 0,
+            meta: image_meta,
+            payload: vec![1],
+        }]);
+        assert_eq!(
+            parse_directory(&bytes),
+            Err(PackReadError::MisshapenPayload("a/image".into()))
+        );
+    }
+
     /// The payload region ends the file, so a tail is a pack whose directory
     /// does not account for every byte. An `entry_count` corrupted to zero
     /// reads exactly this way: every entry check is skipped, and only the
@@ -678,6 +815,10 @@ mod tests {
         assert_eq!(
             PackReadError::MisplacedPayload("a/raw".into()).to_string(),
             "directory entry id `a/raw` has a payload outside the region the format assigns it"
+        );
+        assert_eq!(
+            PackReadError::MisshapenPayload("a/image".into()).to_string(),
+            "directory entry id `a/image` has a payload its own kind metadata does not address"
         );
         assert_eq!(
             PackReadError::TrailingBytes.to_string(),

@@ -1264,7 +1264,12 @@ fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_o
         .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
         .expect("the connection fixture always fabricates the target's map entry");
     target_grid.kind_tag = 1;
-    target_grid.meta = 0u16.to_le_bytes().to_vec();
+    // A well-formed palette of the wrong kind: the format rejects a palette
+    // whose `color_count` does not address its payload
+    // (`pack_format::parse_directory`), and this fixture is about the *kind*
+    // reaching the caller, not about a corrupt pack failing to load.
+    let colors = u16::try_from(target_grid.payload.len() / 2).expect("a u16 grid of colours");
+    target_grid.meta = colors.to_le_bytes().to_vec();
 
     let err = synthetic_scene_result_with_connections(
         write_synthetic_pack(entries),
