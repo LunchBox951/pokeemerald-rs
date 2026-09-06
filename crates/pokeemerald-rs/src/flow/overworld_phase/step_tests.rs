@@ -205,6 +205,43 @@ fn the_faced_vigoroth_is_visible_with_a_real_script() {
     assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
 }
 
+/// The `"0x0"` NULL-script sentinel and a real unmodelled script differ:
+/// Fallarbor Town's Battle Tent corridor attendant at `(2, 6)` carries
+/// `"0x0"` and no hide flag, so an A press on it must not consume the
+/// frame and the perpendicular direction still turns the player.
+#[test]
+fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
+    const CORRIDOR: assets::MapId = assets::MapId("MAP_FALLARBOR_TOWN_BATTLE_TENT_CORRIDOR");
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        CORRIDOR,
+        PlayerState::new((3, 6), 3, Direction::West),
+        None,
+    );
+
+    {
+        let header = assets::MapHeaderTable::new().header(CORRIDOR).unwrap();
+        let events = assets::MapEventsTable::new().resolve(CORRIDOR).unwrap();
+        let runtime = phase.scene.runtime(CORRIDOR, header, events);
+        let object = engine::overworld::facing_object_event(
+            &phase.player,
+            &runtime,
+            &phase.save1.event_data,
+        )
+        .expect("the corridor attendant at (2, 6) must be visible and faced");
+        assert_eq!(object.script, "0x0", "the NULL-script sentinel");
+    }
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a `\"0x0\"` script is upstream's NULL no-op: it must not consume the frame, so the \
+         perpendicular direction still turns the player"
+    );
+}
+
 /// Headless counterpart to the real-pack acceptance test: while a dialog is
 /// open, [`OverworldPhase::step`] must not feed movement to the player at
 /// all (module docs' "NPC dialog routing" section -- upstream's `lock`,

@@ -663,16 +663,14 @@ impl OverworldPhase {
     /// applied (issue #435; that method's own "NPC dialog routing" section
     /// carries the upstream ordering citations) -- so a same-frame
     /// A-plus-direction press finds the NPC faced at frame start, not one
-    /// only faced by that same frame's turn. `self.player.in_transit()`
-    /// is the one value this does *not* hold exactly for: on the frame a
-    /// walk animation drains, upstream's `tileTransitionState` already reads
-    /// `T_TILE_CENTER` and accepts an A press that same frame (`:95-104`),
-    /// while this port's `in_transit` doesn't clear until this frame's own
-    /// [`super::input::advance_player_one_frame`] tick runs, below this
-    /// check -- so that one drain frame accepts A one frame later here than
-    /// upstream does. A pre-existing class of frame-timing approximation
-    /// (this module's own "Warp timing" section), not the #435 divergence
-    /// this reorder fixes. See
+    /// only faced by that same frame's turn. `self.player.in_transit()` is
+    /// frame-exact with upstream here too: `UpdatePlayerAvatarTransitionState`
+    /// runs before `FieldGetPlayerInput` every frame (`overworld.c:1442-1454`),
+    /// so the `tileTransitionState` that gates `pressedAButton` (`:95-107`)
+    /// reflects last frame's `NpcTakeStep` (`event_object_movement.c:8300-8313`)
+    /// -- both this port and upstream first accept A the frame *after* a
+    /// walk animation's last movement pixel, never that pixel's own frame.
+    /// See
     /// `step_tests::a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player`.
     ///
     /// `&self` (not `&mut self`): [`OverworldPhase::step`] calls this while
