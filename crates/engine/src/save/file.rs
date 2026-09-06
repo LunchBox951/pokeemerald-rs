@@ -279,21 +279,30 @@ impl SaveFile {
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
-    /// be written, synced, or renamed into place.
+    /// be written, synced, or renamed into place, or if something replaced
+    /// it between those two steps.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        self.write_with(store, Self::sync_directory_best_effort, || {
-            self.staging_path()
-        })
+        self.write_with(
+            store,
+            Self::sync_directory_best_effort,
+            || self.staging_path(),
+            |_| {},
+        )
     }
 
     /// As [`SaveFile::write`], synchronising through the given `sync_directory`
     /// and drawing each staging attempt's name from `staging_path`, rather than
     /// always [`SaveFile::sync_directory_best_effort`] and [`SaveFile::staging_path`].
+    ///
+    /// `before_rename` runs on the staged path once it holds the image and
+    /// before anything promotes it, which is the only point from which the
+    /// window this call has to defend can be occupied on purpose.
     fn write_with(
         &self,
         store: &SaveStore,
         mut sync_directory: impl FnMut(&Path),
         staging_path: impl FnMut() -> PathBuf,
+        before_rename: impl FnOnce(&Path),
     ) -> Result<(), SaveFileError> {
         self.ensure_parent_directory()?;
 
@@ -302,10 +311,26 @@ impl SaveFile {
             source,
         };
         let staged = Self::stage(staging_path, store.flash_image()).map_err(write_error)?;
-        if let Err(source) = std::fs::rename(&staged, &self.path) {
-            return Err(write_error(Self::remove_abandoned_staging_file(
-                &staged, source,
-            )));
+        before_rename(&staged.path);
+        // Nothing in `std` fuses this check to the rename below, so a
+        // replacement landing between the two is still promoted; the
+        // exclusive create, the unguessable name, and the handle held open
+        // bound that window rather than close it.
+        match staged.still_named() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(write_error(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "the staged image at {} was replaced before it could be renamed into place",
+                        staged.path.display()
+                    ),
+                )))
+            }
+            Err(unreadable) => return Err(write_error(staged.remove_after(unreadable))),
+        }
+        if let Err(source) = std::fs::rename(&staged.path, &self.path) {
+            return Err(write_error(staged.remove_after(source)));
         }
         if let Some(containing) = Self::directory_containing(&self.path) {
             sync_directory(containing);
@@ -318,13 +343,13 @@ impl SaveFile {
 
     /// Stages `bytes` under a fresh name from `next_path` on every attempt,
     /// retrying a name collision up to [`Self::MAX_STAGING_ATTEMPTS`] times;
-    /// returns the path actually written.
-    fn stage(mut next_path: impl FnMut() -> PathBuf, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    /// returns the file actually written.
+    fn stage(mut next_path: impl FnMut() -> PathBuf, bytes: &[u8]) -> std::io::Result<StagedSave> {
         let mut last_collision = None;
         for _ in 0..Self::MAX_STAGING_ATTEMPTS {
             let path = next_path();
             match Self::write_and_sync(&path, bytes) {
-                Ok(()) => return Ok(path),
+                Ok(staged) => return Ok(staged),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     last_collision = Some(err);
                 }
@@ -342,40 +367,27 @@ impl SaveFile {
     /// Opens `path` exclusively -- refusing an existing file, directory, or
     /// symlink there instead of following or truncating it -- then writes and
     /// syncs `bytes`, removing `path` again on any failure once past that
-    /// open so this call never deletes a path a different caller created.
-    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    /// open so this call never deletes an entry a different caller put there.
+    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<StagedSave> {
         use std::io::Write as _;
 
         let file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(path)?;
+        let staged = StagedSave {
+            path: path.to_path_buf(),
+            file,
+        };
         let result = (|| {
-            let mut staged = std::io::BufWriter::new(file);
-            staged.write_all(bytes)?;
-            staged.flush()?;
-            staged.get_ref().sync_all()
+            let mut writer = std::io::BufWriter::new(&staged.file);
+            writer.write_all(bytes)?;
+            writer.flush()?;
+            staged.file.sync_all()
         })();
         match result {
-            Ok(()) => Ok(()),
-            Err(source) => Err(Self::remove_abandoned_staging_file(path, source)),
-        }
-    }
-
-    /// Removes a staging file this call no longer wants after `source`,
-    /// folding a cleanup failure into the returned error rather than
-    /// swallowing it -- otherwise a caller who only sees `source` would
-    /// never learn a staging file was left behind.
-    fn remove_abandoned_staging_file(path: &Path, source: std::io::Error) -> std::io::Error {
-        match std::fs::remove_file(path) {
-            Ok(()) => source,
-            Err(cleanup_source) => std::io::Error::new(
-                source.kind(),
-                format!(
-                    "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
-                    path.display()
-                ),
-            ),
+            Ok(()) => Ok(staged),
+            Err(source) => Err(staged.remove_after(source)),
         }
     }
 
@@ -533,6 +545,72 @@ impl SaveFile {
             .finish();
         format!("{pid:x}.{nanos:x}.{salt:x}")
     }
+}
+
+/// A staged flash image and the handle that wrote it, held open until the
+/// image is promoted or abandoned: while the handle lives the file cannot be
+/// freed, so nothing that replaces it at the staging path can inherit its
+/// identity and pass for it.
+#[derive(Debug)]
+struct StagedSave {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+impl StagedSave {
+    /// Whether the staging path still names this staged file, rather than a
+    /// symlink, directory, or other entry that took its name.
+    ///
+    /// Where [`is_same_file`] has nothing to compare, refusing everything
+    /// that is not a regular file is the whole check. A reading that failed
+    /// is neither answer, and surfaces rather than passing for "replaced".
+    fn still_named(&self) -> std::io::Result<bool> {
+        let found = std::fs::symlink_metadata(&self.path)?;
+        Ok(found.file_type().is_file() && is_same_file(&self.file.metadata()?, &found))
+    }
+
+    /// Removes this staged file after `source`, folding a cleanup failure
+    /// into the returned error rather than swallowing it -- otherwise a
+    /// caller who only sees `source` would never learn a staging file was
+    /// left behind. An entry that replaced it belongs to whoever put it
+    /// there and is left where it is; ownership that could not be read at
+    /// all leaves the same file behind, and is reported the same way.
+    fn remove_after(&self, source: std::io::Error) -> std::io::Error {
+        let left_behind = match self.still_named() {
+            Ok(false) => return source,
+            Ok(true) => std::fs::remove_file(&self.path).err(),
+            Err(unreadable) => Some(unreadable),
+        };
+        let Some(cleanup_source) = left_behind else {
+            return source;
+        };
+        std::io::Error::new(
+            source.kind(),
+            format!(
+                "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
+                self.path.display()
+            ),
+        )
+    }
+}
+
+/// Whether two metadata readings describe the same file system object:
+/// device and inode on unix.
+///
+/// Stable `std` exposes no Windows equivalent -- the file index sits behind
+/// the unstable `windows_by_handle` feature -- so off unix this cannot
+/// answer, and [`StagedSave::still_named`]'s regular-file test stands alone:
+/// a replacement that is itself a regular file goes undetected there.
+#[cfg(unix)]
+fn is_same_file(staged: &std::fs::Metadata, found: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (staged.dev(), staged.ino()) == (found.dev(), found.ino())
+}
+
+#[cfg(not(unix))]
+fn is_same_file(_staged: &std::fs::Metadata, _found: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// Holds a [`SaveFile::lock`] until dropped.

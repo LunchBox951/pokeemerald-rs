@@ -264,9 +264,12 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
         &block2,
     );
     let err = file
-        .write_with(&second, SaveFile::sync_directory_best_effort, || {
-            unstageable.clone()
-        })
+        .write_with(
+            &second,
+            SaveFile::sync_directory_best_effort,
+            || unstageable.clone(),
+            |_| {},
+        )
         .expect_err("staging into a directory cannot succeed");
     assert!(
         matches!(err, SaveFileError::Write { .. }),
@@ -294,14 +297,19 @@ fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
     std::fs::write(&occupied, b"someone else's file").unwrap();
     let fresh = expected_sibling_path(&path, ".tmp.fresh");
     let mut attempts = 0;
-    file.write_with(&store, SaveFile::sync_directory_best_effort, || {
-        attempts += 1;
-        if attempts == 1 {
-            occupied.clone()
-        } else {
-            fresh.clone()
-        }
-    })
+    file.write_with(
+        &store,
+        SaveFile::sync_directory_best_effort,
+        || {
+            attempts += 1;
+            if attempts == 1 {
+                occupied.clone()
+            } else {
+                fresh.clone()
+            }
+        },
+        |_| {},
+    )
     .expect("a staging-name collision must be retried onto a fresh name");
 
     assert_eq!(
@@ -333,9 +341,12 @@ fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
 
     let staged = expected_sibling_path(&path, ".tmp.staged");
     let err = file
-        .write_with(&store, SaveFile::sync_directory_best_effort, || {
-            staged.clone()
-        })
+        .write_with(
+            &store,
+            SaveFile::sync_directory_best_effort,
+            || staged.clone(),
+            |_| {},
+        )
         .expect_err("renaming onto a directory cannot succeed");
 
     assert!(
@@ -438,9 +449,12 @@ fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
     let file = SaveFile::at(&path);
     let (store, _, _) = saved_store();
     let err = file
-        .write_with(&store, SaveFile::sync_directory_best_effort, || {
-            staging.clone()
-        })
+        .write_with(
+            &store,
+            SaveFile::sync_directory_best_effort,
+            || staging.clone(),
+            |_| {},
+        )
         .expect_err("staging onto a planted symlink must never succeed");
 
     assert!(
@@ -462,6 +476,163 @@ fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
     assert!(
         !path.exists(),
         "a write that never got staged must not create the save file"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_staging_file_replaced_before_the_rename_is_never_promoted() {
+    let dir = TempDir::new("staging-replaced-before-rename");
+    let path = dir.join(SAVE_FILE_NAME);
+    let bystander = dir.join("bystander");
+    std::fs::write(&bystander, b"not a save file").unwrap();
+
+    let file = SaveFile::at(&path);
+    let (first, _, block2) = saved_store();
+    file.write(&first).unwrap();
+    let original = std::fs::read(&path).expect("the first save must be readable");
+
+    let mut second = first.clone();
+    second.save(
+        &SaveBlock1 {
+            money: 424_242,
+            ..SaveBlock1::default()
+        },
+        &block2,
+    );
+
+    // The window the exclusive create alone cannot defend: the staged file is
+    // unlinked and a symlink takes its name after the create proved the name
+    // was free, so only an ownership check standing between the write and the
+    // rename can keep the replacement off the save path.
+    let staging = expected_sibling_path(&path, ".tmp.replaced");
+    let err = file
+        .write_with(
+            &second,
+            SaveFile::sync_directory_best_effort,
+            || staging.clone(),
+            |staged| {
+                std::fs::remove_file(staged).unwrap();
+                std::os::unix::fs::symlink(&bystander, staged).unwrap();
+            },
+        )
+        .expect_err("a write that lost its staged file must never report success");
+
+    assert!(
+        matches!(&err, SaveFileError::Write { source, .. }
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a replaced staging file must fail closed, not pass for the staged image: {err:?}"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&path)
+            .expect("the previous save must still be there")
+            .file_type()
+            .is_symlink(),
+        "the save path must never become the planted symlink"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "a refused promotion must leave the image already on disk untouched"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"not a save file",
+        "a refused promotion must not reach the symlink's target"
+    );
+    assert!(
+        std::fs::symlink_metadata(&staging)
+            .expect("the planted symlink must survive")
+            .file_type()
+            .is_symlink(),
+        "a refused promotion must not delete the entry that replaced ours"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_staging_file_swapped_for_another_regular_file_is_never_promoted() {
+    let dir = TempDir::new("staging-swapped-before-rename");
+    let path = dir.join(SAVE_FILE_NAME);
+
+    let file = SaveFile::at(&path);
+    let (first, _, block2) = saved_store();
+    file.write(&first).unwrap();
+    let original = std::fs::read(&path).expect("the first save must be readable");
+
+    let mut second = first.clone();
+    second.save(
+        &SaveBlock1 {
+            money: 515_151,
+            ..SaveBlock1::default()
+        },
+        &block2,
+    );
+
+    // A regular file walks straight past the "not a symlink, not a
+    // directory" test, so nothing but the staged handle's own device and
+    // inode can tell this impostor from the image this call wrote.
+    let staging = expected_sibling_path(&path, ".tmp.swapped");
+    let err = file
+        .write_with(
+            &second,
+            SaveFile::sync_directory_best_effort,
+            || staging.clone(),
+            |staged| {
+                std::fs::remove_file(staged).unwrap();
+                std::fs::write(staged, b"someone else's file").unwrap();
+            },
+        )
+        .expect_err("a write that lost its staged file must never report success");
+
+    assert!(
+        matches!(&err, SaveFileError::Write { source, .. }
+            if source.kind() == std::io::ErrorKind::InvalidData),
+        "a swapped staging file must fail closed, not pass for the staged image: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        original,
+        "a refused promotion must leave the image already on disk untouched"
+    );
+    assert_eq!(
+        std::fs::read(&staging).unwrap(),
+        b"someone else's file",
+        "a refused promotion must not delete the entry that replaced ours"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
+    let dir = TempDir::new("staging-cleanup-ownership");
+    let bystander = dir.join("bystander");
+    std::fs::write(&bystander, b"not a save file").unwrap();
+
+    let staging = dir.join("staged.tmp");
+    let staged = SaveFile::stage(|| staging.clone(), &vec![0u8; FLASH_IMAGE_LEN])
+        .expect("the exclusive staging write must succeed");
+    std::fs::remove_file(&staging).unwrap();
+    std::os::unix::fs::symlink(&bystander, &staging).unwrap();
+
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::Other,
+        "cleanup that removed nothing must surface the failure it was given: {err:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&staging)
+            .expect("the planted symlink must survive")
+            .file_type()
+            .is_symlink(),
+        "cleanup must never remove an entry that replaced this call's staging file"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"not a save file",
+        "cleanup must not reach the symlink's target either"
     );
 }
 
@@ -861,6 +1032,7 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
         &store,
         |path| synced.borrow_mut().push(path.to_path_buf()),
         || file.staging_path(),
+        |_| {},
     )
     .expect("writing a bare relative save path must succeed");
 
