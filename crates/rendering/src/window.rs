@@ -141,8 +141,8 @@ impl WindowConfig {
         self.classify_with_region(x, y, objwin_mask).0
     }
 
-    /// [`classify`](Self::classify), also returning which region matched, to
-    /// gate the `OBJWIN` hole's order-upgrade to `WIN0`/`WIN1` (issue #849).
+    /// [`classify`](Self::classify), also returning which region matched
+    /// (`software-obj.c:161`, `video-software.c:131-134`).
     #[must_use]
     pub(crate) fn classify_with_region(
         &self,
@@ -183,8 +183,8 @@ pub(crate) enum WindowRegion {
 }
 
 impl WindowRegion {
-    /// Whether an `OBJWIN` sprite's hole is barred from upgrading OBJ order
-    /// here — true only inside `WIN0`/`WIN1` (`software-obj.c:161`, issue #849).
+    /// Whether an `OBJWIN` sprite's hole is barred from upgrading OBJ order here —
+    /// true only for `WIN0`/`WIN1` (`software-obj.c:161`, `video-software.c:131-134`).
     #[must_use]
     pub(crate) const fn suppresses_objwin_hole(self) -> bool {
         matches!(self, Self::Win0 | Self::Win1)

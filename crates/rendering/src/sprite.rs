@@ -252,7 +252,7 @@ impl<'a> SpriteLayer<'a> {
     }
 
     /// [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic), skipping every
-    /// [`ObjMode::Window`] entry when `suppress_objwin_hole` is set (`software-obj.c:161`, issue #849).
+    /// [`ObjMode::Window`] entry when `suppress_objwin_hole` is set (`software-obj.c:161`).
     #[must_use]
     pub(crate) fn resolve_pixel_with_mosaic_windowed(
         &self,
@@ -274,8 +274,8 @@ impl<'a> SpriteLayer<'a> {
     /// else branch (`software-obj.c`) rewrites an already-written underlying
     /// pixel's order exactly like the `NORMAL` macro, so a priority-0 `OBJWIN`
     /// hole promotes a worse-priority opaque OBJ beneath it. Both cases are
-    /// handled inline below `(behavioral-fidelity)`; `suppress_objwin_hole` skips
-    /// an `OBJWIN` entry outright for a `WIN0`/`WIN1` caller (issue #849).
+    /// handled inline below `(behavioral-fidelity)`; `suppress_objwin_hole` drops
+    /// an entry whose window outranks `OBJWIN` instead (`software-obj.c:161`).
     ///
     /// Only entries the per-scanline OAM admission stage
     /// ([`with_admission`](Self::with_admission), `crate::oam_budget`, S-2
@@ -312,7 +312,7 @@ impl<'a> SpriteLayer<'a> {
                     continue;
                 }
                 // mgba drops an OBJWIN entry outright when the span's window
-                // outranks it (software-obj.c:161, issue #849).
+                // outranks it (software-obj.c:161).
                 if suppress_objwin_hole && entry.mode() == ObjMode::Window {
                     continue;
                 }
@@ -1121,10 +1121,9 @@ mod tests {
 
     #[test]
     fn resolve_pixel_with_mosaic_windowed_suppresses_objwin_hole_when_flagged() {
-        // Issue #849: a WIN0/WIN1 caller passes suppress_objwin_hole = true,
-        // matching mgba dropping an OBJWIN sprite outright for a span whose
-        // window outranks it (software-obj.c:161). B keeps its own priority
-        // 2 instead of being upgraded to 0.
+        // mgba drops an OBJWIN sprite outright for a span whose window
+        // outranks it (software-obj.c:161); B keeps priority 2 instead of
+        // being upgraded to 0.
         let (tileset, palette) = opaque_and_transparent_tiles();
         let b_opaque_prio2 = square_8x8(0, 2, 0);
         let objwin_hole_prio0 = square_8x8(1, 0, 0).with_mode(ObjMode::Window);
