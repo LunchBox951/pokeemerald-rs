@@ -127,12 +127,10 @@ impl AssetPack {
     /// running executable's directory, then this checkout's
     /// `assets-pack/pokeemerald.pack`.
     ///
-    /// It used to be only that last rung, derived from
-    /// `env!("CARGO_MANIFEST_DIR")`. That is the *build* machine's checkout,
-    /// so a distributed binary went looking for the pack on a CI runner's
-    /// disk. The earlier rungs are what a shipped binary and its ROM
-    /// importer need; the compile-time path stays last so a developer
-    /// checkout with nothing configured behaves exactly as before.
+    /// The compile-time rung names the *build* machine's checkout, so it is
+    /// last: a shipped binary and its ROM importer resolve through the
+    /// earlier rungs, and a developer checkout with nothing configured still
+    /// finds the bundled pack.
     ///
     /// Never fails: the last rung always yields a path, and a path that does
     /// not exist surfaces as [`PackError::NotFound`] from

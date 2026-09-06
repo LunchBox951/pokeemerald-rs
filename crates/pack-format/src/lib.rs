@@ -2,7 +2,7 @@
 //! policies A and C): the one owner of the layout `cargo xtask extract` and
 //! `pokeemerald-rs --import-rom` write and `crates/assets` reads.
 //!
-//! # Format (version 7, wire layout unchanged since 1)
+//! # Format (version 7)
 //!
 //! All multi-byte integers are little-endian. Layout, in order:
 //!
@@ -96,11 +96,9 @@
 //! [`user_pack_path`], [`PACK_PATH_ENV`]). `xtask::extract` writes through
 //! it; `crates/assets`'s `AssetPack` reads through it.
 //!
-//! Both sides used to spell the layout out separately, so that the two
-//! crates stayed decoupled from each other. That held while there were two
-//! of them. The ROM importer is a third writer, and one owner is now cheaper
-//! than keeping three copies in step: a format bump touches one file, and
-//! `xtask` and `assets` still never depend on each other.
+//! One crate owns the layout so its writers (`xtask::extract`, the ROM
+//! importer) and its reader (`crates/assets`) cannot drift: a format bump
+//! touches one file, and `xtask` and `assets` never depend on each other.
 //!
 //! The entry constructors are what makes two backends produce one pack. A
 //! hand-built [`PackEntry`] literal can promise a `color_count` or a
