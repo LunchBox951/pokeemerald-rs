@@ -301,10 +301,8 @@ impl AssetPack {
     /// pack; [`PackError::WrongKind`] if an entry exists under that id but
     /// isn't [`EntryKind::Raw`]; [`PackError::AudioDecode`] if the entry is
     /// [`EntryKind::Raw`] but its bytes are not a well-formed
-    /// [`crate::audio::Song`] — structural decode only, see
-    /// [`Song::decode`]'s own docs on what is (and is not) validated, in
-    /// particular that a [`crate::audio::SongEvent::Goto`] target and the
-    /// song's own [`Song::voicegroup`] reference are not resolved here.
+    /// [`crate::audio::Song`] — see [`Song::decode`]'s own docs on what is
+    /// (and is not) validated.
     pub fn song(&self, name: &str) -> Result<Song, PackError> {
         let id = format!("audio/song/{name}");
         let bytes = self.raw(&id)?;
