@@ -5,22 +5,21 @@
 //!
 //! This is a *title-scoped* compiler, not a general `tools/mid2agb`
 //! reimplementation: it reads `sound/songs/midi/midi.cfg`'s `mus_title.mid`
-//! line generically ([`mod@cfg`]), but [`compile`] hard-requires the two
-//! flags that line always carries and fails closed
-//! ([`error::MidiError::NonExactGateTime`]/
+//! line generically ([`mod@cfg`]), but [`compile`] hard-requires `-E`
+//! (exact gate time) and rejects `-X` (48-clocks-per-beat) — the two
+//! constraints `mus_title.mid`'s own line always satisfies — and fails
+//! closed ([`error::MidiError::NonExactGateTime`]/
 //! [`error::MidiError::UnsupportedClocksPerBeat`]) if a future caller ever
-//! points it at a `midi.cfg` entry that doesn't — see [`compile`]'s module
+//! points it at a `midi.cfg` entry that doesn't. See [`compile`]'s module
 //! docs for why each flag is required. `MEMACC` controllers
 //! ([`error::MidiError::UnsupportedMemAccController`]) fail closed in
 //! [`compile`] for every song; `mus_title.mid` carries none, and the
 //! schema's one `MEMACC` user, `mus_vs_trainer`, is a different song this
 //! compiler never touches.
 //!
-//! Every other command family `mus_title.mid` uses — notes, ties, tempo,
-//! program change, pan/volume/modulation/LFO/bend/tune/priority
-//! controllers, and the pseudo-echo `XCMD` pair — is modelled. Loop markers
-//! are modelled too, unreached by `mus_title.mid` itself but pinned on
-//! crafted fragments in [`compile`]'s own tests.
+//! The compiler models every command family [`event::SongEvent`] can
+//! represent, including loop markers, which `mus_title.mid` itself never
+//! reaches but [`compile`]'s own tests pin on crafted fragments.
 //!
 //! # Pipeline
 //!
@@ -32,9 +31,7 @@
 //! shared — see [`encode`]'s module docs, mirroring
 //! `xtask::extract::voicegroups::encode`'s documented rationale. [`mod@cfg`]
 //! resolves `midi.cfg`'s per-song compile flags this pipeline needs
-//! (voicegroup label, priority, reverb, master volume, `-E`/`-X`)
-//! generically, the same way `xtask::extract::layouts_json` resolves
-//! `layouts.json` entries.
+//! (voicegroup label, priority, reverb, master volume, `-E`/`-X`).
 //!
 //! # Output
 //!
@@ -60,8 +57,6 @@ pub(crate) use error::MidiError;
 use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_file, read_text, ExtractError};
 
-/// The upstream `.mid` source this slice compiles, and the pack id its
-/// compiled song is written under (module docs, "Output").
 const SONG_MIDI_FILENAME: &str = "mus_title.mid";
 const SONG_PACK_ID: &str = "audio/song/mus_title";
 
@@ -122,14 +117,11 @@ mod tests {
     }
 
     /// Pins values hand-verified against a locally built `tools/mid2agb`
-    /// oracle: compiling `mus_title.mid` at its real `midi.cfg` flags
-    /// produces 10 tracks (one per real MIDI channel; the conductor `MTrk`
-    /// chunk itself carries no notes), priority `0`, reverb `50`, track 0's
-    /// first six events, and its final five events ending in `Fine`,
-    /// matching the oracle's own `mus_title_1` assembly block in order (not
-    /// encoded wire bytes — see [`super::compile`]'s module docs for why
-    /// this compiler's `Wait` placement can still diverge from the oracle's
-    /// own `Wnn` opcodes while representing the identical delay).
+    /// oracle: this compiler's own event order matches the oracle's
+    /// assembly listing for `mus_title_1` (not encoded wire bytes). See
+    /// [`super::compile`]'s module docs for why `Wait` placement can still
+    /// diverge from the oracle's own `Wnn` opcodes while representing the
+    /// identical delay.
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn mus_title_compiles_to_hand_verified_values() {
@@ -174,8 +166,7 @@ mod tests {
             ]
         );
 
-        // mus_title.mid has no loop markers: zero `GOTO` events in the
-        // oracle's compiled output.
+        // mus_title.mid has no loop markers.
         let goto_count = song
             .tracks
             .iter()
@@ -184,10 +175,9 @@ mod tests {
             .count();
         assert_eq!(goto_count, 0);
 
-        // Three `XCMD xIECV`/`xIECL` pairs, pseudo-echo volumes 10, 10, 16
-        // and length 12 each time: the oracle's `mus_title_7`/`_8`/`_10`
-        // blocks (its 1-based `g_agbTrack` labels), this compiler's 0-based
-        // `song.tracks[6]`/`[7]`/`[9]`.
+        // Three `XCMD xIECV`/`xIECL` pairs, matching the oracle's
+        // `mus_title_7`/`_8`/`_10` blocks (its 1-based `g_agbTrack` labels;
+        // this compiler's 0-based `tracks[6]`/`[7]`/`[9]`).
         let volumes: Vec<u8> = song
             .tracks
             .iter()
