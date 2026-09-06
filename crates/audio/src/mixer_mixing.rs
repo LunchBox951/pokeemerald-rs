@@ -354,9 +354,10 @@ fn mix_frame_sweeps_at_128hz_across_frame_boundaries() {
 }
 
 #[test]
-fn mix_frame_retires_an_overflowing_sweep_on_the_hardware_tick_count() {
+fn mix_frame_mutes_an_overflowing_sweep_on_the_hardware_tick_count() {
     const FRAMES_BEFORE_OVERFLOW: usize = 29;
     const FREQUENCY_BEFORE_OVERFLOW: u16 = 1122;
+    const FREQUENCY_AT_OVERFLOW: u16 = 1683;
 
     let mut mixer = Mixer::default();
     assert!(mixer.add_cgb_voice(cgb_sweep_voice(PERIOD_7_UPWARD_SHIFT_1)));
@@ -372,11 +373,22 @@ fn mix_frame_retires_an_overflowing_sweep_on_the_hardware_tick_count() {
     );
 
     mixer.mix_frame(&mut out);
-    assert!(
-        square1_sweep_frequency(&mixer).is_none(),
-        "the 30th frame must reach tick 63, overflow, and free the slot"
+    assert_eq!(
+        square1_sweep_frequency(&mixer),
+        Some(FREQUENCY_AT_OVERFLOW),
+        "the 30th frame must reach tick 63, take the 9th step, and overflow"
     );
-    assert_eq!(mixer.voice_count(), 0);
+    assert_eq!(
+        mixer.voice_count(),
+        1,
+        "the overflow mutes the hardware channel, keeping the slot for a later trigger"
+    );
+
+    mixer.mix_frame(&mut out);
+    assert!(
+        out.iter().all(|&sample| sample == 0.0),
+        "a muted channel contributes nothing to the frames after its overflow"
+    );
 }
 
 #[test]

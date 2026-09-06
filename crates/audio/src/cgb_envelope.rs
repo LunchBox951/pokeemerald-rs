@@ -153,13 +153,18 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// Enter the release phase.
-    pub fn note_off(&mut self) {
+    /// Enter the release phase, reporting whether release itself is the
+    /// retrigger-worthy volume write, once only (`m4a.c:1060-1069,1062`).
+    pub fn note_off(&mut self) -> bool {
+        let already_releasing =
+            !matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
         self.note_off_requested = true;
-        if !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
-            self.phase = Phase::Release;
-            self.frames_until_step = transition_frame_delay(self.adsr.release);
+        if already_releasing {
+            return false;
         }
+        self.phase = Phase::Release;
+        self.frames_until_step = transition_frame_delay(self.adsr.release);
+        self.adsr.release != 0
     }
 
     /// Retire the voice immediately.
@@ -177,15 +182,25 @@ impl CgbEnvelope {
     /// Advance the envelope by one software iteration. A render frame is one
     /// or two iterations, so production rendering drives the envelope through
     /// `step_frame` rather than calling this directly (module docs).
-    pub fn step(&mut self) {
+    ///
+    /// Returns whether this iteration crossed a retrigger-worthy
+    /// `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`; see
+    /// [`crate::cgb_voice::Oscillator::retrigger`]).
+    pub fn step(&mut self) -> bool {
         match self.phase {
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
-            Phase::Sustain => self.sustain_step(),
+            Phase::Sustain => {
+                self.sustain_step();
+                false
+            }
             Phase::Release if self.adsr.release == 0 => self.enter_pseudo_echo_or_silence(),
             Phase::Release => self.release_step(),
-            Phase::PseudoEcho => self.pseudo_echo_step(),
-            Phase::Retired => {}
+            Phase::PseudoEcho => {
+                self.pseudo_echo_step();
+                false
+            }
+            Phase::Retired => false,
         }
     }
 
@@ -200,11 +215,15 @@ impl CgbEnvelope {
     /// (`m4a.c:1048`..`:1059`, `:1087`..`:1103`, `:1125`..`:1129`). Every
     /// other transition — note-on/note-off held frames included — falls
     /// through to that check normally and can be doubled.
-    pub(crate) fn step_frame(&mut self, extra_iteration: bool) {
-        self.step();
+    ///
+    /// Returns whether either iteration retriggered: upstream applies at
+    /// most one hardware write per `CgbSound` iteration (`m4a.c:1206-1226`).
+    pub(crate) fn step_frame(&mut self, extra_iteration: bool) -> bool {
+        let retriggered = self.step();
         if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
-            self.step();
+            return self.step() || retriggered;
         }
+        retriggered
     }
 
     /// Decrement this phase's frame counter and report whether it just reached
@@ -222,56 +241,61 @@ impl CgbEnvelope {
         self.frames_until_step == 0
     }
 
-    fn attack_step(&mut self) {
+    fn attack_step(&mut self) -> bool {
         if self.adsr.attack == 0 {
-            self.enter_decay();
-            return;
+            return self.enter_decay();
         }
         if !self.paced_step_is_due() {
-            return;
+            return false;
         }
         if self.volume < self.goal {
             self.volume += 1;
         }
         if self.volume >= self.goal {
-            self.enter_decay();
+            self.enter_decay()
         } else {
             self.frames_until_step = self.adsr.attack;
+            false
         }
     }
 
-    fn enter_decay(&mut self) {
+    /// Enter decay, reporting whether this is the attack-to-decay
+    /// volume write (`m4a.c:1140-1158`).
+    fn enter_decay(&mut self) -> bool {
         if self.adsr.decay == 0 {
-            self.enter_sustain_start();
-            return;
+            return self.enter_sustain_start();
         }
         self.volume = self.goal;
         self.phase = Phase::Decay;
         self.frames_until_step = self.adsr.decay;
+        true
     }
 
-    fn decay_step(&mut self) {
+    fn decay_step(&mut self) -> bool {
         if !self.paced_step_is_due() {
-            return;
+            return false;
         }
         if self.volume > self.sustain_goal {
             self.volume -= 1;
         }
         if self.volume <= self.sustain_goal {
-            self.enter_sustain_start();
+            self.enter_sustain_start()
         } else {
             self.frames_until_step = self.adsr.decay;
+            false
         }
     }
 
-    fn enter_sustain_start(&mut self) {
+    /// Enter sustain, reporting whether this is the decay-to-sustain
+    /// volume write (`m4a.c:1126-1137`).
+    fn enter_sustain_start(&mut self) -> bool {
         if self.adsr.sustain == 0 {
-            self.enter_pseudo_echo_or_silence();
-            return;
+            return self.enter_pseudo_echo_or_silence();
         }
         self.volume = self.sustain_goal;
         self.phase = Phase::Sustain;
         self.frames_until_step = SUSTAIN_REFRESH_FRAMES;
+        true
     }
 
     fn sustain_step(&mut self) {
@@ -281,27 +305,34 @@ impl CgbEnvelope {
         }
     }
 
-    fn release_step(&mut self) {
+    fn release_step(&mut self) -> bool {
         if !self.paced_step_is_due() {
-            return;
+            return false;
         }
         if self.volume > 0 {
             self.volume -= 1;
         }
         if self.volume == 0 {
-            self.enter_pseudo_echo_or_silence();
+            self.enter_pseudo_echo_or_silence()
         } else {
             self.frames_until_step = self.adsr.release;
+            false
         }
     }
 
-    fn enter_pseudo_echo_or_silence(&mut self) {
+    /// Enter the pseudo-echo tail, or silence outright when its floor is
+    /// zero, reporting whether entering the tail is the pseudo-echo-start
+    /// volume write (`m4a.c:1090-1103`; see [`crate::cgb_voice::Oscillator::retrigger`]
+    /// for why silence is not).
+    fn enter_pseudo_echo_or_silence(&mut self) -> bool {
         let floor = cgb_echo_floor(self.goal, self.echo_volume);
         if floor == 0 {
             self.silence();
+            false
         } else {
             self.phase = Phase::PseudoEcho;
             self.volume = floor;
+            true
         }
     }
 
