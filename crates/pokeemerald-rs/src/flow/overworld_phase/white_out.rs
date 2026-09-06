@@ -168,49 +168,15 @@ impl OverworldPhase {
         // saved bytes.
         if let Some(lead) = self.party_lead.as_mut() {
             let slot = self.party_lead_slot;
-            // `MON_DATA_STATUS`/`MON_DATA_HP`: cleared and maxed unconditionally, even
-            // if the live battler's own heal below fails -- upstream's per-mon effect
-            // has no failure mode of its own to skip these two plain fields for
-            // (`script_pokemon_util.c:39-42,52-57`), matching the dormant loop's own
-            // fallback below on a decode it cannot fully process either.
+            // `HealPlayerParty` clears status, restores HP to MAX_HP, and
+            // fully refills PP for every occupied slot, unconditionally
+            // (`script_pokemon_util.c:30-59`).
             self.save1.player_party[slot].status = 0;
-            // `MON_DATA_HP`: the heal fills the battler to the model's 0-EV
-            // maximum, but the retained record's maximum may carry an EV
-            // contribution above it. Upstream restores to MAX_HP
-            // (`script_pokemon_util.c:39-42`), so complete that here too --
-            // otherwise the next merge files a fully healed lead as damaged.
             self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
             match lead.heal(&dex) {
                 Ok(()) => {
-                    // The record's hp no longer matches what the (healed) battler
-                    // will report, so re-measure the load offset the merge adds
-                    // back onto it -- [`crate::party::hp_hidden_by_load`], fed the
-                    // record *as just healed* (`hp == max_hp`), the same function
-                    // `copy_party_and_objects_from_save` uses at load. That -- not
-                    // `lead.stats().max_hp` -- matters: this record may have
-                    // levelled up since the load that first measured its offset
-                    // (a battle won, then lost, on the way to this white-out), and
-                    // `lead.stats().max_hp` is the `0`-EV floor at the battler's
-                    // *current* level, while `self.save1.player_party[slot].max_hp`
-                    // here is still the retained maximum at the record's own
-                    // (unchanged) `level` byte -- comparing the two would measure
-                    // a gap between mismatched levels. `hp_hidden_by_load` instead
-                    // floors at `stored.level`, matching what
-                    // `merge_into_save_pokemon`'s recompute branch rebases against
-                    // (`base.level`, that same still-unchanged byte) on the next
-                    // save (issue #384's round-3 review: an EV-trained lead that
-                    // levelled up and then whited out filed damaged, because the
-                    // gap `F(mon.level()) - F(base.level)` this mismatch drops is
-                    // real HP the next merge could never recover).
                     self.lead_hp_hidden_by_load =
                         crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], lead);
-                    // Persisted now, not deferred to the next ordinary SAVE's merge
-                    // (`copy_party_and_objects_to_save`): the re-scan below may
-                    // hand `party_lead`/`party_lead_slot` to a different slot
-                    // before any SAVE happens, and that merge only ever targets
-                    // whichever slot is *currently* selected. Filing the fully
-                    // healed PP into this slot's own record here is what keeps it
-                    // from being silently dropped if that reselection moves on.
                     self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
                         &dex,
                         lead,
@@ -227,16 +193,9 @@ impl OverworldPhase {
             }
         }
 
-        // Every other occupied slot: this port has no live battler for it
-        // to heal (it was never sent out this session), so its saved
-        // record is healed directly instead -- status and HP as plain
-        // fields, and PP through a decode/heal/merge round trip on the
-        // record's own bytes (`crate::party::from_save_pokemon`/
-        // `crate::party::merge_into_save_pokemon`), the same primitives
-        // continue-load and an ordinary SAVE already use elsewhere in this
-        // crate. A record this port cannot decode still gets its plaintext
-        // HP and status cleared -- upstream's own `HealPlayerParty` has no
-        // decode step of its own to fail either.
+        // `HealPlayerParty` heals every occupied slot, not just the lead
+        // (`script_pokemon_util.c:30-59`); a slot this port cannot decode
+        // still gets its plaintext HP and status cleared.
         for (slot, record) in self.save1.player_party[..stored_count]
             .iter_mut()
             .enumerate()
@@ -274,12 +233,9 @@ impl OverworldPhase {
             }
         }
 
-        // SetBattlePartyIds (`crate::party::select_active_battler`'s own
-        // docs) re-scans from slot 0 at the start of every battle upstream;
-        // with the whole party just healed above, an earlier slot the
-        // continue-time scan skipped as fainted may now be the first
-        // usable one, so this port's own cached selection is re-run here
-        // too, not only on the next continue load.
+        // Re-run `SetBattlePartyIds`'s upstream re-scan now that
+        // `HealPlayerParty` (`script_pokemon_util.c:30-59`) has healed the
+        // whole party: an earlier fainted slot may now be first usable.
         if stored_count > 0 {
             match crate::party::select_active_battler(
                 &dex,
