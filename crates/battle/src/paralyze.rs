@@ -1,41 +1,27 @@
 //! Admission and resolution for `BattleScript_EffectParalyze` (Thunder Wave,
 //! Stun Spore, Glare).
 //!
-//! `data/battle_scripts_1.s:1007`-`:1032`: `attackcanceler`, `attackstring`,
-//! `ppreduce`, then the `jumpifability BS_TARGET, ABILITY_LIMBER` guard
-//! (`:1011`), then `typecalc`'s type-immunity guard, then the two
-//! `jumpifstatus` status guards, and only then `accuracycheck`. The guards
-//! run before the accuracy draw and consume no randomness of their own; a
-//! successful check writes [`crate::status1::Status1::Paralysed`] with
-//! `seteffectprimary`, not `seteffectwithchance`, so a landed hit spends no
-//! further draw.
+//! The Limber, type-immunity, and already-paralysed guards
+//! (`data/battle_scripts_1.s:1007`-`:1032`) run ahead of `accuracycheck` and
+//! draw nothing of their own; a landed hit writes
+//! [`crate::status1::Status1::Paralysed`] with `seteffectprimary`, not
+//! `seteffectwithchance`, so it spends no further draw.
 //!
-//! The type-immunity guard's `jumpifmovehadnoeffect` lands on
-//! `BattleScript_ButItFailed` (`:1014`), but that script only *adds*
-//! `MOVE_RESULT_FAILED` to the `MOVE_RESULT_DOESNT_AFFECT_FOE` bit
-//! `typecalc` already set (`battle_script_commands.c:1327`,
-//! `:2058`-`:2061`); with both bits set and `MOVE_RESULT_MISSED` clear,
-//! `Cmd_resultmessage` still reports the "doesn't affect" string
-//! (`:2090`-`:2093`), the same as an ordinary immune hit. [`ParalyzeOutcome::Immune`]
-//! is named, and mapped to [`crate::battle::BattleEvent::NoEffect`], to
-//! match that resolved message rather than the script label it exits
-//! through.
+//! [`ParalyzeOutcome::Immune`] maps to [`crate::battle::BattleEvent::NoEffect`]
+//! because the type-immunity exit still resolves to the ordinary "doesn't
+//! affect" message (`battle_script_commands.c:2090`-`:2093`). Limber exits
+//! through a separate script that names the ability in its own message
+//! (`BattleScript_LimberProtected`, `data/battle_scripts_1.s:1034`-`:1038`;
+//! `gPRLZPreventionStringIds[B_MSG_ABILITY_PREVENTS_MOVE_STATUS]`,
+//! `src/battle_message.c:1223`), so [`ParalyzeOutcome::LimberProtected`]
+//! keeps its own outcome instead of collapsing into `Immune`.
 //!
-//! `ABILITY_LIMBER` exits through `BattleScript_LimberProtected` (`:1034`-
-//! `:1038`) instead, a distinct script that never reaches `typecalc` or
-//! `accuracycheck`; unlike the immune exit above, its own printed message
-//! (`gPRLZPreventionStringIds[B_MSG_ABILITY_PREVENTS_MOVE_STATUS]`,
-//! `src/battle_message.c:1223`) names the ability, so it keeps its own
-//! [`ParalyzeOutcome::LimberProtected`] outcome rather than collapsing into
-//! [`ParalyzeOutcome::Immune`].
-//!
-//! Not ported: `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE` (`:1012`, no
-//! Substitute), and `jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD`
-//! (`:1018`, no side conditions) — each is simply absent from this module,
-//! so neither can newly fire before the checks this module does run. The
-//! `STATUS1_ANY` guard at `:1016` (any *other* primary status blocks a
-//! second one) is likewise never reached: this crate has no primary status
-//! besides [`crate::status1::Status1::Paralysed`] to be already carrying.
+//! Not ported: `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE`
+//! (`data/battle_scripts_1.s:1012`, no Substitute),
+//! `jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD` (`:1018`, no side
+//! conditions), and the `STATUS1_ANY` guard at `:1016` (this crate has no
+//! primary status besides [`crate::status1::Status1::Paralysed`] to already
+//! be carrying).
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -74,33 +60,23 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 }
 
 /// Refuses an [`EFFECT_PARALYZE`] move that would newly paralyse a defender
-/// whose ability this slice cannot follow past the infliction.
+/// whose ability this slice cannot follow past the infliction; see
+/// [`resolve_paralyze_move`] for where this sits among the module's other
+/// guards.
 ///
-/// Only a status that actually lands reaches any of these abilities, so every
-/// guard `BattleScript_EffectParalyze` runs before `seteffectprimary`
-/// (`data/battle_scripts_1.s:1011`-`:1017`: Limber, `typecalc`, and the
-/// already-statused exits) leaves the interaction fully modelled and is
-/// admitted here. `accuracycheck` is the one preceding guard the refusal
-/// cannot consult, since answering it would spend the draw it exists to
-/// protect.
-///
-/// * Synchronize reflects the status back onto the attacker
+/// * Synchronize reflects the status onto the attacker
 ///   (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_script_commands.c:4275`-`:4277`
-///   via `src/battle_util.c:2971`-`:2985`). An attacker already carrying a
-///   primary status is admitted: the reflection re-enters `SetMoveEffect`
-///   against it (`gEffectBattler = gBattlerAttacker`, `:2241`) and the
-///   paralysis case leaves `statusChanged` false (`:2422`-`:2423`).
-/// * Shed Skin rolls a one-in-three cure every end of turn while its holder is
-///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`) — a
-///   draw [`crate::battle::Battle`]'s residual pass does not make, so the
-///   shared stream would diverge for the rest of the battle.
+///   via `src/battle_util.c:2971`-`:2985`); an attacker already paralysed is
+///   admitted, since the reflection's `SetMoveEffect` re-entry then leaves
+///   `statusChanged` false (`:2422`-`:2423`).
+/// * Shed Skin rolls a one-in-three end-of-turn cure while its holder is
+///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`), a
+///   draw [`crate::battle::Battle`]'s residual pass does not make.
 /// * Guts and Marvel Scale read their own holder's `status1` inside
-///   `CalculateBaseDamage` (`src/pokemon.c`), raising a statused holder's
-///   physical Attack or Defense by half, while
+///   `CalculateBaseDamage` (`src/pokemon.c`) to raise a statused holder's
+///   physical Attack or Defense, which
 ///   [`crate::pokemon::BattlePokemon::attacking_stat`] and
-///   [`crate::pokemon::BattlePokemon::defending_stat`] report the stat
-///   unmodified — so every physical hit after the infliction would compute
-///   the wrong damage rather than merely miss a draw.
+///   [`crate::pokemon::BattlePokemon::defending_stat`] do not model.
 ///
 /// # Errors
 ///

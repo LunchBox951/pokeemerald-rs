@@ -190,13 +190,8 @@
 //! [`status1::Status1::Paralysed`] (poison, confusion, sleep, freeze, burn,
 //! toxic — see [`status1`]'s module docs), weather, multi/double
 //! battles, Mist/Substitute/Safeguard/Protect, and the four abilities that
-//! read a holder's primary status — Synchronize's reflection, Shed Skin's
-//! end-turn cure roll, and Guts' and Marvel Scale's status-dependent stat
-//! boosts (a paralysis that would reach one is refused by
-//! [`paralyze::ensure_admissible`] rather than half-applied, on the exact
-//! per-ability conditions that function's own docs state; see
-//! [`stat_change`]'s and [`paralyze`]'s module docs for why those are a
-//! documented boundary rather than dead code), and the move
+//! read a holder's primary status — Synchronize, Shed Skin, Guts, and
+//! Marvel Scale (see [`paralyze::ensure_admissible`]) — and the move
 //! effects the seven pipelines still do
 //! not cover — Defense Curl (flag *and* stat raise, so it belongs with the
 //! stat-change family), the secondary-effect trampolines
@@ -205,17 +200,12 @@
 //! recoil, OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
 //! residual family, and so on.
 //!
-//! This slice adds [`status1::Status1`] — [`pokemon::BattlePokemon`]'s
-//! primary status, distinct from [`volatile::Volatiles`] — modelling
-//! [`status1::Status1::Healthy`] and [`status1::Status1::Paralysed`].
-//! [`paralyze`] is the seventh [`battle::Battle::execute_move`] pipeline
-//! (`BattleScript_EffectParalyze`: Thunder Wave, Stun Spore, Glare), whose
-//! type/status guards run before the accuracy draw. [`status1::Status1`]
-//! also gates every mover through [`battle::Battle::act`]'s full-paralysis
-//! draw, ported from `AtkCanceler_UnableToUseMove`'s `CANCELER_PARALYZED`
-//! branch and ordered ahead of PP deduction and the no-PP abort, and
-//! quarters [`pokemon::BattlePokemon::speed_for_turn_order`] after stat-stage
-//! scaling.
+//! This slice adds [`status1::Status1`] ([`status1::Status1::Healthy`] and
+//! [`status1::Status1::Paralysed`]), [`paralyze`] as the seventh
+//! [`battle::Battle::execute_move`] pipeline, [`battle::Battle::act`]'s
+//! full-paralysis gate, and speed quartering in
+//! [`pokemon::BattlePokemon::speed_for_turn_order`]. See each item's own
+//! docs for how.
 
 pub mod ability;
 pub mod accuracy;

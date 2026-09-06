@@ -158,13 +158,10 @@
 //! Struggle's no-effect-chance-draw exception).
 //!
 //! **Each mover's action** also opens with [`Battle::act`]'s full-paralysis
-//! check, ahead of every draw above: a healthy mover draws nothing there,
-//! while a paralysed one draws exactly **1** and, on a hit, the move never
-//! reaches its own script at all — no PP, no further draw. `BattleScript_
-//! EffectParalyze` (Thunder Wave, Stun Spore, Glare) itself draws **0** when
-//! typing or an existing status stops it before `accuracycheck`, or **1**
-//! otherwise (miss or a landed, drawless `seteffectprimary`); see
-//! [`crate::paralyze`]'s module docs.
+//! check, ahead of every draw above: a healthy mover draws **0**, a
+//! paralysed one draws **1**. `BattleScript_EffectParalyze` (Thunder Wave,
+//! Stun Spore, Glare) itself draws **0** or **1**; see [`Battle::act`] and
+//! [`crate::paralyze`]'s module docs for why.
 //!
 //! # What the wild opponent chooses
 //!
@@ -1198,29 +1195,19 @@ impl Battle {
     }
 
     /// One mover's whole action: `Cmd_attackcanceler`'s full-paralysis draw,
-    /// then its no-PP abort, PP bookkeeping, then hit resolution.
+    /// then its no-PP abort, then PP bookkeeping, then hit resolution.
     ///
-    /// `attackcanceler` is the **first** command of the hit script
-    /// (`BattleScript_HitFromAtkCanceler`, `data/battle_scripts_1.s:241`),
-    /// and it calls `AtkCanceler_UnableToUseMove` before ever testing PP
-    /// (`battle_script_commands.c:930` vs `:934`): the paralysis branch
-    /// (`CANCELER_PARALYZED`, `battle_util.c:2188`-`:2199`) draws once and,
-    /// on a `Random() % 4 == 0` hit, cancels the move outright — control
-    /// never reaches `ppreduce`, so a fully paralysed mover keeps every PP
-    /// it started the turn with. Only then does the no-PP abort apply: a
-    /// 0-PP slot jumps to `BattleScript_NoPPForMove`
-    /// (`battle_script_commands.c:934`-`:939`), printing "But no PP left!"
-    /// and going to `MoveEnd` — zero RNG draws, zero damage, and no
-    /// deduction, since `ppreduce` is never reached either. That abort is
-    /// unconditional in this slice's world: of its escape hatches, Struggle
-    /// cannot be a picked slot here, `HITMARKER_ALLOW_NO_PP` is never set
-    /// anywhere upstream (only tested at `:934` and cleared at `:942`), and
-    /// the `HITMARKER_NO_ATTACKSTRING` / `STATUS2_MULTIPLETURNS` multi-turn
-    /// continuations are not modelled. Only the wild side can reach the
-    /// no-PP abort — the player's slot is pre-validated against upstream's
-    /// selection menu — and it emits [`BattleEvent::FailedNoPp`]; either
-    /// side can reach the full-paralysis cancel, which emits
-    /// [`BattleEvent::FullyParalyzed`] `(behavioral-fidelity)`.
+    /// `attackcanceler` calls `AtkCanceler_UnableToUseMove` before ever
+    /// testing PP (`battle_script_commands.c:930` vs `:934`): the paralysis
+    /// branch (`CANCELER_PARALYZED`, `battle_util.c:2188`-`:2199`) draws
+    /// once and, on a `Random() % 4 == 0` hit, cancels the move before
+    /// `ppreduce` runs, so a fully paralysed mover keeps every PP it started
+    /// the turn with. Only then does the no-PP abort apply, itself
+    /// unconditional here since this slice models none of its escape
+    /// hatches (Struggle, `HITMARKER_ALLOW_NO_PP`, the multi-turn
+    /// continuations). The full-paralysis cancel emits
+    /// [`BattleEvent::FullyParalyzed`]; the no-PP abort, reachable only on
+    /// the wild side, emits [`BattleEvent::FailedNoPp`] `(behavioral-fidelity)`.
     ///
     /// Always called with a real move slot: the two cases that are *not* a
     /// real move — the forced-Struggle fallback and (`first_battle` only)
