@@ -343,7 +343,7 @@ impl CgbVoice {
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
         let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let oscillator = Oscillator::Square(SquareChannel::new(duty, freq_reg, sweep));
-        let disabled_at_trigger = oscillator.disabled_at_trigger();
+        let muted_at_trigger = oscillator.disabled_at_trigger();
         let mut voice = Self::new(
             channel,
             oscillator,
@@ -359,9 +359,7 @@ impl CgbVoice {
             echo_volume,
             echo_length,
         );
-        if disabled_at_trigger {
-            voice.envelope.retire();
-        }
+        voice.hardware_muted = muted_at_trigger;
         voice
     }
 
@@ -885,33 +883,54 @@ mod tests {
     }
 
     #[test]
-    fn square1_upward_sweep_overflow_is_born_dead() {
+    fn square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger() {
+        // A note-on overflow clears the hardware channel-enable bit and nothing
+        // else: upstream leaves SOUND_CHANNEL_SF_ON set and keeps running the
+        // envelope, so the next volume write can bring the note back
+        // (`m4a.c:1055-1058`, `mgba/src/gb/audio.c:180-186`).
         let high_key = 120;
+        let safe_key = 48;
         for sweep_period in [0, 3] {
             let sweep = upward_sweep(sweep_period, 1);
-            let mut dead = square_voice(
+            let mut muted = square_voice(
                 CgbChannelNumber::Square1,
                 Some(sweep),
                 TestNote::at_key(high_key),
             );
-            assert!(!dead.is_active(), "overflowing sweep note is born dead");
+            assert!(
+                muted.is_active(),
+                "the overflow mutes the hardware channel; the software voice keeps its slot"
+            );
             let mut acc = vec![(0i32, 0i32); 8];
-            dead.begin_frame(MAX_MASTER_VOLUME, false);
-            dead.render(&mut acc, &[]);
+            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            muted.render(&mut acc, &[]);
             assert!(
                 acc.iter().all(|&(l, r)| l == 0 && r == 0),
-                "born-dead channel must be silent from frame 0"
+                "a born-muted channel must be silent from frame 0"
+            );
+
+            muted.set_track_pitch(i32::from(safe_key) - i32::from(high_key), 0);
+            muted.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            let mut revived = vec![(0i32, 0i32); 8];
+            muted.render(&mut revived, &[]);
+            assert!(
+                revived.iter().any(|&(l, r)| l != 0 || r != 0),
+                "a later safe trigger must revive the born-muted note"
             );
         }
 
-        let normal = square_voice(
+        let mut normal = square_voice(
             CgbChannelNumber::Square1,
             Some(upward_sweep(0, 1)),
-            TestNote::at_key(48),
+            TestNote::at_key(safe_key),
         );
+        let mut acc = vec![(0i32, 0i32); 8];
+        normal.begin_frame(MAX_MASTER_VOLUME, false);
+        normal.render(&mut acc, &[]);
         assert!(
-            normal.is_active(),
-            "a normal-frequency sweep note keeps playing"
+            acc.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a normal-frequency sweep note is audible from frame 0"
         );
     }
 
@@ -1008,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_born_dead_check() {
+    fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_mute_check() {
         let edge_note = TestNote {
             fine_pitch: 167,
             ..TestNote::at_key(54)
@@ -1018,16 +1037,37 @@ mod tests {
         assert_eq!(DacCorrection::FixedRate8Bit.apply(raw_frequency), 0x556);
 
         let sweep = upward_sweep(0, 1);
-        let plain = square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut plain = square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut plain_frame = vec![(0i32, 0i32); 8];
+        plain.begin_frame(MAX_MASTER_VOLUME, false);
+        plain.render(&mut plain_frame, &[]);
         assert!(
-            plain.is_active(),
-            "the uncorrected sum sits exactly at the threshold, not over it"
+            plain_frame.iter().any(|&(l, r)| l != 0 || r != 0),
+            "the uncorrected sum sits exactly at the threshold, not over it, so the note sounds"
         );
 
-        let fixed = fixed_square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut fixed = fixed_square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut fixed_frame = vec![(0i32, 0i32); 8];
+        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        fixed.render(&mut fixed_frame, &[]);
         assert!(
-            !fixed.is_active(),
-            "the DAC-corrected sum must overflow the sweep, born dead"
+            fixed_frame.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the DAC-corrected sum must overflow the sweep and mute the channel"
+        );
+        assert!(
+            fixed.is_active(),
+            "the overflow mutes the hardware channel without retiring the voice"
+        );
+
+        let safe_key: u8 = 48;
+        fixed.set_track_pitch(i32::from(safe_key) - i32::from(edge_note.note_key), 0);
+        fixed.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut revived = vec![(0i32, 0i32); 8];
+        fixed.render(&mut revived, &[]);
+        assert!(
+            revived.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a later safe trigger must revive the muted fixed-rate note"
         );
     }
 
@@ -1232,7 +1272,7 @@ mod tests {
         // `mgba/src/gb/audio.c:180-186`).
         let safe_key: u8 = 48;
         let overflow_prone_key: u8 = 120; // shares its overflow fixture with
-                                          // `square1_upward_sweep_overflow_is_born_dead`.
+                                          // `square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger`.
         let mut voice = CgbVoice::square(
             CgbChannelNumber::Square1,
             HALF_DUTY,
