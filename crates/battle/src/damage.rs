@@ -133,9 +133,7 @@ fn apply_weather(damage: u128, move_type: Type, weather: Weather, is_solar_beam:
 ///
 /// The attack/power/level chain widens through `u128`, since three `u32`
 /// factors can exceed even a `u64` intermediate; the final sum saturates to
-/// `u32::MAX` if the true result would not fit back. `StatStage::apply`'s own
-/// multiply-before-divide is a separate, pre-existing overflow path this fix
-/// does not cover (issue #871 scoped this file and `nature.rs` only).
+/// `u32::MAX` if the true result would not fit back.
 #[must_use]
 pub fn base_damage(input: &DamageInput) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
@@ -499,6 +497,14 @@ mod tests {
         // `* level_multiplier` (168_000_000_000) does not.
         let input = neutral_input(Type::Normal, 1_000_000, 1_000_000, 4_000, 100);
         assert_eq!(base_damage(&input), 3_362);
+    }
+
+    #[test]
+    fn base_damage_keeps_a_representable_result_past_a_stage_adjusted_overflow() {
+        // The neutral-stage adjustment itself (500_000_000 * 10) overflows
+        // u32 before StatStage::apply's own widening narrows it back.
+        let input = neutral_input(Type::Normal, 500_000_000, 1, 1, 1);
+        assert_eq!(base_damage(&input), 20_000_002);
     }
 
     #[test]

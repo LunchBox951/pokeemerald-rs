@@ -66,10 +66,22 @@ impl StatStage {
     ///
     /// Multiplication precedes integer division, matching `APPLY_STAT_MOD`
     /// (`pokeemerald/src/pokemon.c:3100`) when the ratio does not divide evenly.
+    /// The product widens through `u64` and saturates to `u32::MAX` if the
+    /// true result would not fit back.
     #[must_use]
     pub const fn apply(self, stat: u32) -> u32 {
         let (numerator, denominator) = self.ratio();
-        stat * numerator / denominator
+        let scaled = stat as u64 * numerator as u64 / denominator as u64;
+        if scaled > u32::MAX as u64 {
+            u32::MAX
+        } else {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "scaled is checked against u32::MAX above"
+            )]
+            let narrowed = scaled as u32;
+            narrowed
+        }
     }
 
     /// Add `delta`, clamping the result to [`Self::MIN`]`..=`[`Self::MAX`].
@@ -213,6 +225,19 @@ mod tests {
     fn min_and_max_stage_landmarks() {
         assert_eq!(StatStage::MIN.apply(100), 25);
         assert_eq!(StatStage::MAX.apply(100), 400);
+    }
+
+    #[test]
+    fn apply_keeps_a_representable_result_past_a_u32_overflowing_product() {
+        // 500_000_000 * 10 (neutral) and * 40 (MAX) both exceed u32::MAX
+        // before the divide.
+        assert_eq!(StatStage::NEUTRAL.apply(500_000_000), 500_000_000);
+        assert_eq!(StatStage::MAX.apply(500_000_000), 2_000_000_000);
+    }
+
+    #[test]
+    fn apply_saturates_instead_of_overflowing_u32() {
+        assert_eq!(StatStage::MAX.apply(u32::MAX), u32::MAX);
     }
 
     #[test]
