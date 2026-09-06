@@ -28453,7 +28453,7 @@
           "status": "stubbed"
         },
         "gWildMonHeaders": {
-          "reason": "gWildMonHeaders (per-map wild encounter tables, generated from src/data/wild_encounters.json) transcribed to a typed table in crates/assets, pinned to upstream by sampled-entry + slot-count tests; wild_encounter.c itself stays pending (runtime encounter-roll unported).",
+          "reason": "gWildMonHeaders (per-map wild encounter tables, generated from src/data/wild_encounters.json) transcribed to a typed table in crates/assets, pinned to upstream by a whole-table FNV-1a fingerprint plus structural and sampled-entry tests; wild_encounter.c itself stays pending (runtime encounter-roll unported).",
           "rust_target": "crates/assets/src/wild_encounters.rs",
           "spec": "S-4",
           "status": "ported"
