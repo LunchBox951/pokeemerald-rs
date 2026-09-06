@@ -26744,7 +26744,7 @@
           "status": "rewritten"
         },
         "CgbSound": {
-          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2); slice 3 extends the CGB envelope with the envelope_pseudoecho_start/pseudoEchoLength tail (CgbEnvelope's echo state), matching the DirectSound pseudo-echo already modelled in slice 1/2.",
+          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2); slice 3 extends the CGB envelope with the envelope_pseudoecho_start/pseudoEchoLength tail (CgbEnvelope's echo state), matching the DirectSound pseudo-echo already modelled in slice 1/2; issue #468 adds the SF_START|SF_STOP short-circuit, retiring a note stopped before its first CgbSound pass at once instead of running it through the release ramp (CgbEnvelope::note_off/step's Starting phase).",
           "rust_target": "crates/audio/src/cgb_voice.rs",
           "spec": "S-3",
           "status": "rewritten"

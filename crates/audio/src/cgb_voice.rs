@@ -907,6 +907,41 @@ mod tests {
     }
 
     #[test]
+    fn note_off_before_the_first_envelope_pass_produces_no_audible_samples() {
+        // Note-off before any `begin_frame`: `CgbEnvelope`'s upstream
+        // short-circuit retires it at once, skipping the pseudo-echo tail.
+        let echo_note = TestNote {
+            echo_volume: 128,
+            echo_length: 3,
+            ..TestNote::default()
+        };
+        let mut voice = noise_voice(
+            CgbAdsr {
+                attack: 0,
+                decay: 0,
+                sustain: MAX_MASTER_VOLUME,
+                release: 0,
+            },
+            WIDE_NOISE,
+            echo_note,
+        );
+
+        voice.note_off();
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut acc = vec![(0i32, 0i32); 8];
+        voice.render(&mut acc, &[]);
+
+        assert!(
+            !voice.is_active(),
+            "must retire immediately, not hold a pseudo-echo tail"
+        );
+        assert!(
+            acc.iter().all(|&(l, r)| l == 0 && r == 0),
+            "must produce no audible samples"
+        );
+    }
+
+    #[test]
     fn fixed_rate_dac_correction_matches_emeralds_8_bit_formula() {
         let correction = DacCorrection::FixedRate8Bit;
         assert_eq!(correction.apply(0), 0);

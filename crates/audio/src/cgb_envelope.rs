@@ -81,6 +81,8 @@ impl CgbAdsr {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
+    /// Awaiting its first `CgbSound` pass; not yet running the attack.
+    Starting,
     Attack,
     Decay,
     Sustain,
@@ -126,7 +128,7 @@ impl CgbEnvelope {
             adsr,
             goal,
             sustain_goal,
-            phase: Phase::Attack,
+            phase: Phase::Starting,
             volume: 0,
             frames_until_step: transition_frame_delay(adsr.attack),
             note_off_requested: false,
@@ -153,10 +155,14 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// Enter the release phase.
+    /// Enter the release phase; a note stopped before its first `step`
+    /// retires at once instead (`m4a.c:988..1046`, `:1053..1057`).
     pub fn note_off(&mut self) {
         self.note_off_requested = true;
-        if !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
+        if !matches!(
+            self.phase,
+            Phase::Starting | Phase::PseudoEcho | Phase::Retired
+        ) {
             self.phase = Phase::Release;
             self.frames_until_step = transition_frame_delay(self.adsr.release);
         }
@@ -179,6 +185,7 @@ impl CgbEnvelope {
     /// `step_frame` rather than calling this directly (module docs).
     pub fn step(&mut self) {
         match self.phase {
+            Phase::Starting => self.start(),
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
             Phase::Sustain => self.sustain_step(),
@@ -220,6 +227,17 @@ impl CgbEnvelope {
     fn paced_step_is_due(&mut self) -> bool {
         self.frames_until_step -= 1;
         self.frames_until_step == 0
+    }
+
+    /// Apply this note's first `CgbSound` pass: retire at once if it was
+    /// already stopped, else begin its attack (`Self::note_off`'s doc).
+    fn start(&mut self) {
+        if self.note_off_requested {
+            self.silence();
+            return;
+        }
+        self.phase = Phase::Attack;
+        self.attack_step();
     }
 
     fn attack_step(&mut self) {
@@ -511,6 +529,19 @@ mod tests {
 
         env.step();
         assert!(!env.is_active());
+    }
+
+    #[test]
+    fn note_off_before_the_first_pass_retires_at_once_unlike_after_it() {
+        // Stopped before its first pass: `CgbSound`'s `SF_START | SF_STOP`
+        // check retires it at once, bypassing pseudo-echo (`m4a.c:988..1046`).
+        let mut env = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
+
+        env.note_off();
+        env.step();
+
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
     }
 
     #[test]
