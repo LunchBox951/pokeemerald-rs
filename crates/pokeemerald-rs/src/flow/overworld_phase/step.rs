@@ -220,11 +220,11 @@ impl OverworldPhase {
     /// `PlayerStep` run at all, `field_control_avatar.c:143-145`/`:172`,
     /// `overworld.c:1444-1455`): a visible object event directly ahead
     /// whose `script` [`npc_scripts::script_text`] recognizes opens a
-    /// [`NpcDialog`]. An object event with no recognized script (including
-    /// the `"0x0"` no-script sentinel) is still found and selected, but
-    /// opens no dialog -- the same observable no-op upstream produces for a
-    /// `NULL` script (module docs on [`npc_scripts::script_text`]). Checked
-    /// before this frame's movement is applied, and a hit preempts that
+    /// [`NpcDialog`]; one it doesn't still preempts the frame without
+    /// opening anything, unless that script is `"0x0"` (upstream's `NULL`
+    /// sentinel), the one case with truly no interaction to find
+    /// ([`InteractionOutcome`]'s own doc comment; review finding on #435).
+    /// Checked before this frame's movement is applied, and a hit preempts that
     /// movement outright -- a same-frame direction press can neither turn
     /// nor step the player once an interaction has already claimed the
     /// frame, matching `PlayerStep` never running once
@@ -631,7 +631,9 @@ impl OverworldPhase {
                     Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                 },
                 Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
-                None => {}
+                // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
+                // own doc comment) -- fail closed, nothing to render.
+                Some(InteractionOutcome::Unmodelled) | None => {}
             }
         }
 
@@ -702,6 +704,10 @@ impl OverworldPhase {
     /// other object event's script is unaffected -- Mom's own dialog path
     /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
     /// method grew a second arm.
+    ///
+    /// Below that, only `"0x0"` (upstream's `NULL`-script sentinel) means no
+    /// interaction; any other unrecognized script is real and still
+    /// consumes the frame upstream (`:172`, review finding on #435).
     fn find_interaction_outcome(
         &self,
         runtime: &engine::overworld::MapRuntime<'_>,
@@ -710,16 +716,23 @@ impl OverworldPhase {
         if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
             return Some(InteractionOutcome::RivalBattle);
         }
-        npc_scripts::script_text(object.script).map(InteractionOutcome::Dialog)
+        if object.script == "0x0" {
+            return None;
+        }
+        Some(
+            npc_scripts::script_text(object.script)
+                .map_or(InteractionOutcome::Unmodelled, InteractionOutcome::Dialog),
+        )
     }
 }
 
 /// What a same-frame A-press interaction ([`OverworldPhase::interaction_tokens_this_frame`])
 /// should do -- a dialog box (the ordinary NPC case,
-/// [`npc_scripts::script_text`]) or the Route 103 rival battle (issue
-/// #248), never both. Not a dialog itself: a trainer battle is not a
-/// message box, so it needs its own outcome rather than being squeezed
-/// into [`Vec<engine::text::Token>`]'s shape.
+/// [`npc_scripts::script_text`]), the Route 103 rival battle (issue #248),
+/// or nothing observable for a real script this port doesn't model yet
+/// (issue #435 finding) -- never more than one. Not a dialog itself: a
+/// trainer battle is not a message box, so it needs its own outcome rather
+/// than being squeezed into [`Vec<engine::text::Token>`]'s shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InteractionOutcome {
     /// Open an [`NpcDialog`] with this token stream.
@@ -727,4 +740,8 @@ pub(super) enum InteractionOutcome {
     /// Start the Route 103 rival battle
     /// ([`OverworldPhase::begin_route103_rival_battle`]).
     RivalBattle,
+    /// A real, non-`"0x0"` script [`npc_scripts::script_text`] doesn't
+    /// recognize: upstream still consumes the frame (`find_interaction_outcome`'s
+    /// own doc comment), but this port has nothing to render for it.
+    Unmodelled,
 }

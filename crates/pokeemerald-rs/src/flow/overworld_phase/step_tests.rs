@@ -174,6 +174,37 @@ fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
     );
 }
 
+/// An object event with a real, non-`"0x0"` script this port does not model
+/// yet still consumes the frame: `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) returns TRUE for any non-NULL script, so
+/// `PlayerStep` never runs (`overworld.c:1444-1455`).
+#[test]
+fn a_pressed_with_a_perpendicular_direction_facing_an_unmodelled_script_does_not_turn() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+
+    phase.step(pressed(Buttons::A | Buttons::LEFT));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "facing a visible object event with a real (unmodelled) script, an A press consumes \
+         the frame upstream -- the perpendicular direction must not turn the player"
+    );
+    assert_eq!(phase.player.position(), (4, 6));
+}
+
+/// The faced object really is a visible object event carrying a real script.
+#[test]
+fn the_faced_vigoroth_is_visible_with_a_real_script() {
+    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    let runtime = runtime_for(&phase);
+    let object =
+        engine::overworld::facing_object_event(&phase.player, &runtime, &phase.save1.event_data)
+            .expect("the Vigoroth at (4, 5) must be visible on a fresh save");
+    assert_eq!(object.script, "PlayersHouse_1F_EventScript_Vigoroth1");
+    assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
+}
+
 /// Headless counterpart to the real-pack acceptance test: while a dialog is
 /// open, [`OverworldPhase::step`] must not feed movement to the player at
 /// all (module docs' "NPC dialog routing" section -- upstream's `lock`,
