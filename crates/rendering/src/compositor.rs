@@ -297,13 +297,18 @@ fn compose_pixel(
 
     let objwin_mask = effects.windows.obj_window.is_some()
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
-    let window = effects.windows.classify(wx, wy, objwin_mask);
+    let (window, region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
 
     let mut front = None;
     let mut next = None;
 
     if window.obj {
-        if let Some(pixel) = sprites.resolve_pixel_with_mosaic(x, y, effects.mosaic.obj) {
+        if let Some(pixel) = sprites.resolve_pixel_with_mosaic_windowed(
+            x,
+            y,
+            effects.mosaic.obj,
+            region.suppresses_objwin_hole(),
+        ) {
             insert_candidate(
                 &mut front,
                 &mut next,
@@ -1496,6 +1501,90 @@ mod tests {
             crate::oam_budget::walk_count(),
             crate::framebuffer::Framebuffer::HEIGHT,
             "the OBJWIN mask path shares the visible path's cached admission"
+        );
+    }
+
+    #[test]
+    fn objwin_sprite_hole_must_not_upgrade_obj_order_inside_win0() {
+        // mgba drops an OBJWIN sprite outright inside WIN0/WIN1 (software-obj.c:161,
+        // video-software.c:131-134), so its hole cannot promote a worse-priority OBJ
+        // there, but still does so in WINOUT.
+        let (tiles, palette, map) = opaque_bg_fixture(9); // red BG0
+        let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+        let slots = [BgSlot::new(layer, 0, 1, 0, 0, true)]; // BG0 at priority 1
+
+        // Tile 0: solid index 15 (the normal sprite). Tile 1: columns 0..4
+        // transparent, columns 4..8 index 14 (the OBJWIN mask sprite).
+        let mut tile_bytes = [0xFFu8; 64];
+        for row in tile_bytes[32..].chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xEE, 0xEE]);
+        }
+        let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 9, 0); // green: the normal sprite
+        sprite_colors[14] = Bgr555::from_channels(0, 31, 31); // must never render
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [
+            // OAM 0: normal sprite, worst priority, opaque everywhere.
+            OamEntry::new(
+                0,
+                0,
+                0,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0,
+                3,
+                true,
+            ),
+            // OAM 1: OBJWIN sprite, best priority, transparent over x < 4.
+            OamEntry::new(
+                0,
+                0,
+                1,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0,
+                0,
+                true,
+            )
+            .with_mode(ObjMode::Window),
+        ];
+        let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette);
+
+        let mut bg0_and_obj = WindowLayerEnable::NONE;
+        bg0_and_obj.bg[0] = true;
+        bg0_and_obj.obj = true;
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                // WIN0 covers x < 2 only; x = 3 falls through to WINOUT.
+                win0: Some((
+                    WindowRect::new(WindowRange::new(0, 2), WindowRange::new(0, 8)),
+                    bg0_and_obj,
+                )),
+                win1: None,
+                obj_window: Some(bg0_and_obj),
+                winout: bg0_and_obj,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(Bgr555::from_channels(0, 9, 0).to_rgb888()),
+            "WINOUT: the OBJWIN hole is drawn, promoting the priority-3 OBJ ahead of BG0"
+        );
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
+            "WIN0 outranks OBJWIN, so the OBJWIN sprite is skipped there and the \
+             OBJ stays at priority 3, behind BG0's priority 1"
         );
     }
 }
