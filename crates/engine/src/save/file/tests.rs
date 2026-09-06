@@ -281,6 +281,73 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
     );
 }
 
+#[test]
+fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
+    let dir = TempDir::new("staging-retry");
+    let path = dir.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+
+    // The first attempt lands on an occupied name and the second on a free
+    // one, so only a retry that carries on past the collision can write.
+    let occupied = expected_sibling_path(&path, ".tmp.occupied");
+    std::fs::write(&occupied, b"someone else's file").unwrap();
+    let fresh = expected_sibling_path(&path, ".tmp.fresh");
+    let mut attempts = 0;
+    file.write_with(&store, SaveFile::sync_directory_best_effort, || {
+        attempts += 1;
+        if attempts == 1 {
+            occupied.clone()
+        } else {
+            fresh.clone()
+        }
+    })
+    .expect("a staging-name collision must be retried onto a fresh name");
+
+    assert_eq!(
+        attempts, 2,
+        "the collision must cost exactly one extra attempt"
+    );
+    assert_eq!(
+        std::fs::read(&occupied).unwrap(),
+        b"someone else's file",
+        "a colliding staging attempt must leave the file already at that name alone"
+    );
+    assert!(
+        !fresh.exists(),
+        "the retried staged file must be renamed into place, not left on disk"
+    );
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+#[test]
+fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
+    let dir = TempDir::new("staging-rename-failure");
+    let path = dir.join(SAVE_FILE_NAME);
+    // A directory at the save path stages fine but can never be renamed onto,
+    // so the failure lands after the staged file exists.
+    std::fs::create_dir_all(&path).unwrap();
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+
+    let staged = expected_sibling_path(&path, ".tmp.staged");
+    let err = file
+        .write_with(&store, SaveFile::sync_directory_best_effort, || {
+            staged.clone()
+        })
+        .expect_err("renaming onto a directory cannot succeed");
+
+    assert!(
+        matches!(err, SaveFileError::Write { .. }),
+        "a failed rename must surface as a write failure: {err:?}"
+    );
+    assert!(
+        !staged.exists(),
+        "a staged file whose rename failed must be cleaned up, not left beside the save"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
@@ -315,70 +382,53 @@ fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
 
 #[test]
 fn two_save_files_on_one_path_never_share_a_staging_name() {
-    use std::sync::{Arc, Barrier};
-
-    let dir = TempDir::new("concurrent-same-path");
+    let dir = TempDir::new("same-path-staging-names");
     let path = dir.join(SAVE_FILE_NAME);
 
-    let mut store_a = SaveStore::new();
-    store_a.save(
-        &SaveBlock1 {
-            money: 111_111,
-            ..SaveBlock1::default()
-        },
-        &SaveBlock2 {
-            encryption_key: 0xAAAA_AAAA,
-            ..SaveBlock2::default()
-        },
-    );
-    let image_a = store_a.flash_image().to_vec();
+    // Two independent `SaveFile` values on the identical path, not clones of
+    // one -- each must derive its own staging name, observed directly rather
+    // than inferred from a race that a fast old implementation could still
+    // win before the two writers' staging windows ever overlapped.
+    let first = SaveFile::at(&path);
+    let second = SaveFile::at(&path);
+    let first_staging = first.staging_path();
+    let second_staging = second.staging_path();
+    let old_deterministic_name = expected_staging_path(&path);
 
-    let mut store_b = SaveStore::new();
-    store_b.save(
+    assert_ne!(
+        first_staging, second_staging,
+        "two SaveFile values on the same path must never derive the same staging name"
+    );
+    assert_ne!(
+        first_staging, old_deterministic_name,
+        "the staging name must not be the old, symlink-plantable <save>.tmp.<pid> form"
+    );
+    assert_ne!(
+        second_staging, old_deterministic_name,
+        "the staging name must not be the old, symlink-plantable <save>.tmp.<pid> form"
+    );
+
+    // Distinct staging names also mean two writers on one path can be
+    // sequenced without either clobbering the other's in-flight staging file.
+    let (first_store, _, block2) = saved_store();
+    first
+        .write(&first_store)
+        .expect("the first writer must succeed");
+
+    let mut second_store = first_store.clone();
+    second_store.save(
         &SaveBlock1 {
             money: 222_222,
             ..SaveBlock1::default()
         },
-        &SaveBlock2 {
-            encryption_key: 0xBBBB_BBBB,
-            ..SaveBlock2::default()
-        },
+        &block2,
     );
-    let image_b = store_b.flash_image().to_vec();
-
-    // Two independent `SaveFile` values, not clones of one -- each derives
-    // its own staging name, and the barrier maximises the chance their
-    // writes genuinely overlap in time rather than merely being sequenced.
-    let barrier = Arc::new(Barrier::new(2));
-    let (path_a, path_b) = (path.clone(), path.clone());
-    let (barrier_a, barrier_b) = (Arc::clone(&barrier), Arc::clone(&barrier));
-    let writer_a = std::thread::spawn(move || {
-        let file = SaveFile::at(path_a);
-        barrier_a.wait();
-        file.write(&store_a)
-    });
-    let writer_b = std::thread::spawn(move || {
-        let file = SaveFile::at(path_b);
-        barrier_b.wait();
-        file.write(&store_b)
-    });
-
-    writer_a
-        .join()
-        .expect("the first writer must not panic")
-        .expect("the first writer must succeed");
-    writer_b
-        .join()
-        .expect("the second writer must not panic")
+    second
+        .write(&second_store)
         .expect("the second writer must succeed");
 
-    let final_bytes = std::fs::read(&path).unwrap();
-    assert!(
-        final_bytes == image_a || final_bytes == image_b,
-        "two SaveFile values racing on the same path must each complete a whole \
-         image, never a mix of both -- sharing one staging name is what let two \
-         concurrent writes interleave into a corrupted file"
-    );
+    let reloaded = second.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), second_store.flash_image());
 }
 
 #[test]
