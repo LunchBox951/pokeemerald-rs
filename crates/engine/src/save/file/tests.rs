@@ -224,9 +224,18 @@ fn writing_leaves_no_temporary_file_behind() {
 
     file.write(&store).unwrap();
 
+    let leftover_staging_names: Vec<_> = std::fs::read_dir(&dir.path)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| {
+            name.to_string_lossy()
+                .starts_with(&format!("{SAVE_FILE_NAME}.tmp."))
+        })
+        .collect();
     assert!(
-        !expected_staging_path(&path).exists(),
-        "the staged temporary must be renamed away, not left on disk"
+        leftover_staging_names.is_empty(),
+        "the staged temporary must be renamed away, not left on disk: {leftover_staging_names:?}"
     );
 }
 
@@ -240,7 +249,11 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
     file.write(&first).unwrap();
     let original = std::fs::read(&path).expect("the first save must be readable");
 
-    std::fs::create_dir_all(expected_staging_path(&path)).unwrap();
+    // Every staging attempt is pointed at the same pre-existing directory, so
+    // every attempt -- and the retry bound -- collides, forcing the failure
+    // this test exercises without depending on the real staging name's shape.
+    let unstageable = expected_staging_path(&path);
+    std::fs::create_dir_all(&unstageable).unwrap();
 
     let mut second = first.clone();
     second.save(
@@ -251,7 +264,9 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
         &block2,
     );
     let err = file
-        .write(&second)
+        .write_with(&second, SaveFile::sync_directory_best_effort, || {
+            unstageable.clone()
+        })
         .expect_err("staging into a directory cannot succeed");
     assert!(
         matches!(err, SaveFileError::Write { .. }),
@@ -263,6 +278,106 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
         "a write that never got staged must not touch the image already on \
          disk -- writing straight to the destination would lose both \
          rotating slots at once"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
+    let dir = TempDir::new("staging-symlink");
+    let path = dir.join(SAVE_FILE_NAME);
+    let bystander = dir.join("bystander");
+    std::fs::write(&bystander, b"not a save file").unwrap();
+
+    // The staging name this attacker can predict is the pre-fix deterministic
+    // one; the fix's real name never matches it, and even if it did,
+    // `create_new` refuses a symlink at that name outright.
+    std::os::unix::fs::symlink(&bystander, expected_staging_path(&path)).unwrap();
+
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+    file.write(&store)
+        .expect("planting a decoy symlink must not fail the write");
+
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"not a save file",
+        "a symlink planted at a staging name must never redirect the flash \
+         image onto the file it points at"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()),
+        "the save path must hold a save image, not a planted symlink"
+    );
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+#[test]
+fn two_save_files_on_one_path_never_share_a_staging_name() {
+    use std::sync::{Arc, Barrier};
+
+    let dir = TempDir::new("concurrent-same-path");
+    let path = dir.join(SAVE_FILE_NAME);
+
+    let mut store_a = SaveStore::new();
+    store_a.save(
+        &SaveBlock1 {
+            money: 111_111,
+            ..SaveBlock1::default()
+        },
+        &SaveBlock2 {
+            encryption_key: 0xAAAA_AAAA,
+            ..SaveBlock2::default()
+        },
+    );
+    let image_a = store_a.flash_image().to_vec();
+
+    let mut store_b = SaveStore::new();
+    store_b.save(
+        &SaveBlock1 {
+            money: 222_222,
+            ..SaveBlock1::default()
+        },
+        &SaveBlock2 {
+            encryption_key: 0xBBBB_BBBB,
+            ..SaveBlock2::default()
+        },
+    );
+    let image_b = store_b.flash_image().to_vec();
+
+    // Two independent `SaveFile` values, not clones of one -- each derives
+    // its own staging name, and the barrier maximises the chance their
+    // writes genuinely overlap in time rather than merely being sequenced.
+    let barrier = Arc::new(Barrier::new(2));
+    let (path_a, path_b) = (path.clone(), path.clone());
+    let (barrier_a, barrier_b) = (Arc::clone(&barrier), Arc::clone(&barrier));
+    let writer_a = std::thread::spawn(move || {
+        let file = SaveFile::at(path_a);
+        barrier_a.wait();
+        file.write(&store_a)
+    });
+    let writer_b = std::thread::spawn(move || {
+        let file = SaveFile::at(path_b);
+        barrier_b.wait();
+        file.write(&store_b)
+    });
+
+    writer_a
+        .join()
+        .expect("the first writer must not panic")
+        .expect("the first writer must succeed");
+    writer_b
+        .join()
+        .expect("the second writer must not panic")
+        .expect("the second writer must succeed");
+
+    let final_bytes = std::fs::read(&path).unwrap();
+    assert!(
+        final_bytes == image_a || final_bytes == image_b,
+        "two SaveFile values racing on the same path must each complete a whole \
+         image, never a mix of both -- sharing one staging name is what let two \
+         concurrent writes interleave into a corrupted file"
     );
 }
 
@@ -607,8 +722,12 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
     let (store, _, _) = saved_store();
 
     let synced = std::cell::RefCell::new(Vec::new());
-    file.write_with(&store, |path| synced.borrow_mut().push(path.to_path_buf()))
-        .expect("writing a bare relative save path must succeed");
+    file.write_with(
+        &store,
+        |path| synced.borrow_mut().push(path.to_path_buf()),
+        || file.staging_path(),
+    )
+    .expect("writing a bare relative save path must succeed");
 
     assert_eq!(
         synced.into_inner(),

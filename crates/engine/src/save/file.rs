@@ -281,26 +281,29 @@ impl SaveFile {
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        self.write_with(store, Self::sync_directory_best_effort)
+        self.write_with(store, Self::sync_directory_best_effort, || {
+            self.staging_path()
+        })
     }
 
     /// As [`SaveFile::write`], synchronising through the given `sync_directory`
-    /// rather than always [`SaveFile::sync_directory_best_effort`].
+    /// and drawing each staging attempt's name from `staging_path`, rather than
+    /// always [`SaveFile::sync_directory_best_effort`] and [`SaveFile::staging_path`].
     fn write_with(
         &self,
         store: &SaveStore,
         mut sync_directory: impl FnMut(&Path),
+        staging_path: impl FnMut() -> PathBuf,
     ) -> Result<(), SaveFileError> {
         self.ensure_parent_directory()?;
 
-        let staging_path = self.staging_path_for_process();
         let write_error = |source: std::io::Error| SaveFileError::Write {
             path: self.path.clone(),
             source,
         };
-        Self::write_and_sync(&staging_path, store.flash_image()).map_err(write_error)?;
-        if let Err(source) = std::fs::rename(&staging_path, &self.path) {
-            drop(std::fs::remove_file(&staging_path));
+        let staged = Self::stage(staging_path, store.flash_image()).map_err(write_error)?;
+        if let Err(source) = std::fs::rename(&staged, &self.path) {
+            drop(std::fs::remove_file(&staged));
             return Err(write_error(source));
         }
         if let Some(containing) = Self::directory_containing(&self.path) {
@@ -309,14 +312,53 @@ impl SaveFile {
         Ok(())
     }
 
+    /// Bound on retries after a staging-name collision before giving up.
+    const MAX_STAGING_ATTEMPTS: u32 = 8;
+
+    /// Stages `bytes` under a fresh name from `next_path` on every attempt,
+    /// retrying a name collision up to [`Self::MAX_STAGING_ATTEMPTS`] times;
+    /// returns the path actually written.
+    fn stage(mut next_path: impl FnMut() -> PathBuf, bytes: &[u8]) -> std::io::Result<PathBuf> {
+        let mut last_collision = None;
+        for _ in 0..Self::MAX_STAGING_ATTEMPTS {
+            let path = next_path();
+            match Self::write_and_sync(&path, bytes) {
+                Ok(()) => return Ok(path),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_collision = Some(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_collision.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "exhausted staging attempts",
+            )
+        }))
+    }
+
+    /// Opens `path` exclusively -- refusing an existing file, directory, or
+    /// symlink there instead of following or truncating it -- then writes and
+    /// syncs `bytes`, removing `path` again on any failure once past that
+    /// open so this call never deletes a path a different caller created.
     fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::io::Write as _;
 
-        let file = std::fs::File::create(path)?;
-        let mut staged = std::io::BufWriter::new(file);
-        staged.write_all(bytes)?;
-        staged.flush()?;
-        staged.get_ref().sync_all()
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)?;
+        let result = (|| {
+            let mut staged = std::io::BufWriter::new(file);
+            staged.write_all(bytes)?;
+            staged.flush()?;
+            staged.get_ref().sync_all()
+        })();
+        if result.is_err() {
+            drop(std::fs::remove_file(path));
+        }
+        result
     }
 
     fn sync_directory_best_effort(path: &Path) {
@@ -448,10 +490,30 @@ impl SaveFile {
         PathBuf::from(name)
     }
 
-    fn staging_path_for_process(&self) -> PathBuf {
+    /// A collision-resistant sibling staging name -- unguessable to a planted
+    /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
+    /// retries the rare exact collision, so this needs resistance, not proof.
+    fn staging_path(&self) -> PathBuf {
         let mut name = self.path.as_os_str().to_os_string();
-        name.push(format!(".tmp.{}", std::process::id()));
+        name.push(".tmp.");
+        name.push(Self::unique_component());
         PathBuf::from(name)
+    }
+
+    /// `std`-only entropy: process id, clock nanoseconds, and a fresh
+    /// `RandomState`-derived salt, which alone already differs between two
+    /// calls at the same nanosecond.
+    fn unique_component() -> String {
+        use std::hash::{BuildHasher, Hasher};
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        let salt = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        format!("{pid:x}.{nanos:x}.{salt:x}")
     }
 }
 
