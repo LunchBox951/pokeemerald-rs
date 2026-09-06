@@ -13,6 +13,7 @@ use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_change::CLEAR_BODY;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 use assets::{AbilityId, EvYield, MoveId, SpeciesId, SpeciesTable};
 
 /// Upstream stores each IV in five bits (`MAX_IV_MASK` = 31,
@@ -563,6 +564,71 @@ fn effective_speed_applies_the_speed_stage() {
 }
 
 #[test]
+fn a_fresh_mon_carries_no_primary_status() {
+    let dex = Dex::new();
+    let mon = sample_mon(&dex);
+    assert_eq!(mon.status1(), Status1::Healthy);
+}
+
+#[test]
+fn speed_for_turn_order_quarters_the_stage_scaled_speed_only_when_paralysed() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.stages_mut().speed = StatStage::new(2).unwrap();
+    let stage_scaled = mon.effective_speed();
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        stage_scaled,
+        "a healthy mon's turn-order speed is unmodified"
+    );
+
+    mon.set_status1(Status1::Paralysed);
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        stage_scaled / 4,
+        "the quarter divides the *stage-scaled* speed, truncating independently"
+    );
+    assert_eq!(
+        mon.effective_speed(),
+        stage_scaled,
+        "effective_speed itself never carries the paralysis modifier"
+    );
+}
+
+#[test]
+fn speed_for_turn_order_scales_the_stage_before_quartering_not_after() {
+    // Bulbasaur (base Speed 45) at level 16 with a 0 Speed IV: (2*45+0)*16/100
+    // = 14 (truncated from 14.4), +5 = 19 raw Speed -- chosen so the two
+    // truncating divisions below give *different* answers depending on
+    // order, the way `apply_uses_multiply_then_divide_not_a_fused_fraction`
+    // (`crate::stat_stage`) pins multiply-before-divide.
+    //
+    // Quarter-then-stage would instead give 19/4 = 4 (from 4.75), then
+    // 4*10/15 = 2 (from 2.67) -- a different, wrong answer.
+    const WRONG_QUARTER_FIRST_ORDER: u32 = 2;
+
+    let dex = Dex::new();
+    let mut ivs = MAX_IVS;
+    ivs.speed = 0;
+    let mut mon =
+        BattlePokemon::new(&dex, BULBASAUR, 16, ivs, HARDY_PERSONALITY, vec![TACKLE]).unwrap();
+    assert_eq!(mon.stats().speed, 19, "fixture sanity: raw Speed is 19");
+    mon.stages_mut().speed = StatStage::new(-1).unwrap();
+    mon.set_status1(Status1::Paralysed);
+
+    // Stage-then-quarter (upstream order): 19*10/15 = 12 (from 12.67), then
+    // 12/4 = 3.
+    assert_eq!(mon.effective_speed(), 12);
+    assert_eq!(
+        mon.speed_for_turn_order(),
+        3,
+        "quartering the *already stage-scaled* 12 gives 3"
+    );
+
+    assert_ne!(mon.speed_for_turn_order(), WRONG_QUARTER_FIRST_ORDER);
+}
+
+#[test]
 fn deduct_pp_decrements_and_reports_exhaustion() {
     let dex = Dex::new();
     let mut mon = sample_mon(&dex);
@@ -604,6 +670,37 @@ fn heal_is_a_no_op_on_an_already_full_mon() {
     let before = mon.clone();
     mon.heal(&dex).unwrap();
     assert_eq!(mon, before);
+}
+
+#[test]
+fn heal_cures_primary_status() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.set_status1(Status1::Paralysed);
+    mon.heal(&dex).unwrap();
+    assert_eq!(
+        mon.status1(),
+        Status1::Healthy,
+        "HealPlayerParty zeroes MON_DATA_STATUS in the same pass as HP and PP \
+         (script_pokemon_util.c:30-58)"
+    );
+}
+
+#[test]
+fn clear_battle_scratch_resets_stages_and_volatiles_but_not_status1() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.stages_mut().speed = StatStage::new(2).unwrap();
+    mon.set_status1(Status1::Paralysed);
+    mon.clear_battle_scratch();
+    assert_eq!(mon.stages(), StatStages::default());
+    assert_eq!(
+        mon.status1(),
+        Status1::Paralysed,
+        "paralysis outlives an ordinary win -- only a faint's own cleanup or \
+         a heal cures it, and this method is shared with the post-battle \
+         return-to-overworld path where the battler did not faint"
+    );
 }
 
 #[test]

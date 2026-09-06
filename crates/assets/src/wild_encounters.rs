@@ -4673,6 +4673,88 @@ mod tests {
         assert_eq!(labels.len(), unique.len(), "duplicate base_label in table");
     }
 
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders the whole table as `MAP|label|kind=rate[min-max:species;...]`
+    /// lines in table order, with an absent kind rendered as `kind=none`.
+    fn render_table() -> String {
+        use std::fmt::Write as _;
+
+        let table = WildEncounterTable::new();
+        let mut out = String::new();
+        for header in table.iter() {
+            let _ = write!(out, "{}|{}", header.map.name(), header.label);
+            let kinds = [
+                (
+                    "land",
+                    header
+                        .land
+                        .as_ref()
+                        .map(|e| (e.encounter_rate, e.mons.as_slice())),
+                ),
+                (
+                    "water",
+                    header
+                        .water
+                        .as_ref()
+                        .map(|e| (e.encounter_rate, e.mons.as_slice())),
+                ),
+                (
+                    "rock_smash",
+                    header
+                        .rock_smash
+                        .as_ref()
+                        .map(|e| (e.encounter_rate, e.mons.as_slice())),
+                ),
+                (
+                    "fishing",
+                    header
+                        .fishing
+                        .as_ref()
+                        .map(|e| (e.encounter_rate, e.mons.as_slice())),
+                ),
+            ];
+            for (name, kind) in kinds {
+                let Some((encounter_rate, slots)) = kind else {
+                    let _ = write!(out, "|{name}=none");
+                    continue;
+                };
+                let _ = write!(out, "|{name}={encounter_rate}[");
+                for (i, slot) in slots.iter().enumerate() {
+                    let separator = if i == 0 { "" } else { ";" };
+                    let _ = write!(
+                        out,
+                        "{separator}{}-{}:{}",
+                        slot.min_level,
+                        slot.max_level,
+                        slot.species.index()
+                    );
+                }
+                out.push(']');
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// The expected digest was computed from upstream `src/data/wild_encounters.json`'s
+    /// `gWildMonHeaders` group under the same rendering.
+    #[test]
+    fn the_whole_table_matches_the_upstream_fingerprint() {
+        let rendered = render_table();
+        assert_eq!(rendered.lines().count(), MAP_HEADER_COUNT);
+        assert_eq!(
+            format!("{:016x}", fnv1a64(rendered.as_bytes())),
+            "216c5da1d35bad83",
+            "wild encounter table drifted from gWildMonHeaders",
+        );
+    }
+
     #[test]
     fn unknown_map_is_an_error() {
         let table = WildEncounterTable::new();

@@ -1,9 +1,10 @@
 //! A Pokémon's owned battle state, stat calculation, HP, experience, and
 //! move slots.
 //!
-//! [`BattlePokemon`] does not retain held items or non-volatile status.
-//! Shedinja's 1-HP special case *is* modelled — see
-//! [`calc_max_hp`].
+//! [`BattlePokemon`] does not retain held items. It carries primary status
+//! ([`Status1`]) distinct from [`Volatiles`] — see that type's own docs for
+//! what is and is not modelled. Shedinja's 1-HP special case *is* modelled —
+//! see [`calc_max_hp`].
 //!
 //! [`evs`] owns the whole EV surface: adoption, KO gains, and the one line
 //! [`BattlePokemon::stats`] refuses to cross because of them.
@@ -16,6 +17,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 use crate::volatile::Volatiles;
 
 pub mod evs;
@@ -176,6 +178,7 @@ const EFFORT_VALUES_PER_STAT_POINT: u32 = 4;
 const NON_HP_STAT_OFFSET: u32 = 5;
 const HP_STAT_OFFSET: u32 = 10;
 const SHEDINJA_MAX_HP: u32 = 1;
+const PARALYSIS_SPEED_DIVISOR: u32 = 4;
 
 fn calc_stat(
     base: u8,
@@ -322,6 +325,7 @@ pub struct BattlePokemon {
     pp_bonuses: PpBonuses,
     stages: StatStages,
     volatiles: Volatiles,
+    status1: Status1,
     pending_move_learn: Option<PendingMoveLearn>,
 }
 
@@ -350,6 +354,7 @@ impl PartialEq for BattlePokemon {
             pp_bonuses,
             stages,
             volatiles,
+            status1,
             pending_move_learn,
         } = self;
         *species == other.species
@@ -369,6 +374,7 @@ impl PartialEq for BattlePokemon {
             && *pp_bonuses == other.pp_bonuses
             && *stages == other.stages
             && *volatiles == other.volatiles
+            && *status1 == other.status1
             && *pending_move_learn == other.pending_move_learn
     }
 }
@@ -474,6 +480,7 @@ impl BattlePokemon {
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
             volatiles: Volatiles::default(),
+            status1: Status1::default(),
             pending_move_learn: None,
         })
     }
@@ -677,8 +684,34 @@ impl BattlePokemon {
         &mut self.volatiles
     }
 
+    /// Current primary status.
+    #[must_use]
+    pub const fn status1(&self) -> Status1 {
+        self.status1
+    }
+
+    /// Overwrites the primary status.
+    pub const fn set_status1(&mut self, status1: Status1) {
+        self.status1 = status1;
+    }
+
     /// Resets stat stages and volatile conditions before returning this
     /// battler to persistent party state.
+    ///
+    /// [`BattlePokemon::status1`] is deliberately left untouched here,
+    /// unlike stages and volatiles: `crates/pokeemerald-rs`'s
+    /// `finalize_battle_turn` calls this on the surviving lead mon after
+    /// *every* battle outcome, including an ordinary win, and upstream
+    /// paralysis outlives a win precisely because nothing but a faint, a
+    /// heal, or a cure clears it — only `Cmd_cleareffectsonfaint`'s `hp == 0`
+    /// branch zeroes `status1` (`battle_script_commands.c:3063`-`:3077`), a
+    /// narrower precondition than "this battler is leaving battle" that this
+    /// one shared method cannot express for both of its callers at once.
+    /// [`BattlePokemon::heal`] is the faithful cure path for a survivor; a
+    /// corpse's own `hp == 0` clear is its faint-settlement caller's own
+    /// explicit [`BattlePokemon::set_status1`] call, right alongside this
+    /// method (`crate::battle::execute::Battle::settle_faint`, the
+    /// double-faint arm of `crate::battle::execute::pipelines`).
     pub fn clear_battle_scratch(&mut self) {
         self.stages = StatStages::default();
         self.volatiles = Volatiles::default();
@@ -793,10 +826,27 @@ impl BattlePokemon {
 
     /// Speed after applying its stat stage.
     ///
-    /// Weather, ability, item, and paralysis modifiers are not applied here.
+    /// Weather, ability, and item modifiers are not applied here; paralysis'
+    /// quarter modifier is [`BattlePokemon::speed_for_turn_order`]'s alone,
+    /// since only turn ordering reads it (`battle_main.c:4650`-`:4651`).
     #[must_use]
     pub const fn effective_speed(&self) -> u32 {
         self.stages.speed.apply(self.stats.speed)
+    }
+
+    /// [`BattlePokemon::effective_speed`] with paralysis' quarter modifier
+    /// applied after stage scaling, truncating independently
+    /// (`speedBattler /= 4`, `battle_main.c:4650`-`:4651`,
+    /// `:4684`-`:4685`). Turn order is the only reader of this modifier —
+    /// see [`BattlePokemon::effective_speed`]'s own doc.
+    #[must_use]
+    pub const fn speed_for_turn_order(&self) -> u32 {
+        let speed = self.effective_speed();
+        if self.status1.is_paralysed() {
+            speed / PARALYSIS_SPEED_DIVISOR
+        } else {
+            speed
+        }
     }
 
     /// Deducts one PP from a move slot.
@@ -817,10 +867,13 @@ impl BattlePokemon {
         Ok(())
     }
 
-    /// Restores maximum HP and each move's PP Up-adjusted maximum.
+    /// Restores maximum HP, each move's PP Up-adjusted maximum, and cures
+    /// primary status.
     ///
-    /// Non-volatile status is not changed because [`BattlePokemon`] does not
-    /// model it.
+    /// `HealPlayerParty` zeroes `MON_DATA_STATUS` in the same per-mon pass
+    /// that restores HP and PP (`script_pokemon_util.c:30`-`:58`), so
+    /// [`BattlePokemon::status1`] is cleared here too rather than left to
+    /// survive the free heal a caller uses this for.
     ///
     /// # Errors
     ///
@@ -831,6 +884,7 @@ impl BattlePokemon {
             let full = self.max_pp(dex, index)?;
             self.moves[index].pp = full;
         }
+        self.status1 = Status1::default();
         Ok(())
     }
 }
