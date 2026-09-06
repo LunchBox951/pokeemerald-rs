@@ -820,13 +820,14 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Absorb, Splash, Focus Energy, Charge, and Defense Curl are all
-        // executable (`battle`'s drain, flag-only, and defense-curl
-        // pipelines), so those five parties get past `ensure_executable`
-        // and stop at `battle::battle::trainer_ai::ensure_scoreable`
-        // instead -- the trainer AI cannot yet score any of those five
-        // effects. Both screens run before the first draw, so the
-        // per-frame cone check is exactly as cheap as it was.
+        // Absorb, Thunder Wave, Splash, Focus Energy, Charge, and Defense
+        // Curl are all executable (`battle`'s drain, paralysis, flag-only,
+        // and defense-curl pipelines), so those six parties get past
+        // `ensure_executable` and stop at
+        // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
+        // trainer AI cannot yet score any of those six effects. Both
+        // screens run before the first draw, so the per-frame cone check is
+        // exactly as cheap as it was.
         let expected = [
             (
                 "Daisy",
@@ -836,7 +837,7 @@ mod tests {
             (
                 "Amy & Liv",
                 TrainerId(481),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(86))), // MOVE_THUNDER_WAVE
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(86))), // MOVE_THUNDER_WAVE
             ),
             (
                 "Andrew",

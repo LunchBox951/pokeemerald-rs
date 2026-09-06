@@ -28,7 +28,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the seven pipelines
+//! one of the battle scripts this crate reproduces — the eight pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script |
@@ -40,6 +40,7 @@
 //! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) |
 //! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) |
 //! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
+//! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -182,17 +183,26 @@
 //! them past `ensure_executable` and into
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
-//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above)
-//! and the four stat-drop guards — Clear Body, White Smoke, Keen Eye,
+//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above),
+//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]) and the four
+//! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
-//! guard left unmodelled) — held items, non-volatile status conditions and
-//! confusion (issue #323), weather, multi/double
-//! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
-//! why those are a documented boundary rather than dead code), and the
-//! move effects the seven pipelines still do not cover — the
-//! secondary-effect trampolines ([`secondary::SECONDARY_TRAMPOLINES`]
-//! lists all 31), recoil, OHKO, Counter, Bide, Leech Seed and the rest of
-//! the end-of-turn residual family, and so on.
+//! guard left unmodelled) — held items, every primary status but
+//! [`status1::Status1::Paralysed`] (poison, confusion, sleep, freeze, burn,
+//! toxic — see [`status1`]'s module docs), weather, multi/double
+//! battles, Mist/Substitute/Safeguard/Protect, and the four abilities that
+//! read a holder's primary status — Synchronize, Shed Skin, Guts, and
+//! Marvel Scale (see [`paralyze::ensure_admissible`]) — and the move
+//! effects the eight pipelines still do not cover — the secondary-effect
+//! trampolines ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, none of
+//! them [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
+//! `EFFECT_PARALYZE_HIT`), recoil, OHKO, Counter, Bide, Leech Seed and the
+//! rest of the end-of-turn residual family, and so on.
+//!
+//! Paralysis reaches past its own pipeline, so read those two owners before
+//! changing turn flow: [`battle::Battle::act`] cancels a paralysed mover
+//! ahead of PP, and [`pokemon::BattlePokemon::speed_for_turn_order`]
+//! quarters its Speed.
 
 pub mod ability;
 pub mod accuracy;
@@ -211,10 +221,12 @@ pub mod hit;
 mod move_gate;
 pub mod multi_hit;
 pub mod nature;
+pub mod paralyze;
 pub mod pokemon;
 pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
+pub mod status1;
 pub mod turn_order;
 pub mod volatile;
 pub mod wild;
@@ -245,6 +257,7 @@ pub use flag_move::{is_flag_move_effect, resolve_flag_move, FlagMoveOutcome};
 pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
+pub use paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
 pub use pokemon::{
     calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
     MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
@@ -258,6 +271,7 @@ pub use stat_change::{
     WHITE_SMOKE,
 };
 pub use stat_stage::StatStage;
+pub use status1::Status1;
 pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
