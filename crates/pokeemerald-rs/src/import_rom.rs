@@ -402,20 +402,21 @@ fn import_to_with(
     };
     // The temporary file has to sit in the destination directory for the
     // rename to be atomic, so the directory is created before the import
-    // runs rather than after it succeeds. Which levels this run makes is
-    // asked before it makes them, and answers both of the questions that
-    // follow: which entries a successful run has to leave durable, and which
-    // directories a failed one takes back with it.
-    let created = directories_to_create(&dir);
-    if let Err(source) = fs::create_dir_all(&dir) {
-        // `create_dir_all` can fail after creating outer levels; take those
-        // back too, not just the levels of a fully created destination.
-        undo_created_directories(&created);
-        return Err(ImportRomError::CreateDirFailed {
-            path: dir.clone(),
-            source,
-        });
-    }
+    // runs rather than after it succeeds. The levels this run made answer
+    // both of the questions that follow: which entries a successful run has
+    // to leave durable, and which directories a failed one takes back.
+    let created = match create_directories(&dir) {
+        Ok(created) => created,
+        Err((created, source)) => {
+            // The creation can fail after making outer levels; take those
+            // back too, not just the levels of a fully created destination.
+            undo_created_directories(&created);
+            return Err(ImportRomError::CreateDirFailed {
+                path: dir.clone(),
+                source,
+            });
+        }
+    };
     sync_created_directories(&created);
 
     // Everything from here on names files inside this one handle. A
@@ -569,20 +570,13 @@ fn names_a_directory(pack_path: &Path) -> bool {
     }
 }
 
-/// The directories [`fs::create_dir_all`] will have to create for `dir`,
-/// outermost first.
-///
-/// Asked before the create, because afterwards nothing tells a level this
-/// run made from one that was always there — and both things done to those
-/// levels need exactly that distinction: [`sync_created_directories`]
-/// persists them, [`undo_created_directories`] takes them back. Empty for a
-/// `dir` that is already a directory, which is a run that created nothing
-/// and so has nothing to undo.
+/// The levels `dir` is missing, outermost first: the ones
+/// [`create_directories`] has to try. Empty for a `dir` that is already a
+/// directory, which is a run with nothing to create.
 ///
 /// A component that exists but is *not* a directory is listed like a
-/// missing one. `create_dir_all` then fails on it and the failure path's
-/// [`undo_created_directories`] skips it, so distinguishing the two here
-/// would buy nothing.
+/// missing one. Creating it then fails on it, and that failure carries the
+/// levels already made, so distinguishing the two here would buy nothing.
 fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
     let mut missing = Vec::new();
     let mut current = Some(dir);
@@ -597,7 +591,37 @@ fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
     missing
 }
 
-/// Get the entries [`fs::create_dir_all`] just wrote onto the disk.
+/// Create the levels `dir` is missing, outermost first, and answer with the
+/// ones this run made — the levels [`sync_created_directories`] persists
+/// and [`undo_created_directories`] may take back.
+///
+/// Ownership is what the create reports, never what a look beforehand
+/// predicted. [`fs::create_dir_all`] says only whether the destination
+/// exists afterwards, so pairing it with an earlier [`directories_to_create`]
+/// claims levels another process created in between — and a failed import
+/// would then remove a directory that process is about to write into.
+/// `create_dir` per level asks the question of the syscall instead: an
+/// existing level is somebody else's, and only a create that succeeded is
+/// recorded.
+///
+/// A failure hands back the levels made before it, which are this run's to
+/// take back like any other.
+fn create_directories(dir: &Path) -> Result<Vec<PathBuf>, (Vec<PathBuf>, io::Error)> {
+    let mut created = Vec::new();
+    for level in directories_to_create(dir) {
+        match fs::create_dir(&level) {
+            Ok(()) => created.push(level),
+            // A level that stands as a directory now is no failure, whoever
+            // made it — `create_dir_all`'s own rule. It is simply not this
+            // run's to record.
+            Err(_) if level.is_dir() => {}
+            Err(source) => return Err((created, source)),
+        }
+    }
+    Ok(created)
+}
+
+/// Get the entries [`create_directories`] just wrote onto the disk.
 ///
 /// A new directory is a *name in the level above it*, so the parent is what
 /// has to be synced for it — the directory's own sync would only persist

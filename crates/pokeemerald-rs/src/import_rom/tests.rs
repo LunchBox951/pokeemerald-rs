@@ -14,8 +14,8 @@ use rom_import::{ImportError, ImportedPack};
 
 use super::dest::Dest;
 use super::{
-    directories_to_create, import_to, import_to_with, pack_directory, pack_name, ImportOutcome,
-    ImportRomError,
+    create_directories, directories_to_create, import_to, import_to_with, pack_directory,
+    pack_name, ImportOutcome, ImportRomError,
 };
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
@@ -152,6 +152,40 @@ fn every_level_the_import_must_create_is_listed_outermost_first() {
     assert_eq!(directories_to_create(&three), [two.clone(), three.clone()]);
     fs::create_dir_all(&three).expect("the rest are created");
     assert!(directories_to_create(&three).is_empty());
+}
+
+#[test]
+fn only_the_levels_the_run_created_come_back_as_its_own() {
+    // Ownership is the create's answer, not an earlier look's: a level that
+    // is already there when the create reaches it belongs to whoever made
+    // it, and a failed import must leave it standing even while it is
+    // empty. Another importer racing this one hits exactly that path.
+    let dir = TempDir::new("created-levels");
+    let one = dir.join("one");
+    let two = one.join("two");
+    fs::create_dir(&one).expect("the outer level is created");
+
+    let created = create_directories(&two).expect("the missing level is created");
+    assert_eq!(created, std::slice::from_ref(&two));
+    assert!(two.is_dir());
+
+    let again = create_directories(&two).expect("an existing destination is not a failure");
+    assert!(again.is_empty(), "a run that created nothing owns nothing");
+}
+
+#[test]
+fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
+    // The overlong component trips the create after `new/` is on disk, and
+    // the prefix has to come back with the error for the caller to undo.
+    let dir = TempDir::new("partial-create-levels");
+    let outer = dir.join("new");
+    let overlong = "x".repeat(300);
+
+    let (created, _source) = create_directories(&outer.join(overlong))
+        .expect_err("the overlong component cannot be created");
+
+    assert_eq!(created, std::slice::from_ref(&outer));
+    assert!(outer.is_dir());
 }
 
 #[test]
