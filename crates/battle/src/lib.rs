@@ -28,7 +28,7 @@
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the six pipelines
+//! one of the battle scripts this crate reproduces — the seven pipelines
 //! `battle::ensure_executable` composes:
 //!
 //! | pipeline | script | added by |
@@ -39,6 +39,7 @@
 //! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) | #321 |
 //! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) | #321 |
 //! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) | #321 |
+//! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) | #822 |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -188,8 +189,7 @@
 //! confusion (issue #323), weather, multi/double
 //! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
 //! why those are a documented boundary rather than dead code), and the
-//! move effects the six pipelines still do not cover — Defense Curl (flag
-//! *and* stat raise, so it belongs with the stat-change family), the
+//! move effects the seven pipelines still do not cover — the
 //! secondary-effect trampolines ([`secondary::SECONDARY_TRAMPOLINES`]
 //! lists all 31), recoil, OHKO, Counter, Bide, Leech Seed and the rest of
 //! the end-of-turn residual family, and so on.
@@ -199,6 +199,7 @@ pub mod accuracy;
 pub mod battle;
 pub mod critical;
 pub mod damage;
+pub mod defense_curl;
 pub mod dex;
 pub mod drain;
 pub mod error;
@@ -231,6 +232,9 @@ pub use damage::{
     apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
     base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
     STRUGGLE,
+};
+pub use defense_curl::{
+    is_defense_curl_effect, resolve_defense_curl_move, DefenseCurlOutcome, EFFECT_DEFENSE_CURL,
 };
 pub use dex::Dex;
 pub use drain::{drain_amount, is_drain_effect, resolve_drain, DrainOutcome};

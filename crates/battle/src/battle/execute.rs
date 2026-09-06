@@ -18,6 +18,7 @@
 use assets::MoveId;
 
 use crate::damage::BattleRng;
+use crate::defense_curl::is_defense_curl_effect;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
@@ -40,7 +41,7 @@ impl Battle {
     /// mon, pushing the resulting events and ending the battle if the
     /// target faints.
     ///
-    /// Dispatches on the move's `EFFECT_*` to one of six pipelines — this
+    /// Dispatches on the move's `EFFECT_*` to one of seven pipelines — this
     /// crate's execution boundary (crate root docs, and
     /// [`super::ensure_executable`] for the screen that guarantees the
     /// dispatch is total):
@@ -52,15 +53,16 @@ impl Battle {
     /// | [`crate::fixed_damage::is_fixed_damage_effect`] | `execute_fixed_damage_move` | `_Sonicboom` / `_DragonRage` / `_LevelDamage` |
     /// | [`crate::multi_hit::is_multi_hit_effect`] | `execute_multi_hit_move` | `BattleScript_EffectMultiHit` |
     /// | [`crate::flag_move::is_flag_move_effect`] | `execute_flag_move` | `_Splash` / `_FocusEnergy` / `_Charge` |
+    /// | [`crate::defense_curl::is_defense_curl_effect`] | `execute_defense_curl_move` | `_EffectDefenseCurl` |
     /// | *otherwise* | `execute_hit_move` | `BattleScript_EffectHit` |
     ///
     /// Every move that reaches here already passed
     /// [`super::ensure_executable`] (at [`Battle::new`] for the opposing
     /// side, at `validate_player_move` for the player's), so at most one of
-    /// the five `is_*` checks holds and the fallthrough is the hit pipeline
+    /// the six `is_*` checks holds and the fallthrough is the hit pipeline
     /// — which then re-runs its own `ensure_resolvable` and would still
     /// refuse anything that slipped past. ([`crate::damage::STRUGGLE`] needs
-    /// no case of its own: `EFFECT_RECOIL` matches none of the five, so it
+    /// no case of its own: `EFFECT_RECOIL` matches none of the six, so it
     /// falls through to the hit pipeline, which accepts it — though
     /// `ensure_executable` refuses it before the turn engine ever gets
     /// there.)
@@ -82,6 +84,8 @@ impl Battle {
             self.execute_multi_hit_move(attacker_is_player, move_id, rng, events)
         } else if is_flag_move_effect(effect) {
             self.execute_flag_move(attacker_is_player, move_id, events)
+        } else if is_defense_curl_effect(effect) {
+            self.execute_defense_curl_move(attacker_is_player, move_id, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }

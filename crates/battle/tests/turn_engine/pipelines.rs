@@ -1,13 +1,16 @@
-//! The four move pipelines issue #321 added, driven through real turns.
+//! The four move pipelines issue #321 added, plus Defense Curl's (issue
+//! #822), driven through real turns.
 //!
 //! The arithmetic and the RNG-draw shapes are pinned at unit level inside
-//! `battle`'s own `drain` / `fixed_damage` / `multi_hit` / `flag_move`
-//! modules. What is pinned **here** is the wiring only a turn can show:
-//! that the drain heals from the HP the target actually lost, that Liquid
-//! Ooze's damage lands on the attacker in the script's message order, that
-//! the multi-hit loop really stops at a knocked-out target without spending
-//! the abandoned hits' draws, and that the volatiles a flag move sets are
-//! read by the *next* move and expire on schedule.
+//! `battle`'s own `drain` / `fixed_damage` / `multi_hit` / `flag_move` /
+//! `defense_curl` modules. What is pinned **here** is the wiring only a turn
+//! can show: that the drain heals from the HP the target actually lost, that
+//! Liquid Ooze's damage lands on the attacker in the script's message
+//! order, that the multi-hit loop really stops at a knocked-out target
+//! without spending the abandoned hits' draws, that the volatiles a flag
+//! move sets are read by the *next* move and expire on schedule, and that
+//! Defense Curl's volatile is written before its Defense raise even when
+//! that raise is capped.
 //!
 //! Every script is exact-length, so a pipeline that draws one time too many
 //! panics rather than quietly desynchronising.
@@ -15,8 +18,8 @@
 use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
 use assets::{MoveId, SpeciesId};
 use battle::{
-    Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStage, StatStages,
-    Volatiles,
+    Battle, BattleEvent, BattleOutcome, BattlePokemon, ChangedStat, Dex, PlayerAction, StatStage,
+    StatStages, Volatiles,
 };
 
 /// `MOVE_TACKLE`.
@@ -31,6 +34,8 @@ const DOUBLE_SLAP: MoveId = MoveId(3);
 const SPLASH: MoveId = MoveId(150);
 const FOCUS_ENERGY: MoveId = MoveId(116);
 const CHARGE: MoveId = MoveId(268);
+/// `MOVE_DEFENSE_CURL` — `EFFECT_DEFENSE_CURL`.
+const DEFENSE_CURL: MoveId = MoveId(111);
 /// `MOVE_SHOCK_WAVE` — `EFFECT_ALWAYS_HIT`, and the only Electric damaging
 /// move this engine can execute, so the one that can show Charge acting.
 const SHOCK_WAVE: MoveId = MoveId(351);
@@ -812,5 +817,78 @@ fn a_failed_run_still_ticks_the_charge_timer_down() {
          residuals on a failed run leaves the timer at 1 and doubles this \
          hit to 10"
     );
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-`:2025`,
+/// issue #822): the volatile and the Defense raise both land, and the whole
+/// move draws no RNG -- no accuracy check, no critical-hit roll, no damage
+/// roll, no secondary-effect roll, matching every other raising effect.
+#[test]
+fn defense_curl_sets_its_volatile_and_raises_defense_and_draws_nothing() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, BULBASAUR, 5, vec![DEFENSE_CURL]);
+    let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
+
+    // 1 (battle start) + turn number + enemy selection + Defense Curl's
+    // *zero* + the enemy's Tackle (4).
+    let script = [0, 0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::StatRose {
+            by_player: true,
+            move_id: DEFENSE_CURL,
+            stat: ChangedStat::Defense,
+            new_stage: StatStage::new(1).unwrap(),
+            magnitude: 1,
+        }
+    );
+    assert!(
+        battle.player().volatiles().defense_curl,
+        "setdefensecurlbit must have run"
+    );
+    assert_eq!(battle.player().stages().defense, StatStage::new(1).unwrap());
+    assert_eq!(battle.player().moves()[0].pp, 39, "a PP was still spent");
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// `setdefensecurlbit` precedes `statbuffchange` in the script
+/// unconditionally (`data/battle_scripts_1.s:2017`-`:2019`), so the volatile
+/// is written even when Defense is already at its ceiling and the only
+/// resulting event is `StatWontGoHigher` -- the upstream command has no
+/// failure branch of its own to skip.
+#[test]
+fn defense_curl_still_sets_its_volatile_when_defense_is_already_capped() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, BULBASAUR, 5, vec![DEFENSE_CURL]);
+    player.stages_mut().defense = StatStage::MAX;
+    let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
+
+    let script = [0, 0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::StatWontGoHigher {
+            by_player: true,
+            move_id: DEFENSE_CURL,
+            stat: ChangedStat::Defense,
+        }
+    );
+    assert!(
+        battle.player().volatiles().defense_curl,
+        "the volatile write must not be skipped just because the raise is capped"
+    );
+    assert_eq!(battle.player().stages().defense, StatStage::MAX);
     assert_eq!(rng.draws(), script.len());
 }

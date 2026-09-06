@@ -1,27 +1,29 @@
-//! The four move pipelines issue #321 added, wired into [`Battle`]'s turn
-//! state (S-6): drain, fixed damage, multi-hit, and flag-only.
+//! The four move pipelines issue #321 added, plus Defense Curl's (issue
+//! #822), wired into [`Battle`]'s turn state (S-6): drain, fixed damage,
+//! multi-hit, flag-only, and defense-curl.
 //!
 //! Sibling of [`super`] and split from it for the reason `oop-boundaries`
 //! gives: [`super`] owns the *dispatch* plus the two pipelines that predate
-//! this slice, and this file owns the four that arrived with it, so neither
+//! this slice, and this file owns the ones that arrived after it, so neither
 //! grew past one screenful of concept. Both contribute `impl Battle` blocks
 //! rather than competing types.
 //!
 //! Every method here is the **turn-level** half of a pipeline: the pure
 //! half — the arithmetic, the RNG shape, the upstream citations — lives in
 //! the free-standing module the method names ([`crate::drain`],
-//! [`crate::fixed_damage`], [`crate::multi_hit`], [`crate::flag_move`]), and
-//! is unit-tested there against a scripted stream. What is added here, and
-//! can only be tested here, is the wiring those modules deliberately cannot
-//! do for themselves because it needs live battle state:
+//! [`crate::fixed_damage`], [`crate::multi_hit`], [`crate::flag_move`],
+//! [`crate::defense_curl`]), and is unit-tested there against a scripted
+//! stream. What is added here, and can only be tested here, is the wiring
+//! those modules deliberately cannot do for themselves because it needs
+//! live battle state:
 //!
 //! - the `gHpDealt` contract — [`crate::drain`]'s heal derives from the HP
 //!   the target *actually* lost ([`Battle::apply_damage_to_target`]), not
 //!   from the formula's raw output, so an overkill Absorb heals a little;
 //! - the multi-hit loop's `jumpifhasnohp` guards, which need both battlers'
 //!   HP *between* hits;
-//! - the volatile writes ([`crate::flag_move`]) and the two `tryfaintmon`s
-//!   the drain script runs in a specific order.
+//! - the volatile writes ([`crate::flag_move`], [`crate::defense_curl`]) and
+//!   the two `tryfaintmon`s the drain script runs in a specific order.
 //!
 //! None of these methods screens its own move: every one is reached only
 //! through [`super::Battle::execute_move`]'s dispatch, behind
@@ -32,12 +34,14 @@
 use assets::MoveId;
 
 use crate::damage::{apply_damage_roll, BattleRng};
+use crate::defense_curl::{resolve_defense_curl_move, DefenseCurlOutcome};
 use crate::drain::{resolve_drain, resolve_drain_move};
 use crate::error::BattleError;
 use crate::fixed_damage::resolve_fixed_damage_move;
 use crate::flag_move::{resolve_flag_move, FlagMoveOutcome};
 use crate::hit::{damage_before_roll, HitOutcome};
 use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
+use crate::stat_change::set_stage;
 
 use super::{Battle, BattleEvent, BattleOutcome};
 
@@ -355,6 +359,56 @@ impl Battle {
             FlagMoveOutcome::ChargingPower => {
                 attacker.volatiles_mut().set_charge();
                 BattleEvent::ChargingPower { by_player, move_id }
+            }
+        });
+        Ok(())
+    }
+
+    /// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-
+    /// `:2025`, issue #822): `setdefensecurlbit` writes
+    /// [`crate::volatile::Volatiles::defense_curl`] **before**
+    /// `statbuffchange` raises Defense, even when Defense is already capped
+    /// and the only resulting event is [`BattleEvent::StatWontGoHigher`] —
+    /// the volatile write has no failure branch of its own
+    /// ([`crate::defense_curl`]'s module docs). Draws no RNG, like every
+    /// raising stat-change effect.
+    pub(in crate::battle) fn execute_defense_curl_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let attacker = self.battlers(attacker_is_player).0;
+            resolve_defense_curl_move(&self.dex, move_id, attacker)?
+        };
+        let attacker = if attacker_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        attacker.volatiles_mut().set_defense_curl();
+
+        let DefenseCurlOutcome {
+            change,
+            new_stage,
+            capped,
+        } = outcome;
+        let by_player = attacker_is_player;
+        events.push(if capped {
+            BattleEvent::StatWontGoHigher {
+                by_player,
+                move_id,
+                stat: change.stat,
+            }
+        } else {
+            set_stage(attacker, change.stat, new_stage);
+            BattleEvent::StatRose {
+                by_player,
+                move_id,
+                stat: change.stat,
+                new_stage,
+                magnitude: change.magnitude.get(),
             }
         });
         Ok(())

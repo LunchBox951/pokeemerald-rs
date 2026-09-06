@@ -96,6 +96,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "BattleScript_EffectDefenseCurl": {
+          "reason": "data/battle_scripts_1.s:2014-:2025. setdefensecurlbit runs before this script's own inline copy of the STAT_DEF+1/statbuffchange tail that BattleScript_EffectDefenseUp instead reaches via goto BattleScript_EffectStatUp (:479-:481) -- the only reason this needs its own script rather than a shared-tail thunk. defense_curl::resolve_defense_curl_move reproduces the raise with stat_change's own public arithmetic (stage_of, StatChangeEffect::cap/delta) without adding this effect to STAT_CHANGE_EFFECTS, and Battle::execute_defense_curl_move writes Volatiles::defense_curl before applying the clamped stage, even when Defense is already capped and the only outcome is BattleEvent::StatWontGoHigher. Zero Random() calls on any path, matching every raising effect (stat_change's module docs). NOT modelled: attackcanceler's no-PP abort (shared generically, Battle::act), ppreduce (shared generically), and the animation/message instructions.",
+          "rust_target": "crates/battle/src/defense_curl.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BattleScript_EffectHit": {
           "reason": "data/battle_scripts_1.s:236-:266 (EffectHit -> HitFromAtkCanceler -> AtkString -> CritCalc -> AtkAnimation -> MoveEnd) plus the :273 miss exit and :3556 BattleScript_NoPPForMove. resolve_hit reproduces the RNG-relevant step order: attackcanceler's no-PP abort (Battle::act), accuracycheck, critcalc, damagecalc, typecalc, adjustnormaldamage's 85-100% roll, and seteffectwithchance's discarded draw at :265; ppreduce is handled by the turn engine. The Surf/underwater prelude at :237-:240, animation/message steps, and every other BattleScript_* in this file are not modelled.",
           "rust_target": "crates/battle/src/hit.rs",
@@ -24661,6 +24667,12 @@
         },
         "Cmd_setcharge": {
           "reason": "battle_script_commands.c:9100-:9106. gStatuses3[] |= STATUS3_CHARGED_UP and gDisableStructs[].chargeTimer = 2 are rewritten as Volatiles::set_charge, one u8 carrying both (upstream raises and clears the flag in lockstep with the timer, so a separate bool could only contradict it). Read by Cmd_damagecalc's Electric doubling (hit::damage_core) and decremented by ENDTURN_CHARGE (Battle::residual_effects). NOT modelled: chargeTimerStartValue (:9104), read only by the battle-recording code this crate does not model. No Random().",
+          "rust_target": "crates/battle/src/volatile.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_setdefensecurlbit": {
+          "reason": "src/battle_script_commands.c:8858-:8862. gBattleMons[gBattlerAttacker].status2 |= STATUS2_DEFENSE_CURL is rewritten as Volatiles::set_defense_curl, an unconditional latch with no failure branch and no Random() -- unlike Cmd_setfocusenergy it has no already-set guard at all. NOT modelled: unlike STATUS2_FOCUS_ENERGY, this bit is outside Baton Pass's status2 preserve mask (src/battle_main.c:3175), so it would not survive a pass -- moot here since switching/Baton Pass are outside this crate's boundary (issue #822). Also not modelled: Rollout's read of this bit for its damage multiplier (STATUS2_DEFENSE_CURL check at battle_script_commands.c:8564), which is issue #298's.",
           "rust_target": "crates/battle/src/volatile.rs",
           "spec": "S-6",
           "status": "stubbed"

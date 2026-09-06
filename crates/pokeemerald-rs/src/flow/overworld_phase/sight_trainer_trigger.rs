@@ -821,9 +821,10 @@ mod tests {
         // screen refuses.
         //
         // Issue #321 moved four of these rows from one screen to the
-        // *next* one: Absorb, Splash, Focus Energy and Charge are all
-        // executable now (`battle`'s drain and flag-only pipelines), so
-        // those four parties get past `ensure_executable` and stop at
+        // *next* one, and issue #822 moved a fifth: Absorb, Splash, Focus
+        // Energy, Charge, and now Defense Curl are all executable
+        // (`battle`'s drain, flag-only, and defense-curl pipelines), so
+        // those five parties get past `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
         // trainer AI cannot yet *score* the new effects, which is issue
         // #325's slice. Both screens run before the first draw, so the
@@ -858,7 +859,7 @@ mod tests {
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(111))), // MOVE_DEFENSE_CURL
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(111))), // MOVE_DEFENSE_CURL
             ),
             (
                 "Pete",
