@@ -562,9 +562,8 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
     fn zlib_cinfo_above_seven_is_rejected() {
         // CMF=0x88 (CM=8, CINFO=8), FLG=0x1c: no FDICT, and 0x881c % 31 == 0,
         // so only the CINFO check catches this header. The rest is an
-        // otherwise-valid empty stored block plus the Adler-32 of empty data
-        // (1), matching #459's reproduction of an oversized CINFO decoding
-        // to `Ok([])` before this check existed.
+        // otherwise-valid empty stored block plus the Adler-32 of empty
+        // data (1).
         let stream_with_oversized_cinfo: &[u8] = &[
             0x88, 0x1c, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
         ];
