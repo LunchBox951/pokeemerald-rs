@@ -103,14 +103,19 @@
 //! *before* presenting and which would therefore stay convincing even if
 //! `present` were never called at all.
 //!
-//! Ticks asserted: 0 (the first `step`), 2 (the third), 14 (the fifteenth).
-//! Tick 14 is what pins the tick counter to exactly zero offset in both
-//! directions. [`crate::title`]'s animation is coarse -- the clouds move
-//! once every four ticks, "Press Start" blinks every sixteen -- so most
-//! adjacent ticks compose bit-identical frames; tick 14 differs from tick 13
-//! (cloud scroll 3 -> 4) *and* from tick 15 ("Press Start" blinks on), and
-//! both differences are asserted as `assert_ne!` guards. Across 15
-//! consecutive steps an `App` running one tick ahead or behind cannot pass.
+//! Ticks asserted: 0 (the first `step`), 2 (the third), 13 and 14 (the
+//! fourteenth and fifteenth, checked back to back). [`crate::title`]'s
+//! animation is coarse -- the clouds move once every four ticks, "Press
+//! Start" blinks every sixteen -- so most adjacent ticks compose
+//! bit-identical frames; tick 14 is where both change together (the clouds'
+//! and the banner's frame-zero origins share the same upstream tick, issue
+//! #873), which is exactly why comparing only tick 14 against a single
+//! neighbour cannot pin the counter both ways. Tick 13 differs from tick 14
+//! (asserted below), so checking the fourteenth step against tick 13 and the
+//! fifteenth against tick 14 pins the counter in both directions: an `App`
+//! running one tick behind repeats tick 13's frame at the fifteenth step
+//! (caught against tick 14); one tick ahead skips straight to tick 14's
+//! frame at the fourteenth step (caught against tick 13).
 //!
 //! This is the evidence for I-2 "boots to the title screen". Before it, the
 //! pack-backed title coverage (`animated_frame_returns_the_presented_tick`,

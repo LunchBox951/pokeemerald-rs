@@ -97,11 +97,11 @@ pub struct DamageInput {
     pub attacker_pinch_boost: bool,
 }
 
-fn nonzero_stage_adjusted_stat(stat: u32, stage: StatStage) -> u32 {
-    stage.apply(stat).max(1)
+fn nonzero_stage_adjusted_stat(stat: u32, stage: StatStage) -> u128 {
+    stage.apply_widened(stat).max(1)
 }
 
-fn apply_weather(damage: u32, move_type: Type, weather: Weather, is_solar_beam: bool) -> u32 {
+fn apply_weather(damage: u128, move_type: Type, weather: Weather, is_solar_beam: bool) -> u128 {
     match weather {
         Weather::Rain => {
             let damage = match move_type {
@@ -130,6 +130,11 @@ fn apply_weather(damage: u32, move_type: Type, weather: Weather, is_solar_beam: 
 /// STAB, type effectiveness, and the random roll are later stages; use
 /// [`calculate_damage`] for the complete single-effectiveness pipeline.
 /// Stage-adjusted zero stats are clamped to one before division.
+///
+/// The stage-scaled stat, power, and level chain widens through `u128`
+/// end to end (see [`StatStage::apply_widened`]), since three `u32` factors
+/// can exceed even a `u64` intermediate; only the final sum narrows back,
+/// saturating to `u32::MAX` if the true result would not fit.
 #[must_use]
 pub fn base_damage(input: &DamageInput) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
@@ -137,12 +142,12 @@ pub fn base_damage(input: &DamageInput) -> u32 {
     let defense = nonzero_stage_adjusted_stat(input.defense_stat, input.defense_stage);
 
     let effective_power = if input.attacker_pinch_boost {
-        150 * input.power / 100
+        150 * u128::from(input.power) / 100
     } else {
-        input.power
+        u128::from(input.power)
     };
 
-    let level_multiplier = 2 * u32::from(input.attacker_level) / 5 + 2;
+    let level_multiplier = 2 * u128::from(input.attacker_level) / 5 + 2;
     let attack_power = attack * effective_power;
     let level_scaled_damage = attack_power * level_multiplier;
     let defense_scaled_damage = level_scaled_damage / defense;
@@ -166,14 +171,17 @@ pub fn base_damage(input: &DamageInput) -> u32 {
         }
     }
 
-    damage + 2
+    u32::try_from(damage + 2).unwrap_or(u32::MAX)
 }
 
 /// Applies STAB with truncating integer arithmetic.
+///
+/// The scaling multiply widens through `u64` and saturates to `u32::MAX` if
+/// the true result would not fit back.
 #[must_use]
 pub fn apply_stab(damage: u32, has_stab: bool) -> u32 {
     if has_stab {
-        damage * 15 / 10
+        u32::try_from(u64::from(damage) * 15 / 10).unwrap_or(u32::MAX)
     } else {
         damage
     }
@@ -192,10 +200,14 @@ pub fn has_stab(attacker_types: [Type; 2], mv: MoveId, move_type: Type) -> bool 
 }
 
 /// Applies one type-effectiveness multiplier, flooring nonzero hits to one.
+///
+/// The scaling multiply widens through `u64` and saturates to `u32::MAX` if
+/// the true result would not fit back.
 #[must_use]
 pub fn apply_type_effectiveness(damage: u32, effectiveness: Effectiveness) -> u32 {
     let multiplier_x10 = u32::from(effectiveness.multiplier_x10());
-    let scaled_damage = damage * multiplier_x10 / 10;
+    let scaled_damage =
+        u32::try_from(u64::from(damage) * u64::from(multiplier_x10) / 10).unwrap_or(u32::MAX);
     if scaled_damage == 0 && multiplier_x10 != 0 {
         1
     } else {
@@ -221,7 +233,15 @@ pub trait BattleRng {
 /// Applies the uniformly distributed 85–100% damage roll.
 ///
 /// The draw precedes the zero-damage guard, so immune hits still consume one
-/// value (`pokeemerald/src/battle_script_commands.c:1639`).
+/// value (`pokeemerald/src/battle_script_commands.c:1639`). `percent` is
+/// always `85..=100`, so the quotient after dividing the `u64`-widened
+/// product by 100 can never exceed `u32::MAX`, even though the product
+/// itself can.
+///
+/// # Panics
+///
+/// Never in practice: `percent <= 100` guarantees the widened roll narrows
+/// back into `u32`.
 #[must_use]
 pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
     let roll_reduction = u32::from(rng.next_u16()) % 16;
@@ -229,7 +249,10 @@ pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
     if damage == 0 {
         return 0;
     }
-    (damage * percent / 100).max(1)
+    let scaled = u64::from(damage) * u64::from(percent) / 100;
+    u32::try_from(scaled)
+        .expect("percent <= 100 keeps the scaled roll within u32")
+        .max(1)
 }
 
 /// Applies dual-type effectiveness in [`TypeChart`] table order.
@@ -464,6 +487,54 @@ mod tests {
     }
 
     #[test]
+    fn base_damage_keeps_a_representable_result_past_a_u32_overflowing_intermediate() {
+        // attack * effective_power (4_000_000_000) fits u32, but the further
+        // `* level_multiplier` (168_000_000_000) does not.
+        let input = neutral_input(Type::Normal, 1_000_000, 1_000_000, 4_000, 100);
+        assert_eq!(base_damage(&input), 3_362);
+    }
+
+    #[test]
+    fn base_damage_keeps_a_representable_result_past_a_stage_adjusted_overflow() {
+        // The neutral-stage adjustment itself (500_000_000 * 10) overflows
+        // u32 before StatStage::apply's own widening narrows it back.
+        let input = neutral_input(Type::Normal, 500_000_000, 1, 1, 1);
+        assert_eq!(base_damage(&input), 20_000_002);
+    }
+
+    #[test]
+    fn base_damage_keeps_a_representable_result_past_a_u64_overflowing_product() {
+        // attack * effective_power * level_multiplier (33_600_000_000_000_000_000)
+        // exceeds even u64::MAX, so the chain needs a u128 intermediate.
+        let input = neutral_input(Type::Normal, 400_000_000, 400_000_000, 2_000_000_000, 100);
+        assert_eq!(base_damage(&input), 1_680_000_002);
+    }
+
+    #[test]
+    fn base_damage_keeps_a_representable_result_past_a_stage_ratio_overflowing_the_stat() {
+        // The +6 stage quadruples the attack stat to 16_000_000_000, which does
+        // not fit a u32 even though the base damage it produces (640_000_002)
+        // does.
+        let mut input = neutral_input(Type::Normal, 4_000_000_000, 1, 1, 1);
+        input.attack_stage = StatStage::MAX;
+        assert_eq!(base_damage(&input), 640_000_002);
+    }
+
+    #[test]
+    fn base_damage_saturates_at_u32_max() {
+        // attack * power * level_multiplier / 50 + 2 is exactly u32::MAX here.
+        let exact = neutral_input(Type::Normal, 2_556_528_151, 1, 2, 100);
+        assert_eq!(base_damage(&exact), u32::MAX);
+
+        // One unit of product further, the true result is u32::MAX + 1.
+        let past = neutral_input(Type::Normal, 1_704_352_101, 1, 3, 100);
+        assert_eq!(base_damage(&past), u32::MAX);
+
+        let far_past = neutral_input(Type::Normal, u32::MAX, 1, u32::MAX, 100);
+        assert_eq!(base_damage(&far_past), u32::MAX);
+    }
+
+    #[test]
     fn weather_other_than_sun_weakens_solar_beam() {
         for weather in [Weather::Rain, Weather::Sandstorm, Weather::Hail] {
             let mut input = neutral_input(Type::Grass, 50, 50, 40, 50);
@@ -504,6 +575,19 @@ mod tests {
     }
 
     #[test]
+    fn apply_stab_keeps_a_representable_result_past_a_u32_overflowing_product() {
+        // 300_000_000 * 15 exceeds u32::MAX before the divide.
+        assert_eq!(apply_stab(300_000_000, true), 450_000_000);
+    }
+
+    #[test]
+    fn apply_stab_saturates_at_u32_max() {
+        assert_eq!(apply_stab(2_863_311_529, true), 4_294_967_293);
+        assert_eq!(apply_stab(2_863_311_530, true), u32::MAX);
+        assert_eq!(apply_stab(u32::MAX, true), u32::MAX);
+    }
+
+    #[test]
     fn apply_type_effectiveness_scales_and_floors_super_and_not_very_effective() {
         assert_eq!(apply_type_effectiveness(28, Effectiveness::Normal), 28);
         assert_eq!(
@@ -520,6 +604,31 @@ mod tests {
             1
         );
         assert_eq!(apply_type_effectiveness(100, Effectiveness::NoEffect), 0);
+    }
+
+    #[test]
+    fn apply_type_effectiveness_keeps_a_representable_result_past_a_u32_overflowing_product() {
+        // 300_000_000 * 20 exceeds u32::MAX before the divide.
+        assert_eq!(
+            apply_type_effectiveness(300_000_000, Effectiveness::SuperEffective),
+            600_000_000
+        );
+    }
+
+    #[test]
+    fn apply_type_effectiveness_saturates_at_u32_max() {
+        assert_eq!(
+            apply_type_effectiveness(2_147_483_647, Effectiveness::SuperEffective),
+            4_294_967_294
+        );
+        assert_eq!(
+            apply_type_effectiveness(u32::MAX, Effectiveness::SuperEffective),
+            u32::MAX
+        );
+        assert_eq!(
+            apply_type_effectiveness(u32::MAX, Effectiveness::Normal),
+            u32::MAX
+        );
     }
 
     #[test]
@@ -577,6 +686,13 @@ mod tests {
     #[test]
     fn apply_damage_roll_floors_a_nonzero_damage_to_one() {
         assert_eq!(apply_damage_roll(1, &mut FixedRng(15)), 1);
+    }
+
+    #[test]
+    fn apply_damage_roll_keeps_a_representable_result_past_a_u32_overflowing_product() {
+        // 60_000_000 * 100 and * 85 both exceed u32::MAX before the divide.
+        assert_eq!(apply_damage_roll(60_000_000, &mut FixedRng(0)), 60_000_000);
+        assert_eq!(apply_damage_roll(60_000_000, &mut FixedRng(15)), 51_000_000);
     }
 
     #[test]

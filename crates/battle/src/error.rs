@@ -1,7 +1,7 @@
 //! Failures reported by battle data, construction, and turn operations.
 
 use assets::trainers::{AiFlags, TrainerId};
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use std::error::Error;
 use std::fmt;
 
@@ -58,6 +58,11 @@ pub enum BattleError {
     /// not apply. The hook reports this only after the effect-chance draw and
     /// preceding damage have occurred.
     UnportedSecondaryEffect(MoveId),
+
+    /// A move met a defender whose ability rewrites the outcome in a way no
+    /// pipeline models. The pre-turn screens report it before the move draws
+    /// or spends PP.
+    UnportedAbilityInteraction(AbilityId),
 
     /// A species was an empty or compatibility placeholder:
     /// [`crate::pokemon::SPECIES_NONE`] or
@@ -139,6 +144,11 @@ impl fmt::Display for BattleError {
             Self::UnportedSecondaryEffect(id) => write!(
                 f,
                 "move `{}` produced an unsupported secondary effect",
+                id.0
+            ),
+            Self::UnportedAbilityInteraction(id) => write!(
+                f,
+                "defender ability `{}` alters this move in an unmodelled way",
                 id.0
             ),
             Self::PlaceholderSpecies => {
