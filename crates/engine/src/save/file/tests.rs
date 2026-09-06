@@ -348,6 +348,48 @@ fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
     );
 }
 
+/// Set in the re-executed child of
+/// [`a_staged_write_that_fails_after_creating_its_file_removes_it`].
+#[cfg(target_os = "linux")]
+const STAGING_WRITE_FAILURE_CHILD: &str = "POKEEMERALD_RS_STAGING_WRITE_FAILURE_CHILD";
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_staged_write_that_fails_after_creating_its_file_removes_it() {
+    // No in-process API can fail a write to a freshly created file, so the
+    // child re-executes this test under a file-size limit that the flash
+    // image exceeds, with SIGXFSZ ignored so the failure surfaces as EFBIG.
+    if std::env::var_os(STAGING_WRITE_FAILURE_CHILD).is_some() {
+        let dir = TempDir::new("staging-write-failure");
+        let staged = dir.join("staged.tmp");
+        let err = SaveFile::write_and_sync(&staged, &vec![0u8; FLASH_IMAGE_LEN])
+            .expect_err("a staged write over the file-size limit cannot succeed");
+        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge, "{err:?}");
+        assert!(
+            !staged.exists(),
+            "a staged file whose write failed must be cleaned up, not left beside the save"
+        );
+        return;
+    }
+
+    let exe = std::env::current_exe().expect("the test binary must be locatable");
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(r#"trap "" XFSZ; ulimit -f 1; exec "$0" "$1" --exact --nocapture"#)
+        .arg(&exe)
+        .arg("save::file::tests::a_staged_write_that_fails_after_creating_its_file_removes_it")
+        .env(STAGING_WRITE_FAILURE_CHILD, "1")
+        .output()
+        .expect("the child test process must be spawnable");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "child status {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
@@ -356,9 +398,9 @@ fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
     let bystander = dir.join("bystander");
     std::fs::write(&bystander, b"not a save file").unwrap();
 
-    // The staging name this attacker can predict is the pre-fix deterministic
-    // one; the fix's real name never matches it, and even if it did,
-    // `create_new` refuses a symlink at that name outright.
+    // A symlink here targets the one deterministic name an attacker without
+    // this process's clock or entropy could still guess; the real staging
+    // name never matches it, and `create_new` refuses a symlink regardless.
     std::os::unix::fs::symlink(&bystander, expected_staging_path(&path)).unwrap();
 
     let file = SaveFile::at(&path);
@@ -380,15 +422,58 @@ fn a_symlink_planted_at_the_old_deterministic_staging_name_is_not_followed() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
+    let dir = TempDir::new("staging-symlink-real-name");
+    let path = dir.join(SAVE_FILE_NAME);
+    let bystander = dir.join("bystander");
+    std::fs::write(&bystander, b"not a save file").unwrap();
+
+    // The symlink sits on the very name the staging attempt opens, so only
+    // the exclusive `create_new` open can keep the flash image off its target.
+    let staging = expected_sibling_path(&path, ".tmp.planted");
+    std::os::unix::fs::symlink(&bystander, &staging).unwrap();
+
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+    let err = file
+        .write_with(&store, SaveFile::sync_directory_best_effort, || {
+            staging.clone()
+        })
+        .expect_err("staging onto a planted symlink must never succeed");
+
+    assert!(
+        matches!(err, SaveFileError::Write { .. }),
+        "a refused staged write must surface as a write failure: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"not a save file",
+        "the exclusive open must not follow the symlink onto its target"
+    );
+    assert!(
+        std::fs::symlink_metadata(&staging)
+            .expect("the planted symlink must survive")
+            .file_type()
+            .is_symlink(),
+        "a refused staging attempt must not delete the path another caller created"
+    );
+    assert!(
+        !path.exists(),
+        "a write that never got staged must not create the save file"
+    );
+}
+
 #[test]
 fn two_save_files_on_one_path_never_share_a_staging_name() {
     let dir = TempDir::new("same-path-staging-names");
     let path = dir.join(SAVE_FILE_NAME);
 
     // Two independent `SaveFile` values on the identical path, not clones of
-    // one -- each must derive its own staging name, observed directly rather
-    // than inferred from a race that a fast old implementation could still
-    // win before the two writers' staging windows ever overlapped.
+    // one -- each must derive its own staging name. Observed directly: a
+    // race between two writers proves nothing when either can finish staging
+    // before the other one even starts.
     let first = SaveFile::at(&path);
     let second = SaveFile::at(&path);
     let first_staging = first.staging_path();

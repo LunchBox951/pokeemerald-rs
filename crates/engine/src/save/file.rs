@@ -303,8 +303,9 @@ impl SaveFile {
         };
         let staged = Self::stage(staging_path, store.flash_image()).map_err(write_error)?;
         if let Err(source) = std::fs::rename(&staged, &self.path) {
-            drop(std::fs::remove_file(&staged));
-            return Err(write_error(source));
+            return Err(write_error(Self::remove_abandoned_staging_file(
+                &staged, source,
+            )));
         }
         if let Some(containing) = Self::directory_containing(&self.path) {
             sync_directory(containing);
@@ -355,10 +356,27 @@ impl SaveFile {
             staged.flush()?;
             staged.get_ref().sync_all()
         })();
-        if result.is_err() {
-            drop(std::fs::remove_file(path));
+        match result {
+            Ok(()) => Ok(()),
+            Err(source) => Err(Self::remove_abandoned_staging_file(path, source)),
         }
-        result
+    }
+
+    /// Removes a staging file this call no longer wants after `source`,
+    /// folding a cleanup failure into the returned error rather than
+    /// swallowing it -- otherwise a caller who only sees `source` would
+    /// never learn a staging file was left behind.
+    fn remove_abandoned_staging_file(path: &Path, source: std::io::Error) -> std::io::Error {
+        match std::fs::remove_file(path) {
+            Ok(()) => source,
+            Err(cleanup_source) => std::io::Error::new(
+                source.kind(),
+                format!(
+                    "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
+                    path.display()
+                ),
+            ),
+        }
     }
 
     fn sync_directory_best_effort(path: &Path) {
