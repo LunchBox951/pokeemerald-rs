@@ -138,31 +138,62 @@ impl WindowConfig {
     /// Returns the layer enables for a pixel and its caller-supplied OBJ-window mask.
     #[must_use]
     pub fn classify(&self, x: u8, y: u8, objwin_mask: bool) -> WindowLayerEnable {
+        self.classify_with_region(x, y, objwin_mask).0
+    }
+
+    /// [`classify`](Self::classify), also returning which region matched, to
+    /// gate the `OBJWIN` hole's order-upgrade to `WIN0`/`WIN1` (issue #849).
+    #[must_use]
+    pub(crate) fn classify_with_region(
+        &self,
+        x: u8,
+        y: u8,
+        objwin_mask: bool,
+    ) -> (WindowLayerEnable, WindowRegion) {
         if !self.any_enabled() {
-            return WindowLayerEnable::ALL;
+            return (WindowLayerEnable::ALL, WindowRegion::WinOut);
         }
         if let Some((rect, enable)) = self.win0 {
             if rect.contains(x, y) {
-                return enable;
+                return (enable, WindowRegion::Win0);
             }
         }
         if let Some((rect, enable)) = self.win1 {
             if rect.contains(x, y) {
-                return enable;
+                return (enable, WindowRegion::Win1);
             }
         }
         if objwin_mask {
             if let Some(enable) = self.obj_window {
-                return enable;
+                return (enable, WindowRegion::ObjWindow);
             }
         }
-        self.winout
+        (self.winout, WindowRegion::WinOut)
+    }
+}
+
+/// Which region [`WindowConfig::classify_with_region`] selected for a pixel,
+/// in mgba's rank order `WIN0 < WIN1 < OBJWIN < WINOUT` (`video-software.c:131-134`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowRegion {
+    Win0,
+    Win1,
+    ObjWindow,
+    WinOut,
+}
+
+impl WindowRegion {
+    /// Whether an `OBJWIN` sprite's hole is barred from upgrading OBJ order
+    /// here — true only inside `WIN0`/`WIN1` (`software-obj.c:161`, issue #849).
+    #[must_use]
+    pub(crate) const fn suppresses_objwin_hole(self) -> bool {
+        matches!(self, Self::Win0 | Self::Win1)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};
+    use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect, WindowRegion};
 
     #[test]
     fn range_contains_the_normal_non_wrapping_case() {
@@ -324,5 +355,47 @@ mod tests {
             winout: enable_only_bg(3),
         };
         assert!(config.classify(200, 200, false).bg_enabled(3));
+    }
+
+    #[test]
+    fn classify_with_region_reports_win0_and_win1_and_suppresses_objwin_hole() {
+        let win0_rect = WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 10));
+        let win1_rect = WindowRect::new(WindowRange::new(10, 20), WindowRange::new(0, 20));
+        let config = WindowConfig {
+            win0: Some((win0_rect, enable_only_bg(0))),
+            win1: Some((win1_rect, enable_only_bg(1))),
+            obj_window: None,
+            winout: WindowLayerEnable::NONE,
+        };
+        let (_, win0_region) = config.classify_with_region(5, 5, false);
+        assert_eq!(win0_region, WindowRegion::Win0);
+        assert!(win0_region.suppresses_objwin_hole());
+
+        let (_, win1_region) = config.classify_with_region(15, 5, false);
+        assert_eq!(win1_region, WindowRegion::Win1);
+        assert!(win1_region.suppresses_objwin_hole());
+    }
+
+    #[test]
+    fn classify_with_region_does_not_suppress_objwin_or_winout_or_no_window() {
+        let win0_rect = WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 10));
+        let config = WindowConfig {
+            win0: Some((win0_rect, enable_only_bg(0))),
+            win1: None,
+            obj_window: Some(enable_only_bg(2)),
+            winout: enable_only_bg(3),
+        };
+
+        let (_, objwin_region) = config.classify_with_region(50, 50, true);
+        assert_eq!(objwin_region, WindowRegion::ObjWindow);
+        assert!(!objwin_region.suppresses_objwin_hole());
+
+        let (_, winout_region) = config.classify_with_region(50, 50, false);
+        assert_eq!(winout_region, WindowRegion::WinOut);
+        assert!(!winout_region.suppresses_objwin_hole());
+
+        let (_, disabled_region) = WindowConfig::default().classify_with_region(0, 0, false);
+        assert_eq!(disabled_region, WindowRegion::WinOut);
+        assert!(!disabled_region.suppresses_objwin_hole());
     }
 }
