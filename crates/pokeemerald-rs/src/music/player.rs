@@ -47,6 +47,10 @@ fn max_drain_wait_frames(ring_capacity: usize, device_tail_frames: usize) -> usi
 /// which the advertisement does not describe.
 const DEVICE_TAIL_MARGIN_MILLIS: usize = 50;
 
+/// Callback periods the host keeps queued behind the one being filled:
+/// cpal's ALSA path holds two, and no supported host holds more.
+const HOST_QUEUED_PERIODS: u64 = 2;
+
 /// Floor for [`device_tail_millis`], and the whole wait for a device that
 /// advertises no callback bound at all.
 const DEVICE_TAIL_FLOOR_MILLIS: usize = 200;
@@ -65,8 +69,9 @@ pub const DEVICE_TAIL_FLOOR_FRAMES: usize = game_frames_in(DEVICE_TAIL_FLOOR_MIL
 ///
 /// The transport reports no playback position and caps no latency --
 /// `build_stream` opens the device's default buffer size -- so this is
-/// derived, not measured: the largest callback buffer the device advertises,
-/// at its own rate, plus [`DEVICE_TAIL_MARGIN_MILLIS`], held between
+/// derived, not measured: [`HOST_QUEUED_PERIODS`] of the largest callback
+/// buffer the device advertises, at its own rate, plus
+/// [`DEVICE_TAIL_MARGIN_MILLIS`], held between
 /// [`DEVICE_TAIL_FLOOR_MILLIS`] and [`DEVICE_TAIL_MAX_MILLIS`]. A device
 /// advertising no concrete range, or no rate, gets the floor.
 fn device_tail_millis(max_callback_frames: Option<usize>, device_sample_rate: u32) -> usize {
@@ -75,7 +80,7 @@ fn device_tail_millis(max_callback_frames: Option<usize>, device_sample_rate: u3
     };
     let buffered = u64::try_from(frames)
         .unwrap_or(u64::MAX)
-        .saturating_mul(1000)
+        .saturating_mul(1000 * HOST_QUEUED_PERIODS)
         / rate;
     usize::try_from(buffered)
         .unwrap_or(usize::MAX)
@@ -469,11 +474,14 @@ mod tests {
     }
 
     /// A callback buffer that outlasts the floor widens the wait rather
-    /// than letting it expire mid-buffer.
+    /// than letting it expire mid-buffer, and the wait covers every period
+    /// the host keeps queued behind the callback, not the one it fills:
+    /// 7,680 frames at 48 kHz is 160 ms per period, so two periods plus the
+    /// margin is 370 ms, the same figure the `play_song` example derives.
     #[test]
-    fn a_callback_bound_past_the_floor_widens_the_wait() {
-        let tail = device_tail_millis(Some(24_000), 48_000);
-        assert_eq!(tail, 500 + DEVICE_TAIL_MARGIN_MILLIS);
+    fn a_callback_bound_past_the_floor_widens_the_wait_by_every_queued_period() {
+        let tail = device_tail_millis(Some(7_680), 48_000);
+        assert_eq!(tail, 2 * 160 + DEVICE_TAIL_MARGIN_MILLIS);
         assert!(tail > DEVICE_TAIL_FLOOR_MILLIS);
     }
 
