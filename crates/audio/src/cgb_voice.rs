@@ -103,6 +103,19 @@ impl Oscillator {
     fn disabled_at_trigger(&self) -> bool {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
+
+    /// Re-applies a `CGB_CHANNEL_MO_VOL` volume-write trigger (`m4a.c:1219-1226`)
+    /// to the channel's own state and returns whether it still plays.
+    fn retrigger(&mut self) -> bool {
+        match self {
+            Self::Square(square) => square.retrigger(),
+            Self::Wave(_) => true,
+            Self::Noise(noise) => {
+                noise.retrigger();
+                true
+            }
+        }
+    }
 }
 
 fn noise_control_byte(note_key: u8, lfsr_width_selector: u8) -> u8 {
@@ -246,6 +259,13 @@ pub struct CgbVoice {
     gate: Gate,
     identity: VoiceIdentity,
     dac_correction: DacCorrection,
+    /// A retrigger owed to the oscillator, applied at the next
+    /// `begin_frame` after this tick's pitch writes (`m4a.c:1185-1226`).
+    pending_retrigger: bool,
+    /// Set when a sweep overflow silences the hardware channel, whether at a
+    /// trigger or on a later 128 Hz tick; the envelope stays alive so a safe
+    /// trigger can revive it (`mgba/src/gb/audio.c:180-186`, `:667-672`).
+    hardware_muted: bool,
 }
 
 impl CgbVoice {
@@ -320,7 +340,7 @@ impl CgbVoice {
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
         let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let oscillator = Oscillator::Square(SquareChannel::new(duty, freq_reg, sweep));
-        let disabled_at_trigger = oscillator.disabled_at_trigger();
+        let muted_at_trigger = oscillator.disabled_at_trigger();
         let mut voice = Self::new(
             channel,
             oscillator,
@@ -336,9 +356,7 @@ impl CgbVoice {
             echo_volume,
             echo_length,
         );
-        if disabled_at_trigger {
-            voice.envelope.retire();
-        }
+        voice.hardware_muted = muted_at_trigger;
         voice
     }
 
@@ -455,6 +473,8 @@ impl CgbVoice {
             gate: Gate::new(gate_time),
             identity: VoiceIdentity::new(track, midi_key),
             dac_correction,
+            pending_retrigger: false,
+            hardware_muted: false,
         }
     }
 
@@ -518,21 +538,32 @@ impl CgbVoice {
 
     /// Advance the note-off gate by one sequencer tick.
     pub fn tick_gate(&mut self) {
-        if self.gate.tick() {
-            self.envelope.note_off();
+        if self.gate.tick() && self.envelope.note_off() {
+            self.pending_retrigger = true;
         }
     }
 
-    /// Request note-off immediately.
+    /// Request note-off immediately; may owe the oscillator a retrigger
+    /// ([`CgbEnvelope::note_off`]'s doc).
     pub fn note_off(&mut self) {
-        self.envelope.note_off();
+        if self.envelope.note_off() {
+            self.pending_retrigger = true;
+        }
     }
 
-    /// Update base volume, panning, and envelope goal from the owning track.
+    /// Applies [`Oscillator::retrigger`], muting the channel instead of
+    /// retiring the voice when the trigger disables it (`m4a.c:1053-1056`).
+    fn apply_retrigger(&mut self) {
+        self.hardware_muted = !self.oscillator.retrigger();
+    }
+
+    /// Update base volume, panning, and envelope goal; itself a retrigger,
+    /// matching upstream's live volume/pan write (`m4a_1.s:1391-1400`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_from_track(vol_mr, vol_ml);
         self.envelope
             .set_goal(self.adsr, self.routing.envelope_goal());
+        self.pending_retrigger = true;
     }
 
     /// Retune from the owning track while preserving note identity and noise width.
@@ -542,9 +573,14 @@ impl CgbVoice {
         self.oscillator.retune(note_key, pit_m, self.dac_correction);
     }
 
-    /// Advance the software envelope and prepare gain for one render frame.
+    /// Advance the software envelope and prepare gain for one render
+    /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
-        self.envelope.step_frame(extra_envelope_iteration);
+        let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
+        let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
+        if retriggered_by_note_off || retriggered_by_transition {
+            self.apply_retrigger();
+        }
         let envelope_gain = self.oscillator.envelope_gain_256(self.envelope.volume());
         let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
         self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
@@ -554,6 +590,9 @@ impl CgbVoice {
     /// `sweep_ticks` must contain ascending sample offsets from the shared
     /// 128 Hz CGB frame sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
+        if self.hardware_muted {
+            return;
+        }
         let mut ticks = sweep_ticks.iter().copied().peekable();
         for (sample_offset, output) in acc.iter_mut().enumerate() {
             if !self.envelope.is_active() {
@@ -562,7 +601,7 @@ impl CgbVoice {
             if ticks.peek() == Some(&sample_offset) {
                 ticks.next();
                 if !self.oscillator.step_sweep_tick() {
-                    self.envelope.retire();
+                    self.hardware_muted = true;
                     break;
                 }
             }
@@ -585,6 +624,13 @@ impl CgbVoice {
     pub(crate) fn sweep_frequency(&self) -> Option<u16> {
         match &self.oscillator {
             Oscillator::Square(s) => s.sweep_frequency(),
+            _ => None,
+        }
+    }
+
+    fn noise_lfsr(&self) -> Option<u16> {
+        match &self.oscillator {
+            Oscillator::Noise(n) => Some(n.lfsr()),
             _ => None,
         }
     }
@@ -771,6 +817,46 @@ mod tests {
     }
 
     #[test]
+    fn release_start_volume_write_retriggers_the_noise_lfsr() {
+        // Release start is a volume write; upstream's channel-4 trigger
+        // resets the LFSR (`m4a.c:1060-1069,1219-1226`; `mgba/src/gb/audio.c:374`).
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: MAX_MASTER_VOLUME,
+            release: 4,
+        };
+        let mut voice = noise_voice(adsr, WIDE_NOISE, TestNote::default());
+        let at_note_on = voice.noise_lfsr();
+
+        let mut acc = vec![(0i32, 0i32); 64];
+        for _ in 0..3 {
+            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.render(&mut acc, &[]);
+        }
+        let walked_away = voice.noise_lfsr();
+        assert_ne!(
+            walked_away, at_note_on,
+            "sanity: a sustained note must have walked the LFSR away from note-on"
+        );
+
+        voice.note_off();
+        assert_eq!(
+            voice.noise_lfsr(),
+            walked_away,
+            "sanity: note_off must not retrigger before the next begin_frame -- upstream applies \
+             a tick's writes inside the following CgbSound call, not synchronously"
+        );
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert_eq!(
+            voice.noise_lfsr(),
+            at_note_on,
+            "note_off's release-start volume write (release != 0) must retrigger channel 4 at \
+             the next begin_frame, clearing the LFSR"
+        );
+    }
+
+    #[test]
     fn wave_note_with_active_envelope_is_audible() {
         let mut voice = wave_voice(false, TestNote::default());
         let mut acc = vec![(0i32, 0i32); 8];
@@ -794,33 +880,54 @@ mod tests {
     }
 
     #[test]
-    fn square1_upward_sweep_overflow_is_born_dead() {
+    fn square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger() {
+        // A note-on overflow clears the hardware channel-enable bit and nothing
+        // else: upstream leaves SOUND_CHANNEL_SF_ON set and keeps running the
+        // envelope, so the next volume write can bring the note back
+        // (`m4a.c:1055-1058`, `mgba/src/gb/audio.c:180-186`).
         let high_key = 120;
+        let safe_key = 48;
         for sweep_period in [0, 3] {
             let sweep = upward_sweep(sweep_period, 1);
-            let mut dead = square_voice(
+            let mut muted = square_voice(
                 CgbChannelNumber::Square1,
                 Some(sweep),
                 TestNote::at_key(high_key),
             );
-            assert!(!dead.is_active(), "overflowing sweep note is born dead");
+            assert!(
+                muted.is_active(),
+                "the overflow mutes the hardware channel; the software voice keeps its slot"
+            );
             let mut acc = vec![(0i32, 0i32); 8];
-            dead.begin_frame(MAX_MASTER_VOLUME, false);
-            dead.render(&mut acc, &[]);
+            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            muted.render(&mut acc, &[]);
             assert!(
                 acc.iter().all(|&(l, r)| l == 0 && r == 0),
-                "born-dead channel must be silent from frame 0"
+                "a born-muted channel must be silent from frame 0"
+            );
+
+            muted.set_track_pitch(i32::from(safe_key) - i32::from(high_key), 0);
+            muted.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            let mut revived = vec![(0i32, 0i32); 8];
+            muted.render(&mut revived, &[]);
+            assert!(
+                revived.iter().any(|&(l, r)| l != 0 || r != 0),
+                "a later safe trigger must revive the born-muted note"
             );
         }
 
-        let normal = square_voice(
+        let mut normal = square_voice(
             CgbChannelNumber::Square1,
             Some(upward_sweep(0, 1)),
-            TestNote::at_key(48),
+            TestNote::at_key(safe_key),
         );
+        let mut acc = vec![(0i32, 0i32); 8];
+        normal.begin_frame(MAX_MASTER_VOLUME, false);
+        normal.render(&mut acc, &[]);
         assert!(
-            normal.is_active(),
-            "a normal-frequency sweep note keeps playing"
+            acc.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a normal-frequency sweep note is audible from frame 0"
         );
     }
 
@@ -917,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_born_dead_check() {
+    fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_mute_check() {
         let edge_note = TestNote {
             fine_pitch: 167,
             ..TestNote::at_key(54)
@@ -927,16 +1034,37 @@ mod tests {
         assert_eq!(DacCorrection::FixedRate8Bit.apply(raw_frequency), 0x556);
 
         let sweep = upward_sweep(0, 1);
-        let plain = square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut plain = square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut plain_frame = vec![(0i32, 0i32); 8];
+        plain.begin_frame(MAX_MASTER_VOLUME, false);
+        plain.render(&mut plain_frame, &[]);
         assert!(
-            plain.is_active(),
-            "the uncorrected sum sits exactly at the threshold, not over it"
+            plain_frame.iter().any(|&(l, r)| l != 0 || r != 0),
+            "the uncorrected sum sits exactly at the threshold, not over it, so the note sounds"
         );
 
-        let fixed = fixed_square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut fixed = fixed_square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
+        let mut fixed_frame = vec![(0i32, 0i32); 8];
+        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        fixed.render(&mut fixed_frame, &[]);
         assert!(
-            !fixed.is_active(),
-            "the DAC-corrected sum must overflow the sweep, born dead"
+            fixed_frame.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the DAC-corrected sum must overflow the sweep and mute the channel"
+        );
+        assert!(
+            fixed.is_active(),
+            "the overflow mutes the hardware channel without retiring the voice"
+        );
+
+        let safe_key: u8 = 48;
+        fixed.set_track_pitch(i32::from(safe_key) - i32::from(edge_note.note_key), 0);
+        fixed.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut revived = vec![(0i32, 0i32); 8];
+        fixed.render(&mut revived, &[]);
+        assert!(
+            revived.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a later safe trigger must revive the muted fixed-rate note"
         );
     }
 
@@ -1079,11 +1207,15 @@ mod tests {
     }
 
     #[test]
-    fn square1_sweep_overflow_retires_the_voice_mid_buffer() {
+    fn square1_sweep_overflow_mutes_the_voice_mid_buffer_until_the_next_safe_trigger() {
+        // A running sweep's overflow clears the channel-enable bit exactly as
+        // a trigger-time overflow does, and leaves the same later trigger able
+        // to revive it (`mgba/src/gb/audio.c:667-672`, `:180-186`).
+        let safe_key = 48;
         let mut voice = square_voice(
             CgbChannelNumber::Square1,
             Some(upward_sweep(1, 1)),
-            TestNote::at_key(48),
+            TestNote::at_key(safe_key),
         );
         assert!(
             voice.is_active(),
@@ -1107,8 +1239,166 @@ mod tests {
              at the buffer end"
         );
         assert!(
-            !voice.is_active(),
-            "the voice must retire once the sweep overflows"
+            voice.is_active(),
+            "the overflow mutes the hardware channel; the software voice lives on"
+        );
+        let mut still_muted = vec![(0i32, 0i32); 8];
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.render(&mut still_muted, &[]);
+        assert!(
+            still_muted.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the mute holds across frames until a trigger rechecks the sweep"
+        );
+
+        voice.set_track_pitch(0, 0);
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut revived = vec![(0i32, 0i32); 8];
+        voice.render(&mut revived, &[]);
+        assert!(
+            revived.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a later safe trigger must revive the muted voice, not find it retired"
+        );
+    }
+
+    #[test]
+    fn attack_to_decay_volume_write_retriggers_channel1_sweep_from_the_current_frequency() {
+        // The attack-to-decay transition is a volume write that reloads
+        // channel 1's sweep from the channel's *current* played frequency,
+        // not a pitch bend's stale shadow (`m4a.c:1150-1158,1219-1226`;
+        // `mgba/src/gb/audio.c:180-186`).
+        let safe_key: u8 = 48;
+        let overflow_prone_key: u8 = 120; // shares its overflow fixture with
+                                          // `square1_upward_sweep_overflow_is_born_muted_and_revives_on_a_safe_trigger`.
+        let mut voice = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            HALF_DUTY,
+            Some(upward_sweep(0, 1)),
+            CgbAdsr {
+                attack: 0,
+                decay: 1,
+                sustain: MAX_MASTER_VOLUME,
+                release: 0,
+            },
+            safe_key,
+            0,
+            FULL_TRACK_VOLUME,
+            FULL_TRACK_VOLUME,
+            FULL_VELOCITY,
+            0,
+            safe_key,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            voice.is_active(),
+            "constructed at a safe frequency, the sweep must not be born dead"
+        );
+
+        voice.set_track_pitch(i32::from(overflow_prone_key) - i32::from(safe_key), 0);
+        assert!(
+            voice.is_active(),
+            "a pitch bend alone must not retrigger the sweep"
+        );
+
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // attack==0 -> decay!=0: retriggers
+
+        assert!(
+            voice.is_active(),
+            "an overflowing trigger mutes the hardware channel, not the software voice"
+        );
+        let mut acc = vec![(0i32, 0i32); 8];
+        voice.render(&mut acc, &[]);
+        assert!(
+            acc.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the attack-to-decay volume write must retrigger channel 1, reloading the sweep \
+             shadow from the bent frequency and finding it overflows"
+        );
+    }
+
+    #[test]
+    fn live_track_volume_update_retriggers_channel1_sweep_from_the_current_frequency() {
+        // `set_track_volume` is itself a volume-write trigger, distinct from
+        // an envelope transition (`m4a_1.s:1391-1400`, applied at `m4a.c:1219-1226`).
+        let safe_key: u8 = 48;
+        let overflow_prone_key: u8 = 120;
+        let mut voice = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(0, 1)),
+            TestNote::at_key(safe_key),
+        );
+        // Settle `CgbAdsr::flat()`'s own instant retrigger first, so this
+        // frame isolates `set_track_volume`'s retrigger below.
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert!(
+            voice.is_active(),
+            "the settling frame must not itself overflow"
+        );
+
+        voice.set_track_pitch(i32::from(overflow_prone_key) - i32::from(safe_key), 0);
+        assert!(
+            voice.is_active(),
+            "a pitch bend alone must not retrigger the sweep"
+        );
+
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        assert!(
+            voice.is_active(),
+            "sanity: set_track_volume must not retrigger before the next begin_frame"
+        );
+
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // steady in sustain now, so only
+                                                     // set_track_volume's retrigger explains
+                                                     // the mute below
+
+        assert!(
+            voice.is_active(),
+            "an overflowing trigger mutes the hardware channel, not the software voice"
+        );
+        let mut acc = vec![(0i32, 0i32); 8];
+        voice.render(&mut acc, &[]);
+        assert!(
+            acc.iter().all(|&(l, r)| l == 0 && r == 0),
+            "a live volume update must retrigger channel 1, reloading the sweep shadow from \
+             the bent frequency and finding it overflows"
+        );
+    }
+
+    #[test]
+    fn a_trigger_time_sweep_overflow_only_mutes_the_channel_until_the_next_safe_trigger() {
+        let safe_key = 48;
+        let overflowing_key = 120;
+        let mut voice = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(0, 1)),
+            TestNote::at_key(safe_key),
+        );
+        assert!(voice.is_active(), "sanity: the note is born playing");
+
+        // The volume write's trigger, after this bend, rechecks the sweep
+        // and overflows (`mgba/src/gb/audio.c:180-196`).
+        voice.set_track_pitch(i32::from(overflowing_key - safe_key), 0);
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut muted = vec![(0i32, 0i32); 8];
+        voice.render(&mut muted, &[]);
+        assert!(
+            muted.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the overflowing trigger must silence the hardware channel"
+        );
+
+        // The next trigger reruns the same recheck and finds no overflow
+        // (`m4a.c:1053-1056`).
+        voice.set_track_pitch(0, 0);
+        voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut revived = vec![(0i32, 0i32); 8];
+        voice.render(&mut revived, &[]);
+        assert!(
+            revived.iter().any(|&(l, r)| l != 0 || r != 0),
+            "a later safe trigger must revive the muted voice, not find it retired"
         );
     }
 }
