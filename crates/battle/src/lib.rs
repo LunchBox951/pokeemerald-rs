@@ -28,18 +28,19 @@
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! one of the battle scripts this crate reproduces — the seven pipelines
+//! one of the battle scripts this crate reproduces — the eight pipelines
 //! `battle::ensure_executable` composes:
 //!
-//! | pipeline | script | added by |
-//! |---|---|---|
-//! | [`hit`] | `BattleScript_EffectHit` ([`hit::is_ordinary_hit_effect`]) | #125 |
-//! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) | #199, widened by #322 |
-//! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) | #321 |
-//! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) | #321 |
-//! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) | #321 |
-//! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) | #321 |
-//! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) | this slice |
+//! | pipeline | script |
+//! |---|---|
+//! | [`hit`] | `BattleScript_EffectHit` ([`hit::is_ordinary_hit_effect`]) |
+//! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) |
+//! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) |
+//! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) |
+//! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) |
+//! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) |
+//! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
+//! | [`paralyze`] | `BattleScript_EffectParalyze` ([`paralyze::is_paralyze_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its
@@ -192,26 +193,23 @@
 //! battles, Mist/Substitute/Safeguard/Protect, and the four abilities that
 //! read a holder's primary status — Synchronize, Shed Skin, Guts, and
 //! Marvel Scale (see [`paralyze::ensure_admissible`]) — and the move
-//! effects the seven pipelines still do
-//! not cover — Defense Curl (flag *and* stat raise, so it belongs with the
-//! stat-change family), the secondary-effect trampolines
-//! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, none of them
-//! [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling `EFFECT_PARALYZE_HIT`),
-//! recoil, OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
-//! residual family, and so on.
+//! effects the eight pipelines still do not cover — the secondary-effect
+//! trampolines ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, none of
+//! them [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
+//! `EFFECT_PARALYZE_HIT`), recoil, OHKO, Counter, Bide, Leech Seed and the
+//! rest of the end-of-turn residual family, and so on.
 //!
-//! This slice adds [`status1::Status1`] ([`status1::Status1::Healthy`] and
-//! [`status1::Status1::Paralysed`]), [`paralyze`] as the seventh
-//! [`battle::Battle::execute_move`] pipeline, [`battle::Battle::act`]'s
-//! full-paralysis gate, and speed quartering in
-//! [`pokemon::BattlePokemon::speed_for_turn_order`]. See each item's own
-//! docs for how.
+//! Paralysis reaches past its own pipeline, so read those two owners before
+//! changing turn flow: [`battle::Battle::act`] cancels a paralysed mover
+//! ahead of PP, and [`pokemon::BattlePokemon::speed_for_turn_order`]
+//! quarters its Speed.
 
 pub mod ability;
 pub mod accuracy;
 pub mod battle;
 pub mod critical;
 pub mod damage;
+pub mod defense_curl;
 pub mod dex;
 pub mod drain;
 pub mod error;
@@ -246,6 +244,9 @@ pub use damage::{
     apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
     base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
     STRUGGLE,
+};
+pub use defense_curl::{
+    is_defense_curl_effect, resolve_defense_curl_move, DefenseCurlOutcome, EFFECT_DEFENSE_CURL,
 };
 pub use dex::Dex;
 pub use drain::{drain_amount, is_drain_effect, resolve_drain, DrainOutcome};

@@ -1,7 +1,11 @@
-//! Focus Energy and Charge state carried by one battler.
+//! Focus Energy, Charge, and Defense Curl state carried by one battler.
 //!
-//! Ordinary switches clear both. Baton Pass preserves Focus Energy but clears
-//! Charge's timer (`src/battle_main.c:3173`-`:3217`).
+//! Ordinary switches clear all three. Baton Pass preserves Focus Energy but
+//! clears Charge's timer and Defense Curl's flag: its `status2` mask keeps
+//! `STATUS2_FOCUS_ENERGY` but omits `STATUS2_DEFENSE_CURL`
+//! (`src/battle_main.c:3173`-`:3217`), the opposite of how Focus Energy
+//! itself survives the pass. Switching is outside this crate's boundary, so
+//! nothing here currently reads that distinction.
 //!
 //! Charge's timer is also its active flag because upstream raises and clears
 //! `STATUS3_CHARGED_UP` in lockstep with `chargeTimer`
@@ -14,6 +18,8 @@ pub struct Volatiles {
     pub focus_energy: bool,
     /// The remaining end-of-turn ticks before Charge expires.
     pub charge_timer: u8,
+    /// Whether Defense Curl has been used.
+    pub defense_curl: bool,
 }
 
 impl Volatiles {
@@ -29,6 +35,13 @@ impl Volatiles {
     /// Activates Focus Energy.
     pub const fn set_focus_energy(&mut self) {
         self.focus_energy = true;
+    }
+
+    /// Activates Defense Curl. `Cmd_setdefensecurlbit`
+    /// (`src/battle_script_commands.c:8858`-`:8862`) unconditionally ORs in
+    /// `STATUS2_DEFENSE_CURL`, with no already-set guard and no `Random()`.
+    pub const fn set_defense_curl(&mut self) {
+        self.defense_curl = true;
     }
 
     /// Activates or refreshes Charge.
@@ -54,6 +67,7 @@ mod tests {
         assert!(!volatiles.focus_energy);
         assert!(!volatiles.charged_up());
         assert_eq!(volatiles.charge_timer, 0);
+        assert!(!volatiles.defense_curl);
     }
 
     #[test]
@@ -76,5 +90,14 @@ mod tests {
         assert!(volatiles.focus_energy);
         volatiles.set_focus_energy();
         assert!(volatiles.focus_energy);
+    }
+
+    #[test]
+    fn defense_curl_is_a_latch() {
+        let mut volatiles = Volatiles::default();
+        volatiles.set_defense_curl();
+        assert!(volatiles.defense_curl);
+        volatiles.set_defense_curl();
+        assert!(volatiles.defense_curl);
     }
 }

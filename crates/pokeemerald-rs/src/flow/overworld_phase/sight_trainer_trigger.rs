@@ -820,17 +820,14 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Issue #321 moved four of these rows from one screen to the
-        // *next* one: Absorb, Splash, Focus Energy and Charge are all
-        // executable now (`battle`'s drain and flag-only pipelines), so
-        // those four parties get past `ensure_executable` and stop at
+        // Absorb, Thunder Wave, Splash, Focus Energy, Charge, and Defense
+        // Curl are all executable (`battle`'s drain, paralysis, flag-only,
+        // and defense-curl pipelines), so those six parties get past
+        // `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet *score* the new effects, which is issue
-        // #325's slice. Amy & Liv's Thunder Wave moved the same way once
-        // the paralysis pipeline widened `ensure_executable`: still
-        // unscoreable, not merely non-damaging. Both screens run before the
-        // first draw, so the per-frame cone check is exactly as cheap as it
-        // was.
+        // trainer AI cannot yet score any of those six effects. Both
+        // screens run before the first draw, so the per-frame cone check is
+        // exactly as cheap as it was.
         let expected = [
             (
                 "Daisy",
@@ -861,7 +858,7 @@ mod tests {
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(111))), // MOVE_DEFENSE_CURL
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(111))), // MOVE_DEFENSE_CURL
             ),
             (
                 "Pete",
