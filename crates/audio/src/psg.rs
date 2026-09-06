@@ -5,6 +5,8 @@ use crate::pitch::MIXER_RATE;
 const PHASE_ONE: u32 = 1 << 16;
 const FREQUENCY_REGISTER_RANGE: u16 = 1 << 11;
 const MAX_FREQUENCY_REGISTER: u16 = FREQUENCY_REGISTER_RANGE - 1;
+const FREQUENCY_LOW_BYTE: u16 = 0x00FF;
+const FREQUENCY_HIGH_BITS: u16 = 0x0700;
 const SQUARE_CLOCK_HZ: f64 = 131_072.0;
 const SQUARE_STEPS_PER_CYCLE: f64 = 8.0;
 const WAVE_CLOCK_HZ: f64 = 65_536.0;
@@ -121,8 +123,10 @@ pub enum SweepResult {
     Unchanged,
     /// Retune the channel to this frequency register value.
     Changed(u16),
-    /// Silence the channel after a frequency overflow.
-    Disable,
+    /// Silence the channel after a frequency overflow, first retuning to the
+    /// frequency the sweep committed before its overflowing look-ahead
+    /// (`mgba/src/gb/audio.c:975-985`).
+    Disable(Option<u16>),
 }
 
 impl Sweep {
@@ -171,6 +175,14 @@ impl Sweep {
             && self.next_frequency().is_none()
     }
 
+    /// Reloads the shadow frequency and timer from a hardware trigger
+    /// (`mgba/src/gb/audio.c:182,863-867`); recheck
+    /// [`Self::overflows_at_trigger`] after (`:184-186`).
+    pub(crate) fn retrigger(&mut self, freq_reg: u16) {
+        self.shadow_frequency = freq_reg.min(MAX_FREQUENCY_REGISTER);
+        self.ticks_until_step = self.period_ticks;
+    }
+
     /// Advances the sweep by one 128 Hz tick.
     pub fn tick(&mut self) -> SweepResult {
         if self.period_ticks == 0 {
@@ -186,7 +198,7 @@ impl Sweep {
         self.ticks_until_step = self.period_ticks;
 
         let Some(frequency) = self.next_frequency() else {
-            return SweepResult::Disable;
+            return SweepResult::Disable(None);
         };
 
         // The increase branch's write-back is gated on a non-zero shift; the
@@ -204,7 +216,7 @@ impl Sweep {
         // Hardware checks the next upward calculation before playing this one
         // (mgba/src/gb/audio.c:975-985).
         if self.direction == SweepDirection::Increase && self.next_frequency().is_none() {
-            return SweepResult::Disable;
+            return SweepResult::Disable(Some(self.shadow_frequency));
         }
 
         SweepResult::Changed(self.shadow_frequency)
@@ -217,6 +229,15 @@ pub struct SquareChannel {
     duty: SquareDuty,
     phase: u32,
     step_delta: u32,
+    /// The played 11-bit frequency: `NR13`'s low byte and `NR14`'s high three
+    /// bits, both of which a sweep write-back replaces
+    /// (`mgba/src/gb/audio.c:160-171`, `:978-979`).
+    frequency: u16,
+    /// The high three bits a pitch write last left in `NR14`. A volume-only
+    /// trigger rewrites `NR14` without `NR13`, so it rejoins these bits to
+    /// whatever low byte the sweep has reached (`pokeemerald/src/m4a.c:1198-1203`,
+    /// `:1219-1225`).
+    note_high_bits: u16,
     sweep: Option<Sweep>,
     disabled_at_trigger: bool,
 }
@@ -231,6 +252,8 @@ impl SquareChannel {
             duty: SquareDuty::from_register(duty),
             phase: 0,
             step_delta: 0,
+            frequency: 0,
+            note_high_bits: 0,
             sweep,
             disabled_at_trigger,
         };
@@ -238,7 +261,7 @@ impl SquareChannel {
         chan
     }
 
-    /// Reports whether the trigger-time sweep check disabled the channel.
+    /// Reports whether the most recent trigger's sweep check disabled the channel.
     #[must_use]
     pub fn is_disabled(&self) -> bool {
         self.disabled_at_trigger
@@ -249,10 +272,35 @@ impl SquareChannel {
         self.sweep.as_ref().map(|s| s.shadow_frequency)
     }
 
-    /// Retunes the channel from an 11-bit frequency register value.
+    /// Retunes the channel from an 11-bit frequency register value, as a pitch
+    /// write does through both `NR13` and `NR14`
+    /// (`pokeemerald/src/m4a.c:1198-1203`).
     pub fn set_frequency(&mut self, freq_reg: u16) {
+        let freq_reg = freq_reg.min(MAX_FREQUENCY_REGISTER);
+        self.note_high_bits = freq_reg & FREQUENCY_HIGH_BITS;
+        self.play_frequency(freq_reg);
+    }
+
+    fn play_frequency(&mut self, freq_reg: u16) {
+        self.frequency = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
         self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
+    }
+
+    /// Applies a volume-only trigger: its `NR14` write restores the note's high
+    /// bits over the swept low byte, and the sweep reloads from that rebuilt
+    /// frequency and rechecks overflow (`mgba/src/gb/audio.c:170-186`).
+    ///
+    /// Returns whether the channel still plays.
+    #[must_use]
+    pub fn retrigger(&mut self) -> bool {
+        self.play_frequency(self.note_high_bits | (self.frequency & FREQUENCY_LOW_BYTE));
+        let Some(sweep) = self.sweep.as_mut() else {
+            return true;
+        };
+        sweep.retrigger(self.frequency);
+        self.disabled_at_trigger = sweep.overflows_at_trigger();
+        !self.disabled_at_trigger
     }
 
     /// Advances channel 1's sweep, returning `false` when it disables the channel.
@@ -263,10 +311,15 @@ impl SquareChannel {
         match sweep.tick() {
             SweepResult::Unchanged => true,
             SweepResult::Changed(freq) => {
-                self.set_frequency(freq);
+                self.play_frequency(freq);
                 true
             }
-            SweepResult::Disable => false,
+            SweepResult::Disable(committed) => {
+                if let Some(freq) = committed {
+                    self.play_frequency(freq);
+                }
+                false
+            }
         }
     }
 
@@ -421,6 +474,14 @@ impl NoiseChannel {
         self.step_delta = NoiseControl::from_byte(byte).step_delta;
     }
 
+    /// Resets the LFSR and clock phase, exactly as at note-on
+    /// (`mgba/src/gb/audio.c:374,381-382`).
+    pub fn retrigger(&mut self) {
+        self.phase = 0;
+        self.lfsr = 0;
+        self.shift_lfsr();
+    }
+
     fn shift_lfsr(&mut self) {
         let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
         let feedback_bits = self.width.feedback_bits();
@@ -434,6 +495,11 @@ impl NoiseChannel {
     #[cfg(test)]
     pub(crate) fn is_narrow(&self) -> bool {
         self.width == LfsrWidth::SevenBit
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lfsr(&self) -> u16 {
+        self.lfsr
     }
 
     /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
@@ -454,6 +520,7 @@ mod tests {
     const HALF_DUTY_REGISTER: u8 = 2;
     const HIGH_FREQUENCY_REGISTER: u16 = 0x700;
     const LOOKAHEAD_OVERFLOW_FREQUENCY: u16 = 1046;
+    const LOOKAHEAD_OVERFLOW_INTERMEDIATE: u16 = 1569;
     const SEVEN_BIT_LFSR_PERIOD: usize = 127;
 
     fn sweep(
@@ -515,17 +582,26 @@ mod tests {
     #[test]
     fn sweep_overflow_disables_the_channel() {
         let mut sweep = sweep(1, SweepDirection::Increase, 1, HIGH_FREQUENCY_REGISTER);
-        assert_eq!(sweep.tick(), SweepResult::Disable);
+        assert_eq!(
+            sweep.tick(),
+            SweepResult::Disable(None),
+            "a first-calculation overflow writes nothing back"
+        );
     }
 
     #[test]
     fn sweep_disables_on_post_update_lookahead_overflow() {
         let mut sweep = sweep(1, SweepDirection::Increase, 1, LOOKAHEAD_OVERFLOW_FREQUENCY);
-        assert_eq!(sweep.tick(), SweepResult::Disable);
+        assert_eq!(
+            sweep.tick(),
+            SweepResult::Disable(Some(LOOKAHEAD_OVERFLOW_INTERMEDIATE)),
+            "the look-ahead disables only after hardware has already written the \
+             non-overflowing intermediate frequency"
+        );
     }
 
     #[test]
-    fn square_channel_retires_on_lookahead_overflow() {
+    fn lookahead_overflow_plays_the_committed_intermediate_before_disabling() {
         let sweep = sweep(1, SweepDirection::Increase, 1, LOOKAHEAD_OVERFLOW_FREQUENCY);
         assert!(!sweep.overflows_at_trigger());
         let mut square = SquareChannel::new(
@@ -535,6 +611,105 @@ mod tests {
         );
         assert!(!square.is_disabled());
         assert!(!square.step_sweep_tick());
+        assert_eq!(
+            square.frequency, LOOKAHEAD_OVERFLOW_INTERMEDIATE,
+            "the disabling tick still leaves the intermediate frequency in NR13/NR14"
+        );
+        assert_eq!(
+            square.sweep_frequency(),
+            Some(LOOKAHEAD_OVERFLOW_INTERMEDIATE),
+            "the shadow tracks the same write"
+        );
+    }
+
+    #[test]
+    fn a_volume_only_trigger_rejoins_the_note_high_bits_to_the_swept_low_byte() {
+        // A volume write rewrites NR14 alone, so the note's high bits return
+        // over the sweep's low byte rather than reloading the full swept
+        // frequency (`pokeemerald/src/m4a.c:1198-1203,1219-1225`;
+        // `mgba/src/gb/audio.c:170-171,182`).
+        let sweep = sweep(1, SweepDirection::Increase, 1, LOOKAHEAD_OVERFLOW_FREQUENCY);
+        let mut square = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            LOOKAHEAD_OVERFLOW_FREQUENCY,
+            Some(sweep),
+        );
+        assert!(!square.step_sweep_tick());
+
+        let rebuilt = (LOOKAHEAD_OVERFLOW_FREQUENCY & FREQUENCY_HIGH_BITS)
+            | (LOOKAHEAD_OVERFLOW_INTERMEDIATE & FREQUENCY_LOW_BYTE);
+        assert_eq!(rebuilt, 1057);
+        assert!(
+            square.retrigger(),
+            "1057 + (1057 >> 1) stays under 2048, so this channel plays again"
+        );
+        assert_eq!(square.frequency, rebuilt);
+        assert_eq!(square.sweep_frequency(), Some(rebuilt));
+        assert!(!square.is_disabled());
+    }
+
+    #[test]
+    fn a_volume_only_trigger_revives_a_note_that_a_full_reload_would_leave_muted() {
+        // Reloading the whole swept frequency (1912) would overflow again;
+        // only the NR13/NR14 split explains the note coming back.
+        const NOTE: u16 = 1700;
+        const SWEPT: u16 = 1912;
+        let mut square = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            NOTE,
+            Some(sweep(1, SweepDirection::Increase, 3, NOTE)),
+        );
+        assert!(!square.step_sweep_tick());
+        assert_eq!(
+            square.frequency, SWEPT,
+            "1700 + (1700 >> 3) is written back"
+        );
+        const {
+            assert!(
+                SWEPT + (SWEPT >> 3) >= FREQUENCY_REGISTER_RANGE,
+                "sanity: the look-ahead from 1912 is what disabled the channel"
+            );
+        }
+
+        assert!(square.retrigger());
+        assert_eq!(
+            square.frequency,
+            (NOTE & FREQUENCY_HIGH_BITS) | (SWEPT & FREQUENCY_LOW_BYTE)
+        );
+        assert_eq!(square.frequency, 1656);
+        assert_eq!(square.sweep_frequency(), Some(1656));
+    }
+
+    #[test]
+    fn a_volume_only_trigger_leaves_an_overflowing_channel_muted() {
+        let mut square = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            HIGH_FREQUENCY_REGISTER,
+            Some(sweep(
+                1,
+                SweepDirection::Increase,
+                1,
+                HIGH_FREQUENCY_REGISTER,
+            )),
+        );
+        assert!(!square.step_sweep_tick());
+        assert!(
+            !square.retrigger(),
+            "no sweep write reached NR13, so the trigger rebuilds the same \
+             overflowing frequency"
+        );
+        assert!(square.is_disabled());
+    }
+
+    #[test]
+    fn a_pitch_write_replaces_both_register_halves() {
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, 0x555, None);
+        square.set_frequency(0x0AA);
+        assert!(square.retrigger());
+        assert_eq!(
+            square.frequency, 0x0AA,
+            "the later pitch write owns the high bits a trigger restores"
+        );
     }
 
     #[test]
@@ -563,7 +738,7 @@ mod tests {
         // and 2048 or higher retires channel 1; only the write-back is gated on
         // a non-zero shift (mgba/src/gb/audio.c:965-990).
         let mut sweep = sweep(1, SweepDirection::Increase, 0, 1024);
-        assert_eq!(sweep.tick(), SweepResult::Disable);
+        assert_eq!(sweep.tick(), SweepResult::Disable(None));
     }
 
     #[test]

@@ -54,6 +54,14 @@ pub enum AudioError {
     /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
     /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
+    /// A `Goto`/`MemAccBranch` target does not address an event in its own
+    /// track. Indices are zero-based; `event_count` is that track's own.
+    JumpTargetOutOfRange {
+        track_index: usize,
+        event_index: usize,
+        target: u32,
+        event_count: u32,
+    },
     /// A decoded value did not consume the complete payload. The value is the number
     /// of trailing bytes.
     TrailingBytes(usize),
@@ -137,6 +145,17 @@ impl fmt::Display for AudioError {
             Self::UnknownMemAccOp(byte) => {
                 write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")
             }
+            Self::JumpTargetOutOfRange {
+                track_index,
+                event_index,
+                target,
+                event_count,
+            } => write!(
+                f,
+                "audio-pack song: track {track_index} event {event_index} has jump \
+                 target {target}, which is not less than the track's event count \
+                 {event_count}"
+            ),
             Self::TrailingBytes(count) => write!(
                 f,
                 "audio-pack entry: {count} trailing byte(s) after the decoded payload"

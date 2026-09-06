@@ -232,7 +232,7 @@ impl<'a> SpriteLayer<'a> {
     /// (`x >= Framebuffer::WIDTH` or `y >= Framebuffer::HEIGHT`).
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, MosaicSize::NONE)
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE, false)
     }
 
     /// Resolve the winning sprite pixel at `(x, y)`, mosaic-snapping
@@ -248,7 +248,20 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic)
+        self.resolve_pixel_inner(x, y, mosaic, false)
+    }
+
+    /// [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic), skipping every
+    /// [`ObjMode::Window`] entry when `suppress_objwin_hole` is set (`software-obj.c:161`).
+    #[must_use]
+    pub(crate) fn resolve_pixel_with_mosaic_windowed(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        suppress_objwin_hole: bool,
+    ) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, mosaic, suppress_objwin_hole)
     }
 
     /// Shared implementation behind [`resolve_pixel`](Self::resolve_pixel)
@@ -261,14 +274,21 @@ impl<'a> SpriteLayer<'a> {
     /// else branch (`software-obj.c`) rewrites an already-written underlying
     /// pixel's order exactly like the `NORMAL` macro, so a priority-0 `OBJWIN`
     /// hole promotes a worse-priority opaque OBJ beneath it. Both cases are
-    /// handled inline below `(behavioral-fidelity)`.
+    /// handled inline below `(behavioral-fidelity)`; `suppress_objwin_hole` drops
+    /// an entry whose window outranks `OBJWIN` instead (`software-obj.c:161`).
     ///
     /// Only entries the per-scanline OAM admission stage
     /// ([`with_admission`](Self::with_admission), `crate::oam_budget`, S-2
     /// issue #329) admits for scanline `y` are even considered — a late
     /// entry past the scanline's cycle budget contributes nothing here,
     /// matching hardware (and the pinned mgba renderer) dropping it.
-    fn resolve_pixel_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> Option<SpritePixel> {
+    fn resolve_pixel_inner(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+        suppress_objwin_hole: bool,
+    ) -> Option<SpritePixel> {
         // Stored OBJ order, starting worse than any real priority (`0..=3`),
         // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
         // exactly when the pixel has been written by an opaque texel.
@@ -289,6 +309,11 @@ impl<'a> SpriteLayer<'a> {
         self.with_admission(y, |admission| {
             for (index, entry) in self.entries.iter().enumerate() {
                 if !admission.is_admitted(index) {
+                    continue;
+                }
+                // mgba drops an OBJWIN entry outright when the span's window
+                // outranks it (software-obj.c:161).
+                if suppress_objwin_hole && entry.mode() == ObjMode::Window {
                     continue;
                 }
                 let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
@@ -1092,6 +1117,34 @@ mod tests {
         let entries_control = [b_opaque_prio2];
         let control = SpriteLayer::new(&entries_control, &tileset, &tileset, &palette);
         assert_eq!(control.resolve_pixel(0, 0).unwrap().priority, 2);
+    }
+
+    #[test]
+    fn resolve_pixel_with_mosaic_windowed_suppresses_objwin_hole_when_flagged() {
+        // mgba drops an OBJWIN sprite outright for a span whose window
+        // outranks it (software-obj.c:161); B keeps priority 2 instead of
+        // being upgraded to 0.
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let b_opaque_prio2 = square_8x8(0, 2, 0);
+        let objwin_hole_prio0 = square_8x8(1, 0, 0).with_mode(ObjMode::Window);
+        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let suppressed = layer
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, true)
+            .unwrap();
+        assert_eq!(
+            suppressed.priority, 2,
+            "suppressed: the OBJWIN hole is skipped, B keeps priority 2"
+        );
+
+        let unsuppressed = layer
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, false)
+            .unwrap();
+        assert_eq!(
+            unsuppressed.priority, 0,
+            "unsuppressed: identical to resolve_pixel, the hole upgrades B to 0"
+        );
     }
 
     #[test]
