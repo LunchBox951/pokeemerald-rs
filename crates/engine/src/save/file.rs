@@ -272,10 +272,8 @@ impl SaveFile {
 
     /// Atomically replaces the save file with `store`'s synchronised image.
     ///
-    /// The parent directory is synchronised after the rename when the host
-    /// permits opening directories. That final synchronisation is best effort.
-    /// On a first save, every ancestor directory is synchronised too; see
-    /// [`SaveFile::ensure_parent_directory`].
+    /// The directory holding the save entry -- `.` for a bare relative path --
+    /// is best-effort synchronised after the rename; see [`SaveFile::ensure_parent_directory`].
     ///
     /// # Errors
     ///
@@ -283,7 +281,17 @@ impl SaveFile {
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        let parent = self.ensure_parent_directory()?;
+        self.write_with(store, Self::sync_directory_best_effort)
+    }
+
+    /// As [`SaveFile::write`], synchronising through the given `sync_directory`
+    /// rather than always [`SaveFile::sync_directory_best_effort`].
+    fn write_with(
+        &self,
+        store: &SaveStore,
+        mut sync_directory: impl FnMut(&Path),
+    ) -> Result<(), SaveFileError> {
+        self.ensure_parent_directory()?;
 
         let staging_path = self.staging_path_for_process();
         let write_error = |source: std::io::Error| SaveFileError::Write {
@@ -295,8 +303,8 @@ impl SaveFile {
             drop(std::fs::remove_file(&staging_path));
             return Err(write_error(source));
         }
-        if let Some(parent) = parent {
-            Self::sync_directory_best_effort(parent);
+        if let Some(containing) = Self::directory_containing(&self.path) {
+            sync_directory(containing);
         }
         Ok(())
     }

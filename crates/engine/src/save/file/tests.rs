@@ -575,3 +575,45 @@ fn the_save_lock_excludes_a_second_locker_until_dropped() {
         "the second lock() returned while the first guard was still held"
     );
 }
+
+/// A bare relative save-file name, unique to this process and thread, that
+/// removes itself on drop -- never touching the working directory every thread shares.
+struct BareRelativeSave {
+    name: PathBuf,
+}
+
+impl BareRelativeSave {
+    fn unique(label: &str) -> Self {
+        Self {
+            name: PathBuf::from(format!(
+                "pokeemerald-rs-save-file-{label}-{}-{:?}.sav",
+                std::process::id(),
+                std::thread::current().id()
+            )),
+        }
+    }
+}
+
+impl Drop for BareRelativeSave {
+    fn drop(&mut self) {
+        drop(std::fs::remove_file(&self.name));
+    }
+}
+
+#[test]
+fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
+    let bare = BareRelativeSave::unique("write");
+    let file = SaveFile::at(bare.name.clone());
+    let (store, _, _) = saved_store();
+
+    let synced = std::cell::RefCell::new(Vec::new());
+    file.write_with(&store, |path| synced.borrow_mut().push(path.to_path_buf()))
+        .expect("writing a bare relative save path must succeed");
+
+    assert_eq!(
+        synced.into_inner(),
+        vec![PathBuf::from(".")],
+        "a bare relative save path's directory entry lives in the working directory, and \
+         the rename must best-effort sync it exactly once"
+    );
+}
