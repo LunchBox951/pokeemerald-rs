@@ -265,10 +265,7 @@ fn the_memacc_conditional_loop_round_trips() {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            // Index 4, the trailing `Fine` -- the last valid index in this
-            // 5-event track (was `5`, one past the end, before
-            // `Song::new`/`Song::decode` validated jump targets, #868).
-            target: 4,
+            target: 4, // the trailing `Fine`, this track's last valid index.
         },
         SongEvent::Goto(1),
         SongEvent::Fine,
