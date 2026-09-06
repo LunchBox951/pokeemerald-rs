@@ -1,5 +1,6 @@
 use super::{
-    ensure_resolvable, is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome, EFFECT_PARALYZE,
+    ensure_admissible, ensure_resolvable, is_paralyze_effect, resolve_paralyze_move,
+    ParalyzeOutcome, EFFECT_PARALYZE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -313,4 +314,67 @@ fn an_already_paralysed_shed_skin_defender_is_admitted_not_refused() {
         ParalyzeOutcome::AlreadyParalysed,
         "this move applies nothing, so it is not what made Shed Skin reachable"
     );
+}
+
+/// `SPECIES_MACHOP`: Fighting, and Guts in its primary ability slot.
+const MACHOP: SpeciesId = SpeciesId(66);
+/// `SPECIES_MILOTIC`: Water, and Marvel Scale in its primary ability slot.
+const MILOTIC: SpeciesId = SpeciesId(329);
+
+#[test]
+fn a_guts_defender_is_refused_before_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, MACHOP, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), assets::AbilityId::GUTS);
+    let mut rng = SequenceRng::new([0]);
+    let refused =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    assert_eq!(
+        refused,
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::GUTS),
+        "CalculateBaseDamage raises a statused Guts holder's physical Attack, which \
+         BattlePokemon::attacking_stat does not model"
+    );
+    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+}
+
+#[test]
+fn a_marvel_scale_defender_is_refused_before_the_accuracy_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let defender = mon(&dex, MILOTIC, 10, vec![TACKLE]);
+    assert_eq!(defender.ability(), assets::AbilityId::MARVEL_SCALE);
+    let mut rng = SequenceRng::new([0]);
+    let refused =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    assert_eq!(
+        refused,
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::MARVEL_SCALE),
+        "CalculateBaseDamage raises a statused Marvel Scale holder's Defense, which \
+         BattlePokemon::defending_stat does not model"
+    );
+    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+}
+
+/// The stat-reading pair is refused for the damage every later turn would
+/// miscompute, not for a draw, so the refusal must not depend on which
+/// paralyzing move carries it.
+#[test]
+fn every_paralyze_move_refuses_the_stat_reading_abilities() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE, STUN_SPORE, GLARE]);
+    for (species, ability) in [
+        (MACHOP, assets::AbilityId::GUTS),
+        (MILOTIC, assets::AbilityId::MARVEL_SCALE),
+    ] {
+        let defender = mon(&dex, species, 10, vec![TACKLE]);
+        for move_id in [THUNDER_WAVE, STUN_SPORE, GLARE] {
+            assert_eq!(
+                ensure_admissible(&dex, move_id, &attacker, &defender),
+                Err(BattleError::UnportedAbilityInteraction(ability)),
+                "{move_id:?} against {species:?}"
+            );
+        }
+    }
 }

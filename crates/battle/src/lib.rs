@@ -189,11 +189,14 @@
 //! guard left unmodelled) — held items, every primary status but
 //! [`status1::Status1::Paralysed`] (poison, confusion, sleep, freeze, burn,
 //! toxic — see [`status1`]'s module docs), weather, multi/double
-//! battles, Mist/Substitute/Safeguard/Protect, and Synchronize's status
-//! reflection and Shed Skin's end-turn cure roll (a paralysis that would wake
-//! either is refused by [`paralyze::ensure_admissible`] rather than
-//! half-applied; see [`stat_change`]'s and [`paralyze`]'s module docs for
-//! why those are a documented boundary rather than dead code), and the move
+//! battles, Mist/Substitute/Safeguard/Protect, and the four abilities that
+//! read a holder's primary status — Synchronize's reflection, Shed Skin's
+//! end-turn cure roll, and Guts' and Marvel Scale's status-dependent stat
+//! boosts (a paralysis that would reach one is refused by
+//! [`paralyze::ensure_admissible`] rather than half-applied, on the exact
+//! per-ability conditions that function's own docs state; see
+//! [`stat_change`]'s and [`paralyze`]'s module docs for why those are a
+//! documented boundary rather than dead code), and the move
 //! effects the seven pipelines still do
 //! not cover — Defense Curl (flag *and* stat raise, so it belongs with the
 //! stat-change family), the secondary-effect trampolines

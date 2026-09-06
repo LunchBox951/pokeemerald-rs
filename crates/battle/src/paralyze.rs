@@ -76,8 +76,8 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// Refuses an [`EFFECT_PARALYZE`] move that would newly paralyse a defender
 /// whose ability this slice cannot follow past the infliction.
 ///
-/// Only a status that actually lands wakes either ability, so every guard
-/// `BattleScript_EffectParalyze` runs before `seteffectprimary`
+/// Only a status that actually lands reaches any of these abilities, so every
+/// guard `BattleScript_EffectParalyze` runs before `seteffectprimary`
 /// (`data/battle_scripts_1.s:1011`-`:1017`: Limber, `typecalc`, and the
 /// already-statused exits) leaves the interaction fully modelled and is
 /// admitted here. `accuracycheck` is the one preceding guard the refusal
@@ -94,6 +94,13 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 ///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`) — a
 ///   draw [`crate::battle::Battle`]'s residual pass does not make, so the
 ///   shared stream would diverge for the rest of the battle.
+/// * Guts and Marvel Scale read their own holder's `status1` inside
+///   `CalculateBaseDamage` (`src/pokemon.c`), raising a statused holder's
+///   physical Attack or Defense by half, while
+///   [`crate::pokemon::BattlePokemon::attacking_stat`] and
+///   [`crate::pokemon::BattlePokemon::defending_stat`] report the stat
+///   unmodified — so every physical hit after the infliction would compute
+///   the wrong damage rather than merely miss a draw.
 ///
 /// # Errors
 ///
@@ -118,9 +125,9 @@ pub fn ensure_admissible(
         return Ok(());
     }
     match defender.ability() {
-        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SHED_SKIN,
-        )),
+        ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
+            Err(BattleError::UnportedAbilityInteraction(ability))
+        }
         AbilityId::SYNCHRONIZE if !attacker.status1().is_paralysed() => Err(
             BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
         ),
@@ -146,10 +153,10 @@ pub enum ParalyzeOutcome {
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// The Limber, type-immunity, already-paralysed, and Synchronize guards
-/// precede the accuracy draw and consume no randomness; a landed hit needs
-/// only that one draw, since `seteffectprimary` inflicts the status
-/// unconditionally once reached.
+/// The Limber, type-immunity and already-paralysed guards, and
+/// [`ensure_admissible`]'s refusals behind them, precede the accuracy draw
+/// and consume no randomness; a landed hit needs only that one draw, since
+/// `seteffectprimary` inflicts the status unconditionally once reached.
 ///
 /// # Errors
 ///

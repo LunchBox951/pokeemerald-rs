@@ -499,9 +499,6 @@ impl Battle {
             // A spent slot aborts at `Cmd_attackcanceler`'s no-PP jump
             // (`battle_script_commands.c:934`-`:939`), never reaching
             // `seteffectprimary`, so it carries no ability interaction.
-            // A spent slot aborts at `Cmd_attackcanceler`'s no-PP jump
-            // (`battle_script_commands.c:934`-`:939`), never reaching
-            // `seteffectprimary`, so it carries no ability interaction.
             if slot.pp > 0 {
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }
