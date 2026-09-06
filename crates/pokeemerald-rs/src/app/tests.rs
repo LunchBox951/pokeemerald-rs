@@ -59,14 +59,14 @@ fn animated_frame_returns_the_presented_tick() {
     );
 }
 
-/// The I-2 headless real-boot check (issues #168 and #175): boots an
+/// The I-2 headless real-boot check (issues #168, #175, #873): boots an
 /// `App` through `App::boot` -- `App::new`'s own body -- and asserts the
 /// frames it *presents* are the real title screen's, at exactly ticks 0,
-/// 2 and 14. See the module docs' "The headless real-boot check" for
+/// 2, 13 and 14. See the module docs' "The headless real-boot check" for
 /// what that does and does not cover, why the presented frames are read
-/// back from the null backend rather than from `App::frame`, and why
-/// tick 14 is the tick that pins the counter. Needs the real pack, like
-/// `animated_frame_returns_the_presented_tick`.
+/// back from the null backend rather than from `App::frame`, and why the
+/// back-to-back tick 13/14 pair is what pins the counter. Needs the real
+/// pack, like `animated_frame_returns_the_presented_tick`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boots_to_the_title_screen_through_app_boot() {
@@ -75,7 +75,6 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
     let expected2 = reference.compose_frame(2);
     let expected13 = reference.compose_frame(13);
     let expected14 = reference.compose_frame(14);
-    let expected15 = reference.compose_frame(15);
     assert_ne!(
         expected0.to_vec(),
         expected2.to_vec(),
@@ -84,14 +83,8 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
     assert_ne!(
         expected14.to_vec(),
         expected13.to_vec(),
-        "tick 14 must differ from tick 13 (the clouds scroll), or the tick-14 check below \
-         would pass for an App running one tick behind"
-    );
-    assert_ne!(
-        expected14.to_vec(),
-        expected15.to_vec(),
-        "tick 14 must differ from tick 15 (\"Press Start\" blinks on), or the tick-14 check \
-         below would pass for an App running one tick ahead"
+        "tick 14 must differ from tick 13 (both the cloud scroll and the \"Press Start\" blink \
+         advance on tick 14, issue #873), or the tick 13/14 checks below prove nothing"
     );
 
     let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
@@ -126,14 +119,21 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
         expected2.to_vec(),
         "the booted App must keep animating: the third step presents tick 2"
     );
-    for _ in 0..12 {
+    for _ in 0..11 {
         app.step().expect("headless step never errors");
     }
     assert_eq!(
         presented(&app),
+        expected13.to_vec(),
+        "the fourteenth step must present tick 13 exactly -- an App running one tick ahead \
+         would present tick 14 here instead (differs, asserted above)"
+    );
+    app.step().expect("headless step never errors");
+    assert_eq!(
+        presented(&app),
         expected14.to_vec(),
-        "the fifteenth step must present tick 14 exactly -- one tick either way composes a \
-         different frame (asserted above)"
+        "the fifteenth step must present tick 14 exactly -- an App running one tick behind \
+         would still be presenting tick 13 here (differs, asserted above)"
     );
 }
 
