@@ -301,17 +301,17 @@ pub enum BattleOutcome {
 /// slot each turn, so no pipeline behind [`Battle::execute_move`] ever sees a
 /// move it would have to guess at.
 ///
-/// Seven pipelines are accepted as of issue #822, tried in this order:
+/// Seven pipelines are accepted, tried in this order:
 ///
-/// | pipeline | script | added by |
-/// |---|---|---|
-/// | [`crate::hit`] | `BattleScript_EffectHit` | #125 |
-/// | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` family | #199, widened by #322 |
-/// | [`crate::drain`] | `BattleScript_EffectAbsorb` | #321 |
-/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` | #321 |
-/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` | #321 |
-/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` | #321 |
-/// | [`crate::defense_curl`] | `_EffectDefenseCurl` | #822 |
+/// | pipeline | script |
+/// |---|---|
+/// | [`crate::hit`] | `BattleScript_EffectHit` |
+/// | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` family |
+/// | [`crate::drain`] | `BattleScript_EffectAbsorb` |
+/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` |
+/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` |
+/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` |
+/// | [`crate::defense_curl`] | `_EffectDefenseCurl` |
 ///
 /// The order is a *diagnostics* choice, not a semantic one: the seven
 /// allow-lists are disjoint (each is a set of `EFFECT_*` ids, and no id

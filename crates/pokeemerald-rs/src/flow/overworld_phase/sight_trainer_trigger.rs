@@ -820,14 +820,12 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Issue #321 moved four of these rows from one screen to the
-        // *next* one, and issue #822 moved a fifth: Absorb, Splash, Focus
-        // Energy, Charge, and now Defense Curl are all executable
-        // (`battle`'s drain, flag-only, and defense-curl pipelines), so
-        // those five parties get past `ensure_executable` and stop at
-        // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet *score* the new effects, which is issue
-        // #325's slice. Both screens run before the first draw, so the
+        // Absorb, Splash, Focus Energy, Charge, and Defense Curl are all
+        // executable (`battle`'s drain, flag-only, and defense-curl
+        // pipelines), so those five parties get past `ensure_executable`
+        // and stop at `battle::battle::trainer_ai::ensure_scoreable`
+        // instead -- the trainer AI cannot yet score any of those five
+        // effects. Both screens run before the first draw, so the
         // per-frame cone check is exactly as cheap as it was.
         let expected = [
             (

@@ -1,5 +1,6 @@
-//! The four move pipelines issue #321 added, plus Defense Curl's (issue
-//! #822), driven through real turns.
+//! `battle`'s move pipelines beyond the ordinary hit and stat-change ones
+//! -- drain, fixed damage, multi-hit, flag-only, and defense-curl --
+//! driven through real turns.
 //!
 //! The arithmetic and the RNG-draw shapes are pinned at unit level inside
 //! `battle`'s own `drain` / `fixed_damage` / `multi_hit` / `flag_move` /
@@ -820,10 +821,10 @@ fn a_failed_run_still_ticks_the_charge_timer_down() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-`:2025`,
-/// issue #822): the volatile and the Defense raise both land, and the whole
-/// move draws no RNG -- no accuracy check, no critical-hit roll, no damage
-/// roll, no secondary-effect roll, matching every other raising effect.
+/// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-`:2025`):
+/// the volatile and the Defense raise both land, and the whole move draws
+/// no RNG -- no accuracy check, no critical-hit roll, no damage roll, no
+/// secondary-effect roll, matching every other raising effect.
 #[test]
 fn defense_curl_sets_its_volatile_and_raises_defense_and_draws_nothing() {
     let dex = Dex::new();

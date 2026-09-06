@@ -31,15 +31,15 @@
 //! one of the battle scripts this crate reproduces — the seven pipelines
 //! `battle::ensure_executable` composes:
 //!
-//! | pipeline | script | added by |
-//! |---|---|---|
-//! | [`hit`] | `BattleScript_EffectHit` ([`hit::is_ordinary_hit_effect`]) | #125 |
-//! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) | #199, widened by #322 |
-//! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) | #321 |
-//! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) | #321 |
-//! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) | #321 |
-//! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) | #321 |
-//! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) | #822 |
+//! | pipeline | script |
+//! |---|---|
+//! | [`hit`] | `BattleScript_EffectHit` ([`hit::is_ordinary_hit_effect`]) |
+//! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) |
+//! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) |
+//! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) |
+//! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) |
+//! | [`flag_move`] | `_Splash` / `_FocusEnergy` / `_Charge` ([`flag_move::is_flag_move_effect`]) |
+//! | [`defense_curl`] | `_EffectDefenseCurl` ([`defense_curl::is_defense_curl_effect`]) |
 //!
 //! The screen is guarded at a two-sided boundary. [`battle::Battle::new`]
 //! rejects a battle whose **opposing** mon knows anything else (its

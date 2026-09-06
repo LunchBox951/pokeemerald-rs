@@ -1,10 +1,10 @@
-//! The four move pipelines issue #321 added, plus Defense Curl's (issue
-//! #822), wired into [`Battle`]'s turn state (S-6): drain, fixed damage,
-//! multi-hit, flag-only, and defense-curl.
+//! [`Battle`]'s move pipelines beyond the ordinary hit and stat-change
+//! ones (S-6): drain, fixed damage, multi-hit, flag-only, and
+//! defense-curl.
 //!
 //! Sibling of [`super`] and split from it for the reason `oop-boundaries`
-//! gives: [`super`] owns the *dispatch* plus the two pipelines that predate
-//! this slice, and this file owns the ones that arrived after it, so neither
+//! gives: [`super`] owns the *dispatch* plus the ordinary-hit and
+//! stat-change pipelines, and this file owns the rest, so neither file
 //! grew past one screenful of concept. Both contribute `impl Battle` blocks
 //! rather than competing types.
 //!
@@ -365,7 +365,7 @@ impl Battle {
     }
 
     /// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-
-    /// `:2025`, issue #822): `setdefensecurlbit` writes
+    /// `:2025`): `setdefensecurlbit` writes
     /// [`crate::volatile::Volatiles::defense_curl`] **before**
     /// `statbuffchange` raises Defense, even when Defense is already capped
     /// and the only resulting event is [`BattleEvent::StatWontGoHigher`] —
