@@ -12,7 +12,8 @@
 //!   format_version: u32
 //!   entry_count:  u32
 //!
-//! Directory (entry_count entries, sorted ascending by `id` as raw bytes):
+//! Directory (entry_count entries, strictly ascending and unique by `id` as
+//! raw bytes):
 //!   for each entry:
 //!     id_len:  u16
 //!     id:      [u8; id_len]      UTF-8, normalized asset id (see below)
@@ -62,7 +63,10 @@
 //!   `std::fs::read_dir` (whose iteration order is *not* guaranteed by std)
 //!   can't perturb the output — see `xtask::extract`'s directory-walk
 //!   helpers, which additionally sort every `read_dir` listing before use
-//!   as defence in depth.
+//!   as defence in depth. This is also a structural contract, not only a
+//!   determinism aid: ids must be strictly ascending and unique, and
+//!   [`parse_directory`] rejects any pack whose directory is not, so a
+//!   consumer may binary-search the result without re-checking it.
 //! - **No hashmap iteration**: the writer collects entries into a `Vec` and
 //!   sorts it; nothing here is ever iterated from a `HashMap`.
 //!

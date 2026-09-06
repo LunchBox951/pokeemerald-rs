@@ -57,6 +57,10 @@ pub enum PackReadError {
     /// An entry's `kind` byte was not one of the three the format defines
     /// (0/1/2). Carries the offending byte.
     BadEntryKind(u8),
+    /// A directory entry's id did not sort strictly after the previous
+    /// entry's — the wire format requires ids strictly ascending and
+    /// unique. Carries the offending id.
+    UnsortedOrDuplicateId(String),
 }
 
 impl fmt::Display for PackReadError {
@@ -68,6 +72,9 @@ impl fmt::Display for PackReadError {
             }
             Self::Truncated => write!(f, "truncated or corrupt"),
             Self::BadEntryKind(byte) => write!(f, "invalid entry kind byte `{byte}`"),
+            Self::UnsortedOrDuplicateId(id) => {
+                write!(f, "directory entry id `{id}` is out of order or duplicated")
+            }
         }
     }
 }
@@ -133,23 +140,22 @@ impl<'a> DirectoryReader<'a> {
 
 /// Parse the header and directory out of a pack file's bytes.
 ///
-/// Entries come back in the order the directory stores them, which
-/// [`PackWriter::finish`](crate::PackWriter::finish) guarantees is ascending
-/// by `id` — a consumer may binary-search the result. A pack whose directory
-/// is *not* sorted still parses: the ordering is the writer's determinism
-/// guarantee, not a structural property this parser can restore, and a
-/// consumer that binary-searches an unsorted directory simply fails its own
-/// lookups.
+/// Entries come back strictly ascending and unique by `id`, the order
+/// [`PackWriter::finish`](crate::PackWriter::finish) writes and the wire
+/// format requires — a consumer may binary-search the result without
+/// re-checking it.
 ///
 /// # Errors
 ///
 /// [`PackReadError::BadMagic`] if the leading 8 bytes are not [`MAGIC`];
 /// [`PackReadError::UnsupportedVersion`] if the version field is not
 /// [`FORMAT_VERSION`]; [`PackReadError::BadEntryKind`] on an unrecognized
-/// entry `kind` byte; [`PackReadError::Truncated`] if any field, id, or
-/// declared payload range runs past the end of `bytes` (a non-UTF-8 id
-/// reports as truncated too — the id length it declared cannot be trusted
-/// to have landed on a real field boundary).
+/// entry `kind` byte; [`PackReadError::UnsortedOrDuplicateId`] if an entry's
+/// id does not sort strictly after the previous entry's;
+/// [`PackReadError::Truncated`] if any field, id, or declared payload range
+/// runs past the end of `bytes` (a non-UTF-8 id reports as truncated too —
+/// the id length it declared cannot be trusted to have landed on a real
+/// field boundary).
 pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadError> {
     let mut reader = DirectoryReader::new(bytes);
 
@@ -170,6 +176,12 @@ pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadErro
         let id = std::str::from_utf8(id_bytes)
             .map_err(|_| PackReadError::Truncated)?
             .to_owned();
+        if entries
+            .last()
+            .is_some_and(|previous: &DirectoryEntry| previous.id >= id)
+        {
+            return Err(PackReadError::UnsortedOrDuplicateId(id));
+        }
         let kind_tag = reader.read_u8()?;
         let offset = reader.read_usize_from_u64()?;
         let length = reader.read_usize_from_u64()?;
@@ -450,6 +462,47 @@ mod tests {
     }
 
     #[test]
+    fn unsorted_or_repeated_ids_are_rejected() {
+        let unsorted = hand_built_pack(&[
+            Fixture {
+                id: "b/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+            Fixture {
+                id: "a/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+        ]);
+        assert_eq!(
+            parse_directory(&unsorted),
+            Err(PackReadError::UnsortedOrDuplicateId("a/raw".into()))
+        );
+
+        let repeated = hand_built_pack(&[
+            Fixture {
+                id: "a/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+            Fixture {
+                id: "a/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+        ]);
+        assert_eq!(
+            parse_directory(&repeated),
+            Err(PackReadError::UnsortedOrDuplicateId("a/raw".into()))
+        );
+    }
+
+    #[test]
     fn a_non_utf8_id_is_rejected() {
         let mut bytes = hand_built_pack(&[Fixture {
             id: "x",
@@ -485,5 +538,9 @@ mod tests {
             "bad magic (not a pokeemerald-rs pack file)"
         );
         assert_eq!(PackReadError::Truncated.to_string(), "truncated or corrupt");
+        assert_eq!(
+            PackReadError::UnsortedOrDuplicateId("a/raw".into()).to_string(),
+            "directory entry id `a/raw` is out of order or duplicated"
+        );
     }
 }

@@ -4,28 +4,15 @@
 /// The 8-byte magic at the start of every pack file.
 pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 
-/// The format version the writer emits (and the only version the reader
-/// accepts).
+/// The format version the writer emits, and the only version the reader
+/// accepts.
 ///
-/// History: `1` was the original layout; `2` added the NPC sprite-sheet and
-/// palette entries issue #161 needs; `3` added the `audio/sample/*` entries
-/// issue #183 needs (S-4, `#115` child 4) — see `xtask::extract::audio_samples`'s
-/// module docs; `4` added the `audio/voicegroup/*` entries those samples
-/// back (issue #182, `#115` child 3); `5` added the `audio/song/mus_title`
-/// entry (issue #181, `#115` child 2) — see `assets::audio`'s module docs,
-/// "Versioning"; `6` added the `interface/palette/main_menu_bg` entry the
-/// no-save main menu requires (issue #216, I-3). Bumps `2` through `6` are
-/// pure content additions under the existing [`EntryKind`] tags
-/// (`audio/sample/*`, `audio/voicegroup/*`, and `audio/song/*` entries are
-/// all [`EntryKind::Raw`]; `interface/palette/*` is [`EntryKind::Palette`]).
-///
-/// `7` is the first bump that changes an existing entry's *bytes*:
-/// `title/palette/pokemon_logo` is now 224 colours rather than 256, the cut
-/// upstream's own build rule makes (`graphics_file_rules.mk`'s
-/// `-num_colors 224`) and the only part of that palette the game reads (see
-/// `xtask::extract::TITLE_SCREEN_PALETTE_CUTS`). Honouring it is what lets
-/// the ROM importer (issue #122) and `cargo xtask extract` emit identical
-/// bytes for that id. The wire layout has not changed since `1`.
+/// A version bump covers both a wire-layout change and a change to what
+/// bytes an existing id holds — both `cargo xtask extract` and the ROM
+/// importer must emit identical bytes for a given asset id, so any change
+/// either backend makes to an id's contract needs a bump the other tracks.
+/// See `xtask::extract::TITLE_SCREEN_PALETTE_CUTS` for the current
+/// `title/palette/pokemon_logo` byte contract this version enforces.
 pub const FORMAT_VERSION: u32 = 7;
 
 /// The pack's location, relative to the repository root: a top-level,

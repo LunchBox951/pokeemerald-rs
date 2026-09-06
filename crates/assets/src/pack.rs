@@ -9,9 +9,9 @@
 //!
 //! The container format belongs to [`pack_format`]: the layout, its
 //! constants, the writer `xtask::extract` drives, and the directory parser
-//! this module calls. Both sides used to spell that layout out separately so
-//! `xtask` and `assets` stayed decoupled; a shared, dependency-free format
-//! crate keeps them decoupled and leaves one file to change.
+//! this module calls. That shared, dependency-free format crate is what
+//! keeps `xtask` and `assets` decoupled from each other while leaving one
+//! file to change.
 //!
 //! The pack itself is **never committed, never a CI artifact, never
 //! embedded in a binary** (owner decision, Discussion #71). It exists only
@@ -69,7 +69,7 @@
 //!
 //! [`pack_format`]'s crate docs are the spec: the header/directory layout,
 //! the per-kind metadata, the id scheme, and the writer's determinism
-//! rules. This module used to restate it. It no longer does.
+//! rules. This module does not restate it.
 //!
 //! # Module layout
 //!
@@ -230,8 +230,9 @@ impl AssetPack {
         self.entries.iter()
     }
 
-    /// Binary-search the (id-sorted, per the format's determinism
-    /// guarantee) directory for `id`.
+    /// Binary-search the directory for `id`, relying on
+    /// [`pack_format::parse_directory`]'s guarantee that entry ids are
+    /// strictly ascending and unique.
     fn find(&self, id: &str) -> Result<&DirectoryEntry, PackError> {
         self.entries
             .binary_search_by(|e| e.id.as_str().cmp(id))
