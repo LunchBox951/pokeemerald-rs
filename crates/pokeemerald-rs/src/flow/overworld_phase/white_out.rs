@@ -27,24 +27,10 @@
 //!      floor beyond what `/` already does. [`OverworldPhase::white_out`]
 //!      reproduces exactly this: `self.save1.money /= 2`.
 //!    - `HealPlayerParty()` (`src/script_pokemon_util.c:30-59`) -- full HP,
-//!      full PP, cleared status for *every* occupied party member, not just
-//!      [`OverworldPhase::party_lead`]. This port never decodes any slot
-//!      but the selected one into a live battler, so
-//!      [`OverworldPhase::white_out`] heals that one slot through
-//!      [`battle::BattlePokemon::heal`] and every other occupied slot
-//!      through a decode/heal/merge round trip on its own saved bytes
-//!      ([`crate::party::from_save_pokemon`]/
-//!      [`crate::party::merge_into_save_pokemon`]). `battle` models no
-//!      non-volatile status and no EV-raised maximum, so this transition
-//!      completes each slot's heal on its retained backing record directly:
-//!      clearing its status word and restoring its `hp` to its own
-//!      `max_hp`; the next merge/save therefore cannot restore the
-//!      pre-white-out status or file a healed slot as damaged. With the
-//!      whole party healed, an earlier slot the continue-time scan
-//!      (`SetBattlePartyIds`) skipped as fainted may now be the first
-//!      usable one, so [`crate::party::select_active_battler`] is re-run
-//!      against the healed records afterward, exactly as a fresh battle's
-//!      own re-scan upstream would.
+//!      full PP, and cleared status for every occupied party member, not
+//!      just the lead ([`crate::party::select_active_battler`]'s own doc
+//!      covers the post-heal re-scan for the newly eligible lead this
+//!      requires).
 //!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
 //!      -- clears field-effect/avatar transition state this port has no
 //!      counterpart for (cycling road, Safari Zone, etc. flags this port
@@ -126,16 +112,11 @@ impl OverworldPhase {
     /// same as [`OverworldPhase::begin_wild_battle`]'s own defensive `None`
     /// arm).
     ///
-    /// Every other occupied saved slot is healed too (module docs), and
-    /// [`crate::party::select_active_battler`] is re-run against the
-    /// healed records once that is done: a slot that was fainted (and so
-    /// skipped) when continue last selected an active battler may now be
-    /// the first usable one, exactly as upstream's own `SetBattlePartyIds`
-    /// would find at the next battle. The outgoing lead's own record is
-    /// merged before this re-scan can run, not just healed in place, so a
-    /// reselection never drops the session's own PP heal, EVs, or
-    /// experience gained on it (they would otherwise live only on
-    /// [`OverworldPhase::party_lead`], which the reselection may replace).
+    /// Every occupied slot is healed too, then
+    /// [`crate::party::select_active_battler`] re-scans for the active
+    /// battler (that fn's own doc covers `SetBattlePartyIds`) -- merging
+    /// the outgoing lead first so reselection cannot drop its session
+    /// heal, EVs, or experience.
     ///
     /// A `last_heal_location` that cannot be resolved to a known map -- in
     /// practice only a hand-edited save: even
