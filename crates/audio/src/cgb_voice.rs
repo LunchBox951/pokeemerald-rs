@@ -104,11 +104,8 @@ impl Oscillator {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
 
-    /// Re-applies a `CGB_CHANNEL_MO_VOL` volume-write trigger
-    /// (`m4a.c:1219-1226`): reloads channel 1's sweep and rechecks overflow,
-    /// resets channel 4's LFSR, and no-ops on channel 2 and the wave channel.
-    ///
-    /// Returns whether the channel still plays after the trigger.
+    /// Re-applies a `CGB_CHANNEL_MO_VOL` volume-write trigger (`m4a.c:1219-1226`)
+    /// to the channel's own state and returns whether it still plays.
     fn retrigger(&mut self) -> bool {
         match self {
             Self::Square(square) => square.retrigger(),

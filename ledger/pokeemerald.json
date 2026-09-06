@@ -26751,7 +26751,7 @@
         },
         "CgbOscOff": {
           "fold_target": "crates/audio/src/cgb_envelope.rs",
-          "reason": "CgbOscOff's immediate-silence effect is absorbed by CgbEnvelope::retire (called on a channel-1 sweep overflow); this crate has no hardware NRxx registers to zero (S-3 slice 2).",
+          "reason": "CgbOscOff's immediate-silence effect is absorbed by CgbEnvelope::retire when a note's envelope ends. A channel-1 sweep overflow does not reach it: that mutes the hardware channel alone (CgbVoice::hardware_muted) while the software voice stays live for a later trigger, since CgbSound keeps SOUND_CHANNEL_SF_ON for the whole envelope (m4a.c:1055-1058 is the only clearer). This crate has no hardware NRxx registers to zero (S-3).",
           "spec": "S-3",
           "status": "folded"
         },
