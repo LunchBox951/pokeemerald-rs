@@ -79,10 +79,6 @@ pub fn max_iv_mon_with_personality(
 /// Personality 25 is odd (secondary ability slot) yet still lands on the
 /// neutral Hardy nature (`25 % 25 == 0`), like [`max_iv_mon`]'s default --
 /// see [`slow_runner_rattata`].
-#[allow(
-    dead_code,
-    reason = "only turn_engine's escape/move_selection tests use this; wild_battle.rs's own test binary compiles this shared module too"
-)]
 pub const SECONDARY_ABILITY_PERSONALITY: u32 = 25;
 
 /// The L5 Rattata every escape/move-selection runner fixture builds, on
@@ -90,10 +86,6 @@ pub const SECONDARY_ABILITY_PERSONALITY: u32 = 25;
 /// Pyramid, upstream's `TryRunFromBattle` escapes a Run Away holder
 /// unconditionally, bypassing the plain speed/run-tries branch these tests
 /// assert (`battle_util.c:427-447`).
-#[allow(
-    dead_code,
-    reason = "only turn_engine's escape/move_selection tests use this; wild_battle.rs's own test binary compiles this shared module too"
-)]
 pub fn slow_runner_rattata(dex: &Dex) -> BattlePokemon {
     let runner =
         max_iv_mon_with_personality(dex, 19, 5, vec![MoveId(33)], SECONDARY_ABILITY_PERSONALITY);
