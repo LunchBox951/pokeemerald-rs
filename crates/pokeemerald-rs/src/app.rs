@@ -129,7 +129,7 @@ use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
 use crate::main_menu::MainMenuItem;
-use crate::music::{MusicContext, MusicPlayer};
+use crate::music::{MusicContext, MusicError, MusicPlayer};
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 use battle::BattleOutcome;
@@ -445,6 +445,9 @@ impl App {
     ) -> Option<MusicPlayer> {
         let pack = match assets::AssetPack::load_default() {
             Ok(pack) => pack,
+            // A bare `PackError` carries no subsystem prefix of its own, so
+            // this log line needs one -- unlike the `MusicError` branch
+            // below ([`title_music_start_failure_message`]'s doc comment).
             Err(err) => {
                 eprintln!("music: {err} -- the title screen will play without music");
                 return None;
@@ -453,7 +456,7 @@ impl App {
         match MusicPlayer::start_from_pack_with_context(context, &pack, "mus_title", open_audio) {
             Ok(player) => Some(player),
             Err(err) => {
-                eprintln!("music: {err} -- the title screen will play without music");
+                eprintln!("{}", title_music_start_failure_message(&err));
                 None
             }
         }
@@ -755,6 +758,16 @@ fn describe_newly_pressed(state: ButtonState) -> Option<String> {
         }
     }
     Some(format!("input: {}", names.join("+")))
+}
+
+/// Format the recovery log line [`App::start_title_music`]'s song-start
+/// branch emits for `err`, without re-adding [`MusicError`]'s own `music: `
+/// prefix (its `Display` impl, `music.rs`, already writes it).
+///
+/// Kept pure (no I/O) so it is unit-testable; [`App::start_title_music`] is
+/// the only caller.
+fn title_music_start_failure_message(err: &MusicError) -> String {
+    format!("{err} -- the title screen will play without music")
 }
 
 #[cfg(test)]

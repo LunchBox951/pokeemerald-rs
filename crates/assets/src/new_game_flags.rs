@@ -46,11 +46,12 @@
 //! shape [`crate::map_headers`]'s generated table uses for its `MUS_*`/
 //! `MAPSEC_*` comments.
 //!
-//! The tests below pin the exact count (159) plus a spread of individual
-//! entries (including both `FLAG_UNKNOWN_0x363`/`FLAG_UNKNOWN_0x393` — real
-//! upstream `setflag` operands despite the name — and the first/last
-//! entries) against their cited `flags.h` line numbers, so a corrupted
-//! transcription can't silently drift `(behavioral-fidelity)`.
+//! `reset_map_flags_match_the_upstream_script_entry_for_entry` (in `mod
+//! tests`) pins every one of the 159 ids, by value *and* position, against a
+//! second, independent transcription of the same upstream source; see its
+//! doc comment for why the exact count, ordinary-range, uniqueness, and
+//! spot-check tests alone cannot catch arbitrary drift
+//! `(behavioral-fidelity)`.
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM`
 /// (`include/constants/flags.h:811`, `0x2F8`) — hides the rival's bedroom
@@ -350,9 +351,10 @@ mod tests {
 
     /// Spot-checks a spread of entries (first, last, both `FLAG_UNKNOWN_*`
     /// oddities, and the `DoD`-pinned rival-bedroom flag) against their cited
-    /// `include/constants/flags.h` line numbers, so a transcription slip
-    /// anywhere in the 159-entry table is caught even without re-deriving
-    /// the whole list `(behavioral-fidelity)`.
+    /// `include/constants/flags.h` line numbers, for direct diagnostics on
+    /// those notable entries.
+    /// `reset_map_flags_match_the_upstream_script_entry_for_entry` below is
+    /// what pins the whole table.
     #[test]
     fn reset_map_flags_spot_checks_match_flags_h() {
         // include/constants/flags.h:104
@@ -373,6 +375,53 @@ mod tests {
                                                  // include/constants/flags.h:96 -- the last setflag before `call
                                                  // EventScript_ResetAllBerries` (new_game.inc:274 vs :275).
         assert_eq!(RESET_MAP_FLAGS[158], 0x50); // ..._SKY_PILLAR_TOP_RAYQUAZA_STILL
+    }
+
+    /// The 159 `setflag` operands of `EventScript_ResetAllMapFlags`
+    /// (`data/scripts/new_game.inc:116-274`) in script order, transcribed
+    /// independently of [`RESET_MAP_FLAGS`] by the derivation the module docs give.
+    #[rustfmt::skip]
+    const UPSTREAM_SETFLAG_OPERANDS: [u16; 159] = [
+        0x056, 0x301, 0x302, 0x303, 0x2D1, 0x379, 0x32B, 0x32C,
+        0x346, 0x2D6, 0x363, 0x2DB, 0x2DC, 0x32E, 0x34C, 0x364,
+        0x2E3, 0x371, 0x2E2, 0x2E4, 0x2E5, 0x2E7, 0x2E8, 0x38A,
+        0x345, 0x306, 0x37F, 0x308, 0x309, 0x30A, 0x30B, 0x30C,
+        0x30D, 0x338, 0x2E9, 0x2EA, 0x2F8, 0x2D2, 0x2DE, 0x351,
+        0x32F, 0x315, 0x316, 0x317, 0x318, 0x2DA, 0x31D, 0x31E,
+        0x31F, 0x385, 0x386, 0x387, 0x388, 0x323, 0x322, 0x326,
+        0x328, 0x329, 0x3D8, 0x2FE, 0x33E, 0x362, 0x365, 0x33C,
+        0x33D, 0x33F, 0x35B, 0x355, 0x349, 0x34D, 0x34E, 0x35C,
+        0x35D, 0x343, 0x348, 0x350, 0x353, 0x312, 0x3CD, 0x330,
+        0x366, 0x368, 0x36D, 0x3E2, 0x36F, 0x37B, 0x370, 0x36E,
+        0x327, 0x3D7, 0x376, 0x374, 0x375, 0x3C1, 0x378, 0x2F0,
+        0x2F5, 0x31A, 0x31B, 0x37C, 0x380, 0x381, 0x382, 0x38D,
+        0x2EC, 0x38E, 0x38F, 0x393, 0x358, 0x390, 0x2FD, 0x398,
+        0x399, 0x39A, 0x39B, 0x2CF, 0x39D, 0x3A1, 0x3A2, 0x3A6,
+        0x3AA, 0x3AC, 0x3A0, 0x3E0, 0x342, 0x3B0, 0x3B1, 0x3B3,
+        0x3B4, 0x2ED, 0x35A, 0x2EF, 0x3B6, 0x3C7, 0x3C8, 0x2D7,
+        0x3D3, 0x3DF, 0x3E3, 0x3E4, 0x3E5, 0x3E6, 0x356, 0x33A,
+        0x33B, 0x36C, 0x36B, 0x36A, 0x337, 0x2F4, 0x35E, 0x35F,
+        0x340, 0x2FB, 0x2EB, 0x2FF, 0x319, 0x357, 0x050,
+    ];
+
+    #[test]
+    fn reset_map_flags_match_the_upstream_script_entry_for_entry() {
+        assert_eq!(
+            RESET_MAP_FLAGS.len(),
+            UPSTREAM_SETFLAG_OPERANDS.len(),
+            "one entry per upstream `setflag`"
+        );
+        for (i, (&got, &want)) in RESET_MAP_FLAGS
+            .iter()
+            .zip(UPSTREAM_SETFLAG_OPERANDS.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                got, want,
+                "RESET_MAP_FLAGS[{i}] is {got:#X}, but upstream setflag #{i} \
+                 is {want:#X}"
+            );
+        }
     }
 
     /// Upstream's `setflag` list never repeats a flag id (each `FLAG_*` name
@@ -400,7 +449,7 @@ mod tests {
     /// name -> id table. That module looked each id up in
     /// `include/constants/flags.h` on its own, so agreement here means two
     /// independent transcriptions of the same header line -- the same
-    /// mutual check `object_event_flags_agree_with_reset_map_flags` already
+    /// mutual check `shared_entries_agree_with_reset_map_flags` already
     /// applies to the reset list.
     #[test]
     fn truck_intro_flags_agree_with_the_object_event_flag_table() {

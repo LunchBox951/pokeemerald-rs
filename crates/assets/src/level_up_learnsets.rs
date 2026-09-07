@@ -5549,6 +5549,40 @@ mod tests {
         );
     }
 
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every species' packed sequence, each closed by the packed
+    /// terminator, as little-endian bytes in table order.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        for learnset in LevelUpLearnsets::new().iter() {
+            for entry in learnset {
+                out.extend_from_slice(&entry.packed().to_le_bytes());
+            }
+            out.extend_from_slice(&PACKED_END.to_le_bytes());
+        }
+        out
+    }
+
+    /// The expected digest was computed from upstream
+    /// `src/data/pokemon/level_up_learnsets.h`'s per-species arrays and
+    /// `src/data/pokemon/level_up_learnset_pointers.h`'s `gLevelUpLearnsets`
+    /// mapping, packed and terminated the same way this module packs its own
+    /// table, and independently of it.
+    #[test]
+    fn every_species_sequence_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "a4b371bdcf5636ff",
+            "level-up learnset table diverges from the canonical sequences",
+        );
+    }
+
     #[test]
     fn learnsets_are_non_empty_and_level_ordered() {
         let learnsets = LevelUpLearnsets::new();
