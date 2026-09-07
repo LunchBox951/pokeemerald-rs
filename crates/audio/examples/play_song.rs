@@ -114,23 +114,25 @@ fn main() -> ExitCode {
 /// How to react to an [`AudioOutput::open`] failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OpenOutcome {
-    /// No default output device exists: the expected CI/headless case.
+    /// No output device could be reached: the expected CI/headless case.
     ExpectedHeadless,
-    /// A device was found, but querying, configuring, or building its stream
-    /// failed.
+    /// A device was reached, but querying, configuring, or building its
+    /// stream failed.
     PlaybackSetupFailure,
 }
 
-/// Classify an [`AudioOutput::open`] error so only the true headless case
-/// exits cleanly.
+/// Classify an [`AudioOutput::open`] error so only the headless case exits
+/// cleanly.
+///
+/// The split is [`PlatformError::is_audio_device_unavailable`]'s, which owns
+/// the backend detail: a headless box need not report
+/// [`PlatformError::NoAudioDevice`], since cpal's ALSA host hands out a
+/// logical `default` device that only fails once queried.
 fn classify_open_error(error: &PlatformError) -> OpenOutcome {
-    match error {
-        PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
-        // Every other variant, `Audio(cpal::Error)` included, means a real
-        // device was found but couldn't be used. `cpal` is not a dependency
-        // of this crate, so the tests below exercise this arm through
-        // `UnsupportedAudioConfig`, which takes the same branch.
-        _ => OpenOutcome::PlaybackSetupFailure,
+    if error.is_audio_device_unavailable() {
+        OpenOutcome::ExpectedHeadless
+    } else {
+        OpenOutcome::PlaybackSetupFailure
     }
 }
 
@@ -369,9 +371,10 @@ mod tests {
 
     #[test]
     fn an_unsupported_audio_config_is_a_playback_setup_failure() {
-        // `PlatformError::Audio(cpal::Error)` takes the same wildcard branch
-        // as this variant, but `cpal` is not a dependency of this crate, so
-        // it cannot be constructed here to test directly.
+        // The `PlatformError::Audio(cpal::Error)` kinds that split either
+        // way are covered by `is_audio_device_unavailable`'s own tests;
+        // `cpal` is not a dependency of this crate, so they cannot be
+        // constructed here.
         assert_eq!(
             classify_open_error(&PlatformError::UnsupportedAudioConfig),
             OpenOutcome::PlaybackSetupFailure
