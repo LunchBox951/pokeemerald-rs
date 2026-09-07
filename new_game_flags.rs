@@ -377,9 +377,17 @@ mod tests {
         assert_eq!(RESET_MAP_FLAGS[158], 0x50); // ..._SKY_PILLAR_TOP_RAYQUAZA_STILL
     }
 
-    /// The 159 `setflag` operands of `EventScript_ResetAllMapFlags`
-    /// (`data/scripts/new_game.inc:116-274`) in script order, transcribed
-    /// independently of [`RESET_MAP_FLAGS`] by the derivation the module docs give.
+    /// Pins every one of the 159 ids -- value *and* position -- against a
+    /// second, independent transcription of the same upstream source: the
+    /// `setflag` operands of `EventScript_ResetAllMapFlags`
+    /// (`data/scripts/new_game.inc:116-274`) in script order, each name
+    /// resolved through its `#define FLAG_X <hex literal>` line in
+    /// `include/constants/flags.h`. The count/range/uniqueness tests above
+    /// are structural: they all still hold if an entry is swapped for
+    /// another in-range, unused id, or if two entries trade places, so on
+    /// their own they leave 152 of the 159 entries free to drift. Re-derive
+    /// this list exactly the way the module docs describe re-deriving
+    /// [`RESET_MAP_FLAGS`] itself `(behavioral-fidelity)`.
     #[rustfmt::skip]
     const UPSTREAM_SETFLAG_OPERANDS: [u16; 159] = [
         0x056, 0x301, 0x302, 0x303, 0x2D1, 0x379, 0x32B, 0x32C,
