@@ -36,8 +36,7 @@ pub struct RevisionProfile {
 /// Pokemon Emerald, US, revision 0. The only build the importer supports.
 ///
 /// Other regions and revisions move data around, so each would need its own
-/// profile with its own verified addresses. None exist yet, and none are
-/// planned before the US build imports end to end.
+/// profile with its own verified addresses.
 pub const EMERALD_US_REV0: RevisionProfile = RevisionProfile {
     name: "Pokemon Emerald (US) rev 0",
     sha1: Digest::from_hex("f3ae088181bf583e55daf962a92bb46f4f1d07b7"),

@@ -62,8 +62,8 @@
 //! # Determinism
 //!
 //! Byte-for-byte reproducibility across runs (on the same upstream ref) is
-//! a hard requirement (issue #81's Definition of Done). This format and its
-//! writer avoid every common source of nondeterminism:
+//! a hard requirement. This format and its writer avoid every common
+//! source of nondeterminism:
 //! - **No timestamps, no host/filesystem metadata** anywhere in the format.
 //! - **Directory entries are sorted by id** ([`PackWriter::finish`]) rather
 //!   than written in insertion order, so callers walking directories with
@@ -79,16 +79,13 @@
 //!
 //! # Asset ids: normalized, not decomp-shaped
 //!
-//! Per the owner's Discussion #71 decision, ids name *what the asset is*
-//! (e.g. `"tileset/general/tiles"`, `"sprite/brendan/walking"`), not
-//! upstream's linker symbols (`gTilesetTiles_General`) or raw source paths
-//! (`data/tilesets/primary/general/tiles.png`). The intent (spelled out in
-//! the discussion) is that a future ROM-backed extractor can produce the
-//! exact same ids from a completely different input, so `crates/assets`'s
-//! pack consumer never has to change when policy A (the decomp-checkout
-//! backend) is eventually joined or replaced by policy C (a ROM-backed
-//! `--import-rom` backend). See `xtask::extract`'s module docs for the
-//! concrete id scheme that pipeline uses.
+//! Ids name *what the asset is* (e.g. `"tileset/general/tiles"`,
+//! `"sprite/brendan/walking"`), not upstream's linker symbols
+//! (`gTilesetTiles_General`) or raw source paths
+//! (`data/tilesets/primary/general/tiles.png`) — so a consumer never has to
+//! change when the extractor backend producing them does. See
+//! `xtask::extract`'s module docs for the concrete id scheme that pipeline
+//! uses.
 //!
 //! # Status
 //!
