@@ -5,15 +5,10 @@
 //! wired into this slice yet -- deferred, still in v1 scope (the issue's own
 //! `DoD` wording: "a direct msgbox-style script subset is enough").
 //!
-//! [`script_text`] returns `None` for every script this table doesn't name
-//! (including the literal `"0x0"` no-script sentinel): pressing A while
-//! facing that object event still selects it
-//! ([`engine::overworld::facing_object_event`] found a real, visible
-//! object), but no dialog opens -- the same observable outcome upstream's
-//! own `TryStartInteractionScript` produces for a `NULL` script
-//! (`GetInteractedObjectEventScript` returns `NULL`, so nothing happens),
-//! and, for a script this table simply hasn't been taught yet, an honest
-//! "not modelled" rather than a fabricated line.
+//! [`script_text`] returns `None` for every script this table doesn't name,
+//! including the `"0x0"` no-script sentinel; the caller owns the
+//! sentinel-versus-unmodelled distinction
+//! (`crate::flow::overworld_phase::step::InteractionOutcome`).
 
 use engine::text::Token;
 

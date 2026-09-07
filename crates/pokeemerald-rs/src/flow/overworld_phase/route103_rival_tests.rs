@@ -267,6 +267,35 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
     );
 }
 
+/// Issue #435 regression, the [`InteractionOutcome::RivalBattle`] arm of the
+/// same fix (see `step_tests::a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player`
+/// and [`OverworldPhase::step`]'s own "NPC dialog routing" section for the
+/// upstream citations): a perpendicular direction held alongside the A
+/// press must not turn the player away from the rival before the
+/// pre-movement interaction lookup runs.
+#[test]
+fn facing_the_rival_with_a_perpendicular_direction_starts_the_battle_without_turning() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.party_lead = Some(overwhelming_treecko_lead());
+    let start_position = phase.player.position();
+
+    // North is perpendicular to the East facing `route_103_phase_facing_the_rival`
+    // sets up -- a step in that direction would turn the player away from
+    // the rival if movement ran before the interaction lookup.
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert!(
+        phase.is_rival_battle_active(),
+        "the pre-movement facing (still East) must still find the rival"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the interaction must preempt the turn, not just the step"
+    );
+    assert_eq!(phase.player.position(), start_position, "and the step too");
+}
+
 /// Holding A through the frame after the battle starts must not re-run the
 /// interaction lookup or start a second battle. Note what this does and
 /// does not prove: a *held* A is not a fresh edge, so
