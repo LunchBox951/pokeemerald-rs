@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::AudioOutput;
+use platform::{AudioOutput, PlatformError};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -48,8 +48,18 @@ fn main() -> ExitCode {
     let mut output = match AudioOutput::open(RING_CAPACITY_FRAMES) {
         Ok(output) => output,
         Err(err) => {
-            println!("no audio device ({err}); nothing to play — this is expected in CI/headless");
-            return ExitCode::SUCCESS;
+            return match classify_open_error(&err) {
+                OpenOutcome::ExpectedHeadless => {
+                    println!(
+                        "no audio device ({err}); nothing to play — this is expected in CI/headless"
+                    );
+                    ExitCode::SUCCESS
+                }
+                OpenOutcome::PlaybackSetupFailure => {
+                    eprintln!("audio playback setup failed: {err}");
+                    ExitCode::FAILURE
+                }
+            };
         }
     };
     output.start().expect("start playback");
@@ -99,6 +109,29 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// How to react to an [`AudioOutput::open`] failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenOutcome {
+    /// No default output device exists: the expected CI/headless case.
+    ExpectedHeadless,
+    /// A device was found, but querying, configuring, or building its stream
+    /// failed.
+    PlaybackSetupFailure,
+}
+
+/// Classify an [`AudioOutput::open`] error so only the true headless case
+/// exits cleanly.
+fn classify_open_error(error: &PlatformError) -> OpenOutcome {
+    match error {
+        PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
+        // Every other variant, `Audio(cpal::Error)` included, means a real
+        // device was found but couldn't be used. `cpal` is not a dependency
+        // of this crate, so the tests below exercise this arm through
+        // `UnsupportedAudioConfig`, which takes the same branch.
+        _ => OpenOutcome::PlaybackSetupFailure,
+    }
 }
 
 /// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
@@ -318,12 +351,32 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use platform::AudioOutput;
+    use platform::{AudioOutput, PlatformError};
 
     use super::{
-        device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError,
-        RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        classify_open_error, device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain,
+        DrainError, OpenOutcome, PushError, RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
+        DEVICE_TAIL_MAX,
     };
+
+    #[test]
+    fn no_audio_device_is_the_expected_headless_case() {
+        assert_eq!(
+            classify_open_error(&PlatformError::NoAudioDevice),
+            OpenOutcome::ExpectedHeadless
+        );
+    }
+
+    #[test]
+    fn an_unsupported_audio_config_is_a_playback_setup_failure() {
+        // `PlatformError::Audio(cpal::Error)` takes the same wildcard branch
+        // as this variant, but `cpal` is not a dependency of this crate, so
+        // it cannot be constructed here to test directly.
+        assert_eq!(
+            classify_open_error(&PlatformError::UnsupportedAudioConfig),
+            OpenOutcome::PlaybackSetupFailure
+        );
+    }
 
     #[test]
     fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
