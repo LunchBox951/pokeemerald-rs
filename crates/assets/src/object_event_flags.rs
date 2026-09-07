@@ -39,7 +39,7 @@
 //! [`RESET_MAP_FLAGS`](crate::new_game_flags::RESET_MAP_FLAGS)), so this
 //! table and that one cross-check each other: a flag present in both must
 //! agree on its numeric id (pinned by
-//! `object_event_flags_agree_with_reset_map_flags`).
+//! `shared_entries_agree_with_reset_map_flags`).
 
 /// `(FLAG_* name, numeric id)` pairs for every `ObjectEvent::flag` value
 /// reachable from a map this port's extraction pipeline bundles (module

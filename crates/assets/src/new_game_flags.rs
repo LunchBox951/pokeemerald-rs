@@ -449,7 +449,7 @@ mod tests {
     /// name -> id table. That module looked each id up in
     /// `include/constants/flags.h` on its own, so agreement here means two
     /// independent transcriptions of the same header line -- the same
-    /// mutual check `object_event_flags_agree_with_reset_map_flags` already
+    /// mutual check `shared_entries_agree_with_reset_map_flags` already
     /// applies to the reset list.
     #[test]
     fn truck_intro_flags_agree_with_the_object_event_flag_table() {
