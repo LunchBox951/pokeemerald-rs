@@ -265,7 +265,7 @@ fn the_memacc_conditional_loop_round_trips() {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            target: 5,
+            target: 4, // the trailing `Fine`, this track's last valid index.
         },
         SongEvent::Goto(1),
         SongEvent::Fine,
@@ -479,7 +479,15 @@ mod canonical_waits {
 
     #[test]
     fn a_target_past_the_end_is_left_alone() {
-        assert_eq!(canon(vec![SongEvent::Goto(99)]), vec![SongEvent::Goto(99)]);
+        // Straight to `canonicalize_waits`, not through `canon` (`song()` /
+        // `Song::new`): an out-of-range target is now also `Song::new`'s own
+        // concern (`check_jump_targets`, issue #868), so routing this one
+        // through `song()` would hit that validation instead of exercising
+        // the rewrite this test targets.
+        assert_eq!(
+            super::super::canonical::canonicalize_waits(&[SongEvent::Goto(99)]),
+            vec![SongEvent::Goto(99)]
+        );
     }
 
     #[test]
@@ -493,4 +501,135 @@ mod canonical_waits {
             vec![SongEvent::Wait(2), SongEvent::Goto(1)]
         );
     }
+}
+
+/// [`SongEvent::Goto`] and [`SongEvent::MemAccBranch`] targets are
+/// documented as event indices into their own track (module docs,
+/// "Looping"); a target at or past the track's own event count cannot
+/// address one. Mirrors
+/// [`super::super::sample::tests::constructor_rejects_a_loop_start_at_or_past_the_data_length`].
+#[test]
+fn the_constructor_rejects_a_jump_target_at_or_past_the_track_length() {
+    for target in [2u32, 3, u32::MAX] {
+        let goto_track = vec![
+            SongEvent::Note {
+                key: 60,
+                velocity: 127,
+                gate: 24,
+            },
+            SongEvent::Goto(target),
+        ];
+        let branch_track = vec![
+            SongEvent::Note {
+                key: 60,
+                velocity: 127,
+                gate: 24,
+            },
+            SongEvent::MemAccBranch {
+                condition: MemAccCondition::Eq,
+                address: 0,
+                data: 1,
+                target,
+            },
+        ];
+        for track in [goto_track, branch_track] {
+            let event_count = u32::try_from(track.len()).unwrap();
+            assert_eq!(
+                Song::new(
+                    VoiceGroupId("audio/voicegroup/title".to_owned()),
+                    0,
+                    None,
+                    vec![track],
+                ),
+                Err(AudioError::JumpTargetOutOfRange {
+                    track_index: 0,
+                    event_index: 1,
+                    target,
+                    event_count,
+                })
+            );
+        }
+    }
+}
+
+/// Decode is the trust boundary for pack bytes, so it must reject the same
+/// out-of-range jump target its constructor does -- as
+/// [`super::super::sample::tests::decode_rejects_a_loop_start_at_or_past_the_decoded_data_length`]
+/// already does for a sample's loop start. Both target-carrying events sit
+/// last in their (only) track, so the trailing 4 bytes are the target.
+#[test]
+fn decode_rejects_a_goto_target_past_the_decoded_track_length() {
+    let mut bytes = song(vec![vec![
+        SongEvent::Note {
+            key: 60,
+            velocity: 100,
+            gate: 24,
+        },
+        SongEvent::Goto(0),
+    ]])
+    .encode();
+    let target_at = bytes.len() - 4;
+    bytes[target_at..].copy_from_slice(&9_999u32.to_le_bytes());
+    assert_eq!(
+        Song::decode(&bytes),
+        Err(AudioError::JumpTargetOutOfRange {
+            track_index: 0,
+            event_index: 1,
+            target: 9_999,
+            event_count: 2,
+        })
+    );
+}
+
+#[test]
+fn decode_rejects_a_memaccbranch_target_past_the_decoded_track_length() {
+    let mut bytes = song(vec![vec![
+        SongEvent::Note {
+            key: 60,
+            velocity: 100,
+            gate: 24,
+        },
+        SongEvent::MemAccBranch {
+            condition: MemAccCondition::Eq,
+            address: 0,
+            data: 1,
+            target: 0,
+        },
+    ]])
+    .encode();
+    let target_at = bytes.len() - 4;
+    bytes[target_at..].copy_from_slice(&9_999u32.to_le_bytes());
+    assert_eq!(
+        Song::decode(&bytes),
+        Err(AudioError::JumpTargetOutOfRange {
+            track_index: 0,
+            event_index: 1,
+            target: 9_999,
+            event_count: 2,
+        })
+    );
+}
+
+/// A backward [`SongEvent::Goto`] and a self-targeting
+/// [`SongEvent::MemAccBranch`] both address an event strictly within their
+/// track (indices below `event_count`), so both remain accepted.
+#[test]
+fn a_song_with_backward_and_self_jump_targets_round_trips() {
+    let track = vec![
+        SongEvent::Note {
+            key: 60,
+            velocity: 100,
+            gate: 24,
+        },
+        SongEvent::Goto(0), // backward: back to the track's first event.
+        SongEvent::MemAccBranch {
+            condition: MemAccCondition::Eq,
+            address: 0,
+            data: 1,
+            target: 2, // self: this event's own index.
+        },
+        SongEvent::Fine,
+    ];
+    let song = song(vec![track.clone()]);
+    assert_eq!(Song::decode(&song.encode()).unwrap().tracks()[0], track);
 }

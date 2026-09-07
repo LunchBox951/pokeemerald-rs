@@ -212,19 +212,15 @@ impl OverworldPhase {
     /// any of it, so a B press that closes a box cannot also do something
     /// else on the same frame.
     ///
-    /// Otherwise, after this frame's movement is applied (so a same-frame
-    /// turn-to-face is already reflected), a fresh A-press checks
-    /// [`facing_object_event`] against this frame's `runtime` (upstream
-    /// `GetInFrontOfPlayerPosition` + `TryStartInteractionScript`): a
-    /// visible object event directly ahead whose `script`
-    /// [`npc_scripts::script_text`] recognizes opens a [`NpcDialog`]. An
-    /// object event with no recognized script (including the `"0x0"`
-    /// no-script sentinel) is still found and selected, but opens no dialog
-    /// -- the same observable no-op upstream produces for a `NULL` script
-    /// (module docs on [`npc_scripts::script_text`]). Checked before the
-    /// warp evaluation below (a borrow-checker consequence of sharing one
-    /// `runtime`, not an upstream-observable ordering choice -- see that
-    /// code's own comment), and gated on the player being between steps --
+    /// Otherwise, a fresh A-press resolves [`facing_object_event`] against
+    /// `self.player`'s pre-movement facing, ahead of this frame's movement:
+    /// upstream reaches `TryStartInteractionScript` inside
+    /// `ProcessPlayerFieldInput`, and `PlayerStep` never runs once that
+    /// returns `TRUE` (`field_control_avatar.c:143-145`, `:172`,
+    /// `overworld.c:1444-1455`). A script [`npc_scripts::script_text`]
+    /// recognizes opens an [`NpcDialog`]; any other script still preempts
+    /// the frame, and only the `"0x0"` sentinel finds nothing
+    /// ([`InteractionOutcome`]). Gated on the player being between steps --
     /// see [`OverworldPhase::interaction_tokens_this_frame`].
     ///
     /// # Wild encounters (issue #169)
@@ -393,6 +389,18 @@ impl OverworldPhase {
                     trigger_arrow_warp(&runtime, x, y, self.player.elevation(), d)
                 });
 
+            // NPC interaction, resolved before `advance_or_skip_for_preempt`
+            // below can turn or step the player (contract: `step`'s "NPC
+            // dialog routing" section). Skipped when `preempting_arrow_trigger`
+            // already fired, as `TryArrowWarp` returns ahead of the
+            // interaction check. The tokens belong to the pre-warp map, so a
+            // same-frame warp below drops them rather than opening the
+            // departed map's dialog on the destination.
+            let interaction = preempting_arrow_trigger
+                .is_none()
+                .then(|| self.interaction_tokens_this_frame(buttons, &runtime))
+                .flatten();
+
             // Latched here (issue #177), tested only after `runtime`'s last
             // borrow below -- see `advance_or_skip_for_preempt`'s own doc
             // comment for why a crossing can't be applied to `self` right
@@ -404,6 +412,8 @@ impl OverworldPhase {
                 pack: &self.connection_pack,
                 source: self.pack_source,
             };
+            // `interaction` preempts movement too (issue #435) -- see its
+            // own comment above.
             let crossed_to = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
@@ -411,23 +421,8 @@ impl OverworldPhase {
                 &runtime,
                 &maps,
                 &self.save1.event_data,
-                preempting_arrow_trigger,
+                preempting_arrow_trigger.is_some() || interaction.is_some(),
             );
-
-            // NPC interaction (module docs' "NPC dialog routing" section):
-            // found against this frame's `runtime` here (immutable borrow of
-            // `self`, so it can be computed before the warp handling below
-            // still needs that same `runtime`), but the dialog itself isn't
-            // opened until after that borrow ends (opening needs `&mut
-            // self`). The tokens are resolved against the PRE-warp map, so
-            // if this same frame also fires a warp below, they are dropped
-            // rather than opened -- opening the departed map's dialog on the
-            // destination map would be wrong. Unreachable with today's data
-            // (no bundled map has a scripted NPC adjacent to a warp tile,
-            // and the rivals next to warps are hidden and script-less), but
-            // guarded rather than assumed so a future map/script addition
-            // can't silently trip it.
-            let interaction = self.interaction_tokens_this_frame(buttons, &runtime);
 
             // Upstream's `tookStep` gate, in this port's terms: the latched
             // landing is only tested once its walk animation has drained
@@ -623,7 +618,9 @@ impl OverworldPhase {
                     }
                 }
                 Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
-                None => {}
+                // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
+                // own doc comment) -- fail closed, nothing to render.
+                Some(InteractionOutcome::Unmodelled) | None => {}
             }
         }
 
@@ -649,15 +646,12 @@ impl OverworldPhase {
     ///    `tookStep`.
     /// 2. **The A press must be a fresh edge** (`newKeys`, not `heldKeys`).
     ///
-    /// One-frame delta, documented rather than papered over: because this
-    /// port applies the frame's movement *before* reading input (see
-    /// [`OverworldPhase::step`]), an A press on the same frame a step
-    /// *starts* from rest is discarded here, where upstream -- which
-    /// samples `tileTransitionState` before applying that frame's movement
-    /// -- would instead preempt the step with the interaction. Unreachable
-    /// from a standing A press (the common case, and the one the acceptance
-    /// path walks); it needs A and a direction pressed on the exact same
-    /// frame.
+    /// Called from [`OverworldPhase::step`] before that frame's movement is
+    /// applied (contract and citations in that method's "NPC dialog routing"
+    /// section). `self.player.in_transit()` is frame-exact with upstream:
+    /// `UpdatePlayerAvatarTransitionState` runs before `FieldGetPlayerInput`
+    /// (`overworld.c:1442-1454`), so A is first accepted the frame after a
+    /// walk's last movement pixel.
     ///
     /// `&self` (not `&mut self`): [`OverworldPhase::step`] calls this while
     /// `runtime` still borrows `self.scene`, and acting on the outcome
@@ -688,6 +682,10 @@ impl OverworldPhase {
     /// other object event's script is unaffected -- Mom's own dialog path
     /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
     /// method grew a second arm.
+    ///
+    /// Below that, only `"0x0"` (upstream's `NULL`-script sentinel) means no
+    /// interaction; any other unrecognized script still consumes the frame
+    /// upstream (`field_control_avatar.c:172`).
     fn find_interaction_outcome(
         &self,
         runtime: &engine::overworld::MapRuntime<'_>,
@@ -696,16 +694,23 @@ impl OverworldPhase {
         if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
             return Some(InteractionOutcome::RivalBattle);
         }
-        npc_scripts::script_text(object.script).map(InteractionOutcome::Dialog)
+        if object.script == "0x0" {
+            return None;
+        }
+        Some(
+            npc_scripts::script_text(object.script)
+                .map_or(InteractionOutcome::Unmodelled, InteractionOutcome::Dialog),
+        )
     }
 }
 
 /// What a same-frame A-press interaction ([`OverworldPhase::interaction_tokens_this_frame`])
 /// should do -- a dialog box (the ordinary NPC case,
-/// [`npc_scripts::script_text`]) or the Route 103 rival battle (issue
-/// #248), never both. Not a dialog itself: a trainer battle is not a
-/// message box, so it needs its own outcome rather than being squeezed
-/// into [`Vec<engine::text::Token>`]'s shape.
+/// [`npc_scripts::script_text`]), the Route 103 rival battle (issue #248),
+/// or nothing observable for a real script this port doesn't model yet --
+/// never more than one. Not a dialog itself: a
+/// trainer battle is not a message box, so it needs its own outcome rather
+/// than being squeezed into [`Vec<engine::text::Token>`]'s shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum InteractionOutcome {
     /// Open an [`NpcDialog`] with this token stream.
@@ -713,4 +718,8 @@ pub(super) enum InteractionOutcome {
     /// Start the Route 103 rival battle
     /// ([`OverworldPhase::begin_route103_rival_battle`]).
     RivalBattle,
+    /// A real, non-`"0x0"` script [`npc_scripts::script_text`] doesn't
+    /// recognize: upstream still consumes the frame (`find_interaction_outcome`'s
+    /// own doc comment), but this port has nothing to render for it.
+    Unmodelled,
 }

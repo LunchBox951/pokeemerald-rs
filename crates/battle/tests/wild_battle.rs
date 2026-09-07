@@ -11,6 +11,10 @@
 //! for the individual formulas (accuracy/crit/damage/turn-order/escape) live
 //! alongside each module in `src/`.
 
+#[expect(
+    dead_code,
+    reason = "the escape and move-selection fixtures in this shared module are used only by turn_engine's test binary"
+)]
 mod common;
 
 use assets::{MoveEffect, MoveId, SpeciesId};

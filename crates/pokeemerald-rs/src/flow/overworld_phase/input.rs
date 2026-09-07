@@ -11,9 +11,7 @@
 //! files under the `oop-boundaries` size guideline -- these are still one
 //! concept with [`super::OverworldPhase::step`], just not one file.
 
-use engine::overworld::{
-    ConnectedMapData, Direction, PlayerState, StepOutcome, TilePos, WarpTrigger,
-};
+use engine::overworld::{ConnectedMapData, Direction, PlayerState, StepOutcome, TilePos};
 use platform::{ButtonState, Buttons};
 
 /// The held D-pad direction to feed [`PlayerState::step`] this frame, or
@@ -40,13 +38,14 @@ pub(super) fn held_direction(buttons: ButtonState) -> Option<Direction> {
     }
 }
 
-/// Apply this frame's movement, unless `preempting_arrow_trigger` already
-/// consumed it -- [`super::OverworldPhase::step`]'s movement branch,
-/// pulled out (as its own free function, disjointly borrowing `player`/
-/// `pending_landing`/`event_data` rather than all of `self` -- see that
-/// call site's own comment) to keep that method under clippy's
-/// `too_many_lines` limit. Returns a [`StepOutcome::Crossed`] landing (issue
-/// #177) for [`super::OverworldPhase::step`] to hand to
+/// Apply this frame's movement, unless `movement_preempted` says a warp or
+/// an NPC interaction already consumed it (issue #435) --
+/// [`super::OverworldPhase::step`]'s movement branch, pulled out (as its own
+/// free function, disjointly borrowing `player`/`pending_landing`/
+/// `event_data` rather than all of `self` -- see that call site's own
+/// comment) to keep that method under clippy's `too_many_lines` limit.
+/// Returns a [`StepOutcome::Crossed`] landing (issue #177) for
+/// [`super::OverworldPhase::step`] to hand to
 /// [`super::OverworldPhase::cross_connection`] once
 /// `runtime`'s borrow there has ended: that rebind needs `&mut self.scene`,
 /// which can't happen while `runtime` -- an immutable borrow of the same
@@ -59,11 +58,11 @@ pub(super) fn advance_or_skip_for_preempt(
     runtime: &engine::overworld::MapRuntime<'_>,
     maps: &impl ConnectedMapData,
     event_data: &engine::event_data::EventData,
-    preempting_arrow_trigger: Option<WarpTrigger>,
+    movement_preempted: bool,
 ) -> Option<(assets::MapId, TilePos)> {
-    if preempting_arrow_trigger.is_some() {
+    if movement_preempted {
         // The walk-animation tick still advances every frame, even one a
-        // warp preempts movement on (module docs on
+        // warp or interaction preempts movement on (module docs on
         // `advance_player_one_frame`) -- a no-op here since the caller only
         // reaches this arm when the player was already at rest, but called
         // anyway so that contract stays unconditional. This path latches
@@ -71,13 +70,14 @@ pub(super) fn advance_or_skip_for_preempt(
         // on its own here rather than being restored by anything downstream:
         // `step`'s own drain-frame `take_if` does run on a preempted frame
         // (the player is at rest, so its `in_transit` guard passes), but the
-        // preempting warp claims the frame before either the door check or
-        // the wild-encounter roll can look at what it returned.
+        // preempting warp or interaction claims the frame before either the
+        // door check or the wild-encounter roll can look at what it
+        // returned.
         debug_assert!(
             pending_landing.is_none(),
             "at rest implies `pending_landing` is None: a landing latched here would be taken \
-             on a frame the preempting warp has already claimed, and so would never reach a \
-             door check or an encounter roll"
+             on a frame the preempting warp or interaction has already claimed, and so would \
+             never reach a door check or an encounter roll"
         );
         player.tick();
         return None;

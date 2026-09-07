@@ -49,7 +49,7 @@ use platform::{ButtonState, Buttons, Frame};
 use crate::frame::to_platform_frame;
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
-use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
+use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::title::TitleScene;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
@@ -298,6 +298,27 @@ fn log_game_continued(phase: &OverworldPhase) {
     );
 }
 
+/// Format the recovery log line the `Title` -> `MainMenu` transition emits
+/// for `err`, without re-adding [`MainMenuSceneError`]'s own `main menu: `
+/// prefix (its `Display` impl, `main_menu.rs`, already writes it).
+///
+/// Kept pure (no I/O) so it is unit-testable; [`title_to_main_menu`]'s error
+/// arm is the only caller. The hint covers both failure shapes operators
+/// actually hit: no pack built at all (`PackError::NotFound`), and -- easy
+/// to mistake for a code bug -- a pack built before this screen existed,
+/// whose directory has no `interface/palette/main_menu_bg` entry
+/// (`PackError::UnknownAsset`). Both are fixed by rebuilding the pack by
+/// whichever route built it in the first place -- a player has no decomp
+/// checkout to extract from; neither changes what the error *is*.
+fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
+    format!(
+        "{err} -- staying on the title screen; a pack built before this \
+         screen existed is missing its entries: players rebuild it with \
+         `pokeemerald-rs --import-rom <path to your Pokemon Emerald (US) \
+         ROM>`, developers with `cargo xtask extract`"
+    )
+}
+
 /// The `Title` -> `MainMenu` half of [`advance_scene`]'s `AppScene::Title`
 /// arm, split out so that arm stays under the lint's line budget
 /// `(oop-boundaries)`: reads `save_slot`, builds the menu bordered with the
@@ -312,13 +333,7 @@ fn log_game_continued(phase: &OverworldPhase) {
 /// the one the save on disk selects.
 ///
 /// Returns `None`, after logging, if the pack load fails -- the caller stays
-/// on the title screen. The hint covers both failure shapes operators
-/// actually hit: no pack built at all (`PackError::NotFound`), and -- easy
-/// to mistake for a code bug -- a pack built before this screen existed,
-/// whose directory has no `interface/palette/main_menu_bg` entry
-/// (`PackError::UnknownAsset`). Both are fixed by rebuilding the pack by
-/// whichever route built it in the first place -- a player has no decomp
-/// checkout to extract from; neither changes what the error *is*.
+/// on the title screen.
 fn title_to_main_menu(
     pack_source: crate::pack_source::PackSource,
     save_slot: &mut SaveSlot,
@@ -335,12 +350,7 @@ fn title_to_main_menu(
             Some((AppScene::MainMenu(Box::new(state)), frame))
         }
         Err(err) => {
-            eprintln!(
-                "main menu: {err} -- staying on the title screen; a pack built \
-                 before this screen existed is missing its entries: players \
-                 rebuild it with `pokeemerald-rs --import-rom <path to your \
-                 Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
-            );
+            eprintln!("{}", main_menu_load_failure_message(&err));
             None
         }
     }

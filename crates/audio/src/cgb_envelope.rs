@@ -81,6 +81,8 @@ impl CgbAdsr {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
+    /// Awaiting its first `CgbSound` pass; not yet running the attack.
+    Starting,
     Attack,
     Decay,
     Sustain,
@@ -126,7 +128,7 @@ impl CgbEnvelope {
             adsr,
             goal,
             sustain_goal,
-            phase: Phase::Attack,
+            phase: Phase::Starting,
             volume: 0,
             frames_until_step: transition_frame_delay(adsr.attack),
             note_off_requested: false,
@@ -155,11 +157,14 @@ impl CgbEnvelope {
 
     /// Enter the release phase, reporting whether release itself is the
     /// retrigger-worthy volume write, once only (`m4a.c:1060-1069,1062`).
+    /// Only a live phase releases: a note stopped before its first `step`
+    /// records the request and retires on that pass instead
+    /// (`m4a.c:988..1046`, `:1053..1057`), and one already past sustain has
+    /// no release write left to report.
     pub fn note_off(&mut self) -> bool {
-        let already_releasing =
-            !matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
+        let live = matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Sustain);
         self.note_off_requested = true;
-        if already_releasing {
+        if !live {
             return false;
         }
         self.phase = Phase::Release;
@@ -188,6 +193,7 @@ impl CgbEnvelope {
     /// [`crate::cgb_voice::Oscillator::retrigger`]).
     pub fn step(&mut self) -> bool {
         match self.phase {
+            Phase::Starting => self.start(),
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
             Phase::Sustain => {
@@ -239,6 +245,19 @@ impl CgbEnvelope {
     fn paced_step_is_due(&mut self) -> bool {
         self.frames_until_step -= 1;
         self.frames_until_step == 0
+    }
+
+    /// Apply this note's first `CgbSound` pass: retire at once if it was
+    /// already stopped, else begin its attack (`Self::note_off`'s doc).
+    /// Reports the attack's own volume write; silencing a stopped note is
+    /// not one (see [`Self::enter_pseudo_echo_or_silence`]).
+    fn start(&mut self) -> bool {
+        if self.note_off_requested {
+            self.silence();
+            return false;
+        }
+        self.phase = Phase::Attack;
+        self.attack_step()
     }
 
     fn attack_step(&mut self) -> bool {
@@ -542,6 +561,27 @@ mod tests {
 
         env.step();
         assert!(!env.is_active());
+    }
+
+    #[test]
+    fn note_off_before_the_first_pass_retires_at_once_unlike_after_it() {
+        // Stopped before its first pass: `CgbSound`'s `SF_START | SF_STOP`
+        // check retires it at once, bypassing pseudo-echo (`m4a.c:988..1046`).
+        let mut env = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
+
+        assert!(
+            !env.note_off(),
+            "a note-off before the first pass takes no release transition, so it owes no \
+             CGB_CHANNEL_MO_VOL write"
+        );
+        assert!(
+            !env.step(),
+            "the short-circuit reaches CgbOscOff through `goto oscillator_off`, past the \
+             modify/CgbModVol write (`m4a.c:988..996`, `:1040..1047`)"
+        );
+
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
     }
 
     #[test]

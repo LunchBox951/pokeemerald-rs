@@ -5,13 +5,15 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed,
-    window_frame_for, AnimatedTitle, AppScene, MainMenuAction, MainMenuState,
+    advance_scene, main_menu_load_failure_message, menu_action, should_retry_overworld_load,
+    title_advance_pressed, window_frame_for, AnimatedTitle, AppScene, MainMenuAction,
+    MainMenuState,
 };
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
-use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuType};
+use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::new_game;
+use assets::pack::PackError;
 use platform::{ButtonState, Buttons};
 
 pub(super) fn pressed(button: Buttons) -> ButtonState {
@@ -197,6 +199,29 @@ fn title_a_or_start_button_transitions_to_main_menu() {
         // picks `HAS_NO_SAVED_GAME` (`main_menu.c:661-665`).
         assert_eq!(state.scene.menu_type(), MainMenuType::NoSavedGame);
     }
+}
+
+/// Issue #902 regression: pins [`main_menu_load_failure_message`]'s exact
+/// output so a reintroduced `main menu: ` prefix (see its own doc comment)
+/// fails loudly instead of rendering as `main menu: main menu: ...`.
+#[test]
+fn main_menu_load_failure_names_its_subsystem_once() {
+    let err = MainMenuSceneError::Pack(PackError::UnknownAsset(
+        "interface/palette/main_menu_bg".into(),
+    ));
+    let message = main_menu_load_failure_message(&err);
+    assert_eq!(
+        message,
+        "main menu: asset pack: no entry with id `interface/palette/main_menu_bg` -- staying \
+         on the title screen; a pack built before this screen existed is missing its entries: \
+         players rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon Emerald \
+         (US) ROM>`, developers with `cargo xtask extract`"
+    );
+    assert_eq!(
+        message.matches("main menu:").count(),
+        1,
+        "the recovery log must name its subsystem once, not once per error layer: {message}"
+    );
 }
 
 /// Issue #795: `advance_scene`'s own `Title` -> `MainMenu` transition --

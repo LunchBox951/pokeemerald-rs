@@ -397,12 +397,14 @@ fn real_pack_composes_non_blank_deterministic_title_frames() {
 
 #[test]
 fn press_start_blinks_every_16_ticks() {
+    // Sprite timer reads `frame + 2` (title_screen.c:409-417, :675-681, :759-762), so the
+    // banner turns on at frame 14, not 15, and off at frame 30, not 31 (issue #873).
     assert!(!press_start_visible(0));
-    assert!(!press_start_visible(14));
+    assert!(press_start_visible(14));
     assert!(press_start_visible(15));
-    assert!(press_start_visible(30));
+    assert!(!press_start_visible(30));
     assert!(!press_start_visible(31));
-    assert!(!press_start_visible(46));
+    assert!(press_start_visible(46));
     assert!(press_start_visible(47));
 }
 
@@ -425,6 +427,29 @@ fn cloud_scroll_advances_roughly_one_pixel_every_4_ticks() {
     let actual: Vec<u16> = (0..20).map(cloud_scroll_y).collect();
     assert_eq!(actual, expected);
     assert!(actual[19] > actual[0]);
+}
+
+#[test]
+fn cloud_scroll_and_press_start_share_the_first_phase3_tick_as_frame_zero() {
+    // `banner_timer` starts at 1: the sprite is animated once on the creation tick before
+    // frame 0 (title_screen.c:409-417, :675-681, :759-763, :806-814). Issue #873.
+    let mut phase3_counter: u16 = 0;
+    let mut cloud_accumulator: u16 = 0;
+    let mut banner_timer: u16 = 1;
+
+    for frame in 0..32_u32 {
+        phase3_counter += 1;
+        if phase3_counter & 1 != 0 {
+            cloud_accumulator += 1;
+        }
+        banner_timer += 1;
+
+        assert_eq!(
+            (cloud_scroll_y(frame), press_start_visible(frame)),
+            (cloud_accumulator / 2, banner_timer & 16 != 0),
+            "frame {frame}"
+        );
+    }
 }
 
 #[test]

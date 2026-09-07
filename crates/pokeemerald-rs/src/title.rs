@@ -561,7 +561,9 @@ fn sprite_palette_from_refs(
 /// 16 frames. Snapshot recording uses this function to select a visible frame.
 #[must_use]
 pub const fn press_start_visible(frame: u32) -> bool {
-    (frame.wrapping_add(1) & 16) != 0
+    // The sprite's timer already ticked once before frame 0, on the creation tick
+    // (title_screen.c:409-417, :675-681, :759-762): it reads `frame + 2`, not `frame + 1`.
+    (frame.wrapping_add(2) & 16) != 0
 }
 
 #[must_use]
@@ -570,6 +572,8 @@ pub const fn press_start_visible(frame: u32) -> bool {
     reason = "the title task stores its wrapping cloud accumulator as signed 16-bit data"
 )]
 const fn cloud_scroll_y(frame: u32) -> u16 {
+    // Frame 0 is the first `Task_TitleScreenPhase3` tick (title_screen.c:806-814), one tick
+    // after Phase2 creates the banners and zeroes `tBg1Y` (title_screen.c:759-762).
     let accumulator_bits = (frame.wrapping_add(2) / 2) as u16;
     (accumulator_bits.cast_signed() / 2).cast_unsigned()
 }

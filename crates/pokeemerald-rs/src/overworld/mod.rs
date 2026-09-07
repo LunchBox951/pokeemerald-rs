@@ -322,80 +322,35 @@ impl OverworldSceneError {
     }
 }
 
-/// One of the current room's own declared map connections
-/// ([`assets::MapHeader::connections`]), already resolved against the real
-/// generated map tables and this room's own pack (issue #253).
+/// A camera-visible map connection, resolved by [`resolve_connections`].
 ///
-/// Mirrors `grid_bytes`/`border_bytes`'s own split: the connected map's
-/// layout metadata and `map.bin` bytes are resolved once, in
-/// [`OverworldScene::from_pack`], and turned into a fresh
-/// [`viewport::ConnectionView`] (a borrowed [`assets::LayoutGrid`] over
-/// `grid_bytes`) every [`OverworldScene::frame_viewport`] call -- the same
-/// "resolve once, decode fresh every frame" shape the active map's own
-/// grid/border already use.
-///
-/// A declared connection that can't be resolved has two distinct fates,
-/// and [`resolve_connections`] keeps them apart (review of #253):
-///
-/// - **Not bundled -- silently omitted.** The target map isn't in the
-///   generated [`assets::MapHeaderTable`], or its layout isn't in
-///   [`assets::LayoutTable`], or the pack simply carries no `layout/<name>/map`
-///   entry for it (the target isn't one of the layouts `cargo xtask
-///   extract` bundles -- all four of this slice's outdoor cluster ship
-///   today, so this arm now covers only maps outside it;
-///   [`viewport::build_tilemaps`]'s own docs). Nothing is *wrong* with the pack;
-///   there is just no neighbour content to draw, and
-///   [`viewport::cell_at`] already falls back to the active map's own
-///   border block for any position no resolvable connection covers, so an
-///   omitted connection is observably identical to it not being declared.
-/// - **Bundled but corrupt -- an error.** The pack entry is present but has
-///   the wrong kind ([`assets::PackError::WrongKind`]), or its raw bytes
-///   fail to decode against the target layout's own declared dimensions
-///   ([`AssetError::LayoutGridTooShort`]). That is a broken pack, not a
-///   missing neighbour, and it surfaces as an [`OverworldSceneError`] out
-///   of [`OverworldScene::from_pack`] -- the same treatment the *active*
-///   map's own `grid_bytes` already get a few lines below. Swallowing it
-///   would have rendered a silent border block in place of real,
-///   present-but-unreadable map data.
+/// Resolution omits an unbundled neighbour and returns
+/// [`OverworldSceneError`] for present but malformed pack data.
 #[derive(Debug)]
 struct ConnectedLayout {
-    /// The edge this connection was declared on, and the neighbour's
-    /// offset along it (upstream `MapConnection::direction`/`::offset`) --
-    /// see [`viewport::connected_cell_at`] for how they combine.
+    /// The cardinal edge this connection is declared on.
     direction: assets::Direction,
+    /// The neighbour's offset along that edge -- see
+    /// [`viewport::connected_cell_at`].
     offset: i32,
-    /// The connected map's own layout metadata (id, dimensions, tileset
-    /// symbols) -- needed, alongside `grid_bytes`, to rebuild a
-    /// [`assets::LayoutGrid`] view fresh each frame, mirroring `self.layout`'s
-    /// own role for the active map.
+    /// The neighbour's layout metadata (id, dimensions, tileset symbols).
     layout: MapLayout,
-    /// The connected map's own decoded `map.bin` bytes.
+    /// The neighbour's validated `map.bin` bytes.
     grid_bytes: Vec<u8>,
 }
 
-/// Resolve `header`'s own [`assets::MapConnection`]s (issue #253) into
-/// owned [`ConnectedLayout`]s, for [`OverworldScene::from_pack`] to store.
+/// Resolves `header`'s camera-visible map connections into
+/// [`ConnectedLayout`]s -- see its doc comment for the omit-vs-error
+/// resolution contract.
 ///
-/// Only [`assets::Direction::South`]/`::North`/`::West`/`::East` connections
-/// are kept -- `Dive`/`Emerge` describe a diving transition, not a map-edge
-/// crossing the camera can pan across; upstream's own
-/// `InitBackupMapLayoutConnections` switch (`pokeemerald/src/fieldmap.c:137-155`)
-/// has no case for them either. Each surviving connection's target header
-/// (for its `layout` id), layout (for width/height/tileset symbols), and
-/// `map.bin` bytes are resolved against the real generated
-/// [`assets::MapHeaderTable`]/[`assets::LayoutTable`] and `pack` itself --
-/// see [`ConnectedLayout`]'s own doc comment for the two fates an
-/// unresolvable connection can meet (silently omitted vs. reported).
+/// `Dive`/`Emerge` connections are excluded: upstream's
+/// `InitBackupMapLayoutConnections` switch has no case for either
+/// (`pokeemerald/src/fieldmap.c:137-155`), so they never produce a
+/// camera-visible connection.
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Pack`] when a target's `layout/<name>/map` entry
-/// is present with the wrong kind, or [`OverworldSceneError::Asset`] when
-/// its bytes don't decode against that layout's own declared dimensions
-/// ([`ConnectedLayout`]'s docs on why these are errors rather than
-/// omissions). An unknown target header or layout, and an
-/// [`assets::PackError::UnknownAsset`] lookup, omit the connection and
-/// return `Ok`.
+/// See [`ConnectedLayout`]'s doc comment.
 fn resolve_connections(
     pack: &AssetPack,
     header: &assets::MapHeader,
@@ -423,13 +378,8 @@ fn resolve_connections(
             Err(assets::PackError::UnknownAsset(_)) => continue,
             Err(err) => return Err(err.into()),
         };
-        // Validate now (mirrors `from_pack`'s own up-front `grid_bytes`/
-        // `border_bytes` validation), so `frame_viewport` can trust every
-        // stored entry decodes on every subsequent call. Past the pack
-        // lookup above this is a *present* entry, so a decode failure is a
-        // corrupt pack and propagates, exactly like the active map's own
-        // grid -- it is not another way to be "not bundled"
-        // (`ConnectedLayout`'s docs).
+        // Decoded only to validate against the target layout's declared
+        // dimensions; the raw bytes below are what's stored.
         let _ = target_layout.grid(target_bytes)?;
         resolved.push(ConnectedLayout {
             direction: connection.direction,
