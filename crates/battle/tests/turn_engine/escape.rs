@@ -1,7 +1,7 @@
 //! Escape attempts, run counters, and escape-specific turn behavior.
 
-use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
+use assets::{AbilityId, MoveId};
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, STRUGGLE,
 };
@@ -51,7 +51,7 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     let dex = Dex::new();
     // Player slower than the enemy: forces the RNG-driven branch, fed a
     // roll that fails (see crate::escape's own tests for the formula).
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow Rattata
+    let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast Charmander
 
     // draws: battle-start turn number, turn number, opponent's move pick,
@@ -82,7 +82,7 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
 #[test]
 fn a_failed_run_reports_the_attempt_even_when_the_enemy_cannot_act() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: the run fails
+    let player = slow_runner_rattata(&dex); // slow: the run fails
     let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
@@ -227,7 +227,7 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
     // tracked run_tries but fed the formula 0 would fail turn 2 as well
     // and panic this script by drawing for the enemy's move.
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
 
     let mut rng = SequenceRng::new([
@@ -276,7 +276,7 @@ fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
     // skipped too (player_speed >= enemy_speed succeeds
     // unconditionally), leaving exactly the turn number and the wild
     // mon's selection pick.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([
         0, 0, // Battle::new: battle-start turn number + initial-seeding tie
@@ -317,7 +317,7 @@ fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
     // damage, no PP change -- while Scratch in slot 1 keeps the moveset
     // only *partially* spent (an all-spent moveset would divert to the
     // forced-Struggle fallback instead).
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: runs can fail
+    let player = slow_runner_rattata(&dex); // slow: runs can fail
     let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // fast
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
@@ -353,4 +353,16 @@ fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
     );
     assert!(battle.outcome().is_none());
     assert_eq!(rng.draws(), 1 + 256 * 3);
+}
+
+#[test]
+fn the_slow_runner_fixture_does_not_carry_run_away() {
+    // Guards slow_runner_rattata's ability slot; see its doc for why.
+    let dex = Dex::new();
+    let runner = slow_runner_rattata(&dex);
+    assert_ne!(
+        runner.ability(),
+        AbilityId::RUN_AWAY,
+        "the runner escapes unconditionally upstream, so its failed runs are unreachable"
+    );
 }
