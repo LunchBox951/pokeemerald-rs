@@ -1,17 +1,8 @@
 //! Species evolution rules.
 
 use crate::error::AssetError;
-use crate::species::{ItemId, SpeciesId};
-
-impl ItemId {
-    const FIRE_STONE: Self = Self(95);
-    const THUNDER_STONE: Self = Self(96);
-    const WATER_STONE: Self = Self(97);
-    const LEAF_STONE: Self = Self(98);
-    const DEEP_SEA_TOOTH: Self = Self(192);
-    const DEEP_SEA_SCALE: Self = Self(193);
-    const UP_GRADE: Self = Self(218);
-}
+use crate::items::ItemId;
+use crate::species::SpeciesId;
 
 /// A species evolution trigger and its method-specific parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,7 +77,7 @@ impl EvoMethod {
             | Self::LevelCascoon(lvl)
             | Self::LevelNinjask(lvl)
             | Self::LevelShedinja(lvl) => lvl as u16,
-            Self::TradeItem(item) | Self::Item(item) => item.0,
+            Self::TradeItem(item) | Self::Item(item) => item.index(),
             Self::Beauty(beauty) => beauty,
         }
     }
@@ -447,7 +438,8 @@ impl Default for EvolutionTable {
 mod tests {
     use super::{EvoMethod, EvolutionTable};
     use crate::error::AssetError;
-    use crate::species::{ItemId, SpeciesId};
+    use crate::items::ItemId;
+    use crate::species::SpeciesId;
 
     #[test]
     fn level_evolution_pins_bulbasaur() {
@@ -465,6 +457,26 @@ mod tests {
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].method, EvoMethod::Item(ItemId::THUNDER_STONE));
         assert_eq!(evs[0].target, SpeciesId::RAICHU);
+    }
+
+    #[test]
+    fn used_item_evolution_id_resolves_in_the_item_table() {
+        let evolutions = EvolutionTable::new();
+        let items = crate::items::ItemTable::new();
+
+        let stone = evolutions
+            .get(SpeciesId::VULPIX)
+            .and_then(|evs| {
+                evs.iter().find_map(|ev| match ev.method {
+                    EvoMethod::Item(item) => Some(item),
+                    _ => None,
+                })
+            })
+            .expect("Vulpix evolves via a stone");
+
+        let data = items.get(stone).expect("the stone is a real item");
+        assert_eq!(data.item_id, stone);
+        assert_eq!(data.price, 2100);
     }
 
     #[test]
