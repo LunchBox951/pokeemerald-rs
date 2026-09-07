@@ -523,21 +523,32 @@ impl SaveFile {
     /// A collision-resistant sibling staging name -- unguessable to a planted
     /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
     /// retries the rare exact collision, so this needs resistance, not proof.
-    /// The suffix is fixed-width (`.tmp.` plus
-    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`]) so a long but valid save
-    /// basename keeps its staging sibling within the filesystem's
-    /// per-component limit.
+    /// The save basename is cut to fit the suffix within
+    /// [`Self::MAX_COMPONENT_LEN`], so every save path whose own name is
+    /// valid gets a valid staging sibling.
     fn staging_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".tmp.");
-        name.push(Self::unique_component());
-        PathBuf::from(name)
+        let suffix = format!(".tmp.{}", Self::unique_component());
+        let mut stem = self
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let budget = Self::MAX_COMPONENT_LEN.saturating_sub(suffix.len());
+        if stem.len() > budget {
+            let mut cut = budget;
+            while !stem.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            stem.truncate(cut);
+        }
+        self.path.with_file_name(format!("{stem}{suffix}"))
     }
 
-    /// Width of the hex component `unique_component` renders: ten digits,
-    /// so `.tmp.` plus the component is never longer than the fifteen bytes
-    /// the former `.tmp.<pid>` suffix could reach, and every save basename
-    /// that fit before still fits.
+    /// The per-component limit shared by Linux, macOS, and Windows
+    /// filesystems, in bytes.
+    const MAX_COMPONENT_LEN: usize = 255;
+
+    /// Width of the hex component `unique_component` renders.
     const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
 
     /// `std`-only entropy folded into one 40-bit value: process id, clock

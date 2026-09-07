@@ -27,22 +27,20 @@ fn expected_staging_path(save_path: &Path) -> PathBuf {
     expected_sibling_path(save_path, format!(".tmp.{}", std::process::id()))
 }
 
-/// A long but valid save basename keeps its staging sibling within the
-/// filesystem's per-component limit only if the unique suffix is
-/// fixed-width and no longer than the fifteen bytes `.tmp.<pid>` could
-/// reach: `.tmp.` plus ten hex digits, never the raw pid, clock, and salt
-/// spelled out side by side.
+/// Every save path whose own name is valid gets a valid staging sibling:
+/// the unique suffix is fixed-width, and a basename at the component limit
+/// is cut to make room for it rather than pushed over.
 #[test]
-fn the_staging_suffix_is_fixed_width_and_unique() {
-    let long_basename = "s".repeat(255 - ".tmp.".len() - SaveFile::UNIQUE_COMPONENT_HEX_DIGITS);
-    let file = SaveFile::at(Path::new(&long_basename));
+fn a_basename_at_the_component_limit_still_gets_a_valid_staging_sibling() {
+    let file = SaveFile::at(Path::new(&"s".repeat(SaveFile::MAX_COMPONENT_LEN)));
 
     let staging = file.staging_path();
     let component = staging.file_name().unwrap().to_str().unwrap();
-    assert_eq!(component.len(), 255, "{component}");
-    assert_eq!(long_basename.len(), 240, "the pre-hash `.tmp.<pid>` range");
-    assert!(component.starts_with(&format!("{long_basename}.tmp.")));
-    assert!(component[long_basename.len() + 5..]
+    assert_eq!(component.len(), SaveFile::MAX_COMPONENT_LEN, "{component}");
+    let suffix_at = component.len() - ".tmp.".len() - SaveFile::UNIQUE_COMPONENT_HEX_DIGITS;
+    assert!(component[..suffix_at].bytes().all(|byte| byte == b's'));
+    assert!(component[suffix_at..].starts_with(".tmp."));
+    assert!(component[suffix_at + 5..]
         .bytes()
         .all(|byte| byte.is_ascii_hexdigit()));
 
@@ -51,6 +49,21 @@ fn the_staging_suffix_is_fixed_width_and_unique() {
         file.staging_path(),
         "two stagings in the same process must not share a name"
     );
+}
+
+/// The longest save basename whose `.tmp.<pid>` staging sibling fit within
+/// the filesystem's 255-byte component limit must still be writable: the
+/// fixed-width suffix may not push a previously valid basename over.
+#[test]
+fn a_basename_that_fit_the_former_staging_suffix_still_writes() {
+    let dir = TempDir::new("longname");
+    let pid_digits = std::process::id().to_string().len();
+    let basename_len = SaveFile::MAX_COMPONENT_LEN - ".tmp.".len() - pid_digits;
+    let file = SaveFile::at(dir.join(&"s".repeat(basename_len)));
+    let (store, _, _) = saved_store();
+
+    file.write(&store).unwrap();
+    assert!(file.exists());
 }
 
 struct TempDir {
