@@ -233,10 +233,14 @@ use pack::{PackEntry, PackKind, PackWriter};
 pub const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
 
 /// Serializes the ignored tests that touch the one real, developer-local
-/// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
-/// while `record_snapshot`'s real-pack round-trip reads it, and the test
-/// harness runs ignored tests in parallel by default. Every ignored test
-/// that reads or writes that path must hold this lock for its whole body.
+/// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` publishes it by staging the
+/// replacement at a process-id-derived sibling path before renaming it into
+/// place (`write_pack_atomically`), so two `extract` calls sharing this
+/// process's pid still race over the same staging path if run concurrently;
+/// `record_snapshot`'s real-pack round-trip also reads that path, and the
+/// test harness runs ignored tests in parallel by default. Every ignored
+/// test that reads or writes that path must hold this lock for its whole
+/// body.
 #[cfg(test)]
 pub(crate) static REAL_PACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -336,14 +340,62 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
         std::fs::create_dir_all(parent)
             .map_err(|e| ExtractError::WriteFailed(output_path.to_path_buf(), e.to_string()))?;
     }
-    std::fs::write(output_path, &bytes)
-        .map_err(|e| ExtractError::WriteFailed(output_path.to_path_buf(), e.to_string()))?;
+    write_pack_atomically(output_path, &bytes)?;
 
     Ok(ExtractReport {
         entry_count,
         pack_size,
         output_path: output_path.to_path_buf(),
     })
+}
+
+/// Atomically publishes the finished pack to `output_path`. Mirrors the
+/// save writer's stage-then-rename idiom
+/// (`engine::save::file::SaveFile::write_with`), strengthened to remove the
+/// staging file after *either* failure phase rather than only a failed
+/// rename: extraction is a one-off developer command, not a per-boot path,
+/// so a leaked `.tmp.<pid>` sibling would otherwise sit next to the pack
+/// unnoticed indefinitely.
+///
+/// # Errors
+///
+/// [`ExtractError::WriteFailed`] if the staging file could not be written,
+/// synchronised, or renamed into place. Always carries `output_path`, never
+/// the staging path, which is an implementation detail the caller never
+/// sees.
+fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), ExtractError> {
+    let staging_path = staging_path_for_process(output_path);
+    let write_failed =
+        |e: std::io::Error| ExtractError::WriteFailed(output_path.to_path_buf(), e.to_string());
+
+    if let Err(e) = write_and_sync(&staging_path, bytes) {
+        drop(std::fs::remove_file(&staging_path));
+        return Err(write_failed(e));
+    }
+    if let Err(e) = std::fs::rename(&staging_path, output_path) {
+        drop(std::fs::remove_file(&staging_path));
+        return Err(write_failed(e));
+    }
+    Ok(())
+}
+
+/// Unique across concurrent processes sharing `output_path`, but not across
+/// concurrent calls that share this process's pid -- see `REAL_PACK_LOCK`'s
+/// doc comment for why that still matters to this module's own tests.
+fn staging_path_for_process(output_path: &Path) -> PathBuf {
+    let mut name = output_path.as_os_str().to_os_string();
+    name.push(format!(".tmp.{}", std::process::id()));
+    PathBuf::from(name)
+}
+
+fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let file = std::fs::File::create(path)?;
+    let mut staged = std::io::BufWriter::new(file);
+    staged.write_all(bytes)?;
+    staged.flush()?;
+    staged.get_ref().sync_all()
 }
 
 /// `(upstream subdir under data/tilesets/, tileset name)` — the five
@@ -759,7 +811,10 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError, LAYOUTS};
+    use super::{
+        collect_pngs_sorted, extract_to, staging_path_for_process, upstream_present,
+        write_pack_atomically, ExtractError, LAYOUTS,
+    };
 
     // Real-checkout tests: `pokeemerald/` must be present locally
     // (`./init.sh`) to run these. `cargo test --workspace` in CI never has
@@ -896,6 +951,77 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("init.sh"));
         assert!(rendered.contains("cargo xtask extract"));
+    }
+
+    /// A fresh scratch directory under `std::env::temp_dir()`, named for
+    /// this process and the given `label` so concurrent test threads (which
+    /// share a process id) never collide with each other. Removed and
+    /// recreated empty; callers are responsible for cleaning it up.
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-atomic-write-test-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("creating scratch dir");
+        dir
+    }
+
+    #[test]
+    fn a_failed_staging_write_leaves_the_existing_pack_untouched() {
+        // No `pokeemerald/` checkout needed: this exercises
+        // `write_pack_atomically` directly against arbitrary bytes, not the
+        // full extraction pipeline. Pre-creating the staging path as a
+        // directory makes `File::create` on it fail deterministically
+        // (`IsADirectory`/`EISDIR`) regardless of the runner's privileges --
+        // unlike a permission-based seam, which root bypasses.
+        let dir = scratch_dir("write");
+        let output_path = dir.join("pokeemerald.pack");
+        let original = b"an existing, usable pack";
+        std::fs::write(&output_path, original).unwrap();
+
+        let staging_path = staging_path_for_process(&output_path);
+        std::fs::create_dir(&staging_path).unwrap();
+
+        let err = write_pack_atomically(&output_path, b"a truncated replacement").unwrap_err();
+        assert!(
+            matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
+            "{err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&output_path).unwrap(),
+            original,
+            "a failed staging write destroyed the pack that was already on disk"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_rename_removes_the_staging_file_and_leaves_the_destination_untouched() {
+        // Same no-checkout, no-privilege-dependent shape as the test above,
+        // but forces the later `rename` step to fail instead: renaming a
+        // regular file over an existing non-empty directory is rejected by
+        // every target this crate builds for, regardless of privilege.
+        let dir = scratch_dir("rename");
+        let output_path = dir.join("destination");
+        std::fs::create_dir(&output_path).unwrap();
+        let marker_path = output_path.join("marker");
+        std::fs::write(&marker_path, b"unchanged").unwrap();
+
+        let staging_path = staging_path_for_process(&output_path);
+        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+        assert!(
+            matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
+            "{err:?}"
+        );
+        assert!(
+            !staging_path.exists(),
+            "a failed rename must not leave its staging file behind"
+        );
+        assert_eq!(std::fs::read(&marker_path).unwrap(), b"unchanged");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
