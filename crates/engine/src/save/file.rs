@@ -523,6 +523,10 @@ impl SaveFile {
     /// A collision-resistant sibling staging name -- unguessable to a planted
     /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
     /// retries the rare exact collision, so this needs resistance, not proof.
+    /// The suffix is fixed-width (`.tmp.` plus
+    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`]) so a long but valid save
+    /// basename keeps its staging sibling within the filesystem's
+    /// per-component limit.
     fn staging_path(&self) -> PathBuf {
         let mut name = self.path.as_os_str().to_os_string();
         name.push(".tmp.");
@@ -530,20 +534,26 @@ impl SaveFile {
         PathBuf::from(name)
     }
 
-    /// `std`-only entropy: process id, clock nanoseconds, and a fresh
-    /// `RandomState`-derived salt, which alone already differs between two
-    /// calls at the same nanosecond.
+    /// Width of the hex component `unique_component` renders.
+    const UNIQUE_COMPONENT_HEX_DIGITS: usize = 16;
+
+    /// `std`-only entropy folded into one 64-bit value: process id, clock
+    /// nanoseconds, and a fresh `RandomState` key, which alone already
+    /// differs between two calls at the same nanosecond.
     fn unique_component() -> String {
         use std::hash::{BuildHasher, Hasher};
 
-        let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .map_or(0, |since| since.as_nanos());
-        let salt = std::collections::hash_map::RandomState::new()
-            .build_hasher()
-            .finish();
-        format!("{pid:x}.{nanos:x}.{salt:x}")
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        hasher.write_u128(nanos);
+        format!(
+            "{:0width$x}",
+            hasher.finish(),
+            width = Self::UNIQUE_COMPONENT_HEX_DIGITS
+        )
     }
 }
 
