@@ -5,13 +5,10 @@
 //! wired into this slice yet -- deferred, still in v1 scope (the issue's own
 //! `DoD` wording: "a direct msgbox-style script subset is enough").
 //!
-//! [`script_text`] returns `None` for every script this table doesn't name
-//! (an honest "not modelled" rather than a fabricated line), including the
-//! literal `"0x0"` no-script sentinel -- but only `"0x0"` means upstream's
-//! `TryStartInteractionScript` truly does nothing; any other unrecognized
-//! script is real and still consumes the frame there
-//! (`crate::flow::overworld_phase::step::InteractionOutcome::Unmodelled`,
-//! issue #435 finding). Callers, not this function, own that distinction.
+//! [`script_text`] returns `None` for every script this table doesn't name,
+//! including the `"0x0"` no-script sentinel; the caller owns the
+//! sentinel-versus-unmodelled distinction
+//! (`crate::flow::overworld_phase::step::InteractionOutcome`).
 
 use engine::text::Token;
 
