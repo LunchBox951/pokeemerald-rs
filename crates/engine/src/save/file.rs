@@ -534,10 +534,13 @@ impl SaveFile {
         PathBuf::from(name)
     }
 
-    /// Width of the hex component `unique_component` renders.
-    const UNIQUE_COMPONENT_HEX_DIGITS: usize = 16;
+    /// Width of the hex component `unique_component` renders: ten digits,
+    /// so `.tmp.` plus the component is never longer than the fifteen bytes
+    /// the former `.tmp.<pid>` suffix could reach, and every save basename
+    /// that fit before still fits.
+    const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
 
-    /// `std`-only entropy folded into one 64-bit value: process id, clock
+    /// `std`-only entropy folded into one 40-bit value: process id, clock
     /// nanoseconds, and a fresh `RandomState` key, which alone already
     /// differs between two calls at the same nanosecond.
     fn unique_component() -> String {
@@ -549,11 +552,9 @@ impl SaveFile {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_u32(std::process::id());
         hasher.write_u128(nanos);
-        format!(
-            "{:0width$x}",
-            hasher.finish(),
-            width = Self::UNIQUE_COMPONENT_HEX_DIGITS
-        )
+        let width = Self::UNIQUE_COMPONENT_HEX_DIGITS;
+        let mask = (1_u64 << (4 * width)) - 1;
+        format!("{:0width$x}", hasher.finish() & mask)
     }
 }
 

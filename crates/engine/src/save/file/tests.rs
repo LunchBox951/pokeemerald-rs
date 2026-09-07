@@ -29,8 +29,9 @@ fn expected_staging_path(save_path: &Path) -> PathBuf {
 
 /// A long but valid save basename keeps its staging sibling within the
 /// filesystem's per-component limit only if the unique suffix is
-/// fixed-width: `.tmp.` plus sixteen hex digits, never the raw pid, clock,
-/// and salt spelled out side by side.
+/// fixed-width and no longer than the fifteen bytes `.tmp.<pid>` could
+/// reach: `.tmp.` plus ten hex digits, never the raw pid, clock, and salt
+/// spelled out side by side.
 #[test]
 fn the_staging_suffix_is_fixed_width_and_unique() {
     let long_basename = "s".repeat(255 - ".tmp.".len() - SaveFile::UNIQUE_COMPONENT_HEX_DIGITS);
@@ -39,6 +40,7 @@ fn the_staging_suffix_is_fixed_width_and_unique() {
     let staging = file.staging_path();
     let component = staging.file_name().unwrap().to_str().unwrap();
     assert_eq!(component.len(), 255, "{component}");
+    assert_eq!(long_basename.len(), 240, "the pre-hash `.tmp.<pid>` range");
     assert!(component.starts_with(&format!("{long_basename}.tmp.")));
     assert!(component[long_basename.len() + 5..]
         .bytes()
