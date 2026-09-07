@@ -360,23 +360,46 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
 /// # Errors
 ///
 /// [`ExtractError::WriteFailed`] if the staging file could not be written,
-/// synchronised, or renamed into place. Always carries `output_path`, never
-/// the staging path, which is an implementation detail the caller never
-/// sees.
+/// synchronised, or renamed into place. Carries `output_path`; also names
+/// the staging path if cleaning it up after such a failure itself fails, so
+/// an abandoned `.tmp.<pid>` sibling is never silently left unreported.
 fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), ExtractError> {
     let staging_path = staging_path_for_process(output_path);
     let write_failed =
         |e: std::io::Error| ExtractError::WriteFailed(output_path.to_path_buf(), e.to_string());
 
     if let Err(e) = write_and_sync(&staging_path, bytes) {
-        drop(std::fs::remove_file(&staging_path));
-        return Err(write_failed(e));
+        return Err(write_failed(remove_abandoned_staging_file(
+            &staging_path,
+            e,
+        )));
     }
     if let Err(e) = std::fs::rename(&staging_path, output_path) {
-        drop(std::fs::remove_file(&staging_path));
-        return Err(write_failed(e));
+        return Err(write_failed(remove_abandoned_staging_file(
+            &staging_path,
+            e,
+        )));
     }
     Ok(())
+}
+
+/// Removes the staging file left behind by a failed write or rename,
+/// folding a cleanup failure into `original` instead of discarding it --
+/// silently dropping it would mean an abandoned `.tmp.<pid>` sibling goes
+/// unreported for the one reason that most needs reporting it: its own
+/// removal failing too. Keeps `original`'s `ErrorKind` so a caller matching
+/// on it still sees the write/rename failure that actually happened.
+fn remove_abandoned_staging_file(staging_path: &Path, original: std::io::Error) -> std::io::Error {
+    match std::fs::remove_file(staging_path) {
+        Ok(()) => original,
+        Err(cleanup_err) => std::io::Error::new(
+            original.kind(),
+            format!(
+                "{original} (additionally, failed to remove abandoned staging file `{}`: {cleanup_err})",
+                staging_path.display()
+            ),
+        ),
+    }
 }
 
 /// Unique across concurrent processes sharing `output_path`, but not across
@@ -1020,6 +1043,34 @@ mod tests {
             "a failed rename must not leave its staging file behind"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), b"unchanged");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_failed_staging_cleanup_names_the_artifact_it_left_behind() {
+        // The staging path is a non-empty directory here (not the empty one
+        // `a_failed_staging_write_leaves_the_existing_pack_untouched` uses):
+        // `remove_file` fails on either, but a directory with real contents
+        // pins down that this is testing "cleanup also failed", not merely
+        // "cleanup was never attempted".
+        let dir = scratch_dir("cleanup");
+        let output_path = dir.join("pokeemerald.pack");
+        let staging_path = staging_path_for_process(&output_path);
+        std::fs::create_dir(&staging_path).unwrap();
+        std::fs::write(staging_path.join("occupant"), b"occupant").unwrap();
+
+        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+
+        assert!(
+            staging_path.is_dir(),
+            "cleanup should have failed, leaving the staging directory behind"
+        );
+        assert!(
+            err.to_string()
+                .contains(&staging_path.display().to_string()),
+            "a failed cleanup must name the artifact it left behind: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
