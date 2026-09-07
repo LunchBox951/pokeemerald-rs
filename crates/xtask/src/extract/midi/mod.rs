@@ -1,66 +1,46 @@
-//! Compiles `mus_title.mid`'s MIDI semantics into the backend-neutral song
-//! schema (S-4, issue #181, `#115` child 2): the Policy-A dev backend's
-//! answer to `crates/assets::audio::song`'s "`#115` child 2 (the MIDI
-//! compiler) is what actually produces this from a `.mid` file" (that
-//! module's own docs).
+//! Compiles `mus_title.mid` into the normalized compiler event model
+//! ([`event::SongEvent`]) that [`encode`] writes as the asset pack's
+//! backend-neutral song schema.
 //!
-//! # Scope: one song, `mus_title`, at its own compile flags
+//! # Scope: `mus_title` only, at its own compile flags
 //!
 //! This is a *title-scoped* compiler, not a general `tools/mid2agb`
-//! reimplementation: it reads `sound/songs/midi/midi.cfg`'s
-//! `mus_title.mid` line generically ([`cfg`]), but [`compile`] hard-requires
-//! the two flags that line always carries (`-E` exact gate time, default
-//! 24-clocks-per-beat — never `-X`) and fails closed
-//! ([`error::MidiError::NonExactGateTime`]/
+//! reimplementation: it reads `sound/songs/midi/midi.cfg`'s `mus_title.mid`
+//! line generically ([`mod@cfg`]), but [`compile`] hard-requires `-E`
+//! (exact gate time) and rejects `-X` (48-clocks-per-beat) — the two
+//! constraints `mus_title.mid`'s own line always satisfies — and fails
+//! closed ([`error::MidiError::NonExactGateTime`]/
 //! [`error::MidiError::UnsupportedClocksPerBeat`]) if a future caller ever
 //! points it at a `midi.cfg` entry that doesn't. See [`compile`]'s module
-//! docs for the full list of what upstream interprets that this compiler
-//! deliberately does not reproduce, and why each cut is safe:
+//! docs for why each flag is required. A `MEMACC` controller fails closed
+//! ([`error::MidiError::UnsupportedMemAccController`]) only on a playable
+//! channel; [`compile`] drops unplayable channels before reading their
+//! controllers at all. `mus_title.mid` carries none, and the pack schema's
+//! one `MEMACC` user, `mus_vs_trainer`, is a different song this compiler
+//! never touches.
 //!
-//! - Note-duration LUT quantization (only reachable without `-E`).
-//! - `-X`/48-clocks-per-beat (this schema has no field to record which
-//!   convention a song's ticks use, so supporting it here would be silently
-//!   wrong for a consumer — a schema gap, not a compiler gap).
-//! - `tools/mid2agb`'s `WAIT`-opcode-legal-value bucketing and whole-note
-//!   pattern-compression bookkeeping (`SplitTime`/`WholeNoteMark`/`PATT`/
-//!   `PEND` — on-disk artifacts with zero audible effect, already out of
-//!   scope for [`crates::assets::audio::song::SongEvent`] itself).
-//! - Operand elision (`EOT`'s omitted key, compressed note/velocity
-//!   mnemonics) — this compiler's stream is always fully explicit.
-//! - `MEMACC` (controllers `0x0C`/`0x0D`/`0x0E`/`0x0F`/`0x10`/`0x11`) —
-//!   `mus_title.mid` carries none (confirmed against a locally built
-//!   `tools/mid2agb` oracle), and the schema's one canonical `MEMACC` user
-//!   (`mus_vs_trainer`) is a different song, out of scope here.
-//!
-//! Every other command family `mus_title.mid` actually carries — notes,
-//! ties, velocity quantization, tempo, program change, pan/volume/
-//! modulation/LFO/bend/tune/priority controllers, the pseudo-echo `XCMD`
-//! pair, and loop markers (the last unexercised by `mus_title` itself but
-//! pinned on crafted fragments — [`compile`]'s tests) — is modelled.
+//! The compiler models every command family [`event::SongEvent`] can
+//! represent, including loop markers, which `mus_title.mid` itself never
+//! reaches but [`compile`]'s own tests pin on crafted fragments.
 //!
 //! # Pipeline
 //!
 //! [`reader`] frames `MThd`/`MTrk` chunks; [`parse`] turns one chunk's bytes
 //! into a flat, time-ordered event list; [`compile`] is the semantic
 //! translation (tick/velocity scaling, note-off pairing, tie-splitting,
-//! sort order, controller mapping) into [`event::SongEvent`], this crate's
-//! own copy of `crates/assets::audio::song::SongEvent`'s shape; [`encode`]
-//! serializes that to the schema's exact wire bytes (duplicated, not
+//! sort order, controller mapping) into [`event::SongEvent`]; [`encode`]
+//! serializes that to the schema's exact wire bytes, duplicated rather than
 //! shared — see [`encode`]'s module docs, mirroring
-//! `xtask::extract::voicegroups::encode`'s documented rationale).
-//! [`cfg`] resolves `midi.cfg`'s per-song compile flags this pipeline needs
-//! (voicegroup label, priority, reverb, master volume, `-E`/`-X`)
-//! generically, the same way `xtask::extract::layouts_json` resolves
-//! `layouts.json` entries.
+//! `xtask::extract::voicegroups::encode`'s documented rationale. [`mod@cfg`]
+//! resolves `midi.cfg`'s per-song compile flags this pipeline needs
+//! (voicegroup label, priority, reverb, master volume, `-E`/`-X`).
 //!
-//! # Asset id: `audio/song/mus_title`
+//! # Output
 //!
-//! Mirrors `audio/voicegroup/<label>`/`audio/sample/*`'s convention
-//! (`crate::extract`'s "Asset id scheme" docs): `<name>` is the upstream
-//! `.mid` file's stem, matching how `xtask::extract::voicegroups` names
-//! entries by the upstream `voice_group` symbol rather than a path. There is
-//! exactly one entry this slice writes; a later slice compiling more songs
-//! would extend this same one-id-per-`.mid`-stem scheme.
+//! Reads `sound/songs/midi/midi.cfg` and [`SONG_MIDI_FILENAME`] from the
+//! upstream checkout and writes the compiled result as one
+//! [`PackKind::Raw`] entry under [`SONG_PACK_ID`] (`crate::extract`'s
+//! "Asset id scheme" docs).
 
 mod cfg;
 mod compile;
@@ -79,8 +59,6 @@ pub(crate) use error::MidiError;
 use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_file, read_text, ExtractError};
 
-/// The upstream `.mid` source this slice compiles, and the pack id its
-/// compiled song is written under (module docs, "Asset id").
 const SONG_MIDI_FILENAME: &str = "mus_title.mid";
 const SONG_PACK_ID: &str = "audio/song/mus_title";
 
@@ -140,26 +118,12 @@ mod tests {
         );
     }
 
-    /// Hand-verified against a locally built `tools/mid2agb` oracle (this
-    /// module's docs): compiling `mus_title.mid` at its real `midi.cfg`
-    /// flags produces exactly 10 tracks (one per real MIDI channel 0..=9;
-    /// the conductor `MTrk` chunk itself carries no notes), priority `0`,
-    /// reverb override `50`, and track 0's first six events are
-    /// `KeyShift(0)` (always first), then `mid2agb`'s own printed tempo
-    /// literal `144` BPM (the merged sequence track's tempo, which only
-    /// ever reaches the first compiled track — module docs), `VOICE 14`,
-    /// `PAN c_v+40`, `LFOS 44`, and `VOL 122*90/127` (truncating integer
-    /// division = `86`) — matching the oracle's own
-    /// `mus_title_1:`/`@ 000` block byte for byte (module order, not wire
-    /// bytes — see `super::compile`'s "No operand elision"/"`Wait` is a
-    /// free tick count" docs for why this compiler's `Wait` placement can
-    /// legitimately diverge from the oracle's own `W24` while representing
-    /// the identical 24-tick delay). Track 0's last two real commands
-    /// (`VOL 13*90/127` = `9`, then `VOL 12*90/127` = `8`, the oracle's
-    /// final two `VOL` bytes) are pinned as well, including the trailing
-    /// `Wait(4)` before `FINE` that this compiler computes from the merged
-    /// sequence track's own `EndOfTrack` tick (module docs on
-    /// `final_boundary`) exactly as the oracle's own trailing `W04` does.
+    /// Pins values hand-verified against a locally built `tools/mid2agb`
+    /// oracle's assembly listing, not its encoded wire bytes: the slices and
+    /// aggregates asserted below, not the full event stream. See
+    /// [`super::compile`]'s module docs for why `Wait` placement can still
+    /// diverge from the oracle's own `Wnn` opcodes while representing the
+    /// identical delay.
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn mus_title_compiles_to_hand_verified_values() {
@@ -204,8 +168,7 @@ mod tests {
             ]
         );
 
-        // No loop markers anywhere in mus_title.mid (confirmed against the
-        // oracle: zero `GOTO` bytes in the whole compiled file).
+        // mus_title.mid has no loop markers.
         let goto_count = song
             .tracks
             .iter()
@@ -214,14 +177,9 @@ mod tests {
             .count();
         assert_eq!(goto_count, 0);
 
-        // Three `XCMD xIECV`/`xIECL` pairs total, pseudo-echo volumes 10,
-        // 10, 16 and length 12 each time. Confirmed against the oracle:
-        // its `mus_title_7`/`mus_title_8`/`mus_title_10` blocks each carry
-        // exactly one. Those are upstream's own 1-based `g_agbTrack`
-        // labels, i.e. this compiler's `song.tracks[6]`/`[7]`/`[9]` -- an
-        // earlier revision of this comment printed the 0-based indices
-        // against the `mus_title_` label prefix, naming three blocks that
-        // are not the ones carrying the pairs.
+        // Three `XCMD xIECV`/`xIECL` pairs, matching the oracle's
+        // `mus_title_7`/`_8`/`_10` blocks (its 1-based `g_agbTrack` labels;
+        // this compiler's 0-based `tracks[6]`/`[7]`/`[9]`).
         let volumes: Vec<u8> = song
             .tracks
             .iter()

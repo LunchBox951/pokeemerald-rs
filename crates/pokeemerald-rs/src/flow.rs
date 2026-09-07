@@ -49,7 +49,7 @@ use platform::{ButtonState, Buttons, Frame};
 use crate::frame::to_platform_frame;
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
-use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
+use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::title::TitleScene;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
@@ -298,6 +298,19 @@ fn log_game_continued(phase: &OverworldPhase) {
     );
 }
 
+/// Format the recovery log line the `Title` -> `MainMenu` transition emits
+/// for `err`, without re-adding [`MainMenuSceneError`]'s own `main menu: `
+/// prefix (its `Display` impl, `main_menu.rs`, already writes it).
+///
+/// Kept pure (no I/O) so it is unit-testable; [`advance_scene`]'s `Title`
+/// arm is the only caller.
+fn main_menu_load_failure_message(err: &MainMenuSceneError) -> String {
+    format!(
+        "{err} -- staying on the title screen; re-run `cargo xtask extract` (a pack extracted \
+         before this screen existed is missing its entries)"
+    )
+}
+
 /// Advance `scene` by exactly one frame given this frame's `buttons`,
 /// returning the (possibly transitioned) next scene and the frame it
 /// composed -- the pure state-transition core of
@@ -365,11 +378,7 @@ pub(crate) fn advance_scene(
                     // has no `interface/palette/main_menu_bg` entry
                     // (`PackError::UnknownAsset`). Both are fixed by
                     // re-extracting; neither changes what the error *is*.
-                    Err(err) => eprintln!(
-                        "main menu: {err} -- staying on the title screen; \
-                         re-run `cargo xtask extract` (a pack extracted before \
-                         this screen existed is missing its entries)"
-                    ),
+                    Err(err) => eprintln!("{}", main_menu_load_failure_message(&err)),
                 }
             }
 

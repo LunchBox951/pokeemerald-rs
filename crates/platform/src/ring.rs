@@ -88,6 +88,18 @@ impl Producer {
         n
     }
 
+    /// Total samples this ring holds, fixed when it was created.
+    ///
+    /// Distinct from [`Self::available_space`], which is this minus whatever
+    /// is queued at the moment of the call. A caller asking "is the ring
+    /// empty?" wants to compare against this; a snapshot of free space taken
+    /// while anything was queued understates it and would read a still-queued
+    /// ring as empty.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.shared.capacity
+    }
+
     /// Samples free right now.
     #[must_use]
     pub fn available_space(&self) -> usize {
@@ -238,6 +250,19 @@ mod tests {
         consumer.fill(&mut out3);
         assert_eq!(out3, [4.0, 5.0]);
         assert_eq!(consumer.underruns(), 12);
+    }
+
+    /// Capacity is the ring's fixed size, not a reading of how much of it is
+    /// free: queueing samples must not appear to shrink the ring.
+    #[test]
+    fn capacity_is_unchanged_by_what_is_queued() {
+        let (producer, _consumer) = ring_buffer(8);
+        assert_eq!(producer.capacity(), 8);
+        assert_eq!(producer.available_space(), 8);
+
+        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
+        assert_eq!(producer.capacity(), 8);
+        assert_eq!(producer.available_space(), 5);
     }
 
     #[test]

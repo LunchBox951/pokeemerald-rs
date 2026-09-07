@@ -7,7 +7,11 @@
 //! `(lean-docs)`. Tests needing an extracted asset pack are `#[ignore]`d and
 //! run by CI's `real-pack` job.
 
-use super::{describe_newly_pressed, App, AppError, AppState, SaveSlot};
+use super::{
+    describe_newly_pressed, title_music_start_failure_message, App, AppError, AppState, SaveSlot,
+};
+use crate::music::MusicError;
+use assets::pack::PackError;
 use platform::{ButtonState, Buttons};
 
 /// The animated path's `frame()` contract (I-2): after every step,
@@ -59,14 +63,14 @@ fn animated_frame_returns_the_presented_tick() {
     );
 }
 
-/// The I-2 headless real-boot check (issues #168 and #175): boots an
+/// The I-2 headless real-boot check (issues #168, #175, #873): boots an
 /// `App` through `App::boot` -- `App::new`'s own body -- and asserts the
 /// frames it *presents* are the real title screen's, at exactly ticks 0,
-/// 2 and 14. See the module docs' "The headless real-boot check" for
+/// 2, 13 and 14. See the module docs' "The headless real-boot check" for
 /// what that does and does not cover, why the presented frames are read
-/// back from the null backend rather than from `App::frame`, and why
-/// tick 14 is the tick that pins the counter. Needs the real pack, like
-/// `animated_frame_returns_the_presented_tick`.
+/// back from the null backend rather than from `App::frame`, and why the
+/// back-to-back tick 13/14 pair is what pins the counter. Needs the real
+/// pack, like `animated_frame_returns_the_presented_tick`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boots_to_the_title_screen_through_app_boot() {
@@ -75,7 +79,6 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
     let expected2 = reference.compose_frame(2);
     let expected13 = reference.compose_frame(13);
     let expected14 = reference.compose_frame(14);
-    let expected15 = reference.compose_frame(15);
     assert_ne!(
         expected0.to_vec(),
         expected2.to_vec(),
@@ -84,14 +87,8 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
     assert_ne!(
         expected14.to_vec(),
         expected13.to_vec(),
-        "tick 14 must differ from tick 13 (the clouds scroll), or the tick-14 check below \
-         would pass for an App running one tick behind"
-    );
-    assert_ne!(
-        expected14.to_vec(),
-        expected15.to_vec(),
-        "tick 14 must differ from tick 15 (\"Press Start\" blinks on), or the tick-14 check \
-         below would pass for an App running one tick ahead"
+        "tick 14 must differ from tick 13 (both the cloud scroll and the \"Press Start\" blink \
+         advance on tick 14, issue #873), or the tick 13/14 checks below prove nothing"
     );
 
     let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
@@ -126,14 +123,21 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
         expected2.to_vec(),
         "the booted App must keep animating: the third step presents tick 2"
     );
-    for _ in 0..12 {
+    for _ in 0..11 {
         app.step().expect("headless step never errors");
     }
     assert_eq!(
         presented(&app),
+        expected13.to_vec(),
+        "the fourteenth step must present tick 13 exactly -- an App running one tick ahead \
+         would present tick 14 here instead (differs, asserted above)"
+    );
+    app.step().expect("headless step never errors");
+    assert_eq!(
+        presented(&app),
         expected14.to_vec(),
-        "the fifteenth step must present tick 14 exactly -- one tick either way composes a \
-         different frame (asserted above)"
+        "the fifteenth step must present tick 14 exactly -- an App running one tick behind \
+         would still be presenting tick 13 here (differs, asserted above)"
     );
 }
 
@@ -347,8 +351,9 @@ fn looping_song_for_test() -> audio::Song {
 /// attached [`crate::music::MusicPlayer`] out once [`AppScene::Title`] is no
 /// longer the active scene -- upstream's `FadeOutBGM(4)`
 /// (`pokeemerald/src/title_screen.c:784`) -- and drops it (stopping the
-/// stream) only when that fade completes, rather than hard-cutting it or
-/// leaving it running unheard.
+/// stream) only once that fade has completed AND the ring has drained
+/// (issue #458), rather than hard-cutting it, leaving it running unheard, or
+/// truncating the still-buffered tail the instant the fade reaches silence.
 ///
 /// Uses [`App::new_headless`] (the pure I-1 boot-scene path, whose
 /// `AppScene` is always `None` -- never `Title`) purely as a scaffold to
@@ -362,6 +367,11 @@ fn leaving_the_title_scene_fades_the_attached_music_player_out_before_stopping_i
     /// `m4aMPlayFadeOut`'s 16 volume steps at `TITLE_FADE_OUT_SPEED` frames
     /// each -- see `crate::music::player`'s `FadeOut` docs.
     const FADE_FRAMES: usize = 64;
+    /// Generous bound on the extra steps needed to drain the ring's queued
+    /// tail after the fade reaches silence (issue #458) -- well above the
+    /// handful of frames prefill can leave queued, so a regression that
+    /// never drains fails this test instead of hanging it.
+    const DRAIN_BUDGET: usize = 200;
 
     let mut app = App::new_headless();
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
@@ -385,13 +395,129 @@ fn leaving_the_title_scene_fades_the_attached_music_player_out_before_stopping_i
 
     app.step().expect("headless step never errors");
     assert!(
-        !app.has_music_for_test(),
-        "advance_music must stop the BGM once the fade-out has run to completion"
+        app.has_music_for_test(),
+        "the fade reaches silence on frame {FADE_FRAMES}, but the ring still buffers queued \
+         audio at that instant -- advance_music must keep the player alive until it drains \
+         rather than dropping it the moment the fade finishes"
+    );
+
+    let mut dropped_within_budget = false;
+    for _ in 0..DRAIN_BUDGET {
+        app.step().expect("headless step never errors");
+        if !app.has_music_for_test() {
+            dropped_within_budget = true;
+            break;
+        }
+        app.drain_music_for_test(&mut drained);
+    }
+    assert!(
+        dropped_within_budget,
+        "advance_music must eventually drop the player once its queued tail drains, within \
+         {DRAIN_BUDGET} steps"
     );
     assert_eq!(
         app.music_underruns_for_test(),
         None,
         "a completed fade drops the player outright rather than leaving it paused"
+    );
+}
+
+/// The ring must be fully drained, not merely silent by the fade math,
+/// before [`App::advance_music`] drops the player, or the still-buffered
+/// tail is truncated.
+///
+/// Deliberately opens a non-default ring capacity (not
+/// [`crate::music::RING_CAPACITY_FRAMES`]) so this also catches a fix that
+/// compares against that module constant instead of the ring the player was
+/// actually given.
+#[test]
+fn every_queued_fade_frame_reaches_the_consumer_before_the_player_is_dropped() {
+    const RING_CAPACITY_FRAMES: usize = 512;
+    /// Bounds the test itself so a regression that never drops the player
+    /// fails loudly instead of looping forever.
+    const STEP_BUDGET: usize = 500;
+
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let full_ring = RING_CAPACITY_FRAMES * usize::from(platform::AudioOutput::CHANNELS);
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    let mut ring_free_before_drop = None;
+    let mut dropped = false;
+
+    for _ in 0..STEP_BUDGET {
+        app.step().expect("headless step never errors");
+        if !app.has_music_for_test() {
+            dropped = true;
+            break;
+        }
+        app.drain_music_for_test(&mut drained);
+        ring_free_before_drop = app.music_ring_free_for_test();
+    }
+
+    assert!(
+        dropped,
+        "the fading player must eventually be dropped within {STEP_BUDGET} steps"
+    );
+    assert_eq!(
+        ring_free_before_drop,
+        Some(full_ring),
+        "every queued fade frame must reach the consumer: the ring must already be fully \
+         drained the step before the player is dropped, not still holding a truncated tail"
+    );
+}
+
+/// An empty ring means the output callback took the samples, not that the
+/// device sounded them, and dropping the player closes the stream where it
+/// stands instead of playing out its callback and OS buffers. So
+/// [`App::advance_music`] must hold a healthy player past the empty ring for
+/// its device tail rather than dropping it on the first empty poll, which
+/// would still cut the quietest end of the fade on a real backend. The null
+/// backend advertises no callback bound, so its tail is the floor every
+/// device gets at least; it also sounds every sample the instant it is
+/// removed, so this pins the policy the real device needs.
+#[test]
+fn the_fading_player_outlives_its_empty_ring_by_the_device_tail() {
+    const RING_CAPACITY_FRAMES: usize = 512;
+    /// Bounds the test itself so a regression that never drops the player
+    /// fails loudly instead of looping forever.
+    const STEP_BUDGET: usize = 500;
+
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let full_ring = RING_CAPACITY_FRAMES * usize::from(platform::AudioOutput::CHANNELS);
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    let mut steps_survived_with_an_empty_ring = 0_usize;
+    let mut dropped = false;
+
+    for _ in 0..STEP_BUDGET {
+        let ring_was_empty = app.music_ring_free_for_test() == Some(full_ring);
+        app.step().expect("headless step never errors");
+        if !app.has_music_for_test() {
+            dropped = true;
+            break;
+        }
+        if ring_was_empty {
+            steps_survived_with_an_empty_ring += 1;
+        }
+        app.drain_music_for_test(&mut drained);
+    }
+
+    assert!(
+        dropped,
+        "the device tail is bounded: the player must still be dropped within {STEP_BUDGET} steps"
+    );
+    assert_eq!(
+        steps_survived_with_an_empty_ring,
+        crate::music::DEVICE_TAIL_FLOOR_FRAMES,
+        "advance_music must keep the stream open for the whole device tail after the ring reads          empty, so the buffers the callback already took can sound before the drop"
     );
 }
 
@@ -421,5 +547,24 @@ fn real_pack_boot_starts_title_music_and_sustains_it_without_underrun() {
         app.music_underruns_for_test(),
         Some(0),
         "120 steps of frame-driven playback, drained once per step, must not underrun the ring"
+    );
+}
+
+/// Issue #902 regression: pins [`title_music_start_failure_message`]'s exact
+/// output so a reintroduced `music: ` prefix (see its own doc comment) fails
+/// loudly instead of rendering as `music: music: ...`.
+#[test]
+fn title_music_start_failure_names_its_subsystem_once() {
+    let err = MusicError::Pack(PackError::UnknownAsset("audio/song/mus_title".into()));
+    let message = title_music_start_failure_message(&err);
+    assert_eq!(
+        message,
+        "music: asset pack: no entry with id `audio/song/mus_title` -- the title screen will \
+         play without music"
+    );
+    assert_eq!(
+        message.matches("music:").count(),
+        1,
+        "the recovery log must name its subsystem once, not once per error layer: {message}"
     );
 }
