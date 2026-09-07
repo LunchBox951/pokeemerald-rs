@@ -182,36 +182,42 @@ impl OverworldPhase {
     /// before they are written.
     ///
     /// **Party** (`SavePlayerParty`): this port's `gPlayerParty` is the
-    /// single [`OverworldPhase::party_lead`] the battle paths borrow, so
-    /// only slot 0 is live. Saving rewrites that slot from the lead while
-    /// retaining an existing valid count and the dormant serialized slots
-    /// 1-5. The encoder uses the lead's own original-trainer id (the box
-    /// header's XOR key), which need not be the current player's id. No lead
-    /// means an empty party -- *unless the slot was retained undecodable
-    /// (below)* -- and slot 0 is then zeroed rather than left holding a
-    /// stale mon, upstream's `ZeroPlayerPartyMons` shape.
+    /// single [`OverworldPhase::party_lead`] the battle paths borrow, live
+    /// at [`OverworldPhase::party_lead_slot`] -- `SetBattlePartyIds`'s
+    /// `gBattlerPartyIndexes[0]`, not always slot 0
+    /// (`pokeemerald/src/battle_controllers.c:585-606`). Saving rewrites
+    /// that slot from the lead while retaining an existing valid count and
+    /// every other dormant serialized slot. The encoder uses the lead's own
+    /// original-trainer id (the box header's XOR key), which need not be
+    /// the current player's id. No lead means an empty party -- *unless the
+    /// slot was retained undecodable (below)* -- and the selected slot is
+    /// then zeroed rather than left holding a stale mon, upstream's
+    /// `ZeroPlayerPartyMons` shape.
     ///
-    /// Slot 0 is *merged*, not rebuilt (issue #344). The block this phase
-    /// holds is the one a continue was loaded from, so `player_party[0]` is
-    /// still the record [`OverworldPhase::copy_party_and_objects_from_save`]
-    /// decoded the lead out of -- the backing state for every field the
-    /// battle model does not carry. Rebuilding the record from the lead
-    /// alone wrote all of them back as zero, which cost a loaded save its
-    /// held item, EVs, friendship, status and mail on an ordinary SAVE;
+    /// The selected slot is *merged*, not rebuilt (issue #344). The block
+    /// this phase holds is the one a continue was loaded from, so
+    /// `player_party[party_lead_slot]` is still the record
+    /// [`OverworldPhase::copy_party_and_objects_from_save`] decoded the
+    /// lead out of -- the backing state for every field the battle model
+    /// does not carry. Rebuilding the record from the lead alone wrote all
+    /// of them back as zero, which cost a loaded save its held item, EVs,
+    /// friendship, status and mail on an ordinary SAVE;
     /// [`party::merge_into_save_pokemon`] overlays the battler onto those
     /// retained bytes and falls back to a fresh record only when the slot
     /// holds a different Pokémon -- a new game's empty slot, or a lead
     /// swapped in since the load.
     ///
-    /// A no-lead slot 0 is *not* always an empty one (issue #353): a load
-    /// whose secure region would not decode also leaves
+    /// A no-lead selected slot is *not* always an empty one (issue #353): a
+    /// load whose secure region would not decode also leaves
     /// [`OverworldPhase::party_lead`] `None`, and
     /// [`OverworldPhase::undecodable_lead_retained`] is what tells the two
-    /// apart here, rather than re-probing `player_party[0]`'s bytes at save
-    /// time (which would just fail the same checksum again and give no way
-    /// to decide "erase" from "keep"). A retained-undecodable slot writes
+    /// apart here, rather than re-probing the slot's bytes at save time
+    /// (which would just fail the same checksum again and give no way to
+    /// decide "erase" from "keep"). A retained-undecodable slot writes
     /// nothing: `player_party[0]` and `player_party_count` are left exactly
-    /// as [`OverworldPhase::copy_party_and_objects_from_save`] found them,
+    /// as [`OverworldPhase::copy_party_and_objects_from_save`] found them
+    /// (that fallback decode never leaves slot 0, so the retained slot is
+    /// always slot 0 -- see [`party::select_active_battler`]'s own docs),
     /// so a checksum failure on slot 0's secure region no longer costs the
     /// player the whole record -- nickname, OT name, language, markings,
     /// and the secure bytes themselves -- on the very next ordinary SAVE.
@@ -259,11 +265,12 @@ impl OverworldPhase {
     /// (`src/event_object_movement.c:1867-1875`), which is the only way
     /// this port's avatar changes direction.
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
+        let slot = self.party_lead_slot;
         if let Some(lead) = &self.party_lead {
-            self.save1.player_party[0] = party::merge_into_save_pokemon(
+            self.save1.player_party[slot] = party::merge_into_save_pokemon(
                 &battle::Dex::new(),
                 lead,
-                &self.save1.player_party[0],
+                &self.save1.player_party[slot],
                 &mut self.lead_hp_hidden_by_load,
             );
             if self.save1.player_party_count == 0 {
@@ -275,7 +282,7 @@ impl OverworldPhase {
             // own docs, issue #353): a slot this port could not decode is
             // not this port's to rebuild.
         } else {
-            self.save1.player_party[0] = engine::save::Pokemon::default();
+            self.save1.player_party[slot] = engine::save::Pokemon::default();
             self.save1.player_party_count = 0;
         }
         let facing = self.player.facing().to_dir_id();
@@ -286,8 +293,9 @@ impl OverworldPhase {
     }
 
     /// `CopyPartyAndObjectsFromSave`'s party half (`LoadPlayerParty`,
-    /// `src/load_save.c:170-178`): rebuild the battle-facing lead from
-    /// `save1.player_party[0]`.
+    /// `src/load_save.c:170-178`): rebuild the battle-facing lead from the
+    /// saved party, selecting which slot is active exactly as
+    /// `SetBattlePartyIds` does ([`party::select_active_battler`]).
     ///
     /// The object-event half is not here: a facing has to be known before
     /// the [`engine::overworld::PlayerState`] is built, so
@@ -295,11 +303,12 @@ impl OverworldPhase {
     /// `super::saved_facing`).
     ///
     /// A stored party count of zero means no lead, exactly as it does
-    /// upstream. A slot that will not decode -- checksum-valid sector
-    /// bytes that are not a mon any battle code could run -- is logged and
-    /// leaves the lead empty: fabricating a replacement starter would hand
-    /// the player a different Pokémon than the one they saved, which is
-    /// strictly worse than an honest empty party.
+    /// upstream. A party with no slot that will decode into a usable
+    /// battler -- checksum-valid sector bytes that are not a mon any
+    /// battle code could run -- is logged and leaves the lead empty:
+    /// fabricating a replacement starter would hand the player a different
+    /// Pokémon than the one they saved, which is strictly worse than an
+    /// honest empty party.
     ///
     /// Which of those two `None` reasons applies is recorded in
     /// [`OverworldPhase::undecodable_lead_retained`] (issue #353), not left
@@ -313,16 +322,20 @@ impl OverworldPhase {
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
         if self.save1.player_party_count == 0 {
             self.party_lead = None;
+            self.party_lead_slot = 0;
             self.lead_hp_hidden_by_load = 0;
             self.undecodable_lead_retained = false;
             return;
         }
         let dex = battle::Dex::new();
-        match party::from_save_pokemon(&dex, &self.save1.player_party[0]) {
-            Ok(lead) => {
+        let stored_count =
+            usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        match party::select_active_battler(&dex, &self.save1.player_party[..stored_count]) {
+            Ok((slot, lead)) => {
                 self.lead_hp_hidden_by_load =
-                    party::hp_hidden_by_load(&dex, &self.save1.player_party[0], &lead);
+                    party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);
                 self.party_lead = Some(lead);
+                self.party_lead_slot = slot;
                 self.undecodable_lead_retained = false;
             }
             Err(err) => {
@@ -331,6 +344,7 @@ impl OverworldPhase {
                      retained; resuming with an empty party"
                 );
                 self.party_lead = None;
+                self.party_lead_slot = 0;
                 self.lead_hp_hidden_by_load = 0;
                 // The slot's stored bytes are still real save data (issue
                 // #353): retained so `copy_party_and_objects_to_save`'s

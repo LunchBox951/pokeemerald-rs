@@ -314,6 +314,13 @@ impl AudioOutput {
         self.stream_errors.load(Ordering::Relaxed)
     }
 
+    /// Records one asynchronous stream error as the `cpal` error closure in
+    /// `build_stream` does, so a null-backend test can stand in for a device.
+    #[doc(hidden)]
+    pub fn record_stream_error_for_test(&self) {
+        self.stream_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Drive the null backend by hand, filling `out` through the exact same
     /// underrun-safe path the real device callback runs (see the module
     /// docs and [`crate::ring::Consumer::fill`]).

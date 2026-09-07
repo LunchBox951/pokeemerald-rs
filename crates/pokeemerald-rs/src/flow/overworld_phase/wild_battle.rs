@@ -90,12 +90,13 @@ impl OverworldPhase {
     /// any draw on a map that could produce such a moveset, this arm is
     /// defensive: no table-rolled encounter reaches it today.
     ///
-    /// The lead mon reaching here is never *fainted* in production: a loss
-    /// heals it before the next step can roll another encounter
-    /// ([`Self::white_out`], `crate::flow::wild_encounter`'s module docs
-    /// "Wild-battle loss" section) -- the same state upstream itself
-    /// cannot reach. Not re-checked here, since a second check could only
-    /// ever be dead code against that invariant.
+    /// The lead mon reaching here is fainted only when the whole saved
+    /// party is unusable: continue already selects the first non-fainted,
+    /// non-egg member ([`crate::party::select_active_battler`],
+    /// `SetBattlePartyIds`, `pokeemerald/src/battle_controllers.c:585-606`).
+    /// That state is not re-checked here -- it is left to
+    /// [`battle::Battle::new`]'s own `FaintedBattler` refusal, the same
+    /// fail-closed outcome it has always produced.
     pub(super) fn begin_wild_battle(
         &mut self,
         encounter: Option<engine::overworld::WildEncounter>,

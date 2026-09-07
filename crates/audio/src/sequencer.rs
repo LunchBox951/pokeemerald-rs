@@ -373,6 +373,9 @@ impl Sequencer {
             loop {
                 guard += 1;
                 if guard > MAX_COMMANDS_PER_TICK {
+                    // A guarded end still honors `ply_fine`'s voice-release
+                    // cleanup, like every other end path.
+                    mixer.release_track(track_id);
                     track.ended = true;
                     break;
                 }
@@ -2211,6 +2214,32 @@ mod tests {
         }
         assert_eq!(seq.voice_count(), 0);
         assert!(seq.is_finished(), "EOF must release the tied voice");
+    }
+
+    #[test]
+    fn command_cap_releases_a_tied_voice_and_the_song_finishes() {
+        // A self-GOTO with no Wait ends only via the command guard, which
+        // must release the tied voice too, or `is_finished()` never returns.
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Goto(2),
+        ];
+        let wave = Arc::new(WaveData::looping(0, 0, vec![100]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        let mut frames = 0;
+        while !seq.is_finished() && frames < 500 {
+            seq.render_frame(&mut out);
+            frames += 1;
+        }
+        assert_eq!(seq.voice_count(), 0, "the command cap must release voices");
+        assert!(seq.is_finished(), "the command cap must end the song");
     }
 
     #[test]

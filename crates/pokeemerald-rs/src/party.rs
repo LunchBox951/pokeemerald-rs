@@ -13,11 +13,18 @@
 //! Deliberately not modelled by `battle`, and so retained from the backing
 //! record by [`merge_into_save_pokemon`]: held item, friendship, pokérus,
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
-//! language, mail, non-volatile status, the egg bit, and contest condition
-//! (`PokemonSubstruct2`'s trailing six bytes). [`to_save_pokemon`], which has
-//! no record to retain them from, writes upstream's own `CreateMon` default
-//! for each instead; friendship is derived from the species' base
-//! friendship, matching `CreateBoxMon`.
+//! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
+//! trailing six bytes). [`to_save_pokemon`], which has no record to retain
+//! them from, writes upstream's own `CreateMon` default for each instead;
+//! friendship is derived from the species' base friendship, matching
+//! `CreateBoxMon`.
+//!
+//! Non-volatile status is likewise retained rather than merged: `battle`
+//! now models [`battle::Status1::Paralysed`] in-battle, but neither encoder
+//! reads or writes it, so a battler paralysed this session keeps the
+//! backing record's own stored status word through an ordinary save exactly
+//! as before -- wiring that overlay is a later slice's boundary, not this
+//! one's.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -76,6 +83,9 @@ pub(crate) enum PartyError {
     Substructures(engine::save::PokemonError),
     /// The decoded species, level, or moveset was not battle-ready.
     Battler(battle::BattleError),
+    /// The record is an egg -- never a battler, upstream's own
+    /// `SetBattlePartyIds` egg exclusion (`pokeemerald/src/battle_controllers.c:601-602`).
+    Egg,
 }
 
 impl std::fmt::Display for PartyError {
@@ -83,6 +93,7 @@ impl std::fmt::Display for PartyError {
         match self {
             Self::Substructures(err) => write!(f, "saved party member: {err}"),
             Self::Battler(err) => write!(f, "saved party member: {err}"),
+            Self::Egg => write!(f, "saved party member: is an egg"),
         }
     }
 }
@@ -528,6 +539,54 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     }
 
     Ok(mon)
+}
+
+/// Whether `record`'s secure-region IV word carries Emerald's egg flag,
+/// checked ahead of decode since [`from_save_pokemon`] itself does not
+/// reject an egg.
+fn record_is_egg(record: &Pokemon) -> bool {
+    record
+        .box_data
+        .substructures()
+        .is_ok_and(|substructures| read_u32(&substructures.misc, MISC_IV_WORD) & IS_EGG_BIT != 0)
+}
+
+/// Selects which saved slot is the active battler on continue: the first
+/// non-egg, non-fainted slot in `party` -- `SetBattlePartyIds`'s
+/// player-side scan (`pokeemerald/src/battle_controllers.c:585-606`,
+/// called by `InitBattleControllers` at `:97`). Falls back to slot 0's own
+/// decode when nothing qualifies, fainted or not -- but never to an egg
+/// (`PartyError::Egg`): an egg is not a battler upstream either, so an
+/// egg-only party fails closed the same way an all-fainted one does.
+///
+/// # Errors
+///
+/// Returns slot 0's [`PartyError`] when nothing qualifies and slot 0 is
+/// itself unusable, whether that is a decode failure or an egg.
+///
+/// # Panics
+///
+/// Panics if `party` is empty; callers only pass a nonzero-count slice.
+pub(crate) fn select_active_battler(
+    dex: &Dex,
+    party: &[Pokemon],
+) -> Result<(usize, BattlePokemon), PartyError> {
+    for (slot, record) in party.iter().enumerate() {
+        if record_is_egg(record) {
+            continue;
+        }
+        match from_save_pokemon(dex, record) {
+            Ok(mon) if !mon.is_fainted() => return Ok((slot, mon)),
+            Ok(_) => {}
+            // Logged, not just discarded: a later slot winning the scan
+            // must not hide that an earlier one's bytes would not decode.
+            Err(err) => eprintln!("continue: slot {slot}'s record {err} -- skipped"),
+        }
+    }
+    if record_is_egg(&party[0]) {
+        return Err(PartyError::Egg);
+    }
+    from_save_pokemon(dex, &party[0]).map(|mon| (0, mon))
 }
 
 fn read_u16(bytes: &[u8], range: Range<usize>) -> u16 {

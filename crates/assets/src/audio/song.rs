@@ -414,6 +414,29 @@ pub const MAX_TRACKS: usize = u8::MAX as usize;
 /// fails the decode). The `Vec` still grows to whatever the input holds.
 const MAX_PREALLOC_EVENTS: usize = 1 << 16;
 
+/// Rejects a [`SongEvent::Goto`]/[`SongEvent::MemAccBranch`] `target` at or
+/// past `track`'s own event count (module docs, "Looping").
+fn check_jump_targets(
+    track_index: usize,
+    track: &[SongEvent],
+    event_count: u32,
+) -> Result<(), AudioError> {
+    for (event_index, event) in track.iter().enumerate() {
+        let (SongEvent::Goto(target) | SongEvent::MemAccBranch { target, .. }) = *event else {
+            continue;
+        };
+        if target >= event_count {
+            return Err(AudioError::JumpTargetOutOfRange {
+                track_index,
+                event_index,
+                target,
+                event_count,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A song: which [`super::VoiceGroup`] it plays through, its
 /// priority/reverb (the upstream `struct SongHeader` fields this schema
 /// carries — `trackCount` is implicit in [`tracks`](Self::tracks) and
@@ -451,7 +474,10 @@ impl Song {
     /// [`AudioError::TooManyTracks`] if `tracks.len() > `[`MAX_TRACKS`];
     /// [`AudioError::TooManyEvents`] if any one track holds more than
     /// `u32::MAX` events; [`AudioError::IdTooLong`] if `voicegroup`'s id
-    /// does not fit the `u16` length prefix the encoding writes for it.
+    /// does not fit the `u16` length prefix the encoding writes for it;
+    /// [`AudioError::JumpTargetOutOfRange`] if any [`SongEvent::Goto`] or
+    /// [`SongEvent::MemAccBranch`] target does not address an event within
+    /// its own track.
     pub fn new(
         voicegroup: VoiceGroupId,
         priority: u8,
@@ -462,10 +488,10 @@ impl Song {
         if tracks.len() > MAX_TRACKS {
             return Err(AudioError::TooManyTracks(tracks.len()));
         }
-        for track in &tracks {
-            if u32::try_from(track.len()).is_err() {
-                return Err(AudioError::TooManyEvents(track.len()));
-            }
+        for (track_index, track) in tracks.iter().enumerate() {
+            let event_count =
+                u32::try_from(track.len()).map_err(|_| AudioError::TooManyEvents(track.len()))?;
+            check_jump_targets(track_index, track, event_count)?;
         }
         Ok(Self {
             voicegroup,
@@ -533,13 +559,9 @@ impl Song {
 
     /// Decode from [`encode`](Self::encode)'s binary form.
     ///
-    /// Structural decode only: a [`SongEvent::Goto`] target is not validated
-    /// against the length of the track it appears in. (Unlike
-    /// [`super::Sample::decode`], which does reject a loop start at or past
-    /// its PCM payload -- a looping sample's one single-field invariant --
-    /// a `Goto` target has no counterpart checkable from this entry alone.)
-    /// Cross-field and cross-entry validation belongs to the later `#115`
-    /// child that loads a pack's audio entries together.
+    /// Same-track jump targets are validated here too, like
+    /// [`super::Sample::decode`] re-checks a loop start; the cross-entry
+    /// [`Song::voicegroup`] reference is not.
     ///
     /// # Errors
     ///
@@ -548,8 +570,10 @@ impl Song {
     /// valid UTF-8; [`AudioError::UnknownSongEvent`] for an unrecognized
     /// event tag byte; [`AudioError::UnknownMemAccOp`] for a MEMACC
     /// op/condition byte outside its range;
-    /// [`AudioError::TrailingBytes`] if unread bytes remain after the last
-    /// track.
+    /// [`AudioError::JumpTargetOutOfRange`] if a [`SongEvent::Goto`] or
+    /// [`SongEvent::MemAccBranch`] target does not address an event within
+    /// its own track; [`AudioError::TrailingBytes`] if unread bytes remain
+    /// after the last track.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let voicegroup = VoiceGroupId(r.string()?);
@@ -562,12 +586,15 @@ impl Song {
         // `VoiceGroup::decode`, whose `u8` count can overrun its 128 slots.
         let track_count = usize::from(r.u8()?);
         let mut tracks = Vec::with_capacity(track_count);
-        for _ in 0..track_count {
-            let event_count = usize::try_from(r.u32()?).map_err(|_| AudioError::Truncated)?;
+        for track_index in 0..track_count {
+            let raw_event_count = r.u32()?;
+            let event_count =
+                usize::try_from(raw_event_count).map_err(|_| AudioError::Truncated)?;
             let mut events = Vec::with_capacity(event_count.min(MAX_PREALLOC_EVENTS));
             for _ in 0..event_count {
                 events.push(SongEvent::read(&mut r)?);
             }
+            check_jump_targets(track_index, &events, raw_event_count)?;
             tracks.push(events);
         }
         r.expect_eof()?;
