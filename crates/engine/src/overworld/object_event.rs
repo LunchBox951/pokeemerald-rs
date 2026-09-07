@@ -1,7 +1,11 @@
-//! Object-event visibility, spatial queries, initial facing, and script-local state.
+//! Object-event visibility, spatial queries, initial facing, and live state.
 //!
-//! Map queries read static object-event templates. Moving an [`ObjectEventState`] does not update
-//! rendering, collision, interaction, sight, or future spawns.
+//! The visibility/spatial queries below still read static object-event templates.
+//! [`ObjectEventState`] is the movable position/elevation/facing/movement representation a caller
+//! holds, either as a standalone script-local copy or, via [`ObjectEventCollection`], as one entry
+//! in a map-scoped collection keyed by `local_id`. Neither form is yet wired into rendering,
+//! collision, interaction, or sight -- those still consult the static templates this module also
+//! exposes.
 
 use assets::{MovementType, ObjectEvent};
 
@@ -10,6 +14,10 @@ use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::player::{PlayerState, TilePos};
 use crate::event_data::EventData;
+
+#[path = "live_object_events.rs"]
+mod live_object_events;
+pub use live_object_events::{LiveObjectEvent, ObjectEventCollection};
 
 /// Returns whether an object's hide flag permits it to spawn.
 ///
@@ -189,10 +197,13 @@ pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
     }
 }
 
-/// Script-local mutable state copied from an object-event template.
+/// Mutable position, previous-position, elevation, facing, and movement state copied from an
+/// object-event template.
 ///
-/// Template overrides remain inside this value; map queries and later spawns do not observe them.
-/// Walking commits the destination immediately, while the owning script tracks animation time.
+/// Template overrides remain inside this value; map queries and later spawns do not observe them
+/// unless a caller holds this value inside an [`ObjectEventCollection`], which does not itself
+/// feed those queries yet. Walking commits the destination immediately, while the owning script
+/// or collection entry tracks animation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectEventState {
     position: TilePos,

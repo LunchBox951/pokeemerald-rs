@@ -1,6 +1,6 @@
 //! Wild move selection, unsupported moves, and PP validation.
 
-use crate::common::{max_iv_mon, SequenceRng};
+use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
 use assets::MoveId;
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage,
@@ -32,7 +32,7 @@ fn the_wild_opponent_rejects_move_slots_it_does_not_know() {
 #[test]
 fn the_wild_opponent_uses_the_slot_the_rejection_loop_landed_on() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: the run fails
+    let player = slow_runner_rattata(&dex); // slow: the run fails
     let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
 
     // draw 1 -> 1 % 4 = 1, a slot this mon knows: Scratch, first try.
@@ -181,7 +181,7 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
     // to MoveEnd. No accuracy/crit/damage/effect-chance draws, no
     // damage, and no deduction (ppreduce is never reached). Only an
     // all-spent moveset diverts to Struggle instead, at selection time.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: the run fails
+    let player = slow_runner_rattata(&dex); // slow: the run fails
     let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(10)]); // fast
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();

@@ -238,8 +238,15 @@ pub(crate) struct OverworldPhase {
     /// fired encounter is logged and dropped in it
     /// (`crate::flow::wild_encounter`'s module docs). The battle writes the
     /// mon back here when it ends, so damage taken persists into the
-    /// overworld the way `gPlayerParty[0]` does.
+    /// overworld the way `gPlayerParty[gBattlerPartyIndexes[0]]` does --
+    /// see [`Self::party_lead_slot`] for which saved slot that is.
     pub(super) party_lead: Option<battle::BattlePokemon>,
+    /// The saved slot [`Self::party_lead`] was decoded from --
+    /// `SetBattlePartyIds`'s `gBattlerPartyIndexes[0]`
+    /// (`pokeemerald/src/battle_controllers.c:604`). Write-back
+    /// ([`Self::copy_party_and_objects_to_save`]) and [`Self::white_out`]'s
+    /// heal both target this index, not always slot 0.
+    pub(super) party_lead_slot: usize,
     /// The current-HP points [`crate::party`]'s load clamp hid from
     /// [`Self::party_lead`] (`party::hp_hidden_by_load`): measured when the
     /// lead is decoded from the save, added back by the merge on every
@@ -267,22 +274,10 @@ pub(crate) struct OverworldPhase {
     ///
     /// Set by [`Self::copy_party_and_objects_from_save`]'s error arm and
     /// cleared by its other two (empty count, clean decode). The battle
-    /// handoffs write [`Self::party_lead`] too -- `begin_wild_battle`,
-    /// `begin_first_battle`, `begin_route103_rival_battle` and
-    /// `begin_sight_trainer_battle_if_seen` each take it to `None` for the
-    /// duration of a fight, and the `&mut` write-backs
-    /// (`npc_trainer_battle::advance_npc_trainer_battle` and its wild
-    /// counterpart) put a `Some` back -- but none of them can run while
-    /// this flag is true: every one of those handoffs bails out unless the
-    /// lead is already `Some`, and the flag is only ever set when the
-    /// decode left none. So the flag's production *write sites* remain
-    /// exactly two: this load path, and [`Self::load_default`]'s
-    /// provisional-starter grant, a deliberate new-game identity change
-    /// that starts from [`Self::new`]'s `false` and never runs the load
-    /// path at all -- which makes that second write a no-op, `false` onto
-    /// `false`, spelled out only so a future new-game path cannot inherit
-    /// a set flag. The only production transition that *changes* the
-    /// value is this load path's error arm.
+    /// handoffs and [`Self::white_out`]'s re-scan also assign
+    /// [`Self::party_lead`], but each bails out unless a lead is already
+    /// `Some`, so none can flip this flag while it is true -- only this
+    /// load path's arms do in production.
     /// [`Self::copy_party_and_objects_to_save`] reads this
     /// flag, not the save bytes, to decide whether the no-lead arm may zero
     /// `player_party[0]` -- upstream's `SavePlayerParty`
@@ -655,6 +650,9 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            // Overwritten immediately below by `copy_party_and_objects_from_save`;
+            // `0` here is only ever the value a genuinely empty party needs.
+            party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             // Overwritten immediately below, once `copy_party_and_objects_from_save`
             // has actually looked at the save's party count and bytes; `false`
@@ -804,6 +802,9 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            // A new game's lead, once `Self::load_default` grants one, is
+            // always the fresh starter written into slot 0.
+            party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             // `Self::from_saved`'s load path never runs for a new game, so
             // there is no retained-undecodable slot to carry -- see
@@ -999,6 +1000,10 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+/// Continue's active-battler selection ([`party::select_active_battler`])
+/// against both battle handoffs and the write-back merge that follows.
+#[cfg(test)]
+mod fainted_lead_party_tests;
 /// `first_battle_conclusion`'s tests (issue #251) -- the same per-area split
 /// `route103_rival_tests`' own doc comment explains.
 #[cfg(test)]
