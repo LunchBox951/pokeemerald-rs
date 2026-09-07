@@ -25,8 +25,27 @@ pub enum PngError {
     Inflate(InflateError),
     /// A scanline has an unknown filter type.
     BadFilterType(u8),
-    /// The inflated data does not contain every declared scanline.
-    PixelDataTooShort,
+    /// The inflated data does not contain every declared scanline. Carries
+    /// the exact length IHDR's dimensions and bit depth imply and the
+    /// inflated data's actual length.
+    PixelDataTooShort {
+        /// The exact length implied by the IHDR dimensions and bit depth.
+        expected: usize,
+        /// The inflated data's actual length.
+        actual: usize,
+    },
+    /// The inflated data contains more bytes than every declared scanline
+    /// accounts for; a well-formed PNG's IDAT stream inflates to exactly
+    /// `scanline_size * height` bytes, so a longer payload is malformed
+    /// rather than a valid image with trailing data to discard. Carries the
+    /// exact length IHDR's dimensions and bit depth imply and the inflated
+    /// data's actual length.
+    PixelDataTooLong {
+        /// The exact length implied by the IHDR dimensions and bit depth.
+        expected: usize,
+        /// The inflated data's actual length.
+        actual: usize,
+    },
     /// A chunk's CRC does not match its type and data.
     ChunkCrcMismatch([u8; 4]),
     /// The `PLTE` chunk is missing, empty, or contains a partial RGB entry.
@@ -43,9 +62,14 @@ impl fmt::Display for PngError {
             Self::Unsupported(what) => write!(f, "unsupported PNG shape: {what}"),
             Self::Inflate(err) => write!(f, "PNG IDAT stream: {err}"),
             Self::BadFilterType(byte) => write!(f, "invalid PNG scanline filter type {byte}"),
-            Self::PixelDataTooShort => {
-                write!(f, "PNG pixel data shorter than IHDR dimensions imply")
-            }
+            Self::PixelDataTooShort { expected, actual } => write!(
+                f,
+                "PNG pixel data too short: IHDR dimensions imply exactly {expected} bytes, got {actual}"
+            ),
+            Self::PixelDataTooLong { expected, actual } => write!(
+                f,
+                "PNG pixel data too long: IHDR dimensions imply exactly {expected} bytes, got {actual}"
+            ),
             Self::ChunkCrcMismatch(kind) => write!(
                 f,
                 "PNG {} chunk CRC mismatch",
@@ -301,9 +325,19 @@ fn defilter_and_unpack(
     let height = height as usize;
     let packed_row_bytes = (width * usize::from(bit_depth)).div_ceil(8);
     let scanline_size = FILTER_PREFIX_SIZE + packed_row_bytes;
+    let expected_len = scanline_size * height;
 
-    if raw.len() < scanline_size * height {
-        return Err(PngError::PixelDataTooShort);
+    if raw.len() < expected_len {
+        return Err(PngError::PixelDataTooShort {
+            expected: expected_len,
+            actual: raw.len(),
+        });
+    }
+    if raw.len() > expected_len {
+        return Err(PngError::PixelDataTooLong {
+            expected: expected_len,
+            actual: raw.len(),
+        });
     }
 
     let mut previous_row = vec![0u8; packed_row_bytes];
@@ -598,6 +632,37 @@ mod tests {
 
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Truncated);
+    }
+
+    #[test]
+    fn rejects_pixel_data_shorter_than_ihdr_dimensions_imply() {
+        let raw = [super::FILTER_NONE];
+        let png = indexed_png_from_raw(super::EIGHT_BIT_DEPTH, 1, 1, &raw);
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::PixelDataTooShort {
+                expected: 2,
+                actual: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_one_surplus_inflated_scanline_byte() {
+        let raw = [super::FILTER_NONE, 7, 9];
+        let png = indexed_png_from_raw(super::EIGHT_BIT_DEPTH, 1, 1, &raw);
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::PixelDataTooLong {
+                expected: 2,
+                actual: 3,
+            },
+            "a 1x1 PNG whose IDAT inflates to one extra byte is malformed, not a one-pixel image"
+        );
     }
 
     #[test]
