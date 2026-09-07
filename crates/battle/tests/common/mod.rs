@@ -1,4 +1,4 @@
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{BattlePokemon, BattleRng, Dex, Ivs, Nature, MAX_IV};
 
 pub struct SequenceRng {
@@ -46,13 +46,61 @@ pub fn max_iv_mon(
     level: u8,
     known_moves: Vec<MoveId>,
 ) -> BattlePokemon {
+    max_iv_mon_with_personality(
+        dex,
+        species_id,
+        level,
+        known_moves,
+        u32::from(Nature::Hardy.id()),
+    )
+}
+
+/// Builds a max-IV mon like [`max_iv_mon`], but with an explicit personality
+/// so a caller can choose which ability slot a two-ability species starts
+/// with.
+pub fn max_iv_mon_with_personality(
+    dex: &Dex,
+    species_id: u16,
+    level: u8,
+    known_moves: Vec<MoveId>,
+    personality: u32,
+) -> BattlePokemon {
     BattlePokemon::new(
         dex,
         SpeciesId(species_id),
         level,
         MAX_IVS,
-        u32::from(Nature::Hardy.id()),
+        personality,
         known_moves,
     )
     .unwrap()
+}
+
+/// Personality 25 is odd (secondary ability slot) yet still lands on the
+/// neutral Hardy nature (`25 % 25 == 0`), like [`max_iv_mon`]'s default --
+/// see [`slow_runner_rattata`].
+#[allow(
+    dead_code,
+    reason = "only turn_engine's escape/move_selection tests use this; wild_battle.rs's own test binary compiles this shared module too"
+)]
+pub const SECONDARY_ABILITY_PERSONALITY: u32 = 25;
+
+/// The L5 Rattata every escape/move-selection runner fixture builds, on
+/// ability slot 1 (Guts) instead of slot 0 (Run Away): outside the Battle
+/// Pyramid, upstream's `TryRunFromBattle` escapes a Run Away holder
+/// unconditionally, bypassing the plain speed/run-tries branch these tests
+/// assert (`battle_util.c:427-447`).
+#[allow(
+    dead_code,
+    reason = "only turn_engine's escape/move_selection tests use this; wild_battle.rs's own test binary compiles this shared module too"
+)]
+pub fn slow_runner_rattata(dex: &Dex) -> BattlePokemon {
+    let runner =
+        max_iv_mon_with_personality(dex, 19, 5, vec![MoveId(33)], SECONDARY_ABILITY_PERSONALITY);
+    assert_eq!(
+        runner.ability(),
+        AbilityId::GUTS,
+        "the runner must not carry Run Away, or upstream escapes unconditionally"
+    );
+    runner
 }
