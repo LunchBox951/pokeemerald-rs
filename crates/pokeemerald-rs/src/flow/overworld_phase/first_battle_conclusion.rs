@@ -265,16 +265,10 @@ impl OverworldPhase {
     /// docs' "The upstream chain" section explains why: `CB2_EndFirstBattle`
     /// itself never branches on the outcome either).
     ///
-    /// Heals every occupied party slot, not just [`OverworldPhase::party_lead`]
-    /// (`special HealPlayerParty`'s own upstream contract -- see this
-    /// method's own "What's modelled, narrowly" section), and re-scans for
-    /// the active battler the same way
-    /// [`super::white_out::OverworldPhase::white_out`] does: a `None` party
-    /// lead with an empty saved party (a bare test phase with no battle
-    /// actually run through the trigger) is a silent no-op there too, since
-    /// production always has a real lead here:
-    /// [`crate::flow::first_battle::advance_first_battle`]'s own
-    /// write-back contract guarantees one.
+    /// `special HealPlayerParty` runs through
+    /// [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`];
+    /// a `None` lead with an empty saved party (a bare test phase) is a
+    /// silent no-op there.
     pub(super) fn conclude_first_battle(&mut self) {
         eprintln!(
             "first battle: concluded -- healing the party, writing the Birch's-bag vars, and \

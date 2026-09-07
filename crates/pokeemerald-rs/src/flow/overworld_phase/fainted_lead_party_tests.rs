@@ -220,14 +220,9 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     );
 }
 
-/// The white-out heal reaches every occupied slot, not just the one
-/// continue selected: `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`)
-/// loops the whole saved party, so a hardcoded `player_party[party_lead_slot]`-only
-/// write would leave a fainted slot the player never sent out still
-/// fainted. With every slot healed, the active-battler selection is
-/// re-run too (`SetBattlePartyIds`'s own re-scan) -- an earlier slot the
-/// continue-time scan skipped as fainted may now be the first usable one
-/// again.
+/// A white-out heals every occupied slot and re-selects the lead through
+/// `heal_whole_party_and_reselect_lead`, so a slot the player never sent
+/// out does not stay fainted and can become the lead again.
 #[test]
 fn a_white_out_heals_every_occupied_slot_and_reselects_the_first_usable_one() {
     const STORED_STATUS: u32 = 0x40;

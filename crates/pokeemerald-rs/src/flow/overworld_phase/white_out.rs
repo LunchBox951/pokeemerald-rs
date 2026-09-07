@@ -157,32 +157,21 @@ impl OverworldPhase {
         self.warp_to_position(map, heal_location.x, heal_location.y);
     }
 
-    /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`):
-    /// full HP, full PP, and cleared status for every occupied party slot,
-    /// not just [`Self::party_lead`], followed by
-    /// [`crate::party::select_active_battler`]'s own upstream re-scan
-    /// (`SetBattlePartyIds`) for the active battler -- merging the outgoing
-    /// lead into its saved slot first so reselection cannot drop its
-    /// session heal, EVs, or experience. [`Self::white_out`] and
-    /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]
-    /// are upstream's only two `HealPlayerParty` call sites this port
-    /// models, and both share this one routine rather than each
-    /// duplicating it `(oop-boundaries)`; `context` only labels each
-    /// caller's own log lines (`"white-out"`, `"first battle"`).
+    /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`): full
+    /// HP, full PP, and cleared status for every occupied slot, then
+    /// [`crate::party::select_active_battler`]'s active-battler re-scan.
+    /// `context` labels the caller's log lines.
     pub(super) fn heal_whole_party_and_reselect_lead(&mut self, context: &str) {
         let dex = Dex::new();
         let stored_count =
             usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
 
-        // HealPlayerParty() -- the slot continue selected
-        // ([`OverworldPhase::party_lead_slot`]) heals through its live
-        // battler; every other occupied slot heals below, through its own
+        // The lead heals through its live battler and merges back into its
+        // saved slot first, so the re-scan below cannot drop its session
+        // heal, EVs, or experience; every other slot heals through its
         // saved bytes.
         if let Some(lead) = self.party_lead.as_mut() {
             let slot = self.party_lead_slot;
-            // `HealPlayerParty` clears status, restores HP to MAX_HP, and
-            // fully refills PP for every occupied slot, unconditionally
-            // (`script_pokemon_util.c:30-59`).
             self.save1.player_party[slot].status = 0;
             self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
             match lead.heal(&dex) {
@@ -205,9 +194,8 @@ impl OverworldPhase {
             }
         }
 
-        // `HealPlayerParty` heals every occupied slot, not just the lead
-        // (`script_pokemon_util.c:30-59`); a slot this port cannot decode
-        // still gets its plaintext HP and status cleared.
+        // A slot this port cannot decode still gets its plaintext HP and
+        // status cleared.
         for (slot, record) in self.save1.player_party[..stored_count]
             .iter_mut()
             .enumerate()
@@ -245,9 +233,7 @@ impl OverworldPhase {
             }
         }
 
-        // Re-run `SetBattlePartyIds`'s upstream re-scan now that
-        // `HealPlayerParty` (`script_pokemon_util.c:30-59`) has healed the
-        // whole party: an earlier fainted slot may now be first usable.
+        // An earlier fainted slot may now be the first usable one.
         if stored_count > 0 {
             match crate::party::select_active_battler(
                 &dex,
