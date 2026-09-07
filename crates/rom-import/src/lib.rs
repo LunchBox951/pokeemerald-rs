@@ -431,8 +431,9 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 ///
 /// The handle is dropped before the unlink because Windows refuses to
 /// remove a file that is still open. The original I/O error is what the
-/// caller sees: the write is why the import failed, and a cleanup that
-/// also fails leaves litter but must not rename the diagnosis.
+/// caller sees, via [`remove_after`], which keeps `error`'s own kind: the
+/// write is why the import failed, and a cleanup that also fails augments
+/// that diagnosis instead of replacing it.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -445,9 +446,32 @@ fn write_new_with(
         Ok(()) => Ok(()),
         Err(error) => {
             drop(file);
-            let _ = std::fs::remove_file(out_path);
-            Err(error)
+            Err(remove_after(out_path, error))
         }
+    }
+}
+
+/// Removes the partial file `write_new_with` leaves behind after `original`,
+/// folding a cleanup failure into `original` instead of discarding it --
+/// silently dropping it would leave a partial file at `path` unreported for
+/// the one reason that most needs reporting it: its own removal failing
+/// too, which then blocks a retry with `AlreadyExists` and no clue why.
+/// Keeps `original`'s `ErrorKind` so a caller matching on it still sees the
+/// write failure that actually happened. A `NotFound` from the removal
+/// means nothing was left to remove, so there is nothing abandoned to
+/// report (`crates/xtask/src/extract/mod.rs`'s `remove_abandoned_staging_file`
+/// mirrors this for the extractor's own staged write).
+fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
+    match std::fs::remove_file(path) {
+        Ok(()) => original,
+        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
+        Err(cleanup_err) => std::io::Error::new(
+            original.kind(),
+            format!(
+                "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
+                path.display()
+            ),
+        ),
     }
 }
 
@@ -681,6 +705,49 @@ mod tests {
         assert_eq!(
             std::fs::read(&out).expect("the pack reads back"),
             b"pack bytes"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_cleanup_names_the_partial_file_it_left_behind() {
+        // `remove_after`'s own removal must also be able to fail -- silently
+        // dropping that failure (as the unfixed code did) would leave
+        // `out`'s name permanently taken with no clue why, and every retry
+        // would fail with `AlreadyExists` and no mention of the artifact
+        // blocking it. The write closure swaps the partial file for a
+        // non-empty directory before returning its error, so `remove_after`'s
+        // `remove_file` fails deterministically (`remove_file` refuses any
+        // directory, empty or not, regardless of the runner's privileges --
+        // unlike a permission-based seam, which root bypasses). Mirrors
+        // `crates/xtask/src/extract/mod.rs`'s
+        // `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
+        let dir = TempDir::new("write-cleanup-fails");
+        let out = dir.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            drop(std::fs::remove_file(&out));
+            std::fs::create_dir(&out).expect("the directory takes the freed name");
+            std::fs::write(out.join("occupant"), b"occupant").expect("the occupant writes");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        // The write's own error kind survives the additional cleanup
+        // failure, and the message names what cleanup left behind.
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert!(
+            err.to_string().contains(&out.display().to_string()),
+            "a failed cleanup must name the artifact it left behind: {err}"
+        );
+        assert!(
+            out.is_dir(),
+            "cleanup should have failed, leaving the directory behind"
         );
     }
 

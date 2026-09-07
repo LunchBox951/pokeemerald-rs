@@ -188,7 +188,21 @@ pub enum ImportRomError {
     /// message the player sees is the importer's own typed diagnosis: the
     /// wrong ROM, a truncated file, or an asset the profile's addresses do
     /// not reach.
-    Import(ImportError),
+    Import {
+        /// The importer's own diagnosis.
+        source: ImportError,
+        /// The temporary file the import had already created when it
+        /// failed, if any. `None` before the ROM's own open succeeds --
+        /// nothing has been created yet at that point (module docs:
+        /// "everything from here on names files inside this one handle").
+        temp_path: Option<PathBuf>,
+        /// Whether the cleanup that followed actually removed
+        /// `temp_path` -- also true when there was nothing to remove.
+        /// [`Dest::discard`] swallows its own failure so it cannot
+        /// displace this diagnosis, which means a partial file can still
+        /// be there.
+        temp_removed: bool,
+    },
     /// The resolved destination names no file to publish.
     ///
     /// A `$POKEEMERALD_PACK` ending in `..` (or naming a filesystem root)
@@ -223,6 +237,12 @@ pub enum ImportRomError {
         temp_path: PathBuf,
         /// The underlying I/O failure.
         source: io::Error,
+        /// Whether the cleanup that followed actually removed
+        /// `temp_path` -- also true when nothing was ever created (temp-
+        /// file creation itself is what failed). [`Dest::discard`]
+        /// swallows its own failure so it cannot displace this
+        /// diagnosis, which means a partial file can still be there.
+        temp_removed: bool,
     },
     /// The pack was built, but moving it from its temporary file to the
     /// destination failed.
@@ -257,7 +277,21 @@ impl fmt::Display for ImportRomError {
             Self::OpenDirFailed { path, source } => {
                 write!(f, "could not open `{}`: {source}", path.display())
             }
-            Self::Import(source) => write!(f, "{source}"),
+            Self::Import {
+                source,
+                temp_path,
+                temp_removed,
+            } => {
+                write!(f, "{source}")?;
+                match temp_path {
+                    Some(temp_path) if !*temp_removed => write!(
+                        f,
+                        " (the partial file `{}` could not be removed and is still there)",
+                        temp_path.display()
+                    ),
+                    _ => Ok(()),
+                }
+            }
             Self::DestinationNamesNoFile { pack_path } => write!(
                 f,
                 "cannot write the asset pack to `{}`: the path names no file — point `{}` at a \
@@ -272,11 +306,25 @@ impl fmt::Display for ImportRomError {
                 rom_path.display(),
                 pack_format::PACK_PATH_ENV
             ),
-            Self::TempFileFailed { temp_path, source } => write!(
-                f,
-                "could not build the asset pack in `{}`: {source}",
-                temp_path.display()
-            ),
+            Self::TempFileFailed {
+                temp_path,
+                source,
+                temp_removed,
+            } => {
+                write!(
+                    f,
+                    "could not build the asset pack in `{}`: {source}",
+                    temp_path.display()
+                )?;
+                if *temp_removed {
+                    Ok(())
+                } else {
+                    write!(
+                        f,
+                        " (that file could not be removed either and is still there)"
+                    )
+                }
+            }
             Self::PublishFailed {
                 temp_path,
                 pack_path,
@@ -320,7 +368,7 @@ impl std::error::Error for ImportRomError {
             | Self::OpenDirFailed { source, .. }
             | Self::TempFileFailed { source, .. }
             | Self::PublishFailed { source, .. } => Some(source),
-            Self::Import(source) => Some(source),
+            Self::Import { source, .. } => Some(source),
             Self::NoDestination
             | Self::DestinationNamesNoFile { .. }
             | Self::DestinationIsSource { .. } => None,
@@ -384,11 +432,13 @@ fn import_to_with(
     // is the file the pack would be published over, and what its bytes are.
     // See the module docs — a path answers about whichever file it named
     // when it was asked, and the source path is not this run's to trust.
-    let rom = fs::File::open(rom_path).map_err(|source| {
-        ImportRomError::Import(ImportError::ReadFailed {
+    let rom = fs::File::open(rom_path).map_err(|source| ImportRomError::Import {
+        source: ImportError::ReadFailed {
             path: rom_path.to_path_buf(),
             source,
-        })
+        },
+        temp_path: None,
+        temp_removed: true,
     })?;
 
     let dir = pack_directory(pack_path);
@@ -459,6 +509,7 @@ fn import_to_with(
             return Err(ImportRomError::TempFileFailed {
                 temp_path: dir.join(&temp_name),
                 source,
+                temp_removed: true,
             });
         }
     };
@@ -467,9 +518,13 @@ fn import_to_with(
         Ok(pack) => pack,
         Err(source) => {
             drop(file);
-            let _ = dest.discard(&temp_name);
+            let temp_removed = dest.discard(&temp_name);
             undo_created_directories(&created);
-            return Err(ImportRomError::Import(source));
+            return Err(ImportRomError::Import {
+                source,
+                temp_path: Some(dir.join(&temp_name)),
+                temp_removed,
+            });
         }
     };
 
@@ -489,11 +544,12 @@ fn import_to_with(
         .and_then(|()| file.sync_all())
     {
         drop(file);
-        let _ = dest.discard(&temp_name);
+        let temp_removed = dest.discard(&temp_name);
         undo_created_directories(&created);
         return Err(ImportRomError::TempFileFailed {
             temp_path: dir.join(&temp_name),
             source,
+            temp_removed,
         });
     }
     drop(file);
