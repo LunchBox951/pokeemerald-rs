@@ -631,12 +631,10 @@ mod tests {
         }
     }
 
-    /// The regression this PR exists for, pinned at the production call
-    /// site: on the ALSA backend a headless box reaches the logical
-    /// `default` device and only fails once queried, so an unreachable
-    /// device arrives as a `cpal` error from [`negotiate`]'s query rather
-    /// than as an absent `default_output_device`. Both kinds must read as
-    /// [`PlatformError::NoAudioDevice`] so a headless run stays a success.
+    /// On the ALSA backend a headless box reaches the logical `default`
+    /// device and only fails once queried, so an unreachable device arrives
+    /// as a `cpal` error from [`negotiate`]'s query rather than as an absent
+    /// `default_output_device`.
     #[test]
     fn an_unreachable_device_or_host_fails_the_query_as_no_audio_device() {
         for kind in [
