@@ -41,9 +41,10 @@
 //!   via [`AudioOutput::stream_errors`]; a nonzero count means the stream is
 //!   unhealthy even when [`AudioOutput::underruns`] stays flat.
 //!
-//! CI is headless, so nothing here opens a real cpal stream in a test: only
+//! CI is headless, so no test CI runs opens a real cpal stream: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
-//! touch `cpal` directly. The ring buffer and resampler — the logic that
+//! touch `cpal` directly, and the one test that drives a real device to pin
+//! which error mapping the build stage uses is `#[ignore]`d. The ring buffer and resampler — the logic that
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
@@ -428,9 +429,11 @@ fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, Platf
 /// it is reported as such.
 ///
 /// Only this stage collapses that way. A device that answered the query is
-/// real, so [`build_stream`] losing it afterwards stays
-/// [`PlatformError::Audio`] — a caller that tolerates a headless run must
-/// still hear about a device that vanished mid-setup.
+/// real, so [`build_stream`] losing it afterwards stays on the plain
+/// [`From<cpal::Error>`] mapping to [`PlatformError::Audio`] — a caller that
+/// tolerates a headless run must still hear about a device that vanished
+/// mid-setup. `a_lost_device_after_the_query_stays_an_audio_error` pins that
+/// split against a real device.
 fn classify_query_error(err: cpal::Error) -> PlatformError {
     match err.kind() {
         cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
@@ -583,15 +586,51 @@ mod tests {
         }
     }
 
-    /// `build_stream` is deliberately not routed through
-    /// [`classify_query_error`], so a device lost between a successful query
-    /// and the stream build keeps its `Audio` variant instead of reading as
-    /// a headless run.
+    /// The stream-build stage is deliberately *not* routed through
+    /// [`classify_query_error`]: a device that answered the query is real,
+    /// so losing it before the build is a failure, not a headless run.
+    ///
+    /// This drives the production [`build_stream`] against the host's real
+    /// default device — the only way to observe which mapping that stage
+    /// uses, since a hand-built `PlatformError` would assert nothing about
+    /// the call site. It is `#[ignore]`d because it touches a real device:
+    /// the module docs' rule is that no test CI runs opens a real `cpal`
+    /// stream, and `cargo test` honours that by skipping this. Run it by
+    /// hand on a headless box (`cargo test -p platform -- --ignored`), where
+    /// cpal's phantom ALSA `default` fails the build with
+    /// `DeviceNotAvailable` — the exact kind the query stage folds into
+    /// `NoAudioDevice`, and which must survive here as `Audio`.
     #[test]
+    #[ignore = "opens the host's real default audio device; run by hand"]
     fn a_lost_device_after_the_query_stays_an_audio_error() {
-        let build_failure =
-            PlatformError::from(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
-        assert!(matches!(build_failure, PlatformError::Audio(_)));
+        let Some(device) = cpal::default_host().default_output_device() else {
+            println!("skipped: the host names no default output device to build against");
+            return;
+        };
+        // Hand-built rather than negotiated: on the headless box this test
+        // targets, the query stage fails first and would never reach here.
+        let config = cpal::SupportedStreamConfig::new(
+            AudioOutput::CHANNELS,
+            48_000,
+            cpal::SupportedBufferSize::Unknown,
+            cpal::SampleFormat::F32,
+        );
+        let (_producer, consumer) = ring_buffer(64);
+
+        match build_stream(
+            &device,
+            &config,
+            Source::Direct(consumer),
+            Arc::new(AtomicU64::new(0)),
+        ) {
+            Ok(_stream) => {
+                println!("skipped: this host has a working device that accepted the stream");
+            }
+            Err(err) => assert!(
+                matches!(err, PlatformError::Audio(_)),
+                "a build-stage failure must stay an audio error, got: {err:?}"
+            ),
+        }
     }
 
     #[test]
