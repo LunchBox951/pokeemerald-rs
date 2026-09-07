@@ -43,9 +43,9 @@
 //!
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
-//! touch `cpal` directly. [`build_stream`] takes its one cpal call behind
-//! [`OutputStreamBuilder`], so its error mapping is testable against a fake
-//! that opens no device. The ring buffer and resampler — the logic that
+//! touch `cpal` directly. Both take their cpal calls behind
+//! [`OutputDevice`], so each stage's error mapping is testable against a
+//! fake that opens no device. The ring buffer and resampler — the logic that
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
@@ -402,10 +402,11 @@ fn select_config(
 /// Pick a stereo output configuration for [`AudioOutput::M4A_MIXER_RATE`],
 /// delegating the selection policy to [`select_config`] and mapping the
 /// chosen candidate back to a concrete [`cpal::SupportedStreamConfig`].
-fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, PlatformError> {
+fn negotiate<D: OutputDevice>(device: &D) -> Result<cpal::SupportedStreamConfig, PlatformError> {
     let candidates: Vec<cpal::SupportedStreamConfigRange> = device
         .supported_output_configs()
         .map_err(classify_query_error)?
+        .into_iter()
         .filter(|c| c.channels() == AudioOutput::CHANNELS)
         .collect();
 
@@ -473,15 +474,23 @@ fn f32_to_i16(sample: f32) -> i16 {
 /// so pre-sizing still spares the real-time thread an allocation.
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
 
-/// The one `cpal` call [`build_stream`] makes, behind a seam.
+/// The two `cpal` calls [`AudioOutput::open`] makes against a device,
+/// behind a seam.
 ///
-/// `cpal::Device::build_output_stream` is the only part of the build stage
-/// that needs a real device, and a failure there must keep
-/// [`PlatformError::Audio`] rather than collapse into the query stage's
-/// [`PlatformError::NoAudioDevice`] (see [`classify_query_error`]). Naming
-/// that call lets a test force the failure without an audio device, which
-/// the module docs' headless rule requires.
-trait OutputStreamBuilder {
+/// Which of the two failed is the whole distinction [`classify_query_error`]
+/// draws: a query failure means the device was never reachable, a build
+/// failure means a reachable device was lost. Naming both calls lets tests
+/// force either failure with no audio device present, which the module
+/// docs' headless rule requires.
+///
+/// [`negotiate`] collects the query's configurations anyway, so the seam
+/// hands back a `Vec` rather than `cpal`'s associated iterator type: it
+/// costs nothing and spares every implementor an associated type.
+trait OutputDevice {
+    fn supported_output_configs(
+        &self,
+    ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error>;
+
     fn build_output_stream<T, D, E>(
         &self,
         config: cpal::StreamConfig,
@@ -495,7 +504,13 @@ trait OutputStreamBuilder {
         E: FnMut(cpal::Error) + Send + 'static;
 }
 
-impl OutputStreamBuilder for cpal::Device {
+impl OutputDevice for cpal::Device {
+    fn supported_output_configs(
+        &self,
+    ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
+        DeviceTrait::supported_output_configs(self).map(Iterator::collect)
+    }
+
     fn build_output_stream<T, D, E>(
         &self,
         config: cpal::StreamConfig,
@@ -515,8 +530,8 @@ impl OutputStreamBuilder for cpal::Device {
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
 /// the counter [`AudioOutput::stream_errors`] reads.
-fn build_stream<B: OutputStreamBuilder>(
-    device: &B,
+fn build_stream<D: OutputDevice>(
+    device: &D,
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
@@ -586,22 +601,54 @@ fn build_stream<B: OutputStreamBuilder>(
 mod tests {
     use super::*;
 
-    /// The regression the query-stage mapping exists for: on the ALSA
-    /// backend a headless box reaches the logical `default` device and only
-    /// fails once queried, so an unreachable device arrives as a `cpal`
-    /// error here, not as an absent `default_output_device`.
+    /// A device whose every `cpal` call fails with one chosen kind.
+    ///
+    /// Only the failure arms are needed: both boundary tests below drive a
+    /// stage that fails, and `cpal::Stream` has no public constructor to
+    /// return from a success arm anyway.
+    struct FailingDevice(cpal::ErrorKind);
+
+    impl OutputDevice for FailingDevice {
+        fn supported_output_configs(
+            &self,
+        ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
+            Err(cpal::Error::new(self.0))
+        }
+
+        fn build_output_stream<T, D, E>(
+            &self,
+            _config: cpal::StreamConfig,
+            _data_callback: D,
+            _error_callback: E,
+            _timeout: Option<std::time::Duration>,
+        ) -> Result<cpal::Stream, cpal::Error>
+        where
+            T: cpal::SizedSample,
+            D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
+            E: FnMut(cpal::Error) + Send + 'static,
+        {
+            Err(cpal::Error::new(self.0))
+        }
+    }
+
+    /// The regression this PR exists for, pinned at the production call
+    /// site: on the ALSA backend a headless box reaches the logical
+    /// `default` device and only fails once queried, so an unreachable
+    /// device arrives as a `cpal` error from [`negotiate`]'s query rather
+    /// than as an absent `default_output_device`. Both kinds must read as
+    /// [`PlatformError::NoAudioDevice`] so a headless run stays a success.
     #[test]
     fn an_unreachable_device_or_host_fails_the_query_as_no_audio_device() {
         for kind in [
             cpal::ErrorKind::DeviceNotAvailable,
             cpal::ErrorKind::HostUnavailable,
         ] {
+            let Err(err) = negotiate(&FailingDevice(kind)) else {
+                panic!("the fake device always fails the query");
+            };
             assert!(
-                matches!(
-                    classify_query_error(cpal::Error::new(kind)),
-                    PlatformError::NoAudioDevice
-                ),
-                "{kind:?} must read as no audio device"
+                matches!(err, PlatformError::NoAudioDevice),
+                "{kind:?} must read as no audio device, got: {err:?}"
             );
         }
     }
@@ -616,12 +663,12 @@ mod tests {
             cpal::ErrorKind::DeviceBusy,
             cpal::ErrorKind::BackendError,
         ] {
+            let Err(err) = negotiate(&FailingDevice(kind)) else {
+                panic!("the fake device always fails the query");
+            };
             assert!(
-                matches!(
-                    classify_query_error(cpal::Error::new(kind)),
-                    PlatformError::Audio(_)
-                ),
-                "{kind:?} must stay an audio error"
+                matches!(err, PlatformError::Audio(_)),
+                "{kind:?} must stay an audio error, got: {err:?}"
             );
         }
     }
@@ -630,34 +677,12 @@ mod tests {
     /// [`classify_query_error`]: a device that answered the query is real,
     /// so losing it before the build is a failure, not a headless run.
     ///
-    /// Driven through the production [`build_stream`] via
-    /// [`OutputStreamBuilder`], so it pins the call site's mapping rather
-    /// than the `From` impl's, and forces the exact `DeviceNotAvailable`
-    /// that the query stage folds into `NoAudioDevice`. Both sample-format
-    /// arms are covered, since each makes its own build call. The fake needs
-    /// no success arm: `cpal::Stream` has no public constructor, and only
-    /// the failure path is under test.
+    /// Driven through the production [`build_stream`], so it pins that call
+    /// site's mapping rather than the `From` impl's, and forces the exact
+    /// `DeviceNotAvailable` the query stage folds into `NoAudioDevice`. Both
+    /// sample-format arms are covered, since each makes its own build call.
     #[test]
     fn a_lost_device_after_the_query_stays_an_audio_error() {
-        struct LostDevice;
-
-        impl OutputStreamBuilder for LostDevice {
-            fn build_output_stream<T, D, E>(
-                &self,
-                _config: cpal::StreamConfig,
-                _data_callback: D,
-                _error_callback: E,
-                _timeout: Option<std::time::Duration>,
-            ) -> Result<cpal::Stream, cpal::Error>
-            where
-                T: cpal::SizedSample,
-                D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
-                E: FnMut(cpal::Error) + Send + 'static,
-            {
-                Err(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable))
-            }
-        }
-
         for format in [cpal::SampleFormat::F32, cpal::SampleFormat::I16] {
             let config = cpal::SupportedStreamConfig::new(
                 AudioOutput::CHANNELS,
@@ -670,12 +695,12 @@ mod tests {
             // `cpal::Stream` is not `Debug`, so the failure is matched out
             // by hand rather than via `expect_err`.
             let Err(err) = build_stream(
-                &LostDevice,
+                &FailingDevice(cpal::ErrorKind::DeviceNotAvailable),
                 &config,
                 Source::Direct(consumer),
                 Arc::new(AtomicU64::new(0)),
             ) else {
-                panic!("the fake builder always fails");
+                panic!("the fake device always fails the build");
             };
 
             assert!(
