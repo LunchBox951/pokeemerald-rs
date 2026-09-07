@@ -124,15 +124,15 @@ enum OpenOutcome {
 /// Classify an [`AudioOutput::open`] error so only the headless case exits
 /// cleanly.
 ///
-/// The split is [`PlatformError::is_audio_device_unavailable`]'s, which owns
-/// the backend detail: a headless box need not report
-/// [`PlatformError::NoAudioDevice`], since cpal's ALSA host hands out a
-/// logical `default` device that only fails once queried.
+/// [`PlatformError::NoAudioDevice`] alone is the headless case, because
+/// `platform` decides at the stage that knows: an unreachable device fails
+/// `open`'s query and is reported as `NoAudioDevice` there, cpal's phantom
+/// ALSA `default` included. Everything left, `Audio(cpal::Error)` from a
+/// stream build included, means a device answered and then refused.
 fn classify_open_error(error: &PlatformError) -> OpenOutcome {
-    if error.is_audio_device_unavailable() {
-        OpenOutcome::ExpectedHeadless
-    } else {
-        OpenOutcome::PlaybackSetupFailure
+    match error {
+        PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
+        _ => OpenOutcome::PlaybackSetupFailure,
     }
 }
 
@@ -369,12 +369,13 @@ mod tests {
         );
     }
 
+    /// A device that answered and then refused must not read as headless.
+    /// A failed stream build's `PlatformError::Audio(cpal::Error)` takes
+    /// this same wildcard arm, but `cpal` is not a dependency of this crate,
+    /// so `platform`'s own `a_lost_device_after_the_query_stays_an_audio_error`
+    /// pins that the build stage keeps the `Audio` variant this arm catches.
     #[test]
     fn an_unsupported_audio_config_is_a_playback_setup_failure() {
-        // The `PlatformError::Audio(cpal::Error)` kinds that split either
-        // way are covered by `is_audio_device_unavailable`'s own tests;
-        // `cpal` is not a dependency of this crate, so they cannot be
-        // constructed here.
         assert_eq!(
             classify_open_error(&PlatformError::UnsupportedAudioConfig),
             OpenOutcome::PlaybackSetupFailure

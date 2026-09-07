@@ -147,11 +147,15 @@ impl AudioOutput {
     /// # Errors
     ///
     /// - [`PlatformError::NoAudioDevice`] if there is no default output
-    ///   device (headless CI, no audio hardware, no driver running).
+    ///   device, or the one the host named cannot be reached at all
+    ///   (headless CI, no audio hardware, no driver running) — see
+    ///   [`classify_query_error`].
     /// - [`PlatformError::UnsupportedAudioConfig`] if the device has no
     ///   usable stereo output configuration.
-    /// - [`PlatformError::Audio`] if `cpal` fails to query the device or
-    ///   build the stream.
+    /// - [`PlatformError::Audio`] if `cpal` fails to query a reachable
+    ///   device, or fails to build the stream. A device lost *after* the
+    ///   query stays here rather than collapsing into `NoAudioDevice`: the
+    ///   device was real, so losing it is a failure, not a headless run.
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
         let host = cpal::default_host();
         let device = host
@@ -399,7 +403,7 @@ fn select_config(
 fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, PlatformError> {
     let candidates: Vec<cpal::SupportedStreamConfigRange> = device
         .supported_output_configs()
-        .map_err(PlatformError::from)?
+        .map_err(classify_query_error)?
         .filter(|c| c.channels() == AudioOutput::CHANNELS)
         .collect();
 
@@ -411,6 +415,29 @@ fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, Platf
     let (index, rate) = select_config(&tuples, AudioOutput::M4A_MIXER_RATE)
         .ok_or(PlatformError::UnsupportedAudioConfig)?;
     Ok(candidates[index].with_sample_rate(rate))
+}
+
+/// Map a failure of the *device query* stage, the first thing
+/// [`AudioOutput::open`] asks of the device the host named.
+///
+/// A host names a device it cannot actually reach: `cpal`'s ALSA backend
+/// hands out the logical `default` device whether or not any sound hardware
+/// or sound server exists, so a headless Linux box with `libasound`
+/// installed gets past the device lookup and only fails here. For every
+/// caller that is the same fact [`PlatformError::NoAudioDevice`] states, so
+/// it is reported as such.
+///
+/// Only this stage collapses that way. A device that answered the query is
+/// real, so [`build_stream`] losing it afterwards stays
+/// [`PlatformError::Audio`] — a caller that tolerates a headless run must
+/// still hear about a device that vanished mid-setup.
+fn classify_query_error(err: cpal::Error) -> PlatformError {
+    match err.kind() {
+        cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
+            PlatformError::NoAudioDevice
+        }
+        _ => PlatformError::Audio(err),
+    }
 }
 
 /// The device's largest advertised callback size in frames, or `0` if the
@@ -515,6 +542,57 @@ fn build_stream(
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    /// The regression the query-stage mapping exists for: on the ALSA
+    /// backend a headless box reaches the logical `default` device and only
+    /// fails once queried, so an unreachable device arrives as a `cpal`
+    /// error here, not as an absent `default_output_device`.
+    #[test]
+    fn an_unreachable_device_or_host_fails_the_query_as_no_audio_device() {
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::HostUnavailable,
+        ] {
+            assert!(
+                matches!(
+                    classify_query_error(cpal::Error::new(kind)),
+                    PlatformError::NoAudioDevice
+                ),
+                "{kind:?} must read as no audio device"
+            );
+        }
+    }
+
+    /// The other half: a device that answered is real, so every other way
+    /// the query can fail stays an audio error a caller must report.
+    #[test]
+    fn any_other_query_failure_stays_an_audio_error() {
+        for kind in [
+            cpal::ErrorKind::UnsupportedConfig,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::DeviceBusy,
+            cpal::ErrorKind::BackendError,
+        ] {
+            assert!(
+                matches!(
+                    classify_query_error(cpal::Error::new(kind)),
+                    PlatformError::Audio(_)
+                ),
+                "{kind:?} must stay an audio error"
+            );
+        }
+    }
+
+    /// `build_stream` is deliberately not routed through
+    /// [`classify_query_error`], so a device lost between a successful query
+    /// and the stream build keeps its `Audio` variant instead of reading as
+    /// a headless run.
+    #[test]
+    fn a_lost_device_after_the_query_stays_an_audio_error() {
+        let build_failure =
+            PlatformError::from(cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable));
+        assert!(matches!(build_failure, PlatformError::Audio(_)));
+    }
 
     #[test]
     fn null_backend_reports_the_m4a_mixer_rate() {
