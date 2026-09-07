@@ -388,10 +388,13 @@ fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), Extract
 /// silently dropping it would mean an abandoned `.tmp.<pid>` sibling goes
 /// unreported for the one reason that most needs reporting it: its own
 /// removal failing too. Keeps `original`'s `ErrorKind` so a caller matching
-/// on it still sees the write/rename failure that actually happened.
+/// on it still sees the write/rename failure that actually happened. A
+/// `NotFound` from the removal means nothing was staged (the create itself
+/// failed), so there is nothing abandoned to report.
 fn remove_abandoned_staging_file(staging_path: &Path, original: std::io::Error) -> std::io::Error {
     match std::fs::remove_file(staging_path) {
         Ok(()) => original,
+        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
         Err(cleanup_err) => std::io::Error::new(
             original.kind(),
             format!(
@@ -1043,6 +1046,31 @@ mod tests {
             "a failed rename must not leave its staging file behind"
         );
         assert_eq!(std::fs::read(&marker_path).unwrap(), b"unchanged");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_staging_file_that_was_never_created_is_not_reported_as_abandoned() {
+        // `File::create` fails before any staging artifact exists here (the
+        // staging path's parent directory does not exist), so `remove_file`'s
+        // `NotFound` means cleanup had nothing to do -- reporting an
+        // "abandoned staging file" sends a developer hunting a `.tmp.<pid>`
+        // sibling that was never written.
+        let dir = scratch_dir("never-created");
+        let output_path = dir.join("absent").join("pokeemerald.pack");
+        let staging_path = staging_path_for_process(&output_path);
+
+        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+
+        assert!(
+            !staging_path.exists(),
+            "no staging file should exist after a failed create"
+        );
+        assert!(
+            !err.to_string().contains("abandoned staging file"),
+            "nothing was staged, so nothing was abandoned: {err}"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }
