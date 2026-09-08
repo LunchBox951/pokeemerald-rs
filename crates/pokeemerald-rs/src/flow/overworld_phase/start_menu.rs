@@ -57,6 +57,7 @@
 //! [`OverworldPhase::from_saved`].
 
 use engine::save::SavedObjectEvent;
+use engine::text::render::TextSpeed;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
 
@@ -391,6 +392,17 @@ impl SaveTarget for PhaseSaveTarget<'_> {
         // into a longer message, so its `End` must not truncate that.
         tokens.retain(|token| *token != Token::End);
         tokens
+    }
+
+    /// `gSaveBlock2Ptr->optionsTextSpeed`, clamped the same way
+    /// `GetPlayerTextSpeedDelay` clamps it for delay selection
+    /// (`src/menu.c:481-487`, mirrored by [`TextSpeed::from_raw_option`]).
+    /// Upstream's own write-back -- repairing an out-of-range value to
+    /// `OPTIONS_TEXT_SPEED_MID` in `gSaveBlock2Ptr` itself (`:483-484`) --
+    /// is not mirrored: this only selects the speed to print at, and never
+    /// mutates the phase's stored `save2`.
+    fn player_text_speed(&self) -> TextSpeed {
+        TextSpeed::from_raw_option(self.phase.save2.options_text_speed)
     }
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`), preceded by

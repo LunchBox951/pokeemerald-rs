@@ -1085,4 +1085,47 @@ mod tests {
             }
         }
     }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every row's nine stored attributes as one byte each, in table
+    /// order. `MoveType::Mystery` renders as upstream's raw `TYPE_MYSTERY` id
+    /// so the byte equals the source `.type` field in every case.
+    fn render_table_bytes() -> Vec<u8> {
+        const MYSTERY_TYPE_BYTE: u8 = 9; // upstream TYPE_MYSTERY (include/constants/pokemon.h:15)
+
+        let mut out = Vec::with_capacity(MOVES_COUNT * 9);
+        for md in MoveTable::new().iter() {
+            let move_type_byte = match md.move_type {
+                MoveType::Battle(t) => t.id(),
+                MoveType::Mystery => MYSTERY_TYPE_BYTE,
+            };
+            out.push(md.effect.id());
+            out.push(md.power);
+            out.push(move_type_byte);
+            out.push(md.accuracy);
+            out.push(md.pp);
+            out.push(md.secondary_effect_chance);
+            out.push(md.target.bits());
+            out.push(md.priority.to_le_bytes()[0]);
+            out.push(md.flags.bits());
+        }
+        out
+    }
+
+    /// Digest of upstream `src/data/battle_moves.h` `gBattleMoves`, every
+    /// row's nine fields rendered as `render_table_bytes` renders ours.
+    #[test]
+    fn every_row_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "21b40cdf1fe8afe8",
+            "battle move table diverges from the canonical upstream rows",
+        );
+    }
 }
