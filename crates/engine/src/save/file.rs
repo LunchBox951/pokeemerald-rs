@@ -523,9 +523,15 @@ impl SaveFile {
     /// A collision-resistant sibling staging name -- unguessable to a planted
     /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
     /// retries the rare exact collision, so this needs resistance, not proof.
-    /// The save basename is cut to fit the suffix within
-    /// [`Self::MAX_COMPONENT_LEN`], so every save path whose own name is
-    /// valid gets a valid staging sibling.
+    /// The save basename is cut to fit the suffix within both
+    /// [`Self::MAX_COMPONENT_LEN`] and [`Self::MAX_PATH_LEN`], so every save
+    /// path whose own name is valid, and whose directory alone leaves room
+    /// for the suffix's fixed width, gets a valid staging sibling -- whether
+    /// the basename alone is long or the whole path already sits close to
+    /// the filesystem's length limit. A directory that by itself already
+    /// consumes that much room admits no sibling at all, with or without
+    /// this budgeting: no basename length can buy back space the directory
+    /// component already spent.
     fn staging_path(&self) -> PathBuf {
         let suffix = format!(".tmp.{}", Self::unique_component());
         let mut stem = self
@@ -533,7 +539,26 @@ impl SaveFile {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let budget = Self::MAX_COMPONENT_LEN.saturating_sub(suffix.len());
+        // The raw, not lossy, basename length: `stem` may already have grown
+        // past what the original bytes occupied (each invalid UTF-8 byte
+        // becomes a multi-byte replacement character), and subtracting that
+        // inflated length here would undercount the directory prefix still
+        // ahead of it.
+        let raw_file_name_len = self
+            .path
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        let directory_prefix_len = self
+            .path
+            .as_os_str()
+            .as_encoded_bytes()
+            .len()
+            .saturating_sub(raw_file_name_len);
+        let component_budget = Self::MAX_COMPONENT_LEN.saturating_sub(suffix.len());
+        let whole_path_budget = Self::MAX_PATH_LEN
+            .saturating_sub(directory_prefix_len)
+            .saturating_sub(suffix.len());
+        let budget = component_budget.min(whole_path_budget);
         if stem.len() > budget {
             let mut cut = budget;
             while !stem.is_char_boundary(cut) {
@@ -547,6 +572,17 @@ impl SaveFile {
     /// The per-component limit shared by Linux, macOS, and Windows
     /// filesystems, in bytes.
     const MAX_COMPONENT_LEN: usize = 255;
+
+    /// Linux's `PATH_MAX`, minus the byte it reserves for a terminating NUL.
+    /// A save path already close to this bound can still fit its own
+    /// component budget while leaving no room for a staging suffix in the
+    /// same directory, so the staged sibling's whole path needs its own
+    /// budget too. macOS's and Windows's whole-path limits differ from
+    /// Linux's -- and from each other, and by configuration -- in either
+    /// direction, so this bound is not a safe stand-in for theirs; it, and
+    /// the test that exercises it, stay Linux-specific rather than claim a
+    /// guarantee this budgeting cannot back on those platforms.
+    const MAX_PATH_LEN: usize = 4095;
 
     /// Width of the hex component `unique_component` renders.
     const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
@@ -600,6 +636,11 @@ impl StagedSave {
     fn remove_after(&self, source: std::io::Error) -> std::io::Error {
         let left_behind = match self.still_named() {
             Ok(false) => return source,
+            // The same accepted bound documented at the rename above
+            // (`SaveFile::write_with`) applies to this unlink: nothing in
+            // `std` fuses the check above to the removal here, so a peer
+            // that lands a replacement in the gap acts with the same
+            // directory-write capability that window already accepts.
             Ok(true) => std::fs::remove_file(&self.path).err(),
             Err(unreadable) => Some(unreadable),
         };
