@@ -59,6 +59,7 @@ use platform::{ButtonState, Buttons};
 use crate::flow::tests::held;
 
 use super::sight_trainer_approach::SightApproach;
+use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::test_support::pressed;
 use super::OverworldPhase;
 
@@ -196,6 +197,67 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
         phase.party_lead.is_some(),
         "a refused handoff must not consume the lead -- no soft lock"
     );
+}
+
+/// Issue #436 regression: a fresh `START` press must not preempt the
+/// sight-trainer cone scan on its own trigger frame (`trainer_see.c`'s own
+/// module docs, `field_control_avatar.c:147-187`).
+///
+/// The real handoff this scan attempts against Rhett's own cone still
+/// fails to construct today (the sibling test above), so
+/// [`SightTrainerOutcome::Refused`] is the only outcome real bundled data
+/// can produce -- asserted directly against the real trigger. The
+/// preempting half ([`SightTrainerOutcome::owns_frame`] `true`, reachable
+/// only once a future move-coverage slice lets some listed trainer
+/// construct -- issue #436's own "Severity: latent defect" note) is
+/// asserted symbolically instead, against the same contract
+/// [`only_a_refusal_leaves_the_frame_alone`] already pins.
+///
+/// Production does not literally route an owning outcome through
+/// [`OverworldPhase::start_menu_may_open`]'s `field_input_claimed`
+/// parameter the way a same-frame interaction does: `step` returns
+/// outright the instant the scan owns the frame (`step`'s own "Field
+/// start menu ordering" section), never reaching that parameter at all.
+/// Feeding `owns_frame()` into the gate directly here is this test's own
+/// stand-in for that early return -- both mean "`START` does not open
+/// this frame" -- letting the unreachable half be asserted without a
+/// real, currently-unreachable `ApproachStarted`/`ApproachAdvanced`/
+/// `BattleStarted` in hand. See
+/// `step_tests::start_does_not_preempt_a_same_frame_npc_interaction`
+/// (issue #908) for the sibling case that does reach the real parameter.
+#[test]
+fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.party_lead = Some(overwhelming_lead());
+    let buttons = pressed(Buttons::START);
+
+    let outcome = phase.begin_sight_trainer_approach_if_seen();
+    assert_eq!(
+        outcome,
+        SightTrainerOutcome::Refused,
+        "Rhett's real moveset must still fail construction, or the reachable \
+         half of this regression is pinning the wrong outcome -- update \
+         alongside standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct \
+         once move coverage grows enough for it to succeed"
+    );
+    assert!(
+        phase.start_menu_may_open(buttons, outcome.owns_frame()),
+        "a refused scan must not preempt START -- upstream falls through to \
+         pressedStartButton once CheckForTrainersWantingBattle returns FALSE"
+    );
+
+    for owning in [
+        SightTrainerOutcome::ApproachStarted,
+        SightTrainerOutcome::ApproachAdvanced,
+        SightTrainerOutcome::BattleStarted,
+    ] {
+        assert!(
+            !phase.start_menu_may_open(buttons, owning.owns_frame()),
+            "{owning:?} owns the frame ahead of START, exactly like the \
+             same-frame interaction issue #908 pins"
+        );
+    }
 }
 
 /// How many consecutive frames the multi-frame RNG tests stand still for --

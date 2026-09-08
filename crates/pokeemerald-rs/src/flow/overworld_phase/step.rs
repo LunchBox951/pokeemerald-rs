@@ -21,13 +21,15 @@
 
 use assets::MapHeaderTable;
 use engine::overworld::{
-    facing_object_event, trigger_arrow_warp, trigger_door_warp, PlayerState, WarpTrigger,
+    facing_object_event, trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState,
+    WarpTrigger,
 };
 use engine::save::Coords16;
 use platform::{ButtonState, Buttons};
 
 use crate::flow::wild_encounter;
 use crate::overworld::{npc_scripts, oldale_town_npc_reposition, NpcDialog};
+use crate::start_menu::StartMenu;
 
 use super::connections::MapConnections;
 use super::input::{advance_or_skip_for_preempt, held_direction};
@@ -40,6 +42,24 @@ use super::OverworldPhase;
 /// `:621`/`:628`), so this tick already reads as latched to every region,
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
+
+/// [`OverworldPhase::resolve_pre_movement_field_input`]'s own return value
+/// -- see that method's doc comment for what each field means and why it
+/// is a struct rather than loose locals.
+struct PreMovementFieldInput {
+    facing: Direction,
+    position: (i32, i32),
+    elevation: u8,
+    arrow_direction: Option<Direction>,
+    arrow_trigger: Option<WarpTrigger>,
+    interaction: Option<InteractionOutcome>,
+    /// The menu a fresh `START` press already built, if
+    /// [`OverworldPhase::start_menu_may_open`] allowed it -- built, not
+    /// merely decided, here (issues #908, #436:
+    /// [`OverworldPhase::build_start_menu`]'s own doc comment on why the
+    /// order matters).
+    start_menu: Option<StartMenu>,
+}
 
 impl OverworldPhase {
     /// Advance [`OverworldPhase::tick`] by one frame, wrapping past
@@ -256,10 +276,33 @@ impl OverworldPhase {
     /// [`OverworldPhase::cross_connection`] is what
     /// rebinds `map_id`/`scene`/`save1.location` to match the position
     /// [`PlayerState::step`] already committed. That call is deliberately
-    /// the *last* thing this method does, after `runtime` (an immutable
-    /// borrow of `self.scene`, still used by the interaction/warp checks
-    /// below the movement branch) has gone out of use -- `crossed_to`
-    /// carries the outcome that far.
+    /// the last thing this method does to the player's position, after
+    /// `runtime` (an immutable borrow of `self.scene`, still used by the
+    /// interaction/warp checks below the movement branch) has gone out of
+    /// use -- `crossed_to` carries the outcome that far.
+    ///
+    /// # Field start menu ordering (issues #908, #436)
+    ///
+    /// A fresh `START` press is this port's own last-relevant branch to
+    /// claim (upstream's exact ladder, and why this method -- not
+    /// [`crate::flow::advance_scene`], which used to decide `START` *ahead*
+    /// of calling this method at all -- is the one place a fresh press can
+    /// honestly be weighed against it: [`OverworldPhase::start_menu_may_open`]'s
+    /// own module docs). The four early returns above (battle, sight-trainer
+    /// approach, dialog, sight-trainer trigger) each preempt it outright by
+    /// returning before reaching this point at all; `start_menu_may_open`'s
+    /// `field_input_claimed` parameter is fed this frame's
+    /// `arrow_trigger`/`interaction` result (see
+    /// [`Self::resolve_pre_movement_field_input`]) -- the two remaining
+    /// branches this method can still find ahead of it. If nothing above
+    /// claimed the frame, a menu is *built* -- not merely decided -- ahead
+    /// of movement, and only a menu that really did build skips this
+    /// frame's movement too, mirroring upstream never calling `PlayerStep`
+    /// on a frame `ProcessPlayerFieldInput` claims; see
+    /// [`OverworldPhase::build_start_menu`]'s own doc comment for why
+    /// building early (not merely deciding early) is what lets a pack-load
+    /// failure leave `START` exactly as inert as a refused gate does,
+    /// movement included.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
@@ -368,38 +411,7 @@ impl OverworldPhase {
             // "the drain frame of a step that started earlier" -- the two
             // cases `self.player.in_transit()` alone can't distinguish once
             // movement has run.
-            let pre_step_facing = self.player.facing();
-            let pre_step_position = self.player.position();
-            let pre_step_elevation = self.player.elevation();
-            let pre_step_at_rest = !self.player.in_transit();
-            let arrow_direction = direction.filter(|held| *held == pre_step_facing);
-
-            // Field input before movement (issue #194, module docs' "Field
-            // input before movement" section): if this frame's pre-movement
-            // state already satisfies the arrow-warp gate, upstream would
-            // have consumed the input in `ProcessPlayerFieldInput` and never
-            // called `PlayerStep` at all -- so movement is skipped outright
-            // below, rather than run and then found to have walked the
-            // player off the arrow tile before the poll got a look.
-            let preempting_arrow_trigger = pre_step_at_rest
-                .then_some(arrow_direction)
-                .flatten()
-                .and_then(|d| {
-                    let (x, y) = pre_step_position;
-                    trigger_arrow_warp(&runtime, x, y, self.player.elevation(), d)
-                });
-
-            // NPC interaction, resolved before `advance_or_skip_for_preempt`
-            // below can turn or step the player (contract: `step`'s "NPC
-            // dialog routing" section). Skipped when `preempting_arrow_trigger`
-            // already fired, as `TryArrowWarp` returns ahead of the
-            // interaction check. The tokens belong to the pre-warp map, so a
-            // same-frame warp below drops them rather than opening the
-            // departed map's dialog on the destination.
-            let interaction = preempting_arrow_trigger
-                .is_none()
-                .then(|| self.interaction_tokens_this_frame(buttons, &runtime))
-                .flatten();
+            let pre = self.resolve_pre_movement_field_input(buttons, direction, &runtime);
 
             // Latched here (issue #177), tested only after `runtime`'s last
             // borrow below -- see `advance_or_skip_for_preempt`'s own doc
@@ -412,8 +424,8 @@ impl OverworldPhase {
                 pack: &self.connection_pack,
                 source: self.pack_source,
             };
-            // `interaction` preempts movement too (issue #435) -- see its
-            // own comment above.
+            // `interaction` preempts movement too (issue #435), and so does
+            // a claimed fresh `START` (above).
             let crossed_to = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
@@ -421,7 +433,9 @@ impl OverworldPhase {
                 &runtime,
                 &maps,
                 &self.save1.event_data,
-                preempting_arrow_trigger.is_some() || interaction.is_some(),
+                pre.arrow_trigger.is_some()
+                    || pre.interaction.is_some()
+                    || pre.start_menu.is_some(),
             );
 
             // Upstream's `tookStep` gate, in this port's terms: the latched
@@ -482,7 +496,7 @@ impl OverworldPhase {
                 &mut self.rng,
                 self.map_id,
                 &runtime,
-                wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
+                wild_encounter::roll_eligible_landing(landed, pre.arrow_trigger, door_warp)
                     .filter(|_| wild_table_fightable),
             );
             // Both remaining `ProcessPlayerFieldInput` steps -- the arrow
@@ -510,12 +524,18 @@ impl OverworldPhase {
             // `heldDirection` in the first place (`:95-112`), so the poll
             // needs no `in_transit` test of its own beyond `landed`'s
             // (`arrow_poll_open`; see the "Warp timing" doc section).
-            let warp_trigger = preempting_arrow_trigger.or(door_warp).or_else(|| {
+            let warp_trigger = pre.arrow_trigger.or(door_warp).or_else(|| {
                 if !wild_encounter::arrow_poll_open(self.player.in_transit(), field_event_fired) {
                     return None;
                 }
-                let (x, y) = pre_step_position;
-                trigger_arrow_warp(&runtime, x, y, self.player.elevation(), arrow_direction?)
+                let (x, y) = pre.position;
+                trigger_arrow_warp(
+                    &runtime,
+                    x,
+                    y,
+                    self.player.elevation(),
+                    pre.arrow_direction?,
+                )
             });
 
             // Resolve this frame's warp/interaction/battle precedence
@@ -531,7 +551,8 @@ impl OverworldPhase {
                 encounter,
                 field_event_fired,
                 first_battle_triggered,
-                interaction,
+                pre.interaction,
+                pre.start_menu,
             );
 
             // Map-edge connection crossing (issue #177): deferred to here,
@@ -547,12 +568,14 @@ impl OverworldPhase {
                     // map -- restore the pre-step stance instead, the same
                     // "leaves the player exactly where they stood" contract
                     // `warp_to` documents for its own failure cases.
-                    self.player =
-                        PlayerState::new(pre_step_position, pre_step_elevation, pre_step_facing);
+                    self.player = PlayerState::new(pre.position, pre.elevation, pre.facing);
                 }
             }
         } else {
             self.player.tick();
+            if self.start_menu_may_open(buttons, false) {
+                self.try_open_start_menu();
+            }
         }
         // Mirror the logical tile into the retained save state every frame
         // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves);
@@ -564,6 +587,82 @@ impl OverworldPhase {
             x: i16::try_from(x).unwrap_or(i16::MAX),
             y: i16::try_from(y).unwrap_or(i16::MAX),
         };
+    }
+
+    /// This frame's pre-movement field-input decisions: this frame's
+    /// pre-movement stance ([`Self::step`]'s own "Warp timing" section on
+    /// why the pre-movement facing/position/elevation matter), the at-rest
+    /// arrow-warp preempt, the same-frame NPC/rival interaction, and a
+    /// fresh `START` press's own menu, already built if it claims the
+    /// frame ("Field start menu ordering"). Bundled into one struct and
+    /// resolved by one `&self` method, rather than left as loose locals in
+    /// `step`, purely to keep that method under `clippy::too_many_lines`:
+    /// nothing here mutates `self`, so this method's own `&self` never
+    /// conflicts with `step`'s still-live borrow of `runtime` (an immutable
+    /// borrow of `self.scene`) the way a `&mut self` extraction would.
+    fn resolve_pre_movement_field_input(
+        &self,
+        buttons: ButtonState,
+        direction: Option<Direction>,
+        runtime: &MapRuntime<'_>,
+    ) -> PreMovementFieldInput {
+        let facing = self.player.facing();
+        let position = self.player.position();
+        let elevation = self.player.elevation();
+        let at_rest = !self.player.in_transit();
+        let arrow_direction = direction.filter(|held| *held == facing);
+
+        // Field input before movement (issue #194, module docs' "Field
+        // input before movement" section): if this frame's pre-movement
+        // state already satisfies the arrow-warp gate, upstream would have
+        // consumed the input in `ProcessPlayerFieldInput` and never called
+        // `PlayerStep` at all -- so movement is skipped outright by `step`,
+        // rather than run and then found to have walked the player off the
+        // arrow tile before the poll got a look.
+        let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
+            let (x, y) = position;
+            trigger_arrow_warp(runtime, x, y, elevation, d)
+        });
+
+        // NPC interaction, resolved before `advance_or_skip_for_preempt`
+        // can turn or step the player (contract: `step`'s "NPC dialog
+        // routing" section). Skipped when `arrow_trigger` already fired, as
+        // `TryArrowWarp` returns ahead of the interaction check. The tokens
+        // belong to the pre-warp map, so a same-frame warp drops them
+        // rather than opening the departed map's dialog on the destination.
+        let interaction = arrow_trigger
+            .is_none()
+            .then(|| self.interaction_tokens_this_frame(buttons, runtime))
+            .flatten();
+
+        // `PreMovementFieldInput::start_menu`'s own doc comment.
+        let start_menu = self
+            .start_menu_may_open(buttons, arrow_trigger.is_some() || interaction.is_some())
+            .then(|| self.build_start_menu())
+            .flatten();
+
+        PreMovementFieldInput {
+            facing,
+            position,
+            elevation,
+            arrow_direction,
+            arrow_trigger,
+            interaction,
+            start_menu,
+        }
+    }
+
+    /// [`Self::step`]'s "Field start menu ordering" section, the mechanical
+    /// half: commit an already-built menu ([`PreMovementFieldInput::start_menu`]),
+    /// pulled out purely to keep `step` under `clippy::too_many_lines` (this
+    /// file's own convention for [`Self::resolve_step_events`]). Never
+    /// double-ticks the tileset animation counter: `step` already advanced
+    /// it, unconditionally, at its own top, and committing writes nothing
+    /// else.
+    fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
+        if let Some(menu) = ready {
+            self.start_menu = Some(menu);
+        }
     }
 
     /// [`Self::step`]'s warp/interaction/battle precedence, once every input
@@ -581,9 +680,12 @@ impl OverworldPhase {
     /// above it returned TRUE. A [`InteractionOutcome::Dialog`] opens a
     /// message box; a [`InteractionOutcome::RivalBattle`] (issue #248,
     /// `super::route103_rival_trigger`) starts the Route 103 rival battle
-    /// instead -- exactly the same gate, one extra branch. Finally, the
-    /// battle this frame earned -- if any -- starts
-    /// ([`Self::begin_step_battle`]).
+    /// instead -- exactly the same gate, one extra branch. The battle this
+    /// frame earned -- if any -- starts next ([`Self::begin_step_battle`]).
+    /// Last of all, an already-built fresh `START` menu is committed
+    /// ([`Self::commit_start_menu`], `step`'s own "Field start menu
+    /// ordering" section) -- upstream's own `pressedStartButton` position,
+    /// behind every branch above.
     fn resolve_step_events(
         &mut self,
         warp_trigger: Option<WarpTrigger>,
@@ -591,6 +693,7 @@ impl OverworldPhase {
         field_event_fired: bool,
         first_battle_triggered: bool,
         interaction: Option<InteractionOutcome>,
+        start_menu: Option<StartMenu>,
     ) {
         match warp_trigger {
             Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
@@ -625,6 +728,7 @@ impl OverworldPhase {
         }
 
         self.begin_step_battle(first_battle_triggered, encounter);
+        self.commit_start_menu(start_menu);
     }
 
     /// The token stream a [`NpcDialog`] should open with this frame, or

@@ -817,3 +817,90 @@ fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
          half)"
     );
 }
+
+/// Issue #908 regression: a same-frame `A`-plus-`START` press must resolve
+/// this port's counterpart to `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) before `pressedStartButton`
+/// (`:182-187`) ever gets a look, because upstream's own
+/// `ProcessPlayerFieldInput` checks the interaction branch first and
+/// returns `TRUE` out of it before the `START` branch is even reached.
+///
+/// Stands the player where
+/// [`a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`]
+/// settles -- one tile east of Mom, at rest, already facing her -- so the
+/// same real, recognized interaction backs `field_input_claimed` here.
+/// [`OverworldPhase::step`] is not driven end to end: both outcomes this
+/// port would take (opening [`crate::overworld::NpcDialog`] or
+/// [`crate::start_menu::open`]) need a local asset pack this checkout does
+/// not have, so an end-to-end assertion would pass on a merge-base bug for
+/// the wrong reason -- the menu failing to open on a missing pack, not on
+/// the gate. Asserted at [`OverworldPhase::start_menu_may_open`] instead,
+/// the same decision [`OverworldPhase::step`]'s own "Field start menu
+/// ordering" section feeds from a real
+/// [`OverworldPhase::interaction_tokens_this_frame`] lookup every frame.
+#[test]
+fn start_does_not_preempt_a_same_frame_npc_interaction() {
+    let phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    let buttons = pressed(Buttons::A | Buttons::START);
+
+    let interaction_found = {
+        let runtime = runtime_for(&phase);
+        phase
+            .interaction_tokens_this_frame(buttons, &runtime)
+            .is_some()
+    };
+    assert!(
+        interaction_found,
+        "the fixture must face an NPC whose script this port recognizes"
+    );
+
+    assert!(
+        !phase.start_menu_may_open(buttons, interaction_found),
+        "a same-frame interaction must refuse a fresh START the same frame \
+         (field_control_avatar.c:172 returns TRUE before :182)"
+    );
+    // Positive control: the same fixture, told nothing else claimed the
+    // frame, is where a fresh START normally works -- so the refusal above
+    // is really the interaction claim, not some other gate this fixture
+    // happens to fail.
+    assert!(
+        phase.start_menu_may_open(buttons, false),
+        "the fixture must otherwise be a frame START can open"
+    );
+}
+
+/// Review-round regression: a same-frame `START` press that fails to build
+/// a menu (no local asset pack, [`crate::start_menu::open`]'s own real
+/// failure mode) must not also cost that frame's movement --
+/// [`OverworldPhase::build_start_menu`]'s own doc comment on why the menu
+/// is *built*, not merely decided, ahead of movement, specifically so a
+/// failed build is known before [`OverworldPhase::step`] chooses whether to
+/// preempt movement for it. This crate's own `cargo test` environment never
+/// has a local pack (`crate::flow::tests`' own guard pattern), so the same
+/// held-direction-plus-fresh-`START` frame here reliably exercises the
+/// failure path, not the pack-dependent success one.
+#[test]
+fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
+    if assets::pack::AssetPack::default_path().is_file() {
+        return;
+    }
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // Already facing west (module docs' `ONE_F` fixture notes): holding
+    // Left begins a step immediately, no separate turn frame first.
+    let mut buttons = ButtonState::new();
+    buttons.update(Buttons::LEFT);
+    buttons.update(Buttons::LEFT | Buttons::START);
+    phase.step(buttons);
+
+    assert!(
+        phase.start_menu().is_none(),
+        "no local pack exists in this test environment, so the menu must \
+         not have opened"
+    );
+    assert!(
+        phase.player.in_transit(),
+        "a failed pack load must leave START exactly as inert as a refused \
+         gate -- the held-direction step must still have started"
+    );
+}

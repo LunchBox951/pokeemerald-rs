@@ -10,8 +10,8 @@
 //!
 //! # When `START` opens a menu
 //!
-//! Upstream's answer is three separate mechanisms, and
-//! [`OverworldPhase::start_menu_may_open`] adds a fourth of this port's own:
+//! Upstream's answer is five separate mechanisms, and
+//! [`OverworldPhase::start_menu_may_open`] checks all five:
 //!
 //! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
@@ -38,12 +38,30 @@
 //!   [`OverworldPhase::in_battle`] because it names a different upstream
 //!   mechanism (a lock, not a callback swap) for a state that is not a
 //!   battle at all.
+//! * `pressedStartButton` is the last branch this port's own pipeline can
+//!   claim ahead of it: `CheckForTrainersWantingBattle`, `TryRunOnFrameMapScript`,
+//!   dive-emerge, `TryStartStepBasedScript` (the door-shaped warp, under
+//!   `tookStep`), `CheckStandardWildEncounter`, `TryArrowWarp`,
+//!   `TryStartInteractionScript`, `TryDoorWarp`, and dive-down all
+//!   `return TRUE` ahead of it upstream (`src/field_control_avatar.c:147-181`)
+//!   -- upstream's own registered-`SELECT`-item branch follows it
+//!   (`:188-189`), unmodelled here, so `pressedStartButton` is this port's
+//!   last *relevant* branch, not upstream's literal last one. This port's
+//!   counterpart is the
+//!   `field_input_claimed` parameter [`OverworldPhase::start_menu_may_open`]
+//!   takes (issues #908, #436): [`super::step::OverworldPhase::step`] is the
+//!   *only* caller that can supply a real answer to it, because it is the
+//!   only place this frame's arrow-warp preempt, same-frame interaction, and
+//!   (ahead of both, at `step`'s own top) sight-trainer cone scan are ever
+//!   resolved. See [`Self::advance_start_menu_frame`]'s own doc comment for
+//!   why this module's other caller, [`crate::flow::advance_scene`], never
+//!   supplies anything but `false`.
 //!
-//! Those four gates are why this port needs no "do not save here" policy
+//! Those five gates are why this port needs no "do not save here" policy
 //! of its own: the states a save must never be taken in -- mid-battle,
-//! mid-step (#230's review), and now mid-approach -- are exactly the
-//! states upstream's own start menu cannot open in. The guard moved from
-//! the writer to the door.
+//! mid-step (#230's review), mid-approach, and now mid-higher-priority-event
+//! -- are exactly the states upstream's own start menu cannot open in. The
+//! guard moved from the writer to the door.
 //!
 //! # What the write is bracketed by
 //!
@@ -73,11 +91,19 @@ impl OverworldPhase {
     /// [`OverworldPhase::advance_dialog_frame`] does for a message box.
     ///
     /// Called by [`crate::flow::advance_scene`] *before*
-    /// [`OverworldPhase::step`], because upstream's own
-    /// `ProcessPlayerFieldInput` runs before `PlayerStep` and returns TRUE
-    /// out of the `pressedStartButton` branch (`src/overworld.c:1444-1455`,
-    /// `src/field_control_avatar.c:182-187`), so the frame a menu opens on
-    /// is not also a frame the player moves on.
+    /// [`OverworldPhase::step`], but -- since issues #908 and #436 -- only
+    /// when a menu is *already* open, exactly as upstream's own
+    /// `ShowStartMenu` calling `LockPlayerFieldControls`
+    /// (`src/start_menu.c:581-591`) stops `DoCB1_Overworld` from polling
+    /// `ProcessPlayerFieldInput`/`PlayerStep` at all while it is up
+    /// (`src/overworld.c:1444-1455`). A *fresh* `START` press's own
+    /// precedence is [`OverworldPhase::step`]'s "Field start menu ordering"
+    /// section and this module's own fifth gate (module docs); this
+    /// method's own `field_input_claimed` argument to
+    /// [`OverworldPhase::start_menu_may_open`] is therefore always `false`
+    /// -- by the time this method is reached, a menu is already open, so
+    /// nothing about this frame's field input is relevant to whether the
+    /// press that opened it was allowed to.
     ///
     /// `save_slot` is this session's save medium, threaded in from
     /// [`crate::app::App`] rather than reached for `(oop-boundaries)`; it
@@ -91,20 +117,10 @@ impl OverworldPhase {
         // `&mut OverworldPhase` (it needs the live save blocks to write,
         // and the player name to print) without borrowing the phase twice.
         let open_menu = self.start_menu.take();
-        if open_menu.is_none() {
-            if !self.start_menu_may_open(buttons) {
-                return false;
-            }
-            match start_menu::open(self.pack_source, self.start_menu_cursor) {
-                Ok(opened) => self.start_menu = Some(opened),
-                // The same "log-or-ignore is fine" policy [`crate::flow`]
-                // applies to every other pack load: a missing pack must not
-                // wedge the field, it must leave `START` inert.
-                Err(err) => {
-                    eprintln!("{err} -- the start menu did not open");
-                    return false;
-                }
-            }
+        if open_menu.is_none()
+            && (!self.start_menu_may_open(buttons, false) || !self.try_open_start_menu())
+        {
+            return false;
         }
 
         // Background tile animation keeps running while a menu owns the
@@ -139,20 +155,78 @@ impl OverworldPhase {
     }
 
     /// Whether a fresh `START` press may open the menu this frame (module
-    /// docs' three upstream gates).
+    /// docs' five upstream gates).
+    ///
+    /// `field_input_claimed` is the caller's own answer to upstream's
+    /// remaining branches -- `TryArrowWarp`, `TryStartInteractionScript`,
+    /// `TryDoorWarp`, and `TrySetupDiveDownScript`
+    /// (`src/field_control_avatar.c:164-181`) -- each of which returns
+    /// `TRUE`, and so reaches `pressedStartButton` at `:182` before this
+    /// port ever could, on a frame it fires. Only
+    /// [`super::step::OverworldPhase::step`] is in a position to answer that
+    /// honestly (module docs); every other caller passes `false`.
     ///
     /// A pure decision rather than an inline condition, for the same
     /// reason [`crate::flow`]'s own `menu_action` is one: inside
     /// [`Self::advance_start_menu_frame`] a refused press and a failed
     /// pack load are indistinguishable to a pack-less test, and these
-    /// three gates are the whole of this slice's "a save must not be
+    /// five gates are the whole of this slice's "a save must not be
     /// takeable here" story.
-    pub(in crate::flow) fn start_menu_may_open(&self, buttons: ButtonState) -> bool {
+    pub(in crate::flow) fn start_menu_may_open(
+        &self,
+        buttons: ButtonState,
+        field_input_claimed: bool,
+    ) -> bool {
         buttons.is_newly_pressed(Buttons::START)
+            && !field_input_claimed
             && !self.in_battle()
             && !self.mid_step()
             && self.dialog.is_none()
             && self.sight_approach.is_none()
+    }
+
+    /// Attempt to build a fresh `START` press's menu, without committing it
+    /// to [`Self::start_menu`] -- the pure half of
+    /// [`Self::advance_start_menu_frame`]'s own opening branch, pulled out
+    /// (`&self`, not `&mut self`) so [`super::step::OverworldPhase::step`]
+    /// can attempt the real pack load *before* deciding whether this
+    /// frame's movement is preempted (issues #908, #436), rather than
+    /// after: deciding the preempt first and attempting the load second
+    /// would cost the frame's movement on a load failure the player never
+    /// even sees a menu for, contradicting the "log-or-ignore is fine"
+    /// policy this method's own `Err` arm below applies.
+    ///
+    /// Never checks the gate itself -- every caller has already asked
+    /// [`Self::start_menu_may_open`] with whatever `field_input_claimed` it
+    /// can honestly supply. A caller that decides some other same-frame
+    /// event outranks this attempt after all simply drops the returned
+    /// value: building it here writes nothing outside the returned
+    /// [`StartMenu`] itself, so an unused one costs nothing to discard.
+    pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
+        match start_menu::open(self.pack_source, self.start_menu_cursor) {
+            Ok(opened) => Some(opened),
+            // The same "log-or-ignore is fine" policy [`crate::flow`]
+            // applies to every other pack load: a missing pack must not
+            // wedge the field, it must leave `START` inert.
+            Err(err) => {
+                eprintln!("{err} -- the start menu did not open");
+                None
+            }
+        }
+    }
+
+    /// [`Self::build_start_menu`] plus the commit [`Self::advance_start_menu_frame`]'s
+    /// own opening branch wants: attempt-and-store in one call, for the
+    /// caller that has no reason to hold the built menu at arm's length
+    /// first. Returns whether it opened.
+    pub(super) fn try_open_start_menu(&mut self) -> bool {
+        match self.build_start_menu() {
+            Some(menu) => {
+                self.start_menu = Some(menu);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Whether the start menu currently owns the phase -- read by
