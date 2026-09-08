@@ -215,6 +215,26 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
+    /// A move's secondary chance inflicted
+    /// [`crate::status1::Status1::Poisoned`] on its target
+    /// (`STRINGID_PKMNWASPOISONED`, `BattleScript_MoveEffectPoison`,
+    /// `data/battle_scripts_1.s:319`-`:321`), immediately after the
+    /// [`BattleEvent::Hit`] it followed.
+    Poisoned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted poison.
+        move_id: MoveId,
+    },
+    /// A poisoned battler took its end-of-turn residual damage
+    /// (`STRINGID_PKMNHURTBYPOISON`, `BattleScript_PoisonTurnDmg`,
+    /// `data/battle_scripts_1.s:3736`-`:3737`).
+    HurtByPoison {
+        /// Whether the player's battler was hurt.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the tick.
+        damage: u32,
+    },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
         /// The replacement's species.

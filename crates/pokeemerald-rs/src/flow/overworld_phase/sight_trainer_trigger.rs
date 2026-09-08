@@ -820,14 +820,16 @@ mod tests {
         // move in that trainer's own level-up-derived moveset that some
         // screen refuses.
         //
-        // Absorb, Thunder Wave, Splash, Focus Energy, Charge, and Defense
-        // Curl are all executable (`battle`'s drain, paralysis, flag-only,
-        // and defense-curl pipelines), so those six parties get past
-        // `ensure_executable` and stop at
+        // Absorb, Thunder Wave, Splash, Focus Energy, Charge, Defense Curl,
+        // and Poison Sting are all executable (`battle`'s drain, paralysis,
+        // flag-only, defense-curl, and poison-hit pipelines), so those seven
+        // parties get past `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score any of those six effects. Both
-        // screens run before the first draw, so the per-frame cone check is
-        // exactly as cheap as it was.
+        // trainer AI cannot yet score any of those seven effects. Pete's
+        // Poison Sting moved the same way once the poison-hit trampoline
+        // widened `ensure_executable` (issue #784): still unscoreable, not
+        // merely non-executable. Both screens run before the first draw, so
+        // the per-frame cone check is exactly as cheap as it was.
         let expected = [
             (
                 "Daisy",
@@ -863,7 +865,7 @@ mod tests {
             (
                 "Pete",
                 TrainerId(735),
-                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(40))), // MOVE_POISON_STING
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(40))), // MOVE_POISON_STING
             ),
         ];
 

@@ -126,7 +126,10 @@ pub fn resolve_fixed_damage_move(
     }
 
     let defender_is_immune = defender_is_immune(move_type, defender);
-    spend_effect_chance_draw(dex, move_id, !defender_is_immune, rng)?;
+    // No fixed-damage effect (`FIXED_DAMAGE_EFFECTS`) is ever
+    // `EFFECT_POISON_HIT`, so the returned poison signal can never be
+    // `true` here; the draw itself still has to run in the right place.
+    spend_effect_chance_draw(dex, move_id, !defender_is_immune, defender, rng)?;
 
     if defender_is_immune {
         Ok(HitOutcome::NoEffect)

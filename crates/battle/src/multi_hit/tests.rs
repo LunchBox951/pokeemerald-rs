@@ -148,6 +148,7 @@ fn admission_draws_accuracy_once_then_draws_the_hit_count() {
 #[test]
 fn epilogue_discards_exactly_one_effect_chance_draw_per_move() {
     let dex = Dex::new();
+    let defender = mon(&dex, SQUIRTLE, vec![TACKLE]);
     assert_eq!(
         dex.move_data(DOUBLE_SLAP).unwrap().secondary_effect_chance,
         0
@@ -156,7 +157,13 @@ fn epilogue_discards_exactly_one_effect_chance_draw_per_move() {
         for value in [0u16, 99, u16::MAX] {
             let mut rng = SequenceRng::new([value]);
             assert_eq!(
-                spend_multi_hit_effect_chance_draw(&dex, DOUBLE_SLAP, had_effect, &mut rng),
+                spend_multi_hit_effect_chance_draw(
+                    &dex,
+                    DOUBLE_SLAP,
+                    had_effect,
+                    &defender,
+                    &mut rng
+                ),
                 Ok(())
             );
             assert_eq!(rng.draws(), 1);

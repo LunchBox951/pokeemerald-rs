@@ -145,6 +145,33 @@ fn a_landed_hit_applies_paralysis_with_a_single_draw_and_does_not_mutate() {
     );
 }
 
+#[test]
+fn a_poisoned_defender_reports_already_statused_without_overwriting_or_drawing() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let mut defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
+    defender.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::AlreadyStatused,
+        "jumpifstatus BS_TARGET, STATUS1_ANY (data/battle_scripts_1.s:1016) catches any \
+         primary status besides the exact-match STATUS1_PARALYSIS jump at :1015"
+    );
+    assert_eq!(
+        rng.draws(),
+        0,
+        "the STATUS1_ANY guard precedes accuracycheck just like the exact-match one"
+    );
+    assert_eq!(
+        defender.status1(),
+        Status1::Poisoned,
+        "resolve_paralyze_move reports the outcome; it never mutates either battler"
+    );
+}
+
 /// `SPECIES_PERSIAN`: Normal, and Limber in its only ability slot.
 const PERSIAN: SpeciesId = SpeciesId(53);
 
@@ -280,6 +307,29 @@ fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
+#[test]
+fn a_poisoned_attacker_is_admitted_against_a_synchronize_defender() {
+    let dex = Dex::new();
+    let mut attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    attacker.set_status1(Status1::Poisoned);
+    let defender = mon(&dex, RALTS, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::Applied,
+        "an attacker carrying any primary status, not just Paralysed, leaves the \
+         reflection's SetMoveEffect re-entry nothing to write"
+    );
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
+    assert_eq!(
+        attacker.status1(),
+        Status1::Poisoned,
+        "the attacker's own status is never rewritten by the reflection"
+    );
+}
+
 /// `SPECIES_SEVIPER`: Poison, and Shed Skin in its primary ability slot.
 const SEVIPER: SpeciesId = SpeciesId(379);
 
@@ -313,6 +363,22 @@ fn an_already_paralysed_shed_skin_defender_is_admitted_not_refused() {
         outcome,
         ParalyzeOutcome::AlreadyParalysed,
         "this move applies nothing, so it is not what made Shed Skin reachable"
+    );
+}
+
+#[test]
+fn an_already_poisoned_shed_skin_defender_is_admitted_not_refused() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    let mut defender = mon(&dex, SEVIPER, 10, vec![TACKLE]);
+    defender.set_status1(Status1::Poisoned);
+    let mut rng = SequenceRng::new([]);
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        ParalyzeOutcome::AlreadyStatused,
+        "the STATUS1_ANY guard exits before ensure_admissible ever reads Shed Skin"
     );
 }
 

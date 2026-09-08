@@ -11,14 +11,29 @@
 //! (`pokeemerald/data/battle_scripts_1.s:897-898`). Effect application is not
 //! implemented, so an effect that would apply fails closed after consuming
 //! exactly the draw Emerald consumes.
+//!
+//! [`EFFECT_POISON_HIT`] is this slice's one modelled trampoline (issue
+//! #784): a successful roll writes [`crate::status1::Status1::Poisoned`]
+//! through `SetMoveEffect`'s `STATUS1_POISON` case
+//! (`battle_script_commands.c:2299`-`:2340`), gated by [`poison_can_land`]'s
+//! silent guards. [`EFFECT_POISON_TAIL`] prepares the identical
+//! `MOVE_EFFECT_POISON` symbolic effect (`:139` below) but stays on the
+//! unported side with every other [`SECONDARY_TRAMPOLINES`] entry — Toxic,
+//! burn, paralysis-hit, flinch, and the rest are issue #784's explicit
+//! boundary. [`ensure_admissible`] fails closed, before any draw, for the
+//! handful of ability interactions [`poison_can_land`] cannot silently
+//! resolve on its own.
 
-use assets::{MoveEffect, MoveId};
+use assets::{AbilityId, MoveEffect, MoveId, Type};
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::pokemon::BattlePokemon;
 
-const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
+/// Poison Sting's, Smog's, Sludge's, and Sludge Bomb's move effect -- this
+/// slice's one resolved [`SECONDARY_TRAMPOLINES`] entry.
+pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
 const EFFECT_BURN_HIT: MoveEffect = MoveEffect(4);
 const EFFECT_FREEZE_HIT: MoveEffect = MoveEffect(5);
 const EFFECT_PARALYZE_HIT: MoveEffect = MoveEffect(6);
@@ -151,24 +166,141 @@ pub fn is_secondary_effect(effect: MoveEffect) -> bool {
     trampoline_for_effect(effect).is_some()
 }
 
-/// Spends the post-damage effect-chance draw for `move_id`.
+/// Returns whether `effect` is [`EFFECT_POISON_HIT`] — this slice's one
+/// resolved [`SECONDARY_TRAMPOLINES`] entry (module docs).
+#[must_use]
+pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
+    effect == EFFECT_POISON_HIT
+}
+
+/// Whether poison could land on `defender` right now, independent of any
+/// roll: the silent guards `SetMoveEffect`'s `STATUS1_POISON` case checks
+/// once the effect-chance draw has already succeeded.
+///
+/// * Poison and Steel types are immune outright
+///   (`battle_script_commands.c:2330`-`:2333`).
+/// * A defender already carrying any primary status refuses a second one
+///   (`:2334`-`:2335`).
+/// * [`AbilityId::IMMUNITY`] blocks poison specifically (`:2336`-`:2337`).
+/// * Shield Dust blocks *every* chance-based secondary this way, silently,
+///   for a plain move's own effect (`!primary`, byte `<= 9`,
+///   `:2253`-`:2255`); its "ability blocks it" message only fires for a
+///   primary or certain effect, neither of which [`EFFECT_POISON_HIT`] ever
+///   is.
+///
+/// Shared between [`ensure_admissible`]'s pre-turn screen and
+/// [`spend_effect_chance_draw`]'s post-draw application, since both ask
+/// exactly this question — the former before any roll happens, the latter
+/// after one has already succeeded.
+#[must_use]
+fn poison_can_land(defender: &BattlePokemon) -> bool {
+    let types = defender.types();
+    let is_poison_or_steel_type = types.contains(&Type::Poison) || types.contains(&Type::Steel);
+    defender.status1().is_healthy()
+        && !is_poison_or_steel_type
+        && defender.ability() != AbilityId::IMMUNITY
+        && defender.ability() != AbilityId::SHIELD_DUST
+}
+
+/// Refuses an [`EFFECT_POISON_HIT`] move whose attacker or target carries an
+/// ability this slice cannot follow past infliction — the same policy
+/// [`crate::paralyze::ensure_admissible`] applies to
+/// [`crate::paralyze::EFFECT_PARALYZE`], now reachable through the
+/// chance-based secondary path instead of a dedicated status-move script. A
+/// no-op whenever [`poison_can_land`] is already `false`: none of these
+/// abilities matter to an infliction that could never happen anyway.
+///
+/// * Serene Grace doubles `secondary_effect_chance` before
+///   [`spend_effect_chance_draw`]'s own draw
+///   (`battle_script_commands.c:2912`-`:2915`); this slice does not widen
+///   the comparison, so an attacker carrying it is refused outright rather
+///   than under-rolling the chance for every use of the move.
+/// * Synchronize reflects a newly-landed poison back onto the attacker
+///   (`synchronizeMoveEffect`, `:2503`-`:2511`, via
+///   `src/battle_util.c:2971`-`:2985`, `BattleScript_SynchronizeActivates`'s
+///   `seteffectprimary`, `data/battle_scripts_1.s:4204`-`:4207`); an
+///   attacker that already carries a primary status of its own is admitted,
+///   since the reflected `SetMoveEffect` re-entry then writes nothing
+///   regardless of which guard it exits through — the already-nonzero
+///   `status1` check (`:2334`-`:2335`) if the attacker is untyped for it, or
+///   (since the reflection sets `primary` and `HITMARKER_STATUS_ABILITY_EFFECT`)
+///   the Immunity- or Poison/Steel-type message branch first
+///   (`:2299`-`:2333`) if the attacker happens to carry one — upstream shows
+///   a different message depending on which exit is taken, but this crate
+///   models no message for a Synchronize reflection either way (successful
+///   or blocked), so the two exits are indistinguishable here: the
+///   attacker's status never changes in either case.
+/// * Shed Skin rolls a one-in-three end-of-turn cure while its holder is
+///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`), a
+///   draw [`crate::battle::Battle`]'s residual pass does not make.
+/// * Guts and Marvel Scale read their own holder's `status1` inside
+///   `CalculateBaseDamage` (`src/pokemon.c`) to raise a statused holder's
+///   physical Attack or Defense, which
+///   [`crate::pokemon::BattlePokemon::attacking_stat`] and
+///   [`crate::pokemon::BattlePokemon::defending_stat`] do not model.
+///
+/// # Errors
+///
+/// [`BattleError::UnknownMove`] if `move_id` is not in `dex`.
+/// [`BattleError::UnportedAbilityInteraction`], carrying the offending
+/// ability, when the move would reach the poison branch against one.
+pub fn ensure_admissible(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<(), BattleError> {
+    let mv = dex.move_data(move_id)?;
+    if !is_poison_hit_effect(mv.effect) {
+        return Ok(());
+    }
+    if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(defender) {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SERENE_GRACE,
+        ));
+    }
+    if !poison_can_land(defender) {
+        return Ok(());
+    }
+    match defender.ability() {
+        ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
+            Err(BattleError::UnportedAbilityInteraction(ability))
+        }
+        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
+            BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Spends the post-damage effect-chance draw for `move_id`, applying
+/// [`EFFECT_POISON_HIT`]'s [`Status1::Poisoned`] when it succeeds.
 ///
 /// A certain effect on a successful hit skips the draw. Every other path
-/// spends one draw, even when the hit had no effect or the move has no modeled
-/// trampoline.
+/// spends one draw, even when the hit had no effect or the move has no
+/// modeled trampoline.
+///
+/// The returned `bool` is whether the caller should write
+/// [`Status1::Poisoned`] to `defender` — deliberately left to the caller,
+/// since this function borrows `defender` immutably and cannot itself
+/// account for the target having fainted from the same hit's damage
+/// (`SetMoveEffect`'s leading `hp == 0` guard,
+/// `battle_script_commands.c:2261`-`:2264`, which this pure draw cannot see).
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
-/// trampoline effect or Struggle's certain recoil effect would apply; any
-/// required chance draw has already been consumed.
+/// trampoline effect other than [`EFFECT_POISON_HIT`], or Struggle's certain
+/// recoil effect, would apply; any required chance draw has already been
+/// consumed.
 pub fn spend_effect_chance_draw(
     dex: &Dex,
     move_id: MoveId,
     hit_had_effect: bool,
+    defender: &BattlePokemon,
     rng: &mut impl BattleRng,
-) -> Result<(), BattleError> {
+) -> Result<bool, BattleError> {
     let mv = dex.move_data(move_id)?;
     let trampoline = trampoline_for_effect(mv.effect);
     let is_struggle = move_id == STRUGGLE;
@@ -182,11 +314,15 @@ pub fn spend_effect_chance_draw(
     let effect_chance_roll = u32::from(rng.next_u16()) % 100;
     let effect_chance_succeeded = effect_chance_roll < u32::from(mv.secondary_effect_chance);
 
-    if hit_had_effect && has_modeled_effect && effect_chance_succeeded {
-        Err(BattleError::UnportedSecondaryEffect(move_id))
-    } else {
-        Ok(())
+    if !(hit_had_effect && has_modeled_effect && effect_chance_succeeded) {
+        return Ok(false);
     }
+
+    if !is_poison_hit_effect(mv.effect) {
+        return Err(BattleError::UnportedSecondaryEffect(move_id));
+    }
+
+    Ok(poison_can_land(defender))
 }
 
 #[cfg(test)]

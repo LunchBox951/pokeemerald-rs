@@ -16,12 +16,17 @@
 //! `src/battle_message.c:1223`), so [`ParalyzeOutcome::LimberProtected`]
 //! keeps its own outcome instead of collapsing into `Immune`.
 //!
+//! `jumpifstatus BS_TARGET, STATUS1_ANY, BattleScript_ButItFailed`
+//! (`data/battle_scripts_1.s:1016`) is now reachable too: once
+//! [`crate::status1::Status1::Poisoned`] exists, a poisoned target hit with
+//! Thunder Wave takes this generic failure, not the
+//! [`ParalyzeOutcome::AlreadyParalysed`] exit `:1015`'s exact-status jump
+//! reserves for [`Status1::Paralysed`] alone.
+//!
 //! Not ported: `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE`
-//! (`data/battle_scripts_1.s:1012`, no Substitute),
+//! (`data/battle_scripts_1.s:1012`, no Substitute), and
 //! `jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD` (`:1018`, no side
-//! conditions), and the `STATUS1_ANY` guard at `:1016` (this crate has no
-//! primary status besides [`crate::status1::Status1::Paralysed`] to already
-//! be carrying).
+//! conditions).
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -66,9 +71,17 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 ///
 /// * Synchronize reflects the status onto the attacker
 ///   (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_script_commands.c:4275`-`:4277`
-///   via `src/battle_util.c:2971`-`:2985`); an attacker already paralysed is
-///   admitted, since the reflection's `SetMoveEffect` re-entry then leaves
-///   `statusChanged` false (`:2422`-`:2423`).
+///   via `src/battle_util.c:2971`-`:2985`); an attacker that already carries
+///   any primary status is admitted, since the reflected `SetMoveEffect`
+///   re-entry then writes nothing regardless of which guard it exits
+///   through — the already-nonzero `status1` check (`:2422`-`:2423`)
+///   ordinarily, or (since the reflection sets `primary`) Limber's own
+///   message branch first (`:2396`-`:2421`) if the attacker happens to hold
+///   it. Upstream shows a different message depending on which exit is
+///   taken, but this crate models no message for a Synchronize reflection
+///   either way, so the two exits are indistinguishable here — see
+///   [`crate::secondary::ensure_admissible`]'s identical note for poison's
+///   own version of this same reflection.
 /// * Shed Skin rolls a one-in-three end-of-turn cure while its holder is
 ///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`), a
 ///   draw [`crate::battle::Battle`]'s residual pass does not make.
@@ -96,7 +109,7 @@ pub fn ensure_admissible(
     };
     if defender.ability() == AbilityId::LIMBER
         || defender_is_immune(move_type, defender)
-        || defender.status1().is_paralysed()
+        || !defender.status1().is_healthy()
     {
         return Ok(());
     }
@@ -104,7 +117,7 @@ pub fn ensure_admissible(
         ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
             Err(BattleError::UnportedAbilityInteraction(ability))
         }
-        AbilityId::SYNCHRONIZE if !attacker.status1().is_paralysed() => Err(
+        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
             BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
         ),
         _ => Ok(()),
@@ -120,6 +133,10 @@ pub enum ParalyzeOutcome {
     Immune,
     /// The defender already carries [`Status1::Paralysed`].
     AlreadyParalysed,
+    /// The defender already carries some other primary status
+    /// (`STATUS1_ANY`, `data/battle_scripts_1.s:1016`) — currently only
+    /// reachable via [`Status1::Poisoned`].
+    AlreadyStatused,
     /// The move missed its accuracy check.
     Miss,
     /// The move connected and inflicts [`Status1::Paralysed`].
@@ -166,6 +183,9 @@ pub fn resolve_paralyze_move(
     }
     if defender.status1().is_paralysed() {
         return Ok(ParalyzeOutcome::AlreadyParalysed);
+    }
+    if !defender.status1().is_healthy() {
+        return Ok(ParalyzeOutcome::AlreadyStatused);
     }
     // The last line of defence behind the pre-turn screens, at the script's
     // own position: every earlier exit is modelled, `accuracycheck` is not yet

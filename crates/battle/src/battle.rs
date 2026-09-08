@@ -38,8 +38,10 @@
 //!    `battle_util.c:524`-`:537`).
 //! 4. Otherwise the second mover's action resolves the same way.
 //!
-//! End-of-turn residual effects (weather/status ticks) are not modelled —
-//! none are modelled anywhere in this slice, so there is nothing to tick.
+//! End-of-turn residual effects: [`Battle::residual_effects`] ticks poison
+//! damage and Charge for every battler still standing, in the same
+//! [`Order`] this turn's move dispatch already resolved. Weather and every
+//! other `DoBattlerEndTurnEffects` case remain unmodelled.
 //!
 //! # `first_battle`
 //!
@@ -245,8 +247,9 @@ use crate::flag_move;
 use crate::multi_hit;
 use crate::paralyze;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
+use crate::secondary;
 use crate::stat_change;
-use crate::status1::draws_full_paralysis;
+use crate::status1::{draws_full_paralysis, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -501,6 +504,7 @@ impl Battle {
             // `seteffectprimary`, so it carries no ability interaction.
             if slot.pp > 0 {
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+                secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }
         }
         let random_turn_number = rng.next_u16();
@@ -611,6 +615,7 @@ impl Battle {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
                 if slot.pp > 0 {
                     paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
+                    secondary::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                 }
             }
         }
@@ -825,6 +830,7 @@ impl Battle {
         }
         ensure_executable(&self.dex, slot.move_id)?;
         paralyze::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
+        secondary::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         Ok(slot.move_id)
     }
 
@@ -1026,10 +1032,14 @@ impl Battle {
             // above survives a failure here -- `take_turn` returns it either
             // way. Upstream still runs `DoBattlerEndTurnEffects` for this
             // turn (`src/battle_main.c:3961`-`:3968`): a failed run does not
-            // skip end-of-turn residuals, so Charge's timer still ticks down
+            // skip end-of-turn residuals, so poison and Charge still tick
             // even though the player never attacked.
             self.enemy_acts(enemy_action, rng, events)?;
-            self.residual_effects();
+            // A chosen `PlayerAction::Run` is always ordered first
+            // (`battle_main.c:4797`-`:4808`), the same `gBattlerByTurnOrder`
+            // `Battle::residual_effects` reads -- so the player's slot comes
+            // up first here too, whether or not the run itself succeeded.
+            self.residual_effects(Order::AttackerFirst, events)?;
             self.end_of_turn(events);
             return Ok(());
         };
@@ -1104,29 +1114,152 @@ impl Battle {
                 }
             }
         }
-        self.residual_effects();
+        self.residual_effects(order, events)?;
         self.end_of_turn(events);
         Ok(())
     }
 
-    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1630`), reduced to the
-    /// one case this slice reaches: `ENDTURN_CHARGE`'s
-    /// `if (chargeTimer && --chargeTimer == 0) status3 &= ~STATUS3_CHARGED_UP`
-    /// (`:1743`-`:1745`), for every battler on the field.
+    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`), reduced
+    /// to the two cases this slice reaches: `ENDTURN_POISON`
+    /// (`:1525`-`:1535`) and `ENDTURN_CHARGE`'s `if (chargeTimer &&
+    /// --chargeTimer == 0) status3 &= ~STATUS3_CHARGED_UP` (`:1743`-`:1745`),
+    /// for every battler on the field, in `gBattlerByTurnOrder` order
+    /// (`:1469`-`:1472`, populated at `battle_main.c:4817`-`:4850`) — poison
+    /// precedes Charge in the same per-battler pass because `ENDTURN_POISON`
+    /// precedes `ENDTURN_CHARGE` in the tracker enum (`battle_util.c:1442`-
+    /// `:1461`).
+    ///
+    /// `order` is the same [`Order`] [`Battle::take_turn`] already resolved
+    /// for this turn's move dispatch: `gBattlerByTurnOrder` is set once per
+    /// turn, and `DoBattlerEndTurnEffects` reads that same array rather than
+    /// recomputing one for its own pass.
     ///
     /// Runs **before** [`Battle::end_of_turn`], because upstream runs
     /// `DoBattlerEndTurnEffects` before `HandleFaintedMonActions`
     /// (`src/battle_main.c:3965` vs `:3968`) — and, like upstream's
     /// `if (gBattleOutcome == 0)` guard at `:3961`, not at all once the
-    /// battle has an outcome. Draws nothing: no modelled end-turn effect
-    /// rolls (poison damage and the rest of the residual family are issue
-    /// #323's).
-    fn residual_effects(&mut self) {
+    /// battle already has an outcome. That guard is a known, pre-existing
+    /// gap this method inherits rather than introduces: a wild battle's own
+    /// direct-hit kill finishes synchronously inside the hit pipeline
+    /// (`Self::settle_win_reward`'s wild-battle arm), setting
+    /// [`Battle::outcome`] before this method ever runs, where upstream's
+    /// own `gBattleOutcome` would still read `0` at that point (its
+    /// `checkteamslost` waits for `DoBattlerEndTurnEffects` to finish, per
+    /// the ordering this doc cites above) — so a surviving poisoned winner's
+    /// final-turn residual tick is skipped here where upstream would still
+    /// apply it. Charge had no observable output, so this predates poison
+    /// (issue #159/#199) without ever being player-visible; poison is the
+    /// first residual effect this crate models that makes it so, and fixing
+    /// it means restructuring when every pipeline's own `settle_faint`/
+    /// `settle_win_reward` finalizes the outcome, not just poison's own
+    /// case — out of this slice's boundary, tracked for a follow-up.
+    ///
+    /// A battler already fainted before this pass began — from a direct hit
+    /// earlier in the same turn — is skipped entirely, matching
+    /// `gAbsentBattlerFlags`' skip of an absent battler's whole tracker walk
+    /// (`:1472`-`:1474`): its own faint was already reported and settled at
+    /// the point it happened, and [`Battle::end_of_turn`] still owns
+    /// replacing or paying out for it. Re-checking it here would either
+    /// re-tick a corpse's Charge or, worse, call [`Self::settle_win_reward`]
+    /// a second time for the same faint.
+    ///
+    /// A poison faint that happens *during* this pass is settled here
+    /// rather than through [`Self::settle_faint`], and the loop stops
+    /// **before** the next battler's turn: `BattleScript_DoTurnDmgEnd`'s own
+    /// `checkteamslost` (`data/battle_scripts_1.s:3746`,
+    /// `Cmd_checkteamslost` at `battle_script_commands.c:3534`-`:3577`) runs
+    /// inside the very script that just fainted this battler, and
+    /// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
+    /// (`battle_main.c:3960`-`:3966`) then refuses to call
+    /// `DoBattlerEndTurnEffects` again once that sets a nonzero outcome —
+    /// abandoning the tracker walk before the next battler's own slot comes
+    /// up, whether or not that battler is also poisoned this same turn. A
+    /// battler whose residual tick does *not* faint it leaves the outcome
+    /// unset, so the loop continues to the next battler exactly as upstream
+    /// continues its own tracker walk.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnknownSpecies`] if a fainted enemy's species is
+    /// missing from the dex, which the experience award has to look up.
+    fn residual_effects(
+        &mut self,
+        order: Order,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
         if self.outcome.is_some() {
+            return Ok(());
+        }
+        let player_first = matches!(order, Order::AttackerFirst);
+        for is_player in [player_first, !player_first] {
+            if self.outcome.is_some() {
+                break;
+            }
+            let already_fainted = if is_player {
+                self.player.is_fainted()
+            } else {
+                self.enemy.is_fainted()
+            };
+            if already_fainted {
+                continue;
+            }
+            self.apply_poison_residual(is_player, events);
+            if is_player {
+                self.player.volatiles_mut().tick_charge();
+            } else {
+                self.enemy.volatiles_mut().tick_charge();
+            }
+            let now_fainted = if is_player {
+                self.player.is_fainted()
+            } else {
+                self.enemy.is_fainted()
+            };
+            if now_fainted {
+                events.push(BattleEvent::Fainted {
+                    by_player: is_player,
+                });
+                let corpse = if is_player {
+                    &mut self.player
+                } else {
+                    &mut self.enemy
+                };
+                corpse.clear_battle_scratch();
+                corpse.set_status1(Status1::Healthy);
+                if is_player {
+                    self.finish(events, BattleOutcome::PlayerLost);
+                } else {
+                    self.settle_win_reward(events)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `ENDTURN_POISON` for one battler (`battle_util.c:1525`-`:1535`): an
+    /// eighth of maximum HP, floored to one
+    /// ([`crate::status1::poison_residual_damage`]), for a standing battler
+    /// carrying [`Status1::Poisoned`]. A no-op for a battler already at `0`
+    /// HP — upstream's own `hp != 0` guard, which also covers a trainer's
+    /// fainted-but-not-yet-replaced corpse, still present in
+    /// [`Battle::enemy`] until [`Battle::end_of_turn`] runs after this.
+    /// Draws nothing: the residual tick has no `Random()` call.
+    fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || !battler.status1().is_poisoned() {
             return;
         }
-        self.player.volatiles_mut().tick_charge();
-        self.enemy.volatiles_mut().tick_charge();
+        let damage = poison_residual_damage(battler.stats().max_hp);
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one

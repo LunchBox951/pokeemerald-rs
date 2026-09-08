@@ -1021,6 +1021,50 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
 }
 
 #[test]
+fn an_in_battle_primary_status_never_overwrites_the_saves_own_status_word() {
+    let dex = Dex::new();
+    let stored = stored_record_with_retained_fields();
+    for in_battle_status in [battle::Status1::Paralysed, battle::Status1::Poisoned] {
+        let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+        lead.set_status1(in_battle_status);
+
+        let merged = merge_into_save_pokemon(
+            &dex,
+            &lead,
+            &stored,
+            &mut hp_hidden_by_load(&dex, &stored, &lead),
+        );
+
+        assert_eq!(
+            merged.status, RETAINED_STATUS,
+            "{in_battle_status:?} in `battle::BattlePokemon` must not leak into the save's \
+             own non-volatile status word -- neither encoder reads or writes `Status1` \
+             (issue #306 owns wiring that overlay)"
+        );
+    }
+}
+
+#[test]
+fn a_fresh_battler_never_writes_an_in_battle_primary_status_into_a_new_record() {
+    let dex = Dex::new();
+    let mut lead = treecko_fixture();
+    lead.set_status1(battle::Status1::Poisoned);
+
+    let record = to_save_pokemon(&dex, &lead);
+
+    // `to_save_pokemon` has no backing record to retain a status from, so it
+    // falls back to `CreateMon`'s own default -- the same value regardless
+    // of whatever `battle::Status1` the in-battle model carries, since
+    // neither encoder reads it at all.
+    let healthy_lead = treecko_fixture();
+    let healthy_record = to_save_pokemon(&dex, &healthy_lead);
+    assert_eq!(
+        record.status, healthy_record.status,
+        "a poisoned battler must not write a different status word than a healthy one"
+    );
+}
+
+#[test]
 fn sub_level_experience_does_not_flatten_the_retained_stat_block() {
     let dex = Dex::new();
     let stored = stored_record_with_retained_fields();

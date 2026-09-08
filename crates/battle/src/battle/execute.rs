@@ -98,9 +98,10 @@ impl Battle {
     }
 
     /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
-    /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
-    /// #199 except for threading `self.is_first_battle()` through as
-    /// `suppress_crit` (issue #187).
+    /// [`crate::hit::resolve_hit`]'s pipeline, threading
+    /// `self.is_first_battle()` through as `suppress_crit` (issue #187) and,
+    /// since issue #784, [`crate::hit::HitResolution::poisons_defender`]
+    /// through to a status write.
     fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -108,7 +109,7 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let outcome = {
+        let resolution = {
             let (attacker, defender) = if attacker_is_player {
                 (&self.player, &self.enemy)
             } else {
@@ -124,7 +125,7 @@ impl Battle {
             )?
         };
 
-        match outcome {
+        match resolution.outcome {
             HitOutcome::Miss => {
                 events.push(BattleEvent::Missed {
                     by_player: attacker_is_player,
@@ -148,6 +149,27 @@ impl Battle {
                     damage: dealt,
                     is_critical,
                 });
+                // `seteffectwithchance` precedes `tryfaintmon`
+                // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`'s
+                // own leading `hp == 0` guard
+                // (`battle_script_commands.c:2261`-`:2264`) means a hit that
+                // faints its target this same turn writes no status at all --
+                // the fainted check the pure draw in `resolve_hit` could not
+                // make for itself.
+                if resolution.poisons_defender {
+                    let defender = if attacker_is_player {
+                        &mut self.enemy
+                    } else {
+                        &mut self.player
+                    };
+                    if !defender.is_fainted() {
+                        defender.set_status1(Status1::Poisoned);
+                        events.push(BattleEvent::Poisoned {
+                            by_player: attacker_is_player,
+                            move_id,
+                        });
+                    }
+                }
                 self.settle_faint(!attacker_is_player, events)?;
             }
         }
@@ -433,6 +455,12 @@ impl Battle {
             }
             ParalyzeOutcome::AlreadyParalysed => {
                 events.push(BattleEvent::AlreadyParalyzed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ParalyzeOutcome::AlreadyStatused => {
+                events.push(BattleEvent::ButItFailed {
                     by_player: attacker_is_player,
                     move_id,
                 });

@@ -322,7 +322,8 @@ impl Battle {
 
         // `BattleScript_MultiHitEnd` (`:650`): one draw for the whole move,
         // then `tryfaintmon BS_TARGET`.
-        spend_multi_hit_effect_chance_draw(&self.dex, move_id, !immune, rng)?;
+        let defender = self.battlers(attacker_is_player).1;
+        spend_multi_hit_effect_chance_draw(&self.dex, move_id, !immune, defender, rng)?;
         self.settle_faint(!attacker_is_player, events)
     }
 
