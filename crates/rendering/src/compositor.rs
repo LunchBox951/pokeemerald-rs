@@ -39,7 +39,7 @@ use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::SpriteLayer;
-use crate::window::WindowConfig;
+use crate::window::{WindowConfig, WindowRegion};
 
 /// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
 /// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
@@ -355,6 +355,12 @@ pub fn compose_frame_with_effects(
         for hold in affine_mosaic_holds.iter_mut().flatten() {
             *hold = AffineMosaicHold::default();
         }
+        // `None` forces the first column of every scanline to read as a
+        // fresh region too, matching the reset above -- see the region-start
+        // handling in `compose_pixel` for why this must track the region
+        // mGBA's window unit actually selected, not just this slot's own
+        // enable bit.
+        let mut previous_region: Option<WindowRegion> = None;
         for x in 0..width {
             let color = compose_pixel(
                 sprites,
@@ -362,6 +368,7 @@ pub fn compose_frame_with_effects(
                 effects,
                 any_target2,
                 &mut affine_mosaic_holds,
+                &mut previous_region,
                 x,
                 y,
             );
@@ -377,12 +384,18 @@ pub fn compose_frame_with_effects(
 /// [`AffineMosaicHold`] (or `None`) per slot, advanced one column at a time
 /// across a scanline; see [`compose_frame_with_effects`]'s docs.
 #[allow(clippy::cast_possible_truncation)] // Framebuffer coordinates are always < 240/160, well within u8.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one pixel's full per-frame render state: layers, effects, and the two pieces of \
+              cross-column affine-mosaic bookkeeping (issue #872)"
+)]
 fn compose_pixel(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
     effects: &FrameEffects,
     any_target2: bool,
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>],
+    previous_region: &mut Option<WindowRegion>,
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -391,6 +404,21 @@ fn compose_pixel(
     let objwin_mask = effects.windows.obj_window.is_some()
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
     let (window, region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
+
+    // mGBA partitions each scanline into hardware-window regions and never
+    // coalesces adjacent regions with equal control bits -- it re-invokes
+    // its background draw routine (and re-derives mosaic hold state fresh
+    // from that region's own start column) once per region, regardless of
+    // whether a given BG stays enabled across the boundary between two of
+    // them (`mgba/src/gba/renderers/video-software.c:628-675,458-505`,
+    // `mgba/src/gba/renderers/software-private.h:173-192`). So an affine
+    // mosaic hold must reset at every region boundary, not only when this
+    // slot's own enable bit toggles closed `(behavioral-fidelity)`.
+    if previous_region.replace(region) != Some(region) {
+        for hold in affine_mosaic_holds.iter_mut().flatten() {
+            hold.close();
+        }
+    }
 
     let mut front = None;
     let mut next = None;
@@ -738,6 +766,50 @@ mod tests {
         colors[200] = Bgr555::from_channels(color_channel, 0, 0);
         let palette = Palette::new(colors);
         let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        (tileset, palette, tilemap)
+    }
+
+    /// A single 8x8-tile *affine* BG layer whose columns 0..8 each carry a
+    /// distinct opaque color (channel `column + 1`) -- distinguishes "holds
+    /// its own column's texel" from "holds a neighbor's" at column
+    /// granularity, unlike [`opaque_affine_bg_fixture`]'s single flat color.
+    fn gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
+        let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+        let mut bytes = vec![0u8; tile_byte_len];
+        for (column, byte) in bytes[..BitDepth::TILE_DIM].iter_mut().enumerate() {
+            *byte = u8::try_from(column + 1).unwrap();
+        }
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        for (column, color) in colors[1..=BitDepth::TILE_DIM].iter_mut().enumerate() {
+            *color = Bgr555::from_channels(u8::try_from(column + 1).unwrap(), 0, 0);
+        }
+        let palette = Palette::new(colors);
+        let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        (tileset, palette, tilemap)
+    }
+
+    /// An 8-tile-wide, 1-tile-tall *affine* BG layer whose tiles 0..8 are
+    /// each flat-filled with a distinct opaque color (channel
+    /// `tile_index + 1`) -- for tests that need to distinguish which *tile*
+    /// (not just which column within one tile) a sample landed in, e.g. with
+    /// a scaled affine matrix that crosses tile boundaries over a handful of
+    /// screen columns.
+    fn eight_tile_gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
+        const TILE_COUNT: usize = 8;
+        let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+        let mut bytes = vec![0u8; tile_byte_len * TILE_COUNT];
+        for (tile_index, chunk) in bytes.chunks_exact_mut(tile_byte_len).enumerate() {
+            chunk.fill(u8::try_from(tile_index + 1).unwrap());
+        }
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        for (tile_index, color) in colors[1..=TILE_COUNT].iter_mut().enumerate() {
+            *color = Bgr555::from_channels(u8::try_from(tile_index + 1).unwrap(), 0, 0);
+        }
+        let palette = Palette::new(colors);
+        let tile_indices: Vec<u8> = (0..TILE_COUNT).map(|i| u8::try_from(i).unwrap()).collect();
+        let tilemap = AffineTilemap::new(TILE_COUNT, 1, tile_indices).unwrap();
         (tileset, palette, tilemap)
     }
 
@@ -1154,22 +1226,23 @@ mod tests {
     }
 
     #[test]
-    fn affine_mosaic_hold_resets_at_a_window_closed_gap_instead_of_carrying_over() {
+    fn affine_mosaic_hold_reopens_seeded_from_the_snapped_origin_not_the_pre_gap_hold() {
         // mGBA re-invokes its mode-2 background draw routine (and re-derives
-        // `mosaicWait` fresh) once per hardware-window region in which the
-        // layer is enabled (`mgba/src/gba/renderers/video-software.c:628-675`,
+        // `mosaicWait` and the snapped block origin) once per hardware-window
+        // region in which the layer is enabled
+        // (`mgba/src/gba/renderers/video-software.c:628-675`,
         // `mgba/src/gba/renderers/software-private.h:173-192`), so a window
-        // gap must reset the retry/hold state rather than merely hide it --
-        // the phase resumes from the *absolute* screen column where the BG
-        // reopens, not from an immediate fresh fetch and not from wherever
-        // the pre-gap hold left off.
+        // gap must reset the retry/hold state rather than merely hide it. The
+        // reopened span is then seeded from the *snapped block origin*
+        // column, not left blank and not resuming the pre-gap hold
+        // (`software-bg.c:66-73`).
         //
-        // Identity matrix + ref_x=0 keeps every screen x in this 8px-wide
-        // texture in bounds, so every drawn pixel is the fixture's one flat
-        // color -- this isolates the retry-phase bookkeeping (which columns
-        // draw vs. stay blank) from the out-of-bounds-origin case the tests
-        // above cover.
-        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        // A per-column gradient (distinct color per texture column) makes
+        // all three outcomes distinguishable at x=5: the pre-gap hold (from
+        // x=0..2) is column 0's color; a naive "start blank" would be
+        // `None`; the correct seed is column 4's color (the snapped origin
+        // for block 4 at x=5).
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let slot = BgSlot::new_affine(
             layer,
@@ -1211,21 +1284,12 @@ mod tests {
         };
         let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
 
-        let held = Bgr555::from_channels(9, 0, 0).to_rgb888();
-        assert_eq!(
-            fb.pixel(0, 0),
-            Some(held),
-            "x=0 is block-aligned: fetches and draws immediately"
-        );
-        assert_eq!(
-            fb.pixel(1, 0),
-            Some(held),
-            "x=1 holds the block fetched at x=0"
-        );
+        let column0 = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        let column4 = Bgr555::from_channels(5, 0, 0).to_rgb888();
         assert_eq!(
             fb.pixel(2, 0),
-            Some(held),
-            "x=2 holds the block fetched at x=0; the window closes right after"
+            Some(column0),
+            "x=2 holds column 0's texel, fetched at x=0; the window closes right after"
         );
         assert_eq!(
             fb.pixel(3, 0),
@@ -1234,19 +1298,91 @@ mod tests {
         );
         assert_eq!(
             fb.pixel(5, 0),
-            Some(crate::palette::Rgb888::BLACK),
-            "x=5 reopens off the true (absolute) block boundary at x=4/x=8, so \
-             it waits rather than resuming x=2's held color or fetching fresh"
+            Some(column4),
+            "x=5 reopens mid-block (phase 1 of 4): seeded from the snapped \
+             origin at x=4 (column 4), not blank and not column 0's pre-gap hold"
         );
         assert_eq!(
             fb.pixel(6, 0),
-            Some(crate::palette::Rgb888::BLACK),
-            "x=6 still waits for the next absolute block boundary at x=8"
+            Some(column4),
+            "x=6 still holds the seed from x=5's span"
         );
         assert_eq!(
             fb.pixel(7, 0),
-            Some(crate::palette::Rgb888::BLACK),
-            "x=7 still waits for the next absolute block boundary at x=8"
+            Some(column4),
+            "x=7 still holds the seed from x=5's span"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_hold_does_not_cross_a_same_enabled_window_region_boundary() {
+        // mGBA partitions a scanline into hardware-window regions and never
+        // coalesces adjacent regions with equal control bits -- it
+        // re-invokes its background draw routine (and re-derives mosaic hold
+        // state fresh from that region's own start column) once per region,
+        // even where the same BG stays enabled across the boundary between
+        // two of them (`mgba/src/gba/renderers/video-software.c:628-675,458-505`).
+        // WIN0 [0, 5) and WINOUT both enable BG0 here, so BG0's own enable
+        // bit never toggles -- x=5 is still a region boundary (WIN0 ->
+        // WINOUT), and the hold must not survive it.
+        //
+        // An 8x horizontal scale makes screen x map to texture x =
+        // 8*(screen_x - 3), landing each screen column in a different one
+        // of 8 flat-colored tiles a few columns apart.
+        let (tiles, palette, tilemap) = eight_tile_gradient_affine_bg_fixture();
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let scale = 8 * AffineMatrix::ONE;
+        let matrix = AffineMatrix::new(scale, 0, 0, AffineMatrix::ONE);
+        let reference_x = -24 * i32::from(AffineMatrix::ONE); // texture x = 8*(screen_x - 3)
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            matrix,
+            reference_x,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let mut bg0_on = WindowLayerEnable::NONE;
+        bg0_on.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(0, 5), WindowRange::new(0, 1)),
+                    bg0_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: bg0_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let first_tile_color = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        let second_tile_color = Bgr555::from_channels(2, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(4, 0),
+            Some(first_tile_color),
+            "x=4 still holds tile 0, fetched at x=3 inside WIN0"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(second_tile_color),
+            "x=5 starts a fresh span at the WIN0/WINOUT boundary, seeded from the \
+             snapped origin (screen x=4, texture tile 1) -- not tile 0's held \
+             color carried over from inside WIN0"
         );
     }
 

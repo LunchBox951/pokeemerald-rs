@@ -309,11 +309,13 @@ impl<'a> AffineBgLayer<'a> {
         let block_h = usize::from(block_h);
         if !hold.span_open {
             // A fresh span (scanline start, or the first column after a
-            // window-closed gap) starts exactly like a fresh mGBA renderer
-            // invocation: `mosaicWait` is re-derived from this column's
-            // absolute position, not carried over from before the gap
-            // (`mgba/src/gba/renderers/software-private.h:181-183`).
+            // window-closed gap or a window-region boundary) starts exactly
+            // like a fresh mGBA renderer invocation: `mosaicWait` and
+            // `startX` (the snapped block origin) are re-derived from this
+            // column's absolute position, not carried over from before the
+            // gap (`mgba/src/gba/renderers/software-private.h:181-191`).
             let phase = screen_x % block_h;
+            let snapped_origin_x = screen_x - phase;
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "phase < block_h, and block_h originated from a u8"
@@ -325,7 +327,39 @@ impl<'a> AffineBgLayer<'a> {
                     (block_h - phase) as u8
                 };
             }
-            hold.held = None;
+            // When the span reopens off a block boundary (phase != 0), mGBA
+            // prefetches `pixelData` from that snapped origin column before
+            // its column loop begins, so the columns spent waiting out
+            // `mosaicWait` composite that prefetched texel rather than
+            // nothing (`mgba/src/gba/renderers/software-bg.c:66-73`). A
+            // rejected origin leaves the prefetch unset (its default,
+            // transparent), matching a rejected coordinate anywhere else on
+            // this path. At phase == 0 this seed is moot: `remaining` is
+            // already 0, so the fetch below runs immediately and overwrites
+            // it.
+            // When the span reopens off a block boundary (phase != 0), mGBA
+            // prefetches `pixelData` from that snapped origin column before
+            // its column loop begins, so the columns spent waiting out
+            // `mosaicWait` composite that prefetched texel rather than
+            // nothing (`mgba/src/gba/renderers/software-bg.c:66-73`). A
+            // rejected origin leaves the prefetch unset (its default,
+            // transparent), matching a rejected coordinate anywhere else on
+            // this path. At phase == 0 this seed is moot: `remaining` is
+            // already 0, so the fetch below runs immediately and overwrites
+            // it.
+            hold.held = if phase == 0 {
+                None
+            } else {
+                self.sampled_coordinate(
+                    matrix,
+                    reference_x,
+                    reference_y,
+                    Overflow::Transparent,
+                    snapped_origin_x,
+                    screen_y,
+                )
+                .and_then(|(sample_x, sample_y)| self.sample_texel(sample_x, sample_y))
+            };
             hold.span_open = true;
         }
         if hold.remaining == 0 {
@@ -391,23 +425,19 @@ impl<'a> AffineBgLayer<'a> {
 ///
 /// A "span" is a run of columns [`AffineMosaicHold`] has advanced through
 /// without a [`Self::close`] in between. mGBA's software renderer processes
-/// one scanline as a sequence of hardware-window regions, re-invoking its
-/// mode-2 background draw routine (and re-deriving `mosaicWait` fresh from
+/// one scanline as a sequence of hardware-window regions, geometrically
+/// partitioned and never coalesced even where two adjacent regions share
+/// identical control bits, re-invoking its mode-2 background draw routine
+/// (and re-deriving `mosaicWait` and the snapped block origin fresh from
 /// that region's own start column) once per region in which the layer is
-/// enabled (`mgba/src/gba/renderers/video-software.c:628-675`,
+/// enabled (`mgba/src/gba/renderers/video-software.c:628-675,458-505`,
 /// `mgba/src/gba/renderers/software-private.h:173-192`) — so retry/hold
-/// state never survives a column this slot's window enable bit excluded.
-/// [`Self::close`], called for every excluded column, is what lets the next
-/// included column detect that and start a fresh span instead of continuing
-/// the old one `(behavioral-fidelity)`.
-///
-/// Not modeled: mGBA still starts a fresh invocation, and so a fresh span,
-/// at a window*-region* boundary even where this slot stays enabled on both
-/// sides of it (e.g. `WIN0` and `WINOUT` both enabling the same BG). This
-/// type only detects a *disabled* gap, since that's what
-/// [`crate::window::WindowConfig::classify_with_region`] exposes per pixel;
-/// a same-enabled region boundary is a narrower, undetected case left for a
-/// follow-up.
+/// state never survives a column this slot's window enable bit excluded,
+/// *or* a region boundary this slot stayed enabled across. The compositor
+/// calls [`Self::close`] for both cases: every excluded column, and every
+/// column starting a new window region regardless of this slot's own enable
+/// bit there — either one lets the next sampled column detect it and start
+/// a fresh span instead of continuing the old one `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AffineMosaicHold {
     remaining: u8,
@@ -427,7 +457,7 @@ impl AffineMosaicHold {
 
 #[cfg(test)]
 mod tests {
-    use super::{AffineBgLayer, AffineTilemap, Overflow};
+    use super::{AffineBgLayer, AffineMosaicHold, AffineTilemap, Overflow};
     use crate::affine::AffineMatrix;
     use crate::bg::BgLayer;
     use crate::framebuffer::Framebuffer;
@@ -845,16 +875,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn sample_row_with_mosaic_hold_applies_no_hold_at_all_for_a_block_size_of_two() {
-        // mGBA only engages its mode-2 mosaic hold/retry macro for a decoded
-        // block size of 3 or more; sizes 1 and 2 sample every column
-        // directly, with no snapping or holding
-        // (`mgba/src/gba/renderers/software-bg.c:56-76`,
-        // `mgba/src/gba/renderers/software-private.h:181-185`). A single 8x8
-        // tile with a distinct opaque color per column proves this: if a
-        // 2-pixel hold were (wrongly) still applied, adjacent columns within
-        // a block would repeat a color instead of each sampling its own.
+    /// A single 8x8-tile affine layer whose columns 0..8 each carry a
+    /// distinct opaque color (channel `column + 1`), plus its owning
+    /// tileset/palette/tilemap.
+    fn gradient_affine_tile_fixture() -> (Tileset, Palette, AffineTilemap) {
         let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
         let mut bytes = vec![0u8; tile_byte_len];
         for (column, byte) in bytes[..BitDepth::TILE_DIM].iter_mut().enumerate() {
@@ -867,6 +891,20 @@ mod tests {
         }
         let palette = Palette::new(colors);
         let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        (tileset, palette, tilemap)
+    }
+
+    #[test]
+    fn sample_row_with_mosaic_hold_applies_no_hold_at_all_for_a_block_size_of_two() {
+        // mGBA only engages its mode-2 mosaic hold/retry macro for a decoded
+        // block size of 3 or more; sizes 1 and 2 sample every column
+        // directly, with no snapping or holding
+        // (`mgba/src/gba/renderers/software-bg.c:56-76`,
+        // `mgba/src/gba/renderers/software-private.h:181-185`). A distinct
+        // opaque color per column proves this: if a 2-pixel hold were
+        // (wrongly) still applied, adjacent columns within a block would
+        // repeat a color instead of each sampling its own.
+        let (tileset, palette, tilemap) = gradient_affine_tile_fixture();
         let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
 
         let block_h = 2;
@@ -879,5 +917,40 @@ mod tests {
             row, expected,
             "every column samples its own texel; none of them hold a neighbor's"
         );
+    }
+
+    #[test]
+    fn a_span_reopening_mid_block_is_seeded_from_the_snapped_block_origin() {
+        // A fresh span (e.g. a window region beginning mid-scanline) that
+        // opens off a block boundary must seed its hold from the snapped
+        // block-origin coordinate, not start blank: mGBA prefetches
+        // `pixelData` from `startX` (the snapped origin) before its column
+        // loop begins, so the columns spent waiting out `mosaicWait`
+        // composite that prefetched texel
+        // (`mgba/src/gba/renderers/software-private.h:184-191`,
+        // `mgba/src/gba/renderers/software-bg.c:66-73`). With block size 4
+        // and a span first advanced at x=5 (phase 1), the snapped origin is
+        // x=4, and `mosaicWait` seeds to 3, so x=5, x=6, and x=7 must all
+        // hold column 4's distinct color.
+        let (tileset, palette, tilemap) = gradient_affine_tile_fixture();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let mut hold = AffineMosaicHold::default();
+        let column4 = Some(Bgr555::from_channels(5, 0, 0).to_rgb888());
+        for screen_x in 5..8 {
+            let sample = layer.sample_column_with_mosaic_hold(
+                &mut hold,
+                AffineMatrix::IDENTITY,
+                0,
+                0,
+                screen_x,
+                0,
+                4,
+            );
+            assert_eq!(
+                sample, column4,
+                "x={screen_x} must hold column 4's texel, the snapped block origin"
+            );
+        }
     }
 }
