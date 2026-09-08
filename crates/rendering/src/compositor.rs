@@ -33,7 +33,7 @@
 
 use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
-use crate::bg_affine::{AffineBgLayer, Overflow};
+use crate::bg_affine::{AffineBgLayer, AffineMosaicHold, Overflow};
 use crate::effects::{self, EffectsConfig, LayerKind};
 use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
@@ -148,7 +148,51 @@ impl<'a> BgSlot<'a> {
     /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op regardless
     /// of the slot's own mosaic bit, which is what keeps
     /// [`compose_frame`]'s output byte-for-byte unaffected by this slice.
-    fn sample(&self, x: usize, y: usize, bg_mosaic: MosaicSize) -> Option<Rgb888> {
+    ///
+    /// `bg_open` is whether [`crate::window`] currently permits this slot's
+    /// BG index at `(x, y)` — the caller always passes it (rather than
+    /// skipping the call when closed) because an affine `Overflow::Transparent`
+    /// mosaic slot's `affine_mosaic_hold`, when `Some`, must still be told
+    /// about a closed column to close its span (issue #872; see
+    /// [`AffineMosaicHold`]'s docs for why). Every other slot kind ignores
+    /// `bg_open` when `false` by simply returning `None`, exactly as the
+    /// caller's own pre-existing early-`continue` did.
+    fn sample(
+        &self,
+        x: usize,
+        y: usize,
+        bg_mosaic: MosaicSize,
+        bg_open: bool,
+        affine_mosaic_hold: Option<&mut AffineMosaicHold>,
+    ) -> Option<Rgb888> {
+        if let Some(hold) = affine_mosaic_hold {
+            if !bg_open {
+                hold.close();
+                return None;
+            }
+            if let BgKind::Affine {
+                layer,
+                matrix,
+                ref_x,
+                ref_y,
+                overflow: Overflow::Transparent,
+            } = self.kind
+            {
+                let (_, snapped_y) = bg_mosaic.snap(0, y);
+                return layer.sample_column_with_mosaic_hold(
+                    hold,
+                    matrix,
+                    ref_x,
+                    ref_y,
+                    x,
+                    snapped_y,
+                    bg_mosaic.horizontal(),
+                );
+            }
+        }
+        if !bg_open {
+            return None;
+        }
         let (x, y) = if self.mosaic {
             bg_mosaic.snap(x, y)
         } else {
@@ -168,6 +212,23 @@ impl<'a> BgSlot<'a> {
                 overflow,
             } => layer.sample_pixel(matrix, ref_x, ref_y, overflow, x, y),
         }
+    }
+
+    /// Whether this slot needs an [`AffineMosaicHold`] (issue #872): only an
+    /// *enabled*, mosaic-enabled, affine [`Overflow::Transparent`] slot does
+    /// — [`Overflow::Wrap`] and regular BGs keep their pre-existing,
+    /// stateless block-origin snap (see [`AffineBgLayer::sample_column_with_mosaic_hold`]'s
+    /// docs for why `Overflow::Transparent` alone needs retry/hold state).
+    fn needs_affine_mosaic_hold(&self) -> bool {
+        self.enabled
+            && self.mosaic
+            && matches!(
+                self.kind,
+                BgKind::Affine {
+                    overflow: Overflow::Transparent,
+                    ..
+                }
+            )
     }
 }
 
@@ -273,10 +334,37 @@ pub fn compose_frame_with_effects(
             slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
         });
 
+    // One `AffineMosaicHold` per slot that needs one (issue #872); `None`
+    // for every other slot. Reset at the start of each scanline below, then
+    // advanced one column at a time by `compose_pixel` -> `BgSlot::sample`,
+    // in lockstep with the window classification that decides whether this
+    // column is open for that slot -- seeing every closed column (not just
+    // every open one) is what lets `AffineMosaicHold` detect a window-closed
+    // gap and start a fresh span after it (see its docs).
+    let mut affine_mosaic_holds: Vec<Option<AffineMosaicHold>> = bg_slots
+        .iter()
+        .map(|slot| {
+            slot.needs_affine_mosaic_hold()
+                .then(AffineMosaicHold::default)
+        })
+        .collect();
+
     let mut framebuffer = Framebuffer::new();
+    let width = framebuffer.width();
     for y in 0..framebuffer.height() {
-        for x in 0..framebuffer.width() {
-            let color = compose_pixel(sprites, bg_slots, effects, any_target2, x, y);
+        for hold in affine_mosaic_holds.iter_mut().flatten() {
+            *hold = AffineMosaicHold::default();
+        }
+        for x in 0..width {
+            let color = compose_pixel(
+                sprites,
+                bg_slots,
+                effects,
+                any_target2,
+                &mut affine_mosaic_holds,
+                x,
+                y,
+            );
             framebuffer.set_pixel(x, y, color);
         }
     }
@@ -284,12 +372,17 @@ pub fn compose_frame_with_effects(
 }
 
 /// Resolve one pixel's final color for [`compose_frame_with_effects`].
+///
+/// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
+/// [`AffineMosaicHold`] (or `None`) per slot, advanced one column at a time
+/// across a scanline; see [`compose_frame_with_effects`]'s docs.
 #[allow(clippy::cast_possible_truncation)] // Framebuffer coordinates are always < 240/160, well within u8.
 fn compose_pixel(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
     effects: &FrameEffects,
     any_target2: bool,
+    affine_mosaic_holds: &mut [Option<AffineMosaicHold>],
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -321,11 +414,18 @@ fn compose_pixel(
             );
         }
     }
-    for slot in bg_slots {
-        if !slot.enabled || !window.bg_enabled(slot.bg_index) {
+    for (slot, affine_mosaic_hold) in bg_slots.iter().zip(affine_mosaic_holds.iter_mut()) {
+        if !slot.enabled {
             continue;
         }
-        let Some(color) = slot.sample(x, y, effects.mosaic.bg) else {
+        let bg_open = window.bg_enabled(slot.bg_index);
+        let Some(color) = slot.sample(
+            x,
+            y,
+            effects.mosaic.bg,
+            bg_open,
+            affine_mosaic_hold.as_mut(),
+        ) else {
             continue;
         };
         insert_candidate(
@@ -945,6 +1045,208 @@ mod tests {
         assert_eq!(
             fb.pixel(1, 1),
             Some(Bgr555::from_channels(4, 0, 0).to_rgb888())
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds() {
+        // The identity matrix with the reference point one texture pixel to
+        // the left puts screen x=0 at texture x=-1 (out of bounds under
+        // `Overflow::Transparent`) and screen x=1 at texture x=0. mGBA's
+        // mode-2 mosaic fetch `continue`s past an out-of-bounds coordinate
+        // without reloading `mosaicWait`, so the next horizontal pixel
+        // retries the fetch and draws -- and, since the block is 4 wide, x=2
+        // and x=3 then hold that retried value rather than each
+        // independently re-snapping to the rejected origin
+        // (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
+        // `mgba/src/gba/renderers/software-bg.c:24-42`) `(behavioral-fidelity)`.
+        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let one_texture_pixel = i32::from(AffineMatrix::ONE);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            -one_texture_pixel,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let held = Bgr555::from_channels(9, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "texture x=-1 is out of bounds, so this pixel draws nothing"
+        );
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(held),
+            "the retry at screen x=1 samples texture x=0 and draws it"
+        );
+        assert_eq!(
+            fb.pixel(2, 0),
+            Some(held),
+            "x=2 holds the value the retry drew at x=1, not a fresh (still in-bounds) sample"
+        );
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(held),
+            "x=3 holds the value the retry drew at x=1, completing the 4-wide block"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_wrap_overflow_still_snaps_to_the_block_origin() {
+        // `Overflow::Wrap` always succeeds (it masks into range), so it never
+        // hits the retry path -- the pre-existing block-origin snap already
+        // matches mGBA's overflow-branch affine mosaic exactly. This is a
+        // regression guard that issue #872's fix left `Overflow::Wrap`
+        // unchanged: x=0 and x=1 must keep sampling the same (snapped)
+        // origin and thus draw the same color, unlike the `Overflow::Transparent`
+        // case above where they differ.
+        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let one_texture_pixel = i32::from(AffineMatrix::ONE);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            -one_texture_pixel,
+            0,
+            Overflow::Wrap,
+            true,
+        )
+        .with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        assert_eq!(
+            fb.pixel(0, 0),
+            fb.pixel(1, 0),
+            "Wrap keeps snapping every pixel in the block to the same origin"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_hold_resets_at_a_window_closed_gap_instead_of_carrying_over() {
+        // mGBA re-invokes its mode-2 background draw routine (and re-derives
+        // `mosaicWait` fresh) once per hardware-window region in which the
+        // layer is enabled (`mgba/src/gba/renderers/video-software.c:628-675`,
+        // `mgba/src/gba/renderers/software-private.h:173-192`), so a window
+        // gap must reset the retry/hold state rather than merely hide it --
+        // the phase resumes from the *absolute* screen column where the BG
+        // reopens, not from an immediate fresh fetch and not from wherever
+        // the pre-gap hold left off.
+        //
+        // Identity matrix + ref_x=0 keeps every screen x in this 8px-wide
+        // texture in bounds, so every drawn pixel is the fixture's one flat
+        // color -- this isolates the retry-phase bookkeeping (which columns
+        // draw vs. stay blank) from the out-of-bounds-origin case the tests
+        // above cover.
+        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            0,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        // WIN0 excludes BG0 for x in [3, 5); WINOUT (everywhere else)
+        // includes it, so BG0 is open at x=0..3, closed at x=3..5, and open
+        // again at x=5..8.
+        let bg0_off = WindowLayerEnable::NONE;
+        let mut bg0_on = WindowLayerEnable::NONE;
+        bg0_on.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(3, 5), WindowRange::new(0, 1)),
+                    bg0_off,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: bg0_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let held = Bgr555::from_channels(9, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(held),
+            "x=0 is block-aligned: fetches and draws immediately"
+        );
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(held),
+            "x=1 holds the block fetched at x=0"
+        );
+        assert_eq!(
+            fb.pixel(2, 0),
+            Some(held),
+            "x=2 holds the block fetched at x=0; the window closes right after"
+        );
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=3 is window-closed: nothing from this slot draws here"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=5 reopens off the true (absolute) block boundary at x=4/x=8, so \
+             it waits rather than resuming x=2's held color or fetching fresh"
+        );
+        assert_eq!(
+            fb.pixel(6, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=6 still waits for the next absolute block boundary at x=8"
+        );
+        assert_eq!(
+            fb.pixel(7, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=7 still waits for the next absolute block boundary at x=8"
         );
     }
 

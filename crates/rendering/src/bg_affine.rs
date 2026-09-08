@@ -157,12 +157,6 @@ impl<'a> AffineBgLayer<'a> {
     }
 
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap,
-        clippy::cast_sign_loss,
-        reason = "framebuffer dimensions and screen coordinates fit in i32, and sampled pixels are nonnegative"
-    )]
     pub(crate) fn sample_pixel(
         &self,
         matrix: AffineMatrix,
@@ -172,6 +166,37 @@ impl<'a> AffineBgLayer<'a> {
         screen_x: usize,
         screen_y: usize,
     ) -> Option<Rgb888> {
+        let (sample_x, sample_y) = self.sampled_coordinate(
+            matrix,
+            reference_x,
+            reference_y,
+            overflow,
+            screen_x,
+            screen_y,
+        )?;
+        self.sample_texel(sample_x, sample_y)
+    }
+
+    /// Resolves `screen_x`/`screen_y` to a texture-space coordinate, or
+    /// `None` when the texture is degenerate/unsampleable, or (under
+    /// `Overflow::Transparent`) the transformed coordinate itself falls
+    /// outside the texture. [`Overflow::Wrap`] never returns `None` once the
+    /// texture itself is sampleable.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "framebuffer dimensions and screen coordinates fit in i32, and sampled pixels are nonnegative"
+    )]
+    fn sampled_coordinate(
+        &self,
+        matrix: AffineMatrix,
+        reference_x: i32,
+        reference_y: i32,
+        overflow: Overflow,
+        screen_x: usize,
+        screen_y: usize,
+    ) -> Option<(usize, usize)> {
         let width_tiles = self.tilemap.width_tiles();
         let height_tiles = self.tilemap.height_tiles();
         if width_tiles == 0 || height_tiles == 0 {
@@ -196,8 +221,12 @@ impl<'a> AffineBgLayer<'a> {
                 (tex_x, tex_y)
             }
         };
-        let (sample_x, sample_y) = (sample_x as usize, sample_y as usize);
+        Some((sample_x as usize, sample_y as usize))
+    }
 
+    /// Resolves an already-in-bounds texture coordinate to a color, or `None`
+    /// for a palette-index-0 (transparent) texel.
+    fn sample_texel(&self, sample_x: usize, sample_y: usize) -> Option<Rgb888> {
         let tile_index = self
             .tilemap
             .tile_index(sample_x / BitDepth::TILE_DIM, sample_y / BitDepth::TILE_DIM)?;
@@ -208,6 +237,191 @@ impl<'a> AffineBgLayer<'a> {
             return None;
         }
         Some(self.palette.color(palette_index).to_rgb888())
+    }
+
+    /// Advances `hold` by one column and returns that column's affine
+    /// `Overflow::Transparent` mosaic sample, replacing the stateless
+    /// block-origin snap [`crate::mosaic::MosaicSize::snap`] otherwise
+    /// applies with mGBA's per-column retry/hold state machine.
+    ///
+    /// `screen_y` is already snapped to the mosaic block's top row: vertical
+    /// mosaic has no retry quirk to model, since mGBA backs the affine
+    /// reference point up by `inY % mosaicV` before the scanline starts
+    /// (`mgba/src/gba/renderers/software-private.h:186-191`), equivalent for
+    /// this crate's static per-pixel transform to sampling at the block's
+    /// top-row `y`.
+    ///
+    /// Within one open [`AffineMosaicHold`] span: mGBA's mode-2 affine
+    /// renderer advances its raw texture coordinate every screen column
+    /// (`mgba/src/gba/renderers/software-bg.c:44-53`). When "no overflow"
+    /// rejects that coordinate, the fetch's `continue` skips both the
+    /// composite and the `mosaicWait` reload
+    /// (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
+    /// `mgba/src/gba/renderers/software-bg.c:24-42`), so the very next
+    /// column retries — an out-of-bounds block origin blanks only the
+    /// columns up to but excluding the first successful fetch, which draws
+    /// immediately and then holds, not the whole block. The reload
+    /// (`mosaicWait = mosaicH`) sits inside that same fetch, before the
+    /// later `pixelData` write test
+    /// (`mgba/src/gba/renderers/software-bg.c:36-42,49-53`), so it applies
+    /// even when the fetched texel is itself palette-index-0 (transparent):
+    /// the reload depends only on the coordinate being accepted, not on
+    /// what it draws `(behavioral-fidelity)`.
+    ///
+    /// See [`AffineMosaicHold`]'s docs for what "one open span" means and why
+    /// a caller can't just run this over every column of a scanline
+    /// unconditionally.
+    ///
+    /// A `block_h` of 1 or 2 skips the retry/hold state machine entirely and
+    /// samples every column directly: mGBA decodes the register's block size
+    /// and immediately decrements it (`mgba/src/gba/renderers/software-private.h:181-185`),
+    /// then only engages its mode-2 mosaic fetch/hold macro when that
+    /// decremented value exceeds 1 -- i.e. only for a decoded block size of
+    /// 3 or more; sizes 1 and 2 take the plain per-pixel
+    /// `MODE_2_NO_MOSAIC` branch instead, with no hold at all
+    /// (`mgba/src/gba/renderers/software-bg.c:56-76`)
+    /// `(behavioral-fidelity)`.
+    #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the affine BG's full per-frame register set plus the caller's per-column position and hold state"
+    )]
+    pub(crate) fn sample_column_with_mosaic_hold(
+        &self,
+        hold: &mut AffineMosaicHold,
+        matrix: AffineMatrix,
+        reference_x: i32,
+        reference_y: i32,
+        screen_x: usize,
+        screen_y: usize,
+        block_h: u8,
+    ) -> Option<Rgb888> {
+        if block_h <= 2 {
+            return self.sample_pixel(
+                matrix,
+                reference_x,
+                reference_y,
+                Overflow::Transparent,
+                screen_x,
+                screen_y,
+            );
+        }
+        let block_h = usize::from(block_h);
+        if !hold.span_open {
+            // A fresh span (scanline start, or the first column after a
+            // window-closed gap) starts exactly like a fresh mGBA renderer
+            // invocation: `mosaicWait` is re-derived from this column's
+            // absolute position, not carried over from before the gap
+            // (`mgba/src/gba/renderers/software-private.h:181-183`).
+            let phase = screen_x % block_h;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "phase < block_h, and block_h originated from a u8"
+            )]
+            {
+                hold.remaining = if phase == 0 {
+                    0
+                } else {
+                    (block_h - phase) as u8
+                };
+            }
+            hold.held = None;
+            hold.span_open = true;
+        }
+        if hold.remaining == 0 {
+            let (sample_x, sample_y) = self.sampled_coordinate(
+                matrix,
+                reference_x,
+                reference_y,
+                Overflow::Transparent,
+                screen_x,
+                screen_y,
+            )?;
+            hold.held = self.sample_texel(sample_x, sample_y);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "block_h originated from a u8, so block_h - 1 fits back in one"
+            )]
+            {
+                hold.remaining = (block_h - 1) as u8;
+            }
+        } else {
+            hold.remaining -= 1;
+        }
+        hold.held
+    }
+
+    /// Runs [`Self::sample_column_with_mosaic_hold`] across one whole,
+    /// uninterrupted scanline (no window gaps) — a convenience for callers
+    /// (and tests) that don't need [`AffineMosaicHold`]'s span-close
+    /// tracking.
+    #[cfg(test)]
+    #[must_use]
+    fn sample_row_with_mosaic_hold(
+        &self,
+        matrix: AffineMatrix,
+        reference_x: i32,
+        reference_y: i32,
+        screen_y: usize,
+        width: usize,
+        block_h: u8,
+    ) -> Vec<Option<Rgb888>> {
+        let mut hold = AffineMosaicHold::default();
+        (0..width)
+            .map(|screen_x| {
+                self.sample_column_with_mosaic_hold(
+                    &mut hold,
+                    matrix,
+                    reference_x,
+                    reference_y,
+                    screen_x,
+                    screen_y,
+                    block_h,
+                )
+            })
+            .collect()
+    }
+}
+
+/// Per-scanline retry/hold state for
+/// [`AffineBgLayer::sample_column_with_mosaic_hold`] (issue #872): how many
+/// more columns to hold the last-fetched sample, what that sample was, and
+/// whether the current run of columns is contiguous with the last one this
+/// state advanced through.
+///
+/// A "span" is a run of columns [`AffineMosaicHold`] has advanced through
+/// without a [`Self::close`] in between. mGBA's software renderer processes
+/// one scanline as a sequence of hardware-window regions, re-invoking its
+/// mode-2 background draw routine (and re-deriving `mosaicWait` fresh from
+/// that region's own start column) once per region in which the layer is
+/// enabled (`mgba/src/gba/renderers/video-software.c:628-675`,
+/// `mgba/src/gba/renderers/software-private.h:173-192`) — so retry/hold
+/// state never survives a column this slot's window enable bit excluded.
+/// [`Self::close`], called for every excluded column, is what lets the next
+/// included column detect that and start a fresh span instead of continuing
+/// the old one `(behavioral-fidelity)`.
+///
+/// Not modeled: mGBA still starts a fresh invocation, and so a fresh span,
+/// at a window*-region* boundary even where this slot stays enabled on both
+/// sides of it (e.g. `WIN0` and `WINOUT` both enabling the same BG). This
+/// type only detects a *disabled* gap, since that's what
+/// [`crate::window::WindowConfig::classify_with_region`] exposes per pixel;
+/// a same-enabled region boundary is a narrower, undetected case left for a
+/// follow-up.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AffineMosaicHold {
+    remaining: u8,
+    held: Option<Rgb888>,
+    span_open: bool,
+}
+
+impl AffineMosaicHold {
+    /// Marks the current span closed: this column is excluded (e.g. by a
+    /// hardware window), so it draws nothing here, and the next column that
+    /// resumes sampling must start a fresh span rather than continue this
+    /// one. See the type docs for why.
+    pub(crate) fn close(&mut self) {
+        self.span_open = false;
     }
 }
 
@@ -546,5 +760,124 @@ mod tests {
         layer.composite(&mut fb, AffineMatrix::IDENTITY, 0, 0, Overflow::Transparent);
 
         assert_eq!(fb.pixel(0, 0), Some(backdrop));
+    }
+
+    #[test]
+    fn sample_row_with_mosaic_hold_retries_past_a_rejected_origin_and_holds_for_the_full_block() {
+        // Two 8x8 tiles side by side (16 texture px wide): tile 0 flat color
+        // A, tile 1 flat color B. A x4 horizontal scale and `reference_x` one
+        // texture pixel left of the origin puts screen x=0 at texture x=-1
+        // (rejected under `Overflow::Transparent`), screen x=1 at texture
+        // x=3 (tile 0, A), and screen x=3/x=4 at texture x=11/x=15 (tile 1,
+        // B) -- distinct colors close enough together to prove the held
+        // value, not a fresh per-pixel sample, is what draws.
+        let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+        let mut bytes = vec![1u8; 2 * tile_byte_len];
+        bytes[tile_byte_len..].fill(2);
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        let color_a = Bgr555::from_channels(9, 0, 0);
+        let color_b = Bgr555::from_channels(0, 9, 0);
+        colors[1] = color_a;
+        colors[2] = color_b;
+        let palette = Palette::new(colors);
+        let tilemap = AffineTilemap::new(2, 1, vec![0, 1]).unwrap();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let scale = 4 * AffineMatrix::ONE;
+        let matrix = AffineMatrix::new(scale, 0, 0, AffineMatrix::ONE);
+        let reference_x = -i32::from(AffineMatrix::ONE);
+        let block_h = 4;
+
+        let row = layer.sample_row_with_mosaic_hold(matrix, reference_x, 0, 0, 7, block_h);
+
+        assert_eq!(
+            row,
+            vec![
+                None,                      // x=0: texture x=-1, rejected
+                Some(color_a.to_rgb888()), // x=1: retries, texture x=3 (tile 0)
+                Some(color_a.to_rgb888()), // x=2: held (fresh sample would still be A)
+                Some(color_a.to_rgb888()), // x=3: held (fresh sample would be B -- proves override)
+                Some(color_a.to_rgb888()), // x=4: held, 4th and last column of the block
+                None,                      // x=5: block expired, retries, texture x=19 is OOB
+                None,                      // x=6: still OOB
+            ]
+        );
+    }
+
+    #[test]
+    fn sample_row_with_mosaic_hold_reloads_on_an_in_bounds_transparent_texel() {
+        // A single 8x8 tile whose column 0 is palette index 0 (transparent)
+        // and columns 1..8 are opaque. Identity transform samples texture x
+        // == screen x directly. With a 3-pixel block, the transparent fetch
+        // at x=0 must still reload the hold (mGBA's `mosaicWait` reload only
+        // depends on the coordinate being in bounds, not on the fetched
+        // pixel data) -- so x=1 and x=2 must stay blank even though a fresh
+        // sample there would be opaque, and only x=3 (the next block) draws.
+        let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+        let mut bytes = vec![5u8; tile_byte_len];
+        for row in 0..BitDepth::TILE_DIM {
+            bytes[row * BitDepth::TILE_DIM] = 0;
+        }
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        let opaque = Bgr555::from_channels(0, 0, 9);
+        colors[5] = opaque;
+        let palette = Palette::new(colors);
+        let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let block_h = 3;
+        let row = layer.sample_row_with_mosaic_hold(AffineMatrix::IDENTITY, 0, 0, 0, 8, block_h);
+
+        assert_eq!(
+            row,
+            vec![
+                None,                     // x=0: in-bounds but index-0, reloads the hold anyway
+                None,                     // x=1: held transparent (fresh sample would be opaque)
+                None,                     // x=2: held transparent
+                Some(opaque.to_rgb888()), // x=3: next block, fresh fetch finds the opaque texel
+                Some(opaque.to_rgb888()), // x=4: held opaque
+                Some(opaque.to_rgb888()), // x=5: held opaque
+                Some(opaque.to_rgb888()), // x=6: next block, fresh fetch (still opaque)
+                Some(opaque.to_rgb888()), // x=7: held opaque
+            ]
+        );
+    }
+
+    #[test]
+    fn sample_row_with_mosaic_hold_applies_no_hold_at_all_for_a_block_size_of_two() {
+        // mGBA only engages its mode-2 mosaic hold/retry macro for a decoded
+        // block size of 3 or more; sizes 1 and 2 sample every column
+        // directly, with no snapping or holding
+        // (`mgba/src/gba/renderers/software-bg.c:56-76`,
+        // `mgba/src/gba/renderers/software-private.h:181-185`). A single 8x8
+        // tile with a distinct opaque color per column proves this: if a
+        // 2-pixel hold were (wrongly) still applied, adjacent columns within
+        // a block would repeat a color instead of each sampling its own.
+        let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
+        let mut bytes = vec![0u8; tile_byte_len];
+        for (column, byte) in bytes[..BitDepth::TILE_DIM].iter_mut().enumerate() {
+            *byte = u8::try_from(column + 1).unwrap();
+        }
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        for (column, color) in colors[1..=BitDepth::TILE_DIM].iter_mut().enumerate() {
+            *color = Bgr555::from_channels(u8::try_from(column + 1).unwrap(), 0, 0);
+        }
+        let palette = Palette::new(colors);
+        let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let block_h = 2;
+        let row = layer.sample_row_with_mosaic_hold(AffineMatrix::IDENTITY, 0, 0, 0, 8, block_h);
+
+        let expected: Vec<Option<crate::palette::Rgb888>> = (1..=8)
+            .map(|column| Some(Bgr555::from_channels(column, 0, 0).to_rgb888()))
+            .collect();
+        assert_eq!(
+            row, expected,
+            "every column samples its own texel; none of them hold a neighbor's"
+        );
     }
 }
