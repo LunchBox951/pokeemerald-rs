@@ -48,17 +48,9 @@
 //!
 //! Two destinations are refused outright before anything is built.
 //!
-//! The first is a destination that already exists as a directory. A
-//! `$POKEEMERALD_PACK` with no trailing separator can still name one, if
-//! something else already created a directory there, and the ordinary
-//! rename `publish` issues fails on every OS this ships to — but only
-//! after the ROM has been read and the whole pack built in a temporary
-//! file beside it. Checking the destination's own file type up front,
-//! through the same pinned handle `publish` will use, catches that case
-//! before any of that work runs. It is still only a courtesy: the check is
-//! racy against whatever appears at that name afterward, so `publish`'s
-//! own failure stays the authority a directory that shows up later is
-//! refused by.
+//! The first is a destination that already exists as a directory --
+//! checked before the ROM is read or a temporary file is built (see
+//! [`Dest::name_is_directory`]).
 //!
 //! The second is the ROM being imported. `$POKEEMERALD_PACK` can name any
 //! path, including the file the player passed to `--import-rom`, and the
@@ -234,13 +226,9 @@ pub enum ImportRomError {
     /// The resolved destination already exists, and it is a directory.
     ///
     /// Unlike [`Self::DestinationNamesNoFile`], the path itself names a
-    /// file — no trailing separator, a real final component — but
-    /// something else already occupies that name with a directory.
-    /// Publishing would rename the finished pack onto it, which fails on
-    /// every OS this ships to, so this is caught by checking the
-    /// destination's own file type before the ROM is read or a temporary
-    /// file is built, rather than at that rename. Refused before anything
-    /// is written.
+    /// file — no trailing separator, a real final component — but that
+    /// name is already occupied by a directory. Refused before anything
+    /// is written; see [`Dest::name_is_directory`] for how and why.
     DestinationIsDirectory {
         /// The destination occupied by an existing directory.
         pack_path: PathBuf,
@@ -671,14 +659,7 @@ fn names_a_directory(pack_path: &Path) -> bool {
 
 /// Refuse `name` if it already exists inside `dest` as a directory.
 ///
-/// An existing directory at this name would only fail at the publishing
-/// rename, after the ROM has been read and the whole pack built in a
-/// temporary file beside it. Checked here instead, through the same
-/// pinned handle the rename itself uses, so nothing after [`Dest::open`]
-/// answers this question about a name a redirected component could still
-/// swap (see the module docs). Racy against a directory appearing
-/// afterward, same as every other pre-check in [`import_to_with`] --
-/// [`Dest::publish`]'s own failure stays the backstop for that window.
+/// See [`Dest::name_is_directory`] for what counts and why.
 fn refuse_existing_directory(
     dest: &Dest,
     name: &OsStr,

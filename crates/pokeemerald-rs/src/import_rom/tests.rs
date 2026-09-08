@@ -829,14 +829,9 @@ fn a_destination_spelled_as_a_directory_is_refused_with_that_name_intact() {
 
 #[test]
 fn an_existing_directory_at_the_destination_is_refused_before_the_rom_is_read() {
-    // No trailing separator this time -- `pack_name` sees an ordinary file
-    // name and hands it through. The only thing wrong is what already sits
-    // there: a directory, which the publishing rename below would hit with
-    // `ENOTDIR`/`EISDIR` only after the (here injected, but in production
-    // possibly large) import had already run. This is the case a stat on
-    // the raw path only spots, and the fix pins it to the same directory
-    // handle the rename itself will use, before either the import runs or
-    // a temporary file is created.
+    // No trailing separator -- an ordinary file name -- but a directory
+    // already occupies it. See `Dest::name_is_directory` for why this is
+    // refused before the import runs rather than at the publishing rename.
     let dir = TempDir::new("existing-directory");
     let pack_path = dir.join("pokeemerald.pack");
     fs::create_dir(&pack_path).expect("the occupying directory is created");
@@ -895,13 +890,9 @@ fn an_existing_regular_file_at_the_destination_is_still_replaced() {
 #[cfg(unix)]
 #[test]
 fn a_destination_symlinked_to_a_directory_is_still_published() {
-    // A symlink is not a directory, even one pointing at a directory:
-    // `rename(2)` never dereferences its destination's last component, so
-    // `publish` replaces the symlink itself rather than writing into
-    // whatever it points to -- the same reason `create_new`'s `O_EXCL`
-    // refuses a symlink outright instead of writing through one. The
-    // directory-refusal check has to agree with that, or it would refuse
-    // an import `publish` was always going to complete cleanly.
+    // A symlink to a directory must not be refused: see
+    // `Dest::name_is_directory` for why `publish` handles it like any
+    // other occupied name.
     let dir = TempDir::new("symlink-to-directory");
     let target = dir.join("elsewhere");
     fs::create_dir(&target).expect("the symlink's target directory is created");

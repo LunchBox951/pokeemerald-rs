@@ -175,12 +175,16 @@ impl Dest {
 
     /// Whether `name`, inside this directory, is itself a directory.
     ///
-    /// A courtesy check ahead of the publishing rename, which fails on
-    /// every OS this ships to if `name` is already a directory. Read
-    /// through the pinned handle by basename, the same guarantee
-    /// [`Self::is_same_file_as`] rests on: a directory component
-    /// redirected after [`Self::open`] cannot make this answer about a
-    /// different entry than the one the rename will later touch.
+    /// A courtesy check the caller makes before the ROM is read or a
+    /// temporary file is built: an existing directory at `name` would
+    /// otherwise only fail at the publishing rename, after both of those
+    /// have already happened. Read through the pinned handle by
+    /// basename, the same guarantee [`Self::is_same_file_as`] rests on: a
+    /// directory component redirected after [`Self::open`] cannot make
+    /// this answer about a different entry than the one the rename will
+    /// later touch. Still racy against a directory appearing at `name`
+    /// afterward -- [`Self::publish`]'s own failure stays the authority
+    /// for that window.
     ///
     /// A final symlink at `name` is *not* followed, unlike
     /// [`Self::is_same_file_as`]'s read of `name`. `rename(2)`/`renameat(2)`
