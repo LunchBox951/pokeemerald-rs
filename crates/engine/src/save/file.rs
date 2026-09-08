@@ -573,15 +573,16 @@ impl SaveFile {
     /// filesystems, in bytes.
     const MAX_COMPONENT_LEN: usize = 255;
 
-    /// Linux's `PATH_MAX`, minus the byte it reserves for a terminating NUL.
-    /// A save path already close to this bound can still fit its own
-    /// component budget while leaving no room for a staging suffix in the
-    /// same directory, so the staged sibling's whole path needs its own
-    /// budget too. macOS's and Windows's whole-path limits differ from
-    /// Linux's -- and from each other, and by configuration -- in either
-    /// direction, so this bound is not a safe stand-in for theirs; it, and
-    /// the test that exercises it, stay Linux-specific rather than claim a
-    /// guarantee this budgeting cannot back on those platforms.
+    /// The host's whole-path limit, minus the byte it reserves for a
+    /// terminating NUL: Linux's `PATH_MAX` of 4096, macOS's of 1024. A save
+    /// path already close to this bound can still fit its own component
+    /// budget while leaving no room for a staging suffix in the same
+    /// directory, so the staged sibling's whole path needs its own budget
+    /// too. Windows is not budgeted: `std` lifts its `MAX_PATH` with the
+    /// verbatim prefix, and the Linux value only ever trims sooner there.
+    #[cfg(target_os = "macos")]
+    const MAX_PATH_LEN: usize = 1023;
+    #[cfg(not(target_os = "macos"))]
     const MAX_PATH_LEN: usize = 4095;
 
     /// Width of the hex component `unique_component` renders.

@@ -66,22 +66,22 @@ fn a_basename_that_fit_the_former_staging_suffix_still_writes() {
     assert!(file.exists());
 }
 
-/// A save path within a few bytes of Linux's `PATH_MAX` -- close enough that
+/// A save path within a few bytes of the host's `PATH_MAX` -- close enough that
 /// the former `.tmp.<pid>` suffix fit, too close for the longer, fixed-width
 /// unique suffix -- must still get a staging sibling the kernel accepts:
 /// [`SaveFile::MAX_COMPONENT_LEN`] alone leaves no room for it, because the
 /// basename here is far short of that per-component limit even though the
 /// whole path is not. This fails with `ENAMETOOLONG` without
 /// [`SaveFile::MAX_PATH_LEN`] budgeting the whole path too.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_save_path_near_path_max_still_gets_a_valid_staging_sibling() {
-    // 15 bytes short of PATH_MAX: within the 15-byte `.tmp.<10 hex digits>`
+    // 11 bytes short of the limit: within the 15-byte `.tmp.<10 hex digits>`
     // suffix's width, so appending it unbudgeted overruns PATH_MAX, while a
     // suffix as short as a low-digit-count `.tmp.<pid>` would still have
     // fit -- yet the basename (`SAVE_FILE_NAME`) is nowhere near
     // `MAX_COMPONENT_LEN`.
-    const SAVE_PATH_LEN: usize = 4_084;
+    const SAVE_PATH_LEN: usize = SaveFile::MAX_PATH_LEN - 11;
 
     let dir = TempDir::new("path-max");
     let parent_len = SAVE_PATH_LEN - 1 - SAVE_FILE_NAME.len();
@@ -156,7 +156,7 @@ fn a_non_utf8_basename_does_not_undercount_the_directory_prefix() {
     // one-byte basename below fits `MAX_PATH_LEN`'s whole-path budget but
     // its three-byte lossy rendering does not, so only counting the raw
     // length keeps the staged sibling within bounds.
-    let directory = "d".repeat(4_077);
+    let directory = "d".repeat(SaveFile::MAX_PATH_LEN - 18);
     let basename = OsString::from_vec(vec![0xFF]);
     let path = PathBuf::from(directory).join(basename);
 
