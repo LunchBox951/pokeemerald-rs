@@ -49,8 +49,8 @@ impl MosaicSize {
 
     /// Returns the horizontal block dimension.
     ///
-    /// Used by [`crate::bg_affine::AffineBgLayer::sample_row_with_mosaic_hold`]
-    /// as its per-scanline hold length (issue #872).
+    /// Used by [`crate::bg_affine::AffineBgLayer::sample_column_with_mosaic_hold`]
+    /// as its per-scanline hold length.
     #[must_use]
     pub(crate) const fn horizontal(self) -> u8 {
         self.h

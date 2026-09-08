@@ -39,7 +39,7 @@ use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::SpriteLayer;
-use crate::window::{WindowConfig, WindowRegion};
+use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
 
 /// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
 /// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
@@ -150,23 +150,24 @@ impl<'a> BgSlot<'a> {
     /// [`compose_frame`]'s output byte-for-byte unaffected by this slice.
     ///
     /// `bg_open` is whether [`crate::window`] currently permits this slot's
-    /// BG index at `(x, y)` — the caller always passes it (rather than
-    /// skipping the call when closed) because an affine `Overflow::Transparent`
-    /// mosaic slot's `affine_mosaic_hold`, when `Some`, must still be told
-    /// about a closed column to close its span (issue #872; see
-    /// [`AffineMosaicHold`]'s docs for why). Every other slot kind ignores
-    /// `bg_open` when `false` by simply returning `None`, exactly as the
-    /// caller's own pre-existing early-`continue` did.
+    /// BG index to *composite* at `(x, y)`; `hold_active` is whether its
+    /// affine mosaic hold should keep advancing regardless of that — see
+    /// [`AffineMosaicHold`]'s docs for why the two can differ. The caller
+    /// always passes both (rather than skipping the call when closed) so a
+    /// `Some` `affine_mosaic_hold` is told about every column. Every other
+    /// slot kind ignores both and returns `None` on `!bg_open`, exactly as
+    /// the caller's own pre-existing early-`continue` did.
     fn sample(
         &self,
         x: usize,
         y: usize,
         bg_mosaic: MosaicSize,
         bg_open: bool,
+        hold_active: bool,
         affine_mosaic_hold: Option<&mut AffineMosaicHold>,
     ) -> Option<Rgb888> {
         if let Some(hold) = affine_mosaic_hold {
-            if !bg_open {
+            if !hold_active {
                 hold.close();
                 return None;
             }
@@ -179,7 +180,7 @@ impl<'a> BgSlot<'a> {
             } = self.kind
             {
                 let (_, snapped_y) = bg_mosaic.snap(0, y);
-                return layer.sample_column_with_mosaic_hold(
+                let sample = layer.sample_column_with_mosaic_hold(
                     hold,
                     matrix,
                     ref_x,
@@ -188,13 +189,20 @@ impl<'a> BgSlot<'a> {
                     snapped_y,
                     bg_mosaic.horizontal(),
                 );
+                // Only the returned color, not the state update above, is
+                // gated on `bg_open` -- see this function's docs.
+                return if bg_open { sample } else { None };
             }
         }
         if !bg_open {
             return None;
         }
         let (x, y) = if self.mosaic {
-            bg_mosaic.snap(x, y)
+            if self.wrap_affine_bypasses_horizontal_mosaic(bg_mosaic) {
+                bg_mosaic.vertical_only().snap(x, y)
+            } else {
+                bg_mosaic.snap(x, y)
+            }
         } else {
             (x, y)
         };
@@ -212,6 +220,23 @@ impl<'a> BgSlot<'a> {
                 overflow,
             } => layer.sample_pixel(matrix, ref_x, ref_y, overflow, x, y),
         }
+    }
+
+    /// Whether this slot is an affine [`Overflow::Wrap`] layer at a decoded
+    /// horizontal mosaic size mGBA bypasses entirely — the `Wrap` sibling of
+    /// the same decoded-size gate
+    /// [`AffineBgLayer::sample_column_with_mosaic_hold`] applies for
+    /// `Overflow::Transparent`; see its docs for the mGBA derivation. Only
+    /// `Wrap` needs a separate check here: it never reaches that function's
+    /// retry/hold path at all `(behavioral-fidelity)`.
+    fn wrap_affine_bypasses_horizontal_mosaic(&self, bg_mosaic: MosaicSize) -> bool {
+        matches!(
+            self.kind,
+            BgKind::Affine {
+                overflow: Overflow::Wrap,
+                ..
+            }
+        ) && bg_mosaic.horizontal() <= 2
     }
 
     /// Whether this slot needs an [`AffineMosaicHold`] (issue #872): only an
@@ -378,6 +403,34 @@ pub fn compose_frame_with_effects(
     framebuffer
 }
 
+/// Whether `bg_index`'s affine mosaic hold should keep advancing given
+/// `partition_control` — the enable bits for whichever `WIN0`/`WIN1`/`WINOUT`
+/// geometric pass this column falls in, from the same
+/// [`WindowConfig::classify_with_region`] call `compose_pixel` derives
+/// `partition` from — independent of whether this exact column *composites*
+/// (`bg_open`, which for an `OBJWIN`-masked column instead reflects
+/// `OBJWIN`'s own control).
+///
+/// mGBA's `TEST_LAYER_ENABLED` runs a background's draw routine for a pass
+/// whenever *either* that pass's own control (`currentWindow`, whichever of
+/// `WIN0`/`WIN1`/`WINOUT` it is) or (when `OBJWIN` is enabled at all)
+/// `OBJWIN`'s own control enables this BG — unconditionally, for every pass,
+/// not only the outside-every-window one
+/// (`mgba/src/gba/renderers/software-private.h:210-215`). See
+/// [`AffineMosaicHold`]'s docs for why a pass that runs at all must keep
+/// advancing the hold regardless of which columns `OBJWIN` later hides
+/// `(behavioral-fidelity)`.
+fn affine_mosaic_hold_participates(
+    windows: &WindowConfig,
+    partition_control: WindowLayerEnable,
+    bg_index: u8,
+) -> bool {
+    partition_control.bg_enabled(bg_index)
+        || windows
+            .obj_window
+            .is_some_and(|enable| enable.bg_enabled(bg_index))
+}
+
 /// Resolve one pixel's final color for [`compose_frame_with_effects`].
 ///
 /// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
@@ -405,16 +458,17 @@ fn compose_pixel(
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
     let (window, region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
 
-    // mGBA partitions each scanline into hardware-window regions and never
-    // coalesces adjacent regions with equal control bits -- it re-invokes
-    // its background draw routine (and re-derives mosaic hold state fresh
-    // from that region's own start column) once per region, regardless of
-    // whether a given BG stays enabled across the boundary between two of
-    // them (`mgba/src/gba/renderers/video-software.c:628-675,458-505`,
-    // `mgba/src/gba/renderers/software-private.h:173-192`). So an affine
-    // mosaic hold must reset at every region boundary, not only when this
-    // slot's own enable bit toggles closed `(behavioral-fidelity)`.
-    if previous_region.replace(region) != Some(region) {
+    // mGBA partitions each scanline into hardware-window regions purely from
+    // `WIN0`/`WIN1` rectangle edges, never at an `OBJWIN` mask edge -- see
+    // [`AffineMosaicHold`]'s docs for the full citation. `partition`
+    // reclassifies with `objwin_mask` forced false, which folds
+    // `WindowRegion::ObjWindow` into `WindowRegion::WinOut` -- the same
+    // partition `classify_with_region` would have picked outside every
+    // `WIN0`/`WIN1` rect -- so an `OBJWIN` mask edge alone never resets the
+    // hold. `partition_control` is that same call's enable bits, reused
+    // below by [`affine_mosaic_hold_participates`] `(behavioral-fidelity)`.
+    let (partition_control, partition) = effects.windows.classify_with_region(wx, wy, false);
+    if previous_region.replace(partition) != Some(partition) {
         for hold in affine_mosaic_holds.iter_mut().flatten() {
             hold.close();
         }
@@ -447,11 +501,14 @@ fn compose_pixel(
             continue;
         }
         let bg_open = window.bg_enabled(slot.bg_index);
+        let hold_active =
+            affine_mosaic_hold_participates(&effects.windows, partition_control, slot.bg_index);
         let Some(color) = slot.sample(
             x,
             y,
             effects.mosaic.bg,
             bg_open,
+            hold_active,
             affine_mosaic_hold.as_mut(),
         ) else {
             continue;
@@ -1226,6 +1283,48 @@ mod tests {
     }
 
     #[test]
+    fn affine_mosaic_wrap_overflow_bypasses_snapping_at_a_decoded_block_size_of_two() {
+        // `BgSlot::wrap_affine_bypasses_horizontal_mosaic`'s docs cite the
+        // mGBA decoded-size gate this proves: a 2-wide BG mosaic must leave
+        // x=0 and x=1 sampling their own per-column-gradient texel, not both
+        // snapped to column 0.
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            0,
+            0,
+            Overflow::Wrap,
+            true,
+        )
+        .with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(2, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let column0 = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        let column1 = Bgr555::from_channels(2, 0, 0).to_rgb888();
+        assert_eq!(fb.pixel(0, 0), Some(column0), "x=0 samples its own column");
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(column1),
+            "x=1 must sample its own column, not snap to x=0's block origin"
+        );
+    }
+
+    #[test]
     fn affine_mosaic_hold_reopens_seeded_from_the_snapped_origin_not_the_pre_gap_hold() {
         // mGBA re-invokes its mode-2 background draw routine (and re-derives
         // `mosaicWait` and the snapped block origin) once per hardware-window
@@ -1383,6 +1482,275 @@ mod tests {
             "x=5 starts a fresh span at the WIN0/WINOUT boundary, seeded from the \
              snapped origin (screen x=4, texture tile 1) -- not tile 0's held \
              color carried over from inside WIN0"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_hold_survives_an_objwin_mask_edge() {
+        // See `AffineMosaicHold`'s docs for why an OBJWIN mask edge must not
+        // reset the hold. BG0 is enabled both by WINOUT and by OBJWIN here,
+        // so it stays visible on both sides of the mask edge at x=4.
+        //
+        // Reference x=-3 texture pixels puts screen x=0..2 out of bounds
+        // (texture x=-3..-1), screen x=3 at texture x=0 (column 0, channel 1)
+        // -- the block-4 hold then covers x=3..6.
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let one_texture_pixel = i32::from(AffineMatrix::ONE);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            -3 * one_texture_pixel,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+
+        // A mode-window sprite masking columns 4..8 (as in
+        // `objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color`),
+        // putting the OBJWIN edge at x=4, inside the x=3..6 hold span.
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
+
+        let mut bg0_on = WindowLayerEnable::NONE;
+        bg0_on.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(bg0_on),
+                winout: bg0_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let column0 = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(column0),
+            "x=3 (outside the mask) establishes the hold"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(column0),
+            "x=5 (inside the mask, past the x=4 OBJWIN edge) must still hold \
+             column 0's texel -- the edge is not a region boundary"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_hold_advances_through_pixels_hidden_by_objwin() {
+        // See `affine_mosaic_hold_participates`'s docs for why a column
+        // OBJWIN hides must still advance the hold. WINOUT enables BG0 but
+        // OBJWIN does not, so masked columns draw nothing while the hold
+        // keeps advancing underneath.
+        //
+        // Same setup as the mask-edge test above: reference x=-3 texture
+        // pixels and a block-4 hold spanning x=3..6, holding column 0's
+        // (channel 1) texel.
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let one_texture_pixel = i32::from(AffineMatrix::ONE);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            -3 * one_texture_pixel,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+
+        // A mode-window sprite masking only columns 4 and 5: row bytes
+        // `0x00, 0x00, 0xFF, 0x00` leave column pairs (0,1) and (2,3)
+        // transparent, (4,5) opaque, and (6,7) transparent again (tile.rs's
+        // decode order, as in the sibling mask-edge test above).
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
+
+        let mut bg0_on = WindowLayerEnable::NONE;
+        bg0_on.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE), // OBJWIN never enables BG0
+                winout: bg0_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let column0 = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(column0),
+            "x=3 (unmasked) establishes the hold"
+        );
+        assert_eq!(
+            fb.pixel(4, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=4 is OBJWIN-hidden: nothing composites, but the hold must still advance"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=5 is still OBJWIN-hidden"
+        );
+        assert_eq!(
+            fb.pixel(6, 0),
+            Some(column0),
+            "x=6 (unmasked again) must still show column 0's held texel -- the \
+             hidden columns advanced the hold invisibly rather than resetting it"
+        );
+    }
+
+    #[test]
+    fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot_show() {
+        // The mirror image of the two OBJWIN tests above: here WINOUT
+        // disables BG0 and only OBJWIN enables it, so an *unmasked* column
+        // both composites nothing (OBJWIN doesn't cover it, and WINOUT
+        // wouldn't show it anyway) and must still let the hold advance --
+        // `affine_mosaic_hold_participates`'s OR must not depend on which of
+        // its two terms happens to be the one composited elsewhere.
+        //
+        // Same reference/mosaic setup as the sibling tests: reference x=-3
+        // texture pixels and a block-4 hold spanning x=3..6, holding column
+        // 0's (channel 1) texel. The mask (columns 4,5 opaque) leaves x=3
+        // and x=6 unmasked.
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let one_texture_pixel = i32::from(AffineMatrix::ONE);
+        let slot = BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            -3 * one_texture_pixel,
+            0,
+            Overflow::Transparent,
+            true,
+        )
+        .with_mosaic(true);
+
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
+
+        let mut bg0_on = WindowLayerEnable::NONE;
+        bg0_on.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(bg0_on),        // only OBJWIN enables BG0
+                winout: WindowLayerEnable::NONE, // WINOUT never does
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(4, 1),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        let column0 = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(3, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=3 is unmasked (WINOUT never enables BG0 here) but must still \
+             establish the hold from OBJWIN's participation alone"
+        );
+        assert_eq!(
+            fb.pixel(4, 0),
+            Some(column0),
+            "x=4 is masked, so OBJWIN's enable composites the held texel"
+        );
+        assert_eq!(fb.pixel(5, 0), Some(column0), "x=5 is still masked");
+        assert_eq!(
+            fb.pixel(6, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "x=6 is unmasked again -- composites nothing, but the hold state \
+             established at x=3 must have kept advancing underneath"
         );
     }
 
