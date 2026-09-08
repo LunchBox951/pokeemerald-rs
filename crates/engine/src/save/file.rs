@@ -370,29 +370,44 @@ impl SaveFile {
         }))
     }
 
-    /// As [`Self::stage`] with [`Self::staging_path_with_stem_cap`] as the
+    /// As [`Self::stage`] with [`Self::staging_path_with_caps`] as the
     /// candidate generator, except that a candidate the host refuses
     /// outright (`InvalidFilename`) -- rather than merely finding it
     /// already taken (`AlreadyExists`) -- halves the stem cap on a char
-    /// boundary (the truncation in [`Self::staging_path_with_stem_cap`]
-    /// already respects one) and starts a fresh run of collision retries
-    /// there, all the way down to an empty stem. [`Self::MAX_COMPONENT_LEN`]
-    /// is only ever a first guess at a limit this module cannot enumerate
-    /// for every host or filesystem -- eCryptfs caps a component at 143
-    /// bytes, well under it, and a symlinked temp root can make a host's
-    /// resolved path longer than the one this process measures -- so this
-    /// loop, not that constant, is what actually keeps the sibling valid.
-    /// Propagates only once even the bare `.tmp.<hex>` suffix is refused.
+    /// boundary (the truncation in [`Self::staging_path_with_caps`] already
+    /// respects one) and starts a fresh run of collision retries there, all
+    /// the way down to an empty stem. [`Self::MAX_COMPONENT_LEN`] is only
+    /// ever a first guess at a limit this module cannot enumerate for every
+    /// host or filesystem -- eCryptfs caps a component at 143 bytes, well
+    /// under it, and a symlinked temp root can make a host's resolved path
+    /// longer than the one this process measures -- so this loop, not that
+    /// constant, is what actually keeps the sibling valid.
+    ///
+    /// An empty stem still carries the fixed-width `.tmp.<hex>` suffix,
+    /// which can itself be wider than a directory's remaining room -- a
+    /// directory that fit the former, short `.tmp.<pid>` name can be too
+    /// tight for this one. Once the stem cannot shrink any further, the hex
+    /// component does too, halving [`Self::UNIQUE_COMPONENT_HEX_DIGITS`]
+    /// down to a single digit, each retry still drawing fresh randomness.
+    /// Propagates only once even that one-digit floor is refused.
     fn stage_shrinking_on_invalid_filename(
         &self,
         open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
         bytes: &[u8],
     ) -> std::io::Result<StagedSave> {
-        let mut cap = Self::first_guess_stem_cap();
+        let mut stem_cap = Self::first_guess_stem_cap();
+        let mut hex_digits = Self::UNIQUE_COMPONENT_HEX_DIGITS;
         loop {
-            match Self::stage(|| self.staging_path_with_stem_cap(cap), &open, bytes) {
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && cap > 0 => {
-                    cap /= 2;
+            match Self::stage(
+                || self.staging_path_with_caps(stem_cap, hex_digits),
+                &open,
+                bytes,
+            ) {
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && stem_cap > 0 => {
+                    stem_cap /= 2;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && hex_digits > 1 => {
+                    hex_digits = (hex_digits / 2).max(1);
                 }
                 result => return result,
             }
@@ -441,7 +456,10 @@ impl SaveFile {
     /// call never deletes an entry a different caller put there. A test
     /// convenience over [`Self::write_and_sync_with`]; production staging
     /// always goes through [`Self::stage_shrinking_on_invalid_filename`].
-    #[cfg(test)]
+    /// Gated to its only caller's platform: the re-executed-child technique
+    /// that test needs to force a write failure is Linux-specific, so this
+    /// is otherwise dead code on every other target.
+    #[cfg(all(test, target_os = "linux"))]
     fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<StagedSave> {
         Self::write_and_sync_with(Self::real_open, path, bytes)
     }
@@ -584,17 +602,22 @@ impl SaveFile {
     /// so the common case succeeds immediately; when a host's real limit
     /// disagrees with that guess, [`Self::stage_shrinking_on_invalid_filename`]
     /// is what actually corrects it, not this function. A test convenience;
-    /// production staging calls [`Self::staging_path_with_stem_cap`] directly.
+    /// production staging calls [`Self::staging_path_with_caps`] directly.
     #[cfg(test)]
     fn staging_path(&self) -> PathBuf {
-        self.staging_path_with_stem_cap(Self::first_guess_stem_cap())
+        self.staging_path_with_caps(
+            Self::first_guess_stem_cap(),
+            Self::UNIQUE_COMPONENT_HEX_DIGITS,
+        )
     }
 
     /// As [`Self::staging_path`], cutting the basename to at most
-    /// `max_stem_len` bytes -- on a char boundary -- rather than computing
-    /// [`Self::first_guess_stem_cap`]'s budget.
-    fn staging_path_with_stem_cap(&self, max_stem_len: usize) -> PathBuf {
-        let suffix = format!(".tmp.{}", Self::unique_component());
+    /// `max_stem_len` bytes -- on a char boundary -- and rendering the
+    /// unique suffix at `hex_digits` digits wide, rather than computing
+    /// [`Self::first_guess_stem_cap`]'s budget and always
+    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`].
+    fn staging_path_with_caps(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
+        let suffix = format!(".tmp.{}", Self::unique_component(hex_digits));
         let mut stem = self
             .path
             .file_name()
@@ -628,13 +651,19 @@ impl SaveFile {
     /// this guess outright.
     const MAX_COMPONENT_LEN: usize = 255;
 
-    /// Width of the hex component `unique_component` renders.
+    /// Width [`Self::unique_component`] renders first, before
+    /// [`Self::stage_shrinking_on_invalid_filename`] narrows it under
+    /// pressure.
     const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
 
-    /// `std`-only entropy folded into one 40-bit value: process id, clock
-    /// nanoseconds, and a fresh `RandomState` key, which alone already
-    /// differs between two calls at the same nanosecond.
-    fn unique_component() -> String {
+    /// `std`-only entropy folded into one value `width` hex digits wide:
+    /// process id, clock nanoseconds, and a fresh `RandomState` key, which
+    /// alone already differs between two calls at the same nanosecond.
+    /// `create_new` is what actually keeps two stagings from colliding on
+    /// purpose; this width is defence in depth on top of it, so narrowing
+    /// it under pressure -- down to a single, still-freshly-drawn digit --
+    /// costs unpredictability, not the exclusivity guarantee itself.
+    fn unique_component(width: usize) -> String {
         use std::hash::{BuildHasher, Hasher};
 
         let nanos = std::time::SystemTime::now()
@@ -643,7 +672,6 @@ impl SaveFile {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_u32(std::process::id());
         hasher.write_u128(nanos);
-        let width = Self::UNIQUE_COMPONENT_HEX_DIGITS;
         let mask = (1_u64 << (4 * width)) - 1;
         format!("{:0width$x}", hasher.finish() & mask)
     }

@@ -66,15 +66,41 @@ fn a_basename_that_fit_the_former_staging_suffix_still_writes() {
     assert!(file.exists());
 }
 
+/// The longest basename `parent` accepts as a save file, found by growing
+/// one byte at a time until the host refuses it -- pinpointing the exact
+/// boundary rather than assuming a constant for it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn longest_valid_basename(parent: &Path) -> usize {
+    (1..=SaveFile::MAX_COMPONENT_LEN)
+        .take_while(|&len| {
+            let candidate = parent.join("s".repeat(len));
+            match std::fs::File::create(&candidate) {
+                Ok(_) => {
+                    std::fs::remove_file(&candidate).unwrap();
+                    true
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename => false,
+                Err(err) => {
+                    panic!("unexpected error probing the host's real path limit: {err:?}")
+                }
+            }
+        })
+        .last()
+        .unwrap_or(0)
+}
+
 /// A save path at the host's real, unpredictable whole-path ceiling --
 /// discovered by probing rather than assumed from a constant, since a
 /// symlinked temp root (macOS's `/var/folders` -> `/private/var`) can make
 /// the kernel's resolved length longer than the one this process measures --
-/// must still be writable. [`SaveFile::staging_path`]'s first-guess
-/// candidate is refused there (proving the scenario is real, not merely
-/// approached); [`SaveFile::write`] must still succeed by retrying under a
-/// shorter stem, which is asserted here by the write's own success rather
-/// than by inspecting which candidate ultimately won.
+/// must still be writable, even when the directory leaves less than the
+/// fixed-width suffix's own 15 bytes of room. Neither
+/// [`SaveFile::staging_path`]'s first-guess candidate nor the old stem-only
+/// shrink chain's floor -- an empty stem with the full-width hex suffix --
+/// fits there (proving the scenario is real, not merely approached);
+/// [`SaveFile::write`] must still succeed by also narrowing the hex
+/// component, which is asserted here by the write's own success rather than
+/// by inspecting which candidate ultimately won.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
@@ -95,33 +121,38 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
         }
     }
 
-    // Fine phase: grow a basename in that directory one byte at a time
-    // until the host refuses it, pinpointing the exact boundary the coarse
-    // phase's failure proved lies somewhere in this range.
-    let longest_valid_len = (1..=SaveFile::MAX_COMPONENT_LEN)
-        .take_while(|&len| {
-            let candidate = parent.join("s".repeat(len));
-            match std::fs::File::create(&candidate) {
-                Ok(_) => {
-                    std::fs::remove_file(&candidate).unwrap();
-                    true
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename => false,
-                Err(err) => {
-                    panic!("unexpected error probing the host's real path limit: {err:?}")
-                }
-            }
-        })
-        .last()
-        .expect("the coarse-nested directory must itself accept at least a one-byte save file");
+    // Fine phase: narrow further, one directory at a time, until fewer than
+    // 15 bytes of headroom remain -- less than even the fixed-width
+    // `.tmp.<hex>` suffix needs on its own, so an empty stem is not enough
+    // and the hex component must narrow too -- but still at least 10, so a
+    // one-digit `.tmp.<hex>` suffix (6 bytes) has room to land in. Nesting a
+    // directory `headroom - 10` bytes long leaves exactly 9 bytes of
+    // headroom behind it (one byte of every step goes to the new
+    // separator), so this converges in a single pass.
+    let mut headroom = longest_valid_basename(&parent);
+    while headroom >= 15 {
+        let nested_len = (headroom - 10).min(SaveFile::MAX_COMPONENT_LEN);
+        let nested = parent.join("d".repeat(nested_len));
+        std::fs::create_dir(&nested)
+            .expect("nesting further to tighten the remaining headroom must succeed");
+        parent = nested;
+        headroom = longest_valid_basename(&parent);
+    }
+    assert!(
+        (6..15).contains(&headroom),
+        "test setup must leave room for at least the one-digit `.tmp.<hex>` suffix (6 \
+         bytes) but less than the full-width one (15 bytes): {headroom} bytes"
+    );
 
-    let save_path = parent.join("s".repeat(longest_valid_len));
+    let save_path = parent.join("s");
     let file = SaveFile::at(&save_path);
+    std::fs::File::create(&save_path)
+        .expect("a save path this close to the host's real limit must itself be a valid path");
+    std::fs::remove_file(&save_path).unwrap();
 
-    // The naive first-guess candidate -- this save path's own directory
-    // plus the fixed-width suffix -- is longer than a save path already
-    // proven to be the longest this host accepts here, so it must be
-    // refused too; this is exactly the scenario under test.
+    // Neither the naive first-guess candidate nor the old stem-only shrink
+    // chain's floor -- an empty stem with the full-width hex suffix -- fits
+    // here; this is exactly the scenario under test.
     let naive_candidate = file.staging_path();
     assert!(
         std::fs::OpenOptions::new()
@@ -131,11 +162,22 @@ fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
             .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
         "test setup must actually exceed the host's real limit, not merely approach it"
     );
+    let empty_stem_candidate =
+        file.staging_path_with_caps(0, SaveFile::UNIQUE_COMPONENT_HEX_DIGITS);
+    assert!(
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&empty_stem_candidate)
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
+        "test setup must exceed even the fixed-width suffix's own floor, not just the \
+         first-guess candidate, or this would not exercise the hex-digit shrink"
+    );
 
     let (store, _, _) = saved_store();
     file.write(&store).expect(
-        "a save path at the host's real path limit must still be writable, by retrying \
-         under a shorter stem once the first-guess candidate is refused",
+        "a save path at the host's real path limit must still be writable, by narrowing \
+         the hex component once the stem cannot shrink any further",
     );
     assert!(file.exists());
 
@@ -197,6 +239,151 @@ fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
         final_component_len < BASENAME_LEN + 15,
         "the stem must actually have been shortened from the first-guess candidate, not \
          merely have succeeded by chance: {final_component_len} bytes"
+    );
+
+    std::fs::remove_file(&staged.path).unwrap();
+}
+
+/// A directory that leaves room for the former, short `.tmp.<pid>` name but
+/// not for the current fixed-width `.tmp.<hex>` suffix must still get a
+/// staging sibling: an empty stem alone is not enough when the suffix
+/// itself no longer fits, so the shrink chain must narrow
+/// [`SaveFile::UNIQUE_COMPONENT_HEX_DIGITS`] too. Pinned through an injected
+/// `open` that refuses anything longer than the save path plus 6 bytes --
+/// tighter than even an empty stem's full-width suffix allows -- so only
+/// narrowing the hex component can satisfy it.
+#[test]
+fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling() {
+    let dir = TempDir::new("hex-digit-shrink");
+    let path = dir.join("s");
+    let file = SaveFile::at(&path);
+
+    let save_path_len = path.as_os_str().as_encoded_bytes().len();
+    let injected_limit = save_path_len + 6;
+
+    let refuse_long_paths = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        if candidate.as_os_str().as_encoded_bytes().len() > injected_limit {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::real_open(candidate)
+    };
+
+    let staged = file
+        .stage_shrinking_on_invalid_filename(refuse_long_paths, &vec![0u8; FLASH_IMAGE_LEN])
+        .expect(
+            "a directory too tight for even the fixed-width suffix must still be \
+             satisfiable by narrowing the hex component too",
+        );
+
+    let original_basename_len = path
+        .file_name()
+        .map_or(0, |name| name.as_encoded_bytes().len());
+    let final_component_len = staged
+        .path
+        .file_name()
+        .map_or(0, |name| name.as_encoded_bytes().len());
+    assert!(
+        final_component_len <= original_basename_len + 6,
+        "the staged sibling's component must be at most 6 bytes over the save name: \
+         {final_component_len} bytes vs a {original_basename_len}-byte save name"
+    );
+
+    std::fs::remove_file(&staged.path).unwrap();
+}
+
+/// A save path whose basename is invalid UTF-8 must still be writable, and
+/// the sibling it stages under must land beside it, in the same directory:
+/// `staging_path_with_caps` renders that basename through `to_string_lossy`
+/// and a char-boundary truncation, which is only exercised by a non-UTF-8
+/// input.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let dir = TempDir::new("non-utf8-basename");
+    let path = dir
+        .path
+        .join(OsString::from_vec(vec![b's', b'a', 0xFF, b'v']));
+    assert!(path.file_name().unwrap().to_str().is_none());
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+
+    let staged_parent = std::cell::RefCell::new(None);
+    file.write_with(
+        &store,
+        SaveFile::sync_directory_best_effort,
+        |bytes| file.stage_shrinking_on_invalid_filename(SaveFile::real_open, bytes),
+        |staged| *staged_parent.borrow_mut() = staged.parent().map(Path::to_path_buf),
+    )
+    .expect("a non-UTF-8 basename must still be writable");
+
+    assert_eq!(
+        staged_parent.into_inner(),
+        Some(dir.path.clone()),
+        "the staged sibling must be created beside the save path, in the same directory"
+    );
+    assert!(file.exists());
+
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+/// A non-UTF-8 basename's lossy rendering can be longer than its raw bytes
+/// -- each invalid byte becomes a three-byte replacement character -- so the
+/// first-guess candidate built from it can be longer than the raw basename
+/// would need. The shrink chain must still bring it under an injected limit
+/// the raw basename alone would have satisfied.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_basename_whose_lossy_form_is_longer_still_respects_an_injected_limit() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    // A limit the lossy candidate (15-byte inflated stem plus the 15-byte
+    // suffix) exceeds, but that the 5-byte raw basename plus the suffix
+    // would not have -- isolating the lossy-inflation scenario specifically.
+    const INJECTED_LIMIT: usize = 20;
+
+    // Five invalid bytes, each rendered as a three-byte U+FFFD replacement
+    // character, so the lossy stem (15 bytes) is three times longer than
+    // the raw basename (5 bytes) it was built from.
+    let raw_basename = vec![0xFFu8; 5];
+    assert!(std::str::from_utf8(&raw_basename).is_err());
+    assert!(raw_basename.len() + 15 <= INJECTED_LIMIT);
+
+    let dir = TempDir::new("non-utf8-lossy-limit");
+    let path = dir.path.join(OsString::from_vec(raw_basename.clone()));
+    let file = SaveFile::at(&path);
+
+    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        let component_len = candidate
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        if component_len > INJECTED_LIMIT {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::real_open(candidate)
+    };
+
+    let staged = file
+        .stage_shrinking_on_invalid_filename(refuse_long_components, &vec![0u8; FLASH_IMAGE_LEN])
+        .expect("a lossy-inflated non-UTF-8 stem must still be satisfiable by shrinking");
+
+    let final_component_len = staged
+        .path
+        .file_name()
+        .map_or(0, |name| name.as_encoded_bytes().len());
+    assert!(
+        final_component_len <= INJECTED_LIMIT,
+        "the staged sibling must respect the injected limit even when the lossy \
+         rendering of a non-UTF-8 basename is longer than its raw bytes: {final_component_len} bytes"
+    );
+    assert!(
+        final_component_len < raw_basename.len() + 15 + 15,
+        "the stem must actually have been shortened from the lossy first-guess \
+         candidate, not merely have succeeded by chance: {final_component_len} bytes"
     );
 
     std::fs::remove_file(&staged.path).unwrap();
