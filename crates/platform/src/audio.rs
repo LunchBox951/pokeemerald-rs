@@ -367,20 +367,19 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 /// (`f32`/`i16`) — a `u16`-only config whose rate range happens to cover the
 /// target must never win, or `AudioOutput::open` would hard-fail instead of
 /// resampling on an available openable format. Each openable candidate is then
-/// scored by `(format rank, distance)`, where `distance` is how far `target`
+/// scored by `(distance, format rank)`, where `distance` is how far `target`
 /// must be clamped to land inside the candidate's `[min, max]` range, and the
 /// minimum is chosen:
 ///
-/// - **Format rank is primary** ([`sample_format_rank`]: `f32` before `i16`).
-///   `f32` is the ring buffer's native format, and the 13379 Hz target is
-///   resampled on real hardware either way (see the module docs), so an `f32`
-///   config is preferred even over an `i16` config that sits nearer the
-///   target — the extra resample distance costs nothing the direct path saves.
-/// - **Distance is secondary**: within one format the nearest achievable rate
-///   wins, regardless of the order the device enumerated its ranges. A range
-///   that covers `target` has distance `0`, so exact support is naturally
-///   preferred over resampling within the same format. Ties (equal rank and
-///   distance) keep device-enumeration order.
+/// - **Distance is primary**: the nearest achievable rate wins, regardless of
+///   format or the order the device enumerated its ranges. A range that
+///   covers `target` has distance `0`, so an exact-rate candidate always
+///   beats one that needs resampling — exact support is what lets
+///   `AudioOutput::open` build [`Source::Direct`] instead of a [`Resampler`]
+///   (see the module docs), so it must not lose to a mere format preference.
+/// - **Format rank is the tie-break** ([`sample_format_rank`]: `f32` before
+///   `i16`) between candidates equally far from `target`. Ties (equal
+///   distance and rank) keep device-enumeration order.
 ///
 /// Returns the chosen candidate's index into `candidates` and the rate to
 /// open it at, or `None` if no openable candidate exists.
@@ -393,9 +392,9 @@ fn select_config(
         .map(|i| {
             let (format, min, max) = candidates[i];
             let rate = target.clamp(min, max);
-            (i, rate, sample_format_rank(format), rate.abs_diff(target))
+            (i, rate, rate.abs_diff(target), sample_format_rank(format))
         })
-        .min_by_key(|&(_, _, rank, distance)| (rank, distance))
+        .min_by_key(|&(_, _, distance, rank)| (distance, rank))
         .map(|(i, rate, _, _)| (i, rate))
 }
 
@@ -816,17 +815,20 @@ mod tests {
     }
 
     #[test]
-    fn select_config_prefers_f32_over_a_nearer_i16() {
-        // Policy: format rank is primary, distance secondary. f32 does not
-        // cover the target and must be resampled from 44100; i16 covers 13379
-        // exactly (distance 0). f32 still wins — it is the ring buffer's native
-        // format and the target is resampled on real hardware either way, so
-        // the extra resample distance costs nothing the direct path would save.
+    fn select_config_prefers_an_exact_i16_rate_over_a_resampled_f32() {
+        // Test-ratchet correction (`(test-ratchet)`): this test previously
+        // asserted `Some((0, 44_100))`, pinning a format-rank-primary policy
+        // that picked f32/44100 (needing a Resampler) over an i16 config that
+        // covers the target exactly. That expectation was wrong, not merely
+        // strict, so it is corrected here rather than weakened: i16 at 13379
+        // exactly (distance 0) reaches Source::Direct with no resampling, and
+        // must beat f32 at 44100 (distance 30721) even though f32 ranks ahead
+        // on format alone.
         let candidates = [
-            (cpal::SampleFormat::F32, 44_100, 48_000), // rank 0, distance 30721
-            (cpal::SampleFormat::I16, 8_000, 48_000),  // rank 1, distance 0
+            (cpal::SampleFormat::F32, 44_100, 48_000), // distance 30721
+            (cpal::SampleFormat::I16, 8_000, 48_000),  // covers 13379 exactly
         ];
-        assert_eq!(select_config(&candidates, 13_379), Some((0, 44_100)));
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 13_379)));
     }
 
     #[test]
