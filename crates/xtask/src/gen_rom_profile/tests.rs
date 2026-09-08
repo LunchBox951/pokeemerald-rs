@@ -508,6 +508,62 @@ fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_failed_cleanup_names_the_partial_profile_it_left_behind() {
+    // `remove_after`'s own removal must also be able to fail -- silently
+    // dropping that failure would leave a `.profile.*.tmp` directory behind
+    // permanently: `temp_sibling`'s name is never chosen twice, so no later
+    // run ever revisits this exact path to clean it up. The injected write
+    // swaps the temporary file for a non-empty directory before returning
+    // its error,
+    // so `remove_after`'s `remove_file` fails deterministically
+    // (`remove_file` refuses any directory, empty or not, regardless of the
+    // runner's privileges -- unlike a permission-based seam, which root
+    // bypasses). Mirrors `rom_import`'s own
+    // `a_failed_cleanup_names_the_partial_file_it_left_behind` and
+    // `crates/xtask/src/extract/mod.rs`'s
+    // `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
+    let dir = scratch("cleanup-fails");
+    let out = dir.join("bpee_rev0.rs");
+    let mut swapped_temp = None;
+
+    let err = super::publish_with(&out, |file, temp| {
+        use std::io::Write as _;
+        file.write_all(b"partial")?;
+        drop(std::fs::remove_file(temp));
+        std::fs::create_dir(temp).expect("the directory takes the freed name");
+        std::fs::write(temp.join("occupant"), b"occupant").expect("the occupant writes");
+        swapped_temp = Some(temp.to_path_buf());
+        Err(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "no space left on device",
+        ))
+    })
+    .unwrap_err();
+    let swapped_temp = swapped_temp.expect("the write ran");
+
+    // The write's own error kind survives the additional cleanup failure,
+    // and the message names what cleanup left behind.
+    let super::GenRomProfileError::WriteFailed { reason, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert!(
+        reason.contains("no space left on device"),
+        "the original failure must survive: {reason}"
+    );
+    assert!(
+        reason.contains(&swapped_temp.display().to_string()),
+        "a failed cleanup must name the artifact it left behind: {reason}"
+    );
+    assert!(
+        swapped_temp.is_dir(),
+        "cleanup should have failed, leaving the directory behind"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_failed_publish_leaves_no_temporary_beside_the_output() {
     // A directory at the output path makes the rename fail after the
     // temporary is written; the write and rename share one cleanup.

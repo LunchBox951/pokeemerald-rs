@@ -382,6 +382,23 @@ fn write_module(rom_path: &Path, path: &Path, module: &str) -> Result<(), GenRom
 /// Same directory on both sides, so the rename is atomic and never
 /// `EXDEV`.
 fn publish(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
+    publish_with(path, |file, _temp| file.write_all(module.as_bytes()))
+}
+
+/// [`publish`] with the write injected, so a cleanup failure is testable
+/// without a real full-disk condition (`rom_import`'s `write_new_with`
+/// precedent). `write` sees the temporary path alongside the handle, since
+/// that path is picked inside this call and a test driving the cleanup
+/// failure has to act on the exact name in use, not a freshly guessed one.
+///
+/// The rename is the only step that publishes anything, so a failure at or
+/// before it leaves the old profile in place and the temporary file would
+/// be litter beside it — [`remove_after`] is what takes that litter with
+/// the failure instead of leaving it unreported.
+fn publish_with(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File, &Path) -> std::io::Result<()>,
+) -> Result<(), GenRomProfileError> {
     let failed = |err: std::io::Error| GenRomProfileError::WriteFailed {
         path: path.to_path_buf(),
         reason: err.to_string(),
@@ -394,16 +411,44 @@ fn publish(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
         .create_new(true)
         .open(&temp)
         .map_err(failed)?;
-    // The rename is the only step that publishes anything, so a failure at
-    // or before it leaves the old profile in place and the temporary file
-    // would be litter beside it.
-    file.write_all(module.as_bytes())
+    match write(&mut file, &temp)
         .and_then(|()| file.sync_all())
         .and_then(|()| std::fs::rename(&temp, path))
-        .map_err(|err| {
-            let _ = std::fs::remove_file(&temp);
-            failed(err)
-        })
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            // Dropped before the removal: Windows refuses to unlink a file
+            // that is still open (the same reason `rom_import` and
+            // `import_rom` drop their own handle first).
+            drop(file);
+            Err(failed(remove_after(&temp, err)))
+        }
+    }
+}
+
+/// Removes the temporary file [`publish_with`] leaves behind after
+/// `original`, folding a cleanup failure into `original` instead of
+/// discarding it -- silently dropping it would leave a `.profile.*.tmp`
+/// sibling unreported, and, because [`temp_sibling`]'s name is never
+/// chosen twice, no later run would ever revisit that exact path to clean
+/// it up either. Keeps `original`'s `ErrorKind` so a caller matching on it
+/// still sees the write or rename failure that actually happened. A
+/// `NotFound` from the removal means nothing was left to remove, so there
+/// is nothing abandoned to report (`rom_import`'s own `remove_after` and
+/// `crates/xtask/src/extract/mod.rs`'s `remove_abandoned_staging_file` do
+/// the same for their own staged writes).
+fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
+    match std::fs::remove_file(path) {
+        Ok(()) => original,
+        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
+        Err(cleanup_err) => std::io::Error::new(
+            original.kind(),
+            format!(
+                "{original} (additionally, failed to remove partial profile `{}`: {cleanup_err})",
+                path.display()
+            ),
+        ),
+    }
 }
 
 /// A scratch name beside `path`, in the same directory so the rename that
