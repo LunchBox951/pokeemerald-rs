@@ -12,17 +12,13 @@
 //! implemented, so an effect that would apply fails closed after consuming
 //! exactly the draw Emerald consumes.
 //!
-//! [`EFFECT_POISON_HIT`] is this slice's one modelled trampoline (issue
-//! #784): a successful roll writes [`crate::status1::Status1::Poisoned`]
-//! through `SetMoveEffect`'s `STATUS1_POISON` case
-//! (`battle_script_commands.c:2299`-`:2340`), gated by [`poison_can_land`]'s
-//! silent guards. [`EFFECT_POISON_TAIL`] prepares the identical
-//! `MOVE_EFFECT_POISON` symbolic effect (`:139` below) but stays on the
-//! unported side with every other [`SECONDARY_TRAMPOLINES`] entry — Toxic,
-//! burn, paralysis-hit, flinch, and the rest are issue #784's explicit
-//! boundary. [`ensure_admissible`] fails closed, before any draw, for the
-//! handful of ability interactions [`poison_can_land`] cannot silently
-//! resolve on its own.
+//! [`EFFECT_POISON_HIT`] is the one modelled trampoline: a successful roll
+//! writes [`crate::status1::Status1::Poisoned`] through `SetMoveEffect`'s
+//! `STATUS1_POISON` case (`battle_script_commands.c:2299`-`:2340`), gated by
+//! [`poison_can_land`]'s silent guards. Every other [`SECONDARY_TRAMPOLINES`]
+//! entry, [`EFFECT_POISON_TAIL`] included, stays unported.
+//! [`ensure_admissible`] fails closed, before any draw, for the ability
+//! interactions [`poison_can_land`] cannot resolve silently.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 

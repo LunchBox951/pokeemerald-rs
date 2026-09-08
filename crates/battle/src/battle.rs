@@ -1120,62 +1120,20 @@ impl Battle {
         Ok(())
     }
 
-    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`), reduced
-    /// to the two cases this slice reaches: `ENDTURN_POISON`
-    /// (`:1525`-`:1535`) and `ENDTURN_CHARGE`'s `if (chargeTimer &&
-    /// --chargeTimer == 0) status3 &= ~STATUS3_CHARGED_UP` (`:1743`-`:1745`),
-    /// for every battler on the field, in `gBattlerByTurnOrder` order
-    /// (`:1469`-`:1472`, populated at `battle_main.c:4817`-`:4850`) — poison
-    /// precedes Charge in the same per-battler pass because `ENDTURN_POISON`
-    /// precedes `ENDTURN_CHARGE` in the tracker enum (`battle_util.c:1442`-
-    /// `:1461`).
-    ///
-    /// `order` is the same [`Order`] [`Battle::take_turn`] already resolved
-    /// for this turn's move dispatch: `gBattlerByTurnOrder` is set once per
-    /// turn, and `DoBattlerEndTurnEffects` reads that same array rather than
-    /// recomputing one for its own pass.
-    ///
-    /// Runs **before** [`Battle::end_of_turn`], because upstream runs
-    /// `DoBattlerEndTurnEffects` before `HandleFaintedMonActions`
-    /// (`src/battle_main.c:3965` vs `:3968`) — and, like upstream's
-    /// `if (gBattleOutcome == 0)` guard at `:3961`, not at all once the
-    /// battle already has an outcome. No pipeline sets [`Battle::outcome`]
-    /// on its own faint anymore ([`Self::settle_faint`] and
-    /// [`Self::execute_drain_move`]'s double-faint arm only report and clear
-    /// the corpse); a direct-hit kill leaves it unset here exactly as
-    /// upstream's own `gBattleOutcome` reads `0` until `checkteamslost` runs
-    /// from `HandleFaintedMonActions`, later still — so a standing poisoned
-    /// winner still takes its final tick before [`Self::end_of_turn`] pays
-    /// out the knockout.
-    ///
-    /// A battler already fainted before this pass began — from a direct hit
-    /// or a drain move's own double-faint arm earlier in the same turn — is
-    /// skipped entirely, matching `gAbsentBattlerFlags`' skip of an absent
-    /// battler's whole tracker walk (`:1472`-`:1474`): its own faint was
-    /// already reported at the point it happened, and [`Self::end_of_turn`]
-    /// still owns paying out or replacing it. Re-checking it here would
-    /// re-tick a corpse's Charge for nothing observable.
-    ///
-    /// A poison faint that happens *during* this pass is settled here with
-    /// the same report-and-clear [`Self::settle_faint`] gives a direct hit,
-    /// and the loop stops **before** the next battler's turn exactly when
-    /// [`Self::fainting_decides_the_battle`] says this faint exhausts that
-    /// whole side: `BattleScript_DoTurnDmgEnd`'s own `checkteamslost`
-    /// (`data/battle_scripts_1.s:3746`, `Cmd_checkteamslost` at
-    /// `battle_script_commands.c:3534`-`:3577`) runs inside the very script
-    /// that just fainted this battler, and `BattleTurnPassed`'s
-    /// `if (gBattleOutcome == 0)` guard (`battle_main.c:3960`-`:3966`) then
-    /// refuses to call `DoBattlerEndTurnEffects` again once that sets a
-    /// nonzero outcome — abandoning the tracker walk before the next
-    /// battler's own slot comes up, whether or not that battler is also
-    /// poisoned this same turn. A trainer's bench absorbing the faint, or a
-    /// battler whose residual tick does not faint it at all, leaves
-    /// `checkteamslost`'s totals nonzero on both sides, so the loop
-    /// continues to the next battler exactly as upstream continues its own
-    /// tracker walk. Awarding the fallen enemy's experience is not part of
-    /// this decision — that happens only in [`Self::end_of_turn`], after the
-    /// whole pass completes, matching `HandleFaintedMonActions`' own later
-    /// `BattleScript_GiveExp` state.
+    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`) for the
+    /// cases modelled so far: `ENDTURN_POISON` (`:1525`-`:1535`) then
+    /// `ENDTURN_CHARGE` (`:1743`-`:1745`), per battler in `gBattlerByTurnOrder`
+    /// order (`:1469`-`:1472`), which is the same [`Order`] this turn's move
+    /// dispatch used. Skips a battler already fainted this turn
+    /// (`gAbsentBattlerFlags`, `:1472`-`:1474`) and runs only while the battle
+    /// has no outcome (`battle_main.c:3960`-`:3966`); a direct-hit kill leaves
+    /// the outcome unset until [`Self::end_of_turn`], as upstream's
+    /// `gBattleOutcome` stays `0` until `HandleFaintedMonActions` (`:3968`).
+    /// A residual faint that exhausts a whole side stops the walk before the
+    /// next battler ([`Self::fainting_decides_the_battle`]), matching
+    /// `BattleScript_DoTurnDmgEnd`'s own `checkteamslost`
+    /// (`data/battle_scripts_1.s:3746`); experience is paid only in
+    /// [`Self::end_of_turn`].
     fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() {
             return;
