@@ -1059,4 +1059,41 @@ mod tests {
     fn item_data_remains_compact() {
         assert!(core::mem::size_of::<ItemData>() <= 16);
     }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every row's nine numeric attributes as bytes, in table order.
+    /// `item_id` is excluded: it is already exhaustively pinned by
+    /// `every_row_has_its_declared_identity`.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::with_capacity(ITEMS_COUNT * 10);
+        for item in ItemTable::new().iter() {
+            out.extend_from_slice(&item.price.to_le_bytes());
+            out.push(item.hold_effect.id());
+            out.push(item.hold_effect_param);
+            out.push(item.pocket.id());
+            out.push(item.item_type.raw());
+            out.push(item.battle_usage.id());
+            out.push(item.importance);
+            out.push(u8::from(item.registrable));
+            out.push(item.secondary_id);
+        }
+        out
+    }
+
+    /// Digest of upstream `src/data/items.h`'s `gItems`, every row's nine
+    /// numeric attributes rendered as `render_table_bytes` renders ours.
+    #[test]
+    fn every_row_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "61fa401adfd526b4",
+            "item table diverges from the canonical upstream rows",
+        );
+    }
 }
