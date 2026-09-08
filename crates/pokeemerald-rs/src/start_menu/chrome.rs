@@ -119,10 +119,16 @@ impl StartMenuChrome {
         })
     }
 
-    /// A field message box printing `tokens` -- `ShowSaveMessage`'s window
-    /// ([`NpcDialog::new`]'s own docs on why the two share a type).
-    pub(super) fn message_box(&self, tokens: Vec<Token>) -> NpcDialog {
-        NpcDialog::new(self.sheet.clone(), self.message_frame.clone(), tokens)
+    /// A field message box printing `tokens` at `text_speed` --
+    /// `ShowSaveMessage`'s window ([`NpcDialog::new`]'s own docs on why the
+    /// two share a type, and on why the speed is caller-supplied).
+    pub(super) fn message_box(&self, tokens: Vec<Token>, text_speed: TextSpeed) -> NpcDialog {
+        NpcDialog::new(
+            self.sheet.clone(),
+            self.message_frame.clone(),
+            tokens,
+            text_speed,
+        )
     }
 
     /// `AddTextPrinterParameterized`'s effect for a fixed menu label:
