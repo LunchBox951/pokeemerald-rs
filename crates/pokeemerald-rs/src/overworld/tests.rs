@@ -850,11 +850,10 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
     );
 }
 
-/// #948: `LoadTilesetPalette` force-writes `RGB_BLACK` over global color 0
-/// for a primary tileset regardless of its own source color there
-/// (`pokeemerald/src/fieldmap.c:839`) -- masked by
-/// [`synthetic_overworld_pack_entries_for`]'s zeroed bank-0 color 0. This
-/// fixture gives it a nonblack color instead, and points the border at a
+/// The combined world palette's global color 0 is always `RGB_BLACK`
+/// (`LoadTilesetPalette`, `pokeemerald/src/fieldmap.c:839-841`), whatever
+/// the primary tileset's own source color 0 holds. This fixture gives that
+/// source color a distinct nonblack value, and points the border at a
 /// metatile id no attribute entry covers so that screen position composes
 /// the backdrop rather than an opaque tile.
 #[test]

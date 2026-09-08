@@ -26466,6 +26466,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "LoadTilesetPalette": {
+          "reason": "combined_world_palette force-writes RGB_BLACK over global color 0 for the primary tileset's bank 0, matching LoadTilesetPalette's forced black write there, and otherwise copies every bank index-for-index from source, matching its unshifted bank copy for the rest of the primary and secondary regions.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
         "MapGridGetCollisionAt": {
           "reason": "Grid collision-bit lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::collision), consumed by PlayerState::step's collision check",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
