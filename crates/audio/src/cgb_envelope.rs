@@ -155,6 +155,19 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
+    /// Whether the hardware envelope is still auto-stepping from its last
+    /// `CGB_CHANNEL_MO_VOL` write, versus held dead at that write's volume.
+    /// Attack, decay, and release write a nonzero NRx2 step-time nibble;
+    /// sustain-start and pseudo-echo-start write a zero one
+    /// (`m4a.c:1132-1137`, `:1090-1098`), which freezes the hardware envelope
+    /// (`stepTime == 0` marks it dead, `mgba/src/gb/audio.c:948-950`) until
+    /// another explicit write — [`Self::sustain_step`]'s refresh and
+    /// [`Self::pseudo_echo_step`]'s countdown write neither.
+    #[must_use]
+    pub(crate) fn hardware_envelope_is_paced(&self) -> bool {
+        matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Release)
+    }
+
     /// Enter the release phase, reporting whether release itself is the
     /// retrigger-worthy volume write, once only (`m4a.c:1060-1069,1062`).
     /// Only a live phase releases: a note stopped before its first `step`
@@ -515,6 +528,51 @@ mod tests {
         env.set_goal(adsr, 20);
 
         assert_eq!(step_volumes::<7>(&mut env), [5, 5, 5, 5, 5, 5, 10]);
+    }
+
+    #[test]
+    fn hardware_envelope_is_paced_only_through_attack_decay_and_release() {
+        // Pins every phase `hardware_envelope_is_paced` classifies
+        // (that method's doc). Each phase gets its own minimal envelope so a
+        // zero-delay neighbor can't skip past it before its pacing is observed.
+        let mut attacking = plain_envelope(adsr(5, 0, 8, 0), 10);
+        assert!(!attacking.hardware_envelope_is_paced(), "not yet started");
+        attacking.step(); // Starting -> Attack, paced by attack == 5
+        assert!(
+            attacking.hardware_envelope_is_paced(),
+            "attack paces hardware"
+        );
+
+        let mut decaying = plain_envelope(adsr(0, 5, 8, 0), 10);
+        decaying.step(); // Starting -> Attack (attack == 0) -> Decay
+        assert!(
+            decaying.hardware_envelope_is_paced(),
+            "decay paces hardware"
+        );
+
+        let mut sustaining = plain_envelope(adsr(0, 0, 8, 0), 10);
+        sustaining.step(); // Starting -> Attack -> Decay (both == 0) -> Sustain
+        assert!(
+            !sustaining.hardware_envelope_is_paced(),
+            "sustain's zero step-time nibble holds hardware dead"
+        );
+
+        let mut releasing = plain_envelope(adsr(0, 0, 8, 4), 10);
+        releasing.step(); // ... -> Sustain
+        releasing.note_off(); // Sustain -> Release, paced by release == 4
+        assert!(
+            releasing.hardware_envelope_is_paced(),
+            "release paces hardware"
+        );
+
+        let mut echoing = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
+        echoing.step(); // ... -> Sustain
+        echoing.note_off(); // Sustain -> Release (release == 0, held for one step)
+        echoing.step(); // Release -> PseudoEcho
+        assert!(
+            !echoing.hardware_envelope_is_paced(),
+            "the pseudo-echo tail's zero step-time nibble holds hardware dead"
+        );
     }
 
     #[test]

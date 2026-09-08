@@ -7,7 +7,7 @@ use crate::voice::{channel_volume, pan_terms, StereoAcc};
 
 const BIPOLAR_SAMPLE_SCALE: i32 = 127;
 const WAVE_SAMPLE_SCALE: i32 = 16;
-const LINEAR_ENVELOPE_SCALE: u32 = 8;
+const LINEAR_ENVELOPE_SCALE: u32 = 16;
 const MASTER_VOLUME_BITS: u32 = 4;
 const SAMPLE_GAIN_BITS: u32 = 8;
 const MIDI_KEY_COUNT: i32 = 256;
@@ -124,9 +124,13 @@ impl Oscillator {
 
 /// The NRx2 byte a live Square or Noise channel's hardware envelope holds: a
 /// `CGB_CHANNEL_MO_VOL` write truncates the software envelope to this
-/// four-bit domain, and hardware paces from there at that write's own
-/// step-time nibble, saturating at 0 or 15 rather than wrapping past it
-/// (`m4a.c:1156-1157,1219-1226`, `mgba/src/gb/audio.c:930-943`).
+/// four-bit domain, and — while [`CgbEnvelope::hardware_envelope_is_paced`]
+/// holds — hardware paces from there at that write's own step-time nibble,
+/// saturating at 0 or 15 rather than wrapping past it
+/// (`m4a.c:1156-1157,1219-1226`, `mgba/src/gb/audio.c:930-943`). Once that
+/// phase ends, hardware is dead (frozen) at the last write until another
+/// explicit trigger, regardless of how far the software envelope itself
+/// drifts in the meantime (`hardware_envelope_is_paced`'s doc).
 #[derive(Clone, Copy, Debug, Default)]
 struct HardwareEnvelopeVolume {
     at_write: u8,
@@ -142,9 +146,13 @@ impl HardwareEnvelopeVolume {
         self.software_at_write = software_volume;
     }
 
-    /// Pace from the last write toward `software_volume`, saturating instead
-    /// of wrapping (this type's doc).
-    fn track(self, software_volume: u8) -> u8 {
+    /// Resolve the current hardware byte: paces toward `software_volume`
+    /// while `paced` holds, else ignores it and holds the last write flat
+    /// (this type's doc).
+    fn track(self, software_volume: u8, paced: bool) -> u8 {
+        if !paced {
+            return self.at_write;
+        }
         if software_volume >= self.software_at_write {
             self.at_write
                 .saturating_add(software_volume - self.software_at_write)
@@ -627,10 +635,12 @@ impl CgbVoice {
         if hardware_write {
             self.hardware_envelope_volume.write(software_volume);
         }
-        let envelope_gain = self.oscillator.envelope_gain_256(
-            software_volume,
-            self.hardware_envelope_volume.track(software_volume),
-        );
+        let hardware_volume = self
+            .hardware_envelope_volume
+            .track(software_volume, self.envelope.hardware_envelope_is_paced());
+        let envelope_gain = self
+            .oscillator
+            .envelope_gain_256(software_volume, hardware_volume);
         let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
         self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
     }
@@ -1132,6 +1142,54 @@ mod tests {
     }
 
     #[test]
+    fn live_track_volume_drop_during_sustain_does_not_silence_the_channel() {
+        // Sustain's periodic refresh (`CgbEnvelope::sustain_step`, every
+        // `SUSTAIN_REFRESH_FRAMES`) only updates software bookkeeping and
+        // never sets a hardware write -- upstream's own sustain-refresh
+        // branch never raises `CGB_CHANNEL_MO_VOL` (`m4a.c:1128-1137`).
+        // `set_track_volume` itself retriggers immediately, but that write
+        // lands before the software goal has caught up (still the stale
+        // value), so it changes nothing audible; the *later*, unwritten
+        // refresh is the one that actually snaps to the new low goal.
+        // `HardwareEnvelopeVolume::track` must not read that unwritten snap
+        // as gradual hardware envelope motion and silence the channel.
+        let held_at_full_sustain = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: MAX_MASTER_VOLUME,
+            release: 0,
+        };
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            held_at_full_sustain,
+            centred_goal_thirty_one_note(),
+        );
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // enters sustain at its write frame
+
+        let mut sanity_acc = vec![(0i32, 0i32); 8];
+        voice.render(&mut sanity_acc, &[]);
+        assert!(
+            sanity_acc.iter().any(|&(l, r)| l != 0 || r != 0),
+            "sanity: the note starts audible in sustain"
+        );
+
+        let near_silent_track_volume = 1u8;
+        voice.set_track_volume(near_silent_track_volume, near_silent_track_volume);
+
+        for frame in 0..8 {
+            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            let mut acc = vec![(0i32, 0i32); 8];
+            voice.render(&mut acc, &[]);
+            assert!(
+                acc.iter().any(|&(l, r)| l != 0 || r != 0),
+                "frame {frame}: hardware holds its last explicit write through the unwritten \
+                 sustain refresh; it must not go silent before another real trigger"
+            );
+        }
+    }
+
+    #[test]
     fn cgb3_wave_level_pins_the_stepped_output_levels() {
         assert_eq!(cgb3_wave_gain_256(0), SILENT_GAIN_256);
         assert_eq!(cgb3_wave_gain_256(1), SILENT_GAIN_256);
@@ -1140,6 +1198,22 @@ mod tests {
         assert_eq!(cgb3_wave_gain_256(10), THREE_QUARTER_GAIN_256);
         assert_eq!(cgb3_wave_gain_256(15), FULL_GAIN_256);
         assert_eq!(cgb3_wave_gain_256(31), FULL_GAIN_256);
+    }
+
+    #[test]
+    fn square_gain_at_the_nibble_ceiling_reaches_near_full_scale_like_the_wave_arm() {
+        // `envelope_gain_256`'s square/noise arm must reach a ceiling
+        // comparable to the wave arm's full-scale gain (`cgb3_wave_gain_256`,
+        // above) once both read the same 0..=15 nibble domain. The bound
+        // allows one hardware step (`LINEAR_ENVELOPE_SCALE`, the finest step
+        // this linear law can represent) short of that ceiling.
+        let square = Oscillator::Square(SquareChannel::new(HALF_DUTY, 0, None));
+        let square_ceiling = square.envelope_gain_256(15, 15);
+        assert!(
+            square_ceiling >= FULL_GAIN_256 - LINEAR_ENVELOPE_SCALE,
+            "the loudest square/noise nibble ({square_ceiling}/256) must land within one \
+             hardware step of the wave arm's full-scale gain ({FULL_GAIN_256}/256)"
+        );
     }
 
     #[test]
