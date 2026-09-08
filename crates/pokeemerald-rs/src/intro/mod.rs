@@ -347,8 +347,11 @@ impl IntroScene {
     ///
     /// Prints at [`TextSpeed::Mid`], upstream's own new-game default
     /// (`SetDefaultOptions`'s `optionsTextSpeed = OPTIONS_TEXT_SPEED_MID`,
-    /// `pokeemerald/src/new_game.c:91-93`) -- nothing yet models the
-    /// player-selectable text-speed option.
+    /// `pokeemerald/src/new_game.c:91-93`) -- the save flow's own SAVE-menu
+    /// messages read the live save block's decoded option instead
+    /// (`crate::start_menu::save_dialog::SaveTarget::player_text_speed`,
+    /// issue #927), but the intro plays before any save block exists, so a
+    /// fixed MID stays correct here regardless.
     ///
     /// # Errors
     ///

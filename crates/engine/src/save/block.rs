@@ -12,12 +12,14 @@ const PLAYER_NAME_OFFSET: usize = 0x00;
 const PLAYER_GENDER_OFFSET: usize = 0x08;
 const PLAYER_TRAINER_ID_OFFSET: usize = 0x0A;
 // `struct SaveBlock2`'s packed `u16` options bitfield
-// (`pokeemerald/include/global.h:518-524`): `optionsTextSpeed:3` (bits 0-2,
-// unmodeled) then `optionsWindowFrameType:5` (bits 3-7) then four more
-// unmodeled 1-bit options and padding filling bits 8-15. Only the frame-type
-// bits are modeled; the rest of this `u16` -- including its own high byte --
-// is preserved from `base`, never zeroed, by [`SaveBlock2::patch_bytes`].
+// (`pokeemerald/include/global.h:518-524`): `optionsTextSpeed:3` (bits 0-2)
+// then `optionsWindowFrameType:5` (bits 3-7) then four more unmodeled 1-bit
+// options and padding filling bits 8-15. Only the low byte -- both the
+// speed and the frame-type bits -- is modeled; the high byte is preserved
+// from `base`, never zeroed, by [`SaveBlock2::patch_bytes`].
 const OPTIONS_OFFSET: usize = 0x14;
+const OPTIONS_TEXT_SPEED_SHIFT: u32 = 0;
+const OPTIONS_TEXT_SPEED_MASK: u16 = 0x07 << OPTIONS_TEXT_SPEED_SHIFT;
 const OPTIONS_WINDOW_FRAME_TYPE_SHIFT: u32 = 3;
 const OPTIONS_WINDOW_FRAME_TYPE_MASK: u16 = 0x1F << OPTIONS_WINDOW_FRAME_TYPE_SHIFT;
 const ENCRYPTION_KEY_OFFSET: usize = 0xAC;
@@ -214,6 +216,15 @@ pub struct SaveBlock2 {
     pub player_trainer_id: [u8; TRAINER_ID_LENGTH],
     /// Key used to serialize money and item quantities.
     pub encryption_key: u32,
+    /// `optionsTextSpeed` (`pokeemerald/include/global.h:519`): the
+    /// player's chosen message pacing, `0..=7` (3 bits) though only
+    /// `0..=2` (`OPTIONS_TEXT_SPEED_[SLOW/MID/FAST]`,
+    /// `pokeemerald/include/constants/global.h:127-129`) name a real speed
+    /// -- `GetPlayerTextSpeedDelay` falls back to MID above that
+    /// (`pokeemerald/src/menu.c:481-487`), which
+    /// [`crate::text::render::TextSpeed::from_raw_option`] mirrors, so this
+    /// stays a plain `u8` rather than a bounded enum.
+    pub options_text_speed: u8,
     /// `optionsWindowFrameType` (`pokeemerald/include/global.h:520`): the
     /// player's chosen text-window border, `0..=31` (5 bits) though only
     /// `0..=19` name a real `sWindowFrames` entry --
@@ -236,16 +247,24 @@ impl SaveBlock2 {
     }
 
     /// Writes modeled fields at their fixed offsets, preserving every other
-    /// byte -- including the unmodeled options bits
-    /// [`options_window_frame_type`](Self::options_window_frame_type)'s own
-    /// `u16` shares (that field's own doc comment).
+    /// byte -- including the truly unmodeled options bits (the shared
+    /// `u16`'s high byte: `optionsSound`/`optionsBattleStyle`/
+    /// `optionsBattleSceneOff`/`regionMapZoom` and padding,
+    /// `pokeemerald/include/global.h:521-524`)
+    /// [`options_text_speed`](Self::options_text_speed) and
+    /// [`options_window_frame_type`](Self::options_window_frame_type)
+    /// together cover the low byte, so patching them never depends on
+    /// `base`'s own low byte.
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN]) {
         base[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
             .copy_from_slice(&self.player_name);
         base[PLAYER_GENDER_OFFSET] = self.player_gender.to_byte();
         base[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
             .copy_from_slice(&self.player_trainer_id);
-        let options = read_u16(base, OPTIONS_OFFSET) & !OPTIONS_WINDOW_FRAME_TYPE_MASK
+        let modeled_options_mask = OPTIONS_TEXT_SPEED_MASK | OPTIONS_WINDOW_FRAME_TYPE_MASK;
+        let options = read_u16(base, OPTIONS_OFFSET) & !modeled_options_mask
+            | (u16::from(self.options_text_speed) << OPTIONS_TEXT_SPEED_SHIFT)
+                & OPTIONS_TEXT_SPEED_MASK
             | (u16::from(self.options_window_frame_type) << OPTIONS_WINDOW_FRAME_TYPE_SHIFT)
                 & OPTIONS_WINDOW_FRAME_TYPE_MASK;
         base[OPTIONS_OFFSET..OPTIONS_OFFSET + SERIALIZED_U16_LEN]
@@ -270,6 +289,8 @@ impl SaveBlock2 {
         player_trainer_id.copy_from_slice(
             &bytes[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH],
         );
+        let options_text_speed = ((read_u16(bytes, OPTIONS_OFFSET) & OPTIONS_TEXT_SPEED_MASK)
+            >> OPTIONS_TEXT_SPEED_SHIFT) as u8;
         let options_window_frame_type = ((read_u16(bytes, OPTIONS_OFFSET)
             & OPTIONS_WINDOW_FRAME_TYPE_MASK)
             >> OPTIONS_WINDOW_FRAME_TYPE_SHIFT) as u8;
@@ -278,6 +299,7 @@ impl SaveBlock2 {
             player_gender,
             player_trainer_id,
             encryption_key: read_u32(bytes, ENCRYPTION_KEY_OFFSET),
+            options_text_speed,
             options_window_frame_type,
         })
     }
@@ -541,11 +563,15 @@ mod tests {
     }
 
     /// `partial` names byte indices this block shares between a modeled
-    /// field and a genuinely unmodeled sibling (`options_window_frame_type`'s
-    /// own doc comment) -- excluded from the base-independence check below,
-    /// since preserving the sibling bits makes those bytes legitimately
-    /// base-dependent. [`save_block2_patch_bytes_preserves_the_shared_options_bytes_other_bits`]
-    /// covers them at bit granularity instead.
+    /// field and a genuinely unmodeled sibling -- excluded from the
+    /// base-independence check below, since preserving the sibling bits
+    /// makes those bytes legitimately base-dependent.
+    /// [`save_block2_patch_bytes_preserves_the_truly_unmodeled_high_byte`]
+    /// covers `SaveBlock2`'s own such byte (the shared options `u16`'s high
+    /// half) at bit granularity instead -- its low half is `partial`-free
+    /// now that [`SaveBlock2::options_text_speed`] and
+    /// [`SaveBlock2::options_window_frame_type`] together cover every bit
+    /// of it.
     fn assert_only_modeled_bytes_are_patched<const N: usize>(
         zero_based: [u8; N],
         patch: impl Fn(&mut [u8; N]),
@@ -592,6 +618,7 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
             encryption_key: 0x89AB_CDEF,
+            options_text_speed: 2,
             options_window_frame_type: 19,
         };
         let bytes = block.to_bytes();
@@ -600,33 +627,35 @@ mod tests {
         assert_eq!(bytes[0x08], 1);
         assert_eq!(bytes[UNMODELED_SPECIAL_SAVE_WARP_FLAGS_OFFSET], 0);
         assert_eq!(&bytes[0x0A..0x0E], &[0x12, 0x34, 0x56, 0x78]);
-        // `optionsWindowFrameType` (`pokeemerald/include/global.h:520`) is
-        // bits 3-7 of the `u16` at 0x14: `19` (0b10011) << 3 == 0x98, and the
-        // high byte (0x15) carries only the other, unmodeled option bits --
-        // zero here since `to_bytes` starts from a zero-filled payload.
-        assert_eq!(bytes[0x14], 0x98);
+        // `optionsTextSpeed` (`pokeemerald/include/global.h:519`) is bits
+        // 0-2 of the `u16` at 0x14 (`2`) and `optionsWindowFrameType`
+        // (`:520`) is bits 3-7 (`19` (0b10011) << 3 == 0x98), so the low
+        // byte is `0x98 | 0x02 == 0x9A`; the high byte (0x15) carries only
+        // the other, unmodeled option bits -- zero here since `to_bytes`
+        // starts from a zero-filled payload.
+        assert_eq!(bytes[0x14], 0x9A);
         assert_eq!(bytes[0x15], 0x00);
         assert_eq!(&bytes[0xAC..0xB0], &[0xEF, 0xCD, 0xAB, 0x89]);
         assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
     }
 
-    /// `optionsWindowFrameType` shares its `u16` with `optionsTextSpeed`
-    /// (bits 0-2) and four more 1-bit options above it
-    /// (`pokeemerald/include/global.h:518-524`), so
-    /// [`SaveBlock2::patch_bytes`] must patch only its own 5 bits, never
-    /// clobbering a base's neighboring option bits the way overwriting the
-    /// whole `u16` would.
+    /// `optionsTextSpeed` (bits 0-2) and `optionsWindowFrameType` (bits
+    /// 3-7) together cover the low byte of the shared `u16`
+    /// (`pokeemerald/include/global.h:518-524`); four more 1-bit options
+    /// occupy its high byte, genuinely unmodeled. [`SaveBlock2::patch_bytes`]
+    /// must patch each of the two low-byte fields independently of the
+    /// other -- never letting one clobber its sibling -- while leaving the
+    /// high byte exactly as `base` had it.
     #[test]
-    fn save_block2_patch_bytes_preserves_the_shared_options_bytes_other_bits() {
+    fn save_block2_patch_bytes_preserves_the_truly_unmodeled_high_byte() {
         let mut base = [0u8; SaveBlock2::PAYLOAD_LEN];
-        // `optionsTextSpeed` bits (0-2) plus a high byte carrying
-        // `optionsSound`/`optionsBattleStyle`/`optionsBattleSceneOff`/
-        // `regionMapZoom` -- deliberately nonzero and distinct from the
-        // frame-type value under test so a leak in either direction shows up.
-        base[0x14] = 0b0000_0101; // optionsTextSpeed == 5 (out of its own 3-bit range, still must survive losslessly)
-        base[0x15] = 0b0000_1111;
+        // Deliberately nonzero and distinct from the modeled values below,
+        // so a leak in either direction shows up.
+        base[0x14] = 0b1111_1111;
+        base[0x15] = 0b0000_1111; // optionsSound/BattleStyle/BattleSceneOff/regionMapZoom
 
         let block = SaveBlock2 {
+            options_text_speed: 5, // out of the valid 0..=2 range, still stored losslessly
             options_window_frame_type: 19,
             ..SaveBlock2::default()
         };
@@ -634,8 +663,8 @@ mod tests {
 
         assert_eq!(
             base[0x14] & 0x07,
-            0b101,
-            "optionsTextSpeed's own 3 bits must survive untouched"
+            5,
+            "optionsTextSpeed's own 3 bits must be the patched value"
         );
         assert_eq!(
             (base[0x14] & 0xF8) >> 3,
@@ -644,14 +673,11 @@ mod tests {
         );
         assert_eq!(
             base[0x15], 0b0000_1111,
-            "the high byte's unmodeled option bits must survive untouched"
+            "the high byte's genuinely unmodeled option bits must survive untouched"
         );
-        assert_eq!(
-            SaveBlock2::from_bytes(&base)
-                .unwrap()
-                .options_window_frame_type,
-            19
-        );
+        let decoded = SaveBlock2::from_bytes(&base).unwrap();
+        assert_eq!(decoded.options_text_speed, 5);
+        assert_eq!(decoded.options_window_frame_type, 19);
     }
 
     #[test]
@@ -672,12 +698,18 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
             encryption_key: 0x89AB_CDEF,
+            options_text_speed: 2,
             options_window_frame_type: 19,
         };
+        // `OPTIONS_OFFSET` (the low byte, 0x14) is no longer partial:
+        // `options_text_speed` and `options_window_frame_type` together
+        // cover every one of its bits, so it is fully modeled like any
+        // other byte here -- only the shared `u16`'s high byte (0x15)
+        // stays base-dependent (the test above covers that one).
         let patched = assert_only_modeled_bytes_are_patched(
             block.to_bytes(),
             |base| block.patch_bytes(base),
-            &[OPTIONS_OFFSET],
+            &[],
         );
         assert_eq!(SaveBlock2::from_bytes(&patched).unwrap(), block);
     }
