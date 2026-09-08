@@ -29,7 +29,7 @@
 //!
 //! The two production steps they cannot take are
 //! [`OverworldPhase::continue_saved_game`]'s own
-//! `crate::overworld::load_room` call and `crate::start_menu::open_default`,
+//! `crate::overworld::load_room` call and `crate::start_menu::open`,
 //! both of which need the pack. The two `#[ignore]`d `real_pack_*` cases
 //! below close that gap on the real-pack lane.
 //!
@@ -959,7 +959,11 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
     assert!(saved_map_id(block1.location).is_none());
 
     // `OverworldPhase` has no `Debug`, so this cannot be `expect_err`.
-    let Err(err) = OverworldPhase::continue_saved_game(block1, SaveBlock2::default()) else {
+    let Err(err) = OverworldPhase::continue_saved_game(
+        crate::pack_source::PackSource::Runtime,
+        block1,
+        SaveBlock2::default(),
+    ) else {
         panic!("an unknown location must not resolve to some other map");
     };
     assert!(
@@ -989,7 +993,12 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(menu.selected(), MainMenuItem::Continue);
 
     let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
-    let (next, _frame) = super::advance_scene(scene, pressed(Buttons::A), &mut slot);
+    let (next, _frame) = super::advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::Overworld(resumed) = next else {
         panic!("A on CONTINUE must hand off to the overworld");
@@ -1008,7 +1017,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
 }
 
 /// The other pack-gated step (module docs): `START` really opening the
-/// menu through `crate::start_menu::open_default`, with real chrome, and a
+/// menu through `crate::start_menu::open`, with real chrome, and a
 /// whole save running through the pack-decoded windows.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
@@ -1772,4 +1781,92 @@ fn a_genuinely_empty_party_still_saves_a_default_zeroed_slot() {
         "an empty slot's stale record is zeroed on the next save, not retained"
     );
     assert_eq!(saved.player_party_count, 0);
+}
+
+/// `OPTIONS_TEXT_SPEED_SLOW`/`_FAST` (`pokeemerald/include/constants/global.h:127-129`).
+const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
+const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+/// Write a checksum-valid save at `temp` whose `SaveBlock2` carries
+/// `text_speed` in `optionsTextSpeed`, with everything else a new game's.
+fn write_save_with_text_speed(temp: &TempSave, text_speed: u8) {
+    let phase = new_game_phase();
+    let (block1, mut block2) = (phase.save1.clone(), phase.save2.clone());
+    block2.options_text_speed = text_speed;
+
+    let mut store = engine::save::SaveStore::new();
+    store.save(&block1, &block2);
+    engine::save::SaveFile::at(temp.path().to_path_buf())
+        .write(&store)
+        .expect("the fixture save must be writable");
+}
+
+/// Continue the save `write_save_with_text_speed` left at `temp`, open
+/// `START` -> `SAVE`, and count the frames `gText_ConfirmSave` takes to
+/// finish printing (the Yes/No menu opens only once it has --
+/// `RunSaveCallback`'s printer gate, `start_menu.c:884-894`). No button is
+/// held while it prints, so the held-A/B speed-up cannot mask the pacing.
+fn frames_to_print_the_save_confirm(label: &str, text_speed: u8) -> usize {
+    let temp = TempSave::new(label);
+    write_save_with_text_speed(&temp, text_speed);
+
+    let mut slot = temp.slot();
+    let saved = slot.load();
+    assert!(
+        saved.status.menu_shows_continue(),
+        "the fixture save must be offerable as CONTINUE, got {:?}",
+        saved.status
+    );
+    assert_eq!(
+        saved.block2.options_text_speed, text_speed,
+        "the fixture's optionsTextSpeed must survive the write/load round trip"
+    );
+    let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        saved.block1,
+        saved.block2,
+    );
+    settle(&mut phase);
+
+    phase.open_synthetic_start_menu();
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Save,
+        "SAVE is the first item, so a fresh menu opens on it"
+    );
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::A), &mut slot),
+        "an open start menu owns its frame"
+    );
+
+    for frames in 1..SAVE_FLOW_FRAME_BUDGET {
+        assert!(
+            phase.advance_start_menu_frame(held(Buttons::NONE), &mut slot),
+            "an open start menu owns its frame"
+        );
+        if phase.start_menu().unwrap().yes_no_cursor().is_some() {
+            return frames;
+        }
+    }
+    panic!("gText_ConfirmSave must finish printing within {SAVE_FLOW_FRAME_BUDGET} frames");
+}
+
+/// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-487`): every field
+/// message `AddTextPrinterForMessage_2` prints -- `ShowSaveMessage`'s
+/// included (`start_menu.c:902-909`) -- paces at the *saved*
+/// `optionsTextSpeed`, so a continued session that saved FAST prints the
+/// save prompt in fewer frames than one that saved SLOW
+/// (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph).
+#[test]
+fn save_messages_pace_at_the_saved_text_speed() {
+    let fast = frames_to_print_the_save_confirm("text-speed-fast", OPTIONS_TEXT_SPEED_FAST);
+    let slow = frames_to_print_the_save_confirm("text-speed-slow", OPTIONS_TEXT_SPEED_SLOW);
+    assert!(
+        fast < slow,
+        "a save whose optionsTextSpeed is FAST must print gText_ConfirmSave \
+         faster than one whose optionsTextSpeed is SLOW, but they took \
+         {fast} and {slow} frames"
+    );
 }

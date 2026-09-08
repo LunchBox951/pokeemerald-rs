@@ -29,7 +29,7 @@ Milestone descriptions own their current scope, upstream references, acceptance 
 The repository has no `LICENSE` file and reproduces a copyrighted work. Contributions must follow these boundaries:
 
 - Never copy upstream source. Read behaviour, then re-express it idiomatically `(no-verbatim)`.
-- Never commit ROM data, sprite, tile, audio, or other copyrighted game assets. Extraction reads the contributor's local reference checkout.
+- Never commit ROM data, sprite, tile, audio, or other copyrighted game assets. Extraction reads the contributor's local reference checkout, and `--import-rom` reads the player's own cartridge image; the ROM, its path, and its bytes never enter git, CI, artifacts, or logs. `crates/rom-import/src/lib.rs` owns that contract.
 - Never edit, commit, or link against `pokeemerald/` or `mgba/` `(reference-only, no-ffi)`.
 - Never add an external Cargo dependency without explicit owner approval for the exact crate, receiving workspace member, features, and purpose `(minimal-deps)`.
 

@@ -1,9 +1,13 @@
 //! Headless end-to-end smoke verification.
 //!
 //! [`run_smoke`] drives the production [`App::step`] path through its null
-//! platform backend. When a default asset pack exists, the suite also verifies
-//! the pack-backed title and overworld renderers. A missing pack skips those
-//! two checks so the synthetic boot check remains available in clean CI.
+//! platform backend for a fixed synthetic-scene boot. When the checkout's
+//! own extracted pack exists, it also verifies the pack-backed title and
+//! overworld renderers against exactly that pack -- never the runtime
+//! resolver's default, so an installed player pack can never substitute for
+//! the checkout's own pack under this gate `(test-ratchet)`. A missing pack
+//! skips those two checks so the synthetic boot check stays available in
+//! clean CI.
 
 use std::fmt;
 
@@ -128,8 +132,30 @@ pub fn run_smoke() -> Result<(), E2eError> {
     check_overworld_scene()
 }
 
+/// The I-2 smoke addition (issue #109, strengthened for issue #116): with a
+/// local asset pack present, load the real title screen and, at frame
+/// indices 0 and 20, assert the composed frame is non-blank and
+/// deterministic across two `compose_frame` calls at that same index, then
+/// assert the two frames differ from each other (module docs); without a
+/// pack, do nothing.
+///
+/// Deliberately independent of `App`/`App::new_headless` above -- it loads
+/// `pokeemerald_rs::title::load_repo` directly, so this check can never
+/// perturb (or depend on) the synthetic-scene headless run. `load_repo`, not
+/// `load_default`: this gate judges the checkout's own pack (module docs'
+/// "Which pack").
+///
+/// # Errors
+///
+/// [`E2eError::TitleSceneFailed`] if a pack is present but fails to load or
+/// decode for any reason other than "no pack" (that case returns `Ok(())`,
+/// not an error -- see [`pokeemerald_rs::title::TitleSceneError::is_pack_missing`]);
+/// [`E2eError::TitleFrameNotDeterministic`] or [`E2eError::TitleFrameBlank`]
+/// if a pack is present and loads, but composing frame 0 or frame 20 fails
+/// either check; [`E2eError::TitleFramesNotAnimated`] if both frames pass
+/// but are pixel-identical to each other.
 fn check_title_screen() -> Result<(), E2eError> {
-    let scene = match pokeemerald_rs::title::load_default() {
+    let scene = match pokeemerald_rs::title::load_repo() {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::TitleSceneFailed(err.to_string())),
@@ -162,10 +188,35 @@ fn check_title_screen() -> Result<(), E2eError> {
     Ok(())
 }
 
+/// The I-3 smoke addition (issue #126): with a local asset pack present,
+/// load the default overworld room
+/// (`pokeemerald_rs::overworld::load_repo_default_room` -- the checkout's own
+/// pack, module docs' "Which pack")
+/// and assert the composed frame -- a standing player at a fixed room
+/// position -- is non-blank and deterministic across two `compose` calls, at
+/// each of two different animation ticks (issue #160; see the tick comment
+/// in the body); without a pack, do nothing.
+///
+/// Deliberately independent of `App`/`App::new_headless` and of
+/// [`check_title_screen`] -- it loads the overworld scene directly, so this
+/// check can never perturb (or depend on) either.
+///
+/// # Errors
+///
+/// [`E2eError::OverworldSceneFailed`] if a pack is present but fails to
+/// load or decode for any reason other than "no pack" (that case returns
+/// `Ok(())`, not an error -- see
+/// `pokeemerald_rs::overworld::OverworldSceneError::is_pack_missing`);
+/// [`E2eError::OverworldFrameNotDeterministic`] or
+/// [`E2eError::OverworldFrameBlank`] if a pack is present and loads, but
+/// composing fails either check.
 fn check_overworld_scene() -> Result<(), E2eError> {
+    // A fresh (all-clear) event-flag store: this check only cares that the
+    // frame composes deterministically and non-blank, not about any
+    // particular object event's hide-flag state.
     let all_event_flags_clear = pokeemerald_rs::overworld::EventData::default();
 
-    let scene = match pokeemerald_rs::overworld::load_default_room(&all_event_flags_clear) {
+    let scene = match pokeemerald_rs::overworld::load_repo_default_room(&all_event_flags_clear) {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::OverworldSceneFailed(err.to_string())),

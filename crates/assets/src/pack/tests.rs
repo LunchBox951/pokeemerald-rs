@@ -5,7 +5,7 @@
 //! `pokeemerald/` checkout and no real pack). The one exception,
 //! [`real_pack_loads_and_every_typed_accessor_works`], is `#[ignore]`d.
 
-use super::{AssetPack, PackError, MAGIC};
+use super::{AssetPack, PackError, FORMAT_VERSION, MAGIC};
 use crate::audio::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, ProgrammableWave, Sample,
     SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
@@ -57,6 +57,15 @@ fn message_box_pixels() -> Vec<u8> {
         .collect()
 }
 
+/// One entry of a hand-serialized fixture pack: an id, its kind tag, the
+/// kind-specific metadata bytes, and the payload.
+struct Entry {
+    id: &'static str,
+    kind_tag: u8,
+    meta: Vec<u8>,
+    payload: Vec<u8>,
+}
+
 /// Build a tiny, synthetic pack in memory (never real upstream art — per
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
@@ -66,13 +75,7 @@ fn message_box_pixels() -> Vec<u8> {
 // helper functions would just move the line count, not reduce it.
 #[allow(clippy::too_many_lines)]
 fn synthetic_pack() -> Vec<u8> {
-    struct Entry {
-        id: &'static str,
-        kind_tag: u8,
-        meta: Vec<u8>,
-        payload: Vec<u8>,
-    }
-    let mut entries = vec![
+    let entries = vec![
         Entry {
             id: "tileset/test/tiles",
             kind_tag: 0,
@@ -174,21 +177,6 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x0099, 0x00AA),
         },
-        // Frame source `4` declares the right 24x24 shape but carries only
-        // 3 payload bytes — the ImageRef pixel-count invariant would be
-        // false.
-        Entry {
-            id: "text-window/image/4",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
-            payload: vec![0, 1, 2],
-        },
-        Entry {
-            id: "text-window/palette/4",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
-            payload: text_window_palette_payload(0x00BB, 0x00CC),
-        },
         // Frame source `5` is a self-consistent 8x8 bitmap (payload
         // matches its declared dimensions) — but a border frame must be a
         // complete 3x3 grid of 8x8 tiles, i.e. exactly 24x24.
@@ -233,14 +221,6 @@ fn synthetic_pack() -> Vec<u8> {
             kind_tag: 1,
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x0055, 0x0066),
-        },
-        // Declares the right 16-colour metadata over a truncated 8-byte
-        // payload — metadata alone must not be trusted on read.
-        Entry {
-            id: "text-window/palette/text_pal2",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
-            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
         },
         // `AssetPack::song`/`voicegroup`/`sample` fixtures (issue #184):
         // one well-formed entry per accessor, referencing each other the
@@ -337,8 +317,15 @@ fn synthetic_pack() -> Vec<u8> {
             payload: vec![0xFF],
         },
     ];
+    pack_bytes(entries)
+}
+
+/// Serialize `entries` into a pack file's bytes by hand, without going
+/// through `pack_format::PackWriter`, so these tests pin the layout
+/// independently of the writer's own idea of it.
+fn pack_bytes(mut entries: Vec<Entry>) -> Vec<u8> {
     // Directory entries must be written in id-sorted order, exactly like
-    // the real writer (`extract::pack::PackWriter::finish`) -- sort here
+    // the real writer (`pack_format::PackWriter::finish`) -- sort here
     // rather than trusting the literal array order above, so
     // reordering/adding fixture entries later can't quietly reintroduce an
     // unsorted directory the reader's binary search then misses.
@@ -358,7 +345,7 @@ fn synthetic_pack() -> Vec<u8> {
 
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&super::format::FORMAT_VERSION.to_le_bytes()); // format_version
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes()); // format_version
     out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
     for (e, &off) in entries.iter().zip(&offsets) {
         out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
@@ -375,11 +362,16 @@ fn synthetic_pack() -> Vec<u8> {
 }
 
 fn write_synthetic_pack(dir_hint: &str) -> std::path::PathBuf {
+    write_pack(dir_hint, &synthetic_pack())
+}
+
+/// Put `bytes` where [`AssetPack::load`] can read them back as a pack file.
+fn write_pack(dir_hint: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-assets-pack-test-{dir_hint}-{}.pack",
         std::process::id()
     ));
-    std::fs::write(&path, synthetic_pack()).unwrap();
+    std::fs::write(&path, bytes).unwrap();
     path
 }
 
@@ -403,6 +395,35 @@ fn loads_and_reads_every_entry_kind() {
 
     let raw = pack.raw("tileset/test/metatiles").unwrap();
     assert_eq!(raw, &[9, 9, 9]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn entries_walks_the_whole_directory_in_sorted_order() {
+    let path = write_synthetic_pack("entries");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let ids: Vec<&str> = pack.entries().map(|e| e.id.as_str()).collect();
+    assert!(ids.contains(&"tileset/test/tiles"));
+    assert!(ids.contains(&"tileset/test/palette/00"));
+    assert!(ids.contains(&"tileset/test/metatiles"));
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted);
+
+    // Every entry's offset/length addresses the same payload the typed
+    // accessors hand out, so a caller can compare two packs entry by entry
+    // without going through a lookup id.
+    let entry = pack
+        .entries()
+        .find(|e| e.id == "tileset/test/metatiles")
+        .unwrap();
+    assert_eq!(entry.kind, super::EntryKind::Raw);
+    assert_eq!(
+        &pack.bytes()[entry.offset..entry.offset + entry.length],
+        pack.raw("tileset/test/metatiles").unwrap()
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -448,9 +469,14 @@ fn wrong_kind_is_reported() {
 fn missing_pack_file_gives_the_required_diagnostic() {
     let err = AssetPack::load(std::path::Path::new("/definitely/does/not/exist.pack")).unwrap_err();
     assert!(matches!(err, PackError::NotFound(_)));
-    let rendered = err.to_string();
-    assert!(rendered.contains("init.sh"));
-    assert!(rendered.contains("cargo xtask extract"));
+    // Pinned whole: the message serves two audiences, and dropping either
+    // half strands one of them (Discussion #71 policy A and policy C).
+    assert_eq!(
+        err.to_string(),
+        "asset pack not found at `/definitely/does/not/exist.pack`: players run \
+         `pokeemerald-rs --import-rom <path to your Pokemon Emerald (US) ROM>`; developers \
+         run `./init.sh` then `cargo xtask extract`"
+    );
 }
 
 #[test]
@@ -472,6 +498,14 @@ fn unsupported_version_is_rejected() {
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(99));
+    // Same two audiences as the missing-pack diagnostic: a stale pack is
+    // rebuilt by whichever route built it in the first place.
+    assert_eq!(
+        err.to_string(),
+        "asset pack: unsupported format version `99`: the pack predates this build's \
+         format; players rebuild it with `pokeemerald-rs --import-rom <path to your \
+         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+    );
     let _ = std::fs::remove_file(path);
 }
 
@@ -644,20 +678,6 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
         } if id == "text-window/palette/2"
     ));
 
-    // `text_pal2` declares the right 16-colour metadata over a truncated
-    // 8-byte payload — metadata alone must not be trusted, or
-    // `PaletteRef::colors()` (which walks the raw payload) would disagree
-    // with `color_count`.
-    let err = pack.text_window_extra_palette(2).unwrap_err();
-    assert!(matches!(
-        &err,
-        PackError::MalformedTextWindowPalette {
-            id,
-            color_count: 16,
-            byte_len: 8,
-        } if id == "text-window/palette/text_pal2"
-    ));
-
     // Frame id 2 selects source `3`: a valid 16-colour palette, but an
     // 8-bit-indexed tile bitmap holding pixel 16 — the read side must
     // reject the pair rather than hand a renderer an unmappable pixel.
@@ -669,20 +689,6 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
             pixel: 16,
             palette_len: 16,
         } if id == "text-window/image/3"
-    ));
-
-    // Frame id 3 selects source `4`: the right 24x24 shape over a 3-byte
-    // payload — the ImageRef pixel-count invariant would be false, so the
-    // typed accessor rejects it.
-    let err = pack.text_window_frame(3).unwrap_err();
-    assert!(matches!(
-        &err,
-        PackError::MalformedTextWindowImage {
-            id,
-            width: 24,
-            height: 24,
-            byte_len: 3,
-        } if id == "text-window/image/4"
     ));
 
     // Frame id 4 selects source `5`: a self-consistent 8x8 bitmap — but a
@@ -704,9 +710,48 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
     // the typed text-window accessors enforce the pairing invariants.
     assert!(pack.palette("text-window/palette/2").is_ok());
     assert!(pack.image("text-window/image/3").is_ok());
-    assert!(pack.image("text-window/image/4").is_ok());
 
     let _ = std::fs::remove_file(path);
+}
+
+/// A payload that contradicts the shape its own metadata declares never
+/// reaches an accessor: the format owns that invariant
+/// (`pack_format::parse_directory`), so the whole pack is refused at load
+/// rather than each typed accessor catching its own entry. `PaletteRef` and
+/// `ImageRef` promise those shapes to every consumer, and the ones outside
+/// the text-window family (the overworld's and the title screen's palette
+/// walks) read them without a second check.
+#[test]
+fn an_entry_whose_payload_contradicts_its_metadata_is_refused_at_load() {
+    let truncated_palette = write_pack(
+        "misshapen-palette",
+        &pack_bytes(vec![Entry {
+            id: "text-window/palette/text_pal2",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
+        }]),
+    );
+    assert!(matches!(
+        AssetPack::load(&truncated_palette).unwrap_err(),
+        PackError::Truncated
+    ));
+    let _ = std::fs::remove_file(truncated_palette);
+
+    let truncated_image = write_pack(
+        "misshapen-image",
+        &pack_bytes(vec![Entry {
+            id: "text-window/image/4",
+            kind_tag: 0,
+            meta: image_meta(24, 24, 4),
+            payload: vec![0, 1, 2],
+        }]),
+    );
+    assert!(matches!(
+        AssetPack::load(&truncated_image).unwrap_err(),
+        PackError::Truncated
+    ));
+    let _ = std::fs::remove_file(truncated_image);
 }
 
 #[test]
@@ -764,6 +809,13 @@ fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
 
 #[test]
 fn default_path_ends_with_expected_relative_path() {
+    // Rungs 1 to 3 of `pack_format::default_pack_path` redirect the path on
+    // purpose; only the plain developer checkout is deterministic.
+    if std::env::var_os(pack_format::PACK_PATH_ENV).is_some()
+        || pack_format::user_pack_path().is_some_and(|p| p.is_file())
+    {
+        return;
+    }
     let path = AssetPack::default_path();
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
@@ -778,7 +830,7 @@ fn default_path_ends_with_expected_relative_path() {
 fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
     let path = AssetPack::repo_pack_path();
     assert!(path.is_absolute(), "{} must be absolute", path.display());
-    assert!(path.ends_with(super::OUTPUT_RELATIVE_PATH));
+    assert!(path.ends_with(pack_format::OUTPUT_RELATIVE_PATH));
 
     let root = path
         .parent()
@@ -972,9 +1024,10 @@ fn sample_accessor_reports_a_malformed_payload() {
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
-/// exercises every typed accessor against it -- proof the writer
-/// (`xtask::extract::pack`) and this reader agree byte-for-byte on the
-/// format, not just on the synthetic fixtures above. Needs a local pack:
+/// exercises every typed accessor against it -- proof the extraction
+/// pipeline (`xtask::extract`, writing through `pack_format::PackWriter`)
+/// and this reader agree byte-for-byte on the format, not just on the
+/// synthetic fixtures above. Needs a local pack:
 /// run `cargo xtask extract` first, then `cargo test -p assets -- --ignored`.
 // Long because it's one end-to-end smoke test exercising every typed
 // accessor this module offers (tileset/sprite/title/layout/font/text-window)

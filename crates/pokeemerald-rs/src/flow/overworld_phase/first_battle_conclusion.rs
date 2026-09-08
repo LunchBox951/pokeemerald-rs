@@ -64,16 +64,16 @@
 //! # What's modelled, narrowly
 //!
 //! - **`special HealPlayerParty`** (`src/script_pokemon_util.c:30-59`) --
-//!   [`battle::BattlePokemon::heal`] on [`OverworldPhase::party_lead`], the
-//!   same primitive [`super::white_out::OverworldPhase::white_out`] already
-//!   calls for the wild/trainer white-out (that module's own docs name this
-//!   exact reuse as the reason `heal` lives on the owned type rather than
-//!   folded into either call site, `oop-boundaries`). **Not** routed
-//!   through `white_out` itself: upstream's `HealPlayerParty` here has no
-//!   accompanying `SetMoney(.../2)` or warp-to-heal-location -- this is the
-//!   bag script's own heal, not a white-out, and halving the player's money
-//!   for winning (or merely surviving) a story-mandated fight would be a
-//!   fidelity bug, not a shortcut.
+//!   [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`],
+//!   the same every-occupied-slot heal plus active-battler re-scan
+//!   [`super::white_out::OverworldPhase::white_out`] already calls for the
+//!   wild/trainer white-out (that method's own doc names this exact reuse,
+//!   `oop-boundaries`). **Not** routed through `white_out` itself: upstream's
+//!   `HealPlayerParty` here has no accompanying `SetMoney(.../2)` or
+//!   warp-to-heal-location -- this is the bag script's own heal, not a
+//!   white-out, and halving the player's money for winning (or merely
+//!   surviving) a story-mandated fight would be a fidelity bug, not a
+//!   shortcut.
 //! - **The four object-event flag writes** -- the tail's own `setflag
 //!   FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`, `clearflag
 //!   FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`, `setflag
@@ -175,12 +175,13 @@
 //!
 //! # RNG stream
 //!
-//! Draws nothing: [`battle::BattlePokemon::heal`], [`EventData::var_set`],
-//! and [`OverworldPhase::warp_to_position`] are all plain state mutation --
-//! matching [`super::white_out::OverworldPhase::white_out`]'s own identical
-//! claim, for the same reason.
+//! Draws nothing:
+//! [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`],
+//! [`EventData::var_set`], and [`OverworldPhase::warp_to_position`] are all
+//! plain state mutation -- matching
+//! [`super::white_out::OverworldPhase::white_out`]'s own identical claim,
+//! for the same reason.
 
-use battle::Dex;
 use engine::event_data::EventData;
 
 use crate::flow::route103_rival::PlayerStarter;
@@ -264,12 +265,10 @@ impl OverworldPhase {
     /// docs' "The upstream chain" section explains why: `CB2_EndFirstBattle`
     /// itself never branches on the outcome either).
     ///
-    /// Heals defensively -- a `None` party lead (a bare test phase with no
-    /// battle actually run through the trigger) is a silent no-op, the same
-    /// shape [`super::white_out::OverworldPhase::white_out`] uses, since
-    /// production always has a real lead here:
-    /// [`crate::flow::first_battle::advance_first_battle`]'s own
-    /// write-back contract guarantees one.
+    /// `special HealPlayerParty` runs through
+    /// [`super::white_out::OverworldPhase::heal_whole_party_and_reselect_lead`];
+    /// a `None` lead with an empty saved party (a bare test phase) is a
+    /// silent no-op there.
     pub(super) fn conclude_first_battle(&mut self) {
         eprintln!(
             "first battle: concluded -- healing the party, writing the Birch's-bag vars, and \
@@ -277,11 +276,7 @@ impl OverworldPhase {
         );
 
         // special HealPlayerParty
-        if let Some(lead) = self.party_lead.as_mut() {
-            if let Err(error) = lead.heal(&Dex::new()) {
-                eprintln!("first battle: couldn't heal the party lead ({error}) -- left as-is");
-            }
-        }
+        self.heal_whole_party_and_reselect_lead("first battle");
 
         // removeobject LOCALID_ROUTE101_ZIGZAGOON (scripts.inc:224) --
         // modelled as the flag write it persists as upstream

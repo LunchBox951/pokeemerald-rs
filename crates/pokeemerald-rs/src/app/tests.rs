@@ -7,7 +7,11 @@
 //! `(lean-docs)`. Tests needing an extracted asset pack are `#[ignore]`d and
 //! run by CI's `real-pack` job.
 
-use super::{describe_newly_pressed, App, AppError, AppState, SaveSlot};
+use super::{
+    describe_newly_pressed, title_music_start_failure_message, App, AppError, AppState, SaveSlot,
+};
+use crate::music::MusicError;
+use assets::pack::PackError;
 use platform::{ButtonState, Buttons};
 
 /// The animated path's `frame()` contract (I-2): after every step,
@@ -195,6 +199,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
     let mut opened = false;
     let mut save_opened = false;
     let Err(err) = App::boot(
+        crate::title::load_default,
         || {
             opened = true;
             Ok(platform::Platform::new_headless())
@@ -203,6 +208,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
             save_opened = true;
             SaveSlot::disabled()
         },
+        crate::pack_source::PackSource::Runtime,
     ) else {
         panic!("with no pack extracted, boot must fail");
     };
@@ -226,8 +232,10 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boot_propagates_a_platform_opener_error() {
     let Err(err) = App::boot(
+        crate::title::load_repo,
         || Err(platform::PlatformError::NoAudioDevice),
         SaveSlot::disabled,
+        crate::pack_source::PackSource::Repo,
     ) else {
         panic!("the opener failed, so boot must fail");
     };
@@ -543,5 +551,24 @@ fn real_pack_boot_starts_title_music_and_sustains_it_without_underrun() {
         app.music_underruns_for_test(),
         Some(0),
         "120 steps of frame-driven playback, drained once per step, must not underrun the ring"
+    );
+}
+
+/// Issue #902 regression: pins [`title_music_start_failure_message`]'s exact
+/// output so a reintroduced `music: ` prefix (see its own doc comment) fails
+/// loudly instead of rendering as `music: music: ...`.
+#[test]
+fn title_music_start_failure_names_its_subsystem_once() {
+    let err = MusicError::Pack(PackError::UnknownAsset("audio/song/mus_title".into()));
+    let message = title_music_start_failure_message(&err);
+    assert_eq!(
+        message,
+        "music: asset pack: no entry with id `audio/song/mus_title` -- the title screen will \
+         play without music"
+    );
+    assert_eq!(
+        message.matches("music:").count(),
+        1,
+        "the recovery log must name its subsystem once, not once per error layer: {message}"
     );
 }

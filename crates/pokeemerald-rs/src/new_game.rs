@@ -133,6 +133,12 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
         player_gender: DEFAULT_PLAYER_GENDER,
         player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         encryption_key: 0,
+        // `OPTIONS_TEXT_SPEED_MID` (`SetDefaultOptions`,
+        // `pokeemerald/src/new_game.c:91-93`): unlike every other option
+        // bit here, MID is not the zeroed representation (that's SLOW,
+        // raw `0`), so this needs an explicit value rather than falling
+        // out of a zeroed block.
+        options_text_speed: 1,
         // `WINDOW_FRAME_TYPE_0`: a zeroed, freshly-initialized save block's
         // own `optionsWindowFrameType` (`pokeemerald/include/global.h:520`),
         // matching every other unmodeled option bit this block also leaves
@@ -281,6 +287,12 @@ mod tests {
         assert_eq!(block2.encryption_key, 0);
         assert_eq!(block2.player_gender, PlayerGender::Male);
         assert_eq!(text::decode_to_string(&block2.player_name).unwrap(), "STU");
+        // `SetDefaultOptions` (`pokeemerald/src/new_game.c:91-93`).
+        assert_eq!(
+            block2.options_text_speed, 1,
+            "a new game's optionsTextSpeed is OPTIONS_TEXT_SPEED_MID"
+        );
+        assert_eq!(block2.options_window_frame_type, 0);
 
         assert_eq!(block1.money, STARTING_MONEY);
         assert_eq!(block1.player_party_count, 0);

@@ -347,8 +347,11 @@ impl IntroScene {
     ///
     /// Prints at [`TextSpeed::Mid`], upstream's own new-game default
     /// (`SetDefaultOptions`'s `optionsTextSpeed = OPTIONS_TEXT_SPEED_MID`,
-    /// `pokeemerald/src/new_game.c:91-93`) -- nothing yet models the
-    /// player-selectable text-speed option.
+    /// `pokeemerald/src/new_game.c:91-93`) -- the save flow's own SAVE-menu
+    /// messages read the live save block's decoded option instead
+    /// (`crate::start_menu::save_dialog::SaveTarget::player_text_speed`,
+    /// issue #927), but the intro plays before any save block exists, so a
+    /// fixed MID stays correct here regardless.
     ///
     /// # Errors
     ///
@@ -477,7 +480,20 @@ impl IntroScene {
 /// if no pack has been extracted yet; see [`IntroScene::from_pack`] for the
 /// other (real-pack-only) error cases.
 pub fn load_default() -> Result<IntroScene, IntroSceneError> {
-    let pack = AssetPack::load_default()?;
+    load(crate::pack_source::PackSource::Runtime)
+}
+
+/// [`load_default`], pinned to whichever [`crate::pack_source::PackSource`]
+/// `source` names instead of always the runtime resolver (issue #412) --
+/// what [`crate::flow::advance_scene`] calls with the same source
+/// [`crate::App`] resolved at construction, so a headless-real scenario's
+/// `MainMenu` -> `Intro` transition keeps reading the checkout's own pack.
+///
+/// # Errors
+///
+/// See [`load_default`].
+pub(crate) fn load(source: crate::pack_source::PackSource) -> Result<IntroScene, IntroSceneError> {
+    let pack = source.load()?;
     IntroScene::from_pack(&pack)
 }
 

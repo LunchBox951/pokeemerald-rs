@@ -1,6 +1,7 @@
 //! Tests for [`super::OverworldPhase::step`] and related stepping/collision
 //! behaviour.
 
+use super::step::InteractionOutcome;
 use super::test_support::*;
 use super::OverworldPhase;
 use crate::new_game;
@@ -93,6 +94,152 @@ fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
             "and only a fresh A edge interacts at all"
         );
     }
+}
+
+/// Issue #435 regression: a same-frame A-plus-direction press must resolve
+/// the interaction lookup against the PRE-movement facing, and a hit must
+/// preempt this frame's movement outright -- see [`OverworldPhase::step`]'s
+/// "NPC dialog routing" section for the upstream citations. Before this
+/// fix, a perpendicular direction held alongside A would turn the player
+/// before the interaction lookup ran, missing Mom.
+///
+/// `AssetPack::load_default` (needed to actually render a dialog box) is
+/// unavailable headless, so this checks the interaction lookup's own
+/// outcome directly (the same pattern
+/// `a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`
+/// uses) rather than `phase.dialog` -- the real-pack acceptance test in
+/// `frame_tests` already covers the box actually opening.
+#[test]
+fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player() {
+    // Two tiles east of Mom is too far; one tile east, facing west, is
+    // exactly adjacent (module docs' `ONE_F` fixture notes).
+    let start = PlayerState::new((3, 6), 3, Direction::West);
+    let mut phase = synthetic_phase(start, None);
+
+    {
+        let runtime = runtime_for(&phase);
+        // North is perpendicular to the player's West facing -- a step in
+        // that direction would turn the player away from Mom if movement
+        // ran first.
+        let outcome =
+            phase.interaction_tokens_this_frame(pressed(Buttons::A | Buttons::UP), &runtime);
+        assert!(
+            matches!(outcome, Some(InteractionOutcome::Dialog(_))),
+            "the pre-movement facing (still West) must find Mom and her recognized script, \
+             even with a perpendicular direction also pressed this frame"
+        );
+    }
+
+    // Drive the identical buttons through the real `step()` pipeline: the
+    // interaction must claim the frame before `advance_or_skip_for_preempt`
+    // can turn or step the player.
+    phase.step(pressed(Buttons::A | Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (3, 6),
+        "an interaction that fires this frame must preempt the step"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "and the turn too -- PlayerStep never runs once the interaction claims the frame"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation may have started either"
+    );
+}
+
+/// The complement: an A press with a direction held, but facing nothing,
+/// must still turn or step exactly as it did before this fix -- the
+/// preempt-movement path introduced for issue #435 must not fire when
+/// [`OverworldPhase::interaction_tokens_this_frame`] finds no object event.
+#[test]
+fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
+    // One tile further east than the fixture above: (3, 6) ahead is clear
+    // of visible object events (module docs' `ONE_F` fixture notes).
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert!(
+        phase.dialog.is_none(),
+        "no object event stands ahead of this tile -- nothing to interact with"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "an A press with no interaction to preempt movement must still let the direction turn \
+         the player, exactly as a direction alone would"
+    );
+}
+
+/// An object event with a real, non-`"0x0"` script this port does not model
+/// yet still consumes the frame: `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) returns TRUE for any non-NULL script, so
+/// `PlayerStep` never runs (`overworld.c:1444-1455`).
+#[test]
+fn a_pressed_with_a_perpendicular_direction_facing_an_unmodelled_script_does_not_turn() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+
+    phase.step(pressed(Buttons::A | Buttons::LEFT));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "facing a visible object event with a real (unmodelled) script, an A press consumes \
+         the frame upstream -- the perpendicular direction must not turn the player"
+    );
+    assert_eq!(phase.player.position(), (4, 6));
+}
+
+/// The faced object really is a visible object event carrying a real script.
+#[test]
+fn the_faced_vigoroth_is_visible_with_a_real_script() {
+    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    let runtime = runtime_for(&phase);
+    let object =
+        engine::overworld::facing_object_event(&phase.player, &runtime, &phase.save1.event_data)
+            .expect("the Vigoroth at (4, 5) must be visible on a fresh save");
+    assert_eq!(object.script, "PlayersHouse_1F_EventScript_Vigoroth1");
+    assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
+}
+
+/// The `"0x0"` NULL-script sentinel and a real unmodelled script differ:
+/// Fallarbor Town's Battle Tent corridor attendant at `(2, 6)` carries
+/// `"0x0"` and no hide flag, so an A press on it must not consume the
+/// frame and the perpendicular direction still turns the player.
+#[test]
+fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
+    const CORRIDOR: assets::MapId = assets::MapId("MAP_FALLARBOR_TOWN_BATTLE_TENT_CORRIDOR");
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        CORRIDOR,
+        PlayerState::new((3, 6), 3, Direction::West),
+        None,
+    );
+
+    {
+        let header = assets::MapHeaderTable::new().header(CORRIDOR).unwrap();
+        let events = assets::MapEventsTable::new().resolve(CORRIDOR).unwrap();
+        let runtime = phase.scene.runtime(CORRIDOR, header, events);
+        let object = engine::overworld::facing_object_event(
+            &phase.player,
+            &runtime,
+            &phase.save1.event_data,
+        )
+        .expect("the corridor attendant at (2, 6) must be visible and faced");
+        assert_eq!(object.script, "0x0", "the NULL-script sentinel");
+    }
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a `\"0x0\"` script is upstream's NULL no-op: it must not consume the frame, so the \
+         perpendicular direction still turns the player"
+    );
 }
 
 /// Headless counterpart to the real-pack acceptance test: while a dialog is
