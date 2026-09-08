@@ -1118,12 +1118,8 @@ mod tests {
         out
     }
 
-    /// The expected digest was computed independently from upstream
-    /// `src/data/battle_moves.h`'s `gBattleMoves` array (355 `[MOVE_x]`
-    /// entries), resolving every symbolic constant and rendering the same
-    /// nine fields per row this module renders from its own table. It pins
-    /// every row's full attribute set, unlike the representative and
-    /// structural checks above.
+    /// Digest of upstream `src/data/battle_moves.h` `gBattleMoves`, every
+    /// row's nine fields rendered as `render_table_bytes` renders ours.
     #[test]
     fn every_row_matches_the_canonical_digest() {
         assert_eq!(
