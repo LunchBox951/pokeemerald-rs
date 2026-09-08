@@ -12,9 +12,9 @@
 use std::mem::size_of;
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::wav;
 use super::{read_file, ExtractError};
+use pack_format::{PackEntry, PackWriter};
 
 const DIRECT_SOUND_SAMPLES: [&str; 33] = [
     "sc88pro_flute",
@@ -100,11 +100,10 @@ fn direct_sound_entry(upstream: &Path, name: &str) -> Result<PackEntry, ExtractE
     let source = read_file(&source_path)?;
     let sample = wav::decode(&source).map_err(|error| ExtractError::Wav(source_path, error))?;
 
-    Ok(PackEntry {
-        id: format!("audio/sample/direct-sound/{name}"),
-        kind: PackKind::Raw,
-        payload: encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data),
-    })
+    Ok(pack_format::raw_entry(
+        format!("audio/sample/direct-sound/{name}"),
+        encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data),
+    ))
 }
 
 fn programmable_wave_entry(upstream: &Path, number: u32) -> Result<PackEntry, ExtractError> {
@@ -119,14 +118,15 @@ fn programmable_wave_entry(upstream: &Path, number: u32) -> Result<PackEntry, Ex
         }
     })?;
 
-    Ok(PackEntry {
-        id: format!("audio/sample/programmable-wave/{number:02}"),
-        kind: PackKind::Raw,
-        payload: encode_programmable_wave(&table),
-    })
+    Ok(pack_format::raw_entry(
+        format!("audio/sample/programmable-wave/{number:02}"),
+        encode_programmable_wave(&table),
+    ))
 }
 
-/// Extracts every sample named by the title-song manifests into the pack.
+/// Extracts every `DirectSound`/programmable-wave sample [`DIRECT_SOUND_SAMPLES`]/
+/// [`PROGRAMMABLE_WAVE_SAMPLES`] name (see the module docs for how that set
+/// was derived) as `audio/sample/*` [`EntryKind::Raw`] entries.
 ///
 /// # Errors
 ///

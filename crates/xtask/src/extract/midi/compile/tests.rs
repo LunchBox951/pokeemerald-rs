@@ -381,8 +381,7 @@ fn an_extended_command_selector_keeps_an_off_grid_remainder() {
                 velocity: 100,
                 gate: 37
             },
-            SongEvent::Wait(4),
-            SongEvent::Wait(3),
+            SongEvent::Wait(7), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,
@@ -418,8 +417,7 @@ fn an_extended_command_selector_gap_stops_at_the_timing_grid() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(19),
-            SongEvent::Wait(24),
+            SongEvent::Wait(43), // the two rests merge: canonical waits
             SongEvent::PseudoEchoLength(12),
             SongEvent::Fine,
         ]
@@ -454,8 +452,7 @@ fn an_extended_command_selector_near_a_grid_line_preserves_later_ticks() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(90),
-            SongEvent::Wait(14),
+            SongEvent::Wait(104), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -491,8 +488,7 @@ fn a_time_signature_rephases_the_extended_command_timing_grid() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(40),
-            SongEvent::Wait(22),
+            SongEvent::Wait(62), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -542,8 +538,7 @@ fn a_silent_controller_after_an_extended_command_selector_keeps_its_wait() {
                 velocity: 100,
                 gate: 30
             },
-            SongEvent::Wait(4),
-            SongEvent::Wait(10),
+            SongEvent::Wait(14), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,
