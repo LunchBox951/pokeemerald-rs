@@ -371,3 +371,150 @@ fn a_failed_run_still_ticks_the_poison_residual() {
         "a failed run does not skip end-of-turn residuals: {events:?}"
     );
 }
+
+/// `SPECIES_CHARMANDER`, a level-50 fixture that one-shots the level-5 wild
+/// mon below with Tackle at any damage roll.
+const CHARMANDER: u16 = 4;
+
+/// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`-`:2823`)
+/// carries no `checkteamslost`, so a direct-hit wild KO leaves
+/// `gBattleOutcome` at `0` for the rest of the turn: `BattleTurnPassed`'s
+/// `if (gBattleOutcome == 0)` gate (`src/battle_main.c:3960`-`:3966`) still
+/// runs `DoBattlerEndTurnEffects`, and `ENDTURN_POISON`
+/// (`src/battle_util.c:1525`-`:1535`) ticks the standing, poisoned winner
+/// before `HandleFaintedMonActions` (`:3968`) hands out the experience and
+/// ends the battle.
+#[test]
+fn a_poisoned_winner_still_takes_its_final_residual_tick_before_the_wild_ko_pays_out() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let player_max_hp = player.stats().max_hp;
+    let player_hp_before = player.current_hp();
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the wild mon's
+    // move pick, then the player's Tackle (accuracy, crit, damage roll,
+    // discarded effect-chance roll). The wild mon never acts: the player's
+    // hit kills it.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "the fixture must knock the wild mon out with a direct hit: {events:?}"
+    );
+
+    let residual_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                BattleEvent::HurtByPoison {
+                    by_player: true,
+                    ..
+                }
+            )
+        })
+        .expect("the poisoned winner takes its end-of-turn tick: {events:?}");
+    assert_eq!(
+        events[residual_index],
+        BattleEvent::HurtByPoison {
+            by_player: true,
+            damage: poison_residual_damage(player_max_hp),
+        },
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        player_hp_before - poison_residual_damage(player_max_hp),
+    );
+
+    let exp_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .expect("the KO awards experience: {events:?}");
+    assert!(
+        residual_index < exp_index,
+        "the residual tick precedes the knockout's payout: {events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// `MOVE_LEER`, a non-damaging stat drop: the trainer mon's only move, so
+/// neither battler's direct action can change the other's HP this turn and
+/// the residual pass alone decides the battle.
+const LEER: MoveId = MoveId(43);
+/// `MOVE_GROWL`, the player's own non-damaging move, for the same reason.
+const GROWL: MoveId = MoveId(45);
+/// `TRAINER_MAY_ROUTE_103_MUDKIP`.
+const MAY_ROUTE_103_MUDKIP: assets::trainers::TrainerId = assets::trainers::TrainerId(529);
+
+/// A trainer's **last** mon fainting to its own residual tick ends the
+/// battle right there: `BattleScript_DoTurnDmgEnd`'s `checkteamslost`
+/// (`data/battle_scripts_1.s:3746`) runs inside the very script that
+/// fainted it, and `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
+/// (`battle_main.c:3960`-`:3966`) then refuses to walk on to the next
+/// battler -- so the player's own lethal tick never runs, exactly as
+/// [`the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_running`]
+/// pins for the wild case.
+#[test]
+fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_own_tick() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, ZIGZAGOON, 20, vec![GROWL]);
+    player.set_status1(Status1::Poisoned);
+    let player_lethal = poison_residual_damage(player.stats().max_hp);
+    player.apply_damage(player.stats().max_hp - player_lethal);
+
+    let mut enemy = max_iv_mon(&dex, RATTATA, 20, vec![LEER]);
+    enemy.set_status1(Status1::Poisoned);
+    let enemy_lethal = poison_residual_damage(enemy.stats().max_hp);
+    enemy.apply_damage(enemy.stats().max_hp - enemy_lethal);
+    assert!(
+        enemy.stats().speed > player.stats().speed,
+        "fixture sanity -- the trainer's mon must be processed first in residual"
+    );
+
+    // Neither move deals damage, so no draw here decides anything the
+    // assertions below read; a long zero script covers the turn-number and
+    // trainer-AI draws without pinning their count (that belongs to
+    // `trainer_ai`'s own tests).
+    let mut rng = SequenceRng::new([0; 40]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::HurtByPoison {
+            by_player: false,
+            damage: enemy_lethal,
+        }),
+        "the faster trainer mon takes its residual tick first: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "that tick alone must faint the trainer's last mon: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                ..
+            }
+        )),
+        "the player's own residual tick must never run once the trainer's \
+         last mon has already lost the battle for them: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::Fainted { by_player: true })),
+        "the player must not faint after the battle is already won: {events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}

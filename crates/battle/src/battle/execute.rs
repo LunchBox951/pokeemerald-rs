@@ -22,20 +22,18 @@ use crate::damage::BattleRng;
 use crate::defense_curl::is_defense_curl_effect;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
-use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::multi_hit::is_multi_hit_effect;
 use crate::paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
-use crate::pokemon::MAX_LEVEL;
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
 };
 use crate::status1::Status1;
 
-use super::{Battle, BattleEvent, BattleOutcome};
+use super::{Battle, BattleEvent};
 
 mod pipelines;
 
@@ -170,7 +168,7 @@ impl Battle {
                         });
                     }
                 }
-                self.settle_faint(!attacker_is_player, events)?;
+                self.settle_faint(!attacker_is_player, events);
             }
         }
         Ok(())
@@ -196,35 +194,25 @@ impl Battle {
         dealt
     }
 
-    /// `tryfaintmon` for one side: if that battler is at `0` HP, report the
-    /// faint and settle everything that follows it — experience for the
-    /// player, and the battle outcome where the battle type ends there.
+    /// `tryfaintmon` for one side, reduced to its own script's scope: if
+    /// that battler is at `0` HP, report the faint and clear its battle-only
+    /// scratch. Neither the reward nor the battle's own outcome is decided
+    /// here any more (issue #784) — upstream's own direct-hit script,
+    /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`-`:2823`),
+    /// carries no `checkteamslost` either; that and `Cmd_getexp` wait for
+    /// `HandleFaintedMonActions`, well after this turn's own
+    /// `DoBattlerEndTurnEffects` residual pass — see [`Battle::end_of_turn`].
     ///
     /// A no-op when the battler is still standing, so a caller can run it
-    /// unconditionally at each `tryfaintmon` in a script, and a no-op once
-    /// the battle already has an outcome, so the drain script's *pair* of
-    /// `tryfaintmon`s (`data/battle_scripts_1.s:358`-`:359`) cannot end the
-    /// same battle twice.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if the fainted opponent's species is
-    /// missing from the dex, which the experience award has to look up.
-    pub(super) fn settle_faint(
-        &mut self,
-        fainted_is_player: bool,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        if self.outcome().is_some() {
-            return Ok(());
-        }
+    /// unconditionally at each `tryfaintmon` in a script.
+    pub(super) fn settle_faint(&mut self, fainted_is_player: bool, events: &mut Vec<BattleEvent>) {
         let fainted = if fainted_is_player {
             self.player.is_fainted()
         } else {
             self.enemy.is_fainted()
         };
         if !fainted {
-            return Ok(());
+            return;
         }
         events.push(BattleEvent::Fainted {
             by_player: fainted_is_player,
@@ -247,80 +235,6 @@ impl Battle {
         };
         corpse.clear_battle_scratch();
         corpse.set_status1(Status1::Healthy);
-        if fainted_is_player {
-            self.finish(events, BattleOutcome::PlayerLost);
-            return Ok(());
-        }
-        self.settle_win_reward(events)
-    }
-
-    /// The half of `tryfaintmon`'s aftermath that only ever applies to the
-    /// enemy going down: experience for the player, then the battle outcome
-    /// where the battle type ends there. Split out of [`Self::settle_faint`]
-    /// (issue #333) so [`Self::execute_drain_move`]'s Liquid-Ooze double
-    /// faint can run it *after* deciding the player didn't also go down,
-    /// instead of duplicating it.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if the fainted opponent's species is
-    /// missing from the dex, which the experience award has to look up.
-    pub(super) fn settle_win_reward(
-        &mut self,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
-        // message: Cmd_getexp case 2 zeroes the award and jumps past the
-        // string (`battle_script_commands.c:3351`-`:3356`), so no event is
-        // emitted either.
-        if self.player.level() < MAX_LEVEL {
-            let defeated = self.dex.species(self.enemy.species())?;
-            let level = self.enemy.level();
-            // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) --
-            // see `crate::exp`.
-            let exp = if self.trainer().is_some() {
-                trainer_faint_exp(defeated.base_exp, level)
-            } else {
-                wild_faint_exp(defeated.base_exp, level)
-            };
-            // `MonGainEVs` (`battle_script_commands.c:3420`) runs before the
-            // exp/level-up sequence, upstream's own order, so a level-up this
-            // turn snapshots the gain into `evs_at_last_level_up` for the
-            // save encoder's EV-aware block; the live recompute stays 0-EV
-            // (`battle::pokemon::evs`'s module docs).
-            // Gated by the same `MAX_LEVEL` check as the exp award: upstream
-            // skips `MonGainEVs` too for a recipient already at the cap
-            // (`:3351`-`:3356`).
-            self.player.gain_evs(defeated.ev_yield);
-            let pending = self.player.apply_experience(&self.dex, exp)?;
-            events.push(BattleEvent::ExpGained(exp));
-            // A crossed level whose learnset move has no free slot parks
-            // the walk on a player decision (issue #304): upstream's
-            // `BattleScript_AskToLearnMove` yes/no box. The mon itself
-            // carries the question (`BattlePokemon::pending_move_learn`)
-            // until `Battle::resolve_move_learn` answers it, and the
-            // battle refuses another turn meanwhile.
-            if let Some(prompt) = pending {
-                events.push(BattleEvent::MoveLearnPrompt {
-                    move_id: prompt.move_id(),
-                });
-            }
-        }
-        // A wild battle ends the moment its only opponent faints. A
-        // trainer's does not: the replacement (or the trainer's defeat) is
-        // settled at the end of the turn instead, in `end_of_turn`, exactly
-        // where upstream's HandleFaintedMonActions sits. Either way, an
-        // open prompt defers the aftermath: upstream finishes the level-up
-        // script -- the yes/no box included -- before anything after the
-        // faint runs (`BattleScript_GiveExp` completes in
-        // HandleFaintedMonActions' case 1 before case 4,
-        // `battle_util.c:1894`-`:1951`), so the wild finish waits in
-        // `Battle::settle_fainted_enemy` for `Battle::resolve_move_learn`'s
-        // last answer.
-        if self.trainer().is_none() && self.player.pending_move_learn().is_none() {
-            self.finish(events, BattleOutcome::PlayerWon);
-        }
-        Ok(())
     }
 
     /// The stat-changing half of [`Self::execute_move`]'s dispatch (issue

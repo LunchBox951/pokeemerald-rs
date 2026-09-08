@@ -242,14 +242,15 @@ use crate::dex::Dex;
 use crate::drain;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
+use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::fixed_damage;
 use crate::flag_move;
 use crate::multi_hit;
 use crate::paralyze;
-use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
+use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, poison_residual_damage, Status1};
+use crate::status1::{draws_full_paralysis, poison_residual_damage};
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -1039,8 +1040,8 @@ impl Battle {
             // (`battle_main.c:4797`-`:4808`), the same `gBattlerByTurnOrder`
             // `Battle::residual_effects` reads -- so the player's slot comes
             // up first here too, whether or not the run itself succeeded.
-            self.residual_effects(Order::AttackerFirst, events)?;
-            self.end_of_turn(events);
+            self.residual_effects(Order::AttackerFirst, events);
+            self.end_of_turn(events)?;
             return Ok(());
         };
 
@@ -1102,20 +1103,20 @@ impl Battle {
                 // Mirrors `AttackerFirst`'s both-battlers guard above: a
                 // drain move whose Liquid Ooze recoil faints the *enemy*
                 // here (the faster trainer mon drains a Liquid Ooze holder)
-                // leaves the player standing but the enemy gone. A trainer's
-                // bench means `self.outcome` is still `None`, so
+                // leaves the player standing but the enemy gone, and
+                // `self.outcome` stays `None` until `Self::end_of_turn` runs
+                // (no pipeline decides it on its own faint any more), so
                 // `!self.player.is_fainted()` alone would let the player's
                 // queued move execute into the fainted enemy's now-empty
-                // slot -- PP spent, an extra `Hit`, and a second
-                // `settle_win_reward` duplicating the EXP award before the
-                // replacement is even sent out.
+                // slot -- PP spent, an extra `Hit`, and a second `Fainted`
+                // event for a corpse that already reported one.
                 if self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted() {
                     self.act(true, player_move, index, rng, events)?;
                 }
             }
         }
-        self.residual_effects(order, events)?;
-        self.end_of_turn(events);
+        self.residual_effects(order, events);
+        self.end_of_turn(events)?;
         Ok(())
     }
 
@@ -1138,63 +1139,49 @@ impl Battle {
     /// `DoBattlerEndTurnEffects` before `HandleFaintedMonActions`
     /// (`src/battle_main.c:3965` vs `:3968`) — and, like upstream's
     /// `if (gBattleOutcome == 0)` guard at `:3961`, not at all once the
-    /// battle already has an outcome. That guard is a known, pre-existing
-    /// gap this method inherits rather than introduces: a wild battle's own
-    /// direct-hit kill finishes synchronously inside the hit pipeline
-    /// (`Self::settle_win_reward`'s wild-battle arm), setting
-    /// [`Battle::outcome`] before this method ever runs, where upstream's
-    /// own `gBattleOutcome` would still read `0` at that point (its
-    /// `checkteamslost` waits for `DoBattlerEndTurnEffects` to finish, per
-    /// the ordering this doc cites above) — so a surviving poisoned winner's
-    /// final-turn residual tick is skipped here where upstream would still
-    /// apply it. Charge had no observable output, so this predates poison
-    /// (issue #159/#199) without ever being player-visible; poison is the
-    /// first residual effect this crate models that makes it so, and fixing
-    /// it means restructuring when every pipeline's own `settle_faint`/
-    /// `settle_win_reward` finalizes the outcome, not just poison's own
-    /// case — out of this slice's boundary, tracked for a follow-up.
+    /// battle already has an outcome. No pipeline sets [`Battle::outcome`]
+    /// on its own faint anymore ([`Self::settle_faint`] and
+    /// [`Self::execute_drain_move`]'s double-faint arm only report and clear
+    /// the corpse); a direct-hit kill leaves it unset here exactly as
+    /// upstream's own `gBattleOutcome` reads `0` until `checkteamslost` runs
+    /// from `HandleFaintedMonActions`, later still — so a standing poisoned
+    /// winner still takes its final tick before [`Self::end_of_turn`] pays
+    /// out the knockout.
     ///
     /// A battler already fainted before this pass began — from a direct hit
-    /// earlier in the same turn — is skipped entirely, matching
-    /// `gAbsentBattlerFlags`' skip of an absent battler's whole tracker walk
-    /// (`:1472`-`:1474`): its own faint was already reported and settled at
-    /// the point it happened, and [`Battle::end_of_turn`] still owns
-    /// replacing or paying out for it. Re-checking it here would either
-    /// re-tick a corpse's Charge or, worse, call [`Self::settle_win_reward`]
-    /// a second time for the same faint.
+    /// or a drain move's own double-faint arm earlier in the same turn — is
+    /// skipped entirely, matching `gAbsentBattlerFlags`' skip of an absent
+    /// battler's whole tracker walk (`:1472`-`:1474`): its own faint was
+    /// already reported at the point it happened, and [`Self::end_of_turn`]
+    /// still owns paying out or replacing it. Re-checking it here would
+    /// re-tick a corpse's Charge for nothing observable.
     ///
-    /// A poison faint that happens *during* this pass is settled here
-    /// rather than through [`Self::settle_faint`], and the loop stops
-    /// **before** the next battler's turn: `BattleScript_DoTurnDmgEnd`'s own
-    /// `checkteamslost` (`data/battle_scripts_1.s:3746`,
-    /// `Cmd_checkteamslost` at `battle_script_commands.c:3534`-`:3577`) runs
-    /// inside the very script that just fainted this battler, and
-    /// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
-    /// (`battle_main.c:3960`-`:3966`) then refuses to call
-    /// `DoBattlerEndTurnEffects` again once that sets a nonzero outcome —
-    /// abandoning the tracker walk before the next battler's own slot comes
-    /// up, whether or not that battler is also poisoned this same turn. A
-    /// battler whose residual tick does *not* faint it leaves the outcome
-    /// unset, so the loop continues to the next battler exactly as upstream
-    /// continues its own tracker walk.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if a fainted enemy's species is
-    /// missing from the dex, which the experience award has to look up.
-    fn residual_effects(
-        &mut self,
-        order: Order,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
+    /// A poison faint that happens *during* this pass is settled here with
+    /// the same report-and-clear [`Self::settle_faint`] gives a direct hit,
+    /// and the loop stops **before** the next battler's turn exactly when
+    /// [`Self::fainting_decides_the_battle`] says this faint exhausts that
+    /// whole side: `BattleScript_DoTurnDmgEnd`'s own `checkteamslost`
+    /// (`data/battle_scripts_1.s:3746`, `Cmd_checkteamslost` at
+    /// `battle_script_commands.c:3534`-`:3577`) runs inside the very script
+    /// that just fainted this battler, and `BattleTurnPassed`'s
+    /// `if (gBattleOutcome == 0)` guard (`battle_main.c:3960`-`:3966`) then
+    /// refuses to call `DoBattlerEndTurnEffects` again once that sets a
+    /// nonzero outcome — abandoning the tracker walk before the next
+    /// battler's own slot comes up, whether or not that battler is also
+    /// poisoned this same turn. A trainer's bench absorbing the faint, or a
+    /// battler whose residual tick does not faint it at all, leaves
+    /// `checkteamslost`'s totals nonzero on both sides, so the loop
+    /// continues to the next battler exactly as upstream continues its own
+    /// tracker walk. Awarding the fallen enemy's experience is not part of
+    /// this decision — that happens only in [`Self::end_of_turn`], after the
+    /// whole pass completes, matching `HandleFaintedMonActions`' own later
+    /// `BattleScript_GiveExp` state.
+    fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() {
-            return Ok(());
+            return;
         }
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
-            if self.outcome.is_some() {
-                break;
-            }
             let already_fainted = if is_player {
                 self.player.is_fainted()
             } else {
@@ -1215,24 +1202,31 @@ impl Battle {
                 self.enemy.is_fainted()
             };
             if now_fainted {
-                events.push(BattleEvent::Fainted {
-                    by_player: is_player,
-                });
-                let corpse = if is_player {
-                    &mut self.player
-                } else {
-                    &mut self.enemy
-                };
-                corpse.clear_battle_scratch();
-                corpse.set_status1(Status1::Healthy);
-                if is_player {
-                    self.finish(events, BattleOutcome::PlayerLost);
-                } else {
-                    self.settle_win_reward(events)?;
+                self.settle_faint(is_player, events);
+                if self.fainting_decides_the_battle(is_player) {
+                    break;
                 }
             }
         }
-        Ok(())
+    }
+
+    /// Whether `is_player` fainting right now would leave that whole side
+    /// with no total HP left — `Cmd_checkteamslost`'s whole-party sum
+    /// (`battle_script_commands.c:3534`-`:3577`), reduced to this crate's
+    /// single-mon-plus-bench model: the player carries no in-battle bench at
+    /// all, so any player faint always exhausts it; the enemy's total is
+    /// exhausted only once every bench member behind it (if any) is also
+    /// fainted, matching [`trainer::TrainerContext::send_out_next`]'s own
+    /// fainted-member skip.
+    #[must_use]
+    fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
+        if is_player {
+            return true;
+        }
+        match &self.kind {
+            BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
+            BattleKind::Wild | BattleKind::FirstBattle => true,
+        }
     }
 
     /// `ENDTURN_POISON` for one battler (`battle_util.c:1525`-`:1535`): an
@@ -1262,51 +1256,120 @@ impl Battle {
         });
     }
 
-    /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
-    /// action this slice models: a trainer whose active mon fainted sends
-    /// out the next party member.
+    /// `HandleFaintedMonActions` (`battle_util.c:1894`), run once after both
+    /// battlers' actions *and* [`Self::residual_effects`] — that is where
+    /// upstream puts it too: `RunTurnActionsFunctions` finishes the turn's
+    /// actions, `BattleTurnPassed` then runs `DoBattlerEndTurnEffects`
+    /// (`:3965`), and only after that returns does `HandleFaintedMonActions`
+    /// (`:3968`) award experience, replace a trainer's fainted lead, or end
+    /// the battle. Neither a direct hit nor a drain move's own double-faint
+    /// arm decides any of that itself ([`Self::settle_faint`],
+    /// [`Self::execute_drain_move`]) — this is the one place that does, for
+    /// a fainted battler regardless of which pipeline (or
+    /// [`Self::residual_effects`]) put it there.
     ///
-    /// Runs **after** both battlers' actions, not at the moment of the
-    /// faint, because that is where upstream puts it —
-    /// `RunTurnActionsFunctions` finishes the turn's actions and only then
-    /// hands off to `HandleFaintedMonActions` (`battle_util.c:1894`, called
-    /// from `BattleTurnPassed` at `battle_main.c:3968`). The
-    /// difference is observable: a Speed-tie turn where the player KOs the
-    /// trainer's lead still ends with the *fainted* mon on the field, not
-    /// its replacement taking a hit it never took upstream.
+    /// The player is checked first and, alone, decides the outcome: this
+    /// crate models no in-battle bench for the player, so any player faint
+    /// exhausts that whole "party" the same way `Cmd_checkteamslost` would
+    /// (`battle_script_commands.c:3563`-`:3564`). A simultaneous double
+    /// faint (a drain move's Liquid Ooze recoil finishing the attacker while
+    /// the same hit already finished the target) is therefore always a
+    /// loss, with no experience awarded — `checkteamslost`'s OR sets both
+    /// outcome bits at once, but `BattleScript_HandleFaintedMon` skips the
+    /// `BattleScript_GiveExp`/switch-in continuation entirely once
+    /// `gBattleOutcome != 0` (`data/battle_scripts_1.s:2831`-`:2832`), and
+    /// that dispatches through the same loss handler as an outright defeat
+    /// (`battle_main.c:557`-`:559`).
     ///
-    /// A wild battle never reaches the body: the faint already set
-    /// [`BattleOutcome::PlayerWon`]. A trainer battle whose bench is empty
-    /// ends here instead, paying out [`trainer::TrainerContext::money`]
-    /// first — upstream's `Cmd_getmoneyreward`
-    /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
-    /// the order [`BattleEvent`]s come back in.
+    /// # Errors
     ///
-    /// An open [`Battle::pending_move_learn`] defers the whole pass:
-    /// upstream runs `BattleScript_GiveExp` — the level-up and its yes/no
-    /// box included — to completion in `HandleFaintedMonActions`' case 1
-    /// before case 4's `BattleScript_HandleFaintedMon` checks the outcome
-    /// or sends out a replacement (`battle_util.c:1894`-`:1951`), so
-    /// nothing after the faint may run until the question is answered.
-    /// [`Battle::resolve_move_learn`] runs [`Battle::settle_fainted_enemy`]
-    /// when the last prompt resolves.
-    fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
+    /// [`BattleError::UnknownSpecies`] if a fainted enemy's species is
+    /// missing from the dex, which the experience award has to look up.
+    fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
+            return Ok(());
+        }
+        if self.player.is_fainted() {
+            self.finish(events, BattleOutcome::PlayerLost);
+            return Ok(());
+        }
+        if !self.enemy.is_fainted() {
+            return Ok(());
+        }
+        self.settle_enemy_reward(events)?;
         if self.player.pending_move_learn().is_some() {
-            return;
+            // Upstream finishes the whole level-up script -- the yes/no box
+            // included -- before anything after the faint runs
+            // (`BattleScript_GiveExp` completes in `HandleFaintedMonActions`'
+            // case 1 before case 4, `battle_util.c:1894`-`:1951`), so nothing
+            // past the reward may run until the question is answered.
+            // [`Battle::resolve_move_learn`] runs [`Self::settle_fainted_enemy`]
+            // when the last prompt resolves.
+            return Ok(());
         }
         self.settle_fainted_enemy(events);
+        Ok(())
     }
 
-    /// The knockout's aftermath — everything that may only run once the
-    /// level-up (prompts included) is done: `BattleScript_HandleFaintedMon`
-    /// reached from `HandleFaintedMonActions`' case 4
-    /// (`battle_util.c:1937`-`:1948`). A trainer with a bench sends out the
-    /// next party member; a trainer without one pays and the battle ends; a
-    /// wild battle simply ends. No-op unless the enemy is down and the
-    /// outcome still open — on the promptless path the wild faint already
-    /// finished the battle where it happened
-    /// ([`Battle::execute_move`]'s pipeline), so the wild arm here is only
-    /// reached by a deferred finish.
+    /// Experience for the player, gated on the recipient's own level and
+    /// awarded exactly once per fainted enemy — `Cmd_getexp`
+    /// (`battle_script_commands.c:3299`), reached from
+    /// `HandleFaintedMonActions`' case 1 (`battle_util.c:1912`-`:1923`),
+    /// **before** case 4's `checkteamslost`/replacement
+    /// (`:1938`-`:1946`) — so this runs ahead of [`Self::settle_fainted_enemy`]
+    /// in [`Self::end_of_turn`], not folded into it.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnknownSpecies`] if the fainted enemy's species is
+    /// missing from the dex.
+    fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
+        // message: Cmd_getexp case 2 zeroes the award and jumps past the
+        // string (`battle_script_commands.c:3351`-`:3356`), so no event is
+        // emitted either.
+        if self.player.level() >= MAX_LEVEL {
+            return Ok(());
+        }
+        let defeated = self.dex.species(self.enemy.species())?;
+        let level = self.enemy.level();
+        // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) -- see
+        // `crate::exp`.
+        let exp = if self.trainer().is_some() {
+            trainer_faint_exp(defeated.base_exp, level)
+        } else {
+            wild_faint_exp(defeated.base_exp, level)
+        };
+        // `MonGainEVs` (`battle_script_commands.c:3420`) runs before the
+        // exp/level-up sequence, upstream's own order, so a level-up this
+        // turn snapshots the gain into `evs_at_last_level_up` for the save
+        // encoder's EV-aware block; the live recompute stays 0-EV
+        // (`battle::pokemon::evs`'s module docs). Gated by the same
+        // `MAX_LEVEL` check as the exp award: upstream skips `MonGainEVs`
+        // too for a recipient already at the cap (`:3351`-`:3356`).
+        self.player.gain_evs(defeated.ev_yield);
+        let pending = self.player.apply_experience(&self.dex, exp)?;
+        events.push(BattleEvent::ExpGained(exp));
+        // A crossed level whose learnset move has no free slot parks the
+        // walk on a player decision (issue #304): upstream's
+        // `BattleScript_AskToLearnMove` yes/no box. The mon itself carries
+        // the question (`BattlePokemon::pending_move_learn`) until
+        // [`Battle::resolve_move_learn`] answers it, and the battle refuses
+        // another turn meanwhile.
+        if let Some(prompt) = pending {
+            events.push(BattleEvent::MoveLearnPrompt {
+                move_id: prompt.move_id(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The knockout's aftermath once the reward (and any level-up prompt)
+    /// is settled: `BattleScript_HandleFaintedMon` reached from
+    /// `HandleFaintedMonActions`' case 4 (`battle_util.c:1937`-`:1948`). A
+    /// trainer with a bench sends out the next party member; a trainer
+    /// without one pays and the battle ends; a wild battle simply ends.
+    /// No-op unless the enemy is down and the outcome still open.
     fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return;
@@ -1325,6 +1388,8 @@ impl Battle {
             });
             return;
         }
+        // `Cmd_getmoneyreward` (`battle_script_commands.c:5635`) runs after
+        // `Cmd_getexp`, which is the order `BattleEvent`s come back in.
         let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
@@ -1561,7 +1626,7 @@ mod tests {
                 .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
                 .count(),
             1,
-            "settle_win_reward must not run twice: {events:?}"
+            "settle_enemy_reward must not run twice: {events:?}"
         );
         assert_eq!(
             events

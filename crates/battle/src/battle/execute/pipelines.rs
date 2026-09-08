@@ -44,7 +44,7 @@ use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
 use crate::stat_change::set_stage;
 use crate::status1::Status1;
 
-use super::{Battle, BattleEvent, BattleOutcome};
+use super::{Battle, BattleEvent};
 
 impl Battle {
     /// `BattleScript_EffectAbsorb` (`data/battle_scripts_1.s:322`-`:360`):
@@ -123,55 +123,30 @@ impl Battle {
 
         // `tryfaintmon BS_ATTACKER` then `tryfaintmon BS_TARGET`, in that
         // script order (`:358`-`:359`). Neither call decides
-        // `gBattleOutcome` on its own -- upstream doesn't score the battle
-        // until `Cmd_checkteamslost` runs later, from
-        // `BattleScript_HandleFaintedMon`'s leading `checkteamslost`
-        // (`data/battle_scripts_1.s:2831`, reached via
-        // `HandleFaintedMonActions`, `battle_util.c:1945`) -- so both
+        // `gBattleOutcome`, awards experience, or replaces/pays out a
+        // trainer on its own -- upstream doesn't reach any of that until
+        // `HandleFaintedMonActions`, well after this turn's own
+        // `DoBattlerEndTurnEffects` residual pass (`battle_main.c:3965`-
+        // `:3968`; `Battle::end_of_turn`'s own docs) -- so both
         // `tryfaintmon`s, and both `Fainted` events, fire regardless of
-        // which faint (if either) ends up mattering for the outcome.
-        //
-        // `checkteamslost` computes the two verdicts independently and ORs
-        // them together (`battle_script_commands.c:3560`-`:3573`): a
-        // player-side total of 0 HP sets `B_OUTCOME_LOST`, an opponent-side
-        // total of 0 HP sets `B_OUTCOME_WON`. This engine's last (only) mon
-        // on each side going down in the same instant -- Liquid Ooze
-        // recoil finishing the attacker while the direct hit already
-        // finished the target -- sets both at once, i.e. `B_OUTCOME_DREW`.
-        // But `B_OUTCOME_DREW` is dispatched through the exact same
-        // `HandleEndTurn_BattleLost` handler as an outright loss
-        // (`battle_main.c:557`-`:559`), never the win path, and
-        // `BattleScript_HandleFaintedMon` skips the EXP/switch-in
-        // continuation whenever `gBattleOutcome != 0`
-        // (`data/battle_scripts_1.s:2832`) -- so a simultaneous double
-        // faint is functionally a loss upstream, complete with no
-        // experience award, whichever side happens to be the attacker.
-        // The player's own faint therefore always takes priority over any
-        // simultaneous enemy faint when this crate decides the outcome.
+        // which faint (if either) ends up mattering for the outcome. This
+        // custom double-faint settlement mirrors `Self::settle_faint`'s own
+        // report-and-clear for each battler that went down
+        // (`Cmd_cleareffectsonfaint`, `battle_script_commands.c:3063`-
+        // `:3076`), rather than calling it twice, so a battler that did not
+        // faint here is left completely untouched.
         let (attacker_fainted, target_fainted) = {
             let (attacker, defender) = self.battlers(attacker_is_player);
             (attacker.is_fainted(), defender.is_fainted())
         };
-        if attacker_fainted {
-            events.push(BattleEvent::Fainted {
-                by_player: attacker_is_player,
-            });
-        }
-        if target_fainted {
-            events.push(BattleEvent::Fainted {
-                by_player: !attacker_is_player,
-            });
-        }
-        // `Cmd_cleareffectsonfaint` clears the corpse's battle-only stages,
-        // volatiles, and primary status before any reward or outcome
-        // settles -- `settle_faint` does this for every other pipeline, and
-        // this custom double-faint settlement must match it for each
-        // battler that went down (`battle_script_commands.c:3063`-`:3076`).
         for (fainted, is_player) in [
             (attacker_fainted, attacker_is_player),
             (target_fainted, !attacker_is_player),
         ] {
             if fainted {
+                events.push(BattleEvent::Fainted {
+                    by_player: is_player,
+                });
                 let corpse = if is_player {
                     &mut self.player
                 } else {
@@ -180,21 +155,6 @@ impl Battle {
                 corpse.clear_battle_scratch();
                 corpse.set_status1(Status1::Healthy);
             }
-        }
-        let player_fainted = if attacker_is_player {
-            attacker_fainted
-        } else {
-            target_fainted
-        };
-        let enemy_fainted = if attacker_is_player {
-            target_fainted
-        } else {
-            attacker_fainted
-        };
-        if player_fainted {
-            self.finish(events, BattleOutcome::PlayerLost);
-        } else if enemy_fainted {
-            self.settle_win_reward(events)?;
         }
         Ok(())
     }
@@ -231,7 +191,8 @@ impl Battle {
             damage: dealt,
             is_critical,
         });
-        self.settle_faint(!attacker_is_player, events)
+        self.settle_faint(!attacker_is_player, events);
+        Ok(())
     }
 
     /// `BattleScript_EffectMultiHit` (`data/battle_scripts_1.s:604`-`:652`):
@@ -324,7 +285,8 @@ impl Battle {
         // then `tryfaintmon BS_TARGET`.
         let defender = self.battlers(attacker_is_player).1;
         spend_multi_hit_effect_chance_draw(&self.dex, move_id, !immune, defender, rng)?;
-        self.settle_faint(!attacker_is_player, events)
+        self.settle_faint(!attacker_is_player, events);
+        Ok(())
     }
 
     /// `BattleScript_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge`
