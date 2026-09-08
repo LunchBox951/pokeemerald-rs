@@ -202,7 +202,16 @@ impl OverworldPhase {
     /// event outranks this attempt after all simply drops the returned
     /// value: building it here writes nothing outside the returned
     /// [`StartMenu`] itself, so an unused one costs nothing to discard.
+    ///
+    /// `Self::synthetic_start_menu_build`'s own doc comment: a test that
+    /// sets it gets a menu that really builds, with no local pack needed.
     pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
+        #[cfg(test)]
+        if self.synthetic_start_menu_build {
+            return Some(crate::start_menu::synthetic_start_menu_at(
+                self.start_menu_cursor,
+            ));
+        }
         match start_menu::open(self.pack_source, self.start_menu_cursor) {
             Ok(opened) => Some(opened),
             // The same "log-or-ignore is fine" policy [`crate::flow`]

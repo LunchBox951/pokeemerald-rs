@@ -150,6 +150,11 @@ impl From<OverworldSceneError> for ContinueError {
 /// `dialog` (issue #161) is the currently-open NPC message box, if any --
 /// see [`OverworldPhase::step`]'s dialog-routing branch and
 /// [`OverworldPhase::compose_frame`]'s overlay.
+// Four independent flags under `--all-targets` (`synthetic_start_menu_build`
+// only exists behind `#[cfg(test)]`; production never carries more than
+// three) -- they gate unrelated concerns and don't share enough structure
+// to collapse into a state machine or enum.
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     pub(super) player: PlayerState,
@@ -362,6 +367,13 @@ pub(crate) struct OverworldPhase {
     /// [`Self::new`] and [`Self::from_saved`], matching a fresh boot's
     /// zeroed EWRAM.
     start_menu_cursor: usize,
+    /// Test-only: make [`Self::build_start_menu`] succeed via
+    /// [`crate::start_menu::synthetic_start_menu_at`] instead of
+    /// [`crate::start_menu::open`]'s real pack load, so an end-to-end
+    /// [`Self::step`] test can drive a menu that genuinely opens without a
+    /// local pack (issues #908, #436).
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_start_menu_build: bool,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -743,6 +755,8 @@ impl OverworldPhase {
             // `Self::new`'s does, regardless of where the menu was left
             // the last time this file was played.
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu_build: false,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -909,6 +923,8 @@ impl OverworldPhase {
             // `sStartMenuCursorPos` is EWRAM, zero at boot -- and this
             // *is* boot (field docs).
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu_build: false,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,

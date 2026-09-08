@@ -220,11 +220,18 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
 /// start menu ordering" section), never reaching that parameter at all.
 /// Feeding `owns_frame()` into the gate directly here is this test's own
 /// stand-in for that early return -- both mean "`START` does not open
-/// this frame" -- letting the unreachable half be asserted without a
-/// real, currently-unreachable `ApproachStarted`/`ApproachAdvanced`/
-/// `BattleStarted` in hand. See
-/// `step_tests::start_does_not_preempt_a_same_frame_npc_interaction`
-/// (issue #908) for the sibling case that does reach the real parameter.
+/// this frame".
+///
+/// Only the *trigger* frame (`Refused` -> an owning outcome, same frame)
+/// stays symbolic this way: no bundled trainer's battle constructs today,
+/// so a real `ApproachStarted`/`ApproachAdvanced`/`BattleStarted` cannot be
+/// produced to drive `step` with. An *already-running* approach's own
+/// precedence over `START` is driven through `step` for real instead --
+/// `step_tests::step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start`
+/// -- with a menu that genuinely builds
+/// ([`OverworldPhase::synthetic_start_menu_build`]), the same seam
+/// `step_tests::step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`
+/// (issue #908) uses for the same-frame-interaction case.
 #[test]
 fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
     let (rx, ry) = RHETT_TILE;
