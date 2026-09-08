@@ -238,6 +238,11 @@ fn read_dynamic_tables(
 ) -> Result<(HuffmanTable, HuffmanTable), InflateError> {
     let literal_length_code_count =
         usize::try_from(reader.read_bits(5)?).expect("5 bits fit usize") + 257;
+    // RFC 1951 section 3.2.7 limits dynamic blocks to 286 literal/length
+    // codes; HLIT values 30 and 31 (287 and 288 codes) are forbidden.
+    if literal_length_code_count > 286 {
+        return Err(InflateError::BadHuffmanTable);
+    }
     let distance_code_count = usize::try_from(reader.read_bits(5)?).expect("5 bits fit usize") + 1;
     let code_length_code_count =
         usize::try_from(reader.read_bits(4)?).expect("4 bits fit usize") + 4;
@@ -556,6 +561,24 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
     fn truncated_stream_is_rejected() {
         let err = inflate(&[]).unwrap_err();
         assert_eq!(err, InflateError::UnexpectedEnd);
+    }
+
+    #[test]
+    fn oversized_hlit_is_rejected() {
+        // Each byte is a final (BFINAL=1) dynamic-Huffman (BTYPE=10) block
+        // header whose 5-bit HLIT field, read least-significant-bit-first
+        // starting at bit 3, is the forbidden value 30 or 31 (287 or 288
+        // literal/length codes). The check must fire before HDIST or any
+        // table body is read, so no further bytes are needed.
+        for (hlit, stream_byte) in [(30u32, 0xF5u8), (31u32, 0xFD)] {
+            let err = inflate(&[stream_byte]).unwrap_err();
+            assert_eq!(
+                err,
+                InflateError::BadHuffmanTable,
+                "HLIT={hlit} requests {} literal/length codes",
+                257 + hlit
+            );
+        }
     }
 
     #[test]
