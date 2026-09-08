@@ -40,6 +40,7 @@
 //! `IsSEPlaying()` simply proceed.
 
 use engine::text::format::{expand_placeholders, PlaceholderResolver};
+use engine::text::render::TextSpeed;
 use engine::text::{Token, PLACEHOLDER_PLAYER};
 use platform::{ButtonState, Buttons};
 
@@ -105,6 +106,12 @@ pub(crate) trait SaveTarget {
     /// The tokens `{PLAYER}` expands to in `gText_PlayerSavedGame` — the
     /// live save block's player name.
     fn player_name(&self) -> Vec<Token>;
+
+    /// `GetPlayerTextSpeedDelay`'s validated speed (`src/menu.c:481-487`) —
+    /// the pacing `ShowSaveMessage`'s `AddTextPrinterForMessage_2`
+    /// (`start_menu.c:902-909`, `menu.c:198-202`) prints every SAVE-flow
+    /// message at, read from the live save block's `optionsTextSpeed`.
+    fn player_text_speed(&self) -> TextSpeed;
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`): perform the write and
     /// report whether it returned `SAVE_STATUS_OK`.
@@ -369,8 +376,9 @@ impl SaveDialog {
 
     /// `ShowSaveMessage` (`start_menu.c:902-909`): open the field message
     /// box on `message`, with `{PLAYER}` expanded against the live save
-    /// block (upstream's `StringExpandPlaceholders`, which
-    /// `AddTextPrinterForMessage` performs for every field message).
+    /// block (upstream's own `StringExpandPlaceholders` call, `:904`) and
+    /// paced at the live save block's `optionsTextSpeed`
+    /// ([`SaveTarget::player_text_speed`]).
     ///
     /// A chrome that cannot build a box at all is impossible here — the
     /// chrome was decoded when the start menu opened — so this cannot fail.
@@ -382,7 +390,7 @@ impl SaveDialog {
             // The only failure mode is a resolver cycle, and this resolver
             // expands one id to plain characters.
             .unwrap_or_else(|_| message.tokens());
-        self.message = Some(chrome.message_box(tokens));
+        self.message = Some(chrome.message_box(tokens, target.player_text_speed()));
         self.printing = true;
     }
 
