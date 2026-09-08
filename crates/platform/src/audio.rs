@@ -816,14 +816,10 @@ mod tests {
 
     #[test]
     fn select_config_prefers_an_exact_i16_rate_over_a_resampled_f32() {
-        // Test-ratchet correction (`(test-ratchet)`): this test previously
-        // asserted `Some((0, 44_100))`, pinning a format-rank-primary policy
-        // that picked f32/44100 (needing a Resampler) over an i16 config that
-        // covers the target exactly. That expectation was wrong, not merely
-        // strict, so it is corrected here rather than weakened: i16 at 13379
-        // exactly (distance 0) reaches Source::Direct with no resampling, and
-        // must beat f32 at 44100 (distance 30721) even though f32 ranks ahead
-        // on format alone.
+        // An exact-rate config reaches Source::Direct with no resampling, so
+        // it must win over an off-rate config even in the ring buffer's
+        // preferred format: i16 at 13379 exactly (distance 0) beats f32 at
+        // 44100 (distance 30721) despite f32 ranking ahead on format alone.
         let candidates = [
             (cpal::SampleFormat::F32, 44_100, 48_000), // distance 30721
             (cpal::SampleFormat::I16, 8_000, 48_000),  // covers 13379 exactly
