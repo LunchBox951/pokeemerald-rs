@@ -27241,6 +27241,12 @@
           "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
           "spec": "I-3",
           "status": "stubbed"
+        },
+        "SetDefaultOptions": {
+          "reason": "SetDefaultOptions (new_game.c:91-99) reimplemented for the two option fields engine::save::block::SaveBlock2 models: optionsTextSpeed = OPTIONS_TEXT_SPEED_MID (:93) and optionsWindowFrameType = 0 (:94), both set explicitly in new_game::init_save_blocks rather than left to a zeroed block (MID's raw value 1 is not the zero representation, unlike the frame type). optionsSound, optionsBattleStyle, optionsBattleSceneOff, and regionMapZoom (:95-98) have no typed home in SaveBlock2 yet and are not modelled, matching NewGameInitData's own pending status for every other option this port has not built a settings screen for.",
+          "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "spec": "I-3",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
