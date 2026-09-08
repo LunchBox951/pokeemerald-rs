@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::AudioOutput;
+use platform::{AudioOutput, PlatformError};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -48,8 +48,18 @@ fn main() -> ExitCode {
     let mut output = match AudioOutput::open(RING_CAPACITY_FRAMES) {
         Ok(output) => output,
         Err(err) => {
-            println!("no audio device ({err}); nothing to play — this is expected in CI/headless");
-            return ExitCode::SUCCESS;
+            return match classify_open_error(&err) {
+                OpenOutcome::ExpectedHeadless => {
+                    println!(
+                        "no audio device ({err}); nothing to play — this is expected in CI/headless"
+                    );
+                    ExitCode::SUCCESS
+                }
+                OpenOutcome::PlaybackSetupFailure => {
+                    eprintln!("audio playback setup failed: {err}");
+                    ExitCode::FAILURE
+                }
+            };
         }
     };
     output.start().expect("start playback");
@@ -99,6 +109,31 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// How to react to an [`AudioOutput::open`] failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenOutcome {
+    /// No output device could be reached: the expected CI/headless case.
+    ExpectedHeadless,
+    /// A device was reached, but querying, configuring, or building its
+    /// stream failed.
+    PlaybackSetupFailure,
+}
+
+/// Classify an [`AudioOutput::open`] error so only the headless case exits
+/// cleanly.
+///
+/// [`PlatformError::NoAudioDevice`] alone is the headless case, because
+/// `platform` decides at the stage that knows: an unreachable device fails
+/// `open`'s query and is reported as `NoAudioDevice` there, cpal's phantom
+/// ALSA `default` included. Everything left, `Audio(cpal::Error)` from a
+/// stream build included, means a device answered and then refused.
+fn classify_open_error(error: &PlatformError) -> OpenOutcome {
+    match error {
+        PlatformError::NoAudioDevice => OpenOutcome::ExpectedHeadless,
+        _ => OpenOutcome::PlaybackSetupFailure,
+    }
 }
 
 /// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
@@ -318,12 +353,34 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
-    use platform::AudioOutput;
+    use platform::{AudioOutput, PlatformError};
 
     use super::{
-        device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain, DrainError, PushError,
-        RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        classify_open_error, device_tail_wait, push_frame, wait_for_device_tail, wait_for_drain,
+        DrainError, OpenOutcome, PushError, RetryPolicy, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
+        DEVICE_TAIL_MAX,
     };
+
+    #[test]
+    fn no_audio_device_is_the_expected_headless_case() {
+        assert_eq!(
+            classify_open_error(&PlatformError::NoAudioDevice),
+            OpenOutcome::ExpectedHeadless
+        );
+    }
+
+    /// A device that answered and then refused must not read as headless.
+    /// A failed stream build's `PlatformError::Audio(cpal::Error)` takes
+    /// this same wildcard arm, but `cpal` is not a dependency of this crate,
+    /// so `platform`'s own `a_lost_device_after_the_query_stays_an_audio_error`
+    /// pins that the build stage keeps the `Audio` variant this arm catches.
+    #[test]
+    fn an_unsupported_audio_config_is_a_playback_setup_failure() {
+        assert_eq!(
+            classify_open_error(&PlatformError::UnsupportedAudioConfig),
+            OpenOutcome::PlaybackSetupFailure
+        );
+    }
 
     #[test]
     fn a_stream_error_aborts_the_retry_without_waiting_out_the_deadline() {
