@@ -521,6 +521,7 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [1, 2, 3, 4],
             encryption_key: 0xA1B2_C3D4,
+            options_text_speed: 1,
             options_window_frame_type: 5,
         }
     }
@@ -1023,6 +1024,7 @@ mod tests {
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x22; TRAINER_ID_LENGTH],
             encryption_key: 0xA1B2_C3D4,
+            options_text_speed: 1,
             options_window_frame_type: 5,
         };
 

@@ -165,9 +165,7 @@ pub(crate) struct NpcDialog {
 
 impl NpcDialog {
     /// Build a dialog over an already-decoded font `sheet` and dialogue
-    /// `frame`, printing `tokens` at [`TextSpeed::Mid`] (upstream's own
-    /// new-game default -- see [`crate::intro::IntroScene::from_pack`]'s
-    /// identical doc comment).
+    /// `frame`, printing `tokens` at `text_speed`.
     ///
     /// `pub(crate)` because this box is not only an NPC's: upstream's
     /// standard field message window is a single window
@@ -178,18 +176,26 @@ impl NpcDialog {
     /// message-box frame, so it builds boxes here directly instead of
     /// re-reading the pack once per message.
     ///
+    /// `text_speed` is caller-supplied: the save flow's own
+    /// `StartMenuChrome::message_box` passes the live save block's decoded
+    /// `optionsTextSpeed` (`SaveTarget::player_text_speed`), matching
+    /// `ShowSaveMessage`'s real `AddTextPrinterForMessage_2`/
+    /// `GetPlayerTextSpeedDelay` pacing (`src/menu.c:198-202,481-487`);
+    /// every other caller still passes [`TextSpeed::Mid`], upstream's own
+    /// new-game default (`SetDefaultOptions`, `src/new_game.c:91-93`).
+    ///
     /// Opts into held-A/B print speed-up (module docs' "Held-A/B print
     /// speed-up" section): every caller of this constructor is one of
     /// upstream's `AddTextPrinterForMessage(TRUE)` sites, so every box built
     /// here -- an NPC's or `ShowSaveMessage`'s alike -- gets it.
-    pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
-        let printer = Printer::new(
-            tokens,
-            sheet,
-            TextSpeed::Mid,
-            textbox::STANDARD_PRINTER_ORIGIN,
-        )
-        .with_ab_speed_up_print();
+    pub(crate) fn new(
+        sheet: OwnedFontGlyphSheet,
+        frame: FrameAssets,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Self {
+        let printer = Printer::new(tokens, sheet, text_speed, textbox::STANDARD_PRINTER_ORIGIN)
+            .with_ab_speed_up_print();
         Self {
             frame,
             printer,
@@ -235,7 +241,10 @@ impl NpcDialog {
     pub(crate) fn from_pack(pack: &AssetPack, tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
         let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, tokens).with_waitbuttonpress())
+        // `TextSpeed::Mid` (`Self::new`'s own doc comment): ordinary field
+        // NPC dialogue does not yet read the saved `optionsTextSpeed`
+        // option.
+        Ok(Self::new(sheet, frame, tokens, TextSpeed::Mid).with_waitbuttonpress())
     }
 
     /// Load the pack from its default location and open a dialog printing
@@ -383,7 +392,9 @@ pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
         height: 16,
         palette: vec![Rgb888::BLACK; 16],
     };
-    NpcDialog::new(sheet, frame, tokens)
+    // `TextSpeed::Mid`: every caller of this fixture assumes upstream's own
+    // new-game default cadence (`NpcDialog::new`'s own doc comment).
+    NpcDialog::new(sheet, frame, tokens, TextSpeed::Mid)
 }
 
 #[cfg(test)]

@@ -18106,7 +18106,7 @@
           "status": "rewritten"
         },
         "SaveBlockPartyMoneyWarpOffsets": {
-          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsWindowFrameType implemented in full-size zero-filled payloads",
+          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, vars, and the options bitfield's optionsTextSpeed and optionsWindowFrameType implemented in full-size zero-filled payloads",
           "rust_target": "crates/engine/src/save/block.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27011,6 +27011,12 @@
           "rust_target": "crates/pokeemerald-rs/src/start_menu/chrome.rs",
           "spec": "I-6",
           "status": "stubbed"
+        },
+        "GetPlayerTextSpeedDelay": {
+          "reason": "GetPlayerTextSpeedDelay's out-of-range-optionsTextSpeed clamp to OPTIONS_TEXT_SPEED_MID for delay selection (src/menu.c:481-487), plus GetPlayerTextSpeed's raw-value selection (:474-479), reimplemented as code in TextSpeed::from_raw_option, over the already-ported sTextSpeedFrameDelays table this same file owns. Threaded from the live SaveBlock2::options_text_speed into ShowSaveMessage's AddTextPrinterForMessage_2 pacing via crate::start_menu::save_dialog::SaveTarget::player_text_speed (crates/pokeemerald-rs), closing issue #927 for the start-menu SAVE flow. Not modelled: upstream's own write-back -- GetPlayerTextSpeedDelay also repairs an invalid gSaveBlock2Ptr->optionsTextSpeed to OPTIONS_TEXT_SPEED_MID in place (:483-484), so a corrupted option self-heals in EWRAM the moment any save message shows; this port's from_raw_option only clamps the value it returns and never mutates the live SaveBlock2, so an out-of-range on-disk value (only reachable via a corrupted or hand-edited save) is preserved losslessly rather than repaired. GetPlayerTextSpeed's gTextFlags.forceMidTextSpeed override is also not modelled; ordinary field NPC dialogue (AddTextPrinterForMessage) does not yet read the option either, so the file's own status stays pending.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         },
         "WindowFunc_DrawDialogueFrame": {
           "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border, left/interior-fill/right column spanning height+1 rows, and the v-flipped bottom border reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
