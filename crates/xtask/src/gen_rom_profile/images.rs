@@ -141,7 +141,8 @@ fn trim_zero_tiles(tiles: &[u8], bytes_per_tile: usize) -> usize {
 ///
 /// [`GenRomProfileError::NotFound`] if an image's art is nowhere in the
 /// ROM under any packing, or [`GenRomProfileError::Ambiguous`] if it turns
-/// up at more addresses than there are ids sharing its bytes.
+/// up at fewer addresses than there are ids sharing its bytes, leaving
+/// them no copy each. More copies than ids is the accepted case.
 pub fn locate_images(
     ctx: &Context<'_>,
     queries: &[ImageQuery],
