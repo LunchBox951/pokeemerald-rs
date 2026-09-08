@@ -8,6 +8,13 @@ use crate::voice::{channel_volume, pan_terms, StereoAcc};
 const BIPOLAR_SAMPLE_SCALE: i32 = 127;
 const WAVE_SAMPLE_SCALE: i32 = 16;
 const LINEAR_ENVELOPE_SCALE: u32 = 8;
+// NRx2 has a four-bit hardware volume field. `CgbSound`'s byte-wide register
+// write truncates the software envelope to this domain at every write
+// (`m4a.c:1219-1223`); between writes, real hardware's own envelope timer
+// keeps pacing toward the software goal using that same write's step-time
+// nibble (`m4a.c:1156-1157` for the decay case) but saturates at this
+// ceiling instead of wrapping past it (`mgba/src/gb/audio.c:930-943`).
+const NRX2_VOLUME_NIBBLE_MASK: u8 = 0x0F;
 const MASTER_VOLUME_BITS: u32 = 4;
 const SAMPLE_GAIN_BITS: u32 = 8;
 const MIDI_KEY_COUNT: i32 = 256;
@@ -73,10 +80,24 @@ impl Oscillator {
         }
     }
 
-    fn envelope_gain_256(&self, envelope_volume: u8) -> u32 {
+    /// `hardware_write` distinguishes the frame that owns a `CGB_CHANNEL_MO_VOL`
+    /// write (`m4a.c:1219-1226`) from a frame that merely continues toward it:
+    /// only a write truncates the byte, so only a write can turn a level like
+    /// 16 into silence. A continuing frame instead saturates at the same
+    /// ceiling, matching real hardware's own envelope timer rather than
+    /// wrapping the software envelope's still-climbing or still-falling value
+    /// back through zero.
+    fn envelope_gain_256(&self, envelope_volume: u8, hardware_write: bool) -> u32 {
         match self {
             Self::Wave(_) => cgb3_wave_gain_256(envelope_volume),
-            Self::Square(_) | Self::Noise(_) => u32::from(envelope_volume) * LINEAR_ENVELOPE_SCALE,
+            Self::Square(_) | Self::Noise(_) => {
+                let hardware_volume = if hardware_write {
+                    envelope_volume & NRX2_VOLUME_NIBBLE_MASK
+                } else {
+                    envelope_volume.min(NRX2_VOLUME_NIBBLE_MASK)
+                };
+                u32::from(hardware_volume) * LINEAR_ENVELOPE_SCALE
+            }
         }
     }
 
@@ -578,10 +599,13 @@ impl CgbVoice {
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
         let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
-        if retriggered_by_note_off || retriggered_by_transition {
+        let hardware_write = retriggered_by_note_off || retriggered_by_transition;
+        if hardware_write {
             self.apply_retrigger();
         }
-        let envelope_gain = self.oscillator.envelope_gain_256(self.envelope.volume());
+        let envelope_gain = self
+            .oscillator
+            .envelope_gain_256(self.envelope.volume(), hardware_write);
         let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
         self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
     }
@@ -644,6 +668,7 @@ impl CgbVoice {
 mod tests {
     use super::*;
     use crate::psg::FrameSequencer128Hz;
+    use std::cmp::Ordering;
 
     const TEST_KEY: u8 = 60;
     const FULL_TRACK_VOLUME: u8 = u8::MAX;
@@ -698,12 +723,17 @@ mod tests {
         }
     }
 
-    fn square_voice(channel: CgbChannelNumber, sweep: Option<u8>, note: TestNote) -> CgbVoice {
+    fn square_voice_with_adsr(
+        channel: CgbChannelNumber,
+        sweep: Option<u8>,
+        adsr: CgbAdsr,
+        note: TestNote,
+    ) -> CgbVoice {
         CgbVoice::square(
             channel,
             HALF_DUTY,
             sweep,
-            CgbAdsr::flat(),
+            adsr,
             note.note_key,
             note.fine_pitch,
             note.track_right,
@@ -716,6 +746,10 @@ mod tests {
             note.echo_volume,
             note.echo_length,
         )
+    }
+
+    fn square_voice(channel: CgbChannelNumber, sweep: Option<u8>, note: TestNote) -> CgbVoice {
+        square_voice_with_adsr(channel, sweep, CgbAdsr::flat(), note)
     }
 
     fn fixed_square_voice(
@@ -865,6 +899,120 @@ mod tests {
         assert!(
             acc.iter().any(|&(l, r)| l != 0 || r != 0),
             "a live-envelope wave note must be audible"
+        );
+    }
+
+    /// Hold a square voice's envelope at `expected_level` (the ADSR's zero
+    /// attack and non-zero decay latch `volume` to the goal on entering decay,
+    /// before any decay step consumes it) and return its peak render sample.
+    fn square_peak_at_level(track_volume: u8, expected_level: u8) -> i32 {
+        let held_at_goal = CgbAdsr {
+            attack: 0,
+            decay: 8,
+            sustain: 15,
+            release: 0,
+        };
+        let note = TestNote {
+            track_right: track_volume,
+            track_left: track_volume,
+            ..TestNote::default()
+        };
+        let mut voice = square_voice_with_adsr(CgbChannelNumber::Square1, None, held_at_goal, note);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert_eq!(
+            voice.envelope_volume(),
+            expected_level,
+            "test setup must hold the envelope at the level under test"
+        );
+        let mut acc = vec![(0i32, 0i32); 64];
+        voice.render(&mut acc, &[]);
+        acc.iter()
+            .map(|&(left, right)| left.abs().max(right.abs()))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn square_envelope_levels_above_fifteen_render_through_the_nrx2_low_nibble() {
+        // `CgbSound` writes `envelopeVolume << 4` through the byte-wide NRx2
+        // register (`m4a.c:1219-1223`), so only the level's low four bits
+        // become hardware volume: level 16 is as silent as level 0, and
+        // level 30 or 31 are as loud as level 14 or 15.
+        let level_14_peak = square_peak_at_level(121, 14);
+        let level_15_peak = square_peak_at_level(130, 15);
+
+        assert!(level_14_peak > 0);
+        assert!(level_15_peak > 0);
+        assert_eq!(square_peak_at_level(131, 16), 0);
+        assert_eq!(square_peak_at_level(243, 30), level_14_peak);
+        assert_eq!(square_peak_at_level(255, 31), level_15_peak);
+    }
+
+    #[test]
+    fn square_envelope_saturates_between_hardware_writes_instead_of_wrapping() {
+        // Only the frame that owns a `CGB_CHANNEL_MO_VOL` write truncates the
+        // byte (`m4a.c:1219-1226`); real hardware's own envelope timer paces
+        // toward the goal between writes using that write's step-time nibble
+        // (`m4a.c:1156-1157`) and saturates at the four-bit ceiling instead of
+        // wrapping through it (`mgba/src/gb/audio.c:930-943`). A paced decay
+        // from a centred goal of 31 down to 0 must therefore hold at level
+        // 15's loudness through the whole out-of-range span, never dipping
+        // toward silence as the raw software level passes 16, and only start
+        // audibly falling once the level re-enters 0..=15.
+        let paced_decay_to_silence = CgbAdsr {
+            attack: 0,
+            decay: 2,
+            sustain: 0,
+            release: 0,
+        };
+        let full_goal_note = TestNote {
+            track_right: u8::MAX,
+            track_left: u8::MAX,
+            ..TestNote::default()
+        };
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            paced_decay_to_silence,
+            full_goal_note,
+        );
+        let level_15_peak = square_peak_at_level(130, 15);
+
+        let mut saw_in_range = false;
+        for _ in 0..80 {
+            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            let level = voice.envelope_volume();
+            let mut acc = vec![(0i32, 0i32); 64];
+            voice.render(&mut acc, &[]);
+            let peak = acc
+                .iter()
+                .map(|&(left, right)| left.abs().max(right.abs()))
+                .max()
+                .unwrap_or(0);
+            match level.cmp(&15) {
+                Ordering::Greater => assert_eq!(
+                    peak, level_15_peak,
+                    "an out-of-range software level must saturate at level 15's loudness, \
+                     not wrap toward silence"
+                ),
+                Ordering::Equal => {
+                    assert_eq!(peak, level_15_peak, "re-entering range at 15 must not jump");
+                }
+                Ordering::Less => {
+                    saw_in_range = true;
+                    assert!(
+                        peak <= level_15_peak,
+                        "once in range the decay must not exceed level 15's loudness"
+                    );
+                }
+            }
+            if level == 0 {
+                break;
+            }
+        }
+        assert!(
+            saw_in_range,
+            "test setup must run the decay far enough to leave the saturated span"
         );
     }
 
