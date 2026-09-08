@@ -141,6 +141,7 @@ impl WarpData {
     const MAP_GROUP_OFFSET: usize = 0;
     const MAP_NUM_OFFSET: usize = Self::MAP_GROUP_OFFSET + std::mem::size_of::<i8>();
     const WARP_ID_OFFSET: usize = Self::MAP_NUM_OFFSET + std::mem::size_of::<i8>();
+    // Upstream padding between `warpId` and `x`, unmodeled here (`pokeemerald/include/global.h:581-588`).
     const PADDING_OFFSET: usize = Self::WARP_ID_OFFSET + std::mem::size_of::<i8>();
     const X_OFFSET: usize = Self::PADDING_OFFSET + std::mem::size_of::<u8>();
     const Y_OFFSET: usize = Self::X_OFFSET + SERIALIZED_U16_LEN;
@@ -478,8 +479,20 @@ fn require_len(bytes: &[u8], expected: usize) -> Result<(), SaveError> {
     }
 }
 
+/// Writes only `warp`'s modeled fields, leaving `WarpData::PADDING_OFFSET` in `out` untouched.
 fn write_warp(out: &mut [u8], offset: usize, warp: WarpData) {
-    out[offset..offset + WarpData::LEN].copy_from_slice(&warp.to_bytes());
+    let bytes = warp.to_bytes();
+    out[offset + WarpData::MAP_GROUP_OFFSET] = bytes[WarpData::MAP_GROUP_OFFSET];
+    out[offset + WarpData::MAP_NUM_OFFSET] = bytes[WarpData::MAP_NUM_OFFSET];
+    out[offset + WarpData::WARP_ID_OFFSET] = bytes[WarpData::WARP_ID_OFFSET];
+
+    let x_offset = offset + WarpData::X_OFFSET;
+    out[x_offset..x_offset + SERIALIZED_U16_LEN]
+        .copy_from_slice(&bytes[WarpData::X_OFFSET..WarpData::X_OFFSET + SERIALIZED_U16_LEN]);
+
+    let y_offset = offset + WarpData::Y_OFFSET;
+    out[y_offset..y_offset + SERIALIZED_U16_LEN]
+        .copy_from_slice(&bytes[WarpData::Y_OFFSET..WarpData::Y_OFFSET + SERIALIZED_U16_LEN]);
 }
 
 fn read_i16(bytes: &[u8], offset: usize) -> i16 {
@@ -884,5 +897,31 @@ mod tests {
         let decoded = SaveBlock2::from_bytes(&bytes).unwrap();
         assert_eq!(decoded.player_gender, PlayerGender::Other(9));
         assert_eq!(decoded.to_bytes()[PLAYER_GENDER_OFFSET], 9);
+    }
+
+    /// `WarpData` byte 3 is upstream padding (`pokeemerald/include/global.h:581-588`),
+    /// so it is unmodeled and [`SaveBlock1::patch_bytes`] must leave it alone.
+    #[test]
+    fn save_block1_patch_bytes_preserves_warp_padding() {
+        let key = 0xA1B2_C3D4;
+        let block = SaveBlock1 {
+            location: sample_warp(-3),
+            continue_game_warp: sample_warp(7),
+            last_heal_location: sample_warp(-11),
+            ..SaveBlock1::default()
+        };
+        let mut base = [0xEE; SaveBlock1::PAYLOAD_LEN];
+        block.patch_bytes(&mut base, key);
+        for offset in [
+            LOCATION_OFFSET,
+            CONTINUE_GAME_WARP_OFFSET,
+            LAST_HEAL_LOCATION_OFFSET,
+        ] {
+            let padding = offset + WarpData::PADDING_OFFSET;
+            assert_eq!(
+                base[padding], 0xEE,
+                "unmodeled warp padding at {padding:#X} must survive patching"
+            );
+        }
     }
 }
