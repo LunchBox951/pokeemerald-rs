@@ -285,14 +285,15 @@ impl SaveFile {
         self.write_with(
             store,
             Self::sync_directory_best_effort,
-            || self.staging_path(),
+            |bytes| self.stage_shrinking_on_invalid_filename(Self::real_open, bytes),
             |_| {},
         )
     }
 
     /// As [`SaveFile::write`], synchronising through the given `sync_directory`
-    /// and drawing each staging attempt's name from `staging_path`, rather than
-    /// always [`SaveFile::sync_directory_best_effort`] and [`SaveFile::staging_path`].
+    /// and staging through `stage`, rather than always
+    /// [`SaveFile::sync_directory_best_effort`] and
+    /// [`SaveFile::stage_shrinking_on_invalid_filename`].
     ///
     /// `before_rename` runs on the staged path once it holds the image and
     /// before anything promotes it, which is the only point from which the
@@ -301,7 +302,7 @@ impl SaveFile {
         &self,
         store: &SaveStore,
         mut sync_directory: impl FnMut(&Path),
-        staging_path: impl FnMut() -> PathBuf,
+        stage: impl FnOnce(&[u8]) -> std::io::Result<StagedSave>,
         before_rename: impl FnOnce(&Path),
     ) -> Result<(), SaveFileError> {
         self.ensure_parent_directory()?;
@@ -310,7 +311,7 @@ impl SaveFile {
             path: self.path.clone(),
             source,
         };
-        let staged = Self::stage(staging_path, store.flash_image()).map_err(write_error)?;
+        let staged = stage(store.flash_image()).map_err(write_error)?;
         before_rename(&staged.path);
         // Nothing in `std` fuses this check to the rename below, so a
         // replacement landing between the two is still promoted; the
@@ -342,13 +343,18 @@ impl SaveFile {
     const MAX_STAGING_ATTEMPTS: u32 = 8;
 
     /// Stages `bytes` under a fresh name from `next_path` on every attempt,
-    /// retrying a name collision up to [`Self::MAX_STAGING_ATTEMPTS`] times;
-    /// returns the file actually written.
-    fn stage(mut next_path: impl FnMut() -> PathBuf, bytes: &[u8]) -> std::io::Result<StagedSave> {
+    /// opening each with `open`, retrying a name collision up to
+    /// [`Self::MAX_STAGING_ATTEMPTS`] times; returns the file actually
+    /// written.
+    fn stage(
+        mut next_path: impl FnMut() -> PathBuf,
+        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+        bytes: &[u8],
+    ) -> std::io::Result<StagedSave> {
         let mut last_collision = None;
         for _ in 0..Self::MAX_STAGING_ATTEMPTS {
             let path = next_path();
-            match Self::write_and_sync(&path, bytes) {
+            match Self::write_and_sync_with(&open, &path, bytes) {
                 Ok(staged) => return Ok(staged),
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     last_collision = Some(err);
@@ -364,17 +370,56 @@ impl SaveFile {
         }))
     }
 
-    /// Opens `path` exclusively -- refusing an existing file, directory, or
-    /// symlink there instead of following or truncating it -- then writes and
-    /// syncs `bytes`, removing `path` again on any failure once past that
-    /// open so this call never deletes an entry a different caller put there.
-    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<StagedSave> {
-        use std::io::Write as _;
+    /// As [`Self::stage`] with [`Self::staging_path_with_stem_cap`] as the
+    /// candidate generator, except that a candidate the host refuses
+    /// outright (`InvalidFilename`) -- rather than merely finding it
+    /// already taken (`AlreadyExists`) -- halves the stem cap on a char
+    /// boundary (the truncation in [`Self::staging_path_with_stem_cap`]
+    /// already respects one) and starts a fresh run of collision retries
+    /// there, all the way down to an empty stem. [`Self::MAX_COMPONENT_LEN`]
+    /// is only ever a first guess at a limit this module cannot enumerate
+    /// for every host or filesystem -- eCryptfs caps a component at 143
+    /// bytes, well under it, and a symlinked temp root can make a host's
+    /// resolved path longer than the one this process measures -- so this
+    /// loop, not that constant, is what actually keeps the sibling valid.
+    /// Propagates only once even the bare `.tmp.<hex>` suffix is refused.
+    fn stage_shrinking_on_invalid_filename(
+        &self,
+        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+        bytes: &[u8],
+    ) -> std::io::Result<StagedSave> {
+        let mut cap = Self::first_guess_stem_cap();
+        loop {
+            match Self::stage(|| self.staging_path_with_stem_cap(cap), &open, bytes) {
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && cap > 0 => {
+                    cap /= 2;
+                }
+                result => return result,
+            }
+        }
+    }
 
-        let file = std::fs::OpenOptions::new()
+    /// Opens `path` exclusively with the real, host `create_new` open --
+    /// refusing an existing file, directory, or symlink there instead of
+    /// following or truncating it.
+    fn real_open(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(path)?;
+            .open(path)
+    }
+
+    /// As [`Self::write_and_sync`], opening `path` through `open` rather
+    /// than always [`Self::real_open`], so a test can substitute a host
+    /// that refuses names an injected rule finds too long.
+    fn write_and_sync_with(
+        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> std::io::Result<StagedSave> {
+        use std::io::Write as _;
+
+        let file = open(path)?;
         let staged = StagedSave {
             path: path.to_path_buf(),
             file,
@@ -389,6 +434,16 @@ impl SaveFile {
             Ok(()) => Ok(staged),
             Err(source) => Err(staged.remove_after(source)),
         }
+    }
+
+    /// Writes and syncs `bytes` to a freshly, exclusively created `path`,
+    /// removing `path` again on any failure once past that open so this
+    /// call never deletes an entry a different caller put there. A test
+    /// convenience over [`Self::write_and_sync_with`]; production staging
+    /// always goes through [`Self::stage_shrinking_on_invalid_filename`].
+    #[cfg(test)]
+    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<StagedSave> {
+        Self::write_and_sync_with(Self::real_open, path, bytes)
     }
 
     fn sync_directory_best_effort(path: &Path) {
@@ -522,45 +577,31 @@ impl SaveFile {
 
     /// A collision-resistant sibling staging name -- unguessable to a planted
     /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
-    /// retries the rare exact collision, so this needs resistance, not proof.
-    /// The save basename is cut to fit the suffix within both
-    /// [`Self::MAX_COMPONENT_LEN`] and [`Self::MAX_PATH_LEN`], so every save
-    /// path whose own name is valid, and whose directory alone leaves room
-    /// for the suffix's fixed width, gets a valid staging sibling -- whether
-    /// the basename alone is long or the whole path already sits close to
-    /// the filesystem's length limit. A directory that by itself already
-    /// consumes that much room admits no sibling at all, with or without
-    /// this budgeting: no basename length can buy back space the directory
-    /// component already spent.
+    /// retries the rare exact collision, so this needs resistance, not
+    /// proof. The save basename is cut to fit the suffix within
+    /// [`Self::first_guess_stem_cap`]'s first guess at
+    /// [`Self::MAX_COMPONENT_LEN`], which the first staging attempt tries
+    /// so the common case succeeds immediately; when a host's real limit
+    /// disagrees with that guess, [`Self::stage_shrinking_on_invalid_filename`]
+    /// is what actually corrects it, not this function. A test convenience;
+    /// production staging calls [`Self::staging_path_with_stem_cap`] directly.
+    #[cfg(test)]
     fn staging_path(&self) -> PathBuf {
+        self.staging_path_with_stem_cap(Self::first_guess_stem_cap())
+    }
+
+    /// As [`Self::staging_path`], cutting the basename to at most
+    /// `max_stem_len` bytes -- on a char boundary -- rather than computing
+    /// [`Self::first_guess_stem_cap`]'s budget.
+    fn staging_path_with_stem_cap(&self, max_stem_len: usize) -> PathBuf {
         let suffix = format!(".tmp.{}", Self::unique_component());
         let mut stem = self
             .path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        // The raw, not lossy, basename length: `stem` may already have grown
-        // past what the original bytes occupied (each invalid UTF-8 byte
-        // becomes a multi-byte replacement character), and subtracting that
-        // inflated length here would undercount the directory prefix still
-        // ahead of it.
-        let raw_file_name_len = self
-            .path
-            .file_name()
-            .map_or(0, |name| name.as_encoded_bytes().len());
-        let directory_prefix_len = self
-            .path
-            .as_os_str()
-            .as_encoded_bytes()
-            .len()
-            .saturating_sub(raw_file_name_len);
-        let component_budget = Self::MAX_COMPONENT_LEN.saturating_sub(suffix.len());
-        let whole_path_budget = Self::MAX_PATH_LEN
-            .saturating_sub(directory_prefix_len)
-            .saturating_sub(suffix.len());
-        let budget = component_budget.min(whole_path_budget);
-        if stem.len() > budget {
-            let mut cut = budget;
+        if stem.len() > max_stem_len {
+            let mut cut = max_stem_len;
             while !stem.is_char_boundary(cut) {
                 cut -= 1;
             }
@@ -569,21 +610,23 @@ impl SaveFile {
         self.path.with_file_name(format!("{stem}{suffix}"))
     }
 
-    /// The per-component limit shared by Linux, macOS, and Windows
-    /// filesystems, in bytes.
-    const MAX_COMPONENT_LEN: usize = 255;
+    /// The stem budget [`Self::staging_path`] tries first: whatever is left
+    /// of [`Self::MAX_COMPONENT_LEN`] once the fixed-width suffix is
+    /// subtracted. A first guess, not a promise -- see
+    /// [`Self::stage_shrinking_on_invalid_filename`].
+    fn first_guess_stem_cap() -> usize {
+        let suffix_len = ".tmp.".len() + Self::UNIQUE_COMPONENT_HEX_DIGITS;
+        Self::MAX_COMPONENT_LEN.saturating_sub(suffix_len)
+    }
 
-    /// The host's whole-path limit, minus the byte it reserves for a
-    /// terminating NUL: Linux's `PATH_MAX` of 4096, macOS's of 1024. A save
-    /// path already close to this bound can still fit its own component
-    /// budget while leaving no room for a staging suffix in the same
-    /// directory, so the staged sibling's whole path needs its own budget
-    /// too. Windows is not budgeted: `std` lifts its `MAX_PATH` with the
-    /// verbatim prefix, and the Linux value only ever trims sooner there.
-    #[cfg(target_os = "macos")]
-    const MAX_PATH_LEN: usize = 1023;
-    #[cfg(not(target_os = "macos"))]
-    const MAX_PATH_LEN: usize = 4095;
+    /// A first guess at the per-component limit most POSIX and Windows
+    /// filesystems share, in bytes -- not a promise every filesystem keeps:
+    /// eCryptfs caps a component at 143, well under this. Predicting a
+    /// host's real limit precisely is not this module's job;
+    /// [`Self::stage_shrinking_on_invalid_filename`] adapts to whatever it
+    /// actually is by retrying under a shorter stem when the host refuses
+    /// this guess outright.
+    const MAX_COMPONENT_LEN: usize = 255;
 
     /// Width of the hex component `unique_component` renders.
     const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;

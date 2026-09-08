@@ -66,108 +66,140 @@ fn a_basename_that_fit_the_former_staging_suffix_still_writes() {
     assert!(file.exists());
 }
 
-/// A save path within a few bytes of the host's `PATH_MAX` -- close enough that
-/// the former `.tmp.<pid>` suffix fit, too close for the longer, fixed-width
-/// unique suffix -- must still get a staging sibling the kernel accepts:
-/// [`SaveFile::MAX_COMPONENT_LEN`] alone leaves no room for it, because the
-/// basename here is far short of that per-component limit even though the
-/// whole path is not. This fails with `ENAMETOOLONG` without
-/// [`SaveFile::MAX_PATH_LEN`] budgeting the whole path too.
+/// A save path at the host's real, unpredictable whole-path ceiling --
+/// discovered by probing rather than assumed from a constant, since a
+/// symlinked temp root (macOS's `/var/folders` -> `/private/var`) can make
+/// the kernel's resolved length longer than the one this process measures --
+/// must still be writable. [`SaveFile::staging_path`]'s first-guess
+/// candidate is refused there (proving the scenario is real, not merely
+/// approached); [`SaveFile::write`] must still succeed by retrying under a
+/// shorter stem, which is asserted here by the write's own success rather
+/// than by inspecting which candidate ultimately won.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn a_save_path_near_path_max_still_gets_a_valid_staging_sibling() {
-    // 11 bytes short of the limit: within the 15-byte `.tmp.<10 hex digits>`
-    // suffix's width, so appending it unbudgeted overruns PATH_MAX, while a
-    // suffix as short as a low-digit-count `.tmp.<pid>` would still have
-    // fit -- yet the basename (`SAVE_FILE_NAME`) is nowhere near
-    // `MAX_COMPONENT_LEN`.
-    const SAVE_PATH_LEN: usize = SaveFile::MAX_PATH_LEN - 11;
+fn a_save_path_near_the_hosts_real_path_limit_still_writes() {
+    let dir = TempDir::new("path-limit");
 
-    let dir = TempDir::new("path-max");
-    let parent_len = SAVE_PATH_LEN - 1 - SAVE_FILE_NAME.len();
-    let root_len = dir.path.as_os_str().len();
-    assert!(
-        root_len < parent_len,
-        "the scratch TempDir root ({root_len} bytes) must leave room to build a \
-         {parent_len}-byte parent directory chain under it"
-    );
-    let remaining = parent_len - root_len;
-
-    // Nest directories no wider than the component limit until their
-    // combined length (each plus its separator) reaches `remaining`.
-    let component_count = remaining.div_ceil(SaveFile::MAX_COMPONENT_LEN + 1);
-    let component_bytes = remaining - component_count;
-    let short_len = component_bytes / component_count;
-    let long_count = component_bytes % component_count;
-
+    // Coarse phase: nest maximally sized directories until the host refuses
+    // one, to approach its real ceiling quickly without assuming a specific
+    // number for it.
     let mut parent = dir.path.clone();
-    for index in 0..component_count {
-        let component_len = short_len + usize::from(index < long_count);
-        assert!((1..=SaveFile::MAX_COMPONENT_LEN).contains(&component_len));
-        parent.push("d".repeat(component_len));
-        std::fs::create_dir(&parent).expect("nested directory must be creatable");
+    loop {
+        let candidate = parent.join("d".repeat(SaveFile::MAX_COMPONENT_LEN));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => parent = candidate,
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename => break,
+            Err(err) => {
+                panic!("unexpected error nesting toward the host's real path limit: {err:?}")
+            }
+        }
     }
 
-    let save_path = parent.join(SAVE_FILE_NAME);
-    assert_eq!(
-        save_path.as_os_str().len(),
-        SAVE_PATH_LEN,
-        "test setup must hit the target length exactly"
-    );
-    std::fs::File::create(&save_path)
-        .expect("a save path this close to PATH_MAX must itself be a valid path");
-    std::fs::remove_file(&save_path).unwrap();
+    // Fine phase: grow a basename in that directory one byte at a time
+    // until the host refuses it, pinpointing the exact boundary the coarse
+    // phase's failure proved lies somewhere in this range.
+    let longest_valid_len = (1..=SaveFile::MAX_COMPONENT_LEN)
+        .take_while(|&len| {
+            let candidate = parent.join("s".repeat(len));
+            match std::fs::File::create(&candidate) {
+                Ok(_) => {
+                    std::fs::remove_file(&candidate).unwrap();
+                    true
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename => false,
+                Err(err) => {
+                    panic!("unexpected error probing the host's real path limit: {err:?}")
+                }
+            }
+        })
+        .last()
+        .expect("the coarse-nested directory must itself accept at least a one-byte save file");
 
+    let save_path = parent.join("s".repeat(longest_valid_len));
     let file = SaveFile::at(&save_path);
-    let staging_path = file.staging_path();
+
+    // The naive first-guess candidate -- this save path's own directory
+    // plus the fixed-width suffix -- is longer than a save path already
+    // proven to be the longest this host accepts here, so it must be
+    // refused too; this is exactly the scenario under test.
+    let naive_candidate = file.staging_path();
     assert!(
-        staging_path.as_os_str().len() <= SaveFile::MAX_PATH_LEN,
-        "the staged sibling must fit under PATH_MAX: {} bytes",
-        staging_path.as_os_str().len()
+        std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&naive_candidate)
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
+        "test setup must actually exceed the host's real limit, not merely approach it"
     );
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&staging_path)
-        .expect("a staging sibling this close to PATH_MAX must be a path the kernel accepts");
-    std::fs::remove_file(&staging_path).unwrap();
 
     let (store, _, _) = saved_store();
-    file.write(&store)
-        .expect("a full write must also budget the staging sibling under PATH_MAX");
+    file.write(&store).expect(
+        "a save path at the host's real path limit must still be writable, by retrying \
+         under a shorter stem once the first-guess candidate is refused",
+    );
     assert!(file.exists());
+
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// A single invalid byte in a basename must not make
-/// [`SaveFile::staging_path`] undercount the directory ahead of it: its
-/// lossy rendering inflates that byte into a three-byte replacement
-/// character, and subtracting that inflated length instead of the raw one
-/// understates how much of `MAX_PATH_LEN` the directory alone already
-/// spent, letting an under-truncated basename push the sibling over the
-/// limit. `staging_path` never touches the filesystem, so this is testable
-/// as pure byte accounting, without creating a real, deeply nested directory.
-#[cfg(unix)]
+/// A host whose real per-component limit sits well under
+/// [`SaveFile::MAX_COMPONENT_LEN`]'s first guess -- eCryptfs caps a
+/// component at 143 bytes, not 255 -- must still get a valid staging
+/// sibling: the first-guess candidate is refused outright, and that must
+/// shrink the stem and retry rather than propagate immediately. Pinned
+/// through an injected `open` rather than a real eCryptfs mount, so this
+/// holds on every platform this crate builds for, not just whichever one
+/// happens to have such a filesystem mounted.
 #[test]
-fn a_non_utf8_basename_does_not_undercount_the_directory_prefix() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt as _;
+fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
+    const HOST_NAME_MAX: usize = 143;
+    // Long enough that a former, short `.tmp.<pid>` suffix still fit under
+    // the host's real limit, but the current fixed 15-byte suffix does not
+    // -- and short enough that `MAX_COMPONENT_LEN`'s 255-byte first guess
+    // does not truncate it at all, so the very first candidate is refused.
+    const BASENAME_LEN: usize = 131;
+    let pid_digits = std::process::id().to_string().len();
+    assert!(BASENAME_LEN + ".tmp.".len() + pid_digits <= HOST_NAME_MAX);
+    const { assert!(BASENAME_LEN + 15 > HOST_NAME_MAX) };
+    const { assert!(BASENAME_LEN < SaveFile::MAX_COMPONENT_LEN - 15) };
 
-    // A directory-plus-separator prefix just long enough that the raw,
-    // one-byte basename below fits `MAX_PATH_LEN`'s whole-path budget but
-    // its three-byte lossy rendering does not, so only counting the raw
-    // length keeps the staged sibling within bounds.
-    let directory = "d".repeat(SaveFile::MAX_PATH_LEN - 18);
-    let basename = OsString::from_vec(vec![0xFF]);
-    let path = PathBuf::from(directory).join(basename);
+    let dir = TempDir::new("host-component-limit");
+    let path = dir.join(&"s".repeat(BASENAME_LEN));
+    let file = SaveFile::at(&path);
 
-    let staging = SaveFile::at(path).staging_path();
+    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        let component_len = candidate
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        if component_len > HOST_NAME_MAX {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::real_open(candidate)
+    };
 
+    let staged = file
+        .stage_shrinking_on_invalid_filename(refuse_long_components, &vec![0u8; FLASH_IMAGE_LEN])
+        .expect(
+            "a host component limit under the first guess must still be satisfiable by \
+             shrinking the stem and retrying",
+        );
+
+    let final_component_len = staged
+        .path
+        .file_name()
+        .map_or(0, |name| name.as_encoded_bytes().len());
     assert!(
-        staging.as_os_str().as_encoded_bytes().len() <= SaveFile::MAX_PATH_LEN,
-        "an inflated lossy basename length must not undercount the real directory \
-         prefix and let the staged sibling overrun PATH_MAX: {} bytes",
-        staging.as_os_str().as_encoded_bytes().len()
+        final_component_len <= HOST_NAME_MAX,
+        "the staged sibling must respect the host's real limit: {final_component_len} bytes"
     );
+    assert!(
+        final_component_len < BASENAME_LEN + 15,
+        "the stem must actually have been shortened from the first-guess candidate, not \
+         merely have succeeded by chance: {final_component_len} bytes"
+    );
+
+    std::fs::remove_file(&staged.path).unwrap();
 }
 
 struct TempDir {
@@ -410,7 +442,7 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
         .write_with(
             &second,
             SaveFile::sync_directory_best_effort,
-            || unstageable.clone(),
+            |bytes| SaveFile::stage(|| unstageable.clone(), SaveFile::real_open, bytes),
             |_| {},
         )
         .expect_err("staging into a directory cannot succeed");
@@ -443,13 +475,19 @@ fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
     file.write_with(
         &store,
         SaveFile::sync_directory_best_effort,
-        || {
-            attempts += 1;
-            if attempts == 1 {
-                occupied.clone()
-            } else {
-                fresh.clone()
-            }
+        |bytes| {
+            SaveFile::stage(
+                || {
+                    attempts += 1;
+                    if attempts == 1 {
+                        occupied.clone()
+                    } else {
+                        fresh.clone()
+                    }
+                },
+                SaveFile::real_open,
+                bytes,
+            )
         },
         |_| {},
     )
@@ -487,7 +525,7 @@ fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
         .write_with(
             &store,
             SaveFile::sync_directory_best_effort,
-            || staged.clone(),
+            |bytes| SaveFile::stage(|| staged.clone(), SaveFile::real_open, bytes),
             |_| {},
         )
         .expect_err("renaming onto a directory cannot succeed");
@@ -595,7 +633,7 @@ fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
         .write_with(
             &store,
             SaveFile::sync_directory_best_effort,
-            || staging.clone(),
+            |bytes| SaveFile::stage(|| staging.clone(), SaveFile::real_open, bytes),
             |_| {},
         )
         .expect_err("staging onto a planted symlink must never succeed");
@@ -653,7 +691,7 @@ fn a_staging_file_replaced_before_the_rename_is_never_promoted() {
         .write_with(
             &second,
             SaveFile::sync_directory_best_effort,
-            || staging.clone(),
+            |bytes| SaveFile::stage(|| staging.clone(), SaveFile::real_open, bytes),
             |staged| {
                 std::fs::remove_file(staged).unwrap();
                 std::os::unix::fs::symlink(&bystander, staged).unwrap();
@@ -720,7 +758,7 @@ fn a_staging_file_swapped_for_another_regular_file_is_never_promoted() {
         .write_with(
             &second,
             SaveFile::sync_directory_best_effort,
-            || staging.clone(),
+            |bytes| SaveFile::stage(|| staging.clone(), SaveFile::real_open, bytes),
             |staged| {
                 std::fs::remove_file(staged).unwrap();
                 std::fs::write(staged, b"someone else's file").unwrap();
@@ -753,8 +791,12 @@ fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
     std::fs::write(&bystander, b"not a save file").unwrap();
 
     let staging = dir.join("staged.tmp");
-    let staged = SaveFile::stage(|| staging.clone(), &vec![0u8; FLASH_IMAGE_LEN])
-        .expect("the exclusive staging write must succeed");
+    let staged = SaveFile::stage(
+        || staging.clone(),
+        SaveFile::real_open,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
     std::fs::remove_file(&staging).unwrap();
     std::os::unix::fs::symlink(&bystander, &staging).unwrap();
 
@@ -793,8 +835,12 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
     let dir = TempDir::new("staging-cleanup-directory-swap");
 
     let staging = dir.join("staged.tmp");
-    let staged = SaveFile::stage(|| staging.clone(), &vec![0u8; FLASH_IMAGE_LEN])
-        .expect("the exclusive staging write must succeed");
+    let staged = SaveFile::stage(
+        || staging.clone(),
+        SaveFile::real_open,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
     std::fs::remove_file(&staging).unwrap();
     std::fs::create_dir(&staging).unwrap();
 
@@ -1211,7 +1257,7 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
     file.write_with(
         &store,
         |path| synced.borrow_mut().push(path.to_path_buf()),
-        || file.staging_path(),
+        |bytes| SaveFile::stage(|| file.staging_path(), SaveFile::real_open, bytes),
         |_| {},
     )
     .expect("writing a bare relative save path must succeed");
