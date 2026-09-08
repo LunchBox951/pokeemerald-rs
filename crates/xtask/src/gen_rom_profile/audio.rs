@@ -144,14 +144,27 @@ pub fn locate(
 
 /// What a linker map should say at a voicegroup's address.
 ///
-/// An unbiased group declares a real global. A group with a
-/// `starting_note` bias is a `.set` to an address before its first slot,
-/// which need not appear as a defined symbol at all.
+/// Upstream's `voice_group` macro declares a `.global` only in its unbiased
+/// spelling; a `starting_note` bias makes the label a `.set` naming an
+/// address *before* the first slot, which no map lists and which is
+/// interior to whatever data precedes the group.
 fn voicegroup_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
     if starting_note == 0 {
         SymbolExpectation::Exact(format!("voicegroup_{label}"))
     } else {
-        SymbolExpectation::Unnamed
+        SymbolExpectation::Interior
+    }
+}
+
+/// What a linker map should say at a key-split table's address.
+///
+/// Upstream's `keysplit` macro splits the same way `voice_group` does, and
+/// a biased table's address is interior for the same reason.
+fn keysplit_symbol(label: &str, starting_note: u8) -> SymbolExpectation {
+    if starting_note == 0 {
+        SymbolExpectation::Exact(format!("keysplit_{label}"))
+    } else {
+        SymbolExpectation::Interior
     }
 }
 
@@ -473,13 +486,7 @@ fn locate_keysplit(
     let len = u16::try_from(table.table.len()).expect("a key-split table fits in u16");
     let mut line = ReportLine::unique(format!("keysplit_{label}"), addr, u32::from(len))
         .with(Resolution::PointerWalk);
-    line.symbol = if table.starting_note == 0 {
-        SymbolExpectation::Exact(format!("keysplit_{label}"))
-    } else {
-        // A biased table's label is a `.set`, not a defined symbol, and
-        // sits before the data. A map need not name it.
-        SymbolExpectation::Unnamed
-    };
+    line.symbol = keysplit_symbol(label, table.starting_note);
     report.push(line.note(format!(
         "biased back {} notes; {len} notes mapped",
         table.starting_note
@@ -609,7 +616,35 @@ fn parse_song_constant(text: &str, symbol: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_song_constant;
+    use super::{keysplit_symbol, parse_song_constant, voicegroup_symbol};
+    use crate::gen_rom_profile::plan::SymbolExpectation;
+
+    #[test]
+    fn a_biased_audio_root_asks_a_map_for_nothing() {
+        // Upstream's biased `voice_group`/`keysplit` spellings emit a `.set`
+        // and no `.global`, so the biased address is in the middle of the
+        // preceding data and no map names it. Demanding *some* symbol there
+        // would fail `--map` on a correct ROM and a correct map: every
+        // key-split table upstream ships is biased, as is `rs_drumset`.
+        assert_eq!(
+            voicegroup_symbol("rs_drumset", 36),
+            SymbolExpectation::Interior
+        );
+        assert_eq!(keysplit_symbol("piano", 36), SymbolExpectation::Interior);
+        assert_eq!(keysplit_symbol("tuba", 24), SymbolExpectation::Interior);
+    }
+
+    #[test]
+    fn an_unbiased_audio_root_is_checked_by_name() {
+        assert_eq!(
+            voicegroup_symbol("title", 0),
+            SymbolExpectation::Exact("voicegroup_title".to_owned())
+        );
+        assert_eq!(
+            keysplit_symbol("piano", 0),
+            SymbolExpectation::Exact("keysplit_piano".to_owned())
+        );
+    }
 
     #[test]
     fn a_song_constant_is_read_past_its_trailing_comment() {
