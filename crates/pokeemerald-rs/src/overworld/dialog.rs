@@ -45,7 +45,7 @@
 //! [`Printer`]/[`TickEvent`] alongside `\l`/`\p` -- [`NpcDialog::tick`]
 //! models it as a second, later gate a message can opt into with
 //! [`NpcDialog::with_waitbuttonpress`] (applied automatically by
-//! [`NpcDialog::from_pack`]/[`NpcDialog::open_default`], the two
+//! [`NpcDialog::from_pack`]/[`NpcDialog::open`], the two
 //! constructors that build a real field NPC's dialog): once
 //! [`TickEvent::Finished`] is reached, the box holds its last frame of text
 //! exactly as printed -- no [`TickEvent::Cleared`], no post-clear reveal
@@ -165,9 +165,7 @@ pub(crate) struct NpcDialog {
 
 impl NpcDialog {
     /// Build a dialog over an already-decoded font `sheet` and dialogue
-    /// `frame`, printing `tokens` at [`TextSpeed::Mid`] (upstream's own
-    /// new-game default -- see [`crate::intro::IntroScene::from_pack`]'s
-    /// identical doc comment).
+    /// `frame`, printing `tokens` at `text_speed`.
     ///
     /// `pub(crate)` because this box is not only an NPC's: upstream's
     /// standard field message window is a single window
@@ -178,18 +176,26 @@ impl NpcDialog {
     /// message-box frame, so it builds boxes here directly instead of
     /// re-reading the pack once per message.
     ///
+    /// `text_speed` is caller-supplied: the save flow's own
+    /// `StartMenuChrome::message_box` passes the live save block's decoded
+    /// `optionsTextSpeed` (`SaveTarget::player_text_speed`), matching
+    /// `ShowSaveMessage`'s real `AddTextPrinterForMessage_2`/
+    /// `GetPlayerTextSpeedDelay` pacing (`src/menu.c:198-202,481-487`);
+    /// every other caller still passes [`TextSpeed::Mid`], upstream's own
+    /// new-game default (`SetDefaultOptions`, `src/new_game.c:91-93`).
+    ///
     /// Opts into held-A/B print speed-up (module docs' "Held-A/B print
     /// speed-up" section): every caller of this constructor is one of
     /// upstream's `AddTextPrinterForMessage(TRUE)` sites, so every box built
     /// here -- an NPC's or `ShowSaveMessage`'s alike -- gets it.
-    pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
-        let printer = Printer::new(
-            tokens,
-            sheet,
-            TextSpeed::Mid,
-            textbox::STANDARD_PRINTER_ORIGIN,
-        )
-        .with_ab_speed_up_print();
+    pub(crate) fn new(
+        sheet: OwnedFontGlyphSheet,
+        frame: FrameAssets,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Self {
+        let printer = Printer::new(tokens, sheet, text_speed, textbox::STANDARD_PRINTER_ORIGIN)
+            .with_ab_speed_up_print();
         Self {
             frame,
             printer,
@@ -223,7 +229,7 @@ impl NpcDialog {
     ///
     /// Opts into [`Self::with_waitbuttonpress`] (that method's own doc
     /// comment): this is the constructor real field NPC scripts open
-    /// through ([`Self::open_default`], `crate::flow::overworld_phase`'s own
+    /// through ([`Self::open`], `crate::flow::overworld_phase`'s own
     /// A-press interaction path), and every one of them ends with upstream's
     /// `waitbuttonpress`, not an auto-close.
     ///
@@ -235,23 +241,35 @@ impl NpcDialog {
     pub(crate) fn from_pack(pack: &AssetPack, tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
         let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, tokens).with_waitbuttonpress())
+        // `TextSpeed::Mid` (`Self::new`'s own doc comment): ordinary field
+        // NPC dialogue does not yet read the saved `optionsTextSpeed`
+        // option.
+        Ok(Self::new(sheet, frame, tokens, TextSpeed::Mid).with_waitbuttonpress())
     }
 
-    /// Load the pack from its default location and open a dialog printing
-    /// `tokens` -- mirrors [`crate::intro::load_default`]. Reads from disk
-    /// on every call, by design (module docs on [`crate::intro::IntroScene`]'s
-    /// identical "owns every byte it renders" shape): a dialog only ever
-    /// opens for the single frame the player presses A facing an NPC, so the
-    /// small extra pack read is not a per-frame cost.
+    /// Load the pack this session's [`crate::pack_source::PackSource`]
+    /// resolves to and open a dialog printing `tokens` -- mirrors
+    /// [`crate::intro::load`]. Reads from disk on every call, by design
+    /// (module docs on [`crate::intro::IntroScene`]'s identical "owns every
+    /// byte it renders" shape): a dialog only ever opens for the single
+    /// frame the player presses A facing an NPC, so the small extra pack
+    /// read is not a per-frame cost.
+    ///
+    /// `source` is the owning [`crate::flow::OverworldPhase`]'s own
+    /// retained source (issue #412), so a headless-real scenario's field
+    /// dialog keeps reading the checkout pack exactly as its title screen
+    /// already did.
     ///
     /// # Errors
     ///
     /// [`NpcDialogError::Pack`] if no pack has been extracted yet, or is
     /// missing the entries [`Self::from_pack`] needs;
     /// [`NpcDialogError::Font`] if the font sheet doesn't decode.
-    pub(crate) fn open_default(tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
-        let pack = AssetPack::load_default()?;
+    pub(crate) fn open(
+        source: crate::pack_source::PackSource,
+        tokens: Vec<Token>,
+    ) -> Result<Self, NpcDialogError> {
+        let pack = source.load()?;
         Self::from_pack(&pack, tokens)
     }
 
@@ -383,7 +401,9 @@ pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
         height: 16,
         palette: vec![Rgb888::BLACK; 16],
     };
-    NpcDialog::new(sheet, frame, tokens)
+    // `TextSpeed::Mid`: every caller of this fixture assumes upstream's own
+    // new-game default cadence (`NpcDialog::new`'s own doc comment).
+    NpcDialog::new(sheet, frame, tokens, TextSpeed::Mid)
 }
 
 #[cfg(test)]

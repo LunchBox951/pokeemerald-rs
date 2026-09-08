@@ -1,4 +1,6 @@
-//! Encodes [`CompiledSong`] values into the asset pack's song schema.
+//! Encodes [`CompiledSong`] values into the asset pack's song schema. The
+//! pack container around this payload is shared (`pack_format` owns it);
+//! only the payload encoding is duplicated here.
 //!
 //! MIDI extraction writes this schema without using the `assets` encoder, so
 //! schema changes must be mirrored between them. Strings are UTF-8 prefixed by

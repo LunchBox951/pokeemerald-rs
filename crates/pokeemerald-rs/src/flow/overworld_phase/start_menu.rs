@@ -57,6 +57,7 @@
 //! [`OverworldPhase::from_saved`].
 
 use engine::save::SavedObjectEvent;
+use engine::text::render::TextSpeed;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
 
@@ -94,7 +95,7 @@ impl OverworldPhase {
             if !self.start_menu_may_open(buttons) {
                 return false;
             }
-            match start_menu::open_default(self.start_menu_cursor) {
+            match start_menu::open(self.pack_source, self.start_menu_cursor) {
                 Ok(opened) => self.start_menu = Some(opened),
                 // The same "log-or-ignore is fine" policy [`crate::flow`]
                 // applies to every other pack load: a missing pack must not
@@ -163,7 +164,7 @@ impl OverworldPhase {
     /// Test-only: open a pack-free
     /// [`crate::start_menu::synthetic_start_menu_at`] directly, so the save
     /// round-trip can drive the *real* [`StartMenu::tick`] state machine in
-    /// CI, where no asset pack exists for [`crate::start_menu::open_default`]
+    /// CI, where no asset pack exists for [`crate::start_menu::open`]
     /// to read (`crate::flow::save_continue_tests`' own module docs on the
     /// two substitutions those tests make). Nothing but the chrome differs:
     /// the menu, its items, its flow, and the write it performs are the
@@ -391,6 +392,17 @@ impl SaveTarget for PhaseSaveTarget<'_> {
         // into a longer message, so its `End` must not truncate that.
         tokens.retain(|token| *token != Token::End);
         tokens
+    }
+
+    /// `gSaveBlock2Ptr->optionsTextSpeed`, clamped the same way
+    /// `GetPlayerTextSpeedDelay` clamps it for delay selection
+    /// (`src/menu.c:481-487`, mirrored by [`TextSpeed::from_raw_option`]).
+    /// Upstream's own write-back -- repairing an out-of-range value to
+    /// `OPTIONS_TEXT_SPEED_MID` in `gSaveBlock2Ptr` itself (`:483-484`) --
+    /// is not mirrored: this only selects the speed to print at, and never
+    /// mutates the phase's stored `save2`.
+    fn player_text_speed(&self) -> TextSpeed {
+        TextSpeed::from_raw_option(self.phase.save2.options_text_speed)
     }
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`), preceded by

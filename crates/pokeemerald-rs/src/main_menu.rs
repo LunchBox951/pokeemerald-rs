@@ -563,7 +563,29 @@ pub fn load_default_with_window_frame(
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> Result<MainMenuScene, MainMenuSceneError> {
-    let pack = AssetPack::load_default()?;
+    load_with_window_frame(
+        crate::pack_source::PackSource::Runtime,
+        menu_type,
+        window_frame,
+    )
+}
+
+/// [`load_default_with_window_frame`], pinned to whichever
+/// [`crate::pack_source::PackSource`] `source` names instead of always the
+/// runtime resolver (issue #412) -- what [`crate::flow::advance_scene`]
+/// calls with the same source [`crate::App`] resolved at construction, so a
+/// headless-real scenario's `Title` -> `MainMenu` transition keeps reading
+/// the checkout's own pack exactly as its title screen already did.
+///
+/// # Errors
+///
+/// See [`load_default_with_window_frame`].
+pub(crate) fn load_with_window_frame(
+    source: crate::pack_source::PackSource,
+    menu_type: MainMenuType,
+    window_frame: u8,
+) -> Result<MainMenuScene, MainMenuSceneError> {
+    let pack = source.load()?;
     MainMenuScene::from_pack_with_window_frame(&pack, menu_type, window_frame)
 }
 

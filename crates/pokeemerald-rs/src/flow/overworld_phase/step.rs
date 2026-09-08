@@ -410,6 +410,7 @@ impl OverworldPhase {
             // (an immutable borrow of `self.scene`) is still needed below.
             let maps = MapConnections {
                 pack: &self.connection_pack,
+                source: self.pack_source,
             };
             // `interaction` preempts movement too (issue #435) -- see its
             // own comment above.
@@ -610,10 +611,12 @@ impl OverworldPhase {
             }
         } else {
             match interaction {
-                Some(InteractionOutcome::Dialog(tokens)) => match NpcDialog::open_default(tokens) {
-                    Ok(dialog) => self.dialog = Some(dialog),
-                    Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
-                },
+                Some(InteractionOutcome::Dialog(tokens)) => {
+                    match NpcDialog::open(self.pack_source, tokens) {
+                        Ok(dialog) => self.dialog = Some(dialog),
+                        Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
+                    }
+                }
                 Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
                 // Consumed upstream too (`InteractionOutcome::Unmodelled`'s
                 // own doc comment) -- fail closed, nothing to render.

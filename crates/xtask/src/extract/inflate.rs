@@ -1,7 +1,7 @@
 //! DEFLATE and zlib decoding for PNG asset extraction.
 //!
-//! Supports stored, fixed-Huffman, and dynamic-Huffman blocks and validates
-//! zlib headers and Adler-32 trailers.
+//! Supports stored, fixed-Huffman, and dynamic-Huffman blocks, and validates
+//! zlib headers, the exact DEFLATE/trailer boundary, and Adler-32 trailers.
 
 use std::fmt;
 
@@ -25,9 +25,13 @@ pub enum InflateError {
     /// produced so far.
     DistanceTooFar,
     /// The zlib header's 2-byte `CMF`/`FLG` pair failed its own checks
-    /// (compression method must be 8, `(CMF*256+FLG) % 31 == 0`, and
-    /// `FDICT` — a preset dictionary — is not supported).
+    /// (compression method must be 8, `CINFO` must be at most 7,
+    /// `(CMF*256+FLG) % 31 == 0`, and `FDICT` — a preset dictionary — is not
+    /// supported).
     BadZlibHeader,
+    /// One or more complete bytes separated the final DEFLATE block from the
+    /// zlib trailer's Adler-32 checksum.
+    TrailingData,
     /// The zlib trailer's Adler-32 checksum did not match the decompressed
     /// data.
     AdlerMismatch,
@@ -45,6 +49,7 @@ impl fmt::Display for InflateError {
             Self::InvalidCode => write!(f, "inflate: invalid Huffman code"),
             Self::DistanceTooFar => write!(f, "inflate: back-reference distance too far"),
             Self::BadZlibHeader => write!(f, "inflate: bad zlib header"),
+            Self::TrailingData => write!(f, "inflate: trailing data before zlib Adler-32 trailer"),
             Self::AdlerMismatch => write!(f, "inflate: Adler-32 checksum mismatch"),
             Self::OutputTooLarge => write!(f, "inflate: decompressed output exceeded size limit"),
         }
@@ -233,6 +238,11 @@ fn read_dynamic_tables(
 ) -> Result<(HuffmanTable, HuffmanTable), InflateError> {
     let literal_length_code_count =
         usize::try_from(reader.read_bits(5)?).expect("5 bits fit usize") + 257;
+    // RFC 1951 section 3.2.7 limits dynamic blocks to 286 literal/length
+    // codes; HLIT values 30 and 31 (287 and 288 codes) are forbidden.
+    if literal_length_code_count > 286 {
+        return Err(InflateError::BadHuffmanTable);
+    }
     let distance_code_count = usize::try_from(reader.read_bits(5)?).expect("5 bits fit usize") + 1;
     let code_length_code_count =
         usize::try_from(reader.read_bits(4)?).expect("4 bits fit usize") + 4;
@@ -349,12 +359,19 @@ const STORED_BLOCK: u32 = 0;
 const FIXED_HUFFMAN_BLOCK: u32 = 1;
 const DYNAMIC_HUFFMAN_BLOCK: u32 = 2;
 
-/// Inflate a raw DEFLATE stream (RFC 1951), with no zlib framing.
+/// The result of inflating a raw DEFLATE stream, including how much of the
+/// input the final block actually consumed.
 ///
-/// # Errors
-///
-/// See [`InflateError`]'s variants for the malformed-stream cases detected.
-pub fn inflate(data: &[u8]) -> Result<Vec<u8>, InflateError> {
+/// `inflate_zlib` uses `byte_pos` and `bit_offset` to reject bytes left
+/// between the final block and the zlib trailer; RFC 1951 has no framing
+/// after `BFINAL`, so the test-only `inflate` helper below discards them.
+struct InflateOutcome {
+    output: Vec<u8>,
+    byte_pos: usize,
+    bit_offset: u32,
+}
+
+fn inflate_with_position(data: &[u8]) -> Result<InflateOutcome, InflateError> {
     let mut reader = BitReader::new(data);
     let mut output = Vec::new();
 
@@ -399,7 +416,22 @@ pub fn inflate(data: &[u8]) -> Result<Vec<u8>, InflateError> {
             break;
         }
     }
-    Ok(output)
+    Ok(InflateOutcome {
+        output,
+        byte_pos: reader.byte_pos,
+        bit_offset: reader.bit_offset,
+    })
+}
+
+/// Inflate a raw DEFLATE stream (RFC 1951), with no zlib framing.
+///
+/// `inflate_zlib` is the only real caller of the DEFLATE decoder, and it
+/// needs the consumed-position tracking `inflate_with_position` returns, so
+/// this discards-the-position convenience wrapper exists only to give tests
+/// a plain `Vec<u8>` result for the raw-DEFLATE (non-zlib) test cases below.
+#[cfg(test)]
+fn inflate(data: &[u8]) -> Result<Vec<u8>, InflateError> {
+    inflate_with_position(data).map(|outcome| outcome.output)
 }
 
 fn adler32(data: &[u8]) -> u32 {
@@ -416,6 +448,7 @@ fn adler32(data: &[u8]) -> u32 {
 
 const ZLIB_COMPRESSION_METHOD_MASK: u8 = 0x0f;
 const ZLIB_DEFLATE_METHOD: u8 = 8;
+const ZLIB_MAX_COMPRESSION_INFO: u8 = 7;
 const ZLIB_PRESET_DICTIONARY_FLAG: u8 = 0b0010_0000;
 const ZLIB_HEADER_CHECK_DIVISOR: u16 = 31;
 const ZLIB_TRAILER_SIZE: usize = 4;
@@ -424,19 +457,23 @@ const ZLIB_TRAILER_SIZE: usize = 4;
 ///
 /// # Errors
 ///
-/// Returns [`InflateError::BadZlibHeader`] for a non-DEFLATE method, invalid
-/// header check bits, or a preset dictionary. Returns
+/// Returns [`InflateError::BadZlibHeader`] for a non-DEFLATE method, a
+/// `CINFO` window-size field over 7, invalid header check bits, or a preset
+/// dictionary. Returns [`InflateError::TrailingData`] when complete bytes
+/// separate the final DEFLATE block from the trailer. Returns
 /// [`InflateError::AdlerMismatch`] when the decompressed data does not match
 /// the trailing checksum. Malformed DEFLATE data returns the corresponding
-/// [`inflate`] error.
+/// error from the underlying DEFLATE decoder.
 pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
     let &[compression_method_and_flags, flags, ref body @ ..] = data else {
         return Err(InflateError::BadZlibHeader);
     };
     let compression_method = compression_method_and_flags & ZLIB_COMPRESSION_METHOD_MASK;
+    let compression_info = compression_method_and_flags >> 4;
     let uses_preset_dictionary = (flags & ZLIB_PRESET_DICTIONARY_FLAG) != 0;
     let header = u16::from_be_bytes([compression_method_and_flags, flags]);
     if compression_method != ZLIB_DEFLATE_METHOD
+        || compression_info > ZLIB_MAX_COMPRESSION_INFO
         || uses_preset_dictionary
         || header % ZLIB_HEADER_CHECK_DIVISOR != 0
     {
@@ -448,7 +485,18 @@ pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
     let (deflate_body, trailer) = body.split_at(body.len() - ZLIB_TRAILER_SIZE);
     let expected_adler = u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
 
-    let output = inflate(deflate_body)?;
+    let InflateOutcome {
+        output,
+        byte_pos,
+        bit_offset,
+    } = inflate_with_position(deflate_body)?;
+    // A final block can end mid-byte; only whole trailing bytes beyond that
+    // partial byte count as residue, since RFC 1951 leaves no framing after
+    // `BFINAL` for anything else to legitimately occupy.
+    let consumed_len = byte_pos + usize::from(bit_offset != 0);
+    if consumed_len != deflate_body.len() {
+        return Err(InflateError::TrailingData);
+    }
     if adler32(&output) != expected_adler {
         return Err(InflateError::AdlerMismatch);
     }
@@ -513,5 +561,60 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
     fn truncated_stream_is_rejected() {
         let err = inflate(&[]).unwrap_err();
         assert_eq!(err, InflateError::UnexpectedEnd);
+    }
+
+    #[test]
+    fn oversized_hlit_is_rejected() {
+        // Each byte is a final (BFINAL=1) dynamic-Huffman (BTYPE=10) block
+        // header whose 5-bit HLIT field, read least-significant-bit-first
+        // starting at bit 3, is the forbidden value 30 or 31 (287 or 288
+        // literal/length codes). The check must fire before HDIST or any
+        // table body is read, so no further bytes are needed.
+        for (hlit, stream_byte) in [(30u32, 0xF5u8), (31u32, 0xFD)] {
+            let err = inflate(&[stream_byte]).unwrap_err();
+            assert_eq!(
+                err,
+                InflateError::BadHuffmanTable,
+                "HLIT={hlit} requests {} literal/length codes",
+                257 + hlit
+            );
+        }
+    }
+
+    #[test]
+    fn zlib_cinfo_above_seven_is_rejected() {
+        // CMF=0x88 (CM=8, CINFO=8), FLG=0x1c: no FDICT, and 0x881c % 31 == 0,
+        // so only the CINFO check catches this header. The rest is an
+        // otherwise-valid empty stored block plus the Adler-32 of empty
+        // data (1).
+        let stream_with_oversized_cinfo: &[u8] = &[
+            0x88, 0x1c, 0x01, 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
+        ];
+        let err = inflate_zlib(stream_with_oversized_cinfo).unwrap_err();
+        assert_eq!(err, InflateError::BadZlibHeader);
+    }
+
+    #[test]
+    fn zlib_trailing_bytes_before_adler_are_rejected() {
+        // A valid header, an empty final stored block, two garbage bytes
+        // (0xDE, 0xAD), then the Adler-32 of empty data (1).
+        let stream_with_injected_garbage: &[u8] = &[
+            0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff, 0xde, 0xad, 0x00, 0x00, 0x00, 0x01,
+        ];
+        let err = inflate_zlib(stream_with_injected_garbage).unwrap_err();
+        assert_eq!(err, InflateError::TrailingData);
+    }
+
+    #[test]
+    fn zlib_stream_ending_mid_byte_still_decodes() {
+        // A valid header, an empty fixed-Huffman final block whose end-of-block
+        // code ends mid-byte, then the Adler-32 of empty data (1). This checks
+        // that the final block's own byte-alignment padding is not mistaken
+        // for trailing data.
+        let minimal_empty_stream: &[u8] = &[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];
+        assert_eq!(
+            inflate_zlib(minimal_empty_stream).unwrap(),
+            Vec::<u8>::new()
+        );
     }
 }

@@ -11,6 +11,7 @@ use super::{
     StartMenuOutcome, ITEMS, MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH,
 };
 use crate::game_save::SaveFileStatus;
+use engine::text::render::TextSpeed;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
 
@@ -55,6 +56,14 @@ impl SaveTarget for FakeTarget {
 
     fn player_name(&self) -> Vec<Token> {
         "STU".chars().map(Token::Char).collect()
+    }
+
+    /// Fixed at MID: this fake exists to drive the menu mechanics, not the
+    /// text-speed plumbing (`crate::flow::save_continue_tests` owns that
+    /// coverage against the real `PhaseSaveTarget`), and every frame
+    /// budget in this file already assumes MID's cadence.
+    fn player_text_speed(&self) -> TextSpeed {
+        TextSpeed::Mid
     }
 
     /// `SaveDoSaveCallback`'s dispatch (`start_menu.c:1093-1096`): the

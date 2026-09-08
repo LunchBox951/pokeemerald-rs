@@ -1,5 +1,8 @@
-//! Resolves parsed voicegroup references and normalizes each emitted group to
-//! [`super::VOICE_SLOT_COUNT`] slots.
+//! Resolves parsed voicegroup references (cycle-safe, and rejecting a
+//! second level of indirection -- see
+//! [`resolve_voice_groups_with_link_successors`]) into stable
+//! [`pack_format`] ids and normalizes each emitted group to exactly
+//! [`super::VOICE_SLOT_COUNT`] slots (see [`pad_to_128`]).
 //!
 //! # Sample id scheme
 //!
@@ -26,6 +29,10 @@ use super::VOICE_SLOT_COUNT;
 const DIRECT_SOUND_SAMPLE_PREFIX: &str = "DirectSoundWaveData_";
 const PROGRAMMABLE_WAVE_SAMPLE_PREFIX: &str = "ProgrammableWaveData_";
 
+/// One fully-resolved voicegroup slot: every reference (sample, child
+/// group) has been turned into a stable pack id. The shape mirrors
+/// `crates/assets`'s `VoiceEntry`, duplicated rather than shared since this
+/// crate never depends on `crates/assets`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum VoiceSlot {
     DirectSound {

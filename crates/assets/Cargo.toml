@@ -13,3 +13,8 @@ test-support = []
 
 [lints]
 workspace = true
+
+[dependencies]
+# The asset-pack container format this crate's `AssetPack` reads. In-workspace,
+# std-only, not a new external dependency.
+pack-format = { path = "../pack-format" }

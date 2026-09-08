@@ -155,6 +155,21 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
 }
 
 #[test]
+fn load_repo_default_room_looks_only_at_the_checkout_pack() {
+    // The point of the repo-pinned loader: it must never consult
+    // `AssetPack::default_path`'s earlier rungs. With no checkout pack
+    // extracted it reports "pack missing" even where a user pack *is*
+    // installed (which `load_default_room` would happily load instead),
+    // so `xtask`'s smoke e2e can never validate the wrong bytes
+    // `(test-ratchet)`.
+    if pack_format::repo_pack_path().is_file() {
+        return;
+    }
+    let err = super::load_repo_default_room(&engine::event_data::EventData::new()).unwrap_err();
+    assert!(err.is_pack_missing());
+}
+
+#[test]
 fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
     // (this function's own doc comment): `load_room` fails at the same
@@ -1249,7 +1264,12 @@ fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_o
         .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
         .expect("the connection fixture always fabricates the target's map entry");
     target_grid.kind_tag = 1;
-    target_grid.meta = 0u16.to_le_bytes().to_vec();
+    // A well-formed palette of the wrong kind: the format rejects a palette
+    // whose `color_count` does not address its payload
+    // (`pack_format::parse_directory`), and this fixture is about the *kind*
+    // reaching the caller, not about a corrupt pack failing to load.
+    let colors = u16::try_from(target_grid.payload.len() / 2).expect("a u16 grid of colours");
+    target_grid.meta = colors.to_le_bytes().to_vec();
 
     let err = synthetic_scene_result_with_connections(
         write_synthetic_pack(entries),
