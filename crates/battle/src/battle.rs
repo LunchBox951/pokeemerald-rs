@@ -91,7 +91,7 @@
 //! - **A fainted opponent does not end the battle.** The faint still emits
 //!   [`BattleEvent::Fainted`] and [`BattleEvent::ExpGained`] where it
 //!   always did, but the replacement is settled at the *end* of the turn,
-//!   in [`Battle::end_of_turn`] — upstream's `HandleFaintedMonActions`
+//!   in [`Battle::handle_fainted_mons`] — upstream's `HandleFaintedMonActions`
 //!   position (`battle_main.c:3968`), so a mon that fainted earlier
 //!   in the turn is simply skipped when its slot in `gBattlerByTurnOrder`
 //!   comes up rather than being replaced mid-turn. With the bench empty,
@@ -398,6 +398,18 @@ pub struct Battle {
     /// `BattleTurnPassed`, which does. Kept as its own flag rather than
     /// re-derived from a turn count, which an aborted turn would skew.
     turn_started: bool,
+    /// The turn order a residual pass still owes, parked because the
+    /// knockout that preceded it opened a level-up prompt.
+    ///
+    /// Upstream reaches `DoBattlerEndTurnEffects` only once the whole
+    /// `BattleScript_GiveExp` script — the yes/no box included — has
+    /// finished inside `HandleFaintedMonActions`
+    /// (`battle_util.c:1912`-`:1923`, run from `HandleAction_TryFinish`,
+    /// `:638`-`:644`, before `BattleTurnPassed` is ever scheduled). This
+    /// crate answers that box through [`Battle::resolve_move_learn`]
+    /// instead of blocking, so the pass it interrupted waits here and runs
+    /// when the last prompt is answered.
+    pending_residual_order: Option<Order>,
 }
 
 /// Which `gBattleTypeFlags` shape a [`Battle`] was constructed for.
@@ -536,6 +548,7 @@ impl Battle {
             },
             turn_counter: 0,
             turn_started: false,
+            pending_residual_order: None,
         })
     }
 
@@ -642,6 +655,7 @@ impl Battle {
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
             turn_started: false,
+            pending_residual_order: None,
         })
     }
 
@@ -730,8 +744,10 @@ impl Battle {
     /// holding for the answer ([`Battle::pending_move_learn`]'s docs): a
     /// trainer's [`BattleEvent::TrainerSentOut`], or
     /// [`BattleEvent::MoneyGained`] (trainer only) and
-    /// [`BattleEvent::Ended`]. Draws no RNG — upstream's box and summary
-    /// screen draw none either.
+    /// [`BattleEvent::Ended`] — and then, for a battle that did not end
+    /// there, the turn's own parked residual pass
+    /// ([`BattleEvent::HurtByPoison`]). Draws no RNG — upstream's box and
+    /// summary screen draw none either.
     ///
     /// Only the *party* mon is updated, which is all this crate has: the
     /// `gBattleMons` half of upstream's write
@@ -749,7 +765,9 @@ impl Battle {
     /// (`src/battle_script_commands.c:5468`-`:5472`), which prints
     /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopens the move list. None of
     /// the three mutates anything, and the prompt stays outstanding so a
-    /// corrected answer can still be given.
+    /// corrected answer can still be given. [`BattleError::UnknownSpecies`]
+    /// if the resumed residual pass fells a battler whose reward has to
+    /// look its species up.
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
@@ -770,17 +788,28 @@ impl Battle {
             }),
             None => events.push(BattleEvent::MoveLearnDeclined { move_id: asked }),
         }
-        match resolution.next {
-            Some(next) => events.push(BattleEvent::MoveLearnPrompt {
+        if let Some(next) = resolution.next {
+            events.push(BattleEvent::MoveLearnPrompt {
                 move_id: next.move_id(),
-            }),
+            });
+        } else {
             // The last prompt of the level-up: release the knockout's
             // aftermath the pause was holding back — the trainer's
             // replacement send-out, or the terminal outcome (money
             // included) — exactly where upstream's completed level-up
             // script hands back to `HandleFaintedMonActions`' case 4
             // (`battle_util.c:1894`-`:1951`; see `settle_fainted_enemy`).
-            None => self.settle_fainted_enemy(&mut events),
+            self.settle_fainted_enemy(&mut events);
+            // ...and then whatever the interrupted turn still owed.
+            // Upstream's box lives *inside* `HandleFaintedMonActions`, so
+            // `BattleTurnPassed`'s residual pass has not run yet -- unless
+            // the knockout this level-up came from ended the battle, which
+            // `residual_effects` refuses on its own (`Battle::pass_turn`'s
+            // docs).
+            if let Some(order) = self.pending_residual_order.take() {
+                self.residual_effects(order, &mut events);
+                self.handle_fainted_mons(&mut events)?;
+            }
         }
         Ok(events)
     }
@@ -1040,8 +1069,7 @@ impl Battle {
             // (`battle_main.c:4797`-`:4808`), the same `gBattlerByTurnOrder`
             // `Battle::residual_effects` reads -- so the player's slot comes
             // up first here too, whether or not the run itself succeeded.
-            self.residual_effects(Order::AttackerFirst, events);
-            self.end_of_turn(events)?;
+            self.pass_turn(Order::AttackerFirst, events)?;
             return Ok(());
         };
 
@@ -1073,9 +1101,12 @@ impl Battle {
                 // A battler that fainted earlier in the turn is skipped when
                 // its slot in `gBattlerByTurnOrder` comes up -- in a wild
                 // battle that is the same thing as the battle being over,
-                // but a trainer's fainted mon is only replaced at the *end*
-                // of the turn (`end_of_turn`), so the two tests are now
-                // distinct.
+                // but a trainer's fainted mon is only replaced once every
+                // action has had its chance (`pass_turn`), which is also
+                // where `cancelallactions`
+                // (`data/battle_scripts_1.s:2894`-`:2895`) would have
+                // stopped the queued action anyway, so the two tests are
+                // now distinct.
                 //
                 // Both battlers are checked, not just the enemy: upstream
                 // never lets a queued action execute against an empty
@@ -1104,7 +1135,7 @@ impl Battle {
                 // drain move whose Liquid Ooze recoil faints the *enemy*
                 // here (the faster trainer mon drains a Liquid Ooze holder)
                 // leaves the player standing but the enemy gone, and
-                // `self.outcome` stays `None` until `Self::end_of_turn` runs
+                // `self.outcome` stays `None` until `Self::pass_turn` runs
                 // (no pipeline decides it on its own faint any more), so
                 // `!self.player.is_fainted()` alone would let the player's
                 // queued move execute into the fainted enemy's now-empty
@@ -1115,9 +1146,51 @@ impl Battle {
                 }
             }
         }
+        self.pass_turn(order, events)
+    }
+
+    /// The turn's tail once both actions have had their chance, in
+    /// upstream's own two steps.
+    ///
+    /// Every move script ends on `Cmd_end`, which sets
+    /// `B_ACTION_TRY_FINISH` (`battle_script_commands.c:3950`-`:3958`);
+    /// `sTurnActionsFuncsTable` dispatches that to `HandleAction_TryFinish`
+    /// (`battle_main.c:549`), which runs `HandleFaintedMonActions`
+    /// (`battle_util.c:638`-`:644`). So an action-phase knockout is paid
+    /// for, replaced, and — where it exhausts a side — *scored* before the
+    /// turn's residuals: `RunTurnActionsFunctions` hands a non-zero
+    /// `gBattleOutcome` to `sEndTurnFuncsTable`
+    /// (`battle_main.c:4937`-`:4952`), which routes to
+    /// `HandleEndTurn_BattleWon`/`_BattleLost`, never to
+    /// `HandleEndTurn_ContinueBattle` and its `BattleTurnPassed`. Only a
+    /// turn nobody's knockout decided reaches `BattleTurnPassed`'s
+    /// `if (gBattleOutcome == 0)` residual gate (`:3960`-`:3966`) and the
+    /// second `HandleFaintedMonActions` behind it (`:3968`), which settles
+    /// whatever the residuals themselves felled.
+    ///
+    /// Both steps call the same [`Self::handle_fainted_mons`], as upstream
+    /// calls the same `HandleFaintedMonActions` from both places; the
+    /// second is a no-op unless the residual pass created new work.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnknownSpecies`] from [`Self::handle_fainted_mons`].
+    fn pass_turn(
+        &mut self,
+        order: Order,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        self.handle_fainted_mons(events)?;
+        if self.player.pending_move_learn().is_some() {
+            // The level-up script upstream finishes inside
+            // `HandleFaintedMonActions` is still open, and nothing after the
+            // faint -- the residual pass included -- may run until it is
+            // answered. [`Self::resolve_move_learn`] resumes here.
+            self.pending_residual_order = Some(order);
+            return Ok(());
+        }
         self.residual_effects(order, events);
-        self.end_of_turn(events)?;
-        Ok(())
+        self.handle_fainted_mons(events)
     }
 
     /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`) for the
@@ -1126,14 +1199,13 @@ impl Battle {
     /// order (`:1469`-`:1472`), which is the same [`Order`] this turn's move
     /// dispatch used. Skips a battler already fainted this turn
     /// (`gAbsentBattlerFlags`, `:1472`-`:1474`) and runs only while the battle
-    /// has no outcome (`battle_main.c:3960`-`:3966`); a direct-hit kill leaves
-    /// the outcome unset until [`Self::end_of_turn`], as upstream's
-    /// `gBattleOutcome` stays `0` until `HandleFaintedMonActions` (`:3968`).
+    /// has no outcome — `BattleTurnPassed`'s own `if (gBattleOutcome == 0)`
+    /// gate (`battle_main.c:3960`-`:3966`), which an action-phase knockout
+    /// that exhausted a side has already closed in [`Self::pass_turn`].
     /// A residual faint that exhausts a whole side stops the walk before the
     /// next battler ([`Self::fainting_decides_the_battle`]), matching
     /// `BattleScript_DoTurnDmgEnd`'s own `checkteamslost`
-    /// (`data/battle_scripts_1.s:3746`); experience is paid only in
-    /// [`Self::end_of_turn`].
+    /// (`data/battle_scripts_1.s:3746`).
     fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() {
             return;
@@ -1190,10 +1262,7 @@ impl Battle {
     /// `ENDTURN_POISON` for one battler (`battle_util.c:1525`-`:1535`): an
     /// eighth of maximum HP, floored to one
     /// ([`crate::status1::poison_residual_damage`]), for a standing battler
-    /// carrying [`Status1::Poisoned`]. A no-op for a battler already at `0`
-    /// HP — upstream's own `hp != 0` guard, which also covers a trainer's
-    /// fainted-but-not-yet-replaced corpse, still present in
-    /// [`Battle::enemy`] until [`Battle::end_of_turn`] runs after this.
+    /// carrying [`Status1::Poisoned`] — upstream's own `hp != 0` guard.
     /// Draws nothing: the residual tick has no `Random()` call.
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
         let battler = if is_player { &self.player } else { &self.enemy };
@@ -1214,17 +1283,16 @@ impl Battle {
         });
     }
 
-    /// `HandleFaintedMonActions` (`battle_util.c:1894`), run once after both
-    /// battlers' actions *and* [`Self::residual_effects`] — that is where
-    /// upstream puts it too: `RunTurnActionsFunctions` finishes the turn's
-    /// actions, `BattleTurnPassed` then runs `DoBattlerEndTurnEffects`
-    /// (`:3965`), and only after that returns does `HandleFaintedMonActions`
-    /// (`:3968`) award experience, replace a trainer's fainted lead, or end
-    /// the battle. Neither a direct hit nor a drain move's own double-faint
-    /// arm decides any of that itself ([`Self::settle_faint`],
-    /// [`Self::execute_drain_move`]) — this is the one place that does, for
-    /// a fainted battler regardless of which pipeline (or
-    /// [`Self::residual_effects`]) put it there.
+    /// `HandleFaintedMonActions` (`battle_util.c:1894`): award experience,
+    /// replace a trainer's fainted lead, or end the battle, for a fainted
+    /// battler regardless of which pipeline (or [`Self::residual_effects`])
+    /// put it there. Neither a direct hit nor a drain move's own
+    /// double-faint arm decides any of that itself ([`Self::settle_faint`],
+    /// [`Self::execute_drain_move`]) — this is the one place that does.
+    ///
+    /// [`Self::pass_turn`] runs it at both of upstream's own call sites, so
+    /// an action-phase knockout settles *before* the turn's residuals and a
+    /// residual knockout settles after.
     ///
     /// The player is checked first and, alone, decides the outcome: this
     /// crate models no in-battle bench for the player, so any player faint
@@ -1243,7 +1311,7 @@ impl Battle {
     ///
     /// [`BattleError::UnknownSpecies`] if a fainted enemy's species is
     /// missing from the dex, which the experience award has to look up.
-    fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+    fn handle_fainted_mons(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
             return Ok(());
         }
@@ -1275,7 +1343,7 @@ impl Battle {
     /// `HandleFaintedMonActions`' case 1 (`battle_util.c:1912`-`:1923`),
     /// **before** case 4's `checkteamslost`/replacement
     /// (`:1938`-`:1946`) — so this runs ahead of [`Self::settle_fainted_enemy`]
-    /// in [`Self::end_of_turn`], not folded into it.
+    /// in [`Self::handle_fainted_mons`], not folded into it.
     ///
     /// # Errors
     ///
@@ -1539,6 +1607,7 @@ mod tests {
             kind: BattleKind::Trainer(context),
             turn_counter: 0,
             turn_started: false,
+            pending_residual_order: None,
         };
         (battle, player_max_hp, tackle_max_pp)
     }

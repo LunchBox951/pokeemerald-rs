@@ -376,20 +376,24 @@ fn a_failed_run_still_ticks_the_poison_residual() {
 /// mon below with Tackle at any damage roll.
 const CHARMANDER: u16 = 4;
 
-/// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`-`:2823`)
-/// carries no `checkteamslost`, so a direct-hit wild KO leaves
-/// `gBattleOutcome` at `0` for the rest of the turn: `BattleTurnPassed`'s
-/// `if (gBattleOutcome == 0)` gate (`src/battle_main.c:3960`-`:3966`) still
-/// runs `DoBattlerEndTurnEffects`, and `ENDTURN_POISON`
-/// (`src/battle_util.c:1525`-`:1535`) ticks the standing, poisoned winner
-/// before `HandleFaintedMonActions` (`:3968`) hands out the experience and
-/// ends the battle.
+/// A direct-hit knockout is settled in the action phase, not after the
+/// residuals: every move script ends on `Cmd_end`, which schedules
+/// `B_ACTION_TRY_FINISH` (`src/battle_script_commands.c:3950`-`:3958`) ->
+/// `HandleAction_TryFinish` (`src/battle_main.c:549`) ->
+/// `HandleFaintedMonActions` (`src/battle_util.c:638`-`:644`), whose case 1
+/// pays `BattleScript_GiveExp` (`:1912`-`:1923`) and whose case 4 runs
+/// `BattleScript_HandleFaintedMon`'s `checkteamslost`
+/// (`data/battle_scripts_1.s:2830`-`:2831`). A wild KO sets `B_OUTCOME_WON`
+/// there, and `RunTurnActionsFunctions` then routes a non-zero
+/// `gBattleOutcome` to `HandleEndTurn_BattleWon`
+/// (`src/battle_main.c:4937`-`:4952`), never to `HandleEndTurn_ContinueBattle`
+/// and its `BattleTurnPassed` -- so `DoBattlerEndTurnEffects` never runs and
+/// the poisoned winner keeps every point of the HP it won on.
 #[test]
-fn a_poisoned_winner_still_takes_its_final_residual_tick_before_the_wild_ko_pays_out() {
+fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     player.set_status1(Status1::Poisoned);
-    let player_max_hp = player.stats().max_hp;
     let player_hp_before = player.current_hp();
     let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
@@ -407,8 +411,76 @@ fn a_poisoned_winner_still_takes_its_final_residual_tick_before_the_wild_ko_pays
         events.contains(&BattleEvent::Fainted { by_player: false }),
         "the fixture must knock the wild mon out with a direct hit: {events:?}"
     );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::HurtByPoison { .. })),
+        "a knockout that already won the battle leaves no turn for a \
+         residual tick to run in: {events:?}"
+    );
+    assert_eq!(battle.player().current_hp(), player_hp_before);
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::ExpGained(_))),
+        "the knockout still pays out: {events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
 
-    let residual_index = events
+/// The reward for a direct-hit knockout is settled **before** the turn's
+/// residual pass, so a winner whose own poison tick then kills it keeps the
+/// experience and EVs it just earned. Upstream never has that ordering to
+/// lose: `HandleFaintedMonActions`' `BattleScript_GiveExp`
+/// (`src/battle_util.c:1912`-`:1923`) runs from `HandleAction_TryFinish`
+/// (`:638`-`:644`) at the end of the killing move's own script, while
+/// `DoBattlerEndTurnEffects` waits for `BattleTurnPassed`
+/// (`src/battle_main.c:3960`-`:3968`).
+///
+/// A trainer with a bench is the fixture because it is the only shape where
+/// both halves are observable: the knockout does not exhaust the opposing
+/// side, so `checkteamslost` leaves `gBattleOutcome` at `0`, the
+/// replacement is sent out, and the turn really does reach its residuals --
+/// unlike
+/// [`a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick`],
+/// where the same knockout ends the battle outright.
+#[test]
+fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winner() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let player_lethal = poison_residual_damage(player.stats().max_hp);
+    player.apply_damage(player.stats().max_hp - player_lethal);
+    let evs_before = player.evs();
+
+    let lead = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+
+    // A long zero script: the player one-shots the lead at any damage roll,
+    // so no draw here decides anything the assertions below read, and the
+    // trainer-AI draw count belongs to `trainer_ai`'s own tests.
+    let mut rng = SequenceRng::new([0; 40]);
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        vec![lead, benched],
+        &mut rng,
+    )
+    .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let exp_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .unwrap_or_else(|| panic!("the direct-hit knockout pays out: {events:?}"));
+    let sent_out_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .unwrap_or_else(|| panic!("the bench replaces the fallen lead: {events:?}"));
+    let tick_index = events
         .iter()
         .position(|event| {
             matches!(
@@ -419,28 +491,33 @@ fn a_poisoned_winner_still_takes_its_final_residual_tick_before_the_wild_ko_pays
                 }
             )
         })
-        .expect("the poisoned winner takes its end-of-turn tick: {events:?}");
+        .unwrap_or_else(|| panic!("the poisoned winner still ticks: {events:?}"));
+
+    assert!(
+        exp_index < tick_index && sent_out_index < tick_index,
+        "the knockout is settled in full before the residual pass: {events:?}"
+    );
     assert_eq!(
-        events[residual_index],
+        events[tick_index],
         BattleEvent::HurtByPoison {
             by_player: true,
-            damage: poison_residual_damage(player_max_hp),
+            damage: player_lethal,
         },
     );
-    assert_eq!(
-        battle.player().current_hp(),
-        player_hp_before - poison_residual_damage(player_max_hp),
-    );
-
-    let exp_index = events
-        .iter()
-        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
-        .expect("the KO awards experience: {events:?}");
     assert!(
-        residual_index < exp_index,
-        "the residual tick precedes the knockout's payout: {events:?}"
+        events.contains(&BattleEvent::Fainted { by_player: true }),
+        "the fixture's tick must be lethal: {events:?}"
     );
-    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+    assert!(
+        battle.player().experience() > 0,
+        "losing the turn must not take back the experience already awarded"
+    );
+    assert_ne!(
+        battle.player().evs(),
+        evs_before,
+        "losing the turn must not take back the EVs already awarded"
+    );
 }
 
 /// `MOVE_LEER`, a non-damaging stat drop: the trainer mon's only move, so
@@ -517,4 +594,90 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
         "the player must not faint after the battle is already won: {events:?}"
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// `SPECIES_TORCHIC`, whose level-16 learnset entry is Peck.
+const TORCHIC: u16 = 280;
+/// `SPECIES_TREECKO`.
+const TREECKO: u16 = 277;
+/// `MOVE_SCRATCH`.
+const SCRATCH: MoveId = MoveId(10);
+/// `MOVE_POUND`.
+const POUND: MoveId = MoveId(1);
+/// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
+const PECK: MoveId = MoveId(64);
+
+/// The residual pass a level-up prompt interrupted is not lost, it is
+/// resumed. Upstream never splits the two: the yes/no box lives *inside*
+/// `BattleScript_GiveExp`, which `HandleFaintedMonActions` runs to
+/// completion (`src/battle_util.c:1912`-`:1923`) before `BattleTurnPassed`
+/// is ever scheduled, so `DoBattlerEndTurnEffects`
+/// (`src/battle_main.c:3960`-`:3968`) still runs afterwards. This crate
+/// answers the box out of band through [`Battle::resolve_move_learn`], so
+/// the tick the knockout deferred has to arrive with the answer, behind the
+/// replacement it also deferred.
+#[test]
+fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping_it() {
+    let dex = Dex::new();
+    let growth_rate = dex.species(assets::SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    player.set_status1(Status1::Poisoned);
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    // The lead takes two Scratches to fall; the player's own tick on each
+    // earlier turn is ordinary and not what this test is about.
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() {
+            break;
+        }
+    }
+    assert!(
+        events.contains(&BattleEvent::MoveLearnPrompt { move_id: PECK }),
+        "the knockout's award must ask about Peck: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::HurtByPoison { .. })),
+        "the residual pass waits on the answer with everything else: {events:?}"
+    );
+
+    let hp_before = battle.player().current_hp();
+    let expected = poison_residual_damage(battle.player().stats().max_hp);
+    let answered = battle
+        .resolve_move_learn(battle::MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined { move_id: PECK },
+            BattleEvent::TrainerSentOut {
+                species: assets::SpeciesId(TREECKO),
+                bench_remaining: 0,
+            },
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                damage: expected,
+            },
+        ],
+        "the answer releases the replacement, then the deferred tick"
+    );
+    assert_eq!(battle.player().current_hp(), hp_before - expected);
+    assert_eq!(battle.outcome(), None, "the battle plays on");
 }

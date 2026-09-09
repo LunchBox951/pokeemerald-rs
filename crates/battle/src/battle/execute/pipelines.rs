@@ -125,9 +125,10 @@ impl Battle {
         // script order (`:358`-`:359`). Neither call decides
         // `gBattleOutcome`, awards experience, or replaces/pays out a
         // trainer on its own -- upstream doesn't reach any of that until
-        // `HandleFaintedMonActions`, well after this turn's own
-        // `DoBattlerEndTurnEffects` residual pass (`battle_main.c:3965`-
-        // `:3968`; `Battle::end_of_turn`'s own docs) -- so both
+        // `HandleFaintedMonActions`, which the move script's own `Cmd_end`
+        // only schedules once the whole script is done
+        // (`battle_script_commands.c:3950`-`:3958`;
+        // `Battle::pass_turn`'s own docs) -- so both
         // `tryfaintmon`s, and both `Fainted` events, fire regardless of
         // which faint (if either) ends up mattering for the outcome. This
         // custom double-faint settlement mirrors `Self::settle_faint`'s own

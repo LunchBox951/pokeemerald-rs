@@ -200,8 +200,9 @@ impl Battle {
     /// here any more (issue #784) — upstream's own direct-hit script,
     /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`-`:2823`),
     /// carries no `checkteamslost` either; that and `Cmd_getexp` wait for
-    /// `HandleFaintedMonActions`, well after this turn's own
-    /// `DoBattlerEndTurnEffects` residual pass — see [`Battle::end_of_turn`].
+    /// `HandleFaintedMonActions`, which `Cmd_end` schedules once the whole
+    /// move script is done (`battle_script_commands.c:3950`-`:3958`) — see
+    /// [`Battle::pass_turn`].
     ///
     /// A no-op when the battler is still standing, so a caller can run it
     /// unconditionally at each `tryfaintmon` in a script.
