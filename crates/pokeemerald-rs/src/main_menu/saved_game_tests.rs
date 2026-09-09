@@ -1,29 +1,15 @@
-//! I-6 (issue #214) unit tests: the `HAS_SAVED_GAME` item list.
-//!
-//! Split out of [`super::tests`] (which keeps the `HAS_NO_SAVED_GAME` list,
-//! the shared helpers, and everything not specific to a menu type) so
-//! neither file has to be read whole to find one menu's cases -- the same
-//! sibling-test-module shape `crate::flow::save_continue_tests` uses.
-//!
-//! The synthetic-pack fixture and the `window_of` accessor are
-//! [`super::tests`]', imported rather than duplicated, so both lists are
-//! always exercised against exactly the same pack.
-
 use super::tests::{load_synthetic_scene_of, load_synthetic_scene_of_with_window_frame, window_of};
 use super::{
     highlight_rect, ItemWindow, MainMenuItem, MainMenuScene, MainMenuType, HEADER_TEXT_BG,
 };
 use assets::AssetPack;
-use rendering::Rgb888;
+use rendering::{Bgr555, Rgb888};
 
-// -- `HAS_SAVED_GAME` geometry -------------------------------------------
+const DARKEN_WEIGHT: u8 = 7;
+const ALTERNATE_WINDOW_FRAME_ID: u8 = 5;
 
-/// `sWindowTemplates_MainMenu[2]`/`[3]`/`[4]` (`main_menu.c:311-339`): the
-/// `HAS_SAVED_GAME` boxes. Not the no-save boxes relabelled -- the whole
-/// list sits lower and `CONTINUE`'s own box is `MENU_HEIGHT_WIN2` (6) tiles
-/// tall, sized for the savegame info block.
 #[test]
-fn saved_game_item_windows_match_menu_top_win2_through_win4() {
+fn saved_game_items_have_the_upstream_order_and_geometry() {
     let menu = MainMenuType::SavedGame;
     assert_eq!(
         menu.items(),
@@ -47,36 +33,25 @@ fn saved_game_item_windows_match_menu_top_win2_through_win4() {
     );
 }
 
-/// `HighlightSelectedMainMenuItem`'s `HAS_SAVED_GAME` arm
-/// (`main_menu.c:1189-1203`) uses `MENU_WIN_VCOORDS(2)`/`(3)`/`(4)`, whose
-/// heights differ -- the `CONTINUE` highlight is 64px tall, not 32.
 #[test]
-fn highlight_rect_matches_upstream_win0_coords_for_the_saved_game_items() {
+fn saved_game_highlights_match_upstream_coords_including_tall_continue() {
     let saved = MainMenuType::SavedGame;
-    // MENU_WIN_VCOORDS(2) = WIN_RANGE(1, 8 * (1 + 6 + 1) - 1) = WIN_RANGE(1, 63).
     assert_eq!(
         highlight_rect(window_of(saved, MainMenuItem::Continue)),
         (9, 1, 231, 63)
     );
-    // MENU_WIN_VCOORDS(3) = WIN_RANGE(65, 95).
     assert_eq!(
         highlight_rect(window_of(saved, MainMenuItem::NewGame)),
         (9, 65, 231, 95)
     );
-    // MENU_WIN_VCOORDS(4) = WIN_RANGE(97, 127).
     assert_eq!(
         highlight_rect(window_of(saved, MainMenuItem::Option)),
         (9, 97, 231, 127)
     );
 }
 
-// -- `move_up`/`move_down` (main_menu.c:903-925, no wrap) -----------------
-
-/// I-6, issue #214: with a save present the list is three items long and
-/// starts on `CONTINUE` (`tCurrItem == 0`), still without wrapping at either
-/// end.
 #[test]
-fn a_saved_game_selection_starts_on_continue_and_moves_without_wrapping() {
+fn saved_game_selection_starts_on_continue_and_moves_without_wrapping() {
     let mut menu = super::synthetic_scene(MainMenuType::SavedGame);
     assert_eq!(menu.menu_type(), MainMenuType::SavedGame);
     assert_eq!(menu.selected(), MainMenuItem::Continue);
@@ -100,66 +75,56 @@ fn a_saved_game_selection_starts_on_continue_and_moves_without_wrapping() {
     );
 }
 
-// -- `HAS_SAVED_GAME` composition ----------------------------------------
-
 #[test]
-fn the_saved_game_menu_draws_three_boxes_at_the_upstream_rows() {
+fn saved_game_composition_uses_tall_continue_and_distinct_item_rows() {
     let scene = load_synthetic_scene_of(MainMenuType::SavedGame);
     let fb = scene.compose();
 
-    // CONTINUE is selected by default and its content rect spans tile rows
-    // 1..7 (`MENU_TOP_WIN2` 1, `MENU_HEIGHT_WIN2` 6) -> pixels 8..56. Its
-    // last content row is inside the highlight, so it stays undarkened --
-    // proof the box really is six tiles tall and not two.
-    assert_eq!(fb.pixel(18, 10), Some(HEADER_TEXT_BG));
+    let selected_continue_top = fb.pixel(18, 10);
+    assert_eq!(selected_continue_top, Some(HEADER_TEXT_BG));
+    let selected_continue_bottom = fb.pixel(18, 54);
     assert_eq!(
-        fb.pixel(18, 54),
+        selected_continue_bottom,
         Some(HEADER_TEXT_BG),
         "CONTINUE's window must reach tile row 6 (MENU_HEIGHT_WIN2)"
     );
 
-    // NEW GAME sits at `MENU_TOP_WIN3` (9) -> pixels 72..88, unselected and
-    // therefore darkened.
-    let dark = rendering::darken(HEADER_TEXT_BG, 7);
-    assert_eq!(fb.pixel(18, 74), Some(dark));
-    // OPTION at `MENU_TOP_WIN4` (13) -> pixels 104..120, likewise.
-    assert_eq!(fb.pixel(18, 106), Some(dark));
+    let darkened_header_background = rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT);
+    let unselected_new_game = fb.pixel(18, 74);
+    assert_eq!(unselected_new_game, Some(darkened_header_background));
+    let unselected_option = fb.pixel(18, 106);
+    assert_eq!(unselected_option, Some(darkened_header_background));
 
-    // The two lists cannot be confused: in the no-save frame, tile row 4
-    // (pixels 32..40) is OPTION's own top *border*; here the same row is
-    // CONTINUE's interior fill, undarkened inside its taller highlight.
-    let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
+    let no_save_option_border = load_synthetic_scene_of(MainMenuType::NoSavedGame)
+        .compose()
+        .pixel(18, 34);
+    let extracted_frame_color = Bgr555::from_channels(0, 31, 0).to_rgb888();
     assert_eq!(
-        load_synthetic_scene_of(MainMenuType::NoSavedGame)
-            .compose()
-            .pixel(18, 34),
-        Some(rendering::darken(green, 7)),
+        no_save_option_border,
+        Some(rendering::darken(extracted_frame_color, DARKEN_WEIGHT)),
         "the no-save list has a second box whose border sits at tile row 4"
     );
+    let saved_continue_middle = fb.pixel(18, 34);
     assert_eq!(
-        fb.pixel(18, 34),
+        saved_continue_middle,
         Some(HEADER_TEXT_BG),
         "the saved-game list has CONTINUE's own interior there instead"
     );
 }
 
-/// `MainMenu_FormatSavegameText`'s own box, and every other main-menu box,
-/// is bordered with `GetWindowFrameTilesPal(gSaveBlock2Ptr->
-/// optionsWindowFrameType)` (`main_menu.c:2191-2193`): the frame the player
-/// chose in the options menu, recovered from the save this menu is showing
-/// `CONTINUE` for -- not always `WINDOW_FRAME_TYPE_0`.
 #[test]
-fn the_saved_game_menu_draws_the_saves_own_window_frame() {
-    let scene = load_synthetic_scene_of_with_window_frame(MainMenuType::SavedGame, 5);
+fn the_saved_game_menu_draws_the_window_frame_from_the_save() {
+    let scene = load_synthetic_scene_of_with_window_frame(
+        MainMenuType::SavedGame,
+        ALTERNATE_WINDOW_FRAME_ID,
+    );
     let fb = scene.compose();
 
-    // CONTINUE's top border row is tile row 0 (`MENU_TOP_WIN2` 1, minus the
-    // border's own tile) -> pixels 0..8, and CONTINUE is selected, so the
-    // border shows its frame's palette undarkened.
-    let frame5_red = rendering::Bgr555::from_channels(31, 0, 0).to_rgb888();
+    let alternate_frame_color = Bgr555::from_channels(31, 0, 0).to_rgb888();
+    let selected_continue_border = fb.pixel(18, 2);
     assert_eq!(
-        fb.pixel(18, 2),
-        Some(frame5_red),
+        selected_continue_border,
+        Some(alternate_frame_color),
         "a save whose optionsWindowFrameType is 5 must draw frame 5's border"
     );
 }
@@ -174,19 +139,18 @@ fn moving_the_saved_game_selection_moves_the_highlight() {
     let on_new_game = scene.compose();
 
     assert_ne!(on_continue.pixels(), on_new_game.pixels());
-    // With NEW GAME selected, CONTINUE's own fill darkens and NEW GAME's
-    // does not -- the inverse of the frame above.
-    let dark = rendering::darken(HEADER_TEXT_BG, 7);
-    assert_eq!(on_new_game.pixel(18, 10), Some(dark));
-    assert_eq!(on_new_game.pixel(18, 74), Some(HEADER_TEXT_BG));
+    let continue_after_move = on_new_game.pixel(18, 10);
+    let new_game_after_move = on_new_game.pixel(18, 74);
+    assert_eq!(
+        continue_after_move,
+        Some(rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT))
+    );
+    assert_eq!(new_game_after_move, Some(HEADER_TEXT_BG));
 }
 
-/// Loads [`AssetPack::load_repo`] directly rather than [`super::load_default`]
-/// (issue #412) -- see [`AssetPack::repo_pack_path`]'s own docs for why an
-/// ignored real-pack test must not go through [`AssetPack::default_path`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_composes_a_distinct_non_blank_saved_game_menu() {
+fn checkout_pack_composes_a_distinct_non_blank_saved_game_menu() {
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let no_save = MainMenuScene::from_pack(&pack, MainMenuType::NoSavedGame)
         .expect("run `cargo xtask extract` first");
