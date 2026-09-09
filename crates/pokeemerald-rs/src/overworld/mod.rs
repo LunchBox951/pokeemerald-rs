@@ -970,6 +970,8 @@ fn resolve_tileset_pack_name(
     }
 }
 
+/// Returns the asset-pack layout name after removing `LAYOUT_` and lowercasing
+/// the remaining symbol.
 pub(crate) fn layout_pack_name(layout_id: LayoutId) -> String {
     let layout_symbol = layout_id.name();
     layout_symbol
