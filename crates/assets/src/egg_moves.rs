@@ -443,6 +443,43 @@ mod tests {
         assert_eq!(table.iter().last().unwrap().species, SpeciesId::CHIMECHO);
     }
 
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders the encoded `gEggMoves` stream: each group's species sentinel
+    /// followed by its ordered moves, closed by the terminator, all as
+    /// little-endian words, in table order.
+    fn render_encoded_stream_bytes() -> Vec<u8> {
+        let table = EggMoveTable::new();
+        let mut out = Vec::new();
+        for group in table.iter() {
+            out.extend_from_slice(
+                &(group.species().index() + EGG_MOVES_SPECIES_OFFSET).to_le_bytes(),
+            );
+            for mv in group.moves() {
+                out.extend_from_slice(&mv.0.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&EGG_MOVES_TERMINATOR.to_le_bytes());
+        out
+    }
+
+    /// Digest of upstream `src/data/pokemon/egg_moves.h`'s `gEggMoves` stream,
+    /// every species sentinel and ordered move rendered as
+    /// `render_encoded_stream_bytes` renders ours.
+    #[test]
+    fn encoded_stream_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_encoded_stream_bytes())),
+            "12e26f605cc5a34f",
+            "egg move stream diverges from the canonical upstream sequence",
+        );
+    }
+
     #[test]
     fn teaches_matches_the_move_list() {
         let table = EggMoveTable::new();
