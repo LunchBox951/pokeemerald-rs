@@ -38,24 +38,13 @@
 //!   [`OverworldPhase::in_battle`] because it names a different upstream
 //!   mechanism (a lock, not a callback swap) for a state that is not a
 //!   battle at all.
-//! * `pressedStartButton` is the last branch this port's own pipeline can
-//!   claim ahead of it: `CheckForTrainersWantingBattle`, `TryRunOnFrameMapScript`,
-//!   dive-emerge, `TryStartStepBasedScript` (the door-shaped warp, under
-//!   `tookStep`), `CheckStandardWildEncounter`, `TryArrowWarp`,
-//!   `TryStartInteractionScript`, `TryDoorWarp`, and dive-down all
-//!   `return TRUE` ahead of it upstream (`src/field_control_avatar.c:147-181`)
-//!   -- upstream's own registered-`SELECT`-item branch follows it
-//!   (`:188-189`), unmodelled here, so `pressedStartButton` is this port's
-//!   last *relevant* branch, not upstream's literal last one. This port's
-//!   counterpart is the
-//!   `field_input_claimed` parameter [`OverworldPhase::start_menu_may_open`]
-//!   takes (issues #908, #436): [`super::step::OverworldPhase::step`] is the
-//!   *only* caller that can supply a real answer to it, because it is the
-//!   only place this frame's arrow-warp preempt, same-frame interaction, and
-//!   (ahead of both, at `step`'s own top) sight-trainer cone scan are ever
-//!   resolved. See [`Self::advance_start_menu_frame`]'s own doc comment for
-//!   why this module's other caller, [`crate::flow::advance_scene`], never
-//!   supplies anything but `false`.
+//! * `pressedStartButton` follows every branch this port models:
+//!   `CheckForTrainersWantingBattle` through dive-down all `return TRUE`
+//!   ahead of it (`src/field_control_avatar.c:147-181`), and only the
+//!   unmodelled registered-`SELECT` item follows it (`:188-189`). The
+//!   `field_input_claimed` parameter of [`OverworldPhase::start_menu_may_open`]
+//!   carries that precedence; [`super::step::OverworldPhase::step`] resolves
+//!   those branches and so is the caller that can answer it.
 //!
 //! Those five gates are why this port needs no "do not save here" policy
 //! of its own: the states a save must never be taken in -- mid-battle,
@@ -185,23 +174,12 @@ impl OverworldPhase {
             && self.sight_approach.is_none()
     }
 
-    /// Attempt to build a fresh `START` press's menu, without committing it
-    /// to [`Self::start_menu`] -- the pure half of
-    /// [`Self::advance_start_menu_frame`]'s own opening branch, pulled out
-    /// (`&self`, not `&mut self`) so [`super::step::OverworldPhase::step`]
-    /// can attempt the real pack load *before* deciding whether this
-    /// frame's movement is preempted (issues #908, #436), rather than
-    /// after: deciding the preempt first and attempting the load second
-    /// would cost the frame's movement on a load failure the player never
-    /// even sees a menu for, contradicting the "log-or-ignore is fine"
-    /// policy this method's own `Err` arm below applies.
-    ///
-    /// Never checks the gate itself -- every caller has already asked
-    /// [`Self::start_menu_may_open`] with whatever `field_input_claimed` it
-    /// can honestly supply. A caller that decides some other same-frame
-    /// event outranks this attempt after all simply drops the returned
-    /// value: building it here writes nothing outside the returned
-    /// [`StartMenu`] itself, so an unused one costs nothing to discard.
+    /// Build a fresh `START` press's menu without committing it, so the
+    /// caller can weigh a real pack load against this frame's movement:
+    /// upstream never runs `PlayerStep` on a frame `ProcessPlayerFieldInput`
+    /// claims (`src/field_control_avatar.c:147-187`), and a load that fails
+    /// claims nothing. Callers check [`Self::start_menu_may_open`] first; a
+    /// discarded result costs nothing.
     ///
     /// `Self::synthetic_start_menu` lets a test choose a menu that really
     /// builds, or a build that really fails, with no local pack involved.

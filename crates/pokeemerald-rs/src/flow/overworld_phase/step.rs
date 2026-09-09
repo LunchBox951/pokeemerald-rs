@@ -281,28 +281,14 @@ impl OverworldPhase {
     /// interaction/warp checks below the movement branch) has gone out of
     /// use -- `crossed_to` carries the outcome that far.
     ///
-    /// # Field start menu ordering (issues #908, #436)
+    /// # Field start menu ordering
     ///
-    /// A fresh `START` press is this port's own last-relevant branch to
-    /// claim (upstream's exact ladder, and why this method -- not
-    /// [`crate::flow::advance_scene`], which used to decide `START` *ahead*
-    /// of calling this method at all -- is the one place a fresh press can
-    /// honestly be weighed against it: [`OverworldPhase::start_menu_may_open`]'s
-    /// own module docs). The four early returns above (battle, sight-trainer
-    /// approach, dialog, sight-trainer trigger) each preempt it outright by
-    /// returning before reaching this point at all; `start_menu_may_open`'s
-    /// `field_input_claimed` parameter is fed this frame's
-    /// `arrow_trigger`/`interaction` result (see
-    /// [`Self::resolve_pre_movement_field_input`]) -- the two remaining
-    /// branches this method can still find ahead of it. If nothing above
-    /// claimed the frame, a menu is *built* -- not merely decided -- ahead
-    /// of movement, and only a menu that really did build skips this
-    /// frame's movement too, mirroring upstream never calling `PlayerStep`
-    /// on a frame `ProcessPlayerFieldInput` claims; see
-    /// [`OverworldPhase::build_start_menu`]'s own doc comment for why
-    /// building early (not merely deciding early) is what lets a pack-load
-    /// failure leave `START` exactly as inert as a refused gate does,
-    /// movement included.
+    /// A fresh `START` press is weighed after every branch above it in
+    /// `ProcessPlayerFieldInput` (`src/field_control_avatar.c:147-187`): the
+    /// early returns above and this frame's arrow-warp and interaction
+    /// results claim the frame first, and only a menu that really builds
+    /// skips this frame's movement, as upstream skips `PlayerStep` on a
+    /// claimed frame.
     pub(in crate::flow) fn step(&mut self, buttons: ButtonState) {
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
