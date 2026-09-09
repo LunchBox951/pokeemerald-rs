@@ -155,9 +155,6 @@ const CLOCK_TABLE: [u8; 49] = [
     72, 76, 78, 80, 84, 88, 90, 92, 96,
 ];
 
-const DEFAULT_KEY: u8 = 60;
-const DEFAULT_VELOCITY: u8 = u8::MAX / 2;
-
 struct JumpFixup {
     event_index: usize,
     target_byte_offset: u32,
@@ -179,8 +176,10 @@ pub fn decode_track(bytes: &[u8]) -> Result<Vec<Event>, DecodeError> {
         bytes,
         cursor: 0,
         running_status: None,
-        last_key: DEFAULT_KEY,
-        last_velocity: DEFAULT_VELOCITY,
+        // Upstream clears the track's key/velocity to zero and never seeds
+        // them (`m4a.c:243-248`, `m4a_1.s:1556-1573`).
+        last_key: 0,
+        last_velocity: 0,
         events: Vec::new(),
         event_byte_offsets: Vec::new(),
         jump_fixups: Vec::new(),
@@ -566,6 +565,43 @@ mod tests {
                 velocity: 90,
                 gate: 0
             }
+        );
+    }
+
+    #[test]
+    fn first_note_without_operands_uses_cleared_track_state() {
+        // Both operands omitted: the note sounds the cleared track's key and
+        // velocity, zero (`m4a.c:243`, `m4a_1.s:1556-1573`).
+        let events = decode_track(&[NOTE_24, WAIT_24, FINE]).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::Note {
+                    key: 0,
+                    velocity: 0,
+                    gate: 24
+                },
+                Event::Wait(24),
+                Event::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn first_note_without_velocity_uses_cleared_track_velocity() {
+        // Velocity omitted: it stays the cleared track's zero (`m4a_1.s:1560-1565`).
+        let events = decode_track(&[NOTE_24, 60, WAIT_24, FINE]).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::Note {
+                    key: 60,
+                    velocity: 0,
+                    gate: 24
+                },
+                Event::Wait(24),
+                Event::Fine,
+            ]
         );
     }
 
