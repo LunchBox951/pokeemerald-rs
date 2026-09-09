@@ -97,7 +97,8 @@ const DEFAULT_ROOM_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BR
 /// An error while loading or composing an [`OverworldScene`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverworldSceneError {
-    /// Opening or reading the asset pack failed.
+    /// The asset pack could not be opened, read, or validated, or a
+    /// required entry was missing or had the wrong kind.
     Pack(assets::PackError),
     /// Typed asset metadata was missing or invalid.
     Asset(AssetError),
