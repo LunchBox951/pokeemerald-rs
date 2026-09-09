@@ -1,28 +1,13 @@
-//! The OAM-equivalent sprite layer: compositing [`OamEntry`](crate::oam::OamEntry)
-//! values into pixels (S-2 slice 2).
+//! Resolves [`OamEntry`] values into display pixels and the object-window mask.
 //!
-//! A sprite renderer compositing enabled sprites into framebuffer output
-//! with correct transparency (palette index 0), horizontal/vertical flip,
-//! and partial off-screen clipping (including the position-wrapping
-//! semantics documented on [`OamEntry`](crate::oam::OamEntry)).
+//! [`SpriteLayer`] applies OAM ordering, transparency, clipping, flips, affine
+//! transforms, mosaic, and one-dimensional OBJ tile addressing. Each sprite's
+//! tiles are contiguous and row-major from its OAM tile index.
 //!
-//! Per-sprite tile layout matches pokeemerald's OBJ character mapping: nearly
-//! every `SetGpuReg(REG_OFFSET_DISPCNT, ...)` call in `pokeemerald/src`
-//! includes `DISPCNT_OBJ_1D_MAP`, so a sprite's own tiles are laid out
-//! contiguously, row-major, starting at its OAM tile index. 2D OBJ character
-//! mapping (a fixed-width VRAM sheet shared across sprites) is the kind of
-//! "tile memory mapping mode beyond what composition needs" issue #64 calls
-//! out of scope.
-//!
-//! Sprite-vs-sprite ordering is verified against
-//! `mgba/src/gba/renderers/software-obj.c` and `video-software.c`: among
-//! sprites covering the same pixel, the lowest OBJ priority wins; a
-//! same-priority tie is won by the lower OAM index. Crucially, a *transparent*
-//! texel of a better-order sprite still upgrades the pixel's stored OBJ
-//! priority (without changing its color) when it sits over an
-//! already-written, worse-priority opaque sprite — the color-supplying and
-//! priority-supplying sprites can differ (see
-//! [`SpriteLayer::resolve_pixel`]) `(behavioral-fidelity)`.
+//! Display and OBJWIN queries share one cached OAM admission for the most
+//! recently queried scanline, so that scanline's OBJ cycle budget admits and
+//! drops the same entries for both; a query on a different scanline walks OAM
+//! again.
 
 use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
@@ -59,37 +44,25 @@ pub struct SpritePixel {
     pub semi_transparent: bool,
 }
 
-/// The full regular-sprite OBJ layer: up to 128 [`OamEntry`] values plus the
-/// tile/palette data they're drawn from, ready to resolve into pixels.
+#[derive(Debug, Clone, Copy)]
+struct CachedScanlineAdmission {
+    scanline: usize,
+    admission: OamAdmission,
+}
+
+/// Resolves borrowed sprite data into display pixels and an object-window mask.
 ///
-/// Sprites are addressed by their position in `entries` — that position
-/// *is* this engine's OAM index, so `entries[0]` is OAM slot 0 and so on.
-/// Lower-indexed sprites win ties against higher-indexed sprites at the same
-/// priority (see [`SpriteLayer::resolve_pixel`]).
+/// The position of an entry in `entries` is its OAM index. Lower indices break
+/// ties between entries at the same OBJ priority. OAM holds 128 entries, so
+/// only the first 128 are ever admitted; any beyond that are never drawn.
 ///
-/// 4bpp and 8bpp sprites draw from separate [`Tileset`]s (matching the
-/// bit-depth split modelled by [`Tileset`] itself); which one an entry uses
-/// is selected by [`OamEntry::bit_depth`].
+/// 4bpp and 8bpp entries draw from their corresponding [`Tileset`]. Affine
+/// entries select a matrix attached by
+/// [`with_affine_matrices`](Self::with_affine_matrices).
 ///
-/// `entries` is not resolved as-is: each scanline's visible pixels and
-/// `OBJWIN` mask are both gated through a shared per-scanline OAM admission
-/// stage (`crate::oam_budget`, S-2 issue #329) modelling the GBA's fixed
-/// per-scanline OBJ processing cycle budget — a late entry past that budget
-/// is dropped from both, never just one, matching real hardware (and the
-/// pinned mgba renderer). [`with_hblank_free_interval`](Self::with_hblank_free_interval)
-/// selects the reduced budget `DISPCNT`'s HBlank-interval-free bit implies.
-///
-/// That admission stage is a walk over all of `entries`, but every entry
-/// point into this layer is *per pixel*, so `admission_cache` memoizes the
-/// current scanline's walk in a one-slot cache keyed by `y`
-/// (`with_admission`). Compositing runs row-major
-/// (`crate::compositor::compose_frame_with_effects`), so the walk runs once
-/// per scanline — 160 times a frame rather than once per pixel per path —
-/// and, because the visible and `OBJWIN` paths read that one slot, they read
-/// literally the same admission value. The cache is pure memoization:
-/// its contents are a function of `(entries, y, hblank_free_interval)`,
-/// which is why interior mutability behind `&self` is sound here and why a
-/// [`Clone`] of a layer (cache included) behaves identically to a fresh one.
+/// Admission caching is described in the module docs.
+/// [`with_hblank_free_interval`](Self::with_hblank_free_interval) selects the
+/// smaller OBJ cycle budget.
 #[derive(Debug, Clone)]
 pub struct SpriteLayer<'a> {
     entries: &'a [OamEntry],
@@ -98,17 +71,13 @@ pub struct SpriteLayer<'a> {
     palette: &'a Palette,
     matrices: &'a [AffineMatrix],
     hblank_free_interval: bool,
-    /// The last scanline's [`OamAdmission`] and the `y` it was computed for
-    /// (struct docs). Never observable from outside: it only ever holds the
-    /// value [`OamAdmission::for_scanline`] would return for that `y`.
-    admission_cache: RefCell<Option<(usize, OamAdmission)>>,
+    admission_cache: RefCell<Option<CachedScanlineAdmission>>,
 }
 
 impl<'a> SpriteLayer<'a> {
-    /// Borrow a sprite entry list together with the tile/palette data it
-    /// draws from. No affine parameter groups are attached — every entry
-    /// must be [`AffineMode::Regular`], or use
-    /// [`with_affine_matrices`](Self::with_affine_matrices) to attach them.
+    /// Borrows entries in OAM order, separate 4bpp and 8bpp tilesets, and a
+    /// palette. Affine entries require matrices attached with
+    /// [`with_affine_matrices`](Self::with_affine_matrices).
     #[must_use]
     pub const fn new(
         entries: &'a [OamEntry],
@@ -127,33 +96,16 @@ impl<'a> SpriteLayer<'a> {
         }
     }
 
-    /// Return a copy of this layer with `matrices` attached as the OAM
-    /// affine parameter groups (`gOamMatrices`) that [`AffineMode::Affine`]/
-    /// [`AffineMode::AffineDoubleSize`] entries select into by `matrix_num`
-    /// (S-2 slice 3, issue #98).
-    ///
-    /// A builder rather than a `new` parameter so every pre-affine call site
-    /// (S-2 slice 2) keeps working unchanged.
+    /// Attaches the OAM matrix groups selected by affine entries' `matrix_num`.
     #[must_use]
     pub const fn with_affine_matrices(mut self, matrices: &'a [AffineMatrix]) -> Self {
         self.matrices = matrices;
         self
     }
 
-    /// Return a copy of this layer with `DISPCNT`'s HBlank-interval-free bit
-    /// applied to the per-scanline OAM admission budget (`crate::oam_budget`,
-    /// S-2 issue #329): `true` selects the reduced 954-cycle budget instead
-    /// of the normal 1210-cycle one (see that module's docs for why, and
-    /// `pokeemerald/src/overworld.c:2122-2123` for where pokeemerald sets the
-    /// bit).
-    ///
-    /// A builder rather than a `new` parameter, defaulting to `false`
-    /// (matching the bit being clear), so every pre-#329 call site keeps
-    /// working unchanged.
-    ///
-    /// Resets the admission cache: the cached value is a function of the
-    /// budget this flag selects, so a slot populated under the old flag must
-    /// not answer for the new one.
+    /// Selects whether scanline admission uses `DISPCNT`'s 954-cycle
+    /// HBlank-free interval budget instead of the normal 1,210-cycle budget.
+    /// Setting the budget clears the cached admission.
     #[must_use]
     pub const fn with_hblank_free_interval(mut self, hblank_free_interval: bool) -> Self {
         self.hblank_free_interval = hblank_free_interval;
@@ -161,30 +113,22 @@ impl<'a> SpriteLayer<'a> {
         self
     }
 
-    /// Run `f` against the [`OamAdmission`] for scanline `y`
-    /// (`crate::oam_budget`, S-2 issue #329), computing it only if the
-    /// one-slot cache is not already holding that scanline's.
+    /// Calls `f` with the admission shared by display and OBJWIN queries for
+    /// scanline `y`.
     ///
-    /// The single shared computation both
-    /// [`resolve_pixel_inner`](Self::resolve_pixel_inner) and
-    /// [`objwin_mask_inner`](Self::objwin_mask_inner) gate their entry
-    /// iteration through: they cannot disagree about which entries a
-    /// scanline exhausted because, for a given `y`, they are handed the very
-    /// same value out of the very same slot. Both are per-pixel calls, so
-    /// without this cache a 240x160 compose would walk OAM 76,800 times a
-    /// frame instead of 160 (struct docs).
-    ///
-    /// `f` must not call back into this method (it would find the
-    /// [`RefCell`] borrowed); nothing it is handed here can — the sampling
-    /// helpers below touch tiles and palettes only.
+    /// The callback must not query this layer recursively because the cache
+    /// remains mutably borrowed while it runs.
     fn with_admission<R>(&self, y: usize, f: impl FnOnce(&OamAdmission) -> R) -> R {
-        let walk = || OamAdmission::for_scanline(self.entries, y, self.hblank_free_interval);
+        let load = || CachedScanlineAdmission {
+            scanline: y,
+            admission: OamAdmission::for_scanline(self.entries, y, self.hblank_free_interval),
+        };
         let mut cache = self.admission_cache.borrow_mut();
-        let cached = cache.get_or_insert_with(|| (y, walk()));
-        if cached.0 != y {
-            *cached = (y, walk());
+        let cached = cache.get_or_insert_with(load);
+        if cached.scanline != y {
+            *cached = load();
         }
-        f(&cached.1)
+        f(&cached.admission)
     }
 
     /// Composite only the sprite layer into `framebuffer` (no BG layers) —
@@ -687,39 +631,73 @@ mod tests {
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
 
+    const BPP4_TILE_BYTES: usize = BitDepth::Bpp4.tile_byte_len();
+    const EIGHT_PIXEL_SQUARE_SIZE: u8 = 0;
+    const SIXTY_FOUR_PIXEL_SQUARE_SIZE: u8 = 3;
+    const FIRST_TILE: u16 = 0;
+    const TRANSPARENT_TILE: u16 = 1;
+    const FIRST_PALETTE_BANK: u8 = 0;
+    const HIGHEST_OBJ_PRIORITY: u8 = 0;
+    const RED_INDEX: u8 = 1;
+    const GREEN_INDEX: u8 = 2;
+    const BLUE_INDEX: u8 = 3;
+    const YELLOW_INDEX: u8 = 4;
+    const FULL_CHANNEL: u8 = 0x1F;
+    const RED: Bgr555 = Bgr555::from_channels(FULL_CHANNEL, 0, 0);
+    const GREEN: Bgr555 = Bgr555::from_channels(0, FULL_CHANNEL, 0);
+    const BLUE: Bgr555 = Bgr555::from_channels(0, 0, FULL_CHANNEL);
+    const YELLOW: Bgr555 = Bgr555::from_channels(FULL_CHANNEL, FULL_CHANNEL, 0);
+
+    fn bpp4_tile(pixels: &[((usize, usize), u8)]) -> [u8; BPP4_TILE_BYTES] {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BITS_PER_PIXEL: usize = 4;
+
+        let mut bytes = [0; BPP4_TILE_BYTES];
+        let bytes_per_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+        for &((x, y), palette_index) in pixels {
+            assert!(x < BitDepth::TILE_DIM && y < BitDepth::TILE_DIM);
+            assert!(usize::from(palette_index) < Palette::BANK_LEN);
+            let byte = y * bytes_per_row + x / PIXELS_PER_BYTE;
+            let shift = (x % PIXELS_PER_BYTE) * BITS_PER_PIXEL;
+            bytes[byte] |= palette_index << shift;
+        }
+        bytes
+    }
+
+    fn palette_with_colors(colors: &[(u8, Bgr555)]) -> Palette {
+        let mut palette = [Bgr555::default(); Palette::LEN];
+        for &(index, color) in colors {
+            palette[usize::from(index)] = color;
+        }
+        Palette::new(palette)
+    }
+
     fn entry(x_raw: u16, y: u8, enabled: bool) -> OamEntry {
         OamEntry::new(
             x_raw,
             y,
-            0,
-            0,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             false,
             false,
             ObjShape::Square,
-            0, // 8x8
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             enabled,
         )
     }
 
-    /// A 4bpp 8x8 tile whose top-left 2x2 block is index 0 (transparent),
-    /// index 1 (red), index 2 (green), index 3 (blue), row-major:
-    /// (0,0)=0 (1,0)=1
-    /// (0,1)=2 (1,1)=3
-    fn quadrant_tile() -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x10; // (0,0)=0 low nibble, (1,0)=1 high nibble
-        bytes[4] = 0x32; // (0,1)=2, (1,1)=3
-        bytes
+    fn quadrant_tile() -> [u8; BPP4_TILE_BYTES] {
+        bpp4_tile(&[
+            ((1, 0), RED_INDEX),
+            ((0, 1), GREEN_INDEX),
+            ((1, 1), BLUE_INDEX),
+        ])
     }
 
     fn quadrant_palette() -> Palette {
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
-        Palette::new(colors)
+        palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN), (BLUE_INDEX, BLUE)])
     }
 
     #[test]
@@ -749,29 +727,23 @@ mod tests {
         );
     }
 
-    /// A 4bpp 8x8 tile with a distinct opaque color at each of its four
-    /// corners — (0,0)=1 (red), (7,0)=2 (green), (0,7)=3 (blue), (7,7)=4
-    /// (yellow) — and every other pixel transparent (index 0), so h/v flip
-    /// across the *whole* 8-wide/8-tall sprite footprint is observable
-    /// (unlike `quadrant_tile`, whose marks all sit in one 2x2 corner and so
-    /// can't distinguish "flip the whole sprite" from "flip within one
-    /// 2x2 block").
-    fn corner_marked_tile() -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: pixel(0,0) low nibble = 1
-        bytes[3] = 0x20; // row 0: pixel(7,0) high nibble = 2
-        bytes[7 * 4] = 0x03; // row 7: pixel(0,7) low nibble = 3
-        bytes[7 * 4 + 3] = 0x40; // row 7: pixel(7,7) high nibble = 4
-        bytes
+    fn corner_marked_tile() -> [u8; BPP4_TILE_BYTES] {
+        let last_pixel = BitDepth::TILE_DIM - 1;
+        bpp4_tile(&[
+            ((0, 0), RED_INDEX),
+            ((last_pixel, 0), GREEN_INDEX),
+            ((0, last_pixel), BLUE_INDEX),
+            ((last_pixel, last_pixel), YELLOW_INDEX),
+        ])
     }
 
     fn corner_marked_palette() -> Palette {
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
-        colors[4] = Bgr555::from_channels(0x1F, 0x1F, 0); // yellow
-        Palette::new(colors)
+        palette_with_colors(&[
+            (RED_INDEX, RED),
+            (GREEN_INDEX, GREEN),
+            (BLUE_INDEX, BLUE),
+            (YELLOW_INDEX, YELLOW),
+        ])
     }
 
     #[test]
@@ -1760,23 +1732,23 @@ mod tests {
         );
     }
 
-    // -- S-2, issue #329: per-scanline OAM admission budget ----------------
+    const NORMAL_BUDGET_WIDE_ENTRY_CAPACITY: usize = 19;
+    const HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY: usize = 15;
 
-    /// A 64x64 regular (non-affine) entry at `x=0, y=0` selecting `tile`,
-    /// enabled. At `x=0` its OAM admission cost is exactly `62` (`oam_budget.rs`),
-    /// matching the issue's reachability example.
+    /// A 64x64 regular entry at the origin, costing 62 admission cycles per
+    /// covered scanline.
     fn wide_64_regular(tile: u16) -> OamEntry {
         OamEntry::new(
             0,
             0,
             tile,
-            0,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             false,
             false,
             ObjShape::Square,
-            3, // 64x64
-            0,
+            SIXTY_FOUR_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )
     }
@@ -1784,17 +1756,10 @@ mod tests {
     #[test]
     fn resolve_pixel_drops_a_late_opaque_sprite_behind_transparent_fillers_once_the_budget_is_exhausted(
     ) {
-        // `oam_budget.rs`'s documented reachability example: 64-px-wide,
-        // x=0 entries cost 62 each (64 total with the 2-cycle traversal
-        // charge), so 19 of them (OAM indices 0..18) exactly exhaust the
-        // 1210 budget and OAM index 19 is never admitted. Here the first 19
-        // are transparent fillers (drawing nothing of their own) and index
-        // 19 is the only opaque entry, so whether the pixel resolves at all
-        // depends entirely on whether that one late entry was admitted.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let filler = wide_64_regular(1); // transparent tile
-        let mut entries = vec![filler; 19];
-        entries.push(wide_64_regular(0)); // opaque tile, OAM index 19
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; NORMAL_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
@@ -1803,8 +1768,6 @@ mod tests {
             "the late opaque sprite at OAM index 19 is past the scanline's cycle budget"
         );
 
-        // Control: drop one filler so the same opaque entry lands at OAM
-        // index 18 -- inside the budget -- and is admitted normally.
         let admitted_entries = entries[1..].to_vec();
         let control_layer = SpriteLayer::new(&admitted_entries, &tileset, &tileset, &palette);
         assert_eq!(
@@ -1816,14 +1779,10 @@ mod tests {
 
     #[test]
     fn objwin_mask_drops_a_late_objwin_sprite_once_the_budget_is_exhausted() {
-        // Same cost profile and cutoff as the visible-resolution test above,
-        // but the late entry is OBJWIN-mode (opaque tile) instead of Normal
-        // -- proving the same admission stage gates the mask, not just
-        // resolve_pixel.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let filler = wide_64_regular(1); // transparent tile
-        let mut entries = vec![filler; 19];
-        entries.push(wide_64_regular(0).with_mode(ObjMode::Window)); // OAM index 19
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; NORMAL_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE).with_mode(ObjMode::Window));
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert!(
@@ -1841,17 +1800,10 @@ mod tests {
 
     #[test]
     fn with_hblank_free_interval_applies_the_reduced_954_cycle_budget() {
-        // 15 transparent 64-px-wide fillers (OAM indices 0..14) then one
-        // opaque entry at OAM index 15: under the normal 1210 budget that
-        // entry is still well inside the (index 19) cutoff, but under the
-        // reduced 954-cycle HBlank-interval-free budget the cutoff moves to
-        // index 15 (`oam_budget.rs`'s own test), dropping this exact entry
-        // -- proving `with_hblank_free_interval` actually reaches the
-        // admission stage, not just `OamAdmission::for_scanline` directly.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let filler = wide_64_regular(1);
-        let mut entries = vec![filler; 15];
-        entries.push(wide_64_regular(0)); // OAM index 15
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
 
         let normal = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
         assert!(
@@ -1870,14 +1822,10 @@ mod tests {
 
     #[test]
     fn with_hblank_free_interval_discards_an_already_populated_admission_cache() {
-        // Same fixture as above, but the flag flips *after* a pixel query has
-        // populated the per-scanline admission cache: the builder must reset
-        // the cached slot, or the 954-cycle layer keeps answering with the
-        // 1210-cycle admission it memoized first.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let filler = wide_64_regular(1);
-        let mut entries = vec![filler; 15];
-        entries.push(wide_64_regular(0)); // OAM index 15
+        let filler = wide_64_regular(TRANSPARENT_TILE);
+        let mut entries = vec![filler; HBLANK_FREE_BUDGET_WIDE_ENTRY_CAPACITY];
+        entries.push(wide_64_regular(FIRST_TILE));
 
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
         assert!(
@@ -1893,21 +1841,16 @@ mod tests {
     }
 
     #[test]
-    fn the_admission_walk_runs_once_per_scanline_not_once_per_pixel() {
-        // `SpriteLayer`'s one-slot admission cache: `resolve_pixel` and
-        // `objwin_mask` are both per-pixel entry points, and both consult
-        // the per-scanline OAM admission stage, so without caching a
-        // 240-pixel row would walk OAM 480 times. It must walk it once --
-        // and the *same* once for both paths.
+    fn display_and_objwin_queries_share_one_admission_walk_per_scanline() {
         let (tileset, palette) = opaque_and_transparent_tiles();
         let entries = vec![
-            wide_64_regular(0),
-            wide_64_regular(0).with_mode(ObjMode::Window),
+            wide_64_regular(FIRST_TILE),
+            wide_64_regular(FIRST_TILE).with_mode(ObjMode::Window),
         ];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         crate::oam_budget::reset_walk_count();
-        for x in 0..240 {
+        for x in 0..Framebuffer::WIDTH {
             let _ = layer.resolve_pixel(x, 0);
             let _ = layer.objwin_mask(x, 0);
         }
@@ -1917,10 +1860,7 @@ mod tests {
             "480 per-pixel calls on one scanline must share a single OAM walk"
         );
 
-        // Moving to the next scanline recomputes exactly once more (the
-        // cache is keyed by `y`), and interleaving the two paths in the
-        // other order changes nothing.
-        for x in 0..240 {
+        for x in 0..Framebuffer::WIDTH {
             let _ = layer.objwin_mask(x, 1);
             let _ = layer.resolve_pixel(x, 1);
         }
@@ -1930,8 +1870,6 @@ mod tests {
             "one further walk for scanline 1, whichever path asks first"
         );
 
-        // Going back to scanline 0 is a miss again -- the cache holds one
-        // slot, which is all a row-major compositor ever needs.
         let _ = layer.resolve_pixel(0, 0);
         assert_eq!(crate::oam_budget::walk_count(), 3);
     }
