@@ -391,111 +391,41 @@ fn resolve_connections(
     Ok(resolved)
 }
 
-/// The current room's decoded BG tilesets/palette, layout grid/border, and
-/// player OBJ sprite, ready to [`compose`](Self::compose) into a
-/// [`Framebuffer`] once per frame against a live
-/// [`PlayerState`](engine::overworld::PlayerState) (module docs).
+/// Loaded render resources and collision data for one overworld room.
 ///
-/// Owns every byte it needs (rather than borrowing from an [`AssetPack`]),
-/// so it carries no lifetime parameter -- [`compose`](Self::compose)
-/// rebuilds the cheap [`assets::LayoutGrid`]/[`BorderGrid`]/
-/// [`MetatileAttributeTable`] *views* over those owned bytes fresh each
-/// call (the camera position varies per call; the underlying grid/tileset
-/// bytes never do).
+/// The scene owns its pack-derived data and rebuilds borrowed grid, border,
+/// and metatile-attribute views when needed.
 #[derive(Debug)]
 pub struct OverworldScene {
     layout: MapLayout,
     grid_bytes: Vec<u8>,
     border_bytes: Vec<u8>,
-    /// This room's own declared map-edge connections, already resolved
-    /// against the pack (issue #253) -- see [`ConnectedLayout`]'s own doc
-    /// comment. Empty for a room with no connections (upstream `connections
-    /// == NULL`, e.g. every bundled interior) or whose declared connections
-    /// couldn't be resolved against the bundled pack.
     connections: Vec<ConnectedLayout>,
     primary_metatiles: Vec<u8>,
     secondary_metatiles: Vec<u8>,
     primary_attrs_bytes: Vec<u8>,
     secondary_attrs_bytes: Vec<u8>,
-    /// The combined primary+secondary tile bitmap, still packed (not
-    /// decoded into a [`Tileset`]): [`Self::compose`] decodes a fresh copy
-    /// every call, after [`tile_anims`](Self::tile_anims) has patched in
-    /// that call's own animated tile frames (issue #160) -- mirrors this
-    /// module's existing "no persisted borrow, rebuild fresh every frame"
-    /// pattern for `grid`/`border`/the attribute tables above. Unused (and
-    /// the per-frame copy/decode skipped entirely) when
-    /// [`unanimated_world_tiles`](Self::unanimated_world_tiles) is `Some`.
+    /// Packed base tiles patched before decoding an animated frame.
     world_tile_bytes: Vec<u8>,
-    /// [`world_tile_bytes`](Self::world_tile_bytes), decoded once here
-    /// instead of on every [`Self::compose`] -- but **only** for a room
-    /// whose [`tile_anims`](Self::tile_anims) is empty, where nothing ever
-    /// patches those bytes and so every frame would otherwise re-derive the
-    /// exact same [`Tileset`] from an exact copy of the same bytes. `None`
-    /// for a room with animated ranges, which genuinely does need a fresh
-    /// patch+decode per tick; the two fields are set together in
-    /// [`Self::from_pack`] and this one is `Some` exactly when `tile_anims`
-    /// is empty.
+    /// Decoded cache present only when `tile_anims` is empty.
     unanimated_world_tiles: Option<Tileset>,
     world_palette: Palette,
-    /// See [`viewport::combined_world_tileset`]'s docs.
     blank_tile_index: u16,
-    /// This room's primary-tileset animated tile ranges (issue #160) --
-    /// empty for a primary tileset `tileset_anims` doesn't recognize (every
-    /// secondary tileset this port bundles). See [`tileset_anims`]'s module
-    /// docs.
     tile_anims: tileset_anims::AnimatedTileset,
-    /// This room's whole OBJ layer -- the combined player+NPC sprite
-    /// tileset/palette and the object events drawn from it (issue #161; see
-    /// [`sprites`]'s module docs).
     sprites: sprites::SceneSprites,
 }
 
 impl OverworldScene {
-    /// Decode `layout`'s map viewport and `player`'s walking sprite out of
-    /// an already-loaded `pack`.
+    /// Loads and validates the render resources for `layout` into an owned scene.
     ///
-    /// `header` is this room's own map header: only its `connections` are
-    /// read here (issue #253, [`resolve_connections`]) -- everything else
-    /// [`Self::runtime`] takes as a separate, later parameter, since a
-    /// header's other fields (warp/collision-relevant metadata) aren't a
-    /// rendering concern.
-    ///
-    /// `events` is this room's own map's object/warp/coord/bg events (issue
-    /// #161: needed here, not just at [`Self::runtime`] time, so the NPC
-    /// sprites [`Self::compose`] can draw are decoded once up front rather
-    /// than every frame) -- typically an
-    /// [`assets::MapEventsTable::resolve`] entry, matching `layout`'s own
-    /// map (see [`load_default_room`]/[`load_room`]). Only borrowed for
-    /// this call (issue #281: [`load_room`] passes a locally patched, non-
-    /// `'static` value for Oldale Town -- see
-    /// [`oldale_town_npc_reposition::resolve_map_events`]) -- everything
-    /// this constructor keeps past it is copied out of `events.object_events`
-    /// itself, which is independently `'static`
-    /// ([`sprites::SceneSprites`]'s own `object_events` field), not out of
-    /// this reference.
-    ///
-    /// `event_data` is this room's own current flags/vars, needed at decode
-    /// time only for [`npc`]'s own `OBJ_EVENT_GFX_VAR_0` exception (issue
-    /// #248, that module's own docs): whichever caller hands this its map's
-    /// destination event-data state, decided *before* this call, is what
-    /// Route 103's rival object event resolves against for the whole of
-    /// this room's visit.
+    /// `header` supplies the room's connections. `events` and `event_data`
+    /// determine the sprite bindings captured by the scene.
     ///
     /// # Errors
     ///
-    /// [`OverworldSceneError::Pack`]/[`OverworldSceneError::Asset`] if a
-    /// needed pack entry or table lookup is missing;
-    /// [`OverworldSceneError::UnknownTileset`] if `layout`'s tileset symbols
-    /// aren't among the five `cargo xtask extract` bundles;
-    /// [`OverworldSceneError::Render`],
-    /// [`OverworldSceneError::ImagePixelCountMismatch`],
-    /// [`OverworldSceneError::ImageNotTileAligned`], or
-    /// [`OverworldSceneError::SpriteSheetWrongDimensions`] if a present
-    /// entry's bytes don't fit the shape this module expects (unreachable
-    /// against a real pack). A declared connection whose own target simply
-    /// isn't bundled is *not* an error here, but one whose bundled grid
-    /// bytes fail to decode is -- see [`ConnectedLayout`]'s doc comment on
-    /// the two.
+    /// Returns an error when a tileset symbol is unsupported or required pack
+    /// data is missing or malformed. An unbundled connected map is omitted;
+    /// present but malformed connection data returns an error.
     pub fn from_pack(
         pack: &AssetPack,
         header: &assets::MapHeader,
@@ -504,23 +434,18 @@ impl OverworldScene {
         events: &assets::MapEvents,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
-        let primary_name = resolve_tileset_pack_name(layout.primary_tileset)?;
-        let secondary_name = resolve_tileset_pack_name(layout.secondary_tileset)?;
-        let primary = pack.tileset(primary_name)?;
-        let secondary = pack.tileset(secondary_name)?;
+        let primary_tileset_name = resolve_tileset_pack_name(layout.primary_tileset)?;
+        let secondary_tileset_name = resolve_tileset_pack_name(layout.secondary_tileset)?;
+        let primary_tileset = pack.tileset(primary_tileset_name)?;
+        let secondary_tileset = pack.tileset(secondary_tileset_name)?;
 
         let (world_tile_bytes, blank_tile_index) =
-            viewport::combined_world_tileset(primary.tiles, secondary.tiles)?;
-        let world_palette =
-            viewport::combined_world_palette(&primary.palettes, &secondary.palettes);
-        // Issue #160: the room's own primary-tileset animated tile ranges,
-        // decoded once here (module docs on `tile_anims`) -- `primary_name`
-        // is the same normalized tileset name `AnimatedTileset::load`
-        // matches against (`tileset_anims`'s own scope docs).
-        let tile_anims = tileset_anims::AnimatedTileset::load(pack, primary_name)?;
-        // A room with no animated ranges at all renders the same decoded
-        // tileset on every frame, so decode it once here rather than per
-        // `compose` call (docs on `unanimated_world_tiles`).
+            viewport::combined_world_tileset(primary_tileset.tiles, secondary_tileset.tiles)?;
+        let world_palette = viewport::combined_world_palette(
+            &primary_tileset.palettes,
+            &secondary_tileset.palettes,
+        );
+        let tile_anims = tileset_anims::AnimatedTileset::load(pack, primary_tileset_name)?;
         let unanimated_world_tiles = if tile_anims.is_empty() {
             Some(Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)?)
         } else {
@@ -530,21 +455,10 @@ impl OverworldScene {
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
         let border_bytes = pack.layout_border(&layout_name)?.to_vec();
-        // Validate up front, once, so `compose` can trust these bytes on
-        // every subsequent call instead of threading a `Result` through a
-        // per-frame hot path.
         let _ = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
-        // This room's own declared map-edge connections (issue #253),
-        // resolved against the pack now so `compose`/`frame_viewport` never
-        // touch disk on a per-frame hot path -- mirrors `grid_bytes`/
-        // `border_bytes`'s own up-front resolution just above.
         let connections = resolve_connections(pack, header)?;
-
-        // The whole OBJ layer -- the player's own frames plus every NPC
-        // sheet this room's object events reference, decoded once into one
-        // combined tileset/palette (see `sprites`' module docs).
         let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
 
         Ok(Self {
@@ -552,10 +466,10 @@ impl OverworldScene {
             grid_bytes,
             border_bytes,
             connections,
-            primary_metatiles: primary.metatiles.to_vec(),
-            secondary_metatiles: secondary.metatiles.to_vec(),
-            primary_attrs_bytes: primary.metatile_attributes.to_vec(),
-            secondary_attrs_bytes: secondary.metatile_attributes.to_vec(),
+            primary_metatiles: primary_tileset.metatiles.to_vec(),
+            secondary_metatiles: secondary_tileset.metatiles.to_vec(),
+            primary_attrs_bytes: primary_tileset.metatile_attributes.to_vec(),
+            secondary_attrs_bytes: secondary_tileset.metatile_attributes.to_vec(),
             world_tile_bytes,
             unanimated_world_tiles,
             world_palette,
@@ -565,17 +479,6 @@ impl OverworldScene {
         })
     }
 
-    /// Whether this scene's decode bound a sprite for `graphics_id` -- the
-    /// flow-facing probe
-    /// `flow::overworld_phase::route103_rival_tests`' crossing walk uses to
-    /// pin that a post-crossing rebind decoded against the *transitioned*
-    /// event-data store (issue #248): `OBJ_EVENT_GFX_VAR_0` binds only when
-    /// `VAR_OBJ_GFX_ID_0` already named a real rival id at decode time.
-    /// A yes/no answer on purpose: the sprite/OAM internals themselves stay
-    /// private to this module tree (`oop-boundaries`);
-    /// `overworld::tests`' own real-pack cases pin the binding's contents.
-    /// Test-only, like the [`sprites::SceneSprites::bindings`] accessor it
-    /// wraps.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn binds_sprite(&self, graphics_id: &str) -> bool {
@@ -803,19 +706,14 @@ impl OverworldScene {
         crate::frame::to_platform_frame(&self.compose(player, event_data, tick))
     }
 
-    /// Build an [`engine::overworld::MapRuntime`] over this scene's
-    /// already-loaded layout grid and tileset attribute bytes (I-3, issue
-    /// #149) -- the movement/collision counterpart to [`Self::compose`],
-    /// which only *renders* the same underlying data. `map_id`/`header`/
-    /// `events` come from the caller's own `assets::MapHeaderTable`/
-    /// `assets::MapEventsTable` lookups (this scene owns pack-derived
-    /// tileset/layout bytes, not the separate map-header/event tables).
+    /// Borrows this scene's grid and metatile attributes into a map runtime.
+    ///
+    /// The caller supplies the runtime's `map_id`, `header`, and `events`.
     ///
     /// # Panics
     ///
-    /// Never in practice: re-decodes `grid_bytes` (owned, unchanged since
-    /// [`from_pack`](Self::from_pack) already validated it there) --
-    /// mirrors [`Self::compose`]'s identical `expect`.
+    /// Panics if the private grid bytes no longer match the layout validated by
+    /// [`Self::from_pack`].
     #[must_use]
     pub fn runtime<'s>(
         &'s self,
@@ -827,15 +725,15 @@ impl OverworldScene {
             .layout
             .grid(&self.grid_bytes)
             .expect("grid_bytes validated in from_pack");
-        let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
-        let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
+        let primary_attributes = MetatileAttributeTable::new(&self.primary_attrs_bytes);
+        let secondary_attributes = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
         engine::overworld::MapRuntime::new(
             map_id,
             header,
             events,
             grid,
-            primary_attrs,
-            secondary_attrs,
+            primary_attributes,
+            secondary_attributes,
         )
     }
 }
