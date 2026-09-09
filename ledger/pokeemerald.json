@@ -26834,7 +26834,7 @@
           "status": "rewritten"
         },
         "ply_memacc": {
-          "reason": "ply_memacc's memory-access ops (set/add/sub and the mem_beq..mem_bhi conditional branches) executed as Sequencer::exec_memacc, dispatched from handle_event (S-3, issue #394). The accumulator area is per-Sequencer and zeroed at construction -- see MemAccArea's doc comment for the declared divergence from upstream's cross-song gMPlayMemAccArea lifetime, pinned by memacc_accumulator_resets_between_sessions.",
+          "reason": "ply_memacc's complete 0..=17 mutation and conditional-jump table executes as Sequencer::exec_memacc, dispatched from handle_event (S-3, issue #394). MemAccArea belongs to one Sequencer and starts zeroed; memacc_cells_are_private_to_each_sequencer pins that deliberate divergence from upstream's shared, cross-song gMPlayMemAccArea lifetime.",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
