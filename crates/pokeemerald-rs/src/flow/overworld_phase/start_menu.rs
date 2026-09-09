@@ -79,20 +79,11 @@ impl OverworldPhase {
     /// the frame -- `true` freezes movement for it exactly as
     /// [`OverworldPhase::advance_dialog_frame`] does for a message box.
     ///
-    /// Called by [`crate::flow::advance_scene`] *before*
-    /// [`OverworldPhase::step`], but -- since issues #908 and #436 -- only
-    /// when a menu is *already* open, exactly as upstream's own
-    /// `ShowStartMenu` calling `LockPlayerFieldControls`
-    /// (`src/start_menu.c:581-591`) stops `DoCB1_Overworld` from polling
-    /// `ProcessPlayerFieldInput`/`PlayerStep` at all while it is up
-    /// (`src/overworld.c:1444-1455`). A *fresh* `START` press's own
-    /// precedence is [`OverworldPhase::step`]'s "Field start menu ordering"
-    /// section and this module's own fifth gate (module docs); this
-    /// method's own `field_input_claimed` argument to
-    /// [`OverworldPhase::start_menu_may_open`] is therefore always `false`
-    /// -- by the time this method is reached, a menu is already open, so
-    /// nothing about this frame's field input is relevant to whether the
-    /// press that opened it was allowed to.
+    /// Runs only while a menu is already open, as `ShowStartMenu`'s
+    /// `LockPlayerFieldControls` (`src/start_menu.c:581-591`) stops
+    /// `DoCB1_Overworld` polling `ProcessPlayerFieldInput` and `PlayerStep`
+    /// (`src/overworld.c:1444-1455`); a fresh press is [`OverworldPhase::step`]'s
+    /// to weigh, so `field_input_claimed` is always `false` here.
     ///
     /// `save_slot` is this session's save medium, threaded in from
     /// [`crate::app::App`] rather than reached for `(oop-boundaries)`; it

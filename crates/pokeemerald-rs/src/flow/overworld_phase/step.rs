@@ -575,17 +575,10 @@ impl OverworldPhase {
         };
     }
 
-    /// This frame's pre-movement field-input decisions: this frame's
-    /// pre-movement stance ([`Self::step`]'s own "Warp timing" section on
-    /// why the pre-movement facing/position/elevation matter), the at-rest
-    /// arrow-warp preempt, the same-frame NPC/rival interaction, and a
-    /// fresh `START` press's own menu, already built if it claims the
-    /// frame ("Field start menu ordering"). Bundled into one struct and
-    /// resolved by one `&self` method, rather than left as loose locals in
-    /// `step`, purely to keep that method under `clippy::too_many_lines`:
-    /// nothing here mutates `self`, so this method's own `&self` never
-    /// conflicts with `step`'s still-live borrow of `runtime` (an immutable
-    /// borrow of `self.scene`) the way a `&mut self` extraction would.
+    /// This frame's pre-movement field-input decisions: the pre-movement
+    /// stance ([`Self::step`]'s "Warp timing" section), the at-rest
+    /// arrow-warp preempt, the same-frame interaction, and a fresh `START`
+    /// press's menu, already built if it claims the frame.
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,
@@ -638,13 +631,7 @@ impl OverworldPhase {
         }
     }
 
-    /// [`Self::step`]'s "Field start menu ordering" section, the mechanical
-    /// half: commit an already-built menu ([`PreMovementFieldInput::start_menu`]),
-    /// pulled out purely to keep `step` under `clippy::too_many_lines` (this
-    /// file's own convention for [`Self::resolve_step_events`]). Never
-    /// double-ticks the tileset animation counter: `step` already advanced
-    /// it, unconditionally, at its own top, and committing writes nothing
-    /// else.
+    /// Commit a menu [`Self::resolve_pre_movement_field_input`] built.
     fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
         if let Some(menu) = ready {
             self.start_menu = Some(menu);
