@@ -711,7 +711,10 @@ impl OverworldScene {
 
     /// Borrows this scene's grid and metatile attributes into a map runtime.
     ///
-    /// The caller supplies the runtime's `map_id`, `header`, and `events`.
+    /// The caller supplies the runtime's `map_id`, `header`, and `events`,
+    /// and all three must describe the room this scene was loaded for;
+    /// nothing here cross-checks them, so a mismatch answers collision, warp,
+    /// and interaction queries against another map's events.
     ///
     /// # Panics
     ///
