@@ -1672,6 +1672,166 @@ mod tests {
         );
     }
 
+    /// An unconditional `MEMACC` writing `addr`, for use as a prelude.
+    fn memacc_set(addr: u8, value: u8) -> Event {
+        Event::MemAcc {
+            op: MEMACC_SET,
+            addr,
+            value,
+            target: None,
+        }
+    }
+
+    #[test]
+    fn memacc_mutations_take_effect_through_the_rendered_track() {
+        let mutate = |op, addr, value| Event::MemAcc {
+            op,
+            addr,
+            value,
+            target: None,
+        };
+        let cases = [
+            (
+                vec![memacc_set(0, 250), mutate(MEMACC_ADD, 0, 10)],
+                4_u8,
+                "mem_add wraps past 255",
+            ),
+            (
+                vec![memacc_set(0, 3), mutate(MEMACC_SUB, 0, 10)],
+                249,
+                "mem_sub wraps below 0",
+            ),
+            (
+                vec![memacc_set(1, 9), mutate(MEMACC_COPY, 0, 1)],
+                9,
+                "mem_mem_set copies cell 1",
+            ),
+            (
+                vec![
+                    memacc_set(0, 10),
+                    memacc_set(1, 250),
+                    mutate(MEMACC_ADD_CELL, 0, 1),
+                ],
+                4,
+                "mem_mem_add wraps past 255",
+            ),
+            (
+                vec![
+                    memacc_set(0, 3),
+                    memacc_set(1, 250),
+                    mutate(MEMACC_SUB_CELL, 0, 1),
+                ],
+                9,
+                "mem_mem_sub wraps below 0",
+            ),
+        ];
+
+        for (prelude, expected_cell_0, operation) in cases {
+            let neighbour = expected_cell_0.wrapping_add(1);
+            assert!(
+                memacc_track_loops_forever(prelude.clone(), MEMACC_EQ, 0, expected_cell_0),
+                "{operation}: cell 0 should hold {expected_cell_0}"
+            );
+            assert!(
+                !memacc_track_loops_forever(prelude, MEMACC_EQ, 0, neighbour),
+                "{operation}: cell 0 should not hold {neighbour}"
+            );
+        }
+    }
+
+    #[test]
+    fn memacc_comparisons_branch_through_the_rendered_track() {
+        const CELL_0: u8 = 10;
+        const OPERANDS: [u8; 3] = [5, 10, 11];
+
+        let cases = [
+            (MEMACC_EQ, MEMACC_CELL_EQ, [false, true, false], "=="),
+            (MEMACC_NE, MEMACC_CELL_NE, [true, false, true], "!="),
+            (MEMACC_GT, MEMACC_CELL_GT, [true, false, false], ">"),
+            (MEMACC_GE, MEMACC_CELL_GE, [true, true, false], ">="),
+            (MEMACC_LE, MEMACC_CELL_LE, [false, true, true], "<="),
+            (MEMACC_LT, MEMACC_CELL_LT, [false, false, true], "<"),
+        ];
+
+        for (literal_op, cell_op, taken_per_operand, ordering) in cases {
+            for (operand, expected) in OPERANDS.into_iter().zip(taken_per_operand) {
+                assert_eq!(
+                    memacc_track_loops_forever(vec![memacc_set(0, CELL_0)], literal_op, 0, operand),
+                    expected,
+                    "{CELL_0} {ordering} {operand}"
+                );
+                assert_eq!(
+                    memacc_track_loops_forever(
+                        vec![memacc_set(0, CELL_0), memacc_set(1, operand)],
+                        cell_op,
+                        0,
+                        1
+                    ),
+                    expected,
+                    "{CELL_0} {ordering} cell holding {operand}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn memacc_out_of_range_cells_stay_safe_through_the_rendered_track() {
+        const PAST_THE_AREA: u8 = 200;
+
+        assert!(
+            memacc_track_loops_forever(vec![memacc_set(PAST_THE_AREA, 42)], MEMACC_EQ, 0, 0),
+            "a write past the area must corrupt no real cell"
+        );
+        assert!(
+            !memacc_track_loops_forever(Vec::new(), MEMACC_EQ, PAST_THE_AREA, 0),
+            "a comparison addressed past the area must fall through to Fine"
+        );
+        assert!(
+            memacc_track_loops_forever(
+                vec![Event::MemAcc {
+                    op: MEMACC_COPY,
+                    addr: 0,
+                    value: PAST_THE_AREA,
+                    target: None,
+                }],
+                MEMACC_EQ,
+                0,
+                0
+            ),
+            "a copy sourced past the area must leave cell 0 zeroed"
+        );
+
+        for op in [
+            MEMACC_CELL_EQ,
+            MEMACC_CELL_NE,
+            MEMACC_CELL_GT,
+            MEMACC_CELL_GE,
+            MEMACC_CELL_LE,
+            MEMACC_CELL_LT,
+        ] {
+            assert!(
+                !memacc_track_loops_forever(vec![memacc_set(0, 10)], op, 0, PAST_THE_AREA),
+                "operation {op} sourced past the area must fall through to Fine"
+            );
+        }
+    }
+
+    #[test]
+    fn memacc_unknown_operation_is_a_no_op_through_the_rendered_track() {
+        for op in [18, u8::MAX] {
+            let prelude = vec![Event::MemAcc {
+                op,
+                addr: 0,
+                value: 42,
+                target: None,
+            }];
+            assert!(
+                memacc_track_loops_forever(prelude, MEMACC_EQ, 0, 0),
+                "operation {op} must leave cell 0 zeroed"
+            );
+        }
+    }
+
     #[test]
     fn memacc_event_dispatches_a_taken_conditional_jump() {
         let mut sequencer = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
