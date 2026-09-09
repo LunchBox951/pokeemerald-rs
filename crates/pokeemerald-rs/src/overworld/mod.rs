@@ -418,8 +418,11 @@ pub struct OverworldScene {
 impl OverworldScene {
     /// Loads and validates the render resources for `layout` into an owned scene.
     ///
-    /// `header` supplies the room's connections. `events` and `event_data`
-    /// determine the sprite bindings captured by the scene.
+    /// `header`, `events`, and `event_data` must belong to the same room as
+    /// `layout`; nothing here cross-checks them, so a mismatch composes a
+    /// scene with one map's grid and another's connections or NPCs. `header`
+    /// supplies the room's connections. `events` and `event_data` determine
+    /// the sprite bindings captured by the scene.
     ///
     /// # Errors
     ///
