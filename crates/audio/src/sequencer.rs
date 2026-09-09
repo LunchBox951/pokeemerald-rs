@@ -1369,6 +1369,74 @@ mod tests {
         track.cursor == MEMACC_BRANCH_TARGET
     }
 
+    // `decode_track` hands `ply_memacc`'s operation byte through unchanged
+    // (`sequence.rs:343`..`:346`), so the two tests below drive raw `0..=17`
+    // literals: they pin the wire numbering that the `MEMACC_*` constants
+    // only name.
+
+    #[test]
+    fn raw_memacc_opcodes_select_the_upstream_mutations() {
+        let cases = [
+            (0_u8, 3_u8, 3_u8, "mem_set cell0 = 3"),
+            (1, 3, 13, "mem_add cell0 += 3"),
+            (2, 3, 7, "mem_sub cell0 -= 3"),
+            (3, 1, 3, "mem_mem_set cell0 = cell1"),
+            (4, 1, 13, "mem_mem_add cell0 += cell1"),
+            (5, 1, 7, "mem_mem_sub cell0 -= cell1"),
+        ];
+
+        for (raw_op, operand, expected_cell_0, operation) in cases {
+            let mut mem_acc = MemAccArea::default();
+            mem_acc.write(0, 10);
+            mem_acc.write(1, 3);
+
+            apply_memacc(&mut mem_acc, raw_op, 0, operand);
+
+            assert_eq!(
+                mem_acc.read(0),
+                Some(expected_cell_0),
+                "raw opcode {raw_op}: {operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_memacc_opcodes_select_the_upstream_comparisons() {
+        const CELL_0: u8 = 10;
+        const OPERANDS: [u8; 3] = [5, 10, 11];
+
+        // Upstream numbers the six orderings `6..=11` against a literal and
+        // repeats them at `12..=17` against another cell. Each row lists
+        // whether the branch is taken for each of `OPERANDS`.
+        let cases = [
+            (6_u8, 12_u8, [false, true, false], "=="),
+            (7, 13, [true, false, true], "!="),
+            (8, 14, [true, false, false], ">"),
+            (9, 15, [true, true, false], ">="),
+            (10, 16, [false, true, true], "<="),
+            (11, 17, [false, false, true], "<"),
+        ];
+
+        for (literal_op, cell_op, taken_per_operand, ordering) in cases {
+            for (operand, expected) in OPERANDS.into_iter().zip(taken_per_operand) {
+                let mut mem_acc = MemAccArea::default();
+                mem_acc.write(0, CELL_0);
+                mem_acc.write(1, operand);
+
+                assert_eq!(
+                    memacc_branch_taken(&mut mem_acc, literal_op, 0, operand),
+                    expected,
+                    "raw opcode {literal_op}: {CELL_0} {ordering} {operand}"
+                );
+                assert_eq!(
+                    memacc_branch_taken(&mut mem_acc, cell_op, 0, 1),
+                    expected,
+                    "raw opcode {cell_op}: {CELL_0} {ordering} cell holding {operand}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn memacc_literal_mutations_set_and_wrap_at_u8_bounds() {
         let mut mem_acc = MemAccArea::default();
@@ -2483,6 +2551,72 @@ mod tests {
 
         assert_eq!(sequencer.tracks[0].cursor, 3);
         assert_eq!(sequencer.tracks[0].repeat_counter, 0);
+    }
+
+    fn repeat_body() -> [Event; 2] {
+        [
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 4,
+            },
+            Event::Wait(12),
+        ]
+    }
+
+    /// A finite `REPT` track, built so `target` points at the first event of
+    /// [`repeat_body`].
+    fn repeat_track(count: u8) -> Vec<Event> {
+        const REPEAT_TARGET: usize = 1;
+
+        let mut track = vec![Event::Voice(0)];
+        track.extend(repeat_body());
+        track.push(Event::Repeat {
+            count,
+            target: REPEAT_TARGET,
+        });
+        track.push(Event::Fine);
+        track
+    }
+
+    #[test]
+    fn repeat_renders_identically_to_the_unrolled_track() {
+        const REPEAT_COUNT: u8 = 3;
+
+        let mut unrolled = vec![Event::Voice(0)];
+        for _ in 0..REPEAT_COUNT {
+            unrolled.extend(repeat_body());
+        }
+        unrolled.push(Event::Fine);
+
+        assert_eq!(
+            render_track(repeat_track(REPEAT_COUNT), 80),
+            render_track(unrolled, 80)
+        );
+    }
+
+    #[test]
+    fn repeat_reaches_fine_through_the_rendered_track() {
+        let mut sequencer = Sequencer::new(test_song(vec![repeat_track(3)], 150));
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        for _ in 0..200 {
+            sequencer.render_frame(&mut output);
+        }
+
+        assert!(sequencer.is_finished());
+    }
+
+    #[test]
+    fn repeat_count_zero_loops_the_rendered_track_forever() {
+        let mut sequencer = Sequencer::new(test_song(vec![repeat_track(0)], 150));
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        for _ in 0..200 {
+            sequencer.render_frame(&mut output);
+        }
+
+        assert!(!sequencer.is_finished());
     }
 
     // --- CGB PSG instruments, wired end-to-end through the sequencer -------
