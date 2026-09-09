@@ -910,6 +910,55 @@ mod tests {
         assert!(!TmHmLearnsets::slot(TM01_FOCUS_PUNCH).unwrap().is_hm());
     }
 
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every slot's move id, in slot order, as little-endian bytes.
+    fn render_slot_move_bytes() -> Vec<u8> {
+        let mut out = Vec::with_capacity(SLOT_MOVES.len() * 2);
+        for slot_move in SLOT_MOVES {
+            out.extend_from_slice(&slot_move.move_id.0.to_le_bytes());
+        }
+        out
+    }
+
+    /// Digest of `FOREACH_TMHM`'s 58 machine moves (`include/constants/tms_hms.h`,
+    /// `src/data/party_menu.h`), each rendered as `render_slot_move_bytes` renders ours.
+    #[test]
+    fn every_slot_move_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_slot_move_bytes())),
+            "ff73fe3582ba6cf7",
+            "TM/HM slot moves diverge from the canonical upstream sequence",
+        );
+    }
+
+    /// Renders every species' compatibility mask, in species-id order, as
+    /// little-endian bytes.
+    fn render_learnset_mask_bytes() -> Vec<u8> {
+        let mut out = Vec::with_capacity(LEARNSET_MASKS.len() * 8);
+        for mask in LEARNSET_MASKS {
+            out.extend_from_slice(&mask.to_le_bytes());
+        }
+        out
+    }
+
+    /// Digest of every `gTMHMLearnsets` compatibility mask
+    /// (`src/data/pokemon/tmhm_learnsets.h`), each rendered as
+    /// `render_learnset_mask_bytes` renders ours.
+    #[test]
+    fn every_species_mask_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_learnset_mask_bytes())),
+            "6411b1b2e37c2e20",
+            "TM/HM species masks diverge from the canonical upstream table",
+        );
+    }
+
     #[test]
     fn is_hm_move_recognizes_only_hm_slot_moves() {
         let hm_moves = [

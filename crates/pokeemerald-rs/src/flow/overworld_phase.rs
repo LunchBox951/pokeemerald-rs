@@ -127,6 +127,18 @@ impl From<OverworldSceneError> for ContinueError {
     }
 }
 
+/// Test-only stand-in for [`OverworldPhase::build_start_menu`]'s pack load.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow) enum SyntheticStartMenu {
+    /// Load the menu from the real pack source, as production does.
+    RealPack,
+    /// Build [`crate::start_menu::synthetic_start_menu_at`] without a pack.
+    Builds,
+    /// Fail the build, as a missing or unreadable pack would.
+    Fails,
+}
+
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
@@ -362,6 +374,18 @@ pub(crate) struct OverworldPhase {
     /// [`Self::new`] and [`Self::from_saved`], matching a fresh boot's
     /// zeroed EWRAM.
     start_menu_cursor: usize,
+    /// Test-only: what [`Self::build_start_menu`] does instead of
+    /// [`crate::start_menu::open`]'s real pack load, so an end-to-end
+    /// [`Self::step`] test can drive a menu that genuinely opens, or one
+    /// that genuinely fails, without depending on a local pack.
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_start_menu: SyntheticStartMenu,
+    /// Test-only: the trainer
+    /// [`Self::begin_sight_trainer_approach_if_seen`] builds its battle
+    /// against, in place of the scanned object event's own, so a test can
+    /// drive a cone that claims its trigger frame through [`Self::step`].
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -743,6 +767,10 @@ impl OverworldPhase {
             // `Self::new`'s does, regardless of where the menu was left
             // the last time this file was played.
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -909,6 +937,10 @@ impl OverworldPhase {
             // `sStartMenuCursorPos` is EWRAM, zero at boot -- and this
             // *is* boot (field docs).
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
