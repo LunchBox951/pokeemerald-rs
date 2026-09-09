@@ -28,7 +28,10 @@ use crate::textbox::{self, FrameAssets};
 
 const FIELD_SCRIPT_TEXT_SPEED: TextSpeed = TextSpeed::Mid;
 
-/// Maps A/B button edges and holds to printer input.
+/// Maps A/B button edges and holds to the shared printer input shape.
+///
+/// Fresh edges advance prompts and close waits. Held states accelerate printing.
+/// Keeping the mapping here prevents field and save dialogs from drifting.
 pub(crate) fn confirm_printer_input(buttons: ButtonState) -> PrinterInput {
     PrinterInput {
         a_pressed: buttons.is_newly_pressed(Buttons::A),
@@ -99,7 +102,9 @@ pub(crate) struct NpcDialog {
 impl NpcDialog {
     /// Creates the standard field message box from decoded assets.
     ///
-    /// NPC and save messages share this type and supply their own `text_speed`.
+    /// NPC and save messages share this type because both use the standard field
+    /// message resources. `text_speed` stays caller-supplied so save messages can
+    /// use the saved option while field scripts use [`FIELD_SCRIPT_TEXT_SPEED`].
     /// Holding A or B accelerates printing.
     pub(crate) fn new(
         sheet: OwnedFontGlyphSheet,
@@ -159,6 +164,9 @@ impl NpcDialog {
     }
 
     /// Advances the dialog by one frame and reports whether it remains open.
+    ///
+    /// Fresh A/B edges advance printer prompts and the final script wait. Held A/B
+    /// states accelerate printing without satisfying that final wait.
     pub(crate) fn tick(&mut self, input: PrinterInput) -> DialogOutcome {
         match self.state {
             DialogState::Closed => return DialogOutcome::Closed,
@@ -285,12 +293,16 @@ mod tests {
         b_held: true,
     };
 
-    const DIALOG_FRAME_LIMIT: usize = 16;
+    const ONE_GLYPH_PRINT_FRAME_LIMIT: usize = 8;
+    const TWO_GLYPH_PRINT_FRAME_LIMIT: usize = 16;
     const MID_SPEED_PROMPT_READY_FRAMES: usize = 8;
+    const POST_CLEAR_CLOSE_FRAME_LIMIT: usize = 8;
+    const WAIT_STATE_STABILITY_FRAMES: usize = 8;
+    const ACCELERATION_TEST_FRAME_LIMIT: usize = 16;
     const OUTSIDE_DIALOG_PIXEL: (usize, usize) = (120, 0);
 
-    fn advance_until_state(dialog: &mut NpcDialog, expected: DialogState) {
-        for _ in 0..DIALOG_FRAME_LIMIT {
+    fn advance_until_state(dialog: &mut NpcDialog, expected: DialogState, frame_limit: usize) {
+        for _ in 0..frame_limit {
             if dialog.state == expected {
                 return;
             }
@@ -309,7 +321,7 @@ mod tests {
     #[test]
     fn a_message_without_a_trailing_prompt_closes_the_instant_printing_finishes() {
         let mut dialog = synthetic_dialog(vec![Token::Char('A'), Token::End]);
-        for _ in 0..DIALOG_FRAME_LIMIT {
+        for _ in 0..ONE_GLYPH_PRINT_FRAME_LIMIT {
             if dialog.tick(NO_INPUT) == DialogOutcome::Closed {
                 return;
             }
@@ -331,7 +343,7 @@ mod tests {
             DialogOutcome::Continue,
             "Cleared, not yet Closed"
         );
-        for _ in 0..DIALOG_FRAME_LIMIT {
+        for _ in 0..POST_CLEAR_CLOSE_FRAME_LIMIT {
             if dialog.tick(NO_INPUT) == DialogOutcome::Closed {
                 return;
             }
@@ -344,10 +356,14 @@ mod tests {
         let mut dialog = synthetic_dialog(vec![Token::Char('H'), Token::Char('i'), Token::End])
             .with_waitbuttonpress();
 
-        advance_until_state(&mut dialog, DialogState::AwaitingButtonPress);
+        advance_until_state(
+            &mut dialog,
+            DialogState::AwaitingButtonPress,
+            TWO_GLYPH_PRINT_FRAME_LIMIT,
+        );
         assert_eq!(dialog.revealed_glyph_count(), 2);
 
-        for _ in 0..DIALOG_FRAME_LIMIT {
+        for _ in 0..WAIT_STATE_STABILITY_FRAMES {
             assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
             assert_eq!(
                 dialog.revealed_glyph_count(),
@@ -373,7 +389,11 @@ mod tests {
     fn waitbuttonpress_accepts_a_fresh_b_press_too() {
         let mut dialog =
             synthetic_dialog(vec![Token::Char('A'), Token::End]).with_waitbuttonpress();
-        advance_until_state(&mut dialog, DialogState::AwaitingButtonPress);
+        advance_until_state(
+            &mut dialog,
+            DialogState::AwaitingButtonPress,
+            ONE_GLYPH_PRINT_FRAME_LIMIT,
+        );
         assert_eq!(dialog.revealed_glyph_count(), 1);
         assert_eq!(
             dialog.tick(B_PRESS),
@@ -386,7 +406,11 @@ mod tests {
     fn waitbuttonpress_ignores_a_held_button_with_no_fresh_edge() {
         let mut dialog =
             synthetic_dialog(vec![Token::Char('A'), Token::End]).with_waitbuttonpress();
-        advance_until_state(&mut dialog, DialogState::AwaitingButtonPress);
+        advance_until_state(
+            &mut dialog,
+            DialogState::AwaitingButtonPress,
+            ONE_GLYPH_PRINT_FRAME_LIMIT,
+        );
         assert_eq!(dialog.revealed_glyph_count(), 1);
         assert_eq!(
             dialog.tick(A_HELD),
@@ -421,7 +445,7 @@ mod tests {
 
         let ticks_to_second_glyph = |inputs: &[PrinterInput]| {
             let mut dialog = synthetic_dialog(tokens());
-            for tick in 0..DIALOG_FRAME_LIMIT {
+            for tick in 0..ACCELERATION_TEST_FRAME_LIMIT {
                 let input = inputs[tick % inputs.len()];
                 dialog.tick(input);
                 if dialog.revealed_glyph_count() >= 2 {
