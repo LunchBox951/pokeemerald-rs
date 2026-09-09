@@ -39,7 +39,11 @@ const SPECIAL_FLAGS_BYTES: usize = (NUM_SPECIAL_FLAGS as usize).div_ceil(FLAGS_P
 
 const SYSTEM_FLAGS: u16 = 0x860;
 const FLAG_NURSE_UNION_ROOM_REMINDER: u16 = SYSTEM_FLAGS + 0x20;
+const FLAG_SYS_USE_FLASH: u16 = SYSTEM_FLAGS + 0x28;
 const FLAG_SYS_USE_STRENGTH: u16 = SYSTEM_FLAGS + 0x29;
+const FLAG_SYS_CYCLING_ROAD: u16 = SYSTEM_FLAGS + 0x2B;
+const FLAG_SYS_SAFARI_MODE: u16 = SYSTEM_FLAGS + 0x2C;
+const FLAG_SYS_CRUISE_MODE: u16 = SYSTEM_FLAGS + 0x2D;
 const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
 const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
 const FLAG_SYS_CTRL_OBJ_DELETE: u16 = SYSTEM_FLAGS + 0x61;
@@ -64,6 +68,10 @@ pub const SPECIAL_VARS_START: u16 = 0x8000;
 pub const SPECIAL_VARS_END: u16 = 0x8015;
 /// Number of session-only variable ids.
 pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
+
+const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
+const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
+const ABNORMAL_WEATHER_NONE: u16 = 0;
 
 /// Errors from flag and variable access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +269,32 @@ impl EventData {
         self.clear_known_ordinary_flag(FLAG_SYS_USE_STRENGTH);
         self.clear_known_ordinary_flag(FLAG_SYS_CTRL_OBJ_DELETE);
         self.clear_known_ordinary_flag(FLAG_NURSE_UNION_ROOM_REMINDER);
+    }
+
+    /// Clears the persistent field-mode flags and, if pending, ends the
+    /// abnormal weather a white-out must not let survive into the next save
+    /// (`Overworld_ResetStateAfterWhiteOut`, `src/overworld.c:399-413`).
+    ///
+    /// All other values remain unchanged.
+    pub fn clear_white_out_state(&mut self) {
+        for flag in [
+            FLAG_SYS_CYCLING_ROAD,
+            FLAG_SYS_CRUISE_MODE,
+            FLAG_SYS_SAFARI_MODE,
+            FLAG_SYS_USE_STRENGTH,
+            FLAG_SYS_USE_FLASH,
+        ] {
+            self.clear_known_ordinary_flag(flag);
+        }
+
+        // A Kyogre/Groudon defeat that already maxed the step counter ends
+        // the abnormal weather rather than leaving it pending forever.
+        let should_end = usize::from(VAR_SHOULD_END_ABNORMAL_WEATHER - VARS_START);
+        if self.vars[should_end] == 1 {
+            self.vars[should_end] = 0;
+            self.vars[usize::from(VAR_ABNORMAL_WEATHER_LOCATION - VARS_START)] =
+                ABNORMAL_WEATHER_NONE;
+        }
     }
 }
 
@@ -499,6 +533,56 @@ mod tests {
             data.var_get(outside_var),
             Ok(123),
             "vars outside the temp range must survive the clear"
+        );
+    }
+
+    #[test]
+    fn clear_white_out_state_clears_field_mode_flags_and_ends_pending_abnormal_weather() {
+        let mut data = EventData::new();
+
+        data.flag_set(FLAG_SYS_CYCLING_ROAD).unwrap();
+        data.flag_set(FLAG_SYS_CRUISE_MODE).unwrap();
+        data.flag_set(FLAG_SYS_SAFARI_MODE).unwrap();
+        data.flag_set(FLAG_SYS_USE_STRENGTH).unwrap();
+        data.flag_set(FLAG_SYS_USE_FLASH).unwrap();
+        data.var_set(VAR_SHOULD_END_ABNORMAL_WEATHER, 1).unwrap();
+        data.var_set(VAR_ABNORMAL_WEATHER_LOCATION, 3).unwrap();
+
+        let unrelated_flag = FLAG_SYS_ENC_UP_ITEM;
+        data.flag_set(unrelated_flag).unwrap();
+
+        data.clear_white_out_state();
+
+        assert_eq!(data.flag_get(FLAG_SYS_CYCLING_ROAD), Ok(false));
+        assert_eq!(data.flag_get(FLAG_SYS_CRUISE_MODE), Ok(false));
+        assert_eq!(data.flag_get(FLAG_SYS_SAFARI_MODE), Ok(false));
+        assert_eq!(data.flag_get(FLAG_SYS_USE_STRENGTH), Ok(false));
+        assert_eq!(data.flag_get(FLAG_SYS_USE_FLASH), Ok(false));
+        assert_eq!(data.var_get(VAR_SHOULD_END_ABNORMAL_WEATHER), Ok(0));
+        assert_eq!(data.var_get(VAR_ABNORMAL_WEATHER_LOCATION), Ok(0));
+        assert_eq!(
+            data.flag_get(unrelated_flag),
+            Ok(true),
+            "flags outside the named set must survive the clear"
+        );
+    }
+
+    #[test]
+    fn clear_white_out_state_leaves_abnormal_weather_alone_when_not_pending() {
+        let mut data = EventData::new();
+        data.var_set(VAR_ABNORMAL_WEATHER_LOCATION, 3).unwrap();
+
+        data.clear_white_out_state();
+
+        assert_eq!(
+            data.var_get(VAR_SHOULD_END_ABNORMAL_WEATHER),
+            Ok(0),
+            "setup: was never pending"
+        );
+        assert_eq!(
+            data.var_get(VAR_ABNORMAL_WEATHER_LOCATION),
+            Ok(3),
+            "a location with no pending end-request must survive the clear"
         );
     }
 
