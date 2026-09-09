@@ -62,9 +62,13 @@ pub enum Rival {
 }
 
 impl Rival {
-    /// Returns the rival selected for the saved player gender.
+    /// Returns the rival selected for the saved player gender, as
+    /// `Route103_EventScript_Rival`'s `checkplayergender` does
+    /// (`data/maps/Route103/scripts.inc:19-21`).
     ///
-    /// [`engine::save::PlayerGender::Other`] has no rival and returns `None`.
+    /// [`engine::save::PlayerGender::Other`] returns `None`: `checkplayergender`
+    /// copies the raw gender byte and its script falls through to `end` for any
+    /// value but `MALE` or `FEMALE` (`src/scrcmd.c:2014-2018`), so no battle starts.
     #[must_use]
     pub const fn for_gender(gender: engine::save::PlayerGender) -> Option<Self> {
         match gender {
