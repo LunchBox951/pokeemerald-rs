@@ -323,6 +323,30 @@ fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling
     std::fs::remove_file(&staged.path).unwrap();
 }
 
+/// Whether `dir`'s filesystem will hold an entry whose name is not valid
+/// UTF-8. Not every one will: APFS and HFS+ validate the bytes of every
+/// name a syscall hands them and refuse `sa\xFFv` outright with `EILSEQ`
+/// ("Illegal byte sequence"), so on macOS the save path the test below
+/// needs cannot be brought into existence at all and there is nothing
+/// there to assert about. Probed through the very operation that test
+/// depends on -- the rename that publishes the staged image onto such a
+/// name -- rather than assumed from `target_os`, so a host that does
+/// accept one keeps the coverage.
+#[cfg(unix)]
+fn host_accepts_a_non_utf8_filename(dir: &Path) -> bool {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let valid = dir.join("utf8-name-probe");
+    if std::fs::write(&valid, b"probe").is_err() {
+        return false;
+    }
+    let raw = dir.join(OsString::from_vec(vec![b'p', 0xFF, b'e']));
+    let accepted = std::fs::rename(&valid, &raw).is_ok();
+    drop(std::fs::remove_file(if accepted { &raw } else { &valid }));
+    accepted
+}
+
 /// A save path whose basename is invalid UTF-8 must still be writable, and
 /// the sibling it stages under must land beside it, in the same directory:
 /// `staging_path_with_caps` renders that basename through `to_string_lossy`
@@ -335,6 +359,9 @@ fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
     use std::os::unix::ffi::OsStringExt as _;
 
     let dir = TempDir::new("non-utf8-basename");
+    if !host_accepts_a_non_utf8_filename(&dir.path) {
+        return;
+    }
     let path = dir
         .path
         .join(OsString::from_vec(vec![b's', b'a', 0xFF, b'v']));
