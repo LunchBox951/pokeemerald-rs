@@ -47,7 +47,7 @@ const NO_MOVE_PRIORITY: i8 = 0;
 /// A player's selected turn action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlayerAction {
-    /// Use the move at this party move-slot index.
+    /// Use the move at this index in the active Pokémon's moveset.
     UseMove(usize),
     /// Attempt to run away.
     Run,
@@ -255,7 +255,7 @@ impl Battle {
         matches!(self.kind, BattleKind::FirstBattle)
     }
 
-    /// Returns the completed-turn counter, which remains `0` during turn one.
+    /// Returns the zero-based battle-turn counter used by trainer AI.
     #[must_use]
     pub const fn turn_counter(&self) -> u8 {
         self.turn_counter
