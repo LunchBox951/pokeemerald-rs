@@ -382,10 +382,8 @@ pub(crate) struct OverworldPhase {
     pub(in crate::flow) synthetic_start_menu: SyntheticStartMenu,
     /// Test-only: the trainer
     /// [`Self::begin_sight_trainer_approach_if_seen`] builds its battle
-    /// against, in place of the scanned object event's own. Every real
-    /// sight trainer's party refuses to construct today (that method's
-    /// "Refusals cost nothing, forever"), so a cone that genuinely *claims*
-    /// its trigger frame is otherwise undrivable through [`Self::step`].
+    /// against, in place of the scanned object event's own, so a test can
+    /// drive a cone that claims its trigger frame through [`Self::step`].
     #[cfg(test)]
     pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
     /// The Route 101 scripted first battle currently being played out, if

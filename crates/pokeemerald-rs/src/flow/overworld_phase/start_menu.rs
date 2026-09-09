@@ -197,10 +197,7 @@ impl OverworldPhase {
         }
     }
 
-    /// [`Self::build_start_menu`] plus the commit [`Self::advance_start_menu_frame`]'s
-    /// own opening branch wants: attempt-and-store in one call, for the
-    /// caller that has no reason to hold the built menu at arm's length
-    /// first. Returns whether it opened.
+    /// Build and commit a fresh press's menu; returns whether it opened.
     pub(super) fn try_open_start_menu(&mut self) -> bool {
         match self.build_start_menu() {
             Some(menu) => {

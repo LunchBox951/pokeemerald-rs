@@ -43,9 +43,7 @@ use super::OverworldPhase;
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 
-/// [`OverworldPhase::resolve_pre_movement_field_input`]'s own return value
-/// -- see that method's doc comment for what each field means and why it
-/// is a struct rather than loose locals.
+/// This frame's pre-movement field-input decisions.
 struct PreMovementFieldInput {
     facing: Direction,
     position: (i32, i32),
@@ -53,11 +51,8 @@ struct PreMovementFieldInput {
     arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
     interaction: Option<InteractionOutcome>,
-    /// The menu a fresh `START` press already built, if
-    /// [`OverworldPhase::start_menu_may_open`] allowed it -- built, not
-    /// merely decided, here (issues #908, #436:
-    /// [`OverworldPhase::build_start_menu`]'s own doc comment on why the
-    /// order matters).
+    /// The menu a fresh `START` press built, if
+    /// [`OverworldPhase::start_menu_may_open`] allowed it.
     start_menu: Option<StartMenu>,
 }
 
@@ -524,14 +519,8 @@ impl OverworldPhase {
                 )
             });
 
-            // Resolve this frame's warp/interaction/battle precedence
-            // (module docs' own citations) -- pulled into its own method
-            // purely to keep this one under `clippy::too_many_lines`; see
-            // that method's doc comment for what each branch does and why.
-            // `runtime`'s last use is above this call, not inside it -- every
-            // argument below is an owned value already derived from it, so
-            // this borrows only `self`, the same way `begin_step_battle`
-            // already does.
+            // Warp, interaction, battle, then the START menu, in upstream's
+            // `ProcessPlayerFieldInput` order.
             self.resolve_step_events(
                 warp_trigger,
                 encounter,
@@ -591,13 +580,9 @@ impl OverworldPhase {
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
 
-        // Field input before movement (issue #194, module docs' "Field
-        // input before movement" section): if this frame's pre-movement
-        // state already satisfies the arrow-warp gate, upstream would have
-        // consumed the input in `ProcessPlayerFieldInput` and never called
-        // `PlayerStep` at all -- so movement is skipped outright by `step`,
-        // rather than run and then found to have walked the player off the
-        // arrow tile before the poll got a look.
+        // Upstream consumes an arrow-warp press in `ProcessPlayerFieldInput`
+        // before `PlayerStep` runs, so a satisfied gate skips this frame's
+        // movement.
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
             trigger_arrow_warp(runtime, x, y, elevation, d)
@@ -614,7 +599,6 @@ impl OverworldPhase {
             .then(|| self.interaction_tokens_this_frame(buttons, runtime))
             .flatten();
 
-        // `PreMovementFieldInput::start_menu`'s own doc comment.
         let start_menu = self
             .start_menu_may_open(buttons, arrow_trigger.is_some() || interaction.is_some())
             .then(|| self.build_start_menu())
@@ -655,10 +639,8 @@ impl OverworldPhase {
     /// `super::route103_rival_trigger`) starts the Route 103 rival battle
     /// instead -- exactly the same gate, one extra branch. The battle this
     /// frame earned -- if any -- starts next ([`Self::begin_step_battle`]).
-    /// Last of all, an already-built fresh `START` menu is committed
-    /// ([`Self::commit_start_menu`], `step`'s own "Field start menu
-    /// ordering" section) -- upstream's own `pressedStartButton` position,
-    /// behind every branch above.
+    /// Last, a fresh `START` menu already built is committed: upstream's
+    /// `pressedStartButton` position, behind every branch above.
     fn resolve_step_events(
         &mut self,
         warp_trigger: Option<WarpTrigger>,
