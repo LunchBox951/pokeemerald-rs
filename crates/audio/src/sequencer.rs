@@ -96,9 +96,7 @@ const MEMACC_CELL_GE: u8 = 15;
 const MEMACC_CELL_LE: u8 = 16;
 const MEMACC_CELL_LT: u8 = 17;
 
-/// Private, zero-initialized `MEMACC` cells for one [`Sequencer`]. Upstream
-/// shares one global, but canonical data only writes once and never reads it
-/// (`gMPlayMemAccArea`, `m4a.c:20,88`).
+/// One [`Sequencer`]'s zero-initialized `MEMACC` cells.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct MemAccArea {
     cells: [u8; MEM_ACC_LEN],
@@ -468,7 +466,7 @@ impl Sequencer {
             // (`assets::audio::song::SongEvent::Tempo`), which round-trips an
             // unbounded on-disk `u16` -- so the clamp is re-applied here
             // too, guarding `tempo_c`'s accumulation against a malformed
-            // pack (#404).
+            // pack.
             Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
             Event::KeyShift(k) => {
                 track.key_shift = k;
@@ -594,9 +592,9 @@ impl Sequencer {
         track.ended = true;
     }
 
-    /// Executes `ply_memacc`'s mutation and conditional-jump table; invalid
-    /// operations, cell addresses, and missing jump targets are safe no-ops
-    /// (`m4a.c:1437`..`:1521`).
+    /// Executes `ply_memacc`'s mutation and conditional-jump table
+    /// (`m4a.c:1437`..`:1521`). This port treats invalid operations, cell
+    /// addresses, and missing jump targets as safe no-ops.
     fn exec_memacc(
         mem_acc: &mut MemAccArea,
         track: &mut TrackState,
