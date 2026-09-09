@@ -4,8 +4,10 @@
 //! transforms, mosaic, and one-dimensional OBJ tile addressing. Each sprite's
 //! tiles are contiguous and row-major from its OAM tile index.
 //!
-//! Display and OBJWIN queries share one cached OAM admission per scanline, so
-//! the scanline's OBJ cycle budget admits and drops the same entries for both.
+//! Display and OBJWIN queries share one cached OAM admission for the most
+//! recently queried scanline, so that scanline's OBJ cycle budget admits and
+//! drops the same entries for both; a query on a different scanline walks OAM
+//! again.
 
 use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
@@ -51,13 +53,15 @@ struct CachedScanlineAdmission {
 /// Resolves borrowed sprite data into display pixels and an object-window mask.
 ///
 /// The position of an entry in `entries` is its OAM index. Lower indices break
-/// ties between entries at the same OBJ priority.
+/// ties between entries at the same OBJ priority. OAM holds 128 entries, so
+/// only the first 128 are ever admitted; any beyond that are never drawn.
 ///
 /// 4bpp and 8bpp entries draw from their corresponding [`Tileset`]. Affine
 /// entries select a matrix attached by
 /// [`with_affine_matrices`](Self::with_affine_matrices).
 ///
-/// Display and OBJWIN queries use the same cached admission for each scanline.
+/// Display and OBJWIN queries use the same cached admission for the most
+/// recently queried scanline.
 /// [`with_hblank_free_interval`](Self::with_hblank_free_interval) selects the
 /// smaller OBJ cycle budget.
 #[derive(Debug, Clone)]
