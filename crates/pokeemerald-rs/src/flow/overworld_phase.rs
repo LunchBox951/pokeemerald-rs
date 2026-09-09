@@ -380,6 +380,14 @@ pub(crate) struct OverworldPhase {
     /// that genuinely fails, without depending on a local pack.
     #[cfg(test)]
     pub(in crate::flow) synthetic_start_menu: SyntheticStartMenu,
+    /// Test-only: the trainer
+    /// [`Self::begin_sight_trainer_approach_if_seen`] builds its battle
+    /// against, in place of the scanned object event's own. Every real
+    /// sight trainer's party refuses to construct today (that method's
+    /// "Refusals cost nothing, forever"), so a cone that genuinely *claims*
+    /// its trigger frame is otherwise undrivable through [`Self::step`].
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -763,6 +771,8 @@ impl OverworldPhase {
             start_menu_cursor: 0,
             #[cfg(test)]
             synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -931,6 +941,8 @@ impl OverworldPhase {
             start_menu_cursor: 0,
             #[cfg(test)]
             synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,

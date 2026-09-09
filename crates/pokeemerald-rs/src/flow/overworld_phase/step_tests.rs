@@ -937,13 +937,11 @@ fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
     );
 }
 
-/// Issue #436's reachable half, end to end: an already-owning sight-trainer
-/// approach must keep outranking a fresh `START` driven through
+/// Issue #436, end to end: an already-owning sight-trainer approach must
+/// keep outranking a fresh `START` driven through
 /// [`OverworldPhase::step`] itself, with the same injected build as above
-/// so the menu really would have opened. The *trigger* frame stays
-/// symbolic in `sight_trainer_tests` -- no bundled trainer's battle
-/// constructs today, so the cone scan itself cannot own a frame with real
-/// data.
+/// so the menu really would have opened. The *trigger* frame is
+/// `sight_trainer_tests::start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame`.
 #[test]
 fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
