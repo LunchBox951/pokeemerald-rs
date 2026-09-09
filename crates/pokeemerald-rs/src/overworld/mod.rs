@@ -587,8 +587,7 @@ impl OverworldScene {
     ///
     /// `event_data` controls object visibility, and `tick` selects the animated tile frames.
     /// The result is deterministic for this scene and the supplied arguments.
-    /// Animated frames patch a fresh copy of the base tile bytes. The sprite layer uses the
-    /// reduced HBlank-free interval OAM budget because overworld setup enables
+    /// The sprite layer uses the reduced HBlank-free interval OAM budget because overworld setup enables
     /// `DISPCNT_HBLANK_INTERVAL` (`pokeemerald/src/overworld.c:2122-2123`).
     ///
     /// # Panics
