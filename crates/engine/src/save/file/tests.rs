@@ -389,6 +389,52 @@ fn a_non_utf8_basename_stages_and_writes_in_the_same_directory() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
+/// A narrowed staging namespace is walked without repeats, so occupancy
+/// alone can never report exhaustion while a free name is still there. The
+/// one-hex-digit floor holds only sixteen names; eight independent draws
+/// over sixteen revisit names already found taken, and with fifteen held
+/// they give up about three times in five with the survivor untried.
+/// Pinned through an injected `open` that refuses anything longer than the
+/// save path plus five bytes, so the shrink chain has nowhere to go but
+/// that floor.
+#[test]
+fn a_narrowed_staging_namespace_is_walked_to_its_last_free_name() {
+    const FREE_DIGIT: char = 'd';
+
+    let dir = TempDir::new("staging-namespace-exhaustion");
+    let path = dir.join("s");
+    let file = SaveFile::at(&path);
+
+    // Every name the floor can render but one, so only a walk that tries
+    // each of the sixteen once is certain to reach the survivor.
+    for digit in "0123456789abcdef".chars() {
+        if digit != FREE_DIGIT {
+            std::fs::write(dir.join(&format!(".tmp.{digit}")), b"someone else's file").unwrap();
+        }
+    }
+
+    let injected_limit = path.as_os_str().as_encoded_bytes().len() + 5;
+    let refuse_long_paths = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        if candidate.as_os_str().as_encoded_bytes().len() > injected_limit {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::real_open(candidate)
+    };
+
+    let staged = file
+        .stage_shrinking_on_invalid_filename(refuse_long_paths, &vec![0u8; FLASH_IMAGE_LEN])
+        .expect(
+            "a narrowed namespace holding one free name must be walked to it, not \
+             reported exhausted",
+        );
+
+    assert_eq!(
+        staged.path,
+        dir.join(&format!(".tmp.{FREE_DIGIT}")),
+        "the one name left free at the floor is the only one staging could have taken"
+    );
+}
+
 /// A non-UTF-8 basename's lossy rendering can be longer than its raw bytes
 /// -- each invalid byte becomes a three-byte replacement character -- so the
 /// first-guess candidate built from it can be longer than the raw basename

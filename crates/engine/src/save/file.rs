@@ -339,8 +339,15 @@ impl SaveFile {
         Ok(())
     }
 
-    /// Bound on retries after a staging-name collision before giving up.
-    const MAX_STAGING_ATTEMPTS: u32 = 8;
+    /// Candidates one staging rung tries before reporting its namespace
+    /// exhausted. The narrowest rung [`Self::stage_shrinking_on_invalid_filename`]
+    /// can reach renders a single hex digit, and sixteen names is that
+    /// whole namespace: because [`Self::staging_candidates`] steps rather
+    /// than redraws, a walk this long tries every one of them, so stale or
+    /// concurrently held entries can never report exhaustion while a free
+    /// name remains. Wider rungs stop here too, where sixteen distinct
+    /// names all landing on taken ones is already out of reach.
+    const MAX_STAGING_ATTEMPTS: u32 = 16;
 
     /// Stages `bytes` under a fresh name from `next_path` on every attempt,
     /// opening each with `open`, retrying a name collision up to
@@ -398,11 +405,7 @@ impl SaveFile {
         let mut stem_cap = Self::first_guess_stem_cap();
         let mut hex_digits = Self::UNIQUE_COMPONENT_HEX_DIGITS;
         loop {
-            match Self::stage(
-                || self.staging_path_with_caps(stem_cap, hex_digits),
-                &open,
-                bytes,
-            ) {
+            match Self::stage(self.staging_candidates(stem_cap, hex_digits), &open, bytes) {
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && stem_cap > 0 => {
                     stem_cap /= 2;
                 }
@@ -602,7 +605,7 @@ impl SaveFile {
     /// so the common case succeeds immediately; when a host's real limit
     /// disagrees with that guess, [`Self::stage_shrinking_on_invalid_filename`]
     /// is what actually corrects it, not this function. A test convenience;
-    /// production staging calls [`Self::staging_path_with_caps`] directly.
+    /// production staging walks [`Self::staging_candidates`] instead.
     #[cfg(test)]
     fn staging_path(&self) -> PathBuf {
         self.staging_path_with_caps(
@@ -611,25 +614,35 @@ impl SaveFile {
         )
     }
 
-    /// As [`Self::staging_path`], cutting the basename to at most
-    /// `max_stem_len` bytes -- on a char boundary -- and rendering the
-    /// unique suffix at `hex_digits` digits wide, rather than computing
-    /// [`Self::first_guess_stem_cap`]'s budget and always
-    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`].
+    /// The candidates one staging rung offers [`Self::stage`], in the
+    /// order it tries them: the basename cut to at most `max_stem_len`
+    /// bytes -- on a char boundary -- carrying a unique suffix
+    /// `hex_digits` wide, drawn fresh for the first candidate and stepped
+    /// through the namespace for each one after it.
+    ///
+    /// Stepped rather than redrawn so the walk never repeats itself. The
+    /// narrowest rung the shrink chain reaches holds only sixteen names,
+    /// and independent draws over a namespace that small revisit names
+    /// already found taken: with fifteen of them held by stale or
+    /// concurrent entries, eight draws report exhaustion about three times
+    /// in five while a free name sits untried. A walk of
+    /// [`Self::MAX_STAGING_ATTEMPTS`] distinct names cannot.
     ///
     /// Never the save path itself. A save whose own basename already has
-    /// the `<stem>.tmp.<hex>` shape this renders can be drawn exactly --
-    /// a save literally named `.tmp.a`, once the shrink chain has reached
-    /// an empty stem and a single hex digit, collides on one draw in
-    /// sixteen -- and staging there is not staging at all: with no save
-    /// yet at the destination `create_new` would succeed on it, so the
-    /// image would be written in place, visible while half-written, and a
-    /// crash would leave a partial file where the rename is supposed to
-    /// publish a whole one. Stepping the drawn value rather than redrawing
-    /// makes the escape certain instead of merely likely, and cannot land
-    /// back on the save path: at most one value in the namespace renders
-    /// that basename.
-    fn staging_path_with_caps(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
+    /// the `<stem>.tmp.<hex>` shape this renders is one of the names the
+    /// walk would otherwise reach -- a save literally named `.tmp.a`, once
+    /// the chain has reached an empty stem and a single hex digit, is one
+    /// of that rung's sixteen -- and staging there is not staging at all:
+    /// with no save yet at the destination `create_new` would succeed on
+    /// it, so the image would go down in place, visible while half-written,
+    /// and a crash would leave a partial file where the rename is supposed
+    /// to publish a whole one. Skipping it costs at most one extra step,
+    /// since at most one value in the namespace renders that basename.
+    fn staging_candidates(
+        &self,
+        max_stem_len: usize,
+        hex_digits: usize,
+    ) -> impl FnMut() -> PathBuf + '_ {
         let mut stem = self
             .path
             .file_name()
@@ -642,17 +655,25 @@ impl SaveFile {
             }
             stem.truncate(cut);
         }
-        let sibling = |value: u64| {
-            self.path
-                .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"))
-        };
-        let drawn = Self::unique_value(hex_digits);
-        let candidate = sibling(drawn);
-        if candidate == self.path {
-            sibling(drawn.wrapping_add(1) & Self::unique_value_mask(hex_digits))
-        } else {
-            candidate
+        let mask = Self::unique_value_mask(hex_digits);
+        let mut value = Self::unique_value(hex_digits);
+        move || loop {
+            let candidate = self
+                .path
+                .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"));
+            value = value.wrapping_add(1) & mask;
+            if candidate != self.path {
+                return candidate;
+            }
         }
+    }
+
+    /// The first candidate of a fresh walk under these caps. A test
+    /// convenience over [`Self::staging_candidates`]; production staging
+    /// hands the whole walk to [`Self::stage`].
+    #[cfg(test)]
+    fn staging_path_with_caps(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
+        self.staging_candidates(max_stem_len, hex_digits)()
     }
 
     /// The stem budget [`Self::staging_path`] tries first: whatever is left
