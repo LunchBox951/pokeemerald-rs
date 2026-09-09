@@ -240,46 +240,20 @@ impl<'a> AffineBgLayer<'a> {
     }
 
     /// Advances `hold` by one column and returns that column's affine
-    /// `Overflow::Transparent` mosaic sample, replacing the stateless
-    /// block-origin snap [`crate::mosaic::MosaicSize::snap`] otherwise
-    /// applies with mGBA's per-column retry/hold state machine.
+    /// `Overflow::Transparent` mosaic sample. [`AffineMosaicHold`]'s docs
+    /// bound one span; `screen_y` arrives pre-snapped to its block's top row,
+    /// because mGBA backs the reference point up by `inY % mosaicV` once
+    /// before the scanline rather than per column.
     ///
-    /// `screen_y` is already snapped to the mosaic block's top row: vertical
-    /// mosaic has no retry quirk to model, since mGBA backs the affine
-    /// reference point up by `inY % mosaicV` before the scanline starts
-    /// (`mgba/src/gba/renderers/software-private.h:186-191`), equivalent for
-    /// this crate's static per-pixel transform to sampling at the block's
-    /// top-row `y`.
-    ///
-    /// Within one open [`AffineMosaicHold`] span: mGBA's mode-2 affine
-    /// renderer advances its raw texture coordinate every screen column
-    /// (`mgba/src/gba/renderers/software-bg.c:44-53`). When "no overflow"
-    /// rejects that coordinate, the fetch's `continue` skips both the
-    /// composite and the `mosaicWait` reload
-    /// (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
-    /// `mgba/src/gba/renderers/software-bg.c:24-42`), so the very next
-    /// column retries — an out-of-bounds block origin blanks only the
-    /// columns up to but excluding the first successful fetch, which draws
-    /// immediately and then holds, not the whole block. The reload
-    /// (`mosaicWait = mosaicH`) sits inside that same fetch, before the
-    /// later `pixelData` write test
-    /// (`mgba/src/gba/renderers/software-bg.c:36-42,49-53`), so it applies
-    /// even when the fetched texel is itself palette-index-0 (transparent):
-    /// the reload depends only on the coordinate being accepted, not on
-    /// what it draws `(behavioral-fidelity)`.
-    ///
-    /// See [`AffineMosaicHold`]'s docs for what "one open span" means and why
-    /// a caller can't just run this over every column of a scanline
-    /// unconditionally.
-    ///
-    /// A `block_h` of 1 or 2 skips the retry/hold state machine entirely and
-    /// samples every column directly: mGBA decodes the register's block size
-    /// and immediately decrements it (`mgba/src/gba/renderers/software-private.h:181-185`),
-    /// then only engages its mode-2 mosaic fetch/hold macro when that
-    /// decremented value exceeds 1 -- i.e. only for a decoded block size of
-    /// 3 or more; sizes 1 and 2 take the plain per-pixel
-    /// `MODE_2_NO_MOSAIC` branch instead, with no hold at all
-    /// (`mgba/src/gba/renderers/software-bg.c:56-76`)
+    /// Three mGBA contracts the code below cannot state for itself: a
+    /// rejected no-overflow coordinate `continue`s past both the composite
+    /// and the `mosaicWait` reload, so the next column retries instead of the
+    /// block blanking wholesale; an accepted coordinate reloads before the
+    /// `pixelData` write test, so a palette-index-0 texel reloads too; and
+    /// the decoded block size is decremented before the hold macro's
+    /// `mosaicH > 1` gate, so decoded sizes 1 and 2 hold nothing
+    /// (`mgba/src/gba/renderers/software-bg.c:24-53,56-76`,
+    /// `mgba/src/gba/renderers/software-private.h:181-191`)
     /// `(behavioral-fidelity)`.
     #[must_use]
     #[expect(
