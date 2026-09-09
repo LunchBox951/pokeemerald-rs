@@ -759,25 +759,16 @@ impl OverworldScene {
     }
 }
 
-/// Load the pack from its default location and decode
-/// [`DEFAULT_ROOM_LAYOUT_ID`] out of it, with [`PlayerCharacter::Brendan`]'s
-/// walking sprite and [`DEFAULT_ROOM_MAP_ID`]'s own object events (issue
-/// #161) -- the entry point the running game uses. Checkout gates take
-/// [`load_repo_default_room`] instead.
+/// Loads the fixed initial bedroom from the runtime asset pack as Brendan.
 ///
-/// `event_data` is threaded down to [`OverworldScene::from_pack`] (issue
-/// #248) -- callers building the game's real intro handoff have no
-/// meaningful event-data state yet at this point (nothing has run
-/// `crate::new_game::init_save_blocks` for this session), so a fresh
-/// [`EventData::new`] is the honest value to pass; a real caller with an
-/// already-loaded save should prefer [`load_room`] instead.
+/// `event_data` determines the object sprites captured in the scene. Pass
+/// fresh event data for a new game; use [`load_room`] when loading saved map
+/// state.
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Pack`] with
-/// [`OverworldSceneError::is_pack_missing`] true if no pack has been
-/// extracted yet; see [`OverworldScene::from_pack`] for the other
-/// (real-pack-only) error cases.
+/// Returns an error if the runtime asset pack cannot be loaded or the initial
+/// room's resources are missing or malformed.
 pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, OverworldSceneError> {
     load_default_room_from_source(crate::pack_source::PackSource::Runtime, event_data)
 }
@@ -837,37 +828,17 @@ pub(crate) fn load_default_room_from_source(
     )
 }
 
-/// Load the pack from its default location and decode `map_id`'s own room
-/// out of it, with `player`'s walking sprite -- the
-/// map-id-keyed counterpart to [`load_default_room`] (which always decodes
-/// the fixed [`DEFAULT_ROOM_LAYOUT_ID`]), added for warp processing (issue
-/// #163): [`crate::flow::OverworldPhase`] needs to rebind its rendered room
-/// to an arbitrary warp destination, not just the bedroom the intro hands
-/// off to. Resolves `map_id`'s layout via the generated
-/// [`assets::MapHeaderTable`] (`header.layout`), then decodes it exactly
-/// like [`load_default_room`] does its own fixed id.
+/// Loads `map_id` from the runtime asset pack with `player`'s walking sprite.
 ///
-/// `event_data` is threaded down to [`OverworldScene::from_pack`] (issue
-/// #248) -- pass the destination map's own event-data state (i.e. after
-/// any on-transition effect this port models has already run against it),
-/// not the departed map's, so Route 103's rival object event resolves
-/// correctly the instant its room decodes.
-///
-/// Resolves `map_id`'s events through
-/// [`oldale_town_npc_reposition::resolve_map_events`] (issue #281) rather
-/// than `assets::MapEventsTable::resolve` directly, so Oldale Town's
-/// footprints man and mart employee decode already standing where
-/// `OldaleTown_OnTransition` unconditionally puts them, not their bare
-/// map.json positions -- a no-op for every other map.
+/// `event_data` must include any destination-map transition updates because
+/// variable object graphics resolve while the scene loads. Oldale Town's object
+/// events include its unconditional transition positions before scene
+/// construction.
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Pack`] with [`OverworldSceneError::is_pack_missing`]
-/// true if no pack has been extracted yet; [`OverworldSceneError::Asset`] if
-/// `map_id` (or its layout) isn't in the generated tables -- unreachable for
-/// any [`assets::MapId`] this port's own warp-destination tables reference;
-/// see [`OverworldScene::from_pack`] for the other (real-pack-only) error
-/// cases.
+/// Returns an error if the runtime asset pack cannot be loaded, `map_id` or its
+/// layout is unknown, or the room's resources are missing or malformed.
 pub fn load_room(
     map_id: assets::MapId,
     player: PlayerCharacter,
@@ -905,73 +876,45 @@ pub(crate) fn load_room_from_source(
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
-/// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack
-/// name `AssetPack::tileset` expects (`crates/xtask/src/extract/mod.rs`'s
-/// `TILESETS` -- the five tilesets the pack currently bundles). An explicit
-/// table, not a mechanical `snake_case` conversion: `"BrendansMaysHouse"`'s
-/// word boundaries aren't otherwise recoverable without guessing, and this
-/// module only ever needs these five.
-fn resolve_tileset_pack_name(symbol: &'static str) -> Result<&'static str, OverworldSceneError> {
-    match symbol {
+fn resolve_tileset_pack_name(
+    tileset_symbol: &'static str,
+) -> Result<&'static str, OverworldSceneError> {
+    match tileset_symbol {
         "gTileset_General" => Ok("general"),
         "gTileset_Building" => Ok("building"),
         "gTileset_Petalburg" => Ok("petalburg"),
         "gTileset_BrendansMaysHouse" => Ok("brendans_mays_house"),
         "gTileset_Lab" => Ok("lab"),
-        other => Err(OverworldSceneError::UnknownTileset(other)),
+        unknown_symbol => Err(OverworldSceneError::UnknownTileset(unknown_symbol)),
     }
 }
 
-/// Translate a [`LayoutId`] into the normalized pack name
-/// `AssetPack::layout_map`/`layout_border` expect
-/// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`): strip the `LAYOUT_`
-/// prefix and lowercase the rest -- a mechanical rule confirmed against
-/// every one of that table's 8 entries (e.g.
-/// `LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE` ->
-/// `littleroot_town_professor_birchs_lab_with_table`), unlike the tileset
-/// symbols above.
-///
-/// `pub(crate)` (issue #177): also called from
-/// `crate::flow::overworld_phase`'s `MapConnections`, which needs it to
-/// resolve a connection target's own `layout/<name>/map` pack id -- the
-/// same translation this module's own [`load_room`] uses for the *current*
-/// map.
-pub(crate) fn layout_pack_name(id: LayoutId) -> String {
-    id.name()
+/// Returns the asset-pack layout name after removing `LAYOUT_` and lowercasing
+/// the remaining symbol.
+pub(crate) fn layout_pack_name(layout_id: LayoutId) -> String {
+    let layout_symbol = layout_id.name();
+    layout_symbol
         .strip_prefix("LAYOUT_")
-        .unwrap_or(id.name())
+        .unwrap_or(layout_symbol)
         .to_lowercase()
 }
 
-/// Validate `image`'s declared dimensions against its own payload, then
-/// crop and re-pack a `w`x`h` region at `(x0, y0)` into the GBA's packed
-/// 4bpp per-8x8-tile byte layout -- tiled left-to-right then top-to-bottom,
-/// matching how upstream's own tilesheet PNGs are laid out and how
-/// `gbagfx` packs them (mirrors [`crate::title`]'s identical BG/OBJ tile
-/// packing -- duplicated rather than shared, since the two modules' error
-/// types differ `(no-verbatim)`). Shared by [`viewport::combined_world_tileset`]
-/// (whole-image regions) and [`avatar::pack_people_sheet_frames`] (per-frame
-/// crops, for the player's and every NPC's 9-frame sheet alike).
-///
-/// # Errors
-///
-/// [`OverworldSceneError::ImagePixelCountMismatch`] if `image`'s declared
-/// dimensions don't match its payload length;
-/// [`OverworldSceneError::ImageNotTileAligned`] if `w`/`h` is not a
-/// multiple of 8 (neither is true for the real upstream art).
 fn pack_4bpp_region(
     label: &'static str,
     image: ImageRef<'_>,
-    x0: usize,
-    y0: usize,
-    w: usize,
-    h: usize,
+    origin_x: usize,
+    origin_y: usize,
+    width: usize,
+    height: usize,
 ) -> Result<Vec<u8>, OverworldSceneError> {
-    const DIM: usize = BitDepth::TILE_DIM;
+    const TILE_SIDE: usize = BitDepth::TILE_DIM;
+    const PIXELS_PER_BYTE: usize = 2;
+    const PIXEL_MASK: u8 = 0x0F;
+    const HIGH_NIBBLE_SHIFT: u32 = 4;
 
-    let stride = image.width as usize;
-    let declared = stride * image.height as usize;
-    if image.pixels.len() != declared {
+    let image_row_width = image.width as usize;
+    let expected_pixel_count = image_row_width * image.height as usize;
+    if image.pixels.len() != expected_pixel_count {
         return Err(OverworldSceneError::ImagePixelCountMismatch {
             label,
             width: image.width,
@@ -979,7 +922,7 @@ fn pack_4bpp_region(
             actual: image.pixels.len(),
         });
     }
-    if !w.is_multiple_of(BitDepth::TILE_DIM) || !h.is_multiple_of(BitDepth::TILE_DIM) {
+    if !width.is_multiple_of(TILE_SIDE) || !height.is_multiple_of(TILE_SIDE) {
         return Err(OverworldSceneError::ImageNotTileAligned {
             label,
             width: image.width,
@@ -987,22 +930,26 @@ fn pack_4bpp_region(
         });
     }
 
-    let tiles_wide = w / DIM;
-    let tiles_high = h / DIM;
-    let mut packed = Vec::with_capacity(tiles_wide * tiles_high * BitDepth::Bpp4.tile_byte_len());
-    for tile_row in 0..tiles_high {
-        for tile_col in 0..tiles_wide {
-            let mut tile_pixels = [0u8; DIM * DIM];
-            for local_y in 0..DIM {
-                let src_y = y0 + tile_row * DIM + local_y;
-                let src_row_start = src_y * stride + x0 + tile_col * DIM;
-                tile_pixels[local_y * DIM..local_y * DIM + DIM]
-                    .copy_from_slice(&image.pixels[src_row_start..src_row_start + DIM]);
+    let tiles_wide = width / TILE_SIDE;
+    let tiles_high = height / TILE_SIDE;
+    let mut packed_bytes =
+        Vec::with_capacity(tiles_wide * tiles_high * BitDepth::Bpp4.tile_byte_len());
+    for tile_y in 0..tiles_high {
+        for tile_x in 0..tiles_wide {
+            let mut tile_pixels = [0u8; TILE_SIDE * TILE_SIDE];
+            for row_in_tile in 0..TILE_SIDE {
+                let source_y = origin_y + tile_y * TILE_SIDE + row_in_tile;
+                let source_row_start = source_y * image_row_width + origin_x + tile_x * TILE_SIDE;
+                let tile_row_start = row_in_tile * TILE_SIDE;
+                tile_pixels[tile_row_start..tile_row_start + TILE_SIDE]
+                    .copy_from_slice(&image.pixels[source_row_start..source_row_start + TILE_SIDE]);
             }
-            for pair in tile_pixels.chunks_exact(2) {
-                packed.push((pair[0] & 0x0F) | ((pair[1] & 0x0F) << 4));
+            for pixel_pair in tile_pixels.chunks_exact(PIXELS_PER_BYTE) {
+                let low_nibble = pixel_pair[0] & PIXEL_MASK;
+                let high_nibble = (pixel_pair[1] & PIXEL_MASK) << HIGH_NIBBLE_SHIFT;
+                packed_bytes.push(low_nibble | high_nibble);
             }
         }
     }
-    Ok(packed)
+    Ok(packed_bytes)
 }
