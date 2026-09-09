@@ -3967,20 +3967,20 @@ mod tests {
     #[test]
     fn layout_grid_decodes_row_major_little_endian_cells() {
         let layout = test_layout(2, 2);
-        let cells = [
+        let bytes = [0x01, 0x10, 0x02, 0x24, 0x03, 0x0C, 0xFF, 0xF3];
+        let expected = [
             cell(1, 0, 1),
             cell(2, 1, 2),
             cell(3, 3, 0),
             cell(1023, 0, 15),
         ];
-        let bytes = encode_cells(&cells);
         let grid = LayoutGrid::new(&layout, &bytes).unwrap();
-        assert_eq!(grid.cell_count(), cells.len());
-        assert_eq!(grid.cells().collect::<Vec<_>>(), cells);
-        assert_eq!(grid.cell_at(0, 0), Some(cells[0]));
-        assert_eq!(grid.cell_at(1, 0), Some(cells[1]));
-        assert_eq!(grid.cell_at(0, 1), Some(cells[2]));
-        assert_eq!(grid.cell_at(1, 1), Some(cells[3]));
+        assert_eq!(grid.cell_count(), expected.len());
+        assert_eq!(grid.cells().collect::<Vec<_>>(), expected);
+        assert_eq!(grid.cell_at(0, 0), Some(expected[0]));
+        assert_eq!(grid.cell_at(1, 0), Some(expected[1]));
+        assert_eq!(grid.cell_at(0, 1), Some(expected[2]));
+        assert_eq!(grid.cell_at(1, 1), Some(expected[3]));
     }
 
     #[test]
