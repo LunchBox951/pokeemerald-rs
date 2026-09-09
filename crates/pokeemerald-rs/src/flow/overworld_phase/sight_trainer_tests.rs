@@ -229,7 +229,7 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
 /// precedence over `START` is driven through `step` for real instead --
 /// `step_tests::step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start`
 /// -- with a menu that genuinely builds
-/// ([`OverworldPhase::synthetic_start_menu_build`]), the same seam
+/// ([`OverworldPhase::synthetic_start_menu`]), the same seam
 /// `step_tests::step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`
 /// (issue #908) uses for the same-frame-interaction case.
 #[test]

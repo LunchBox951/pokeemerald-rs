@@ -203,14 +203,18 @@ impl OverworldPhase {
     /// value: building it here writes nothing outside the returned
     /// [`StartMenu`] itself, so an unused one costs nothing to discard.
     ///
-    /// `Self::synthetic_start_menu_build`'s own doc comment: a test that
-    /// sets it gets a menu that really builds, with no local pack needed.
+    /// `Self::synthetic_start_menu` lets a test choose a menu that really
+    /// builds, or a build that really fails, with no local pack involved.
     pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
         #[cfg(test)]
-        if self.synthetic_start_menu_build {
-            return Some(crate::start_menu::synthetic_start_menu_at(
-                self.start_menu_cursor,
-            ));
+        match self.synthetic_start_menu {
+            super::SyntheticStartMenu::Builds => {
+                return Some(crate::start_menu::synthetic_start_menu_at(
+                    self.start_menu_cursor,
+                ));
+            }
+            super::SyntheticStartMenu::Fails => return None,
+            super::SyntheticStartMenu::RealPack => {}
         }
         match start_menu::open(self.pack_source, self.start_menu_cursor) {
             Ok(opened) => Some(opened),

@@ -3,7 +3,7 @@
 
 use super::step::InteractionOutcome;
 use super::test_support::*;
-use super::OverworldPhase;
+use super::{OverworldPhase, SyntheticStartMenu};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
@@ -869,15 +869,11 @@ fn start_does_not_preempt_a_same_frame_npc_interaction() {
 
 /// A same-frame `START` press whose menu fails to build must not cost that
 /// frame's movement ([`OverworldPhase::build_start_menu`]'s own doc comment
-/// on why the menu is built ahead of movement). The failure path needs a
-/// checkout with no local pack, so the guard below skips this test rather
-/// than assert the pack-dependent success path.
+/// on why the menu is built ahead of movement).
 #[test]
 fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
-    if assets::pack::AssetPack::default_path().is_file() {
-        return;
-    }
     let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Fails;
 
     // Already facing west (module docs' `ONE_F` fixture notes): holding
     // Left begins a step immediately, no separate turn frame first.
@@ -888,8 +884,7 @@ fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
 
     assert!(
         phase.start_menu().is_none(),
-        "no local pack exists in this test environment, so the menu must \
-         not have opened"
+        "a failed build must leave no menu open"
     );
     assert!(
         phase.player.in_transit(),
@@ -901,7 +896,7 @@ fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
 /// Issue #908, end to end: the ordering
 /// [`start_does_not_preempt_a_same_frame_npc_interaction`] pins at the gate
 /// directly, driven through the real [`OverworldPhase::step`] instead, with
-/// [`OverworldPhase::synthetic_start_menu_build`] standing in for a real
+/// [`OverworldPhase::synthetic_start_menu`] standing in for a real
 /// pack load so a menu can genuinely open in a test.
 ///
 /// Three same-frame outcomes, one fixture: `A`+`START` next to Mom leaves
@@ -911,7 +906,7 @@ fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
 #[test]
 fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
     let mut with_interaction = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
-    with_interaction.synthetic_start_menu_build = true;
+    with_interaction.synthetic_start_menu = SyntheticStartMenu::Builds;
     with_interaction.step(pressed(Buttons::A | Buttons::START));
     assert!(
         with_interaction.start_menu().is_none(),
@@ -920,7 +915,7 @@ fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
     );
 
     let mut alone = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
-    alone.synthetic_start_menu_build = true;
+    alone.synthetic_start_menu = SyntheticStartMenu::Builds;
     alone.step(pressed(Buttons::START));
     assert!(
         alone.start_menu().is_some(),
@@ -929,7 +924,7 @@ fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
     );
 
     let mut walking = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
-    walking.synthetic_start_menu_build = true;
+    walking.synthetic_start_menu = SyntheticStartMenu::Builds;
     let mut buttons = ButtonState::new();
     buttons.update(Buttons::LEFT);
     buttons.update(Buttons::LEFT | Buttons::START);
@@ -952,7 +947,7 @@ fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
 #[test]
 fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
-    phase.synthetic_start_menu_build = true;
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
     phase.begin_synthetic_sight_approach_for_test();
 
     phase.step(pressed(Buttons::START));

@@ -127,6 +127,18 @@ impl From<OverworldSceneError> for ContinueError {
     }
 }
 
+/// Test-only stand-in for [`OverworldPhase::build_start_menu`]'s pack load.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow) enum SyntheticStartMenu {
+    /// Load the menu from the real pack source, as production does.
+    RealPack,
+    /// Build [`crate::start_menu::synthetic_start_menu_at`] without a pack.
+    Builds,
+    /// Fail the build, as a missing or unreadable pack would.
+    Fails,
+}
+
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
@@ -150,17 +162,6 @@ impl From<OverworldSceneError> for ContinueError {
 /// `dialog` (issue #161) is the currently-open NPC message box, if any --
 /// see [`OverworldPhase::step`]'s dialog-routing branch and
 /// [`OverworldPhase::compose_frame`]'s overlay.
-#[cfg_attr(
-    test,
-    expect(
-        clippy::struct_excessive_bools,
-        reason = "the fourth flag, `synthetic_start_menu_build`, exists only \
-                  under `#[cfg(test)]`, so the lint fires for test builds \
-                  alone and a production build keeps the warning; the flags \
-                  gate unrelated concerns and share no structure to collapse \
-                  into"
-    )
-)]
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     pub(super) player: PlayerState,
@@ -373,13 +374,12 @@ pub(crate) struct OverworldPhase {
     /// [`Self::new`] and [`Self::from_saved`], matching a fresh boot's
     /// zeroed EWRAM.
     start_menu_cursor: usize,
-    /// Test-only: make [`Self::build_start_menu`] succeed via
-    /// [`crate::start_menu::synthetic_start_menu_at`] instead of
+    /// Test-only: what [`Self::build_start_menu`] does instead of
     /// [`crate::start_menu::open`]'s real pack load, so an end-to-end
-    /// [`Self::step`] test can drive a menu that genuinely opens without a
-    /// local pack (issues #908, #436).
+    /// [`Self::step`] test can drive a menu that genuinely opens, or one
+    /// that genuinely fails, without depending on a local pack.
     #[cfg(test)]
-    pub(in crate::flow) synthetic_start_menu_build: bool,
+    pub(in crate::flow) synthetic_start_menu: SyntheticStartMenu,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -762,7 +762,7 @@ impl OverworldPhase {
             // the last time this file was played.
             start_menu_cursor: 0,
             #[cfg(test)]
-            synthetic_start_menu_build: false,
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -930,7 +930,7 @@ impl OverworldPhase {
             // *is* boot (field docs).
             start_menu_cursor: 0,
             #[cfg(test)]
-            synthetic_start_menu_build: false,
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
