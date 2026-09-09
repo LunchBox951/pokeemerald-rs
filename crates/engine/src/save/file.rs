@@ -616,8 +616,20 @@ impl SaveFile {
     /// unique suffix at `hex_digits` digits wide, rather than computing
     /// [`Self::first_guess_stem_cap`]'s budget and always
     /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`].
+    ///
+    /// Never the save path itself. A save whose own basename already has
+    /// the `<stem>.tmp.<hex>` shape this renders can be drawn exactly --
+    /// a save literally named `.tmp.a`, once the shrink chain has reached
+    /// an empty stem and a single hex digit, collides on one draw in
+    /// sixteen -- and staging there is not staging at all: with no save
+    /// yet at the destination `create_new` would succeed on it, so the
+    /// image would be written in place, visible while half-written, and a
+    /// crash would leave a partial file where the rename is supposed to
+    /// publish a whole one. Stepping the drawn value rather than redrawing
+    /// makes the escape certain instead of merely likely, and cannot land
+    /// back on the save path: at most one value in the namespace renders
+    /// that basename.
     fn staging_path_with_caps(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
-        let suffix = format!(".tmp.{}", Self::unique_component(hex_digits));
         let mut stem = self
             .path
             .file_name()
@@ -630,7 +642,17 @@ impl SaveFile {
             }
             stem.truncate(cut);
         }
-        self.path.with_file_name(format!("{stem}{suffix}"))
+        let sibling = |value: u64| {
+            self.path
+                .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"))
+        };
+        let drawn = Self::unique_value(hex_digits);
+        let candidate = sibling(drawn);
+        if candidate == self.path {
+            sibling(drawn.wrapping_add(1) & Self::unique_value_mask(hex_digits))
+        } else {
+            candidate
+        }
     }
 
     /// The stem budget [`Self::staging_path`] tries first: whatever is left
@@ -651,19 +673,20 @@ impl SaveFile {
     /// this guess outright.
     const MAX_COMPONENT_LEN: usize = 255;
 
-    /// Width [`Self::unique_component`] renders first, before
+    /// Width [`Self::unique_value`] is drawn at first, before
     /// [`Self::stage_shrinking_on_invalid_filename`] narrows it under
     /// pressure.
     const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
 
-    /// `std`-only entropy folded into one value `width` hex digits wide:
-    /// process id, clock nanoseconds, and a fresh `RandomState` key, which
-    /// alone already differs between two calls at the same nanosecond.
-    /// `create_new` is what actually keeps two stagings from colliding on
-    /// purpose; this width is defence in depth on top of it, so narrowing
-    /// it under pressure -- down to a single, still-freshly-drawn digit --
-    /// costs unpredictability, not the exclusivity guarantee itself.
-    fn unique_component(width: usize) -> String {
+    /// `std`-only entropy folded into one value that fits `width` hex
+    /// digits: process id, clock nanoseconds, and a fresh `RandomState`
+    /// key, which alone already differs between two calls at the same
+    /// nanosecond. `create_new` is what actually keeps two stagings from
+    /// colliding on purpose; this width is defence in depth on top of it,
+    /// so narrowing it under pressure -- down to a single, still-freshly-
+    /// drawn digit -- costs unpredictability, not the exclusivity
+    /// guarantee itself.
+    fn unique_value(width: usize) -> u64 {
         use std::hash::{BuildHasher, Hasher};
 
         let nanos = std::time::SystemTime::now()
@@ -672,8 +695,14 @@ impl SaveFile {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
         hasher.write_u32(std::process::id());
         hasher.write_u128(nanos);
-        let mask = (1_u64 << (4 * width)) - 1;
-        format!("{:0width$x}", hasher.finish() & mask)
+        hasher.finish() & Self::unique_value_mask(width)
+    }
+
+    /// Every value `width` hex digits can render, and no other. `width` is
+    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`] or a halving of it, so it is
+    /// never wide enough to overflow the shift.
+    fn unique_value_mask(width: usize) -> u64 {
+        (1_u64 << (4 * width)) - 1
     }
 }
 

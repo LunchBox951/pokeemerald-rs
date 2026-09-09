@@ -51,6 +51,38 @@ fn a_basename_at_the_component_limit_still_gets_a_valid_staging_sibling() {
     );
 }
 
+/// A staging candidate is always a sibling of the save path, never the save
+/// path itself. A save whose own basename already has the `.tmp.<hex>`
+/// shape the generator renders can otherwise be drawn exactly -- a save
+/// named `.tmp.a`, once the shrink chain has reached an empty stem and a
+/// single hex digit, is one of only sixteen names the generator can produce
+/// there -- and `create_new` succeeds on a destination no save occupies yet,
+/// so the image would be written in place instead of staged: visible while
+/// half-written, and a partial file left behind by a crash where the rename
+/// is supposed to publish a whole one.
+#[test]
+fn a_staging_candidate_is_never_the_save_path_itself() {
+    let path = Path::new("/saves/.tmp.a");
+    let file = SaveFile::at(path);
+
+    let mut drawn = std::collections::BTreeSet::new();
+    for _ in 0..4_096 {
+        let candidate = file.staging_path_with_caps(0, 1);
+        assert_ne!(
+            candidate, *path,
+            "a staging candidate must never be the save path itself"
+        );
+        drawn.insert(candidate);
+    }
+
+    assert_eq!(
+        drawn.len(),
+        15,
+        "escaping the save path must cost only that one name, not narrow the \
+         floor further: {drawn:?}"
+    );
+}
+
 /// The longest save basename whose `.tmp.<pid>` staging sibling fit within
 /// the filesystem's 255-byte component limit must still be writable: the
 /// fixed-width suffix may not push a previously valid basename over.
