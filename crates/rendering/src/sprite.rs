@@ -1,10 +1,10 @@
-//! The OAM-equivalent sprite layer: compositing [`OamEntry`](crate::oam::OamEntry)
+//! The OAM-equivalent sprite layer: compositing [`OamEntry`]
 //! values into pixels (S-2 slice 2).
 //!
 //! A sprite renderer compositing enabled sprites into framebuffer output
 //! with correct transparency (palette index 0), horizontal/vertical flip,
 //! and partial off-screen clipping (including the position-wrapping
-//! semantics documented on [`OamEntry`](crate::oam::OamEntry)).
+//! semantics documented on [`OamEntry`]).
 //!
 //! Per-sprite tile layout matches pokeemerald's OBJ character mapping: nearly
 //! every `SetGpuReg(REG_OFFSET_DISPCNT, ...)` call in `pokeemerald/src`
@@ -14,15 +14,10 @@
 //! "tile memory mapping mode beyond what composition needs" issue #64 calls
 //! out of scope.
 //!
-//! Sprite-vs-sprite ordering is verified against
-//! `mgba/src/gba/renderers/software-obj.c` and `video-software.c`: among
-//! sprites covering the same pixel, the lowest OBJ priority wins; a
-//! same-priority tie is won by the lower OAM index. Crucially, a *transparent*
-//! texel of a better-order sprite still upgrades the pixel's stored OBJ
-//! priority (without changing its color) when it sits over an
-//! already-written, worse-priority opaque sprite — the color-supplying and
-//! priority-supplying sprites can differ (see
-//! [`SpriteLayer::resolve_pixel`]) `(behavioral-fidelity)`.
+//! Entries use slice order as OAM order. The lowest OBJ priority wins, and an
+//! earlier entry wins a tie. A better-priority transparent texel can promote
+//! an opaque pixel beneath it without replacing its color, so one entry can
+//! supply the color while another supplies its priority.
 
 use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
@@ -34,28 +29,18 @@ use crate::sprite_affine;
 use crate::tile::{BitDepth, Tileset};
 use std::cell::RefCell;
 
-/// One resolved, opaque sprite pixel: a color plus the OBJ priority it
-/// composited at (needed by the cross-layer priority compositor to compare
-/// against BG layer priorities).
+/// One opaque sprite-layer result for cross-layer composition.
 ///
-/// The `color` comes from the topmost opaque sprite covering the pixel, but
-/// `priority` is the *best* OBJ order among all sprites covering it —
-/// including a better-order sprite whose own texel there is transparent (see
-/// [`SpriteLayer::resolve_pixel`]). The two can therefore come from different
-/// sprites.
+/// A better-priority transparent texel can update `priority` and
+/// `semi_transparent` without replacing `color`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
-    /// The resolved color.
+    /// The topmost opaque sprite color.
     pub color: Rgb888,
     /// The winning OBJ priority (`0..=3`).
     pub priority: u8,
-    /// Whether the sprite that set [`priority`](Self::priority) — which, per
-    /// the struct docs, may differ from the one that supplied
-    /// [`color`](Self::color) — has [`ObjMode::SemiTransparent`] (OAM mode
-    /// 1). When set, the cross-layer compositor forces this pixel to
-    /// alpha-blend against whatever's behind it, overriding whichever color
-    /// effect was actually selected (S-2 slice 4, issue #99; see
-    /// [`crate::effects::resolve_pixel_color`]).
+    /// Whether the sprite that set [`priority`](Self::priority) forces alpha
+    /// blending.
     pub semi_transparent: bool,
 }
 
@@ -187,10 +172,8 @@ impl<'a> SpriteLayer<'a> {
         f(&cached.1)
     }
 
-    /// Composite only the sprite layer into `framebuffer` (no BG layers) —
-    /// useful standalone and for testing sprite-vs-sprite ordering in
-    /// isolation. The full BG+sprite priority compositor is
-    /// [`compose_frame`](crate::compositor::compose_frame).
+    /// Composites the sprite layer over `framebuffer` without background
+    /// layers or color effects.
     pub fn composite(&self, framebuffer: &mut Framebuffer) {
         for y in 0..framebuffer.height() {
             for x in 0..framebuffer.width() {
@@ -201,46 +184,19 @@ impl<'a> SpriteLayer<'a> {
         }
     }
 
-    /// Resolve the winning sprite pixel at `(x, y)`, or `None` if no sprite
-    /// contributes an opaque texel there.
+    /// Resolves the visible sprite pixel at `(x, y)`.
     ///
-    /// Mirrors the per-pixel `spriteLayer` state machine of
-    /// `mgba/src/gba/renderers/software-obj.c`'s
-    /// `SPRITE_DRAW_PIXEL_*_NORMAL` macros, verified against
-    /// `video-software.c`. mgba iterates OAM `0..=127` over a buffer that
-    /// starts `FLAG_UNWRITTEN`; a sprite acts on a pixel only when its OBJ
-    /// order strictly beats the stored order — order being priority first,
-    /// then (because same-priority sprites share an order value and only a
-    /// strictly-better one overwrites) OAM iteration position, so the
-    /// lowest-indexed entry keeps a priority tie.
-    ///
-    /// When a sprite acts:
-    /// - an **opaque** texel supplies the color and lowers the stored order
-    ///   to its own (the opaque branch: `spriteLayer[x] = palette | flags`);
-    /// - a **transparent** texel over an already-written pixel lowers the
-    ///   stored order *without* changing the color (the `else if (current !=
-    ///   FLAG_UNWRITTEN)` branch: order bits upgraded, color kept), so a
-    ///   better-order sprite's hole promotes a worse-priority opaque sprite
-    ///   underneath it to the front order;
-    /// - a transparent texel over a still-unwritten pixel does nothing.
-    ///
-    /// The returned [`SpritePixel::priority`] is therefore the best order
-    /// among *all* covering sprites, which may be a different sprite than the
-    /// one that supplied [`SpritePixel::color`] `(behavioral-fidelity)`.
-    ///
-    /// Returns `None` for a coordinate outside the visible framebuffer
-    /// (`x >= Framebuffer::WIDTH` or `y >= Framebuffer::HEIGHT`).
+    /// Lower OBJ priorities win, and earlier OAM entries win ties. A
+    /// better-priority transparent texel promotes an existing opaque result
+    /// without changing its color. Returns `None` outside the framebuffer or
+    /// when no opaque sprite covers the coordinate.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
         self.resolve_pixel_inner(x, y, MosaicSize::NONE, false)
     }
 
-    /// Resolve the winning sprite pixel at `(x, y)`, mosaic-snapping
-    /// mosaic-enabled entries' sampling coordinate to their `mosaic`
-    /// block's origin first (S-2 slice 4, issue #99; see [`crate::mosaic`]).
-    /// Otherwise identical to [`resolve_pixel`](Self::resolve_pixel), which
-    /// is exactly this method called with [`MosaicSize::NONE`] (a no-op
-    /// snap), so it stays byte-for-byte unaffected by this parameter.
+    /// Resolves a sprite pixel after applying `mosaic` to enabled entries.
+    /// [`MosaicSize::NONE`] is equivalent to [`resolve_pixel`](Self::resolve_pixel).
     #[must_use]
     pub fn resolve_pixel_with_mosaic(
         &self,
@@ -251,154 +207,90 @@ impl<'a> SpriteLayer<'a> {
         self.resolve_pixel_inner(x, y, mosaic, false)
     }
 
-    /// [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic), skipping every
-    /// [`ObjMode::Window`] entry when `suppress_objwin_hole` is set (`software-obj.c:161`).
+    /// Resolves a mosaic sprite pixel, optionally skipping OBJ-window entries.
+    ///
+    /// WIN0 and WIN1 outrank OBJWIN, so mGBA skips OBJ-window entries while
+    /// drawing those regions (`software-obj.c:161`,
+    /// `video-software.c:131-134`).
     #[must_use]
     pub(crate) fn resolve_pixel_with_mosaic_windowed(
         &self,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        suppress_objwin_hole: bool,
+        skip_objwin_entries: bool,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, suppress_objwin_hole)
+        self.resolve_pixel_inner(x, y, mosaic, skip_objwin_entries)
     }
 
-    /// Shared implementation behind [`resolve_pixel`](Self::resolve_pixel)
-    /// and [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic).
-    ///
-    /// [`ObjMode::Window`] entries never supply a *display* pixel of their
-    /// own — an opaque `OBJWIN` texel contributes only to the `OBJWIN` mask
-    /// ([`Self::objwin_mask`]). But a *transparent* `OBJWIN` texel still takes
-    /// part in the order-upgrade path: mgba's `SPRITE_DRAW_PIXEL_*_OBJWIN`
-    /// else branch (`software-obj.c`) rewrites an already-written underlying
-    /// pixel's order exactly like the `NORMAL` macro, so a priority-0 `OBJWIN`
-    /// hole promotes a worse-priority opaque OBJ beneath it. Both cases are
-    /// handled inline below `(behavioral-fidelity)`; `suppress_objwin_hole` drops
-    /// an entry whose window outranks `OBJWIN` instead (`software-obj.c:161`).
-    ///
-    /// Only entries the per-scanline OAM admission stage
-    /// ([`with_admission`](Self::with_admission), `crate::oam_budget`, S-2
-    /// issue #329) admits for scanline `y` are even considered — a late
-    /// entry past the scanline's cycle budget contributes nothing here,
-    /// matching hardware (and the pinned mgba renderer) dropping it.
     fn resolve_pixel_inner(
         &self,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        suppress_objwin_hole: bool,
+        skip_objwin_entries: bool,
     ) -> Option<SpritePixel> {
-        // Stored OBJ order, starting worse than any real priority (`0..=3`),
-        // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
-        // exactly when the pixel has been written by an opaque texel.
-        const UNWRITTEN_ORDER: u8 = u8::MAX;
-        // Reject a coordinate outside the visible framebuffer before it ever
-        // reaches admission or sampling — `footprint`'s `i32` round-trips
-        // below only hold for a genuine framebuffer coordinate, and an
-        // unchecked out-of-range `usize` (e.g. `1usize << 32` on a 64-bit
-        // target) can alias back to an in-bounds `i32` by truncation. Mirrors
-        // [`Framebuffer::pixel`](crate::framebuffer::Framebuffer::pixel)'s
-        // own compare-before-use idiom.
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return None;
         }
-        let mut order = UNWRITTEN_ORDER;
-        let mut color: Option<Rgb888> = None;
-        let mut semi_transparent = false;
+
+        let mut resolved: Option<SpritePixel> = None;
         self.with_admission(y, |admission| {
             for (index, entry) in self.entries.iter().enumerate() {
                 if !admission.is_admitted(index) {
                     continue;
                 }
-                // mgba drops an OBJWIN entry outright when the span's window
-                // outranks it (software-obj.c:161).
-                if suppress_objwin_hole && entry.mode() == ObjMode::Window {
+                if skip_objwin_entries && entry.mode() == ObjMode::Window {
                     continue;
                 }
+
                 let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
-                // Only a strictly-better order acts (`current order > flags`), so
-                // an equal-priority later entry never displaces an earlier one.
-                if entry.priority() >= order {
+                if resolved.is_some_and(|pixel| entry.priority() >= pixel.priority) {
                     continue;
                 }
-                let is_objwin = entry.mode() == ObjMode::Window;
-                match texel {
-                    // An opaque `OBJWIN` (OAM mode 2) texel feeds only the
-                    // `OBJWIN` mask ([`Self::objwin_mask`]) — mgba's
-                    // `SPRITE_DRAW_PIXEL_*_OBJWIN` opaque branch touches only
-                    // `renderer->row`, never `spriteLayer` — so it supplies
-                    // neither a color nor an order upgrade in this resolution.
-                    Texel::Opaque(_) if is_objwin => {}
-                    Texel::Opaque(c) => {
-                        color = Some(c);
-                        order = entry.priority();
-                        semi_transparent = entry.mode() == ObjMode::SemiTransparent;
+
+                match (entry.mode(), texel) {
+                    (ObjMode::Window, Texel::Opaque(_)) => {}
+                    (mode, Texel::Opaque(color)) => {
+                        resolved = Some(SpritePixel {
+                            color,
+                            priority: entry.priority(),
+                            semi_transparent: mode == ObjMode::SemiTransparent,
+                        });
                     }
-                    // Transparent hole: upgrade the stored order only if an
-                    // opaque sprite has already written here (mgba's `current !=
-                    // FLAG_UNWRITTEN` guard); the color is left untouched. This
-                    // fires for a regular *or* `OBJWIN`-mode sprite — the
-                    // `SPRITE_DRAW_PIXEL_*_OBJWIN` transparent (else) branch
-                    // rewrites the underlying pixel's order/REBLEND/TARGET_1 bits
-                    // exactly like the `NORMAL` macro, so a better-order `OBJWIN`
-                    // hole promotes a worse-priority opaque OBJ underneath it. The
-                    // order-upgrading entry's own mode still replaces
-                    // `semi_transparent` (an `OBJWIN` sprite, never OAM mode 1,
-                    // therefore clears it), matching mgba merging in the *new*
-                    // write's target-1 bit along with the order it upgrades, not
-                    // the original color-supplying sprite's `(behavioral-fidelity)`.
-                    Texel::Transparent if color.is_some() => {
-                        order = entry.priority();
-                        semi_transparent = entry.mode() == ObjMode::SemiTransparent;
+                    (mode, Texel::Transparent) => {
+                        if let Some(pixel) = resolved.as_mut() {
+                            pixel.priority = entry.priority();
+                            pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                        }
                     }
-                    Texel::Transparent => {}
-                    Texel::Outside => unreachable!("filtered above"),
+                    (_, Texel::Outside) => unreachable!("outside texels were skipped"),
                 }
             }
         });
-        color.map(|color| SpritePixel {
-            color,
-            priority: order,
-            semi_transparent,
-        })
+        resolved
     }
 
-    /// Whether an `OBJWIN`-mode sprite (OAM mode 2, [`ObjMode::Window`])
-    /// draws an opaque texel at `(x, y)` — the per-pixel `OBJWIN` mask that
-    /// [`crate::window::WindowConfig::classify`] consults. `OBJWIN` entries
-    /// never contribute a display pixel themselves (see [`ObjMode`]'s docs),
-    /// only this mask. `false` for a coordinate outside the visible
-    /// framebuffer (`x >= Framebuffer::WIDTH` or `y >= Framebuffer::HEIGHT`).
+    /// Returns whether an OBJ-window entry has an opaque texel at `(x, y)`.
+    ///
+    /// OBJ-window entries contribute to this mask instead of supplying a
+    /// display color. Returns `false` outside the framebuffer.
     #[must_use]
     pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
         self.objwin_mask_inner(x, y, MosaicSize::NONE)
     }
 
-    /// [`objwin_mask`](Self::objwin_mask), mosaic-snapping mosaic-enabled
-    /// `OBJWIN` entries' sampling coordinate first — see
-    /// [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic)'s docs
-    /// for why this stays byte-for-byte equivalent to
-    /// [`objwin_mask`](Self::objwin_mask) at [`MosaicSize::NONE`].
+    /// Resolves the OBJ-window mask after applying `mosaic` to enabled entries.
+    /// [`MosaicSize::NONE`] is equivalent to [`objwin_mask`](Self::objwin_mask).
     #[must_use]
     pub fn objwin_mask_with_mosaic(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
         self.objwin_mask_inner(x, y, mosaic)
     }
 
-    /// Only entries the per-scanline OAM admission stage admits for scanline
-    /// `y` are considered — see
-    /// [`resolve_pixel_inner`](Self::resolve_pixel_inner)'s docs, which this
-    /// mirrors, for why: both read the same cached admission through
-    /// [`with_admission`](Self::with_admission), so a late `OBJWIN` entry
-    /// past the scanline's cycle budget is dropped from the mask exactly when a late
-    /// `Normal`-mode entry at the same position would be dropped from
-    /// visible resolution.
     fn objwin_mask_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
-        // Same out-of-framebuffer rejection as
-        // [`resolve_pixel_inner`](Self::resolve_pixel_inner) — see its docs.
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return false;
         }
@@ -661,19 +553,14 @@ impl<'a> SpriteLayer<'a> {
     }
 }
 
-/// One sampled sprite texel: outside the footprint (or missing tile),
-/// transparent (palette index 0), or an opaque color. Distinguishing the
-/// transparent case from the outside case is what lets a better-order sprite
-/// with a transparent hole upgrade the OBJ priority of an opaque sprite
-/// beneath it (see [`SpriteLayer::resolve_pixel`]).
+/// The result of sampling one sprite entry at a framebuffer coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Texel {
-    /// `(x, y)` lies beyond the sprite's footprint, or its tile is absent
-    /// from the tileset — the sprite does not cover this pixel at all.
+    /// The entry does not cover the coordinate.
     Outside,
-    /// The sprite covers this pixel but the texel is palette index 0.
+    /// The entry covers the coordinate with palette index zero.
     Transparent,
-    /// The sprite covers this pixel with an opaque texel of this color.
+    /// The entry covers the coordinate with an opaque color.
     Opaque(Rgb888),
 }
 
@@ -703,22 +590,29 @@ mod tests {
         )
     }
 
-    /// A 4bpp 8x8 tile whose top-left 2x2 block is index 0 (transparent),
-    /// index 1 (red), index 2 (green), index 3 (blue), row-major:
-    /// (0,0)=0 (1,0)=1
-    /// (0,1)=2 (1,1)=3
+    fn set_4bpp_index(tile: &mut [u8], x: usize, y: usize, index: u8) {
+        let byte = &mut tile[y * 4 + x / 2];
+        let shift = (x % 2) * 4;
+        *byte |= index << shift;
+    }
+
+    fn solid_4bpp_tile(index: u8) -> [u8; 32] {
+        [index | (index << 4); 32]
+    }
+
     fn quadrant_tile() -> [u8; 32] {
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x10; // (0,0)=0 low nibble, (1,0)=1 high nibble
-        bytes[4] = 0x32; // (0,1)=2, (1,1)=3
+        set_4bpp_index(&mut bytes, 1, 0, 1);
+        set_4bpp_index(&mut bytes, 0, 1, 2);
+        set_4bpp_index(&mut bytes, 1, 1, 3);
         bytes
     }
 
     fn quadrant_palette() -> Palette {
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
         Palette::new(colors)
     }
 
@@ -734,7 +628,7 @@ mod tests {
         fb.fill(backdrop);
         layer.composite(&mut fb);
 
-        assert_eq!(fb.pixel(0, 0), Some(backdrop)); // index 0 -> transparent
+        assert_eq!(fb.pixel(0, 0), Some(backdrop));
         assert_eq!(
             fb.pixel(1, 0),
             Some(Bgr555::from_channels(0x1F, 0, 0).to_rgb888())
@@ -910,55 +804,27 @@ mod tests {
     fn resolve_pixel_sprite_vs_sprite_lower_oam_index_wins_a_priority_tie() {
         let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0x1F, 0, 0); // red, bank 0
-        colors[16 + 15] = Bgr555::from_channels(0, 0x1F, 0); // green, bank 1
+        let bank_zero_opaque_index = OPAQUE_PALETTE_INDEX as usize;
+        let bank_one_opaque_index = Palette::BANK_LEN + bank_zero_opaque_index;
+        colors[bank_zero_opaque_index] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[bank_one_opaque_index] = Bgr555::from_channels(0, 0x1F, 0);
         let palette = Palette::new(colors);
 
-        // Both fully opaque 8x8 sprites at the same position and priority;
-        // entry index 0 (red, bank 0) must win over entry index 1 (green,
-        // bank 1) despite being declared first only by array position.
-        let low_index_red = OamEntry::new(
-            0,
-            0,
-            0,
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            2,
-            true,
-        );
-        let high_index_green = OamEntry::new(
-            0,
-            0,
-            0,
-            1,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            2,
-            true,
-        );
+        let low_index_red = square_8x8(OPAQUE_TILE_INDEX, 2, 0);
+        let high_index_green = square_8x8(OPAQUE_TILE_INDEX, 2, 1);
         let entries = [low_index_red, high_index_green];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[15].to_rgb888())
+            Some(colors[bank_zero_opaque_index].to_rgb888())
         );
 
-        // Reversed array order: now the green (bank 1) entry is OAM index 0
-        // and must win instead, proving the winner tracks array position,
-        // not palette/color identity.
         let entries_reversed = [high_index_green, low_index_red];
         let layer_reversed = SpriteLayer::new(&entries_reversed, &tileset, &tileset, &palette);
         assert_eq!(
             layer_reversed.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[16 + 15].to_rgb888())
+            Some(colors[bank_one_opaque_index].to_rgb888())
         );
     }
 
@@ -966,45 +832,20 @@ mod tests {
     fn resolve_pixel_lower_priority_number_wins_regardless_of_oam_index() {
         let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[16 + 15] = Bgr555::from_channels(0, 0x1F, 0);
+        let bank_zero_opaque_index = OPAQUE_PALETTE_INDEX as usize;
+        let bank_one_opaque_index = Palette::BANK_LEN + bank_zero_opaque_index;
+        colors[bank_zero_opaque_index] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[bank_one_opaque_index] = Bgr555::from_channels(0, 0x1F, 0);
         let palette = Palette::new(colors);
 
-        // Entry 0 (red) has the *worse* (higher) priority 3; entry 1
-        // (green) has the better priority 0 and must win despite the
-        // higher OAM index.
-        let worse_priority_red = OamEntry::new(
-            0,
-            0,
-            0,
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            3,
-            true,
-        );
-        let better_priority_green = OamEntry::new(
-            0,
-            0,
-            0,
-            1,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        );
+        let worse_priority_red = square_8x8(OPAQUE_TILE_INDEX, 3, 0);
+        let better_priority_green = square_8x8(OPAQUE_TILE_INDEX, 0, 1);
         let entries = [worse_priority_red, better_priority_green];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[16 + 15].to_rgb888())
+            Some(colors[bank_one_opaque_index].to_rgb888())
         );
     }
 
@@ -1047,23 +888,25 @@ mod tests {
         );
     }
 
-    /// Build a 4bpp tileset with tile 0 fully opaque (index 15) and tile 1
-    /// fully transparent (index 0), plus a palette mapping index 15 to blue.
+    const OPAQUE_TILE_INDEX: u16 = 0;
+    const TRANSPARENT_TILE_INDEX: u16 = 1;
+    const OPAQUE_PALETTE_INDEX: u8 = 15;
+
     fn opaque_and_transparent_tiles() -> (Tileset, Palette) {
         let mut two_tiles = [0u8; 64];
-        two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0: all index 15
+        two_tiles[..32].fill(0xFF);
         let tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0, 0, 0x1F); // blue
+        colors[OPAQUE_PALETTE_INDEX as usize] = Bgr555::from_channels(0, 0, 0x1F);
         (tileset, Palette::new(colors))
     }
 
-    fn square_8x8(tile: u16, priority: u8, oam_slot_color_bank: u8) -> OamEntry {
+    fn square_8x8(tile: u16, priority: u8, palette_bank: u8) -> OamEntry {
         OamEntry::new(
             0,
             0,
             tile,
-            oam_slot_color_bank,
+            palette_bank,
             BitDepth::Bpp4,
             false,
             false,
@@ -1076,111 +919,76 @@ mod tests {
 
     #[test]
     fn resolve_pixel_better_sprites_hole_over_opaque_worse_sprite_upgrades_priority() {
-        // Finding 1: opaque B (priority 2, tile 0, OAM index 0) is written
-        // first; A (priority 0, transparent tile 1, OAM index 1) then sits on
-        // top with a hole here. mgba keeps B's color but upgrades the stored
-        // OBJ order to priority 0 (the `else if (current != FLAG_UNWRITTEN)`
-        // branch), so the resolved pixel is B's color at priority 0.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let entries = [square_8x8(0, 2, 0), square_8x8(1, 0, 0)];
+        let opaque_priority_two = square_8x8(OPAQUE_TILE_INDEX, 2, 0);
+        let transparent_priority_zero = square_8x8(TRANSPARENT_TILE_INDEX, 0, 0);
+        let entries = [opaque_priority_two, transparent_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let pixel = layer.resolve_pixel(0, 0).unwrap();
         assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
-        assert_eq!(pixel.priority, 0, "A's hole upgrades B's order to 0");
+        assert_eq!(pixel.priority, 0);
     }
 
     #[test]
     fn resolve_pixel_objwin_transparent_hole_upgrades_an_opaque_worse_sprite() {
-        // Finding 1: an OBJWIN-mode sprite (OAM mode 2) whose texel here is a
-        // transparent hole still upgrades the stored OBJ order of an
-        // already-written, worse-priority opaque sprite beneath it — mgba's
-        // `SPRITE_DRAW_PIXEL_*_OBJWIN` transparent (else) branch, which
-        // rewrites the underlying pixel's order just like the NORMAL macro.
-        // Opaque B (priority 2, OAM index 0) writes first; the priority-0
-        // OBJWIN sprite (transparent tile 1) then upgrades B's order to 0
-        // without changing its color, and contributes no display pixel itself.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let b_opaque_prio2 = square_8x8(0, 2, 0);
-        let objwin_hole_prio0 = square_8x8(1, 0, 0).with_mode(ObjMode::Window);
-        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let opaque_priority_two = square_8x8(OPAQUE_TILE_INDEX, 2, 0);
+        let objwin_hole_priority_zero =
+            square_8x8(TRANSPARENT_TILE_INDEX, 0, 0).with_mode(ObjMode::Window);
+        let entries = [opaque_priority_two, objwin_hole_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let pixel = layer.resolve_pixel(0, 0).unwrap();
         assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
-        assert_eq!(
-            pixel.priority, 0,
-            "the OBJWIN hole upgrades B's OBJ order to 0"
-        );
+        assert_eq!(pixel.priority, 0);
 
-        // Control: without the OBJWIN sprite, B alone keeps its own priority 2.
-        let entries_control = [b_opaque_prio2];
+        let entries_control = [opaque_priority_two];
         let control = SpriteLayer::new(&entries_control, &tileset, &tileset, &palette);
         assert_eq!(control.resolve_pixel(0, 0).unwrap().priority, 2);
     }
 
     #[test]
     fn resolve_pixel_with_mosaic_windowed_suppresses_objwin_hole_when_flagged() {
-        // mgba drops an OBJWIN sprite outright for a span whose window
-        // outranks it (software-obj.c:161); B keeps priority 2 instead of
-        // being upgraded to 0.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let b_opaque_prio2 = square_8x8(0, 2, 0);
-        let objwin_hole_prio0 = square_8x8(1, 0, 0).with_mode(ObjMode::Window);
-        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let opaque_priority_two = square_8x8(OPAQUE_TILE_INDEX, 2, 0);
+        let objwin_hole_priority_zero =
+            square_8x8(TRANSPARENT_TILE_INDEX, 0, 0).with_mode(ObjMode::Window);
+        let entries = [opaque_priority_two, objwin_hole_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let suppressed = layer
             .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, true)
             .unwrap();
-        assert_eq!(
-            suppressed.priority, 2,
-            "suppressed: the OBJWIN hole is skipped, B keeps priority 2"
-        );
+        assert_eq!(suppressed.priority, 2);
 
         let unsuppressed = layer
             .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, false)
             .unwrap();
-        assert_eq!(
-            unsuppressed.priority, 0,
-            "unsuppressed: identical to resolve_pixel, the hole upgrades B to 0"
-        );
+        assert_eq!(unsuppressed.priority, 0);
     }
 
     #[test]
     fn resolve_pixel_objwin_opaque_texel_supplies_no_display_pixel() {
-        // The opaque half of the same OBJWIN sprite must never become a
-        // display pixel on its own (it only feeds the OBJWIN mask): with no
-        // other sprite covering the pixel, resolve_pixel stays `None`.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let objwin_opaque = square_8x8(0, 0, 0).with_mode(ObjMode::Window); // opaque tile 0
+        let objwin_opaque = square_8x8(OPAQUE_TILE_INDEX, 0, 0).with_mode(ObjMode::Window);
         let entries = [objwin_opaque];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
         assert_eq!(layer.resolve_pixel(0, 0), None);
-        // ...but it does register on the OBJWIN mask.
         assert!(layer.objwin_mask(0, 0));
     }
 
     #[test]
     fn resolve_pixel_better_transparent_sprite_before_opaque_worse_does_not_upgrade() {
-        // The reachable-state subtlety: when the better-order transparent
-        // sprite is iterated *before* any opaque write (OAM index 0), its
-        // hole lands on an unwritten pixel, so mgba's `current !=
-        // FLAG_UNWRITTEN` guard fails and nothing is written. The later
-        // opaque B (priority 2) then writes at its own order, so the pixel
-        // stays priority 2 — a leading hole never promotes anything.
         let (tileset, palette) = opaque_and_transparent_tiles();
-        // A (priority 0, transparent tile 1) at OAM index 0; B (priority 2,
-        // opaque tile 0) at OAM index 1.
-        let entries = [square_8x8(1, 0, 0), square_8x8(0, 2, 0)];
+        let transparent_priority_zero = square_8x8(TRANSPARENT_TILE_INDEX, 0, 0);
+        let opaque_priority_two = square_8x8(OPAQUE_TILE_INDEX, 2, 0);
+        let entries = [transparent_priority_zero, opaque_priority_two];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let pixel = layer.resolve_pixel(0, 0).unwrap();
         assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
-        assert_eq!(
-            pixel.priority, 2,
-            "a leading transparent hole over an unwritten pixel must not upgrade order"
-        );
+        assert_eq!(pixel.priority, 2);
     }
 
     #[test]
@@ -1523,26 +1331,12 @@ mod tests {
 
     #[test]
     fn affine_objwin_mask_ignores_horizontal_obj_mosaic() {
-        // Same x = 2, mosaicH = 4 geometry as the affine mosaic tests above,
-        // but `ObjMode::Window`. mgba selects the unconditional non-mosaic
-        // `SPRITE_TRANSFORMED_LOOP(_, OBJWIN)` whenever `FLAG_OBJWIN` is set
-        // (software-obj.c:287-288/303-304), never the mosaic-holding loop —
-        // so a mosaic-enabled OBJWIN entry's mask must match its non-mosaic
-        // mask exactly, pixel for pixel. This test's mosaic is vertically a
-        // no-op (v = 1); it isolates the horizontal block hold mgba's
-        // OBJWIN loop skips, not the vertical row snap mgba's preprocess
-        // step still applies (see
-        // `objwin_mask_still_applies_vertical_obj_mosaic`).
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[1] = 0x02;
-        bytes[3] = 0x03;
+        set_4bpp_index(&mut bytes, 0, 0, 1);
+        set_4bpp_index(&mut bytes, 2, 0, 2);
+        set_4bpp_index(&mut bytes, 6, 0, 3);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
         let entries = [entry(2, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)
@@ -1562,80 +1356,55 @@ mod tests {
 
     #[test]
     fn regular_objwin_mask_keeps_the_mosaic_rounded_draw_condition() {
-        // Pinned mgba rounds `condition` up to the next H mosaic boundary
-        // for any mosaic-bit sprite *before* the FLAG_OBJWIN dispatch
-        // (software-obj.c:318-325), then runs SPRITE_NORMAL_LOOP(_, OBJWIN)
-        // out to that rounded condition with an unclamped `inX`
-        // (software-obj.c:8-14, 344-345). An 8x8 OBJWIN entry at x = 2 with
-        // mosaicH = 4 therefore has condition = round_up(10, 4) = 12, and
-        // screen x = 10, 11 sample inX = 8, 9 -> the tile after the
-        // sprite's own (xBase = 32), masking wherever that tile is opaque.
-        // Screen x = 12 is past the rounded condition and must stay clear.
+        const SPRITE_X: u16 = 2;
+        const RAW_END_X: usize = 10;
+        const ROUNDED_END_X: usize = 12;
+
         let mut bytes = [0u8; 64];
-        for byte in &mut bytes[..32] {
-            *byte = 0x11; // tile 0: opaque everywhere.
-        }
-        bytes[32] = 0x11; // tile 1: row 0 cols 0 and 1 opaque.
+        bytes[..32].copy_from_slice(&solid_4bpp_tile(1));
+        set_4bpp_index(&mut bytes[32..], 0, 0, 1);
+        set_4bpp_index(&mut bytes[32..], 1, 0, 1);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
-        let palette = Palette::new(colors);
-        let entries = [entry(2, 0, true)
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
         let mosaic = MosaicSize::new(4, 1);
 
-        for x in 2..10 {
-            assert!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
-                "screen x = {x} is inside the raw footprint"
-            );
+        for x in usize::from(SPRITE_X)..RAW_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
         }
-        for x in [10, 11] {
-            assert!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
-                "screen x = {x} is inside the mosaic-rounded draw condition"
-            );
+        for x in RAW_END_X..ROUNDED_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
         }
-        assert!(
-            !layer.objwin_mask_with_mosaic(12, 0, mosaic),
-            "screen x = 12 is past the rounded draw condition"
-        );
+        assert!(!layer.objwin_mask_with_mosaic(ROUNDED_END_X, 0, mosaic));
     }
 
     #[test]
     fn flipped_regular_objwin_mask_wraps_the_mosaic_tail_below_the_sprite_tiles() {
-        // H-flip mirror of the test above. mgba's regular loop seeds a
-        // flipped sprite at `inX = width - inX - 1` and steps it by -1
-        // (software-obj.c:328-334), so the OBJWIN loop's unclamped walk runs
-        // `inX` negative across the mosaic-rounded tail and its `xBase`
-        // addresses the tiles *below* the sprite's own, wrapped in the 32 KiB
-        // OBJ window, exactly as the unflipped walk addresses those above.
-        // 8x8 OBJWIN entry at x = 2, tile 1, mosaicH = 4: condition rounds to
-        // 12, and screen x = 10, 11 reach source columns -1 and -2 -> tile 0,
-        // columns 7 and 6. Column 7 is opaque and column 6 is not, so the two
-        // tail pixels disagree — a clamp to the sprite's own leftmost column
-        // would mask both.
+        const SPRITE_TILE_INDEX: u16 = 1;
+        const SPRITE_X: u16 = 2;
+        const RAW_END_X: usize = 10;
+        const OPAQUE_WRAPPED_TAIL_X: usize = 10;
+        const TRANSPARENT_WRAPPED_TAIL_X: usize = 11;
+        const ROUNDED_END_X: usize = 12;
+
         let mut bytes = [0u8; 64];
-        bytes[3] = 0x10; // tile 0 row 0: col 6 transparent, col 7 opaque.
-        for byte in &mut bytes[32..] {
-            *byte = 0x11; // tile 1 (the sprite's own): opaque everywhere.
-        }
+        set_4bpp_index(&mut bytes[..32], 7, 0, 1);
+        bytes[32..].copy_from_slice(&solid_4bpp_tile(1));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
-        let palette = Palette::new(colors);
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
         let entries = [OamEntry::new(
-            2,
+            SPRITE_X,
             0,
-            1, // tile index
+            SPRITE_TILE_INDEX,
             0,
             BitDepth::Bpp4,
-            true, // h_flip
+            true,
             false,
             ObjShape::Square,
-            0, // 8x8
+            0,
             0,
             true,
         )
@@ -1644,47 +1413,22 @@ mod tests {
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
         let mosaic = MosaicSize::new(4, 1);
 
-        for x in 2..10 {
-            assert!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
-                "screen x = {x} is inside the raw footprint"
-            );
+        for x in usize::from(SPRITE_X)..RAW_END_X {
+            assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
         }
-        assert!(
-            layer.objwin_mask_with_mosaic(10, 0, mosaic),
-            "screen x = 10 reaches source column -1: tile 0 column 7, opaque"
-        );
-        assert!(
-            !layer.objwin_mask_with_mosaic(11, 0, mosaic),
-            "screen x = 11 reaches source column -2: tile 0 column 6, transparent"
-        );
-        assert!(
-            !layer.objwin_mask_with_mosaic(12, 0, mosaic),
-            "screen x = 12 is past the rounded draw condition"
-        );
+        assert!(layer.objwin_mask_with_mosaic(OPAQUE_WRAPPED_TAIL_X, 0, mosaic));
+        assert!(!layer.objwin_mask_with_mosaic(TRANSPARENT_WRAPPED_TAIL_X, 0, mosaic));
+        assert!(!layer.objwin_mask_with_mosaic(ROUNDED_END_X, 0, mosaic));
     }
 
     #[test]
     fn regular_objwin_mask_ignores_horizontal_obj_mosaic() {
-        // Regular-sprite counterpart to the affine case below: mgba's
-        // regular loop selects the same unconditional non-mosaic
-        // `SPRITE_NORMAL_LOOP(_, OBJWIN)` whenever `FLAG_OBJWIN` is set
-        // (software-obj.c:344-345/360-361), so a mosaic-enabled Regular
-        // `ObjMode::Window` entry's mask must match its non-mosaic mask —
-        // this test's mosaic is vertically a no-op (v = 1), so it isolates
-        // the horizontal per-block hold/clamp mgba's OBJWIN loop skips, not
-        // the vertical row snap mgba's preprocess step still applies (see
-        // `objwin_mask_still_applies_vertical_obj_mosaic`).
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[1] = 0x02;
-        bytes[3] = 0x03;
+        set_4bpp_index(&mut bytes, 0, 0, 1);
+        set_4bpp_index(&mut bytes, 2, 0, 2);
+        set_4bpp_index(&mut bytes, 6, 0, 3);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
         let entries = [entry(2, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
@@ -1701,18 +1445,8 @@ mod tests {
 
     #[test]
     fn objwin_mask_still_applies_vertical_obj_mosaic() {
-        // mgba snaps a mosaic-enabled sprite's source row *before* dispatch,
-        // in `GBAVideoSoftwareRendererPreprocessSpriteLayer`
-        // (video-software.c:1027,1042-1050): `localY = mosaicY` is keyed only
-        // on the sprite's own mosaic bit and `mosaicV > 1`, never on its OBJ
-        // mode, and that snapped row is what `PreprocessSprite` turns into
-        // `inY` (software-obj.c:212). `FLAG_OBJWIN` only skips the
-        // *horizontal* mosaic loop (:344-345/360-361). So an OBJWIN entry
-        // must still read its mosaic-snapped row.
-        //
-        // 8x8 Regular OBJWIN entry at (0, 0) with V mosaic 4. Column 0 is
-        // index 0 (transparent) on row 0 and index 2 (opaque) on row 1, so
-        // screen row 1 snaps back to source row 0 and the mask must clear.
+        const OPAQUE_SOURCE_ROW: usize = 1;
+
         let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
         let palette = quadrant_palette();
         let entries = [entry(0, 0, true)
@@ -1720,13 +1454,8 @@ mod tests {
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
-        // Control: without mosaic, screen row 1 reads source row 1 (opaque).
-        assert!(layer.objwin_mask_with_mosaic(0, 1, MosaicSize::NONE));
-
-        assert!(
-            !layer.objwin_mask_with_mosaic(0, 1, MosaicSize::new(1, 4)),
-            "vertical mosaic must snap screen row 1 back to transparent source row 0"
-        );
+        assert!(layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::NONE));
+        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::new(1, 4)));
     }
 
     #[test]
@@ -1816,27 +1545,19 @@ mod tests {
 
     #[test]
     fn objwin_mask_drops_a_late_objwin_sprite_once_the_budget_is_exhausted() {
-        // Same cost profile and cutoff as the visible-resolution test above,
-        // but the late entry is OBJWIN-mode (opaque tile) instead of Normal
-        // -- proving the same admission stage gates the mask, not just
-        // resolve_pixel.
+        const EXHAUSTING_FILLER_COUNT: usize = 19;
+
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let filler = wide_64_regular(1); // transparent tile
-        let mut entries = vec![filler; 19];
-        entries.push(wide_64_regular(0).with_mode(ObjMode::Window)); // OAM index 19
+        let transparent_filler = wide_64_regular(TRANSPARENT_TILE_INDEX);
+        let mut entries = vec![transparent_filler; EXHAUSTING_FILLER_COUNT];
+        entries.push(wide_64_regular(OPAQUE_TILE_INDEX).with_mode(ObjMode::Window));
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
-        assert!(
-            !layer.objwin_mask(0, 0),
-            "the late OBJWIN sprite at OAM index 19 must be dropped from the mask"
-        );
+        assert!(!layer.objwin_mask(0, 0));
 
         let admitted_entries = entries[1..].to_vec();
         let control_layer = SpriteLayer::new(&admitted_entries, &tileset, &tileset, &palette);
-        assert!(
-            control_layer.objwin_mask(0, 0),
-            "one fewer filler admits the same OBJWIN entry at OAM index 18"
-        );
+        assert!(control_layer.objwin_mask(0, 0));
     }
 
     #[test]
@@ -1936,30 +1657,38 @@ mod tests {
         assert_eq!(crate::oam_budget::walk_count(), 3);
     }
 
-    /// A query coordinate outside the visible framebuffer must miss even a
-    /// sprite whose *raw* (unclipped) footprint reaches past the edge —
-    /// proving the rejection is a real framebuffer-bounds check rather than
-    /// an already-off-footprint miss a sprite fixed at the origin could not
-    /// distinguish (`#803`). All four public query methods share this
-    /// contract through their two inner paths.
+    fn assert_display_queries_miss(layer: &SpriteLayer<'_>, x: usize, y: usize) {
+        assert_eq!(layer.resolve_pixel(x, y), None);
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(x, y, MosaicSize::NONE),
+            None
+        );
+    }
+
+    fn assert_objwin_queries_miss(layer: &SpriteLayer<'_>, x: usize, y: usize) {
+        assert!(!layer.objwin_mask(x, y));
+        assert!(!layer.objwin_mask_with_mosaic(x, y, MosaicSize::NONE));
+    }
+
     #[test]
     fn queries_at_the_framebuffer_edge_miss_a_sprite_whose_raw_footprint_reaches_past_it() {
+        const STRADDLING_RIGHT_EDGE_X: u16 = 236;
+        const STRADDLING_BOTTOM_EDGE_Y: u8 = 155;
+        const VERTICAL_8X16_SIZE: u8 = 0;
+
         let (tileset, palette) = opaque_and_transparent_tiles();
 
-        // X: an 8x8 sprite at x=236 has a raw footprint of columns 236..244,
-        // straddling x=240 (`Framebuffer::WIDTH`). Without the framebuffer
-        // guard, `footprint`'s dx = 240 - 236 = 4 < 8 would hit.
         let x_edge_entry = |mode: ObjMode| {
             OamEntry::new(
-                236,
+                STRADDLING_RIGHT_EDGE_X,
                 0,
-                0,
+                OPAQUE_TILE_INDEX,
                 0,
                 BitDepth::Bpp4,
                 false,
                 false,
                 ObjShape::Square,
-                0, // 8x8
+                0,
                 0,
                 true,
             )
@@ -1967,45 +1696,25 @@ mod tests {
         };
         let x_entries = [x_edge_entry(ObjMode::Normal)];
         let x_layer = SpriteLayer::new(&x_entries, &tileset, &tileset, &palette);
-        assert!(
-            x_layer.resolve_pixel(239, 0).is_some(),
-            "control: x=239 is the sprite's last on-screen column"
-        );
-        assert_eq!(
-            x_layer.resolve_pixel(Framebuffer::WIDTH, 0),
-            None,
-            "x == WIDTH is off-screen despite the raw footprint (236..244) reaching it"
-        );
-        assert_eq!(
-            x_layer.resolve_pixel_with_mosaic(Framebuffer::WIDTH, 0, MosaicSize::NONE),
-            None
-        );
+        assert!(x_layer.resolve_pixel(Framebuffer::WIDTH - 1, 0).is_some());
+        assert_display_queries_miss(&x_layer, Framebuffer::WIDTH, 0);
+
         let x_objwin_entries = [x_edge_entry(ObjMode::Window)];
         let x_objwin_layer = SpriteLayer::new(&x_objwin_entries, &tileset, &tileset, &palette);
-        assert!(
-            x_objwin_layer.objwin_mask(239, 0),
-            "control: x=239 is the sprite's last on-screen column"
-        );
-        assert!(
-            !x_objwin_layer.objwin_mask(Framebuffer::WIDTH, 0),
-            "x == WIDTH"
-        );
-        assert!(!x_objwin_layer.objwin_mask_with_mosaic(Framebuffer::WIDTH, 0, MosaicSize::NONE));
+        assert!(x_objwin_layer.objwin_mask(Framebuffer::WIDTH - 1, 0));
+        assert_objwin_queries_miss(&x_objwin_layer, Framebuffer::WIDTH, 0);
 
-        // Y: an 8x16 (Vertical, size 0) sprite at y=155 has a raw footprint
-        // of rows 155..171, straddling y=160 (`Framebuffer::HEIGHT`).
-        // Without the guard, dy = 160 - 155 = 5 < 16 would hit.
         let y_edge_entry = |mode: ObjMode| {
             OamEntry::new(
                 0,
-                155,
-                0,
+                STRADDLING_BOTTOM_EDGE_Y,
+                OPAQUE_TILE_INDEX,
                 0,
                 BitDepth::Bpp4,
                 false,
                 false,
                 ObjShape::Vertical,
-                0, // 8x16
+                VERTICAL_8X16_SIZE,
                 0,
                 true,
             )
@@ -2013,66 +1722,40 @@ mod tests {
         };
         let y_entries = [y_edge_entry(ObjMode::Normal)];
         let y_layer = SpriteLayer::new(&y_entries, &tileset, &tileset, &palette);
-        assert!(
-            y_layer.resolve_pixel(0, 159).is_some(),
-            "control: y=159 is the sprite's last on-screen row"
-        );
-        assert_eq!(
-            y_layer.resolve_pixel(0, Framebuffer::HEIGHT),
-            None,
-            "y == HEIGHT is off-screen despite the raw footprint (155..171) reaching it"
-        );
-        assert_eq!(
-            y_layer.resolve_pixel_with_mosaic(0, Framebuffer::HEIGHT, MosaicSize::NONE),
-            None
-        );
+        assert!(y_layer.resolve_pixel(0, Framebuffer::HEIGHT - 1).is_some());
+        assert_display_queries_miss(&y_layer, 0, Framebuffer::HEIGHT);
+
         let y_objwin_entries = [y_edge_entry(ObjMode::Window)];
         let y_objwin_layer = SpriteLayer::new(&y_objwin_entries, &tileset, &tileset, &palette);
-        assert!(
-            y_objwin_layer.objwin_mask(0, 159),
-            "control: y=159 is the sprite's last on-screen row"
-        );
-        assert!(
-            !y_objwin_layer.objwin_mask(0, Framebuffer::HEIGHT),
-            "y == HEIGHT"
-        );
-        assert!(!y_objwin_layer.objwin_mask_with_mosaic(0, Framebuffer::HEIGHT, MosaicSize::NONE));
+        assert!(y_objwin_layer.objwin_mask(0, Framebuffer::HEIGHT - 1));
+        assert_objwin_queries_miss(&y_objwin_layer, 0, Framebuffer::HEIGHT);
     }
 
-    /// `1usize << 32` truncates to `0i32` on a 64-bit target, so an
-    /// unchecked cast would alias this coordinate onto the visible origin
-    /// (`#803`). All four public query methods must still report a miss.
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn queries_far_outside_the_framebuffer_miss_a_sprite_at_the_origin() {
-        const FAR: usize = 1 << 32;
+        const COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32: usize = 1 << 32;
 
         let (tileset, palette) = opaque_and_transparent_tiles();
-        let entries = [square_8x8(0, 0, 0)]; // opaque tile 0 at the origin
+        let entries = [square_8x8(OPAQUE_TILE_INDEX, 0, 0)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        assert!(layer.resolve_pixel(0, 0).is_some(), "sprite at the origin");
+        assert!(layer.resolve_pixel(0, 0).is_some());
 
-        for (x, y) in [(FAR, 0), (0, FAR)] {
-            assert_eq!(layer.resolve_pixel(x, y), None, "column/row 1 << 32");
-            assert_eq!(
-                layer.resolve_pixel_with_mosaic(x, y, MosaicSize::NONE),
-                None,
-                "column/row 1 << 32, with mosaic"
-            );
+        for (x, y) in [
+            (COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32, 0),
+            (0, COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32),
+        ] {
+            assert_display_queries_miss(&layer, x, y);
         }
 
-        let objwin_entries = [square_8x8(0, 0, 0).with_mode(ObjMode::Window)];
+        let objwin_entries = [square_8x8(OPAQUE_TILE_INDEX, 0, 0).with_mode(ObjMode::Window)];
         let objwin_layer = SpriteLayer::new(&objwin_entries, &tileset, &tileset, &palette);
-        assert!(
-            objwin_layer.objwin_mask(0, 0),
-            "OBJWIN sprite at the origin"
-        );
-        for (x, y) in [(FAR, 0), (0, FAR)] {
-            assert!(!objwin_layer.objwin_mask(x, y), "column/row 1 << 32");
-            assert!(
-                !objwin_layer.objwin_mask_with_mosaic(x, y, MosaicSize::NONE),
-                "column/row 1 << 32, with mosaic"
-            );
+        assert!(objwin_layer.objwin_mask(0, 0));
+        for (x, y) in [
+            (COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32, 0),
+            (0, COORDINATE_THAT_TRUNCATES_TO_ZERO_AS_I32),
+        ] {
+            assert_objwin_queries_miss(&objwin_layer, x, y);
         }
     }
 }
