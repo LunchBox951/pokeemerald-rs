@@ -1600,8 +1600,6 @@ mod tests {
     fn memacc_cells_are_private_to_each_sequencer() {
         let song = || test_song(vec![vec![Event::Fine]], 150);
         let mut first = Sequencer::new(song());
-        let second = Sequencer::new(song());
-
         apply_test_event(
             &mut first,
             0,
@@ -1612,9 +1610,66 @@ mod tests {
                 target: None,
             },
         );
-
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+        first.render_frame(&mut output);
+        assert!(first.is_finished());
         assert_eq!(first.mem_acc.read(0), Some(42));
+
+        // Built only once the first song has written a cell and finished, so
+        // a process- or session-carried area would surface here.
+        let second = Sequencer::new(song());
+
         assert_eq!(second.mem_acc.read(0), Some(0));
+    }
+
+    /// Builds `prelude`, then `[loop:] Voice, Note, Wait, MemAcc -> loop`
+    /// followed by `Fine`, and renders it: a taken branch loops the track
+    /// forever, a fall-through reaches `Fine`.
+    fn memacc_track_loops_forever(prelude: Vec<Event>, op: u8, address: u8, operand: u8) -> bool {
+        let loop_target = prelude.len() + 1;
+        let mut track = prelude;
+        track.push(Event::Voice(0));
+        track.push(Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 1,
+        });
+        track.push(Event::Wait(24));
+        track.push(Event::MemAcc {
+            op,
+            addr: address,
+            value: operand,
+            target: Some(loop_target),
+        });
+        track.push(Event::Fine);
+
+        let mut sequencer = Sequencer::new(test_song(vec![track], 150));
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..200 {
+            sequencer.render_frame(&mut output);
+        }
+        !sequencer.is_finished()
+    }
+
+    #[test]
+    fn memacc_mutates_and_branches_through_the_rendered_track() {
+        let set_cell_0_to_5 = || {
+            vec![Event::MemAcc {
+                op: MEMACC_SET,
+                addr: 0,
+                value: 5,
+                target: None,
+            }]
+        };
+
+        assert!(
+            memacc_track_loops_forever(set_cell_0_to_5(), MEMACC_EQ, 0, 5),
+            "cell 0 holds 5, so the equal branch loops the rendered track forever"
+        );
+        assert!(
+            !memacc_track_loops_forever(set_cell_0_to_5(), MEMACC_EQ, 0, 6),
+            "cell 0 holds 5, so the unequal branch falls through to Fine"
+        );
     }
 
     #[test]
