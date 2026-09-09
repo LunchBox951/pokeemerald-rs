@@ -582,38 +582,18 @@ impl OverworldScene {
         self.sprites.bindings().contains_key(graphics_id)
     }
 
-    /// Composite the current map viewport plus the player OBJ and this
-    /// room's own currently-visible NPC object events, centered on
-    /// `player`'s current tile with edge clamping via the border-block
-    /// fallback (module docs), into a fresh [`Framebuffer`].
+    /// Composes the current map view, visible objects, and tileset animation into a new
+    /// [`Framebuffer`].
     ///
-    /// `event_data` gates which object events are visible
-    /// ([`engine::overworld::object_event_is_visible`]) -- the same flag
-    /// store [`crate::flow::OverworldPhase`] retains in its own
-    /// `SaveBlock1::event_data`.
-    ///
-    /// `tick` (issue #160) selects this frame's animated tile frames --
-    /// [`tileset_anims`]'s own module docs for the cadence and for why
-    /// `tick == 0` reproduces this scene's un-animated base art exactly
-    /// (every region's own `latched_frame` is `None` there). Mirrors
-    /// [`crate::title::TitleScene::compose`]'s identical `frame` parameter;
-    /// [`crate::flow::OverworldPhase`] is this port's counterpart to
-    /// `AnimatedTitle`'s own tick field, reset to 0 on every fresh room load
-    /// or warp (`tileset_anims`'s docs on why that matches upstream's own
-    /// `InitTilesetAnimations` reset points).
-    ///
-    /// Deterministic: a pure function of `player`'s already-computed
-    /// position/facing/step-progress, `event_data`'s current flags, `tick`,
-    /// and this scene's already-decoded data -- no wall-clock time, no RNG.
+    /// `event_data` controls object visibility, and `tick` selects the animated tile frames.
+    /// The result is deterministic for this scene and the supplied arguments.
+    /// The sprite layer uses the reduced HBlank-free interval OAM budget because overworld setup enables
+    /// `DISPCNT_HBLANK_INTERVAL` (`pokeemerald/src/overworld.c:2122-2123`).
     ///
     /// # Panics
     ///
-    /// Never in practice: re-decodes `grid_bytes`/`border_bytes`/
-    /// `world_tile_bytes` (owned, unchanged since
-    /// [`from_pack`](Self::from_pack) already validated the first two there,
-    /// and [`tileset_anims::AnimatedTileset::patch`] only ever overwrites
-    /// existing tile-sized ranges within the third, never changing its
-    /// length).
+    /// Panics if scene-owned map or tile bytes no longer decode. Successful construction
+    /// validates those bytes, and tile animation only patches existing byte ranges.
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
         let viewport::FrameViewport {
@@ -624,36 +604,30 @@ impl OverworldScene {
             scroll_y,
         } = self.frame_viewport(player);
 
-        // This frame's animated tile ranges, patched into a fresh copy of
-        // the base bytes and decoded fresh (issue #160) -- see
-        // `world_tile_bytes`'s own doc comment for why an *animated* room's
-        // tileset can't be cached across ticks. A room with no animated
-        // ranges at all skips that copy/patch/decode entirely and reuses the
-        // tileset `from_pack` already decoded (docs on
-        // `unanimated_world_tiles`).
-        let patched_world_tiles;
+        let animated_world_tiles;
         let world_tiles = if let Some(tiles) = &self.unanimated_world_tiles {
             tiles
         } else {
             let mut world_tile_bytes = self.world_tile_bytes.clone();
             self.tile_anims.patch(&mut world_tile_bytes, tick);
-            patched_world_tiles = Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)
+            animated_world_tiles = Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)
                 .expect("world_tile_bytes' length is unchanged from from_pack's validated build");
-            &patched_world_tiles
+            &animated_world_tiles
         };
 
         let bottom_layer = BgLayer::new(world_tiles, &self.world_palette, &bottom);
         let middle_layer = BgLayer::new(world_tiles, &self.world_palette, &middle);
         let top_layer = BgLayer::new(world_tiles, &self.world_palette, &top);
 
-        let slots = [
+        let backgrounds_enabled = true;
+        let background_slots = [
             BgSlot::new(
                 bottom_layer,
                 viewport::BOTTOM_BG_INDEX,
                 viewport::BOTTOM_PRIORITY,
                 scroll_x,
                 scroll_y,
-                true,
+                backgrounds_enabled,
             ),
             BgSlot::new(
                 middle_layer,
@@ -661,7 +635,7 @@ impl OverworldScene {
                 viewport::MIDDLE_PRIORITY,
                 scroll_x,
                 scroll_y,
-                true,
+                backgrounds_enabled,
             ),
             BgSlot::new(
                 top_layer,
@@ -669,63 +643,27 @@ impl OverworldScene {
                 viewport::TOP_PRIORITY,
                 scroll_x,
                 scroll_y,
-                true,
+                backgrounds_enabled,
             ),
         ];
 
-        // The player at OAM index 0 followed by every recognized,
-        // currently-visible NPC object event (issue #161 --
-        // `sprites::SceneSprites::entries`' own doc comment on why index 0
-        // is load-bearing).
-        let entries = self.sprites.entries(player, event_data);
-        // `InitOverworldGraphicsRegisters` sets `DISPCNT_HBLANK_INTERVAL`
-        // unconditionally in its own `SetGpuReg(REG_OFFSET_DISPCNT, ...)`
-        // call (`pokeemerald/src/overworld.c:2122-2123`), so every overworld
-        // frame runs the reduced 954-cycle per-scanline OAM budget, not the
-        // normal 1210-cycle one (S-2, issue #329/#334; see
-        // `SpriteLayer::with_hblank_free_interval`'s own docs). No other
-        // scene this port composes a `SpriteLayer` for sets the bit: the
-        // title screen's four `SetGpuReg(REG_OFFSET_DISPCNT, ...)` calls
-        // (`title_screen.c:581,655,707,753` -- see `title.rs`'s own
-        // `compose` for the citation) never include it, and the main
-        // menu/battle DISPCNT sites (`main_menu.c:561,608,1267-1268,1770,1794-1795`,
-        // `battle_main.c:2434`) don't either -- neither builds its own
-        // `SpriteLayer` here regardless (`MainMenuScene::compose` fills a
-        // fresh framebuffer with no sprites; battle has no sprite
-        // composition yet). The field overlays that draw *over* this frame
-        // -- `NpcDialog::compose_over`, `StartMenu::compose_over` -- are
-        // pixel blits with no `SpriteLayer` of their own, matching
-        // upstream's field UI, which never rewrites DISPCNT: the bit stays
-        // set while they are open.
+        let player_first_oam_entries = self.sprites.entries(player, event_data);
         let sprites = SpriteLayer::new(
-            &entries,
+            &player_first_oam_entries,
             self.sprites.tiles(),
             self.sprites.tiles(),
             self.sprites.palette(),
         )
         .with_hblank_free_interval(true);
 
-        // GBA hardware shows BG palette color 0 — not black — wherever every
-        // enabled layer is transparent (reachable here via the blank-tile
-        // fallback for undefined metatile ids).
+        // The GBA backdrop is BG palette colour 0 wherever every enabled layer is transparent.
         let effects = FrameEffects {
             backdrop: self.world_palette.color(0).to_rgb888(),
             ..FrameEffects::default()
         };
-        compose_frame_with_effects(&sprites, &slots, &effects)
+        compose_frame_with_effects(&sprites, &background_slots, &effects)
     }
 
-    /// This frame's composed BG tilemaps and their shared scroll --
-    /// [`Self::compose`]'s first step, split out so
-    /// [`Self::oam_entries_and_bg_scroll`] reads the *same* scroll
-    /// `compose` hands the rasterizer rather than re-deriving it.
-    ///
-    /// # Panics
-    ///
-    /// Never in practice -- see [`Self::compose`]'s own note (this is the
-    /// `grid_bytes`/`border_bytes`/`connections` half of it: every
-    /// [`ConnectedLayout`] in `connections` was already validated to decode
-    /// against its own stored `grid_bytes` in [`Self::from_pack`]).
     fn frame_viewport(&self, player: &PlayerState) -> viewport::FrameViewport {
         let grid = self
             .layout
@@ -735,10 +673,7 @@ impl OverworldScene {
             BorderGrid::new(&self.border_bytes).expect("border_bytes validated in from_pack");
         let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
         let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
-        // Issue #253: each declared connection's own grid, rebuilt fresh
-        // over its already-resolved bytes -- mirrors `grid`/`border`
-        // themselves, just above.
-        let connections: Vec<viewport::ConnectionView<'_>> = self
+        let connection_views: Vec<viewport::ConnectionView<'_>> = self
             .connections
             .iter()
             .map(|connection| viewport::ConnectionView {
@@ -755,7 +690,7 @@ impl OverworldScene {
             player,
             &grid,
             &border,
-            &connections,
+            &connection_views,
             &self.primary_metatiles,
             &self.secondary_metatiles,
             &primary_attrs,
@@ -764,17 +699,6 @@ impl OverworldScene {
         )
     }
 
-    /// This frame's OAM entries (player at index 0, then each drawn NPC)
-    /// and the BG scroll every layer shares -- the two halves of
-    /// [`Self::compose`] that issue #217's camera-alignment regression
-    /// tests have to compare *against each other*, since "the NPC stays
-    /// glued to the background" is a statement about both at once and
-    /// neither alone.
-    ///
-    /// Test-only, and deliberately so: production has no reason to want
-    /// half-composed frames, and the alternative -- asserting on composed
-    /// pixels -- would pin the whole rasterizer instead of the one number
-    /// under test.
     #[cfg(test)]
     pub(crate) fn oam_entries_and_bg_scroll(
         &self,
@@ -782,17 +706,12 @@ impl OverworldScene {
         event_data: &EventData,
     ) -> (Vec<rendering::OamEntry>, (u16, u16)) {
         let viewport = self.frame_viewport(player);
-        (
-            self.sprites.entries(player, event_data),
-            (viewport.scroll_x, viewport.scroll_y),
-        )
+        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        let background_scroll = (viewport.scroll_x, viewport.scroll_y);
+        (player_first_oam_entries, background_scroll)
     }
 
-    /// [`compose`](Self::compose), converted to `platform`'s
-    /// presentation-ready pixel format -- mirrors
-    /// [`crate::title::TitleScene::compose_frame`], letting callers outside
-    /// this crate (namely `xtask`'s smoke e2e check) inspect/compare
-    /// composed frames without depending on `rendering` directly.
+    /// Composes the scene in the platform's presentation-ready pixel format.
     #[must_use]
     pub fn compose_frame(
         &self,
