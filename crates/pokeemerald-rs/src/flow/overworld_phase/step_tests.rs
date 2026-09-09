@@ -867,16 +867,11 @@ fn start_does_not_preempt_a_same_frame_npc_interaction() {
     );
 }
 
-/// Review-round regression: a same-frame `START` press that fails to build
-/// a menu (no local asset pack, [`crate::start_menu::open`]'s own real
-/// failure mode) must not also cost that frame's movement --
-/// [`OverworldPhase::build_start_menu`]'s own doc comment on why the menu
-/// is *built*, not merely decided, ahead of movement, specifically so a
-/// failed build is known before [`OverworldPhase::step`] chooses whether to
-/// preempt movement for it. This crate's own `cargo test` environment never
-/// has a local pack (`crate::flow::tests`' own guard pattern), so the same
-/// held-direction-plus-fresh-`START` frame here reliably exercises the
-/// failure path, not the pack-dependent success one.
+/// A same-frame `START` press whose menu fails to build must not cost that
+/// frame's movement ([`OverworldPhase::build_start_menu`]'s own doc comment
+/// on why the menu is built ahead of movement). The failure path needs a
+/// checkout with no local pack, so the guard below skips this test rather
+/// than assert the pack-dependent success path.
 #[test]
 fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
     if assets::pack::AssetPack::default_path().is_file() {

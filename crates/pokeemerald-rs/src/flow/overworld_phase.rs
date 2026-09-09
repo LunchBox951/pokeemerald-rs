@@ -150,12 +150,16 @@ impl From<OverworldSceneError> for ContinueError {
 /// `dialog` (issue #161) is the currently-open NPC message box, if any --
 /// see [`OverworldPhase::step`]'s dialog-routing branch and
 /// [`OverworldPhase::compose_frame`]'s overlay.
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "the fourth flag, `synthetic_start_menu_build`, exists only under \
-              `#[cfg(test)]`, so the lint fires for test builds alone and an \
-              `expect` would go unfulfilled in production; the flags gate \
-              unrelated concerns and share no structure to collapse into"
+#[cfg_attr(
+    test,
+    expect(
+        clippy::struct_excessive_bools,
+        reason = "the fourth flag, `synthetic_start_menu_build`, exists only \
+                  under `#[cfg(test)]`, so the lint fires for test builds \
+                  alone and a production build keeps the warning; the flags \
+                  gate unrelated concerns and share no structure to collapse \
+                  into"
+    )
 )]
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
