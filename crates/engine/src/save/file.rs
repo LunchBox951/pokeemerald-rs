@@ -662,9 +662,22 @@ impl SaveFile {
                 .path
                 .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"));
             value = value.wrapping_add(1) & mask;
-            if candidate != self.path {
+            if !self.aliases_save_path(&candidate) {
                 return candidate;
             }
+        }
+    }
+
+    /// Whether `candidate` names the save path itself on any supported
+    /// file system. The candidate's stem is copied from the save's own
+    /// basename and its suffix is ASCII, so byte equality under ASCII case
+    /// folding is the only alias a case-insensitive volume can add.
+    fn aliases_save_path(&self, candidate: &Path) -> bool {
+        match (candidate.file_name(), self.path.file_name()) {
+            (Some(candidate), Some(save)) => candidate
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(save.as_encoded_bytes()),
+            _ => candidate == self.path,
         }
     }
 

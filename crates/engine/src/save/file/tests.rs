@@ -83,6 +83,32 @@ fn a_staging_candidate_is_never_the_save_path_itself() {
     );
 }
 
+/// A case-insensitive volume treats `.tmp.a` and `.TMP.A` as one entry, so
+/// the walk must also skip a candidate that differs from the save path only
+/// by ASCII case; otherwise `create_new` opens the destination itself there.
+#[test]
+fn a_staging_candidate_never_aliases_the_save_path_by_ascii_case() {
+    let path = Path::new("/saves/.TMP.A");
+    let file = SaveFile::at(path);
+
+    let mut drawn = std::collections::BTreeSet::new();
+    for _ in 0..4_096 {
+        let candidate = file.staging_path_with_caps(0, 1);
+        let name = candidate.file_name().expect("candidate has a file name");
+        assert!(
+            !name.as_encoded_bytes().eq_ignore_ascii_case(b".TMP.A"),
+            "a staging candidate must not alias the save path by case: {candidate:?}"
+        );
+        drawn.insert(candidate);
+    }
+
+    assert_eq!(
+        drawn.len(),
+        15,
+        "escaping the case alias must cost only that one name: {drawn:?}"
+    );
+}
+
 /// The longest save basename whose `.tmp.<pid>` staging sibling fit within
 /// the filesystem's 255-byte component limit must still be writable: the
 /// fixed-width suffix may not push a previously valid basename over.
