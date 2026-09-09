@@ -60,8 +60,7 @@ struct CachedScanlineAdmission {
 /// entries select a matrix attached by
 /// [`with_affine_matrices`](Self::with_affine_matrices).
 ///
-/// Display and OBJWIN queries use the same cached admission for the most
-/// recently queried scanline.
+/// Admission caching is described in the module docs.
 /// [`with_hblank_free_interval`](Self::with_hblank_free_interval) selects the
 /// smaller OBJ cycle budget.
 #[derive(Debug, Clone)]
