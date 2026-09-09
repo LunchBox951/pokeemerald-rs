@@ -486,8 +486,8 @@ impl Song {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::Truncated`] for incomplete data, [`AudioError::InvalidString`] for a
-    /// non-UTF-8 voicegroup id, [`AudioError::UnknownSongEvent`] or
+    /// Returns [`AudioError::Truncated`] for incomplete or structurally malformed data,
+    /// [`AudioError::InvalidString`] for a non-UTF-8 voicegroup id, [`AudioError::UnknownSongEvent`] or
     /// [`AudioError::UnknownMemAccOp`] for undefined tags, [`AudioError::JumpTargetOutOfRange`] for
     /// an invalid same-track target, and [`AudioError::TrailingBytes`] for bytes after the payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
