@@ -2456,6 +2456,44 @@ mod tests {
     }
 
     #[test]
+    fn nested_pattern_calls_render_identically_to_the_unrolled_track() {
+        const OUTER_BODY: usize = 4;
+        const INNER_BODY: usize = 8;
+
+        let note = |key: u8| Event::Note {
+            key,
+            velocity: 127,
+            gate: 4,
+        };
+        // A `PATT` inside a `PATT` body: each `PEND` returns to its own call
+        // site, so the inner note sounds before the outer body resumes.
+        let nested = vec![
+            Event::Voice(0),
+            Event::Pattern(OUTER_BODY),
+            Event::Wait(12),
+            Event::Fine,
+            Event::Pattern(INNER_BODY),
+            note(64),
+            Event::Wait(12),
+            Event::PatternEnd,
+            note(60),
+            Event::Wait(12),
+            Event::PatternEnd,
+        ];
+        let unrolled = vec![
+            Event::Voice(0),
+            note(60),
+            Event::Wait(12),
+            note(64),
+            Event::Wait(12),
+            Event::Wait(12),
+            Event::Fine,
+        ];
+
+        assert_eq!(render_track(nested, 80), render_track(unrolled, 80));
+    }
+
+    #[test]
     fn nested_pattern_calls_return_to_each_call_site() {
         let mut sequencer = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
         sequencer.tracks[0].cursor = 2;
