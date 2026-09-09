@@ -16,14 +16,14 @@ const MOM_FRESH_SAVE_SCRIPT: &str = "PlayersHouse_1F_EventScript_Mom";
 pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
     match script {
         MOM_FRESH_SAVE_SCRIPT => Some(
-            authored_message::parse_message(&mom_fresh_save_text())
+            authored_message::parse_message(&mom_text())
                 .expect("Mom's compiled-in default message must be a valid authored message"),
         ),
         _ => None,
     }
 }
 
-fn mom_fresh_save_text() -> String {
+fn mom_text() -> String {
     format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?")
 }
 

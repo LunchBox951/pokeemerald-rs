@@ -2,6 +2,19 @@
 //!
 //! A dialog advances its text printer once per frame. Field-script dialogs
 //! preserve their final text until a fresh A or B press closes the box.
+//!
+//! # Held-A/B print speed-up
+//!
+//! Field messages enable delay skipping when they create their text printer
+//! (`pokeemerald/src/field_message_box.c:62-69,109-129`). [`NpcDialog::new`]
+//! therefore accelerates printing while either confirm button is held.
+//!
+//! # Script-level `waitbuttonpress`
+//!
+//! The field script waits for a fresh A or B press only after printing finishes
+//! (`pokeemerald/data/scripts/std_msgbox.inc:1-22` and
+//! `pokeemerald/src/scrcmd.c:1323-1336`). [`NpcDialog::with_waitbuttonpress`]
+//! models that separate wait without clearing the final printed frame.
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
@@ -84,7 +97,10 @@ pub(crate) struct NpcDialog {
 }
 
 impl NpcDialog {
-    /// Creates a field message box with held-A/B print acceleration.
+    /// Creates the standard field message box from decoded assets.
+    ///
+    /// NPC and save messages share this type and supply their own `text_speed`.
+    /// Holding A or B accelerates printing.
     pub(crate) fn new(
         sheet: OwnedFontGlyphSheet,
         frame: FrameAssets,
