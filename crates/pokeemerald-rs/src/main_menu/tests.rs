@@ -79,6 +79,8 @@ pub(super) fn window_of(menu: MainMenuType, item: MainMenuItem) -> ItemWindow {
     menu.window(item).expect("item belongs to this menu type")
 }
 
+/// `MENU_WIN_HCOORDS` is `WIN_RANGE(9, 231)` and `MENU_WIN_VCOORDS(0)` is
+/// `WIN_RANGE(1, 31)` (`main_menu.c:283-284`).
 #[test]
 fn highlight_rect_matches_upstream_win0_coords_for_new_game() {
     assert_eq!(
@@ -87,6 +89,7 @@ fn highlight_rect_matches_upstream_win0_coords_for_new_game() {
     );
 }
 
+/// `MENU_WIN_VCOORDS(1)` is `WIN_RANGE(33, 63)` (`main_menu.c:284`).
 #[test]
 fn highlight_rect_matches_upstream_win0_coords_for_option() {
     assert_eq!(

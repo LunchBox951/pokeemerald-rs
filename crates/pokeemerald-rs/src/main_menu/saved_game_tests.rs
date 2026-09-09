@@ -33,6 +33,9 @@ fn saved_game_items_have_the_upstream_order_and_geometry() {
     );
 }
 
+/// `MENU_WIN_VCOORDS(2)`, `(3)`, and `(4)` are `WIN_RANGE(1, 63)`,
+/// `WIN_RANGE(65, 95)`, and `WIN_RANGE(97, 127)` (`main_menu.c:262-284`,
+/// selected by `main_menu.c:1189-1203`).
 #[test]
 fn saved_game_highlights_match_upstream_coords_including_tall_continue() {
     let saved = MainMenuType::SavedGame;
