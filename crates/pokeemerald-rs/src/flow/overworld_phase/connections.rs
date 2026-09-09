@@ -2,9 +2,12 @@
 //! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`): the
 //! [`MapConnections`] resolver [`super::step`] feeds into
 //! [`engine::overworld::PlayerState::step`], the on-transition map-script
-//! effects [`run_on_transition_map_script`] applies, and the two ways a
+//! effects [`run_on_transition_map_script`] applies, and the ways a
 //! [`super::OverworldPhase`] actually rebinds to a new map --
-//! [`super::OverworldPhase::warp_to`] (a resolved warp) and
+//! [`super::OverworldPhase::warp_to`] (a resolved warp),
+//! [`super::OverworldPhase::warp_to_position`] (literal coordinates),
+//! [`super::OverworldPhase::warp_to_saved_location`] (a complete saved
+//! [`WarpData`], issue #951), and
 //! [`super::OverworldPhase::cross_connection`] (a map-edge crossing, issue
 //! #177).
 
@@ -331,17 +334,18 @@ impl OverworldPhase {
     /// Execute an *explicit-coordinate* warp: land on `(x, y)` of `map`
     /// directly, rather than resolving a warp event's own position the way
     /// [`OverworldPhase::warp_to`] does. [`OverworldPhase::warp_to`]'s
-    /// sibling for the two callers with no warp event to resolve at all --
-    /// the white-out's `SetWarpDestinationToLastHealLocation` +
-    /// `WarpIntoMap` (`pokeemerald/src/overworld.c:364-365`,
-    /// `crate::flow::overworld_phase::white_out`, issue #261) and the
-    /// scripted first-battle conclusion's own
+    /// sibling for the one caller with a fixed destination tile and no
+    /// warp event or saved `WarpData` to resolve -- the scripted
+    /// first-battle conclusion's own
     /// `warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5`
     /// (`crate::flow::overworld_phase::first_battle_conclusion`) — mirroring
     /// `SetPlayerCoordsFromWarp`'s own `WARP_ID_NONE` branch
     /// (`src/overworld.c:611-617`, "the given coords are valid, use those
-    /// instead"): a heal location, like a `warp` command's own literal
-    /// coordinates, names a raw tile, not a warp event index.
+    /// instead"): a `warp` command's own literal coordinates name a raw
+    /// tile, not a warp event index. [`OverworldPhase::warp_to_saved_location`]
+    /// is the sibling for the other caller with no warp event to resolve --
+    /// the white-out's complete saved `last_heal_location` (issue #951),
+    /// whose own `warp_id` this method does not consult.
     ///
     /// Same shape as [`OverworldPhase::warp_to`] otherwise -- on-transition
     /// effects, temp-field-data clear, the two Route 101/103 targeted
@@ -364,14 +368,11 @@ impl OverworldPhase {
     /// (`event_object_movement.c:7737`), which calls
     /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`)
     /// to read the landing tile's real elevation off the destination grid
-    /// and overwrite the sentinel before the player ever takes a step. Both
-    /// of this method's own callers' destinations reach this: the white-out's
-    /// heal-location relocation to the player's house 2F at its bed tile `(4, 2)`
-    /// (`crate::flow::overworld_phase::white_out`,
-    /// [`crate::new_game::default_last_heal_location`]) and the scripted
-    /// first-battle conclusion's return to Birch's lab at `(6, 5)`
-    /// (`crate::flow::overworld_phase::first_battle_conclusion`) land
-    /// on elevation-`3` tiles, so leaving the sentinel in place would be
+    /// and overwrite the sentinel before the player ever takes a step. This
+    /// method's one caller reaches it: the scripted first-battle
+    /// conclusion's return to Birch's lab at `(6, 5)`
+    /// (`crate::flow::overworld_phase::first_battle_conclusion`) lands on
+    /// an elevation-`3` tile, so leaving the sentinel in place would be
     /// wrong until the player's first step, not merely imprecise.
     ///
     /// `warp_to_position` has no warp event to hand a `warp_id`, so it can't
@@ -384,11 +385,10 @@ impl OverworldPhase {
     ///
     /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
     /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`
-    /// (`overworld.c:540-546`) copies `sWarpDestination` verbatim, and
-    /// `SetWarpDestinationToLastHealLocation` (`overworld.c:665-668`) sets
-    /// that to `gSaveBlock1Ptr->lastHealLocation` as-is -- a real `(x, y)`
-    /// pair, not the `WARP_ID_NONE`-plus-sentinel-coords shape a resolved
-    /// warp event leaves behind.
+    /// (`overworld.c:540-546`) copies `sWarpDestination` verbatim, and this
+    /// method's caller sets that to its own literal `x`/`y` as-is -- a real
+    /// `(x, y)` pair, not the `WARP_ID_NONE`-plus-sentinel-coords shape a
+    /// resolved warp event leaves behind.
     ///
     /// # Panics
     ///
@@ -455,6 +455,111 @@ impl OverworldPhase {
             x,
             y,
         };
+        self.save1.pos = engine::save::Coords16 { x, y };
+    }
+
+    /// Execute a *saved-location* warp: land using the complete saved
+    /// [`WarpData`] `destination` names, exactly as upstream's
+    /// `SetWarpDestinationToLastHealLocation` + `WarpIntoMap` chain does
+    /// (`pokeemerald/src/overworld.c:665-668, 626-631`) --
+    /// [`OverworldPhase::warp_to`]'s sibling for the one caller that has a
+    /// complete saved `WarpData` to honor, rather than either a warp
+    /// event's own index alone ([`OverworldPhase::warp_to`]) or literal
+    /// coordinates alone ([`OverworldPhase::warp_to_position`]): the
+    /// white-out's own `last_heal_location` (issue #261/#951,
+    /// `crate::flow::overworld_phase::white_out`).
+    ///
+    /// Mirrors `SetPlayerCoordsFromWarp`'s own three branches
+    /// (`overworld.c:603-624`), tried in order by [`saved_warp_position`]: a
+    /// `destination.warp_id` naming a real warp event on `map` lands at
+    /// that event's own position; otherwise a non-negative
+    /// `destination.x`/`.y` lands there directly; otherwise -- unreachable
+    /// through any state this port's own writers ever produce, since
+    /// [`crate::new_game::default_last_heal_location`]'s worst case is
+    /// `WarpData::default()`'s all-zero (and therefore non-negative)
+    /// coordinates -- the destination map's own center tile, the same
+    /// honest fallback for corrupt save data [`OverworldPhase::warp_to`]'s
+    /// own doc comment describes for its unresolvable cases.
+    ///
+    /// Unlike [`OverworldPhase::warp_to_position`], `save1.location` is set
+    /// to `destination` **verbatim**, warp id included: `ApplyCurrentWarp`
+    /// (`overworld.c:540-546`) copies `sWarpDestination` as-is, and
+    /// `SetWarpDestinationToLastHealLocation` sets that to
+    /// `gSaveBlock1Ptr->lastHealLocation` unchanged -- so a later white-out
+    /// or continue reads back the exact value this one saw, not a
+    /// resolved-position sentinel the way [`OverworldPhase::warp_to`]'s
+    /// `-1`/`-1` or `warp_to_position`'s `warp_id: -1` are.
+    ///
+    /// Same on-transition effects, temp-field-data clear, atomic
+    /// scene/`map_id` rebind, `tick` reset, and
+    /// `RestartWildEncounterImmunitySteps` as
+    /// [`OverworldPhase::warp_to_position`]; same "leaves the player
+    /// exactly where they stood" failure contract if `map`'s
+    /// header/events/room can't be resolved, or no branch above names a
+    /// position inside the destination's decoded grid.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`OverworldPhase::warp_to`]: if the destination's generated
+    /// `MAP_GROUP`/`MAP_NUM` index doesn't fit the `i8` upstream's `struct
+    /// WarpData` stores it in ([`warp_data_index`]).
+    pub(super) fn warp_to_saved_location(&mut self, map: assets::MapId, destination: WarpData) {
+        let Ok(header) = MapHeaderTable::new().header(map) else {
+            eprintln!("warp: unknown destination map {map:?} -- staying put");
+            return;
+        };
+        let Ok(events) = MapEventsTable::new().resolve(map) else {
+            eprintln!("warp: no event data for destination map {map:?} -- staying put");
+            return;
+        };
+        let mut transitioned_event_data = self.save1.event_data.clone();
+        transitioned_event_data.clear_temp_field_event_data();
+        run_on_transition_map_script(map, &mut transitioned_event_data);
+        super::first_battle_trigger::sync_route_101_state_on_entry(
+            map,
+            &mut transitioned_event_data,
+        );
+        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            map,
+            &mut transitioned_event_data,
+            self.save2.player_gender,
+        );
+
+        let Ok(scene) = overworld::load_room_from_source(
+            self.pack_source,
+            map,
+            self.save2.player_gender.into(),
+            &transitioned_event_data,
+        ) else {
+            eprintln!("warp: failed to load destination map {map:?} -- staying put");
+            return;
+        };
+        let position = {
+            let runtime = scene.runtime(map, header, events);
+            saved_warp_position(&runtime, events, destination).map(|(x, y, elevation)| {
+                let behavior = runtime
+                    .metatile_behavior(i32::from(x), i32::from(y))
+                    .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
+                (x, y, elevation, warp_in_facing(behavior))
+            })
+        };
+        let Some((x, y, elevation, facing)) = position else {
+            eprintln!(
+                "warp: saved location {destination:?} names no position inside map {map:?} -- \
+                 staying put"
+            );
+            return;
+        };
+
+        self.player =
+            engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
+        self.pending_landing = None;
+        self.scene = scene;
+        self.map_id = map;
+        self.tick = 0;
+        self.save1.event_data = transitioned_event_data;
+        self.wild.restart_immunity_steps();
+        self.save1.location = destination;
         self.save1.pos = engine::save::Coords16 { x, y };
     }
 
@@ -603,6 +708,43 @@ impl OverworldPhase {
         };
         true
     }
+}
+
+/// `SetPlayerCoordsFromWarp` (`pokeemerald/src/overworld.c:603-624`): a
+/// `destination.warp_id` naming a real warp event on the map `runtime` is
+/// bound to lands at that event's own position
+/// ([`warp_destination_position`]); otherwise a non-negative
+/// `destination.x`/`.y` lands there directly; otherwise the destination
+/// map's own center tile, upstream's last-resort branch for a `WarpData`
+/// with neither a valid warp id nor valid coordinates.
+///
+/// `None` when the chosen branch names a position outside the destination's
+/// decoded grid -- including a valid `warp_id` whose own event cell cannot
+/// decode, which must not fall through to the coordinate branch below it,
+/// since upstream has already committed to the valid-id branch by that
+/// point.
+fn saved_warp_position(
+    runtime: &engine::overworld::MapRuntime<'_>,
+    events: &assets::MapEvents,
+    destination: WarpData,
+) -> Option<(i16, i16, u8)> {
+    if let Ok(warp_id) = u8::try_from(destination.warp_id) {
+        if usize::from(warp_id) < events.warp_events.len() {
+            return warp_destination_position(runtime, warp_id);
+        }
+    }
+    if destination.x >= 0 && destination.y >= 0 {
+        let elevation =
+            runtime.arrival_elevation(i32::from(destination.x), i32::from(destination.y))?;
+        return Some((destination.x, destination.y, elevation));
+    }
+    let layout = assets::LayoutTable::new()
+        .layout(runtime.header().layout)
+        .ok()?;
+    let x = i16::try_from(layout.width / 2).ok()?;
+    let y = i16::try_from(layout.height / 2).ok()?;
+    let elevation = runtime.arrival_elevation(i32::from(x), i32::from(y))?;
+    Some((x, y, elevation))
 }
 
 /// Narrow a generated map-table index (`MAP_GROUP`, `MAP_NUM`, or a warp
