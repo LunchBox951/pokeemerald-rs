@@ -531,12 +531,13 @@ impl OverworldPhase {
         if self.sight_trainer_battle.is_none() {
             return false;
         }
-        if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
+        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.sight_trainer_battle,
             &mut self.party_lead,
             &mut self.save1.money,
             &mut self.rng,
-        ) {
+        );
+        if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
@@ -556,6 +557,14 @@ impl OverworldPhase {
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
+        }
+        // Cleared whenever the battle slot itself empties, not only on a
+        // reported outcome: `advance_npc_trainer_battle` can also end the
+        // battle with no outcome at all, on a failed turn
+        // (`battle_finalize::finalize_battle_turn`'s own `turn_failed`
+        // abort) -- an id retained past that point would be stale the
+        // instant a fresh cone entry reuses this field.
+        if self.sight_trainer_battle.is_none() {
             self.sight_trainer_id = None;
         }
         true

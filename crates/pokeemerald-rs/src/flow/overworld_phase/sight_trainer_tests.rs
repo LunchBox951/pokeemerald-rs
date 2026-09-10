@@ -1447,3 +1447,47 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
         .expect("the approach must still be running")
         .trainer()
 }
+
+/// [`OverworldPhase::sight_trainer_id`]'s own doc comment promises it is
+/// "cleared the instant [the battle] ends (win, loss, or abort alike), so
+/// it is never stale once [`OverworldPhase::sight_trainer_battle`] is
+/// `None` again". A turn the engine cannot play -- here a lead whose slot 0
+/// has no PP left, so `Battle::take_turn`'s pre-draw validation returns
+/// `battle::BattleError::NoPpRemaining(0)` -- empties the battle slot with
+/// **no outcome at all** (`flow::battle_finalize::finalize_battle_turn`'s
+/// own `turn_failed` arm), which is the "abort" case that doc names. The
+/// sibling `route103_rival_trigger` already clears `rival_trainer_id`
+/// whenever `rival_battle.is_none()`, off the battle slot rather than off
+/// the outcome, for exactly this reason.
+#[test]
+fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    // Drain slot 0 through the same accessor the turn engine spends PP
+    // with, rather than reaching into the struct.
+    let mut drained = lead(277, 5, 1);
+    let starting_pp = drained.moves()[0].pp;
+    assert!(starting_pp > 0, "a freshly built lead starts with PP");
+    for _ in 0..starting_pp {
+        drained
+            .deduct_pp(0)
+            .expect("draining a slot that still has PP");
+    }
+    seed_battle(&mut phase, TRAINER_RHETT, drained, 1);
+    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+
+    phase.step(ButtonState::new());
+    assert!(
+        phase.sight_trainer_battle.is_none(),
+        "setup: the failed turn must have emptied the battle slot"
+    );
+    assert_eq!(
+        phase.sight_trainer_battle_outcome(),
+        None,
+        "setup: an abort reports no outcome at all"
+    );
+    assert_eq!(
+        phase.sight_trainer_id, None,
+        "the trainer id must be cleared on an abort too -- an id retained past the point the \
+         battle slot emptied is stale the instant a fresh cone entry reuses the field"
+    );
+}
