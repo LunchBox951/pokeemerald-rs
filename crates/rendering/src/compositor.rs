@@ -1226,12 +1226,15 @@ mod tests {
     fn affine_mosaic_wrap_overflow_still_snaps_to_the_block_origin() {
         // `Overflow::Wrap` always succeeds (it masks into range), so it never
         // hits the retry path -- the pre-existing block-origin snap already
-        // matches mGBA's overflow-branch affine mosaic exactly. This is a
-        // regression guard that the `Overflow::Transparent` retry/hold path left `Overflow::Wrap`
-        // unchanged: x=0 and x=1 must keep sampling the same (snapped)
-        // origin and thus draw the same color, unlike the `Overflow::Transparent`
-        // case above where they differ.
-        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        // matches mGBA's overflow-branch affine mosaic exactly. This guards
+        // both sides of that: above
+        // `BgSlot::wrap_affine_bypasses_horizontal_mosaic`'s decoded-size
+        // gate a 4-wide block must still collapse to its origin's texel, and
+        // that origin must stay wrapped rather than going transparent. A
+        // per-column gradient is what makes snapping visible; the reference
+        // point sits one texture pixel left, so the block origin wraps to
+        // texture column 7 and the next block lands on column 3.
+        let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let one_texture_pixel = i32::from(AffineMatrix::ONE);
         let slot = BgSlot::new_affine(
@@ -1258,10 +1261,18 @@ mod tests {
         };
         let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
 
+        let wrapped_origin = Bgr555::from_channels(8, 0, 0).to_rgb888();
+        for x in 0..4 {
+            assert_eq!(
+                fb.pixel(x, 0),
+                Some(wrapped_origin),
+                "x={x} must draw the 4-wide block origin's wrapped texel"
+            );
+        }
         assert_eq!(
-            fb.pixel(0, 0),
-            fb.pixel(1, 0),
-            "Wrap keeps snapping every pixel in the block to the same origin"
+            fb.pixel(4, 0),
+            Some(Bgr555::from_channels(4, 0, 0).to_rgb888()),
+            "x=4 starts the next block and snaps to its own origin"
         );
     }
 

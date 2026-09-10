@@ -240,21 +240,16 @@ impl<'a> AffineBgLayer<'a> {
     }
 
     /// Advances `hold` by one column and returns that column's affine
-    /// `Overflow::Transparent` mosaic sample. [`AffineMosaicHold`]'s docs
-    /// bound one span; `screen_y` arrives pre-snapped to its block's top row,
-    /// because mGBA backs the reference point up by `inY % mosaicV` once
-    /// before the scanline rather than per column.
+    /// [`Overflow::Transparent`] mosaic sample, with `screen_y` already
+    /// snapped to its block's top row.
     ///
-    /// Three mGBA contracts the code below cannot state for itself: a
-    /// rejected no-overflow coordinate `continue`s past both the composite
-    /// and the `mosaicWait` reload, so the next column retries instead of the
-    /// block blanking wholesale; an accepted coordinate reloads before the
-    /// `pixelData` write test, so a palette-index-0 texel reloads too; and
-    /// the decoded block size is decremented before the hold macro's
-    /// `mosaicH > 1` gate, so decoded sizes 1 and 2 hold nothing
-    /// (`mgba/src/gba/renderers/software-bg.c:24-53,56-76`,
-    /// `mgba/src/gba/renderers/software-private.h:181-191`)
-    /// `(behavioral-fidelity)`.
+    /// Contracts mGBA owns that this signature cannot carry: an off-map
+    /// column retries on the next column instead of blanking the rest of its
+    /// block; an on-map column reloads the hold even when its texel is
+    /// transparent; decoded block sizes 1 and 2 hold nothing; and a span
+    /// reopening mid-block seeds its hold from the snapped block origin,
+    /// gated on the column before the span yet fetched wrapped
+    /// (`mgba/src/gba/renderers/software-bg.c:24-76`) `(behavioral-fidelity)`.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -282,10 +277,6 @@ impl<'a> AffineBgLayer<'a> {
         }
         let block_h = usize::from(block_h);
         if !hold.span_open {
-            // A fresh span re-derives `mosaicWait` and `startX` (the snapped
-            // block origin) from this column's absolute position, never
-            // carrying them over from before the break
-            // (`mgba/src/gba/renderers/software-private.h:181-191`).
             let phase = screen_x % block_h;
             let snapped_origin_x = screen_x - phase;
             #[expect(
@@ -299,38 +290,35 @@ impl<'a> AffineBgLayer<'a> {
                     (block_h - phase) as u8
                 };
             }
-            // mGBA's pre-loop prefetch carries two coordinates: it
-            // bounds-tests the one at the column *before* the span, then
-            // fetches the one at the snapped origin. So a span whose
-            // preceding column is off-map holds nothing even when the
-            // snapped origin is on-map
-            // (`mgba/src/gba/renderers/software-bg.c:66-73`,
-            // `mgba/src/gba/renderers/software-private.h:173-191`). At
-            // phase == 0 `remaining` is already 0, so the fetch below
-            // overwrites this seed `(behavioral-fidelity)`.
-            hold.held = if phase == 0 {
-                None
-            } else {
-                self.sampled_coordinate(
-                    matrix,
-                    reference_x,
-                    reference_y,
-                    Overflow::Transparent,
-                    screen_x - 1,
-                    screen_y,
-                )
-                .and_then(|_| {
-                    self.sampled_coordinate(
+            // The prefetch bounds-tests the column before the span but
+            // fetches the snapped origin masked into range, so an off-map
+            // origin still yields its wrapped texel
+            // (`mgba/src/gba/renderers/software-bg.c:66-72`)
+            // `(behavioral-fidelity)`.
+            let span_predecessor_on_map = phase != 0
+                && self
+                    .sampled_coordinate(
                         matrix,
                         reference_x,
                         reference_y,
                         Overflow::Transparent,
+                        screen_x - 1,
+                        screen_y,
+                    )
+                    .is_some();
+            hold.held = span_predecessor_on_map
+                .then(|| {
+                    self.sampled_coordinate(
+                        matrix,
+                        reference_x,
+                        reference_y,
+                        Overflow::Wrap,
                         snapped_origin_x,
                         screen_y,
                     )
                 })
-                .and_then(|(sample_x, sample_y)| self.sample_texel(sample_x, sample_y))
-            };
+                .flatten()
+                .and_then(|(sample_x, sample_y)| self.sample_texel(sample_x, sample_y));
             hold.span_open = true;
         }
         if hold.remaining == 0 {
@@ -953,6 +941,47 @@ mod tests {
             sample, None,
             "x=8, the column before the span, is off the map, so mGBA never \
              prefetches the snapped origin at x=0 and the held columns stay blank"
+        );
+    }
+
+    #[test]
+    fn a_mid_block_span_prefetch_wraps_the_snapped_origin_coordinate() {
+        // mGBA gates the mode-2 no-overflow mosaic prefetch on the
+        // *predecessor* coordinate `x`/`y`, but once that gate passes it
+        // *masks* the snapped-origin coordinate `localX`/`localY` before
+        // fetching, rather than bounds-testing it:
+        // `if (!((x | y) & ~(sizeAdjusted - 1))) { localX &= sizeAdjusted - 1;
+        //  localY &= sizeAdjusted - 1; MODE_2_NO_MOSAIC(); }`
+        // (`mgba/src/gba/renderers/software-bg.c:66-72`). So an off-map
+        // snapped origin still fetches -- at its wrapped position -- and the
+        // held columns must show that wrapped texel, not blank.
+        //
+        // One 8px-wide tile with a distinct color per column, identity
+        // transform, `reference_x` six texture pixels left (texture x ==
+        // screen x - 6), an 8px block, and a span first advanced at x=7
+        // (phase 7, so the snapped origin is x=0). The column before the
+        // span, x=6, sits at texture x=0 and passes the gate; the snapped
+        // origin sits at texture x=-6, which wraps to texture column 2.
+        let (tileset, palette, tilemap) = gradient_affine_tile_fixture();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let mut hold = AffineMosaicHold::default();
+        let reference_x = -6 * i32::from(AffineMatrix::ONE);
+        let sample = layer.sample_column_with_mosaic_hold(
+            &mut hold,
+            AffineMatrix::IDENTITY,
+            reference_x,
+            0,
+            7,
+            0,
+            8,
+        );
+
+        assert_eq!(
+            sample,
+            Some(Bgr555::from_channels(3, 0, 0).to_rgb888()),
+            "the predecessor gate passes, so the snapped origin at texture \
+             x=-6 must be masked to texture column 2 and fetched, not dropped"
         );
     }
 }
