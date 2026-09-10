@@ -4,13 +4,21 @@
 use std::path::Path;
 
 use super::{
-    create_new_exclusive, fill_new_file, stage_at_first_free_name, StagingArea, MAX_COMPONENT_LEN,
+    create_new_exclusive, stage_at_first_free_name, StagingArea, MAX_COMPONENT_LEN,
     WIDEST_HEX_DIGITS,
 };
 use crate::save::block::SaveBlock1;
 use crate::save::file::tests::{guessable_pid_staging_path, saved_store, sibling_path, TempDir};
-use crate::save::file::{SaveFile, SaveFileError, SAVE_FILE_NAME};
+use crate::save::file::{SaveFile, SAVE_FILE_NAME};
 use crate::save::store::FLASH_IMAGE_LEN;
+
+// Only the platform-gated tests below reach these, so their imports carry the
+// same gate: an import a host compiles out every use of is a `dead_code`
+// warning, and warnings are denied.
+#[cfg(target_os = "linux")]
+use super::fill_new_file;
+#[cfg(unix)]
+use crate::save::file::SaveFileError;
 
 /// The staging area beside `file`'s save path.
 fn area(file: &SaveFile) -> StagingArea<'_> {
@@ -446,6 +454,79 @@ fn a_narrowed_staging_namespace_is_walked_to_its_last_free_name() {
     );
 }
 
+/// The value a two-digit staging suffix renders. The stem is already empty
+/// wherever the shrink chain has narrowed the suffix this far, so the whole
+/// component is the suffix.
+fn two_digit_suffix_of(candidate: &Path) -> u8 {
+    let component = candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a staging candidate always has a UTF-8 name here");
+    let hex = component
+        .strip_prefix(".tmp.")
+        .unwrap_or_else(|| panic!("a narrowed staging candidate is all suffix: {component}"));
+    u8::from_str_radix(hex, 16)
+        .unwrap_or_else(|err| panic!("{component} must render two hex digits: {err}"))
+}
+
+/// Each width the shrink chain lands on is walked to the end of its own
+/// namespace, not to the count the narrowest width happens to hold. Two hex
+/// digits render 256 names; a walk cut to sixteen of them reports the
+/// namespace exhausted with 240 untried, so a start that lands on a run of
+/// entries a crashed process never swept fails a write that had free names
+/// in reach.
+///
+/// The run is seeded from inside the injected `open`, on the sixteen
+/// consecutive names the walk actually starts from, so however the start was
+/// drawn the seventeenth attempt is the first that can succeed.
+#[test]
+fn a_two_digit_staging_namespace_is_walked_past_its_first_sixteen_names() {
+    const OCCUPIED_RUN: u8 = 16;
+
+    let dir = TempDir::new("staging-two-digit-namespace");
+    let path = dir.join("s");
+    let file = SaveFile::at(&path);
+
+    // Room for an empty stem and a two-digit suffix and no more, so the
+    // shrink chain stops one rung above the floor rather than on it.
+    let two_digit_limit = path
+        .with_file_name(".tmp.00")
+        .as_os_str()
+        .as_encoded_bytes()
+        .len();
+    let start = std::cell::Cell::new(None);
+    let occupy_the_start_of_the_walk = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        if candidate.as_os_str().as_encoded_bytes().len() > two_digit_limit {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        if start.get().is_none() {
+            let origin = two_digit_suffix_of(candidate);
+            start.set(Some(origin));
+            for step in 0..OCCUPIED_RUN {
+                let taken = dir.join(&format!(".tmp.{:02x}", origin.wrapping_add(step)));
+                std::fs::write(&taken, b"someone else's file").unwrap();
+            }
+        }
+        create_new_exclusive(candidate)
+    };
+
+    let staged = area(&file)
+        .stage_narrowing_until_accepted(occupy_the_start_of_the_walk, &vec![0u8; FLASH_IMAGE_LEN])
+        .expect(
+            "a two-digit namespace with 240 names free must be walked past the sixteen \
+             taken ones, not reported exhausted",
+        );
+
+    let origin = start
+        .get()
+        .expect("the shrink chain must have reached the two-digit width");
+    assert_eq!(
+        staged.path,
+        dir.join(&format!(".tmp.{:02x}", origin.wrapping_add(OCCUPIED_RUN))),
+        "the walk must take the first free name past the occupied run"
+    );
+}
+
 /// A non-UTF-8 basename's lossy rendering can be longer than its raw bytes
 /// -- each invalid byte becomes a three-byte replacement character -- so the
 /// first-guess candidate built from it can be longer than the raw basename
@@ -523,14 +604,15 @@ fn a_staging_name_collision_is_retried_onto_a_fresh_name() {
         SaveFile::sync_directory_best_effort,
         |bytes| {
             stage_at_first_free_name(
-                || {
+                std::iter::repeat_with(|| {
                     attempts += 1;
                     if attempts == 1 {
                         occupied.clone()
                     } else {
                         fresh.clone()
                     }
-                },
+                })
+                .take(2),
                 create_new_exclusive,
                 bytes,
             )
@@ -649,7 +731,13 @@ fn a_symlink_at_the_staging_path_the_write_actually_uses_is_refused() {
         .write_with(
             &store,
             SaveFile::sync_directory_best_effort,
-            |bytes| stage_at_first_free_name(|| staging.clone(), create_new_exclusive, bytes),
+            |bytes| {
+                stage_at_first_free_name(
+                    std::iter::once(staging.clone()),
+                    create_new_exclusive,
+                    bytes,
+                )
+            },
             |_| {},
         )
         .expect_err("staging onto a planted symlink must never succeed");
@@ -685,7 +773,7 @@ fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
 
     let staging = dir.join("staged.tmp");
     let staged = stage_at_first_free_name(
-        || staging.clone(),
+        std::iter::once(staging.clone()),
         create_new_exclusive,
         &vec![0u8; FLASH_IMAGE_LEN],
     )
@@ -729,7 +817,7 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
 
     let staging = dir.join("staged.tmp");
     let staged = stage_at_first_free_name(
-        || staging.clone(),
+        std::iter::once(staging.clone()),
         create_new_exclusive,
         &vec![0u8; FLASH_IMAGE_LEN],
     )

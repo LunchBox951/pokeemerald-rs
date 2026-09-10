@@ -272,7 +272,7 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
             SaveFile::sync_directory_best_effort,
             |bytes| {
                 staging::stage_at_first_free_name(
-                    || unstageable.clone(),
+                    std::iter::once(unstageable.clone()),
                     staging::create_new_exclusive,
                     bytes,
                 )
@@ -310,7 +310,7 @@ fn a_staged_write_that_cannot_be_renamed_removes_its_staged_file() {
             SaveFile::sync_directory_best_effort,
             |bytes| {
                 staging::stage_at_first_free_name(
-                    || staged.clone(),
+                    std::iter::once(staged.clone()),
                     staging::create_new_exclusive,
                     bytes,
                 )
@@ -362,7 +362,7 @@ fn a_staging_file_replaced_before_the_rename_is_never_promoted() {
             SaveFile::sync_directory_best_effort,
             |bytes| {
                 staging::stage_at_first_free_name(
-                    || staging_name.clone(),
+                    std::iter::once(staging_name.clone()),
                     staging::create_new_exclusive,
                     bytes,
                 )
@@ -435,7 +435,7 @@ fn a_staging_file_swapped_for_another_regular_file_is_never_promoted() {
             SaveFile::sync_directory_best_effort,
             |bytes| {
                 staging::stage_at_first_free_name(
-                    || staging_name.clone(),
+                    std::iter::once(staging_name.clone()),
                     staging::create_new_exclusive,
                     bytes,
                 )

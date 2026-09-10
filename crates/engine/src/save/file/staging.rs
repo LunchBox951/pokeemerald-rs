@@ -22,11 +22,24 @@ pub(super) const WIDEST_HEX_DIGITS: usize = 10;
 /// Suffix width the narrowing retries stop at.
 const NARROWEST_HEX_DIGITS: usize = 1;
 
-/// Names one width offers before reporting its namespace exhausted: exactly
-/// as many as the narrowest width can render. Because [`StagingArea::names`]
-/// steps rather than redraws, a walk this long reaches every name that width
-/// has, so occupancy alone can never hide the last free one.
-const NAMES_PER_WIDTH: u32 = 1 << (4 * NARROWEST_HEX_DIGITS);
+/// The widest suffix a walk exhausts rather than samples. The narrowing
+/// retries halve the width, so a host's real limits can only land staging on
+/// ten, five, two, or one hex digits; two renders 256 names, few enough that
+/// entries a crashed process never swept could hold them all, and few enough
+/// to try in bounded work. Five renders over a million, more than any
+/// directory holds and more than a walk should attempt: a width that wide is
+/// there to be unguessable, not to be exhausted.
+const WIDEST_EXHAUSTIBLE_HEX_DIGITS: usize = 2;
+
+/// The names a walk at `hex_digits` offers before reporting the namespace
+/// exhausted: every name that width renders, or, past
+/// [`WIDEST_EXHAUSTIBLE_HEX_DIGITS`], as many as that width would. Because
+/// [`StagingArea::names`] steps rather than redraws, a walk over a whole
+/// namespace reaches every name in it, so occupancy alone can never hide the
+/// last free one.
+fn names_offered(hex_digits: usize) -> usize {
+    1_usize << (4 * hex_digits.min(WIDEST_EXHAUSTIBLE_HEX_DIGITS))
+}
 
 /// Opens `path` for writing and fails if anything already holds that name,
 /// refusing an existing file, directory, or symlink instead of following or
@@ -38,17 +51,20 @@ pub(super) fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File
         .open(path)
 }
 
-/// Stages `bytes` at the first name from `next_name` that `create_new` finds
-/// free, reporting the last collision once [`NAMES_PER_WIDTH`] names have all
-/// turned out to be taken.
+/// Stages `bytes` at the first of `names` that `create_new` finds free,
+/// reporting the last collision once they have all turned out to be taken.
+///
+/// The walk is only as long as the names handed to it, and
+/// [`StagingArea::names`] hands over its width's whole namespace wherever
+/// that namespace is small enough to walk. Exhaustion at a narrow width is
+/// therefore reported only once every name the width renders has been tried.
 pub(super) fn stage_at_first_free_name(
-    mut next_name: impl FnMut() -> PathBuf,
+    names: impl IntoIterator<Item = PathBuf>,
     create_new: impl Fn(&Path) -> std::io::Result<std::fs::File>,
     bytes: &[u8],
 ) -> std::io::Result<StagedSave> {
     let mut last_collision = None;
-    for _ in 0..NAMES_PER_WIDTH {
-        let path = next_name();
+    for path in names {
         match fill_new_file(&create_new, &path, bytes) {
             Ok(staged) => return Ok(staged),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -147,15 +163,18 @@ impl<'a> StagingArea<'a> {
     /// carrying a `.tmp.<hex>` suffix `hex_digits` wide.
     ///
     /// The suffix is drawn once and then stepped, never redrawn, so no name
-    /// is offered twice: at [`NARROWEST_HEX_DIGITS`] the namespace holds only
-    /// [`NAMES_PER_WIDTH`] names, and independent draws would report it
-    /// exhausted while a free name sat untried.
+    /// is offered twice, and the walk runs [`names_offered`] names long: at a
+    /// width the shrink chain narrows to, that is the width's entire
+    /// namespace -- sixteen names at [`NARROWEST_HEX_DIGITS`], 256 one rung
+    /// above it -- and independent draws, or a walk cut to some other width's
+    /// count, would report the namespace exhausted while a free name sat
+    /// untried.
     ///
     /// A name equal to the save path is skipped. `create_new` succeeds on a
     /// destination no save occupies yet, so staging there would write the
     /// image in place: visible while half-written, and left partial by a
     /// crash where the rename is supposed to publish a whole file.
-    fn names(&self, max_stem_len: usize, hex_digits: usize) -> impl FnMut() -> PathBuf + '_ {
+    fn names(&self, max_stem_len: usize, hex_digits: usize) -> impl Iterator<Item = PathBuf> + '_ {
         let mut stem = self
             .save_path
             .file_name()
@@ -170,7 +189,7 @@ impl<'a> StagingArea<'a> {
         }
         let mask = unique_value_mask(hex_digits);
         let mut value = unique_value(hex_digits);
-        move || loop {
+        std::iter::repeat_with(move || loop {
             let candidate = self
                 .save_path
                 .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"));
@@ -178,7 +197,8 @@ impl<'a> StagingArea<'a> {
             if !self.aliases_save_path(&candidate) {
                 return candidate;
             }
-        }
+        })
+        .take(names_offered(hex_digits))
     }
 
     /// Whether `candidate` names the save path itself on any supported file
@@ -199,7 +219,9 @@ impl<'a> StagingArea<'a> {
     /// [`stage_at_first_free_name`].
     #[cfg(test)]
     pub(super) fn first_name_under(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
-        self.names(max_stem_len, hex_digits)()
+        self.names(max_stem_len, hex_digits)
+            .next()
+            .expect("every width offers at least one name")
     }
 
     /// The first name of a fresh walk at the widths [`Self::stage`] tries
