@@ -150,15 +150,9 @@ enum StartOutcome {
     PlaybackSetupFailure,
 }
 
-/// Start playback and decide what `main` does with the answer.
-///
-/// A device that answered [`AudioOutput::open`] and then refused `play` is
-/// the same answered-then-refused fact [`classify_open_error`] reports as a
-/// playback-setup failure, so the refusal is reported here in that same
-/// wording and handed back as [`StartOutcome::PlaybackSetupFailure`] instead
-/// of aborting this command through a panic. Reporting and classifying both
-/// live here, and `start` is injected as in [`push_frame`], so the tests
-/// below pin the outcome `main` acts on without an audio device.
+/// Start playback, reporting a refusal in the wording [`classify_open_error`]
+/// uses for a playback-setup failure. `start` is injected as in
+/// [`push_frame`].
 fn start_playback(
     output: &mut AudioOutput,
     start: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
@@ -418,14 +412,9 @@ mod tests {
         );
     }
 
-    /// A device that answered `open` can still refuse to play: `start`
-    /// returns `PlatformError::Audio` when `cpal` rejects a stream that built
-    /// fine (`platform/src/audio.rs`). That is the same answered-then-refused
-    /// fact `classify_open_error` reports as a playback-setup failure, so the
-    /// refusal must produce the reported failure outcome `main` exits on.
-    /// Restoring an `expect` inside `start_playback` fails this assertion by
-    /// panicking here instead of returning that outcome. `start` is injected,
-    /// so no audio device is needed.
+    /// A device that answered `open` can still refuse `play`
+    /// (`platform/src/audio.rs`); the refusal must come back as the reported
+    /// failure outcome, never as a panic.
     #[test]
     fn a_device_that_refuses_to_start_is_a_reported_playback_setup_failure() {
         let mut output = AudioOutput::null(4);
