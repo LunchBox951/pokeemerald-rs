@@ -294,10 +294,8 @@ pub(super) struct FrameViewport {
 /// matching `DrawMetatileAt` after `InitBackupMapLayoutConnections` copies raw
 /// metatile IDs (`pokeemerald/src/field_camera.c`, `src/fieldmap.c`).
 ///
-/// The vertical scroll always carries [`RESTING_SCROLL_Y`]'s baseline
-/// (module docs' "camera model" section), so the composed tilemap always
-/// has [`RESTING_SCROLL_ROW`]'s extra metatile of real content south of the
-/// ordinary crop, even at rest with no vertical step in progress.
+/// The vertical scroll always carries [`RESTING_SCROLL_Y`], backed by
+/// [`RESTING_SCROLL_ROW`]'s extra metatile south of the crop.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_tilemaps(
     player: &PlayerState,
@@ -328,10 +326,6 @@ pub(super) fn build_tilemaps(
     let anchor_x = base_x - PLAYER_VIEW_COL - west_padding;
     let anchor_y = base_y - PLAYER_VIEW_ROW - north_padding;
     let cols_metatiles = VIEW_COLS + west_padding + east_padding;
-    // `RESTING_SCROLL_ROW` is unconditional (not gated on `north_padding`/
-    // `south_padding`): the anchor stays put, and this appends one more row
-    // south of the ordinary crop so `RESTING_SCROLL_Y`'s baseline scroll
-    // samples that real row instead of wrapping into row zero.
     let rows_metatiles = VIEW_ROWS + north_padding + south_padding + RESTING_SCROLL_ROW;
     #[expect(
         clippy::cast_sign_loss,

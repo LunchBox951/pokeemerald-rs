@@ -51,37 +51,14 @@
 //! so the BG has scrolled exactly one metatile by the time a step
 //! completes.
 //!
-//! Upstream resolves the half-metatile placement this port's even
-//! [`VIEW_ROWS`] would otherwise leave ambiguous, rather than leaving it
-//! unspecified (issue #977). `GetCameraFocusCoords` reads the camera focus
-//! back as `gSaveBlock1Ptr->pos + MAP_OFFSET` (`MAP_OFFSET == 7`,
-//! `pokeemerald/src/fieldmap.c:748-758`, `include/fieldmap.h:18`), so the
-//! player's own metatile sits seven metatiles below the camera anchor and
-//! lands at BG pixel row `7 * 16 == 112` once drawn
-//! (`DrawWholeMapViewInternal`, `pokeemerald/src/field_camera.c:100-119`).
-//! `FieldUpdateBgTilemapScroll` then writes `BGnVOFS = sVerticalCameraPan +
-//! yPixelOffset + 8` (`field_camera.c:74-85`), and the ordinary field's
-//! resting pan is 32 (`InstallCameraPanAheadCallback`, `field_camera.c:448-
-//! 453`, installed for every field init at `overworld.c:2139`), so a
-//! freshly reset camera's resting `BGnVOFS == 40`. `yPixelOffset` (a
-//! wrapping `u8`) keeps accumulating with further movement rather than
-//! resetting every step (`AddCameraPixelOffset`, `field_camera.c:63-67`,
-//! called every frame from `CameraUpdate`, `field_camera.c:423`), but the
-//! redrawn ring-buffer row it pairs with (`yTileOffset`,
-//! `AddCameraTileOffset`, `field_camera.c:55-60`/`:420`) advances by the
-//! same amount, so the *net* screen position is the same 40-equivalent
-//! placement at every rest position, not only right after a reset. The
-//! player's metatile therefore always occupies screen rows
-//! `112 - 40 == 72..=87` at rest, centred on the 160px screen, and the 16x32 player
-//! OBJ (`centerToCornerVecY == -16` plus `gSpriteCoordOffsetY ==
-//! gTotalCameraPixelOffsetY - sVerticalCameraPan - 8`, `field_camera.c:456-
-//! 462`) starts at screen row `112 - 16 - 40 == 56`
-//! (`SetSpritePosToMapCoords`, `event_object_movement.c:4801-4819`). This
-//! module reproduces the same 72/56 framing by keeping [`PLAYER_VIEW_ROW`]
-//! as its row-5 crop -- already two rows short of upstream's `MAP_OFFSET`,
-//! absorbing the 32px pan -- and adding [`RESTING_SCROLL_Y`], an
-//! unconditional 8px vertical scroll baseline, for the remaining half
-//! metatile.
+//! Upstream rests the player's metatile on screen rows 72..=87 and the
+//! 16x32 player OBJ at row 56: the camera anchor sits `MAP_OFFSET` (7)
+//! metatiles above the player (`pokeemerald/src/fieldmap.c:748-758`), and
+//! `FieldUpdateBgTilemapScroll` writes `BGnVOFS = sVerticalCameraPan +
+//! yPixelOffset + 8` with a resting pan of 32 (`field_camera.c:74-85`,
+//! `:448-453`). This module reproduces that framing with
+//! [`PLAYER_VIEW_ROW`]'s row-5 crop, two rows short of `MAP_OFFSET` to
+//! absorb the 32px pan, plus [`RESTING_SCROLL_Y`] for the remaining 8px.
 //!
 //! # Scope
 //!
@@ -179,21 +156,12 @@ const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 /// samples past the tilemap's own edge (see [`viewport::build_tilemaps`]).
 const PAD: i32 = 1;
 
-/// Upstream's resting vertical BG bias, in pixels: `FieldUpdateBgTilemapScroll`
-/// writes `BGnVOFS = sVerticalCameraPan + yPixelOffset + 8`
-/// (`pokeemerald/src/field_camera.c:74-85`). [`PLAYER_VIEW_ROW`] already
-/// folds in the ordinary field's resting 32px pan
-/// (`InstallCameraPanAheadCallback`, `field_camera.c:448-453`) by cropping
-/// two rows short of upstream's `MAP_OFFSET`; this constant is the
-/// remaining half-metatile (module docs' "camera model" section has the
-/// full derivation).
+/// Upstream's 8px resting vertical BG bias, the half metatile left after
+/// [`PLAYER_VIEW_ROW`]'s crop (module docs' "camera model" section).
 const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
 
-/// One extra metatile of southward tilemap capacity, present even at rest
-/// (unlike [`PAD`], which only appears mid-step): [`RESTING_SCROLL_Y`]'s
-/// baseline scroll needs one more real row past the ordinary crop so it
-/// samples map content instead of wrapping into an unrelated row (see
-/// [`viewport::build_tilemaps`]).
+/// One extra southward metatile, present even at rest, so
+/// [`RESTING_SCROLL_Y`] samples real map content instead of wrapping.
 const RESTING_SCROLL_ROW: i32 = 1;
 
 /// The screen rectangle the player's avatar OBJ covers in a frame
