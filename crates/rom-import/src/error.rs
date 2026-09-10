@@ -343,9 +343,11 @@ impl fmt::Display for ImportError {
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ReadFailed { path, source } => {
-                write!(f, "could not read ROM `{}`: {source}", path.display())
-            }
+            Self::ReadFailed { path, source } => write!(
+                f,
+                "could not read ROM `{}`: {source}",
+                path.to_string_lossy().escape_debug()
+            ),
             Self::WrongSize { actual } => write!(
                 f,
                 "ROM is {actual} bytes; a Pokemon Emerald ROM is exactly {} bytes",
@@ -436,11 +438,13 @@ impl fmt::Display for ImportError {
             Self::SameFile { path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`",
-                path.display()
+                path.to_string_lossy().escape_debug()
             ),
-            Self::WriteFailed { path, source } => {
-                write!(f, "could not write `{}`: {source}", path.display())
-            }
+            Self::WriteFailed { path, source } => write!(
+                f,
+                "could not write `{}`: {source}",
+                path.to_string_lossy().escape_debug()
+            ),
             Self::EmptyPack => f.write_str(
                 "the ROM's profile records no assets, so no pack was written",
             ),
@@ -514,6 +518,40 @@ mod tests {
             version: 0,
         };
         assert!(err.to_string().contains("game code ??EE"));
+    }
+
+    #[test]
+    fn path_bearing_messages_are_escaped_and_stay_one_line() {
+        // A player's own path is untrusted the same way the ROM's header
+        // bytes are (`write_ascii`, above): a name holding a newline or an
+        // ESC byte must not reach the terminal verbatim, or the "one line"
+        // promise at the top of this module breaks on the player's own
+        // filename rather than on anything the ROM contributed.
+        let hostile = std::path::PathBuf::from("roms/one\ntwo\u{1b}[2Kthree.gba");
+        let cases = [
+            ImportError::ReadFailed {
+                path: hostile.clone(),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            },
+            ImportError::SameFile {
+                path: hostile.clone(),
+            },
+            ImportError::WriteFailed {
+                path: hostile,
+                source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            },
+        ];
+        for case in cases {
+            let text = case.to_string();
+            assert!(!text.contains('\n'), "{text:?}");
+            assert!(!text.contains('\u{1b}'), "{text:?}");
+            // The escaped path must still be legible, not merely stripped
+            // silently.
+            assert!(
+                text.contains(r"roms/one\ntwo\u{1b}[2Kthree.gba"),
+                "escaped path missing from {text:?}"
+            );
+        }
     }
 
     #[test]
