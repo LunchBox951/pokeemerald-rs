@@ -51,6 +51,15 @@
 //! so the BG has scrolled exactly one metatile by the time a step
 //! completes.
 //!
+//! Upstream rests the player's metatile on screen rows 72..=87 and the
+//! 16x32 player OBJ at row 56: the camera anchor sits `MAP_OFFSET` (7)
+//! metatiles above the player (`pokeemerald/src/fieldmap.c:748-758`), and
+//! `FieldUpdateBgTilemapScroll` writes `BGnVOFS = sVerticalCameraPan +
+//! yPixelOffset + 8` with a resting pan of 32 (`field_camera.c:74-85`,
+//! `:448-453`). This module reproduces that framing with
+//! [`PLAYER_VIEW_ROW`]'s row-5 crop, two rows short of `MAP_OFFSET` to
+//! absorb the 32px pan, plus [`RESTING_SCROLL_Y`] for the remaining 8px.
+//!
 //! # Scope
 //!
 //! In scope: the current map's layout grid + border fill, connected-map
@@ -92,10 +101,6 @@
 //!   nothing" rather than a fabricated pixel in the rare case it isn't.
 //! - **No left/right foot alternation across steps.** See
 //!   `avatar::FRAME_SOUTH_STEP`.
-//! - **No sub-scanline vertical centering tie-break claim.** [`VIEW_ROWS`]
-//!   (10 metatiles) is even, so there is no single upstream-verified
-//!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
-//!   than above) is this module's own pick, not a transcribed constant.
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
@@ -140,8 +145,9 @@ const METATILE_PX: i32 = 16;
 const VIEW_COLS: i32 = 240 / METATILE_PX;
 const VIEW_ROWS: i32 = 160 / METATILE_PX;
 
-/// The metatile column/row the player's own tile sits at within the visible
-/// screen (module docs' "camera model" section).
+/// The metatile column/row the player's own tile sits at within the
+/// composed tilemap, before [`RESTING_SCROLL_Y`]'s baseline vertical scroll
+/// (module docs' "camera model" section).
 const PLAYER_VIEW_COL: i32 = VIEW_COLS / 2;
 const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 
@@ -149,6 +155,42 @@ const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 /// a mid-step sub-tile scroll (up to `WALK_FRAMES_PER_TILE - 1` px) never
 /// samples past the tilemap's own edge (see [`viewport::build_tilemaps`]).
 const PAD: i32 = 1;
+
+/// Upstream's 8px resting vertical BG bias, the half metatile left after
+/// [`PLAYER_VIEW_ROW`]'s crop (module docs' "camera model" section).
+const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
+
+/// One extra southward metatile, present even at rest, so
+/// [`RESTING_SCROLL_Y`] samples real map content instead of wrapping.
+const RESTING_SCROLL_ROW: i32 = 1;
+
+/// The screen rectangle the player's avatar OBJ covers in a frame
+/// [`OverworldScene::compose`] draws, in framebuffer pixels.
+///
+/// Plain data with public fields `(oop-boundaries)`: this is a measurement,
+/// not an object with behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvatarScreenBox {
+    /// Leftmost screen pixel column the avatar covers.
+    pub left: usize,
+    /// Topmost screen pixel row the avatar covers.
+    pub top: usize,
+    /// The avatar OBJ's width in pixels.
+    pub width: usize,
+    /// The avatar OBJ's height in pixels.
+    pub height: usize,
+}
+
+/// Where the player's avatar lands on screen, fixed for a standing and a
+/// walking player alike: the OBJ stays put and the BG scrolls under it
+/// (module docs' "camera model" section). Exported for `xtask`'s smoke
+/// suite, which masks this box out of a composed frame.
+pub const PLAYER_AVATAR_SCREEN_BOX: AvatarScreenBox = AvatarScreenBox {
+    left: avatar::PLAYER_OBJ_X as usize,
+    top: avatar::PLAYER_OBJ_Y as usize,
+    width: avatar::FRAME_W,
+    height: avatar::FRAME_H,
+};
 
 /// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
 /// fixed choice: the protagonist's *bedroom* (the 2F room the early playable
