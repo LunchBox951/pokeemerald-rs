@@ -8,7 +8,7 @@ use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
-use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW};
+use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
 pub(super) const FRAME_W: usize = 16;
 pub(super) const FRAME_H: usize = 32;
@@ -80,8 +80,11 @@ pub(super) fn priority_for_elevation(elevation: u8) -> u8 {
     reason = "the visible-screen coordinate is positive and fits u16"
 )]
 pub(super) const PLAYER_OBJ_X: u16 = (PLAYER_VIEW_COL * METATILE_PX) as u16;
-/// One metatile above the viewport anchor, so the 32px sprite's lower half
-/// covers the tile the player stands on rather than its head.
+/// One metatile above the viewport anchor, minus [`RESTING_SCROLL_Y`]'s
+/// resting scroll baseline the BG always carries, so the 32px sprite's
+/// lower half covers the tile the player stands on -- at the same screen
+/// row the BG itself rests at -- rather than its head (module docs' "camera
+/// model" section has the full upstream derivation).
 #[expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -89,7 +92,7 @@ pub(super) const PLAYER_OBJ_X: u16 = (PLAYER_VIEW_COL * METATILE_PX) as u16;
     reason = "the visible-screen coordinate is positive and fits u8"
 )]
 pub(super) const PLAYER_OBJ_Y: u8 =
-    (PLAYER_VIEW_ROW * METATILE_PX - (FRAME_H as i32 - METATILE_PX)) as u8;
+    (PLAYER_VIEW_ROW * METATILE_PX - RESTING_SCROLL_Y - (FRAME_H as i32 - METATILE_PX)) as u8;
 
 /// Selects the player avatar's sprite sheet and palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

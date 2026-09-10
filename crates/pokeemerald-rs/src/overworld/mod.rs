@@ -51,6 +51,38 @@
 //! so the BG has scrolled exactly one metatile by the time a step
 //! completes.
 //!
+//! Upstream resolves the half-metatile placement this port's even
+//! [`VIEW_ROWS`] would otherwise leave ambiguous, rather than leaving it
+//! unspecified (issue #977). `GetCameraFocusCoords` reads the camera focus
+//! back as `gSaveBlock1Ptr->pos + MAP_OFFSET` (`MAP_OFFSET == 7`,
+//! `pokeemerald/src/fieldmap.c:748-758`, `include/fieldmap.h:18`), so the
+//! player's own metatile sits seven metatiles below the camera anchor and
+//! lands at BG pixel row `7 * 16 == 112` once drawn
+//! (`DrawWholeMapViewInternal`, `pokeemerald/src/field_camera.c:100-119`).
+//! `FieldUpdateBgTilemapScroll` then writes `BGnVOFS = sVerticalCameraPan +
+//! yPixelOffset + 8` (`field_camera.c:74-85`), and the ordinary field's
+//! resting pan is 32 (`InstallCameraPanAheadCallback`, `field_camera.c:448-
+//! 453`, installed for every field init at `overworld.c:2139`), so a
+//! freshly reset camera's resting `BGnVOFS == 40`. `yPixelOffset` (a
+//! wrapping `u8`) keeps accumulating with further movement rather than
+//! resetting every step (`AddCameraPixelOffset`, `field_camera.c:63-67`,
+//! called every frame from `CameraUpdate`, `field_camera.c:423`), but the
+//! redrawn ring-buffer row it pairs with (`yTileOffset`,
+//! `AddCameraTileOffset`, `field_camera.c:55-60`/`:420`) advances by the
+//! same amount, so the *net* screen position is the same 40-equivalent
+//! placement at every rest position, not only right after a reset. The
+//! player's metatile therefore always occupies screen rows
+//! `112 - 40 == 72..=87` at rest, centred on the 160px screen, and the 16x32 player
+//! OBJ (`centerToCornerVecY == -16` plus `gSpriteCoordOffsetY ==
+//! gTotalCameraPixelOffsetY - sVerticalCameraPan - 8`, `field_camera.c:456-
+//! 462`) starts at screen row `112 - 16 - 40 == 56`
+//! (`SetSpritePosToMapCoords`, `event_object_movement.c:4801-4819`). This
+//! module reproduces the same 72/56 framing by keeping [`PLAYER_VIEW_ROW`]
+//! as its row-5 crop -- already two rows short of upstream's `MAP_OFFSET`,
+//! absorbing the 32px pan -- and adding [`RESTING_SCROLL_Y`], an
+//! unconditional 8px vertical scroll baseline, for the remaining half
+//! metatile.
+//!
 //! # Scope
 //!
 //! In scope: the current map's layout grid + border fill, connected-map
@@ -92,10 +124,6 @@
 //!   nothing" rather than a fabricated pixel in the rare case it isn't.
 //! - **No left/right foot alternation across steps.** See
 //!   `avatar::FRAME_SOUTH_STEP`.
-//! - **No sub-scanline vertical centering tie-break claim.** [`VIEW_ROWS`]
-//!   (10 metatiles) is even, so there is no single upstream-verified
-//!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
-//!   than above) is this module's own pick, not a transcribed constant.
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
@@ -140,8 +168,9 @@ const METATILE_PX: i32 = 16;
 const VIEW_COLS: i32 = 240 / METATILE_PX;
 const VIEW_ROWS: i32 = 160 / METATILE_PX;
 
-/// The metatile column/row the player's own tile sits at within the visible
-/// screen (module docs' "camera model" section).
+/// The metatile column/row the player's own tile sits at within the
+/// composed tilemap, before [`RESTING_SCROLL_Y`]'s baseline vertical scroll
+/// (module docs' "camera model" section).
 const PLAYER_VIEW_COL: i32 = VIEW_COLS / 2;
 const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 
@@ -149,6 +178,23 @@ const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 /// a mid-step sub-tile scroll (up to `WALK_FRAMES_PER_TILE - 1` px) never
 /// samples past the tilemap's own edge (see [`viewport::build_tilemaps`]).
 const PAD: i32 = 1;
+
+/// Upstream's resting vertical BG bias, in pixels: `FieldUpdateBgTilemapScroll`
+/// writes `BGnVOFS = sVerticalCameraPan + yPixelOffset + 8`
+/// (`pokeemerald/src/field_camera.c:74-85`). [`PLAYER_VIEW_ROW`] already
+/// folds in the ordinary field's resting 32px pan
+/// (`InstallCameraPanAheadCallback`, `field_camera.c:448-453`) by cropping
+/// two rows short of upstream's `MAP_OFFSET`; this constant is the
+/// remaining half-metatile (module docs' "camera model" section has the
+/// full derivation).
+const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
+
+/// One extra metatile of southward tilemap capacity, present even at rest
+/// (unlike [`PAD`], which only appears mid-step): [`RESTING_SCROLL_Y`]'s
+/// baseline scroll needs one more real row past the ordinary crop so it
+/// samples map content instead of wrapping into an unrelated row (see
+/// [`viewport::build_tilemaps`]).
+const RESTING_SCROLL_ROW: i32 = 1;
 
 /// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
 /// fixed choice: the protagonist's *bedroom* (the 2F room the early playable
