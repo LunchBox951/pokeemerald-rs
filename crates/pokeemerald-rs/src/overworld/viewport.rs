@@ -243,8 +243,8 @@ type MetatileQuad = [ScreenEntry; 4];
 
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
 ///
-/// `Normal` uses the transparent fallback instead of upstream's unspecified
-/// BG3 value, as documented by the parent module.
+/// `Normal` uses the transparent fallback instead of upstream's fixed BG3
+/// entry `0x3014`, as documented by the parent module.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
