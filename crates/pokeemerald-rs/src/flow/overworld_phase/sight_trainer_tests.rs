@@ -1447,3 +1447,39 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
         .expect("the approach must still be running")
         .trainer()
 }
+
+/// Pins [`OverworldPhase::sight_trainer_id`]'s abort clause: a lead with no
+/// PP left in its only move fails the turn with no outcome at all, which
+/// must still clear the id.
+#[test]
+fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    // Drain slot 0 through the same accessor the turn engine spends PP
+    // with, rather than reaching into the struct.
+    let mut drained = lead(277, 5, 1);
+    let starting_pp = drained.moves()[0].pp;
+    assert!(starting_pp > 0, "a freshly built lead starts with PP");
+    for _ in 0..starting_pp {
+        drained
+            .deduct_pp(0)
+            .expect("draining a slot that still has PP");
+    }
+    seed_battle(&mut phase, TRAINER_RHETT, drained, 1);
+    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+
+    phase.step(ButtonState::new());
+    assert!(
+        phase.sight_trainer_battle.is_none(),
+        "setup: the failed turn must have emptied the battle slot"
+    );
+    assert_eq!(
+        phase.sight_trainer_battle_outcome(),
+        None,
+        "setup: an abort reports no outcome at all"
+    );
+    assert_eq!(
+        phase.sight_trainer_id, None,
+        "the trainer id must be cleared on an abort too -- an id retained past the point the \
+         battle slot emptied is stale the instant a fresh cone entry reuses the field"
+    );
+}
