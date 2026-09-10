@@ -1,37 +1,26 @@
-//! Effort values on [`BattlePokemon`].
+//! Effort-value storage and gains for [`BattlePokemon`].
 //!
-//! Construction starts at `0` EVs, [`BattlePokemon::with_evs`] adopts a
-//! loaded record's bytes, and [`BattlePokemon::gain_evs`] is `MonGainEVs`
-//! (`pokeemerald/src/pokemon.c:5988`-`:6064`), run on every KO before
-//! [`BattlePokemon::apply_experience`], upstream's order. Pokérus and Macho
-//! Brace doubling do not apply: this crate carries neither.
+//! A new battler starts with zero EVs. Loaded EVs retain their raw save values,
+//! while battle rewards cap new gains. Reward EVs are applied before
+//! [`BattlePokemon::apply_experience`], so a level-up snapshot includes the
+//! latest gain. This battle model has no Pokérus or held-item EV multipliers.
 //!
-//! [`BattlePokemon::stats`] never becomes EV-aware: the save side's
-//! load-clamp rebase depends on that fixed `0`-EV floor. Only the save-time
-//! recompute is EV-aware, fed [`BattlePokemon::evs_at_last_level_up`].
+//! Live [`BattlePokemon::stats`] remain zero-EV calculations. Save-time stat
+//! recomputation instead reads [`BattlePokemon::evs_at_last_level_up`].
 
 use assets::EvYield;
 
 use super::BattlePokemon;
 
-/// Largest effort value a single stat can hold (`MAX_PER_STAT_EVS`,
-/// `pokeemerald/include/constants/pokemon.h:203`) — [`BattlePokemon::gain_evs`]'s
-/// per-stat cap.
+/// Maximum value [`BattlePokemon::gain_evs`] can store for one stat.
 pub const MAX_PER_STAT_EVS: u16 = 255;
 
-/// Largest sum of all six effort values (`MAX_TOTAL_EVS`,
-/// `pokeemerald/include/constants/pokemon.h:204`) — [`BattlePokemon::gain_evs`]'s
-/// whole-mon cap, applied before [`MAX_PER_STAT_EVS`] (upstream's own order).
+/// Maximum total that [`BattlePokemon::gain_evs`] can grant across all stats.
 pub const MAX_TOTAL_EVS: u16 = 510;
 
-/// Stored effort values for all six stats.
+/// Raw stored effort values for all six stats.
 ///
-/// Each byte accepts `0..=255`. The stat formula divides by four, so values
-/// `252..=255` all provide the maximum contribution. [`BattlePokemon::evs`]'s
-/// type, and also the standalone value [`super::compute_stats_with_evs`]
-/// takes for the one caller outside this crate with real EVs and no battler
-/// of its own to attach them to — `party::merge_into_save_pokemon`,
-/// recomputing a levelled-up stat block from a save record's own bytes.
+/// Saved values are not required to satisfy [`MAX_TOTAL_EVS`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Evs {
     /// HP effort value.
@@ -49,8 +38,8 @@ pub struct Evs {
 }
 
 impl Evs {
-    /// Values in HP, Attack, Defense, Speed, Special Attack, Special Defense
-    /// order — the same order [`super::Ivs::as_array`] uses.
+    /// Returns values in HP, Attack, Defense, Speed, Special Attack, and
+    /// Special Defense order.
     #[must_use]
     pub const fn as_array(self) -> [u8; 6] {
         [
@@ -62,58 +51,53 @@ impl Evs {
             self.sp_defense,
         ]
     }
+
+    const fn from_array([hp, attack, defense, speed, sp_attack, sp_defense]: [u8; 6]) -> Self {
+        Self {
+            hp,
+            attack,
+            defense,
+            speed,
+            sp_attack,
+            sp_defense,
+        }
+    }
 }
 
 impl BattlePokemon {
-    /// This mon's live effort values. See [`BattlePokemon::gain_evs`] and
-    /// [`BattlePokemon::with_evs`] for how they change, and this module's
-    /// own docs for what carrying them does, and does not, change about
-    /// [`BattlePokemon::stats`].
+    /// Returns the current effort values.
     #[must_use]
     pub const fn evs(&self) -> Evs {
         self.evs
     }
 
-    /// [`BattlePokemon::evs_at_last_level_up`]'s own field doc: the EV set
-    /// the most recent level-up's `CalculateMonStats` would have cached,
-    /// distinct from this mon's current, possibly KO-incremented-since,
-    /// [`BattlePokemon::evs`]. `pokeemerald-rs::party`'s save-time recompute
-    /// is this method's one caller.
+    /// Returns the EV snapshot captured at the most recent level-up.
+    ///
+    /// Save-time stat recomputation uses this snapshot rather than the current
+    /// [`BattlePokemon::evs`].
     #[must_use]
     pub const fn evs_at_last_level_up(&self) -> Evs {
         self.evs_at_last_level_up
     }
 
-    /// Adopts a saved record's own EV bytes at the boundary that restores
-    /// this Pokémon — the same position as
-    /// [`BattlePokemon::with_original_trainer_id`], immediately after
-    /// [`BattlePokemon::new`], which otherwise leaves every mon at `0` EVs.
-    /// Deliberately does **not** recompute [`BattlePokemon::stats`] (this
-    /// module's own docs). Every byte is accepted: upstream's EV fields are
-    /// unconstrained `u8`s -- [`MAX_PER_STAT_EVS`] and [`MAX_TOTAL_EVS`]
-    /// bound only what [`BattlePokemon::gain_evs`] writes, not what a
-    /// hand-edited save can already hold.
+    /// Adopts raw loaded EVs without validating caps or recomputing live stats.
     #[must_use]
     pub const fn with_evs(mut self, evs: Evs) -> Self {
         self.evs = evs;
         self
     }
 
-    /// `MonGainEVs` (`pokeemerald/src/pokemon.c:5988`-`:6064`): adds
-    /// `ev_yield`'s per-stat award to [`BattlePokemon::evs`], capping the
-    /// running total at [`MAX_TOTAL_EVS`] before each stat's own value at
-    /// [`MAX_PER_STAT_EVS`] — upstream's own order (`:6051`-`:6059`). The
-    /// loop stops entirely, not just for the current stat, once the running
-    /// total reaches [`MAX_TOTAL_EVS`], exactly as upstream's `break`
-    /// (`:6005`-`:6006`) does, so a later stat gets no award once the mon is
-    /// full.
+    /// Adds a defeated species' base EV yield to the current values.
     ///
-    /// Called from [`crate::battle::Battle::settle_win_reward`] on every KO,
-    /// **before** [`BattlePokemon::apply_experience`] — upstream's own order
-    /// (`Cmd_getexp` case 2's `MonGainEVs` call precedes case 3's stat
-    /// recompute).
+    /// Each stat's gain is limited by the remaining total capacity and then by
+    /// that stat's capacity. Stats are processed in [`Evs::as_array`] order,
+    /// and processing stops when the total reaches [`MAX_TOTAL_EVS`]. This does
+    /// not recompute live stats.
+    ///
+    /// Battle reward settlement calls this before
+    /// [`BattlePokemon::apply_experience`].
     pub fn gain_evs(&mut self, ev_yield: EvYield) {
-        let yields = [
+        let stat_yields = [
             ev_yield.hp,
             ev_yield.attack,
             ev_yield.defense,
@@ -121,29 +105,24 @@ impl BattlePokemon {
             ev_yield.sp_attack,
             ev_yield.sp_defense,
         ];
-        let mut evs = self.evs.as_array();
-        let mut total: u16 = evs.iter().copied().map(u16::from).sum();
-        for (ev, stat_yield) in evs.iter_mut().zip(yields) {
-            if total >= MAX_TOTAL_EVS {
+        let mut stat_evs = self.evs.as_array();
+        let mut total_evs: u16 = stat_evs.iter().copied().map(u16::from).sum();
+
+        for (stat_ev, stat_yield) in stat_evs.iter_mut().zip(stat_yields) {
+            if total_evs >= MAX_TOTAL_EVS {
                 break;
             }
-            let mut increase = u16::from(stat_yield);
-            if total + increase > MAX_TOTAL_EVS {
-                increase = MAX_TOTAL_EVS - total;
-            }
-            if u16::from(*ev) + increase > MAX_PER_STAT_EVS {
-                increase = MAX_PER_STAT_EVS - u16::from(*ev);
-            }
-            *ev = u8::try_from(u16::from(*ev) + increase).unwrap_or(u8::MAX);
-            total += increase;
+
+            let remaining_total_capacity = MAX_TOTAL_EVS - total_evs;
+            let remaining_stat_capacity = MAX_PER_STAT_EVS - u16::from(*stat_ev);
+            let increase = u16::from(stat_yield)
+                .min(remaining_total_capacity)
+                .min(remaining_stat_capacity);
+
+            *stat_ev = u8::try_from(u16::from(*stat_ev) + increase).unwrap_or(u8::MAX);
+            total_evs += increase;
         }
-        self.evs = Evs {
-            hp: evs[0],
-            attack: evs[1],
-            defense: evs[2],
-            speed: evs[3],
-            sp_attack: evs[4],
-            sp_defense: evs[5],
-        };
+
+        self.evs = Evs::from_array(stat_evs);
     }
 }

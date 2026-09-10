@@ -185,7 +185,7 @@ impl SightApproach {
     /// `waitmessage`/`waitbuttonpress` half, as though the box had already
     /// been opened.
     ///
-    /// [`NpcDialog::open_default`] reads the extracted asset pack, which CI
+    /// [`NpcDialog::open`] reads the extracted asset pack, which CI
     /// does not have, so the *handshake* (the battle waits for the box, the
     /// box waits for the player) would otherwise only ever be exercised on a
     /// developer machine. A test that puts the box there itself -- with
@@ -481,7 +481,7 @@ impl OverworldPhase {
     /// `dotrainerbattle`.
     ///
     /// The wait is the script's, not the text's (issue #410):
-    /// [`NpcDialog::open_default`] applies
+    /// [`NpcDialog::open`] applies
     /// [`NpcDialog::with_waitbuttonpress`], so the finished box holds its
     /// last printed frame -- every glyph still on screen -- until a confirm
     /// edge lands, and closes on that very tick. `start_sight_trainer_battle`
@@ -495,7 +495,7 @@ impl OverworldPhase {
     /// upstream and always reports "no second trainer" here (module docs).
     ///
     /// A message box that cannot be built at all -- a missing or corrupt
-    /// font/frame asset, [`NpcDialog::open_default`]'s own error -- starts
+    /// font/frame asset, [`NpcDialog::open`]'s own error -- starts
     /// the battle anyway rather than stranding the player in a cutscene with
     /// no way out: the fight is the part with consequences, and it is
     /// already built and paid for.
@@ -507,7 +507,7 @@ impl OverworldPhase {
             let tokens = authored_message::parse_message(intro).unwrap_or_else(|err| {
                 panic!("sight trainer intro speech {intro:?} is malformed: {err}")
             });
-            match NpcDialog::open_default(tokens) {
+            match NpcDialog::open(self.pack_source, tokens) {
                 Ok(dialog) => {
                     self.dialog = Some(dialog);
                     if let Some(approach) = &mut self.sight_approach {

@@ -60,7 +60,7 @@ use crate::flow::tests::held;
 
 use super::sight_trainer_approach::SightApproach;
 use super::test_support::pressed;
-use super::OverworldPhase;
+use super::{OverworldPhase, SyntheticStartMenu};
 
 /// `MAP_ROUTE103`, used throughout this file.
 const ROUTE_103: MapId = MapId("MAP_ROUTE103");
@@ -198,6 +198,47 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
     );
 }
 
+/// Issue #436 regression, driven through [`OverworldPhase::step`] itself:
+/// the cone scan claims its trigger frame ahead of a fresh `START`, and
+/// falls through to it when the cone refuses. Upstream reaches
+/// `pressedStartButton` (`field_control_avatar.c:182`) only past
+/// `CheckForTrainersWantingBattle` (`:150`).
+///
+/// Both halves stand in Rhett's own real cone with a menu that really
+/// builds; only the claiming half's party is the borrowed
+/// [`STAND_IN_TRAINER`] (module docs).
+#[test]
+fn start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame() {
+    let (rx, ry) = RHETT_TILE;
+
+    let mut claimed = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    claimed.party_lead = Some(overwhelming_lead());
+    claimed.synthetic_start_menu = SyntheticStartMenu::Builds;
+    claimed.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
+    claimed.step(pressed(Buttons::START));
+    assert!(
+        claimed.sight_approach.is_some(),
+        "setup: the cone must really have claimed this frame"
+    );
+    assert!(
+        claimed.start_menu().is_none(),
+        "the scan owns its trigger frame -- START must not open the menu"
+    );
+
+    let mut refused = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    refused.party_lead = Some(overwhelming_lead());
+    refused.synthetic_start_menu = SyntheticStartMenu::Builds;
+    refused.step(pressed(Buttons::START));
+    assert!(
+        refused.sight_approach.is_none(),
+        "setup: Rhett's own real party must still refuse to construct"
+    );
+    assert!(
+        refused.start_menu().is_some(),
+        "a refused scan must fall through to pressedStartButton"
+    );
+}
+
 /// How many consecutive frames the multi-frame RNG tests stand still for --
 /// one wall-clock second at this port's 60 Hz frame budget, i.e. long past
 /// the point where a per-frame leak would be obvious.
@@ -332,8 +373,9 @@ fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
 /// `TRAINER_MAY_ROUTE_103_TREECKO` (`crates/battle/src/battle/trainer.rs`'s
 /// own `route103_rival::tests` fixtures use the identical id/RNG-seed/lead
 /// combination below for an identical "must lose" scenario) -- the
-/// proven-constructible stand-in party [`seed_battle`] builds a real battle
-/// around (module docs, "The stand-in party").
+/// proven-constructible stand-in party [`seed_battle`] and
+/// `OverworldPhase::synthetic_sight_trainer` each borrow (module docs, "The
+/// stand-in party").
 const STAND_IN_TRAINER: u16 = 532;
 
 /// Seed `phase` with an in-progress sight-trainer battle directly, bypassing
@@ -1146,7 +1188,7 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
 /// docs) so the handshake is pinned without an extracted pack -- built the
 /// exact way the production path builds it since issue #410: no trailing
 /// `{P}`, and the script's `waitbuttonpress` opted into on the dialog
-/// (`NpcDialog::open_default` applies it for the real
+/// (`NpcDialog::open` applies it for the real
 /// `advance_intro_message`).
 #[test]
 fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
@@ -1260,7 +1302,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// test only reaches `advance_intro_message`'s real `!opened` arm one frame
 /// after [`SightApproach::skip_to_open_intro_message`]'s synthetic
 /// shortcut plants the box directly -- so
-/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open_default`
+/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open`
 /// call, its `opened` latch, and the `Err` fallback path
 /// (`sight_trainer_approach.rs`'s own module doc comment) had never been
 /// exercised by any test. This one drives the real icon, the real

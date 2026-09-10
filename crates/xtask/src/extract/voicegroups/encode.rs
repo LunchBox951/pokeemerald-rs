@@ -1,4 +1,6 @@
 //! Encodes resolved voicegroups into the asset pack's voicegroup schema.
+//! The pack container around this payload is shared (`pack_format` owns
+//! it); only the payload encoding is duplicated here.
 //!
 //! `xtask` and `assets` intentionally remain decoupled, so schema changes must
 //! be mirrored between their encoders. Each id is UTF-8 prefixed by its `u16`

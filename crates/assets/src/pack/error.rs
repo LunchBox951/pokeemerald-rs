@@ -87,8 +87,9 @@ impl fmt::Display for PackError {
         match self {
             Self::NotFound(path) => write!(
                 f,
-                "asset pack not found at `{}`: run `./init.sh` to fetch the upstream reference, \
-                 then `cargo xtask extract` to build the pack",
+                "asset pack not found at `{}`: players run `pokeemerald-rs --import-rom <path \
+                 to your Pokemon Emerald (US) ROM>`; developers run `./init.sh` then \
+                 `cargo xtask extract`",
                 path.display()
             ),
             Self::ReadFailed(path, msg) => {
@@ -98,9 +99,10 @@ impl fmt::Display for PackError {
             Self::UnsupportedVersion(version) => {
                 write!(
                     f,
-                    "asset pack: unsupported format version `{version}` -- \
-                     the pack predates this build's format; regenerate it \
-                     with `cargo xtask extract`"
+                    "asset pack: unsupported format version `{version}`: the pack predates \
+                     this build's format; players rebuild it with `pokeemerald-rs \
+                     --import-rom <path to your Pokemon Emerald (US) ROM>`, developers with \
+                     `cargo xtask extract`"
                 )
             }
             Self::Truncated => write!(f, "asset pack: truncated or corrupt"),

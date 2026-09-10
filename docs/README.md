@@ -10,6 +10,7 @@ Read only the branch required by the task. Each target below owns the named cont
 | Roadmap work, milestones, or issue placement | The relevant acceptance criterion, then [`../CONTRIBUTING.md`](../CONTRIBUTING.md) and the live GitHub milestone | Dynamic scope, sequencing, and completion work |
 | Contributor setup or dependency policy | [`../README.md`](../README.md), then [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Human setup path, contribution contract, and approval requirements |
 | Upstream provenance or ledger coverage | `python3 scripts/ledger.py -h`, focused subcommand help, then the read-only upstream reference | Artifact ownership, status, destination, and canonical behaviour |
+| Player ROM import or the asset-pack format | [`../README.md#playing`](../README.md#playing), then `crates/rom-import/src/lib.rs` and `crates/pack-format/src/lib.rs` `//!` docs | Supported revision, hash-keyed import contract, and the pack layout both backends write |
 | Deterministic frame captures | [`snapshots.md`](snapshots.md) | Snapshot format, generation, and comparison contract |
 | Scripted headless application runs | [`scenarios.md`](scenarios.md) | Scenario definition and execution contract |
 | Versions, releases, or channel promotion | [`../RELEASE.md`](../RELEASE.md), [`../CHANGELOG.md`](../CHANGELOG.md), and live GitHub state | Release policy, curated history, and current evidence |

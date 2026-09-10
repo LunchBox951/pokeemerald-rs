@@ -304,7 +304,10 @@ mod synthetic_pack {
 
     fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         const PACK_MAGIC: &[u8; 8] = b"PKMRPACK";
-        const PACK_VERSION: u32 = 6;
+        // Bound to the live format version rather than a hardcoded number so
+        // this synthetic pack keeps matching what `pack_format`'s reader
+        // accepts as the format evolves.
+        const PACK_VERSION: u32 = assets::pack::FORMAT_VERSION;
         const RAW_ENTRY_KIND: u8 = 2;
 
         // AssetPack binary-searches directory entries by ID.

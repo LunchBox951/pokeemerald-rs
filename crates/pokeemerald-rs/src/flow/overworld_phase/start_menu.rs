@@ -10,8 +10,8 @@
 //!
 //! # When `START` opens a menu
 //!
-//! Upstream's answer is three separate mechanisms, and
-//! [`OverworldPhase::start_menu_may_open`] adds a fourth of this port's own:
+//! Upstream's answer is five separate mechanisms, and
+//! [`OverworldPhase::start_menu_may_open`] checks all five:
 //!
 //! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
@@ -38,12 +38,19 @@
 //!   [`OverworldPhase::in_battle`] because it names a different upstream
 //!   mechanism (a lock, not a callback swap) for a state that is not a
 //!   battle at all.
+//! * `pressedStartButton` follows every branch this port models:
+//!   `CheckForTrainersWantingBattle` through dive-down all `return TRUE`
+//!   ahead of it (`src/field_control_avatar.c:147-181`), and only the
+//!   unmodelled registered-`SELECT` item follows it (`:188-189`). The
+//!   `field_input_claimed` parameter of [`OverworldPhase::start_menu_may_open`]
+//!   carries that precedence; [`super::step::OverworldPhase::step`] resolves
+//!   those branches and so is the caller that can answer it.
 //!
-//! Those four gates are why this port needs no "do not save here" policy
+//! Those five gates are why this port needs no "do not save here" policy
 //! of its own: the states a save must never be taken in -- mid-battle,
-//! mid-step (#230's review), and now mid-approach -- are exactly the
-//! states upstream's own start menu cannot open in. The guard moved from
-//! the writer to the door.
+//! mid-step (#230's review), mid-approach, and now mid-higher-priority-event
+//! -- are exactly the states upstream's own start menu cannot open in. The
+//! guard moved from the writer to the door.
 //!
 //! # What the write is bracketed by
 //!
@@ -57,6 +64,7 @@
 //! [`OverworldPhase::from_saved`].
 
 use engine::save::SavedObjectEvent;
+use engine::text::render::TextSpeed;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
 
@@ -71,12 +79,11 @@ impl OverworldPhase {
     /// the frame -- `true` freezes movement for it exactly as
     /// [`OverworldPhase::advance_dialog_frame`] does for a message box.
     ///
-    /// Called by [`crate::flow::advance_scene`] *before*
-    /// [`OverworldPhase::step`], because upstream's own
-    /// `ProcessPlayerFieldInput` runs before `PlayerStep` and returns TRUE
-    /// out of the `pressedStartButton` branch (`src/overworld.c:1444-1455`,
-    /// `src/field_control_avatar.c:182-187`), so the frame a menu opens on
-    /// is not also a frame the player moves on.
+    /// Runs only while a menu is already open, as `ShowStartMenu`'s
+    /// `LockPlayerFieldControls` (`src/start_menu.c:581-591`) stops
+    /// `DoCB1_Overworld` polling `ProcessPlayerFieldInput` and `PlayerStep`
+    /// (`src/overworld.c:1444-1455`); a fresh press is [`OverworldPhase::step`]'s
+    /// to weigh, so `field_input_claimed` is always `false` here.
     ///
     /// `save_slot` is this session's save medium, threaded in from
     /// [`crate::app::App`] rather than reached for `(oop-boundaries)`; it
@@ -90,20 +97,10 @@ impl OverworldPhase {
         // `&mut OverworldPhase` (it needs the live save blocks to write,
         // and the player name to print) without borrowing the phase twice.
         let open_menu = self.start_menu.take();
-        if open_menu.is_none() {
-            if !self.start_menu_may_open(buttons) {
-                return false;
-            }
-            match start_menu::open_default(self.start_menu_cursor) {
-                Ok(opened) => self.start_menu = Some(opened),
-                // The same "log-or-ignore is fine" policy [`crate::flow`]
-                // applies to every other pack load: a missing pack must not
-                // wedge the field, it must leave `START` inert.
-                Err(err) => {
-                    eprintln!("{err} -- the start menu did not open");
-                    return false;
-                }
-            }
+        if open_menu.is_none()
+            && (!self.start_menu_may_open(buttons, false) || !self.try_open_start_menu())
+        {
+            return false;
         }
 
         // Background tile animation keeps running while a menu owns the
@@ -138,20 +135,77 @@ impl OverworldPhase {
     }
 
     /// Whether a fresh `START` press may open the menu this frame (module
-    /// docs' three upstream gates).
+    /// docs' five upstream gates).
+    ///
+    /// `field_input_claimed` is the caller's own answer to upstream's
+    /// remaining branches -- `TryArrowWarp`, `TryStartInteractionScript`,
+    /// `TryDoorWarp`, and `TrySetupDiveDownScript`
+    /// (`src/field_control_avatar.c:164-181`) -- each of which returns
+    /// `TRUE`, and so reaches `pressedStartButton` at `:182` before this
+    /// port ever could, on a frame it fires. Only
+    /// [`super::step::OverworldPhase::step`] is in a position to answer that
+    /// honestly (module docs); every other caller passes `false`.
     ///
     /// A pure decision rather than an inline condition, for the same
     /// reason [`crate::flow`]'s own `menu_action` is one: inside
     /// [`Self::advance_start_menu_frame`] a refused press and a failed
     /// pack load are indistinguishable to a pack-less test, and these
-    /// three gates are the whole of this slice's "a save must not be
+    /// five gates are the whole of this slice's "a save must not be
     /// takeable here" story.
-    pub(in crate::flow) fn start_menu_may_open(&self, buttons: ButtonState) -> bool {
+    pub(in crate::flow) fn start_menu_may_open(
+        &self,
+        buttons: ButtonState,
+        field_input_claimed: bool,
+    ) -> bool {
         buttons.is_newly_pressed(Buttons::START)
+            && !field_input_claimed
             && !self.in_battle()
             && !self.mid_step()
             && self.dialog.is_none()
             && self.sight_approach.is_none()
+    }
+
+    /// Build a fresh `START` press's menu without committing it, so the
+    /// caller can weigh a real pack load against this frame's movement:
+    /// upstream never runs `PlayerStep` on a frame `ProcessPlayerFieldInput`
+    /// claims (`src/field_control_avatar.c:147-187`), and a load that fails
+    /// claims nothing. Callers check [`Self::start_menu_may_open`] first; a
+    /// discarded result costs nothing.
+    ///
+    /// `Self::synthetic_start_menu` lets a test choose a menu that really
+    /// builds, or a build that really fails, with no local pack involved.
+    pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
+        #[cfg(test)]
+        match self.synthetic_start_menu {
+            super::SyntheticStartMenu::Builds => {
+                return Some(crate::start_menu::synthetic_start_menu_at(
+                    self.start_menu_cursor,
+                ));
+            }
+            super::SyntheticStartMenu::Fails => return None,
+            super::SyntheticStartMenu::RealPack => {}
+        }
+        match start_menu::open(self.pack_source, self.start_menu_cursor) {
+            Ok(opened) => Some(opened),
+            // The same "log-or-ignore is fine" policy [`crate::flow`]
+            // applies to every other pack load: a missing pack must not
+            // wedge the field, it must leave `START` inert.
+            Err(err) => {
+                eprintln!("{err} -- the start menu did not open");
+                None
+            }
+        }
+    }
+
+    /// Build and commit a fresh press's menu; returns whether it opened.
+    pub(super) fn try_open_start_menu(&mut self) -> bool {
+        match self.build_start_menu() {
+            Some(menu) => {
+                self.start_menu = Some(menu);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Whether the start menu currently owns the phase -- read by
@@ -163,7 +217,7 @@ impl OverworldPhase {
     /// Test-only: open a pack-free
     /// [`crate::start_menu::synthetic_start_menu_at`] directly, so the save
     /// round-trip can drive the *real* [`StartMenu::tick`] state machine in
-    /// CI, where no asset pack exists for [`crate::start_menu::open_default`]
+    /// CI, where no asset pack exists for [`crate::start_menu::open`]
     /// to read (`crate::flow::save_continue_tests`' own module docs on the
     /// two substitutions those tests make). Nothing but the chrome differs:
     /// the menu, its items, its flow, and the write it performs are the
@@ -391,6 +445,17 @@ impl SaveTarget for PhaseSaveTarget<'_> {
         // into a longer message, so its `End` must not truncate that.
         tokens.retain(|token| *token != Token::End);
         tokens
+    }
+
+    /// `gSaveBlock2Ptr->optionsTextSpeed`, clamped the same way
+    /// `GetPlayerTextSpeedDelay` clamps it for delay selection
+    /// (`src/menu.c:481-487`, mirrored by [`TextSpeed::from_raw_option`]).
+    /// Upstream's own write-back -- repairing an out-of-range value to
+    /// `OPTIONS_TEXT_SPEED_MID` in `gSaveBlock2Ptr` itself (`:483-484`) --
+    /// is not mirrored: this only selects the speed to print at, and never
+    /// mutates the phase's stored `save2`.
+    fn player_text_speed(&self) -> TextSpeed {
+        TextSpeed::from_raw_option(self.phase.save2.options_text_speed)
     }
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`), preceded by

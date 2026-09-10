@@ -90,7 +90,7 @@ struct SightTrainer {
     /// trailing `{P}` to stand in for the script's own
     /// `waitmessage`/`waitbuttonpress` pair; that wait is now
     /// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`], applied
-    /// by the [`crate::overworld::dialog::NpcDialog::open_default`] the intro
+    /// by the [`crate::overworld::dialog::NpcDialog::open`] the intro
     /// stage opens through, so the text itself carries none of it --
     /// `npc_scripts`' own `MSGBOX_DEFAULT` line took the same migration.
     intro: &'static str,
@@ -468,6 +468,10 @@ impl OverworldPhase {
             return SightTrainerOutcome::Refused;
         };
         let trainer_id = entry.id;
+        // `Self::synthetic_sight_trainer`: a constructible party in place of
+        // one no listed sight trainer has yet.
+        #[cfg(test)]
+        let trainer_id = self.synthetic_sight_trainer.unwrap_or(trainer_id);
 
         self.sight_trainer_battle_outcome = None;
         let first_report = self.sight_trainer_log.should_log(trainer_id);
