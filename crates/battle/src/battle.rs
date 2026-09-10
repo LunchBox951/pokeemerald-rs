@@ -1,237 +1,15 @@
-//! The battle state machine (S-6, issue #159): a headless single wild
-//! battle from action selection through victory/defeat/run.
+//! Single-battle turn resolution.
 //!
-//! [`Battle`] is an owned type mirroring the upstream battle-main loop's
-//! *observable* order (`pokeemerald/src/battle_main.c`, `battle_util.c`),
-//! not its task/callback structure `(oop-boundaries)`: intro → action
-//! selection → turn resolution → faint/exp → victory/defeat/run. "Intro" has
-//! no state-affecting logic to model (it is pure presentation upstream —
-//! sending out both mons, printing the encounter message), so [`Battle::new`]
-//! starts directly in the action-selection-ready state; a caller drives the
-//! loop by calling [`Battle::take_turn`] once per turn until
-//! [`Battle::outcome`] is `Some`.
+//! [`Battle`] supports ordinary wild encounters, the scripted first battle,
+//! and trainer parties. An accepted turn chooses the opponent's action before
+//! resolving a run or move order, skips queued actions once either battler
+//! faints, settles the knockouts that leaves, applies end-of-turn residuals
+//! in that same turn order, and settles whatever those residuals felled.
 //!
-//! Turn resolution, per upstream's `SetActionsAndBattlersTurnOrder`
-//! (`battle_main.c:4756`) plus each battler's `HandleAction_*`:
-//!
-//! 1. A chosen [`PlayerAction::Run`] always resolves **first**, before any
-//!    move (`turnOrderId = 5` early-out — the non-link branch's
-//!    `gChosenActionByBattler[0] == B_ACTION_RUN` test at
-//!    `battle_main.c:4784`-`:4794`, then the reordering block guarded by
-//!    `if (turnOrderId == 5)` at `:4797`; `:4776` is the link-battle variant,
-//!    which this slice does not model): success ends the battle immediately;
-//!    failure burns the player's turn and the opponent still acts. In a
-//!    `first_battle` ([`Battle::new`]), Run is rejected outright before this
-//!    step is ever reached — see "`first_battle`" below.
-//! 2. Otherwise, [`crate::turn_order::resolve_order`] decides who moves
-//!    first from each side's chosen action's priority and effective Speed —
-//!    the wild opponent fleeing (`first_battle` only) counts as priority `0`,
-//!    the same as `MOVE_NONE` (`battle_main.c:4700`-`:4707`).
-//! 3. The first mover's action resolves: a move via [`crate::hit::resolve_hit`]
-//!    (faints the target → battle ends immediately, win → exp gain via
-//!    [`crate::exp::wild_faint_exp`], loss otherwise, and the second mover
-//!    never acts — a fainted battler is skipped when its turn in
-//!    `gBattlerByTurnOrder` comes up), or the wild opponent fleeing
-//!    (`first_battle` only) → the battle ends immediately in
-//!    [`BattleOutcome::WildFled`], no RNG draw, and the second mover never
-//!    acts either (`HandleAction_Run`'s non-player branch,
-//!    `battle_util.c:524`-`:537`).
-//! 4. Otherwise the second mover's action resolves the same way.
-//!
-//! End-of-turn residual effects: [`Battle::residual_effects`] ticks poison
-//! damage and Charge for every battler still standing, in the same
-//! [`Order`] this turn's move dispatch already resolved. Weather and every
-//! other `DoBattlerEndTurnEffects` case remain unmodelled.
-//!
-//! # `first_battle`
-//!
-//! [`Battle::new`]'s `first_battle` parameter is `gBattleTypeFlags &
-//! BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro Zigzagoon fight (issue
-//! #187). Upstream's differences from an ordinary wild encounter, and where
-//! each lives in this crate:
-//!
-//! - **Crit suppression.** [`crate::hit::resolve_hit`]'s crit roll (and its
-//!   RNG draw) is skipped outright — see [`crate::critical`]'s module docs
-//!   and [`crate::hit`]'s draw-count table.
-//! - **Running forbidden.** [`PlayerAction::Run`] is rejected with
-//!   [`BattleError::RunForbidden`] before any draw, rather than reaching
-//!   [`crate::escape::try_run_from_battle`] at all — see `crate::escape`'s
-//!   module docs.
-//! - **Opponent selection.** The wild opponent's action comes from
-//!   `opponent_ai::choose_enemy_action_first_battle` (upstream's AI branch,
-//!   narrowed to the one AI script this battle type ever runs) instead of
-//!   `opponent_ai::choose_enemy_move`'s rejection loop — see that function's docs,
-//!   and "What the wild opponent chooses" below.
-//!
-//! Every other rule (turn order, damage, fainting, exp, PP) is unchanged.
-//!
-//! Only those *rules* live here: this module never itself passes
-//! `first_battle = true`. The scripted intro's own construction
-//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`)
-//! and headless driver are issue #221's
-//! `crates/pokeemerald-rs/src/flow/first_battle.rs`; the "don't leave Prof.
-//! Birch!" narrative gate that upstream reaches it through is a separate,
-//! still-unmodelled overworld hookup (that module's own docs). Every
-//! ordinary Route 101 grass encounter still constructs with
-//! `first_battle = false` (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
-//!
-//! # `BATTLE_TYPE_TRAINER`
-//!
-//! [`Battle::new_trainer`] (issue #237) is the trainer-battle constructor.
-//! It is a separate entry point rather than another `bool` on
-//! [`Battle::new`] because a trainer battle carries *state* a wild one does
-//! not: the opponent's bench, the trainer's `aiFlags`, and the prize purse,
-//! all owned by [`trainer::TrainerContext`]. Of the five deltas, the two that
-//! change this module's control flow are:
-//!
-//! - **Running is refused**, with [`BattleError::NoRunningFromTrainer`] —
-//!   a *different* upstream gate from `first_battle`'s
-//!   ([`BattleError::RunForbidden`]), tested earlier and printing a
-//!   different message, hence a distinct error.
-//! - **A fainted opponent does not end the battle.** The faint still emits
-//!   [`BattleEvent::Fainted`] and [`BattleEvent::ExpGained`] where it
-//!   always did, but the replacement is settled at the *end* of the turn,
-//!   in [`Battle::handle_fainted_mons`] — upstream's `HandleFaintedMonActions`
-//!   position (`battle_main.c:3968`), so a mon that fainted earlier
-//!   in the turn is simply skipped when its slot in `gBattlerByTurnOrder`
-//!   comes up rather than being replaced mid-turn. With the bench empty,
-//!   that is where [`BattleEvent::MoneyGained`] and the win land.
-//!
-//! Everything else — turn order, damage, accuracy, PP, the escape formula's
-//! absence — is the same code the wild paths run.
-//!
-//! # RNG draw order
-//!
-//! The battle RNG is a single shared stream upstream, so *where* draws happen
-//! is itself observable behaviour `(behavioral-fidelity)`. This type
-//! reproduces the whole per-battle sequence:
-//!
-//! **[`Battle::new`] — one draw, plus a conditional tie draw.**
-//! `BattleStartClearSetData` (`battle_main.c:3034`) ends with
-//! `gRandomTurnNumber = Random()` at `:3140`; it runs once per battle, from
-//! `BeginBattleIntro` (`:3019`). Then `TryDoEventsBeforeFirstTurn` seeds the
-//! initial turn order (`:3852`..`:3861`) with `GetWhoStrikesFirst(..,
-//! ignoreChosenMoves=TRUE)` — both moves read as `MOVE_NONE`, so priorities
-//! tie and an *exact* effective-Speed tie draws one `Random()` (`:4745`..
-//! `:4750`) between the `:3140` and `:3923` draws. `new` reproduces that by
-//! running [`crate::turn_order::resolve_order`] once with equal priorities
-//! and discarding the ordering.
-//!
-//! **[`Battle::take_turn`] — one draw at the top, every turn.** The same
-//! assignment appears twice more, once on each path into
-//! `HandleTurnActionSelectionState`: `TryDoEventsBeforeFirstTurn`
-//! (`:3841`) draws at `:3923` immediately before handing off to action
-//! selection for turn 1, and `BattleTurnPassed` (`:3956`) draws at `:4013`
-//! doing the same for every later turn. Exactly one of the two runs per
-//! modelled turn, so one draw at the top of `take_turn` covers both. Turn 1
-//! is therefore preceded by **two** draws overall (`:3140` then `:3923`) and
-//! each later turn by one (`:4013`) — which is what `new` + `take_turn`
-//! produces. (`gRandomTurnNumber` itself is only ever *read* by Quick Claw,
-//! `:4653`/`:4687`, which this slice does not model; the value is kept in
-//! [`Battle::random_turn_number`] so the draw is not merely discarded.)
-//!
-//! **Action selection.** The player's action is human input and draws
-//! nothing. The wild opponent's does draw — see [`Battle::take_turn`] — and
-//! its draws land *after* the turn-number draw and *before* turn-order
-//! resolution, because upstream runs `HandleTurnActionSelectionState` for
-//! every battler to completion before `SetActionsAndBattlersTurnOrder`. That
-//! holds even on a turn the player runs: the opponent has already picked a
-//! move by the time the run resolves, so a successful escape still consumes
-//! those draws.
-//!
-//! **Turn order** draws 0 or 1 (a genuine Speed tie only —
-//! [`crate::turn_order`]), and **each executed move** draws 1 (an ordinary
-//! move that missed), 4 (an ordinary move that hit — accuracy, crit, damage
-//! roll, plus `Cmd_seteffectwithchance`'s discarded effect-chance roll on
-//! every landed hit), or 3 — a move whose effect bypasses the accuracy roll
-//! entirely (`EFFECT_ALWAYS_HIT` / `EFFECT_VITAL_THROW`,
-//! `AccuracyCalcHelper`'s early return at
-//! `battle_script_commands.c:1089`-`:1094`) skips the accuracy draw and can
-//! never miss, so a Swift turn where both sides act costs 10 draws rather
-//! than 11. Two more shapes come from the `BattleScript_EffectStatUp`/
-//! `StatDown` family (issue #199, widened by issue #322):
-//! `BattleScript_EffectStatDown` (Growl, Leer, Sand Attack, Screech, …)
-//! always draws exactly **1** — the accuracy roll, hit, missed, blocked, or
-//! floored alike — because it has no crit/damage-roll/effect-chance step at
-//! all, while `BattleScript_EffectStatUp` (Growth, Harden, Swords Dance, …)
-//! has no `accuracycheck` command either and so draws **0**, always; see
-//! [`crate::stat_change`]'s module docs for the full derivation. See
-//! [`crate::hit`]'s draw table for the ordinary-hit shapes (including
-//! Struggle's no-effect-chance-draw exception).
-//!
-//! **Each mover's action** also opens with [`Battle::act`]'s full-paralysis
-//! check, ahead of every draw above: a healthy mover draws **0**, a
-//! paralysed one draws **1**. `BattleScript_EffectParalyze` (Thunder Wave,
-//! Stun Spore, Glare) itself draws **0** or **1**; see [`Battle::act`] and
-//! [`crate::paralyze`]'s module docs for why.
-//!
-//! # What the wild opponent chooses
-//!
-//! `OpponentHandleChooseMove` (`src/battle_controller_opponent.c:1551`) takes
-//! upstream's trainer-AI branch only for `BATTLE_TYPE_TRAINER |
-//! BATTLE_TYPE_FIRST_BATTLE | SAFARI | ROAMER` (`:1563`); a plain (not
-//! `first_battle`) wild mon falls into the `else` at `:1594`-`:1601`, a
-//! plain rejection loop:
-//!
-//! ```text
-//! do {
-//!     chosenMoveId = MOD(Random(), MAX_MON_MOVES);
-//!     move = moveInfo->moves[chosenMoveId];
-//! } while (move == MOVE_NONE);
-//! ```
-//!
-//! That is what `opponent_ai::choose_enemy_move` models, draw for draw. Note the
-//! loop ignores PP entirely — a wild mon can and does pick a move it has no
-//! PP for, and upstream then **fails the move at `Cmd_attackcanceler`**, the
-//! first command of the hit script (`battle_script_commands.c:934`-`:939`):
-//! control jumps to `BattleScript_NoPPForMove` ("But no PP left!") and on to
-//! `MoveEnd` — no RNG draw, no damage, no deduction (unless the picked
-//! battler's own full-paralysis draw cancels it first — see [`Battle::act`]).
-//! `Cmd_ppreduce`'s own 0-PP guard (`:1230`) never sees this case; it exists
-//! for the paths that legitimately reach `ppreduce` without PP (Struggle,
-//! multi-turn continuations), none of which are modelled here.
-//! [`BattleEvent::FailedNoPp`] reproduces the abort. Struggle enters only
-//! when **every** slot is unusable: `AreAllMovesUnusable`
-//! (`battle_util.c:1125`-`:1140`) then forces it at selection time — before
-//! the rejection loop, drawing nothing.
-//!
-//! `first_battle` takes the AI branch at `:1563` instead —
-//! `opponent_ai::choose_enemy_action_first_battle`, **not** upstream's general
-//! trainer AI (`I-5`, still explicitly out of scope): the branch is narrowed
-//! to exactly the one AI script `AI_SCRIPT_FIRST_BATTLE` ever runs, because
-//! that is the *only* `aiFlags` bit this specific `gBattleTypeFlags` value
-//! ever sets. See that method's docs, and
-//! [`crate::critical`] and `crate::escape` for the other two `first_battle`
-//! deltas.
-//!
-//! A trainer opponent's choice is neither of those: it is the real
-//! `AI_SCRIPT_*` scoring pipeline in this module's private [`trainer_ai`]
-//! submodule, narrowed to the four scripts and three move effects the Route
-//! 103 rival battle exercises and screened at [`Battle::new_trainer`] so
-//! nothing outside that narrowing can reach it. See that module's own docs
-//! for the per-script draw accounting.
-//!
-//! Only **single** battles are modelled (one player mon on the field, one
-//! opponent, no doubles). The player never switches: a player-mon faint ends
-//! the battle in defeat immediately rather than prompting a party switch,
-//! for a trainer battle exactly as for a wild one — the player's party is
-//! still one mon as far as this crate is concerned. The *opponent* does
-//! switch, but only when forced (see `BATTLE_TYPE_TRAINER` above).
-//!
-//! Past ~1,450 lines, one file carrying turn flow, the event vocabulary, and
-//! move execution stopped being one concept (issue #320,
-//! `oop-boundaries`) — every move-effect slice had to edit all three at
-//! once. This file now keeps turn flow alone: [`Battle`]'s state and
-//! construction, per-turn validation, action selection, turn order, the
-//! two movers' actions, the end-of-turn fainted-mon pass, and the terminal
-//! outcome. The other two concerns are focused sibling modules, each
-//! contributing to [`Battle`] rather than owning a competing type —
-//! [`events`] (what a turn *reports*: [`BattleEvent`] and [`TurnError`]) and
-//! [`execute`] ("this battler used this move — what happens?":
-//! [`Battle::execute_move`]'s dispatch and the per-script pipelines behind
-//! it). [`ensure_executable`] stays here because it is a *pre-turn* screen:
-//! [`Battle::new`] and `validate_player_move` both run it before the first
-//! draw, so no pipeline in [`execute`] ever sees a move it rejects.
+//! Construction consumes a turn-number draw and a conditional Speed-tie draw.
+//! Each accepted turn consumes another turn-number draw before opponent action
+//! selection. These positions preserve the shared upstream RNG sequence
+//! (`src/battle_main.c:3140`, `:3852`-`:3861`, `:3923`, `:4013`).
 
 use assets::trainers::TrainerId;
 use assets::MoveId;
@@ -267,103 +45,48 @@ use opponent_ai::{
 use trainer::TrainerContext;
 use trainer_ai::choose_trainer_action;
 
-/// The action the player commits to for a turn.
+const NO_MOVE_PRIORITY: i8 = 0;
+
+/// A player's selected turn action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlayerAction {
-    /// Use the move in slot `0..MAX_MON_MOVES`
-    /// (see [`crate::pokemon::MAX_MON_MOVES`]).
+    /// Use the move at this index in the active Pokémon's moveset.
     UseMove(usize),
     /// Attempt to run away.
     Run,
 }
 
-/// How a finished battle ended.
+/// The result of a finished battle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BattleOutcome {
-    /// The wild Pokémon fainted.
+    /// The opposing side has no usable Pokémon.
     PlayerWon,
-    /// The player's Pokémon fainted.
+    /// The player's active Pokémon fainted.
     PlayerLost,
     /// The player successfully ran away.
     PlayerRan,
-    /// The wild Pokémon fled — only reachable in a `first_battle`
-    /// ([`Battle::new`]): upstream's `AI_FirstBattle` AI script
-    /// (`data/battle_ai_scripts.s:3233`-`:3239`) chooses to flee once the
-    /// player's mon drops to `<=20%` HP, and a non-player battler's
-    /// `B_ACTION_RUN` unconditionally ends the battle
-    /// (`HandleAction_Run`'s `B_OUTCOME_MON_FLED`,
-    /// `src/battle_util.c:524`-`:537`) rather than rolling
-    /// [`crate::escape::try_run_from_battle`] the way the player's own Run
-    /// does.
+    /// The opponent fled from the scripted first battle.
     WildFled,
 }
 
-/// Whether the turn engine can execute `move_id` at all — the composed
-/// allow-list of every pipeline [`Battle::execute_move`] can dispatch to,
-/// checked **before any state or RNG is touched**, exactly like each of the
-/// checks it composes.
-///
-/// This is the crate's fail-closed boundary `(behavioral-fidelity)`. A move
-/// whose `EFFECT_*` runs a battle script no pipeline reproduces computes
-/// different damage *and* spends a different number of `Random()` calls, and
-/// a shared stream that has advanced the wrong number of steps is wrong for
-/// the rest of the battle — so an unsupported move is refused here, ahead of
-/// the first draw and ahead of any HP/PP/stage change, rather than being
-/// approximated. [`Battle::new`] runs it over the whole opposing side at
-/// construction and `validate_player_move` runs it over the player's *chosen*
-/// slot each turn, so no pipeline behind [`Battle::execute_move`] ever sees a
-/// move it would have to guess at.
-///
-/// Eight pipelines are accepted, tried in this order:
-///
-/// | pipeline | script |
-/// |---|---|
-/// | [`crate::hit`] | `BattleScript_EffectHit` |
-/// | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` family |
-/// | [`crate::drain`] | `BattleScript_EffectAbsorb` |
-/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` |
-/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` |
-/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` |
-/// | [`crate::defense_curl`] | `_EffectDefenseCurl` |
-/// | [`crate::paralyze`] | `BattleScript_EffectParalyze` |
-///
-/// The order is a *diagnostics* choice, not a semantic one: the eight
-/// allow-lists are disjoint (each is a set of `EFFECT_*` ids, and no id
-/// appears in two), so at most one can accept. The hit pipeline goes first
-/// so its richer errors — [`BattleError::NonDamagingMove`],
-/// [`BattleError::UnsupportedMoveType`], [`BattleError::UnknownMove`] — are
-/// what a genuinely unsupported move reports, rather than a bare
-/// [`BattleError::UnsupportedMoveEffect`] from whichever list happened to be
-/// consulted last. (Every real stat-lowering and flag-only move is `0` base
-/// power, so the hit pipeline rejects those with
-/// [`BattleError::NonDamagingMove`] before reaching its own effect check —
-/// which is why the fallthrough is on *any* hit-pipeline rejection and not
-/// just on `UnsupportedMoveEffect`.)
-///
-/// # Errors
-///
-/// [`BattleError::UnsupportedMoveEffect`] for [`STRUGGLE`], rejected here —
-/// not left to the pipelines — because the hit pipeline *would* accept it
-/// while this slice never applies its `EFFECT_RECOIL` half; keeping the
-/// guard inside the composed check means no future call site can admit
-/// Struggle by forgetting a follow-up test. Otherwise the hit-pipeline's
-/// error if `move_id` is a genuinely unsupported move, or `Ok(())` if any
-/// pipeline accepts it.
+/// Validates that one complete move-effect pipeline can execute a move.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+    // The ordinary-hit pipeline cannot apply Struggle's recoil half.
     if move_id == STRUGGLE {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
     }
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
-            let accepted = stat_change::ensure_resolvable(dex, move_id).is_ok()
+            let accepted_by_specialized_pipeline = stat_change::ensure_resolvable(dex, move_id)
+                .is_ok()
                 || drain::ensure_resolvable(dex, move_id).is_ok()
                 || fixed_damage::ensure_resolvable(dex, move_id).is_ok()
                 || multi_hit::ensure_resolvable(dex, move_id).is_ok()
                 || flag_move::ensure_resolvable(dex, move_id).is_ok()
                 || defense_curl::ensure_resolvable(dex, move_id).is_ok()
                 || paralyze::ensure_resolvable(dex, move_id).is_ok();
-            if accepted {
+            if accepted_by_specialized_pipeline {
                 Ok(())
             } else {
                 Err(hit_error)
@@ -372,119 +95,65 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
     }
 }
 
-/// An owned single wild battle `(oop-boundaries)`: one player
-/// [`BattlePokemon`] against one wild [`BattlePokemon`], driven one turn at
-/// a time via [`Battle::take_turn`].
+/// An owned single battle driven one turn at a time.
 #[derive(Debug, Clone)]
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
     enemy: BattlePokemon,
-    run_tries: u8,
+    run_attempts: u8,
     random_turn_number: u16,
     outcome: Option<BattleOutcome>,
-    /// Which `gBattleTypeFlags` shape this battle is — the one place every
-    /// battle-type delta is gated, matching upstream having a single flag
-    /// word (see [`BattleKind`]).
     kind: BattleKind,
-    /// `gBattleResults.battleTurnCounter` (`battle_main.c:3995`-`:3998`):
-    /// `0` throughout turn 1, then incremented by `BattleTurnPassed` at the
-    /// top of every later turn, saturating at `0xFF`. Only
-    /// `trainer_ai`'s `AI_SetupFirstTurn` reads it.
     turn_counter: u8,
-    /// Whether any turn has begun. Turn 1 reaches action selection through
-    /// `TryDoEventsBeforeFirstTurn`, which does **not** touch
-    /// [`Battle::turn_counter`]; every later turn goes through
-    /// `BattleTurnPassed`, which does. Kept as its own flag rather than
-    /// re-derived from a turn count, which an aborted turn would skew.
-    turn_started: bool,
-    /// The turn order a residual pass still owes, parked because the
-    /// knockout that preceded it opened a level-up prompt.
-    ///
-    /// Upstream reaches `DoBattlerEndTurnEffects` only once the whole
-    /// `BattleScript_GiveExp` script — the yes/no box included — has
-    /// finished inside `HandleFaintedMonActions`
-    /// (`battle_util.c:1912`-`:1923`, run from `HandleAction_TryFinish`,
-    /// `:638`-`:644`, before `BattleTurnPassed` is ever scheduled). This
-    /// crate answers that box through [`Battle::resolve_move_learn`]
-    /// instead of blocking, so the pass it interrupted waits here and runs
-    /// when the last prompt is answered.
+    turn_has_started: bool,
     pending_residual_order: Option<Order>,
 }
 
-/// Which `gBattleTypeFlags` shape a [`Battle`] was constructed for.
-///
-/// Upstream has one flag word and tests bits of it at each decision point;
-/// this crate models the three *combinations* it can actually be handed as
-/// an enum, so a decision point that forgets a case fails to compile rather
-/// than silently taking the wild path `(oop-boundaries)`. The trainer arm
-/// carries a whole [`TrainerContext`] because a trainer battle needs state
-/// the other two do not: a bench, a prize purse, and `aiFlags`.
 #[derive(Debug, Clone)]
 enum BattleKind {
-    /// `gBattleTypeFlags == 0`: an ordinary wild encounter
-    /// (`DoStandardWildBattle`, `src/battle_setup.c:408`).
     Wild,
-    /// `BATTLE_TYPE_FIRST_BATTLE` (issue #187): the scripted Route 101 intro
-    /// Zigzagoon fight — crit suppression
-    /// ([`crate::critical`]/[`crate::hit`]), running forbidden
-    /// ([`crate::escape`]'s module docs), and the wild opponent's AI-branch
-    /// move choice (`opponent_ai::choose_enemy_action_first_battle`).
     FirstBattle,
-    /// `BATTLE_TYPE_TRAINER` (issue #237): a party opponent with AI flags and a
-    /// prize purse, owned by [`trainer::TrainerContext`].
     Trainer(TrainerContext),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ValidatedPlayerAction {
+    UseMove { slot: usize, move_id: MoveId },
+    Run,
+}
+
+fn initialize_turn_rng_state(
+    player: &BattlePokemon,
+    enemy: &BattlePokemon,
+    rng: &mut impl BattleRng,
+) -> u16 {
+    let random_turn_number = rng.next_u16();
+    // Upstream seeds a MOVE_NONE order here. A Speed tie consumes RNG even
+    // though the order is discarded (`src/battle_main.c:3852`-`:3861`).
+    let _initial_order = resolve_order(
+        NO_MOVE_PRIORITY,
+        NO_MOVE_PRIORITY,
+        player.speed_for_turn_order(),
+        enemy.speed_for_turn_order(),
+        rng,
+    );
+    random_turn_number
+}
+
 impl Battle {
-    /// Start a new battle. See the module docs for why there is no separate
-    /// "intro" step to advance through.
+    /// Starts an ordinary wild battle or the scripted first battle.
     ///
-    /// The *wild* moveset is checked here, before any state exists and
-    /// before the first draw: every move the wild mon knows must be one of
-    /// the pipelines [`ensure_executable`] composes (its own docs list all
-    /// seven) accepts — because its rejection loop picks mid-turn and can
-    /// land on any slot — discovering an unsupported move *then* would mean
-    /// a turn that has already consumed shared-RNG draws failing with no
-    /// events to show for it. The player's moveset is deliberately *not*
-    /// screened; each chosen slot is validated per turn
-    /// instead, before any draw, so [`Battle::take_turn`] can still reject a
-    /// player pick with [`BattleError::NonDamagingMove`] /
-    /// [`BattleError::UnsupportedMoveEffect`].
-    ///
-    /// Draws from `rng` exactly once (after validation): the
-    /// `BattleStartClearSetData` `gRandomTurnNumber = Random()`
-    /// (`battle_main.c:3140`), plus the conditional Speed-tie draw described
-    /// in the module docs' "RNG draw order". A rejected configuration draws
-    /// nothing at all.
+    /// The enemy's full moveset is validated before RNG is consumed because
+    /// its action selection can choose any slot. Player moves are validated
+    /// when selected. The scripted first battle suppresses critical hits,
+    /// forbids running, and uses its dedicated opponent AI.
     ///
     /// # Errors
     ///
-    /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
-    /// (see that variant's docs), or whatever [`ensure_executable`] reports
-    /// for the first unsupported move in the **wild mon's** moveset — a
-    /// `0`-power status move outside every modelled `0`-power family (the
-    /// `BattleScript_EffectStatUp`/`EffectStatDown` family and
-    /// `BattleScript_EffectParalyze`, [`BattleError::NonDamagingMove`]) or a
-    /// move whose effect runs some other battle script
-    /// ([`BattleError::UnsupportedMoveEffect`]),
-    /// which includes [`crate::damage::STRUGGLE`]: the turn engine never
-    /// applies its `EFFECT_RECOIL` half. Only the wild moveset is screened
-    /// here, because its rejection loop can land on any slot; the *player's*
-    /// moveset may hold unsupported moves — each chosen slot is checked per
-    /// turn instead, before any draw ([`Battle::take_turn`]).
-    ///
-    /// `first_battle` is `gBattleTypeFlags & BATTLE_TYPE_FIRST_BATTLE` —
-    /// the Route 101 intro Zigzagoon fight. Pass `true` and every turn this
-    /// battle plays picks up its three upstream deltas from an ordinary wild
-    /// encounter: [`crate::hit::resolve_hit`]'s crit roll is suppressed
-    /// (never crits, one fewer RNG draw per hit — [`crate::critical`]'s
-    /// module docs), [`PlayerAction::Run`] is rejected outright with
-    /// [`BattleError::RunForbidden`] before any draw
-    /// ([`crate::escape`]'s module docs), and the wild opponent picks its
-    /// action via `opponent_ai::choose_enemy_action_first_battle` instead of the
-    /// ordinary rejection loop. Every other rule — turn order, damage,
-    /// fainting, exp — is unchanged.
+    /// Returns [`BattleError::FaintedBattler`] for a fainted participant or
+    /// the first move or ability validation error from the enemy's moveset.
+    /// Errors leave the RNG untouched.
     pub fn new(
         dex: Dex,
         player: BattlePokemon,
@@ -492,53 +161,27 @@ impl Battle {
         first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
-        for (is_player, mon) in [(true, &player), (false, &enemy)] {
-            // Upstream never starts a wild battle around a fainted
-            // participant (the sent-out mon has HP; a wild mon spawns at
-            // full HP), and `take_turn` checks HP only *after* a hit lands
-            // — so a 0-HP battler (reachable via `apply_damage`) is
-            // rejected here, before any draw.
-            if mon.is_fainted() {
-                return Err(BattleError::FaintedBattler(is_player));
-            }
+        if player.is_fainted() {
+            return Err(BattleError::FaintedBattler(true));
         }
-        // Only the *wild* side needs every slot executable up front: its
-        // rejection loop ignores everything but `MOVE_NONE`, so any slot
-        // can come up mid-turn, after draws. The player's moveset may still
-        // carry a move no pipeline covers (a status move outside every
-        // modelled family, say); the player's *chosen* slot is
-        // validated per turn instead, before any draw
-        // (`validate_player_move`), so an unsupported pick is rejected
-        // without disturbing the stream and another action can be chosen.
+        if enemy.is_fainted() {
+            return Err(BattleError::FaintedBattler(false));
+        }
         for slot in enemy.moves() {
             ensure_executable(&dex, slot.move_id)?;
-            // A spent slot aborts at `Cmd_attackcanceler`'s no-PP jump
-            // (`battle_script_commands.c:934`-`:939`), never reaching
-            // `seteffectprimary`, so it carries no ability interaction.
+            // Zero-PP moves stop before applying effects
+            // (`src/battle_script_commands.c:934`-`:939`).
             if slot.pp > 0 {
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
                 secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }
         }
-        let random_turn_number = rng.next_u16();
-        // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
-        // `ignoreChosenMoves = TRUE` (`battle_main.c:3852`..`:3861`): both
-        // priorities read as 0, so an exact Speed tie costs one draw here,
-        // before turn 1's own turn-number draw (module docs, "RNG draw
-        // order"). The ordering itself is discarded — turn 1 re-resolves it
-        // with the real chosen moves.
-        let _ = resolve_order(
-            0,
-            0,
-            player.speed_for_turn_order(),
-            enemy.speed_for_turn_order(),
-            rng,
-        );
+        let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
             player,
             enemy,
-            run_tries: 0,
+            run_attempts: 0,
             random_turn_number,
             outcome: None,
             kind: if first_battle {
@@ -547,65 +190,22 @@ impl Battle {
                 BattleKind::Wild
             },
             turn_counter: 0,
-            turn_started: false,
+            turn_has_started: false,
             pending_residual_order: None,
         })
     }
 
-    /// Start a `BATTLE_TYPE_TRAINER` battle (S-6, issue #237): the player's
-    /// lead against `party`, the opponent's whole `CreateNPCTrainerParty`
-    /// party in `gTrainers[].party` order, with `trainer`'s own metadata
-    /// driving the AI and the prize money.
+    /// Starts a trainer battle with `party[0]` active and the rest on the bench.
     ///
-    /// `party[0]` is the mon the trainer leads with (upstream sends out
-    /// party slot `0`; there is no lead-choice step for an NPC) and
-    /// everything after it becomes the bench
-    /// [`trainer::TrainerContext::send_out_next`] draws from.
-    ///
-    /// # Two screens, both before the first draw
-    ///
-    /// Every party mon's moveset is checked twice over, because both checks
-    /// can only be honoured *ahead* of a battle rather than during one:
-    ///
-    /// * [`ensure_executable`] — can the turn engine run this move at all?
-    ///   The same screen [`Battle::new`] applies to the wild side, applied
-    ///   here to the whole party rather than just the lead: a benched mon
-    ///   arrives mid-battle, long after the shared stream has moved on, so
-    ///   discovering an unexecutable move then would mean a battle that
-    ///   cannot be finished.
-    /// * [`trainer_ai::ensure_scoreable`] — can the trainer AI *score* it?
-    ///   Strictly narrower, and separate on purpose: several unscored
-    ///   effects take `AI_CheckViability` branches that draw
-    ///   ([`trainer_ai`]'s module docs), so admitting one would leave the
-    ///   move executable but the RNG stream wrong.
-    ///
-    /// [`trainer_ai::ensure_supported_flags`] screens `gTrainers[].aiFlags`
-    /// the same way, for the same reason.
-    ///
-    /// Both screens run here too late to help a *caller* that has already
-    /// paid `CreateNPCTrainerParty`'s per-mon OT-id draws to build `party`:
-    /// [`trainer::ensure_trainer_party_startable`] is the same set composed
-    /// into a pre-flight that runs before the first draw, and is what an
-    /// integration layer should ask (issue #264 review). These stay as the
-    /// last line of defence for a party built some other way.
-    ///
-    /// Draws from `rng` exactly as [`Battle::new`] does once validation
-    /// passes — `BattleStartClearSetData`'s `gRandomTurnNumber`
-    /// (`battle_main.c:3140`) plus `TryDoEventsBeforeFirstTurn`'s
-    /// conditional Speed-tie draw — and nothing more: `CreateNPCTrainerParty`
-    /// runs *before* `BeginBattleIntro` upstream
-    /// (`CB2_InitBattleInternal`, `:697` then `:713`), so the party's own
-    /// construction draws belong to the caller that built it
-    /// (`crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs`), exactly as the
-    /// scripted first battle's do.
+    /// Trainer metadata, AI flags, active battlers, and every party move are
+    /// validated before this constructor consumes RNG.
     ///
     /// # Errors
     ///
-    /// [`BattleError::EmptyTrainerParty`] for an empty `party`,
-    /// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
-    /// [`BattleError::FaintedBattler`] if the player's lead or the
-    /// trainer's is already at `0` HP, and whatever the three screens above
-    /// report. None of them draws.
+    /// Returns [`BattleError::EmptyTrainerParty`] for an empty party,
+    /// [`BattleError::UnknownTrainer`] for an unknown trainer,
+    /// [`BattleError::FaintedBattler`] for a fainted active battler, or the
+    /// first AI, move, or ability validation error. Errors leave the RNG untouched.
     pub fn new_trainer(
         dex: Dex,
         player: BattlePokemon,
@@ -635,33 +235,22 @@ impl Battle {
         }
 
         let enemy = party.remove(0);
-        let random_turn_number = rng.next_u16();
-        // The same `TryDoEventsBeforeFirstTurn` seeding draw `Battle::new`
-        // takes; see its docs and the module docs' "RNG draw order".
-        let _ = resolve_order(
-            0,
-            0,
-            player.speed_for_turn_order(),
-            enemy.speed_for_turn_order(),
-            rng,
-        );
+        let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
             player,
             enemy,
-            run_tries: 0,
+            run_attempts: 0,
             random_turn_number,
             outcome: None,
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
-            turn_started: false,
+            turn_has_started: false,
             pending_residual_order: None,
         })
     }
 
-    /// The `BATTLE_TYPE_TRAINER` context — the opponent trainer's id, class,
-    /// `aiFlags`, remaining bench, and prize money — or `None` for a wild
-    /// battle of either kind.
+    /// Returns the opponent's trainer context, if this is a trainer battle.
     #[must_use]
     pub const fn trainer(&self) -> Option<&TrainerContext> {
         match &self.kind {
@@ -670,109 +259,62 @@ impl Battle {
         }
     }
 
-    /// Whether this is the scripted `BATTLE_TYPE_FIRST_BATTLE`
-    /// ([`Battle::new`]'s `first_battle`).
     const fn is_first_battle(&self) -> bool {
         matches!(self.kind, BattleKind::FirstBattle)
     }
 
-    /// `gBattleResults.battleTurnCounter` — `0` for the whole of turn 1.
+    /// Returns the zero-based battle-turn counter used by trainer AI.
     #[must_use]
     pub const fn turn_counter(&self) -> u8 {
         self.turn_counter
     }
 
-    /// The player's mon.
+    /// Returns the player's active Pokémon.
     #[must_use]
     pub const fn player(&self) -> &BattlePokemon {
         &self.player
     }
 
-    /// The wild mon.
+    /// Returns the opponent's active Pokémon.
     #[must_use]
     pub const fn enemy(&self) -> &BattlePokemon {
         &self.enemy
     }
 
-    /// The battle's outcome, or `None` while it is still ongoing.
+    /// Returns the outcome once the battle has ended.
     #[must_use]
     pub const fn outcome(&self) -> Option<BattleOutcome> {
         self.outcome
     }
 
-    /// The level-up move waiting on a player decision, if any (issue #304)
-    /// — the state upstream's `BattleScript_AskToLearnMove` yes/no box
-    /// (`src/battle_script_commands.c:5368`-`:5370`) holds the engine in.
+    /// Returns the level-up move waiting for a learn or decline decision.
     ///
-    /// This is the decision surface every experience-awarding flow reaches:
-    /// the award has already been applied and
-    /// [`BattleEvent::MoveLearnPrompt`] already reported, and the battle
-    /// refuses another turn ([`BattleError::MoveLearnPending`]) until
-    /// [`Battle::resolve_move_learn`] answers. A driver with no way to ask
-    /// the player must still *answer* — declining is an answer; ignoring the
-    /// prompt is not, and would strand the battle.
-    ///
-    /// A prompt holds the battle's own end (and a trainer's replacement
-    /// send-out) *back*: the last faint of a battle awards experience, so
-    /// the question can be raised by the knockout that would decide the
-    /// outcome — and upstream finishes the whole level-up script, the ask
-    /// included, before anything after the faint runs
-    /// (`HandleFaintedMonActions` executes `BattleScript_GiveExp` to
-    /// completion in its case 1 before case 4's
-    /// `BattleScript_HandleFaintedMon` checks the outcome or sends out a
-    /// replacement, `battle_util.c:1894`-`:1951`). While this is `Some`,
-    /// [`Battle::outcome`] therefore stays `None` and no
-    /// [`BattleEvent::TrainerSentOut`]/[`BattleEvent::MoneyGained`]/
-    /// [`BattleEvent::Ended`] has been emitted; answering the last prompt
-    /// releases them ([`Battle::resolve_move_learn`]).
+    /// A pending decision blocks another turn and defers the battle outcome or
+    /// trainer replacement until [`Battle::resolve_move_learn`] resolves it.
     #[must_use]
     pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
         self.player.pending_move_learn()
     }
 
-    /// Answer [`Battle::pending_move_learn`] and resume the level-up walk it
-    /// paused — `Cmd_yesnoboxlearnmove`'s outcome
-    /// (`src/battle_script_commands.c:5455`-`:5497`) and the
-    /// `BattleScript_TryLearnMoveLoop` jump back into
-    /// `Cmd_handlelearnnewmove`.
+    /// Resolves the pending move-learning decision and returns its ordered events.
     ///
-    /// Returns the events the answer produced, in order:
-    /// [`BattleEvent::MoveReplaced`] or [`BattleEvent::MoveLearnDeclined`]
-    /// for the answer itself, then [`BattleEvent::MoveLearnPrompt`] again if
-    /// the resumed level-up stopped at another entry it cannot fit —
-    /// or, once no prompt remains, whatever the knockout's aftermath was
-    /// holding for the answer ([`Battle::pending_move_learn`]'s docs): a
-    /// trainer's [`BattleEvent::TrainerSentOut`], or
-    /// [`BattleEvent::MoneyGained`] (trainer only) and
-    /// [`BattleEvent::Ended`] — and then, for a battle that did not end
-    /// there, the turn's own parked residual pass
-    /// ([`BattleEvent::HurtByPoison`]). Draws no RNG — upstream's box and
-    /// summary screen draw none either.
-    ///
-    /// Only the *party* mon is updated, which is all this crate has: the
-    /// `gBattleMons` half of upstream's write
-    /// (`SetBattleMonMoveSlot`/`RemoveBattleMonPPBonus`, `:5484`-`:5492`)
-    /// exists because upstream keeps a separate in-battle copy, while
-    /// [`Battle::player`] *is* the mon.
+    /// Another prompt may follow immediately. Resolving the final prompt also
+    /// releases any deferred replacement, prize money, and battle outcome, and
+    /// then runs the residual pass the prompt held back.
     ///
     /// # Errors
     ///
-    /// [`BattleError::NoMoveLearnPending`] if nothing is waiting on an
-    /// answer, [`BattleError::InvalidMoveSlot`] if
-    /// [`crate::pokemon::MoveLearnDecision::Replace`] names a slot the mon
-    /// does not have, or [`BattleError::HmMoveCantBeForgotten`] if the
-    /// named slot holds an HM move — upstream's `IsHMMove2` refusal
-    /// (`src/battle_script_commands.c:5468`-`:5472`), which prints
-    /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopens the move list. None of
-    /// the three mutates anything, and the prompt stays outstanding so a
-    /// corrected answer can still be given. [`BattleError::UnknownSpecies`]
-    /// if the resumed residual pass fells a battler whose reward has to
-    /// look its species up.
+    /// Returns [`BattleError::NoMoveLearnPending`] when no decision is waiting,
+    /// [`BattleError::InvalidMoveSlot`] for an invalid replacement slot, or
+    /// [`BattleError::HmMoveCantBeForgotten`] for an HM replacement; all three
+    /// preserve the pending decision. Returns [`BattleError::UnknownSpecies`]
+    /// when the released residual pass fells a battler whose reward needs a
+    /// dex lookup.
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
     ) -> Result<Vec<BattleEvent>, BattleError> {
-        let asked = self
+        let asked_move = self
             .player
             .pending_move_learn()
             .ok_or(BattleError::NoMoveLearnPending)?
@@ -786,26 +328,19 @@ impl Battle {
                 forgotten: learned.forgotten,
                 slot: learned.slot,
             }),
-            None => events.push(BattleEvent::MoveLearnDeclined { move_id: asked }),
+            None => events.push(BattleEvent::MoveLearnDeclined {
+                move_id: asked_move,
+            }),
         }
         if let Some(next) = resolution.next {
             events.push(BattleEvent::MoveLearnPrompt {
                 move_id: next.move_id(),
             });
         } else {
-            // The last prompt of the level-up: release the knockout's
-            // aftermath the pause was holding back — the trainer's
-            // replacement send-out, or the terminal outcome (money
-            // included) — exactly where upstream's completed level-up
-            // script hands back to `HandleFaintedMonActions`' case 4
-            // (`battle_util.c:1894`-`:1951`; see `settle_fainted_enemy`).
             self.settle_fainted_enemy(&mut events);
-            // ...and then whatever the interrupted turn still owed.
-            // Upstream's box lives *inside* `HandleFaintedMonActions`, so
-            // `BattleTurnPassed`'s residual pass has not run yet -- unless
-            // the knockout this level-up came from ended the battle, which
-            // `residual_effects` refuses on its own (`Battle::pass_turn`'s
-            // docs).
+            // Upstream's yes/no box sits inside HandleFaintedMonActions, which
+            // every path to the residual pass runs through first
+            // (`src/battle_util.c:1912`-`:1923`).
             if let Some(order) = self.pending_residual_order.take() {
                 self.residual_effects(order, &mut events);
                 self.handle_fainted_mons(&mut events)?;
@@ -814,38 +349,18 @@ impl Battle {
         Ok(events)
     }
 
-    /// The number of previous run attempts this battle (upstream
-    /// `gBattleStruct->runTries`).
+    /// Returns the number of run attempts made in this battle.
     #[must_use]
     pub const fn run_tries(&self) -> u8 {
-        self.run_tries
+        self.run_attempts
     }
 
-    /// The most recent `gRandomTurnNumber` draw (`battle_main.c:208`),
-    /// refreshed by [`Battle::new`] and again at the top of every
-    /// [`Battle::take_turn`].
-    ///
-    /// Nothing in this slice consumes it — upstream's only readers are the
-    /// two Quick Claw checks in `GetWhoStrikesFirst` (`:4653`, `:4687`), and
-    /// held items are out of scope. It is exposed so the draw is observable
-    /// rather than silently discarded, and so a later held-item slice has the
-    /// value already in the right place.
+    /// Returns the turn-number draw captured during construction or turn start.
     #[must_use]
     pub const fn random_turn_number(&self) -> u16 {
         self.random_turn_number
     }
 
-    /// The player's chosen move id, rejecting a slot no upstream selection
-    /// menu could have offered (out of range, out of PP, or the `MOVE_NONE`
-    /// placeholder that `CheckMoveLimitations` rules out —
-    /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`) — and, this
-    /// slice's own boundary, a known move no pipeline can execute
-    /// ([`ensure_executable`], which also rejects Struggle for its
-    /// unmodelled recoil).
-    /// Construction deliberately allows such moves in unselected player
-    /// slots; the check moves here, still ahead of the turn's first draw,
-    /// so a rejected pick leaves the battle and the shared stream untouched
-    /// and the caller can choose another action.
     fn validate_player_move(&self, index: usize) -> Result<MoveId, BattleError> {
         let slot = self
             .player
@@ -864,61 +379,18 @@ impl Battle {
         Ok(slot.move_id)
     }
 
-    /// Resolve one turn: `player_action` for the player, and the wild
-    /// opponent's own rejection-loop move pick. Returns the ordered events
-    /// that occurred.
+    /// Resolves one player action and returns the resulting events in order.
     ///
-    /// Draws from `rng` in the module docs' documented order: one
-    /// turn-number draw, then the opponent's action selection, then turn
-    /// order, then each executed move.
+    /// The action is validated before RNG is consumed. The opponent then chooses
+    /// an action before a run attempt or move ordering resolves.
     ///
     /// # Errors
     ///
-    /// **Before the turn begins, drawing nothing.**
-    /// [`BattleError::BattleAlreadyOver`] if [`Battle::outcome`] is already
-    /// `Some`, or [`BattleError::InvalidMoveSlot`] /
-    /// [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`] /
-    /// the [`crate::hit::ensure_resolvable`] errors (and Struggle's
-    /// [`BattleError::UnsupportedMoveEffect`]) for an unusable or
-    /// unsupported [`PlayerAction::UseMove`] slot. The player's action is the
-    /// only one that can be validated this early — it is the caller's input,
-    /// available before any draw — so these leave the battle *and* the shared
-    /// RNG stream exactly as they were, with no events.
-    ///
-    /// **Partway through the turn, after draws.** Only
-    /// [`BattleError::UnsupportedMoveEffect`] (carrying
-    /// [`crate::damage::STRUGGLE`]), and only when the wild opponent has
-    /// **every** slot spent *and* actually has to act. Upstream's
-    /// `AreAllMovesUnusable` (`battle_util.c:1125`) forces Struggle at
-    /// selection time — drawing nothing — and this slice cannot execute
-    /// Struggle, so the turn stops at the moment the forced fallback would
-    /// move. How much has committed by then depends on what came first:
-    ///
-    /// - the player **ran successfully** → the battle simply ends
-    ///   ([`BattleOutcome::PlayerRan`]), no error: upstream's forced Struggle
-    ///   never executes either;
-    /// - the player acted first and **won** → the battle ends
-    ///   ([`BattleOutcome::PlayerWon`]), no error, same reasoning;
-    /// - the fallback is the **first mover** → the turn stops before either
-    ///   mon acts, so [`TurnError::events`] is empty even though the
-    ///   turn-number draw (and a Speed-tie draw, if any) has happened and
-    ///   [`Battle::random_turn_number`] has advanced (no PP or HP changed);
-    /// - the fallback is the **second mover** after a surviving first move
-    ///   (or after a failed run) → everything already committed comes back
-    ///   in [`TurnError::events`] rather than being discarded.
-    ///
-    /// A *partially* spent wild moveset is **not** an error: the rejection
-    /// loop ignores PP, and a picked 0-PP slot fails its move at
-    /// `Cmd_attackcanceler` — [`BattleEvent::FailedNoPp`], no draws, no
-    /// damage, no deduction (see [`Battle::act`]) — and the turn continues.
-    /// [`BattleError::NoPpRemaining`] is only ever returned by the pre-draw
-    /// player validation above.
-    ///
-    /// Other than the Struggle fallback, no unsupported move survives to
-    /// mid-turn: the wild moveset was screened at [`Battle::new`], and an
-    /// unsupported *player* pick (a status move, say — every real starter
-    /// knows one) is rejected by the pre-draw validation above, so the
-    /// caller can simply choose another action `(behavioral-fidelity)`.
+    /// Returns [`TurnError`] for an invalid state or action. Pre-turn failures
+    /// consume no RNG and contain no events. A wild opponent forced to use the
+    /// unsupported Struggle may fail after draws or earlier events; those events
+    /// remain in [`TurnError::events`]. A pending move-learning decision takes
+    /// precedence over an existing outcome.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -927,28 +399,42 @@ impl Battle {
         let mut events = Vec::new();
         match self.resolve_turn(player_action, rng, &mut events) {
             Ok(()) => Ok(events),
-            // Everything committed so far is still real -- hand it back with
-            // the error instead of dropping it on the floor.
             Err(error) => Err(TurnError { events, error }),
         }
     }
 
-    /// [`Battle::take_turn`]'s body, writing into a caller-owned `events` so
-    /// an early return keeps everything pushed so far.
     fn resolve_turn(
         &mut self,
         player_action: PlayerAction,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        // Checked ahead of everything else, the battle's own end included:
-        // an unanswered level-up prompt is the loudest thing wrong with the
-        // call, and reporting `BattleAlreadyOver` first would hide the fact
-        // that a decision (and the rest of that level-up's learnset entries)
-        // is still outstanding. Upstream cannot reach action selection here
-        // at all -- the yes/no box is inside `BattleScript_LevelUp`, which
-        // completes before the next turn begins. Like every other pre-turn
-        // rejection, this draws nothing.
+        let player_action = self.validate_player_action(player_action)?;
+        self.start_turn(rng);
+        let enemy_action = self.choose_enemy_action(rng)?;
+
+        let order = match player_action {
+            ValidatedPlayerAction::UseMove { slot, move_id } => {
+                self.resolve_move_exchange(slot, move_id, enemy_action, rng, events)?
+            }
+            ValidatedPlayerAction::Run => {
+                self.resolve_run_attempt(enemy_action, rng, events)?;
+                if self.outcome.is_some() {
+                    return Ok(());
+                }
+                // A chosen run always takes the first slot in
+                // `gBattlerByTurnOrder` (`src/battle_main.c:4797`-`:4808`).
+                Order::AttackerFirst
+            }
+        };
+
+        self.pass_turn(order, events)
+    }
+
+    fn validate_player_action(
+        &self,
+        action: PlayerAction,
+    ) -> Result<ValidatedPlayerAction, BattleError> {
         if let Some(pending) = self.player.pending_move_learn() {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
@@ -956,67 +442,34 @@ impl Battle {
             return Err(BattleError::BattleAlreadyOver);
         }
 
-        // `first_battle`'s run-forbidding delta is checked here, ahead of
-        // even the player-move validation below: upstream's
-        // `IsRunningFromBattleImpossible` runs at action-*selection* time
-        // (`battle_main.c:4339`-`:4344`), before Run is ever a chosen action
-        // for the turn, so it leaves the battle and the shared RNG stream
-        // exactly as they were -- see `crate::escape`'s module docs and
-        // [`BattleError::RunForbidden`].
-        if matches!(player_action, PlayerAction::Run) {
-            match self.kind {
-                // Upstream tests BATTLE_TYPE_TRAINER *first*
-                // (`battle_main.c:4331`-`:4337`, BattleScript_PrintCantRunFromTrainer
-                // / STRINGID_NORUNNINGFROMTRAINERS), before
-                // IsRunningFromBattleImpossible is called at all -- so the
-                // two refusals stay distinct errors with distinct messages.
-                BattleKind::Trainer(_) => return Err(BattleError::NoRunningFromTrainer),
-                BattleKind::FirstBattle => return Err(BattleError::RunForbidden),
-                BattleKind::Wild => {}
-            }
+        match action {
+            PlayerAction::Run => match self.kind {
+                BattleKind::Trainer(_) => Err(BattleError::NoRunningFromTrainer),
+                BattleKind::FirstBattle => Err(BattleError::RunForbidden),
+                BattleKind::Wild => Ok(ValidatedPlayerAction::Run),
+            },
+            PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
+                slot,
+                move_id: self.validate_player_move(slot)?,
+            }),
         }
+    }
 
-        // Validated before any draw. An out-of-range or PP-less slot has no
-        // upstream counterpart (the selection menu cannot offer one), so it
-        // is a caller bug rather than a battle event -- a rejected call must
-        // leave both the battle and the shared RNG stream untouched.
-        let player_move = match player_action {
-            PlayerAction::Run => None,
-            PlayerAction::UseMove(index) => Some((index, self.validate_player_move(index)?)),
-        };
-
-        // BattleTurnPassed's `if (battleTurnCounter < 0xFF)
-        // battleTurnCounter++` (`battle_main.c:3995`-`:3998`), which runs
-        // for every turn *after* the first and lands immediately ahead of
-        // that turn's own turn-number draw. Turn 1 takes
-        // TryDoEventsBeforeFirstTurn's path instead, which never touches the
-        // counter -- so it reads 0 for the whole of turn 1.
-        if self.turn_started {
+    fn start_turn(&mut self, rng: &mut impl BattleRng) {
+        if self.turn_has_started {
             self.turn_counter = self.turn_counter.saturating_add(1);
         }
-        self.turn_started = true;
-
-        // `gRandomTurnNumber = Random()`: TryDoEventsBeforeFirstTurn
-        // (`battle_main.c:3923`) on turn 1, BattleTurnPassed (`:4013`)
-        // thereafter -- exactly one of the two per turn, both immediately
-        // ahead of action selection.
+        self.turn_has_started = true;
         self.random_turn_number = rng.next_u16();
+    }
 
-        // Action selection, in upstream's battler order: the player's is
-        // human input and draws nothing; the wild opponent's happens here
-        // even when the player is about to run, because
-        // HandleTurnActionSelectionState completes for every battler before
-        // SetActionsAndBattlersTurnOrder looks at any of the choices --
-        // true of both the ordinary rejection loop and the `first_battle`
-        // AI branch alike.
-        let enemy_action = match &self.kind {
-            BattleKind::FirstBattle => {
-                choose_enemy_action_first_battle(&self.enemy, &self.player, rng)
-            }
-            // `gTrainers[].aiFlags` was screened at `new_trainer`, so the
-            // only errors this can raise are unreachable ones -- they are
-            // propagated rather than unwrapped so a future caller that
-            // skipped the screen fails honestly instead of panicking.
+    fn choose_enemy_action(&self, rng: &mut impl BattleRng) -> Result<EnemyAction, BattleError> {
+        match &self.kind {
+            BattleKind::FirstBattle => Ok(choose_enemy_action_first_battle(
+                &self.enemy,
+                &self.player,
+                rng,
+            )),
             BattleKind::Trainer(context) => choose_trainer_action(
                 &self.dex,
                 &self.enemy,
@@ -1024,55 +477,48 @@ impl Battle {
                 context.ai_flags(),
                 self.turn_counter,
                 rng,
-            )?,
-            BattleKind::Wild => match choose_enemy_move(&self.enemy, rng) {
+            ),
+            BattleKind::Wild => Ok(match choose_enemy_move(&self.enemy, rng) {
                 Some(index) => EnemyAction::Move(index),
                 None => EnemyAction::Struggle,
-            },
-        };
+            }),
+        }
+    }
 
-        let Some((index, player_move)) = player_move else {
-            // `first_battle` already rejected `PlayerAction::Run` above, so
-            // reaching here means the ordinary escape formula applies and
-            // `enemy_action` can never be `EnemyAction::Flee` (only the
-            // `first_battle` path ever produces it).
-            let success = try_run_from_battle(
-                // Raw gBattleMons speed on both sides, not the stage-modified
-                // effective Speed -- see `crate::escape`'s parameter docs
-                // (`battle_util.c:463`-`:465`).
-                self.player.stats().speed,
-                self.enemy.stats().speed,
-                self.run_tries,
-                rng,
-            );
-            // Upstream's `gBattleStruct->runTries` is a byte: the 256th
-            // failed attempt wraps it to 0, resetting the +30-per-try
-            // escape bonus `(behavioral-fidelity)`.
-            self.run_tries = self.run_tries.wrapping_add(1);
-            events.push(BattleEvent::RunAttempt {
-                by_player: true,
-                success,
-            });
-            if success {
-                self.finish(events, BattleOutcome::PlayerRan);
-                return Ok(());
-            }
-            // Failed run: the turn is burned, but the wild mon still acts on
-            // the action it already selected above. The RunAttempt event
-            // above survives a failure here -- `take_turn` returns it either
-            // way. Upstream still runs `DoBattlerEndTurnEffects` for this
-            // turn (`src/battle_main.c:3961`-`:3968`): a failed run does not
-            // skip end-of-turn residuals, so poison and Charge still tick
-            // even though the player never attacked.
-            self.enemy_acts(enemy_action, rng, events)?;
-            // A chosen `PlayerAction::Run` is always ordered first
-            // (`battle_main.c:4797`-`:4808`), the same `gBattlerByTurnOrder`
-            // `Battle::residual_effects` reads -- so the player's slot comes
-            // up first here too, whether or not the run itself succeeded.
-            self.pass_turn(Order::AttackerFirst, events)?;
+    fn resolve_run_attempt(
+        &mut self,
+        enemy_action: EnemyAction,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        // Escape uses raw battle stats, not stage-modified turn-order Speed
+        // (`src/battle_util.c:463`-`:465`).
+        let success = try_run_from_battle(
+            self.player.stats().speed,
+            self.enemy.stats().speed,
+            self.run_attempts,
+            rng,
+        );
+        self.run_attempts = self.run_attempts.wrapping_add(1);
+        events.push(BattleEvent::RunAttempt {
+            by_player: true,
+            success,
+        });
+        if success {
+            self.finish(events, BattleOutcome::PlayerRan);
             return Ok(());
-        };
+        }
+        self.resolve_enemy_action(enemy_action, rng, events)
+    }
 
+    fn resolve_move_exchange(
+        &mut self,
+        player_slot: usize,
+        player_move: MoveId,
+        enemy_action: EnemyAction,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<Order, BattleError> {
         let player_priority = self.dex.move_data(player_move)?.priority;
         let enemy_priority = match enemy_action {
             EnemyAction::Move(slot) => {
@@ -1081,11 +527,7 @@ impl Battle {
                     .priority
             }
             EnemyAction::Struggle => self.dex.move_data(STRUGGLE)?.priority,
-            // `gChosenActionByBattler[battler] != B_ACTION_USE_MOVE` reads as
-            // `MOVE_NONE` (priority 0) in `GetWhoStrikesFirst`
-            // (`battle_main.c:4700`-`:4707`): fleeing has no move of its own
-            // and is ordered exactly like one at priority 0.
-            EnemyAction::Flee => 0,
+            EnemyAction::Flee => NO_MOVE_PRIORITY,
         };
         let order = resolve_order(
             player_priority,
@@ -1097,95 +539,37 @@ impl Battle {
 
         match order {
             Order::AttackerFirst => {
-                self.act(true, player_move, index, rng, events)?;
-                // A battler that fainted earlier in the turn is skipped when
-                // its slot in `gBattlerByTurnOrder` comes up -- in a wild
-                // battle that is the same thing as the battle being over,
-                // but a trainer's fainted mon is only replaced once every
-                // action has had its chance (`pass_turn`), which is also
-                // where `cancelallactions`
-                // (`data/battle_scripts_1.s:2894`-`:2895`) would have
-                // stopped the queued action anyway, so the two tests are
-                // now distinct.
-                //
-                // Both battlers are checked, not just the enemy: upstream
-                // never lets a queued action execute against an empty
-                // battler slot (`Cmd_attackcanceler`'s
-                // `gBattleMons[gBattlerAttacker].hp == 0` check and
-                // `HandleFaintedMonActions` both intervene before the next
-                // action, `battle_util.c:1894`). A drain move whose Liquid
-                // Ooze recoil faints the *player* here (attacker holds a
-                // drain move, enemy holds Liquid Ooze) leaves the enemy
-                // standing but the player gone -- `!self.enemy.is_fainted()`
-                // alone would let the enemy's queued move execute against
-                // an already-empty player slot, one turn early (a trainer's
-                // replacement is only sent out at the end of the turn).
-                if self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted() {
-                    // If the enemy's action turns out to be the unexecutable
-                    // Struggle fallback, the player's events above are
-                    // already in `events` and stay there -- `take_turn`
-                    // returns them with the error rather than throwing away
-                    // a hit that really landed.
-                    self.enemy_acts(enemy_action, rng, events)?;
+                self.act(true, player_move, player_slot, rng, events)?;
+                if self.both_battlers_can_act() {
+                    self.resolve_enemy_action(enemy_action, rng, events)?;
                 }
             }
             Order::DefenderFirst => {
-                self.enemy_acts(enemy_action, rng, events)?;
-                // Mirrors `AttackerFirst`'s both-battlers guard above: a
-                // drain move whose Liquid Ooze recoil faints the *enemy*
-                // here (the faster trainer mon drains a Liquid Ooze holder)
-                // leaves the player standing but the enemy gone, and
-                // `self.outcome` stays `None` until `Self::pass_turn` runs
-                // (no pipeline decides it on its own faint any more), so
-                // `!self.player.is_fainted()` alone would let the player's
-                // queued move execute into the fainted enemy's now-empty
-                // slot -- PP spent, an extra `Hit`, and a second `Fainted`
-                // event for a corpse that already reported one.
-                if self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted() {
-                    self.act(true, player_move, index, rng, events)?;
+                self.resolve_enemy_action(enemy_action, rng, events)?;
+                if self.both_battlers_can_act() {
+                    self.act(true, player_move, player_slot, rng, events)?;
                 }
             }
         }
-        self.pass_turn(order, events)
+        Ok(order)
     }
 
-    /// The turn's tail once both actions have had their chance, in
-    /// upstream's own two steps.
-    ///
-    /// Every move script ends on `Cmd_end`, which sets
-    /// `B_ACTION_TRY_FINISH` (`battle_script_commands.c:3950`-`:3958`);
-    /// `sTurnActionsFuncsTable` dispatches that to `HandleAction_TryFinish`
-    /// (`battle_main.c:549`), which runs `HandleFaintedMonActions`
-    /// (`battle_util.c:638`-`:644`). So an action-phase knockout is paid
-    /// for, replaced, and — where it exhausts a side — *scored* before the
-    /// turn's residuals: `RunTurnActionsFunctions` hands a non-zero
-    /// `gBattleOutcome` to `sEndTurnFuncsTable`
-    /// (`battle_main.c:4937`-`:4952`), which routes to
-    /// `HandleEndTurn_BattleWon`/`_BattleLost`, never to
-    /// `HandleEndTurn_ContinueBattle` and its `BattleTurnPassed`. Only a
-    /// turn nobody's knockout decided reaches `BattleTurnPassed`'s
-    /// `if (gBattleOutcome == 0)` residual gate (`:3960`-`:3966`) and the
-    /// second `HandleFaintedMonActions` behind it (`:3968`), which settles
-    /// whatever the residuals themselves felled.
-    ///
-    /// Both steps call the same [`Self::handle_fainted_mons`], as upstream
-    /// calls the same `HandleFaintedMonActions` from both places; the
-    /// second is a no-op unless the residual pass created new work.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] from [`Self::handle_fainted_mons`].
+    fn both_battlers_can_act(&self) -> bool {
+        self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted()
+    }
+
     fn pass_turn(
         &mut self,
         order: Order,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // Upstream reaches HandleFaintedMonActions twice a turn: once per
+        // action, through the HandleAction_TryFinish every move script's own
+        // `Cmd_end` schedules, and again behind `BattleTurnPassed`'s residual
+        // pass (`src/battle_main.c:549`, `:3960`-`:3968`). A knockout that
+        // ended the battle in the first call leaves no residual pass to run.
         self.handle_fainted_mons(events)?;
         if self.player.pending_move_learn().is_some() {
-            // The level-up script upstream finishes inside
-            // `HandleFaintedMonActions` is still open, and nothing after the
-            // faint -- the residual pass included -- may run until it is
-            // answered. [`Self::resolve_move_learn`] resumes here.
             self.pending_residual_order = Some(order);
             return Ok(());
         }
@@ -1193,23 +577,14 @@ impl Battle {
         self.handle_fainted_mons(events)
     }
 
-    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`) for the
-    /// cases modelled so far: `ENDTURN_POISON` (`:1525`-`:1535`) then
-    /// `ENDTURN_CHARGE` (`:1743`-`:1745`), per battler in `gBattlerByTurnOrder`
-    /// order (`:1469`-`:1472`), which is the same [`Order`] this turn's move
-    /// dispatch used. Skips a battler already fainted this turn
-    /// (`gAbsentBattlerFlags`, `:1472`-`:1474`) and runs only while the battle
-    /// has no outcome — `BattleTurnPassed`'s own `if (gBattleOutcome == 0)`
-    /// gate (`battle_main.c:3960`-`:3966`), which an action-phase knockout
-    /// that exhausted a side has already closed in [`Self::pass_turn`].
-    /// A residual faint that exhausts a whole side stops the walk before the
-    /// next battler ([`Self::fainting_decides_the_battle`]), matching
-    /// `BattleScript_DoTurnDmgEnd`'s own `checkteamslost`
-    /// (`data/battle_scripts_1.s:3746`).
     fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() {
             return;
         }
+        // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
+        // own move order -- skips a battler that already fainted, and reaches
+        // ENDTURN_POISON before ENDTURN_CHARGE inside each battler's pass
+        // (`src/battle_util.c:1442`-`:1474`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -1240,16 +615,10 @@ impl Battle {
         }
     }
 
-    /// Whether `is_player` fainting right now would leave that whole side
-    /// with no total HP left — `Cmd_checkteamslost`'s whole-party sum
-    /// (`battle_script_commands.c:3534`-`:3577`), reduced to this crate's
-    /// single-mon-plus-bench model: the player carries no in-battle bench at
-    /// all, so any player faint always exhausts it; the enemy's total is
-    /// exhausted only once every bench member behind it (if any) is also
-    /// fainted, matching [`trainer::TrainerContext::send_out_next`]'s own
-    /// fainted-member skip.
-    #[must_use]
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
+        // `Cmd_checkteamslost` totals a whole party's HP
+        // (`src/battle_script_commands.c:3534`-`:3577`); this crate benches
+        // nothing for the player, so any player faint exhausts that side.
         if is_player {
             return true;
         }
@@ -1259,11 +628,6 @@ impl Battle {
         }
     }
 
-    /// `ENDTURN_POISON` for one battler (`battle_util.c:1525`-`:1535`): an
-    /// eighth of maximum HP, floored to one
-    /// ([`crate::status1::poison_residual_damage`]), for a standing battler
-    /// carrying [`Status1::Poisoned`] — upstream's own `hp != 0` guard.
-    /// Draws nothing: the residual tick has no `Random()` call.
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
         let battler = if is_player { &self.player } else { &self.enemy };
         if battler.is_fainted() || !battler.status1().is_poisoned() {
@@ -1283,38 +647,13 @@ impl Battle {
         });
     }
 
-    /// `HandleFaintedMonActions` (`battle_util.c:1894`): award experience,
-    /// replace a trainer's fainted lead, or end the battle, for a fainted
-    /// battler regardless of which pipeline (or [`Self::residual_effects`])
-    /// put it there. Neither a direct hit nor a drain move's own
-    /// double-faint arm decides any of that itself ([`Self::settle_faint`],
-    /// [`Self::execute_drain_move`]) — this is the one place that does.
-    ///
-    /// [`Self::pass_turn`] runs it at both of upstream's own call sites, so
-    /// an action-phase knockout settles *before* the turn's residuals and a
-    /// residual knockout settles after.
-    ///
-    /// The player is checked first and, alone, decides the outcome: this
-    /// crate models no in-battle bench for the player, so any player faint
-    /// exhausts that whole "party" the same way `Cmd_checkteamslost` would
-    /// (`battle_script_commands.c:3563`-`:3564`). A simultaneous double
-    /// faint (a drain move's Liquid Ooze recoil finishing the attacker while
-    /// the same hit already finished the target) is therefore always a
-    /// loss, with no experience awarded — `checkteamslost`'s OR sets both
-    /// outcome bits at once, but `BattleScript_HandleFaintedMon` skips the
-    /// `BattleScript_GiveExp`/switch-in continuation entirely once
-    /// `gBattleOutcome != 0` (`data/battle_scripts_1.s:2831`-`:2832`), and
-    /// that dispatches through the same loss handler as an outright defeat
-    /// (`battle_main.c:557`-`:559`).
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if a fainted enemy's species is
-    /// missing from the dex, which the experience award has to look up.
     fn handle_fainted_mons(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
             return Ok(());
         }
+        // A double faint sets both of `Cmd_checkteamslost`'s outcome bits at
+        // once, and BattleScript_HandleFaintedMon then skips the reward and
+        // the switch-in entirely (`data/battle_scripts_1.s:2831`-`:2832`).
         if self.player.is_fainted() {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
@@ -1322,66 +661,37 @@ impl Battle {
         if !self.enemy.is_fainted() {
             return Ok(());
         }
+        // Case 1 runs BattleScript_GiveExp to completion -- the level-up's
+        // yes/no box included -- before case 4 replaces or pays out
+        // (`src/battle_util.c:1912`-`:1946`).
         self.settle_enemy_reward(events)?;
         if self.player.pending_move_learn().is_some() {
-            // Upstream finishes the whole level-up script -- the yes/no box
-            // included -- before anything after the faint runs
-            // (`BattleScript_GiveExp` completes in `HandleFaintedMonActions`'
-            // case 1 before case 4, `battle_util.c:1894`-`:1951`), so nothing
-            // past the reward may run until the question is answered.
-            // [`Battle::resolve_move_learn`] runs [`Self::settle_fainted_enemy`]
-            // when the last prompt resolves.
             return Ok(());
         }
         self.settle_fainted_enemy(events);
         Ok(())
     }
 
-    /// Experience for the player, gated on the recipient's own level and
-    /// awarded exactly once per fainted enemy — `Cmd_getexp`
-    /// (`battle_script_commands.c:3299`), reached from
-    /// `HandleFaintedMonActions`' case 1 (`battle_util.c:1912`-`:1923`),
-    /// **before** case 4's `checkteamslost`/replacement
-    /// (`:1938`-`:1946`) — so this runs ahead of [`Self::settle_fainted_enemy`]
-    /// in [`Self::handle_fainted_mons`], not folded into it.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if the fainted enemy's species is
-    /// missing from the dex.
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
-        // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
-        // message: Cmd_getexp case 2 zeroes the award and jumps past the
-        // string (`battle_script_commands.c:3351`-`:3356`), so no event is
-        // emitted either.
+        // Cmd_getexp case 2 zeroes the award, and jumps past both the string
+        // and MonGainEVs, for a recipient already at the cap
+        // (`src/battle_script_commands.c:3351`-`:3356`).
         if self.player.level() >= MAX_LEVEL {
             return Ok(());
         }
         let defeated = self.dex.species(self.enemy.species())?;
         let level = self.enemy.level();
-        // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) -- see
-        // `crate::exp`.
         let exp = if self.trainer().is_some() {
             trainer_faint_exp(defeated.base_exp, level)
         } else {
             wild_faint_exp(defeated.base_exp, level)
         };
-        // `MonGainEVs` (`battle_script_commands.c:3420`) runs before the
-        // exp/level-up sequence, upstream's own order, so a level-up this
-        // turn snapshots the gain into `evs_at_last_level_up` for the save
-        // encoder's EV-aware block; the live recompute stays 0-EV
-        // (`battle::pokemon::evs`'s module docs). Gated by the same
-        // `MAX_LEVEL` check as the exp award: upstream skips `MonGainEVs`
-        // too for a recipient already at the cap (`:3351`-`:3356`).
+        // MonGainEVs runs ahead of the exp and level-up sequence, so a level
+        // crossed this turn snapshots the gain
+        // (`src/battle_script_commands.c:3420`).
         self.player.gain_evs(defeated.ev_yield);
         let pending = self.player.apply_experience(&self.dex, exp)?;
         events.push(BattleEvent::ExpGained(exp));
-        // A crossed level whose learnset move has no free slot parks the
-        // walk on a player decision (issue #304): upstream's
-        // `BattleScript_AskToLearnMove` yes/no box. The mon itself carries
-        // the question (`BattlePokemon::pending_move_learn`) until
-        // [`Battle::resolve_move_learn`] answers it, and the battle refuses
-        // another turn meanwhile.
         if let Some(prompt) = pending {
             events.push(BattleEvent::MoveLearnPrompt {
                 move_id: prompt.move_id(),
@@ -1390,12 +700,6 @@ impl Battle {
         Ok(())
     }
 
-    /// The knockout's aftermath once the reward (and any level-up prompt)
-    /// is settled: `BattleScript_HandleFaintedMon` reached from
-    /// `HandleFaintedMonActions`' case 4 (`battle_util.c:1937`-`:1948`). A
-    /// trainer with a bench sends out the next party member; a trainer
-    /// without one pays and the battle ends; a wild battle simply ends.
-    /// No-op unless the enemy is down and the outcome still open.
     fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return;
@@ -1414,53 +718,32 @@ impl Battle {
             });
             return;
         }
-        // `Cmd_getmoneyreward` (`battle_script_commands.c:5635`) runs after
-        // `Cmd_getexp`, which is the order `BattleEvent`s come back in.
         let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
     }
 
-    /// One mover's whole action: `Cmd_attackcanceler`'s full-paralysis draw,
-    /// then its no-PP abort, then PP bookkeeping, then hit resolution.
-    ///
-    /// `attackcanceler` calls `AtkCanceler_UnableToUseMove` before ever
-    /// testing PP (`battle_script_commands.c:930` vs `:934`): the paralysis
-    /// branch (`CANCELER_PARALYZED`, `battle_util.c:2188`-`:2199`) draws
-    /// once and, on a `Random() % 4 == 0` hit, cancels the move before
-    /// `ppreduce` runs, so a fully paralysed mover keeps every PP it started
-    /// the turn with. Only then does the no-PP abort apply, itself
-    /// unconditional here since this slice models none of its escape
-    /// hatches (Struggle, `HITMARKER_ALLOW_NO_PP`, the multi-turn
-    /// continuations). The full-paralysis cancel emits
-    /// [`BattleEvent::FullyParalyzed`]; the no-PP abort, reachable only on
-    /// the wild side, emits [`BattleEvent::FailedNoPp`] `(behavioral-fidelity)`.
-    ///
-    /// Always called with a real move slot: the two cases that are *not* a
-    /// real move — the forced-Struggle fallback and (`first_battle` only)
-    /// fleeing — never reach here, [`Battle::enemy_acts`] handles both
-    /// itself before it would call this.
     fn act(
         &mut self,
-        is_player: bool,
+        player_is_attacker: bool,
         move_id: MoveId,
         slot: usize,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let attacker_status1 = if is_player {
+        let attacker_status1 = if player_is_attacker {
             self.player.status1()
         } else {
             self.enemy.status1()
         };
         if draws_full_paralysis(attacker_status1, rng) {
             events.push(BattleEvent::FullyParalyzed {
-                by_player: is_player,
+                by_player: player_is_attacker,
                 move_id,
             });
             return Ok(());
         }
-        if is_player {
+        if player_is_attacker {
             self.player.deduct_pp(slot)?;
         } else if self.enemy.moves()[slot].pp == 0 {
             events.push(BattleEvent::FailedNoPp {
@@ -1471,22 +754,10 @@ impl Battle {
         } else {
             self.enemy.deduct_pp(slot)?;
         }
-        self.execute_move(is_player, move_id, rng, events)
+        self.execute_move(player_is_attacker, move_id, rng, events)
     }
 
-    /// The wild opponent's whole action, whichever of [`EnemyAction`]'s
-    /// three shapes `opponent_ai::choose_enemy_move` or
-    /// `opponent_ai::choose_enemy_action_first_battle` produced.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnsupportedMoveEffect`] carrying [`STRUGGLE`] for
-    /// [`EnemyAction::Struggle`] once its own full-paralysis draw does not
-    /// cancel it: the all-slots-spent forced fallback has to act, and this
-    /// slice cannot execute Struggle — the honest stop, at the same point
-    /// upstream's forced Struggle would begin executing (after
-    /// `attackcanceler`, not before it).
-    fn enemy_acts(
+    fn resolve_enemy_action(
         &mut self,
         action: EnemyAction,
         rng: &mut impl BattleRng,
@@ -1496,13 +767,9 @@ impl Battle {
             EnemyAction::Move(slot) => {
                 self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
             }
-            // Struggle still shares `BattleScript_HitFromAtkCanceler`
-            // (`data/battle_scripts_1.s:241`-`:247`) with every ordinary
-            // move, so a paralysed enemy forced into it draws the same
-            // full-paralysis check `Battle::act` runs for a real move slot,
-            // ahead of the honest stop below -- the point this slice's own
-            // Struggle gap actually begins.
             EnemyAction::Struggle => {
+                // Struggle reaches the paralysis gate before its unsupported
+                // recoil path (`data/battle_scripts_1.s:241`-`:247`).
                 if draws_full_paralysis(self.enemy.status1(), rng) {
                     events.push(BattleEvent::FullyParalyzed {
                         by_player: false,
@@ -1513,9 +780,6 @@ impl Battle {
                     Err(BattleError::UnsupportedMoveEffect(STRUGGLE))
                 }
             }
-            // HandleAction_Run's non-player branch (`battle_util.c:524`-
-            // `:537`): no escape formula, no RNG draw, no PP touched --
-            // fleeing simply ends the battle.
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
@@ -1547,95 +811,74 @@ mod tests {
         sp_attack: 31,
         sp_defense: 31,
     };
-    /// `MOVE_ABSORB` (`EFFECT_ABSORB`, the drain pipeline).
     const ABSORB: MoveId = MoveId(71);
-    /// `MOVE_TACKLE`.
     const TACKLE: MoveId = MoveId(33);
+    const BULBASAUR: SpeciesId = SpeciesId(1);
+    const SQUIRTLE: SpeciesId = SpeciesId(7);
+    const TENTACOOL: SpeciesId = SpeciesId(72);
+    const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
+    const ENEMY_LEVEL: u8 = 50;
+    const PLAYER_LEVEL: u8 = 30;
+    const ENEMY_REMAINING_HP: u32 = 5;
+    const ENEMY_SPEED: u32 = 65;
+    const PLAYER_SPEED: u32 = 56;
+    const LIQUID_OOZE_PERSONALITY: u32 = 1;
+    const PLAYER_MOVE_SLOT: usize = 0;
+    const DRAWS_THROUGH_ENEMY_ABSORB: usize = 9;
 
-    /// Hand-builds the reviewer finding 3 fixture: a trainer [`Battle`]
-    /// whose enemy (level-50 Bulbasaur, Absorb, faster (65) than the
-    /// player's level-30 Tentacool (56) -- `Order::DefenderFirst`, the enemy
-    /// resolves first) is left on 5 HP, well under the Ooze recoil an
-    /// overkill Absorb reflects back onto it. The player (Tentacool,
-    /// ability slot 1 = Liquid Ooze) is at full HP, comfortably more than
-    /// the overkill Absorb's damage -- the player must survive while the
-    /// enemy does not. Returns the battle plus the two baselines the test
-    /// checks against: the player's max HP and Tackle's max PP.
-    ///
-    /// No *real* trainer can carry a drain move today: `EFFECT_ABSORB` is
-    /// outside `trainer_ai`'s scoreable-effect set
-    /// ([`trainer_ai::is_scoreable_effect`]), so [`Battle::new_trainer`]'s
-    /// per-mon [`trainer::ensure_move_playable`] screen refuses it before a
-    /// battle can even start. This builds [`Battle`] by hand instead, with
-    /// an `ai_flags` of [`AiFlags::NONE`] -- which is what actually lets
-    /// [`trainer_ai::choose_trainer_action`] score Absorb without erroring --
-    /// sidestepping `new_trainer`'s screen rather than defeating it, because
-    /// the invariant the caller tests belongs to the turn engine and has to
-    /// hold the moment either restriction is ever lifted, not only while
-    /// both remain in place.
-    fn liquid_ooze_kill_of_the_enemy_fixture() -> (Battle, u32, u8) {
+    fn trainer_battle_with_faster_absorb_user() -> (Battle, u32, u8) {
         let dex = Dex::new();
-        let mut enemy = BattlePokemon::new(&dex, SpeciesId(1), 50, MAX_IVS, 0, vec![ABSORB])
+        let mut enemy = BattlePokemon::new(&dex, BULBASAUR, ENEMY_LEVEL, MAX_IVS, 0, vec![ABSORB])
             .expect("valid enemy");
-        assert_eq!(enemy.stats().speed, 65);
-        enemy.apply_damage(enemy.stats().max_hp - 5);
-        let player = BattlePokemon::new(&dex, SpeciesId(72), 30, MAX_IVS, 1, vec![TACKLE])
-            .expect("valid player");
-        assert_eq!(player.stats().speed, 56);
+        assert_eq!(enemy.stats().speed, ENEMY_SPEED);
+        enemy.apply_damage(enemy.stats().max_hp - ENEMY_REMAINING_HP);
+        let player = BattlePokemon::new(
+            &dex,
+            TENTACOOL,
+            PLAYER_LEVEL,
+            MAX_IVS,
+            LIQUID_OOZE_PERSONALITY,
+            vec![TACKLE],
+        )
+        .expect("valid player");
+        assert_eq!(player.stats().speed, PLAYER_SPEED);
         assert_eq!(player.ability(), crate::ability::LIQUID_OOZE);
         let player_max_hp = player.stats().max_hp;
 
-        // A real trainer's data, `ai_flags` overridden to `NONE`: any real
-        // flag would run a `trainer_ai` script over Absorb and refuse it the
-        // same way `new_trainer`'s pre-screen does (this fn's own docs).
-        let mut data = *trainer::trainer_data(TrainerId(529)).expect("known trainer");
-        data.ai_flags = AiFlags::NONE;
-        let bench = vec![
-            BattlePokemon::new(&dex, SpeciesId(7), 30, MAX_IVS, 0, vec![TACKLE])
-                .expect("valid bench mon"),
-        ];
-        let context = TrainerContext::new(TrainerId(529), &data, bench);
-        let tackle_max_pp = dex.move_data(TACKLE).expect("known move").pp;
+        let mut trainer_without_ai =
+            *trainer::trainer_data(MAY_ROUTE_103_MUDKIP).expect("known trainer");
+        trainer_without_ai.ai_flags = AiFlags::NONE;
+        let bench =
+            vec![
+                BattlePokemon::new(&dex, SQUIRTLE, PLAYER_LEVEL, MAX_IVS, 0, vec![TACKLE])
+                    .expect("valid bench mon"),
+            ];
+        let trainer = TrainerContext::new(MAY_ROUTE_103_MUDKIP, &trainer_without_ai, bench);
+        let player_move_max_pp = dex.move_data(TACKLE).expect("known move").pp;
 
         let battle = Battle {
             dex,
             player,
             enemy,
-            run_tries: 0,
+            run_attempts: 0,
             random_turn_number: 0,
             outcome: None,
-            kind: BattleKind::Trainer(context),
+            kind: BattleKind::Trainer(trainer),
             turn_counter: 0,
-            turn_started: false,
+            turn_has_started: false,
             pending_residual_order: None,
         };
-        (battle, player_max_hp, tackle_max_pp)
+        (battle, player_max_hp, player_move_max_pp)
     }
 
-    /// Reviewer finding 3 (issue #339 review): a faster enemy trainer mon
-    /// whose drain move's Liquid Ooze recoil faints *only itself* must not
-    /// let the player's already-queued move execute afterwards. Upstream
-    /// never runs a queued action against an empty battler slot --
-    /// `HandleFaintedMonActions` (`battle_util.c:1894`) intervenes between
-    /// the two actions of a turn -- and a trainer's bench means the battle
-    /// has no `outcome` yet to stop it another way, unlike a wild fight. See
-    /// [`liquid_ooze_kill_of_the_enemy_fixture`] for how the (currently
-    /// unreachable through the public API) fixture is built.
     #[test]
-    fn a_liquid_ooze_kill_of_the_enemy_skips_the_players_queued_move() {
-        let (mut battle, player_max_hp, tackle_max_pp) = liquid_ooze_kill_of_the_enemy_fixture();
+    fn liquid_ooze_recoil_ko_skips_the_players_queued_move() {
+        let (mut battle, player_max_hp, player_move_max_pp) =
+            trainer_battle_with_faster_absorb_user();
 
-        // Draws: the turn-number seed, `choose_trainer_action`'s four
-        // `simulatedRNG` draws (spent unconditionally, module docs on
-        // `trainer_ai`) plus its one-candidate tie-break, then Absorb's
-        // ordinary three (accuracy, crit, damage roll -- `crate::drain`'s
-        // module docs: no `seteffectwithchance` draw). If the player's
-        // Tackle wrongly executes too, `SequenceRng` panics on exhaustion
-        // rather than silently drawing zero, so a regression here fails
-        // loudly.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let mut rng = SequenceRng::new([0; DRAWS_THROUGH_ENEMY_ABSORB]);
         let events = battle
-            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .take_turn(PlayerAction::UseMove(PLAYER_MOVE_SLOT), &mut rng)
             .unwrap();
 
         assert_eq!(
@@ -1644,8 +887,7 @@ mod tests {
                 .filter(|e| matches!(e, BattleEvent::Fainted { by_player: false }))
                 .count(),
             1,
-            "exactly one enemy Fainted event, not a second one from the \
-             player's move executing into the corpse: {events:?}"
+            "the enemy should faint exactly once: {events:?}"
         );
         assert_eq!(
             events
@@ -1653,7 +895,7 @@ mod tests {
                 .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
                 .count(),
             1,
-            "settle_enemy_reward must not run twice: {events:?}"
+            "experience should be awarded exactly once: {events:?}"
         );
         assert_eq!(
             events
@@ -1667,8 +909,7 @@ mod tests {
                 ))
                 .count(),
             0,
-            "the player's queued Tackle must not execute against the \
-             already-fainted enemy: {events:?}"
+            "the player's queued move should not execute: {events:?}"
         );
         assert!(
             !events
@@ -1676,11 +917,6 @@ mod tests {
                 .any(|e| matches!(e, BattleEvent::Fainted { by_player: true })),
             "the player never fainted here: {events:?}"
         );
-        // The player takes real damage from the *enemy's* Absorb (the first
-        // action of the turn) -- that is expected. What must NOT happen is
-        // a second reduction from the player's own queued Tackle, which
-        // deals no damage to its own side, so the player's final HP must
-        // equal `player_max_hp` minus exactly the one Hit the enemy landed.
         let player_damage_taken: u32 = events
             .iter()
             .filter_map(|e| match e {
@@ -1695,13 +931,12 @@ mod tests {
         assert_eq!(
             battle.player().current_hp(),
             player_max_hp - player_damage_taken,
-            "the player's HP reflects only the enemy's one Hit, nothing the \
-             (skipped) Tackle would have added: {events:?}"
+            "only the enemy's hit should reduce player HP: {events:?}"
         );
         assert_eq!(
-            battle.player().moves()[0].pp,
-            tackle_max_pp,
-            "full PP: the skipped Tackle must not have deducted any"
+            battle.player().moves()[PLAYER_MOVE_SLOT].pp,
+            player_move_max_pp,
+            "the skipped move should preserve PP"
         );
         assert_eq!(
             battle.outcome(),
@@ -1710,17 +945,14 @@ mod tests {
         );
         assert!(
             events.contains(&BattleEvent::TrainerSentOut {
-                species: SpeciesId(7),
+                species: SQUIRTLE,
                 bench_remaining: 0,
             }),
-            "the bench mon comes out at the end of this same turn, exactly \
-             as an ordinary trainer faint would -- the bug this test guards \
-             against is the player's move running *before* that happens, \
-             not the send-out itself: {events:?}"
+            "the replacement should enter after the turn: {events:?}"
         );
         assert_eq!(
             battle.enemy().species(),
-            SpeciesId(7),
+            SQUIRTLE,
             "the replacement is active by the time `take_turn` returns"
         );
     }

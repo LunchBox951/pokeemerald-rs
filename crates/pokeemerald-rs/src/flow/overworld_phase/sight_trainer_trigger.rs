@@ -531,12 +531,13 @@ impl OverworldPhase {
         if self.sight_trainer_battle.is_none() {
             return false;
         }
-        if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
+        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.sight_trainer_battle,
             &mut self.party_lead,
             &mut self.save1.money,
             &mut self.rng,
-        ) {
+        );
+        if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
@@ -556,6 +557,10 @@ impl OverworldPhase {
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
+        }
+        // Slot-based, not outcome-based: `Self::sight_trainer_id`'s own
+        // abort clause.
+        if self.sight_trainer_battle.is_none() {
             self.sight_trainer_id = None;
         }
         true
