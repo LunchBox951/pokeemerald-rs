@@ -497,13 +497,13 @@ pub(crate) fn advance_scene(
             (AppScene::OverworldLoadFailed(intro_scene), frame)
         }
         AppScene::Overworld(mut phase) => {
-            // The field start menu runs ahead of movement and owns the
-            // frame outright when it is open -- upstream's own ordering
-            // (`ProcessPlayerFieldInput` before `PlayerStep`, returning
-            // TRUE out of its `pressedStartButton` branch). This is the
-            // only point in the whole state machine that hands the save
-            // medium to something that can write it.
-            if !phase.advance_start_menu_frame(buttons, save_slot) {
+            // An open menu owns the frame, as upstream's locked field
+            // controls skip `ProcessPlayerFieldInput` while it is up; a
+            // fresh `START` press is weighed inside `step`. This is the one
+            // point that hands the save medium to something that writes it.
+            if phase.start_menu().is_some() {
+                phase.advance_start_menu_frame(buttons, save_slot);
+            } else {
                 phase.step(buttons);
             }
             let frame = phase.compose_frame();
