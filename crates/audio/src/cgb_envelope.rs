@@ -47,6 +47,11 @@ impl CgbEnvelopeCadence {
     }
 }
 
+mod hardware;
+
+use hardware::NRX2_ENV_DIR_INC;
+pub(crate) use hardware::{HardwareEnvelopePacing, HardwareEnvelopeVolume};
+
 const CGB_ENVELOPE_LEVELS: u32 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
 const PSEUDO_ECHO_SCALE: u32 = 256;
@@ -153,6 +158,38 @@ impl CgbEnvelope {
     #[must_use]
     pub fn is_stopping(&self) -> bool {
         self.note_off_requested
+    }
+
+    /// The pacing this phase's NRx2 store programs, decoded by
+    /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
+    /// direction bit and no step time, leaving hardware dead at its last
+    /// level (sustain-start `m4a.c:1132-1137`, pseudo-echo-start
+    /// `:1090-1098`, and the refreshes that store nothing at all).
+    /// The software envelope keeps its own pace off the raw phase byte, as
+    /// upstream's `envelopeCounter` does (`m4a.c:1031`, `:1063`, `:1152`).
+    #[must_use]
+    pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
+        let step_time_and_dir = match self.phase {
+            Phase::Attack => return self.attack_pacing(),
+            // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1158`), whose
+            // direction constant is zero (`m4a_internal.h:84`).
+            Phase::Decay => self.adsr.decay,
+            // `channels->release | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1068`).
+            Phase::Release => self.adsr.release,
+            Phase::Starting | Phase::Sustain | Phase::PseudoEcho | Phase::Retired => return None,
+        };
+        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(step_time_and_dir)
+    }
+
+    /// `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`), which
+    /// note-on stores too (`m4a.c:993`), decoded.
+    #[must_use]
+    fn attack_pacing(&self) -> Option<HardwareEnvelopePacing> {
+        // Only the low nibble reaches NRx2, so wrapping at a byte discards
+        // nothing the mask would keep.
+        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(
+            self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
+        )
     }
 
     /// Enter the release phase, reporting whether release itself is the
@@ -515,6 +552,127 @@ mod tests {
         env.set_goal(adsr, 20);
 
         assert_eq!(step_volumes::<7>(&mut env), [5, 5, 5, 5, 5, 5, 10]);
+    }
+
+    #[test]
+    fn hardware_envelope_is_paced_only_through_attack_decay_and_release() {
+        // Pins every phase `hardware_envelope_pacing` classifies, and the
+        // step time and direction each paced phase writes into NRx2 (that
+        // method's doc). Each phase gets its own minimal envelope so a
+        // zero-delay neighbor can't skip past it before its pacing is observed.
+        let up = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: true,
+            })
+        };
+        let down = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: false,
+            })
+        };
+
+        let mut attacking = plain_envelope(adsr(5, 0, 8, 0), 10);
+        assert_eq!(
+            attacking.hardware_envelope_pacing(),
+            None,
+            "not yet started"
+        );
+        attacking.step(); // Starting -> Attack, paced by attack == 5
+        assert_eq!(
+            attacking.hardware_envelope_pacing(),
+            up(5),
+            "attack paces hardware upward at its own step time"
+        );
+
+        let mut decaying = plain_envelope(adsr(0, 5, 8, 0), 10);
+        decaying.step(); // Starting -> Attack (attack == 0) -> Decay
+        assert_eq!(
+            decaying.hardware_envelope_pacing(),
+            down(5),
+            "decay paces hardware downward at its own step time"
+        );
+
+        let mut sustaining = plain_envelope(adsr(0, 0, 8, 0), 10);
+        sustaining.step(); // Starting -> Attack -> Decay (both == 0) -> Sustain
+        assert_eq!(
+            sustaining.hardware_envelope_pacing(),
+            None,
+            "sustain's zero step-time nibble holds hardware dead"
+        );
+
+        let mut releasing = plain_envelope(adsr(0, 0, 8, 4), 10);
+        releasing.step(); // ... -> Sustain
+        releasing.note_off(); // Sustain -> Release, paced by release == 4
+        assert_eq!(
+            releasing.hardware_envelope_pacing(),
+            down(4),
+            "release paces hardware downward at its own step time"
+        );
+
+        let mut echoing = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
+        echoing.step(); // ... -> Sustain
+        echoing.note_off(); // Sustain -> Release (release == 0, held for one step)
+        echoing.step(); // Release -> PseudoEcho
+        assert_eq!(
+            echoing.hardware_envelope_pacing(),
+            None,
+            "the pseudo-echo tail's zero step-time nibble holds hardware dead"
+        );
+    }
+
+    #[test]
+    fn envelope_bytes_above_seven_pace_hardware_through_the_nrx2_nibble() {
+        // Pins `hardware_envelope_pacing`'s decode: a phase byte wider than
+        // NRx2's 3-bit step time reaches hardware as the low nibble of the
+        // byte upstream combines with its direction constant, so it can pace
+        // at a different period and in the opposite direction from the raw
+        // byte, or not at all.
+        let up = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: true,
+            })
+        };
+        let down = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: false,
+            })
+        };
+        let attacking = |attack| {
+            let mut env = plain_envelope(adsr(attack, 0, 8, 0), 10);
+            env.step(); // Starting -> Attack
+            env
+        };
+        let decaying = |decay| {
+            let mut env = plain_envelope(adsr(0, decay, 8, 0), 10);
+            env.step(); // Starting -> Attack (attack == 0) -> Decay
+            env
+        };
+        let releasing = |release| {
+            let mut env = plain_envelope(adsr(0, 0, 8, release), 10);
+            env.step(); // ... -> Sustain
+            env.note_off(); // Sustain -> Release
+            env
+        };
+
+        // `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`: a dead, downward envelope,
+        // not an upward step every 8 iterations.
+        assert_eq!(attacking(8).hardware_envelope_pacing(), None);
+        // `(9 + CGB_NRx2_ENV_DIR_INC) & 0xF == 1`.
+        assert_eq!(attacking(9).hardware_envelope_pacing(), down(1));
+        // `15 + CGB_NRx2_ENV_DIR_INC` keeps only the step time it overflows into.
+        assert_eq!(attacking(15).hardware_envelope_pacing(), down(7));
+
+        // `8 | CGB_NRx2_ENV_DIR_DEC == 8`: bit 3 alone, so dead again.
+        assert_eq!(decaying(8).hardware_envelope_pacing(), None);
+        // `9 | CGB_NRx2_ENV_DIR_DEC == 9`: bit 3 turns the decay upward.
+        assert_eq!(decaying(9).hardware_envelope_pacing(), up(1));
+
+        assert_eq!(releasing(12).hardware_envelope_pacing(), up(4));
+        assert_eq!(releasing(u8::MAX).hardware_envelope_pacing(), up(7));
     }
 
     #[test]
