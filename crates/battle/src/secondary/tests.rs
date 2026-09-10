@@ -56,6 +56,78 @@ fn certain_trampolines_have_the_expected_effects_and_target_sides() {
 }
 
 #[test]
+fn every_trampoline_row_matches_its_upstream_script() {
+    // Each row is `(effect id, prepared MOVE_EFFECT_*, certain, affects_user)`,
+    // independently re-derived from `pokeemerald/data/battle_scripts_1.s` and
+    // `pokeemerald/include/constants/battle_move_effects.h`, not from
+    // `SECONDARY_TRAMPOLINES` itself, so a corrupted row does not agree by
+    // construction.
+    let rows: Vec<(u8, &str, bool, bool)> = SECONDARY_TRAMPOLINES
+        .iter()
+        .map(|trampoline| {
+            (
+                trampoline.effect.id(),
+                trampoline.move_effect,
+                trampoline.certain,
+                trampoline.affects_user,
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (2, "MOVE_EFFECT_POISON", false, false), // battle_scripts_1.s:319-321
+            (4, "MOVE_EFFECT_BURN", false, false),   // battle_scripts_1.s:362-364
+            (5, "MOVE_EFFECT_FREEZE", false, false), // battle_scripts_1.s:366-368
+            (6, "MOVE_EFFECT_PARALYSIS", false, false), // battle_scripts_1.s:370-372
+            (31, "MOVE_EFFECT_FLINCH", false, false), // battle_scripts_1.s:668-670
+            (34, "MOVE_EFFECT_PAYDAY", false, false), // battle_scripts_1.s:720-722
+            (36, "MOVE_EFFECT_TRI_ATTACK", false, false), // battle_scripts_1.s:731-733
+            // Whirlpool's setup falls into the unflagged Wrap handler.
+            (42, "MOVE_EFFECT_WRAP", false, false), // battle_scripts_1.s:830-837
+            (68, "MOVE_EFFECT_ATK_MINUS_1", false, false), // battle_scripts_1.s:1040-1042
+            (69, "MOVE_EFFECT_DEF_MINUS_1", false, false), // battle_scripts_1.s:1044-1046
+            (70, "MOVE_EFFECT_SPD_MINUS_1", false, false), // battle_scripts_1.s:1048-1050
+            (71, "MOVE_EFFECT_SP_ATK_MINUS_1", false, false), // battle_scripts_1.s:1052-1054
+            (72, "MOVE_EFFECT_SP_DEF_MINUS_1", false, false), // battle_scripts_1.s:1056-1058
+            (73, "MOVE_EFFECT_ACC_MINUS_1", false, false), // battle_scripts_1.s:1060-1062
+            (76, "MOVE_EFFECT_CONFUSION", false, false), // battle_scripts_1.s:1071-1073
+            (105, "MOVE_EFFECT_STEAL_ITEM", false, false), // battle_scripts_1.s:1440-1442
+            // Thaw Hit prepares Burn, not a Thaw-named effect.
+            (125, "MOVE_EFFECT_BURN", false, false), // battle_scripts_1.s:1679-1681
+            // Both MOVE_EFFECT_CERTAIN and MOVE_EFFECT_AFFECTS_USER are set.
+            (129, "MOVE_EFFECT_RAPIDSPIN", true, true), // battle_scripts_1.s:1716-1718
+            // AFFECTS_USER but chance-based (not CERTAIN).
+            (138, "MOVE_EFFECT_DEF_PLUS_1", false, true), // battle_scripts_1.s:1764-1766
+            (139, "MOVE_EFFECT_ATK_PLUS_1", false, true), // battle_scripts_1.s:1768-1770
+            (140, "MOVE_EFFECT_ALL_STATS_UP", false, true), // battle_scripts_1.s:1772-1774
+            // Twister dispatches (battle_scripts_1.s:167) into the unflagged
+            // flinch handler.
+            (146, "MOVE_EFFECT_FLINCH", false, false), // battle_scripts_1.s:1826-1832
+            // Flinch/Minimize dispatches to Stomp (battle_scripts_1.s:171,
+            // :1898-1901), which falls into the same unflagged flinch handler.
+            (150, "MOVE_EFFECT_FLINCH", false, false), // battle_scripts_1.s:1830-1832
+            // CERTAIN without AFFECTS_USER.
+            (158, "MOVE_EFFECT_FLINCH", true, false), // battle_scripts_1.s:2048-2052
+            // Both flags explicit.
+            (182, "MOVE_EFFECT_ATK_DEF_DOWN", true, true), // battle_scripts_1.s:2388-2390
+            (188, "MOVE_EFFECT_KNOCK_OFF", false, false),  // battle_scripts_1.s:2475-2477
+            // Both flags explicit.
+            (198, "MOVE_EFFECT_RECOIL_33", true, true), // battle_scripts_1.s:2567-2569
+            // Blaze Kick dispatches (battle_scripts_1.s:221) into the
+            // unflagged Burn handler.
+            (200, "MOVE_EFFECT_BURN", false, false), // battle_scripts_1.s:362-364
+            (202, "MOVE_EFFECT_TOXIC", false, false), // battle_scripts_1.s:2640-2642
+            // Both flags explicit.
+            (204, "MOVE_EFFECT_SP_ATK_TWO_DOWN", true, true), // battle_scripts_1.s:2648-2650
+            // Poison Tail dispatches (battle_scripts_1.s:230) into the
+            // unflagged Poison handler.
+            (209, "MOVE_EFFECT_POISON", false, false), // battle_scripts_1.s:319-321
+        ]
+    );
+}
+
+#[test]
 fn lookup_returns_metadata_for_table_members() {
     let dex = Dex::new();
     for (move_id, name) in [
