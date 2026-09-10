@@ -77,16 +77,17 @@ impl Coverage {
     /// Whether a blit painted this pixel. A disabled tracker and an
     /// out-of-range coordinate both answer `false`.
     pub(crate) fn is_painted(&self, x: usize, y: usize) -> bool {
-        x < Framebuffer::WIDTH
-            && self
-                .painted_pixels
-                .get(y * Framebuffer::WIDTH + x)
-                .copied()
-                .unwrap_or(false)
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
+            return false;
+        }
+        self.painted_pixels
+            .get(y * Framebuffer::WIDTH + x)
+            .copied()
+            .unwrap_or(false)
     }
 
     fn mark(&mut self, x: usize, y: usize) {
-        if x >= Framebuffer::WIDTH {
+        if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return;
         }
         if let Some(slot) = self.painted_pixels.get_mut(y * Framebuffer::WIDTH + x) {
@@ -481,5 +482,28 @@ mod tests {
         let second_y = usize::try_from(second_cell.row * TILE_SIZE_PX).unwrap();
         assert_eq!(fb.pixel(0, 0), Some(FILL_COLOR));
         assert_eq!(fb.pixel(second_x, second_y), Some(FILL_COLOR));
+    }
+
+    // `WIDTH` is 240 == 15 * 2^4, so this `y` makes `y * WIDTH` a multiple
+    // of `2^usize::BITS`: an unchecked index would wrap back to the origin.
+    #[test]
+    fn coverage_rejects_out_of_range_y_that_would_alias_a_painted_pixel() {
+        let mut coverage = Coverage::recording();
+        coverage.mark(0, 0);
+        let wrapping_y = 1usize << (usize::BITS - 4);
+
+        assert!(coverage.is_painted(0, 0));
+        assert!(!coverage.is_painted(0, wrapping_y));
+    }
+
+    #[test]
+    fn coverage_mark_rejects_out_of_range_y_without_touching_real_pixels() {
+        let mut coverage = Coverage::recording();
+        let wrapping_y = 1usize << (usize::BITS - 4);
+
+        coverage.mark(0, usize::MAX);
+        coverage.mark(0, wrapping_y);
+
+        assert!(!coverage.is_painted(0, 0));
     }
 }

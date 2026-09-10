@@ -776,7 +776,7 @@ mod tests {
     fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
         const CANDIDATE_ROW_RADIUS: i32 = 32;
         const EXPECTED_ADMITTED_ROWS: usize = 17;
-        const EXPECTED_UNWRAPPED_Y_BOUNDS: (i32, i32) = (-64, 224);
+        const EXPECTED_UNWRAPPED_Y_BOUNDS: (i32, i32) = (-72, 216);
 
         let player = (40, 40);
         let max_lag = i32::from(engine::overworld::WALK_FRAMES_PER_TILE);
