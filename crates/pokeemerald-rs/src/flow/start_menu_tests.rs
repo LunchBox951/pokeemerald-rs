@@ -12,7 +12,7 @@
 //! its prompts, and which `TrySavingData` arm each answer reaches -- is
 //! unit-tested against a fake save medium in `crate::start_menu::tests`.
 
-use platform::Buttons;
+use platform::{ButtonState, Buttons, GBA_WIDTH};
 
 use super::overworld_phase::OverworldPhase;
 use super::save_continue_tests::{new_game_phase, settle};
@@ -281,12 +281,73 @@ fn an_open_start_menu_freezes_movement_and_exit_writes_nothing() {
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
     assert!(
+        phase.start_menu().is_some(),
+        "A on EXIT only arms StartMenuExitCallback (issue #1035); the menu \
+         is still open for its own selection frame"
+    );
+    phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot);
+    assert!(
         phase.start_menu().is_none(),
-        "EXIT closes the menu (StartMenuExitCallback)"
+        "EXIT closes the menu on the following tick (StartMenuExitCallback)"
     );
     assert!(
         !temp.slot().load().status.menu_shows_continue(),
         "EXIT writes nothing"
+    );
+}
+
+/// Item-window content pixels (`AddWindowParameterized(0, 22, 1, 7,
+/// numActions * 2 + 2, ...)`, `src/menu.c:490-494`) of a composed frame --
+/// what the player actually sees of the menu itself, whatever the map
+/// behind it looks like.
+fn item_window_pixels(phase: &OverworldPhase) -> Vec<u32> {
+    const LEFT: usize = 22 * 8;
+    const TOP: usize = 8;
+    const WIDTH: usize = 7 * 8;
+    const HEIGHT: usize = (2 * 2 + 2) * 8;
+    let frame = phase.compose_frame();
+    (TOP..TOP + HEIGHT)
+        .flat_map(|y| (LEFT..LEFT + WIDTH).map(move |x| (y, x)))
+        .map(|(y, x)| frame[y * GBA_WIDTH as usize + x])
+        .collect()
+}
+
+/// Issue #1035 regression: the composed frame the `A` press selecting
+/// `EXIT` lands on must still draw the item window. Upstream's A handler
+/// only arms `gMenuCallback = StartMenuExitCallback` and returns `FALSE`
+/// (`start_menu.c:607-626`), so `Task_ShowStartMenu`'s `case 1` does not
+/// tear the window down that same frame (`:561-577`) -- `StartMenuExitCallback`
+/// itself, which actually hides it, does not run until the next tick
+/// (`:747-752`). A menu dropped one tick early instead composes the bare
+/// overworld on the press frame, which this pixel comparison catches where
+/// a bare `StartMenuOutcome`/`Option` assertion cannot.
+#[test]
+fn a_on_exit_still_draws_the_menu_on_its_own_press_frame() {
+    let temp = TempSave::new("menu-exit-press-frame-still-drawn");
+    let mut save_slot = temp.slot();
+    let mut phase = new_game_phase();
+    settle(&mut phase);
+    phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Exit,
+        "DOWN moves to EXIT before the A press this test drives"
+    );
+    let open_pixels = item_window_pixels(&phase);
+
+    phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+    assert_eq!(
+        item_window_pixels(&phase),
+        open_pixels,
+        "the A-on-EXIT press frame must still compose the item window"
+    );
+
+    phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot);
+    assert_ne!(
+        item_window_pixels(&phase),
+        open_pixels,
+        "StartMenuExitCallback removes the window on the following tick"
     );
 }
 
@@ -371,7 +432,16 @@ fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
         "DOWN moves the cursor onto EXIT before closing"
     );
     phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
-    assert!(phase.start_menu().is_none(), "A on EXIT closes the menu");
+    assert!(
+        phase.start_menu().is_some(),
+        "A on EXIT only arms StartMenuExitCallback (issue #1035) -- the \
+         menu is still open for this frame"
+    );
+    phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot);
+    assert!(
+        phase.start_menu().is_none(),
+        "StartMenuExitCallback closes the menu on the next tick"
+    );
 
     phase.open_synthetic_start_menu();
     assert_eq!(

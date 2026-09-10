@@ -55,6 +55,18 @@
 //! so `ProcessPlayerFieldInput` stops being polled until the menu closes.
 //! See [`crate::flow::overworld_phase`]'s `start_menu` module for the gate
 //! that decides when `START` may open one at all.
+//!
+//! `EXIT` closes one tick later than `START`/`B` do (I-6, issue #1035):
+//! `HandleStartMenuInput`'s A branch (`start_menu.c:607-626`) only arms
+//! `gMenuCallback = StartMenuExitCallback` (`:616`) and returns `FALSE`, so
+//! `Task_ShowStartMenu`'s `case 1` (`:574-577`) does not tear the menu down
+//! that same frame -- the item window is still on screen for the press.
+//! `StartMenuExitCallback` itself does not run, and no input is read at
+//! all, until the *next* task tick (`:747-752`). `START`/`B` instead hide
+//! the window inline from inside `HandleStartMenuInput` and return `TRUE`
+//! on the same press frame (`:629-634`), so they stay immediate. See
+//! [`StartMenu::tick`]'s `exit_pending` handling for where this is
+//! modelled.
 
 use assets::pack::PackError;
 use engine::text::render::RevealedGlyph;
@@ -79,8 +91,9 @@ pub(crate) use save_dialog::{SaveMode, SaveTarget};
 pub(crate) enum StartMenuItem {
     /// `MENU_ACTION_SAVE` -> `StartMenuSaveCallback` (`:721-728`).
     Save,
-    /// `MENU_ACTION_EXIT` -> `StartMenuExitCallback` (`:750-757`), which
-    /// hides the menu and gives field control back.
+    /// `MENU_ACTION_EXIT` -> `StartMenuExitCallback` (`:747-752`), which
+    /// hides the menu and gives field control back -- one tick later than
+    /// `START`/`B` do (module docs' "Frame ownership" section).
     Exit,
 }
 
@@ -159,6 +172,11 @@ pub(crate) struct StartMenu {
     /// `gMenuCallback`: `None` is `HandleStartMenuInput`, `Some` is the
     /// SAVE flow having taken over (`SaveCallback`).
     save: Option<SaveDialog>,
+    /// `gMenuCallback == StartMenuExitCallback` (module docs' "Frame
+    /// ownership" section): A armed it on a previous tick. A bare `bool`
+    /// rather than folding into `save`, since EXIT carries no state of its
+    /// own to run.
+    exit_pending: bool,
 }
 
 impl StartMenu {
@@ -192,6 +210,7 @@ impl StartMenu {
             yes_no_glyphs,
             cursor,
             save: None,
+            exit_pending: false,
         }
     }
 
@@ -202,11 +221,18 @@ impl StartMenu {
     /// is not reached at all -- upstream's own structure, and what keeps a
     /// D-pad press meant for a Yes/No prompt from also moving the item
     /// cursor behind it.
+    ///
+    /// [`Self::exit_pending`] takes the same precedence, ahead of `save`
+    /// (module docs' "Frame ownership" section).
     pub(crate) fn tick(
         &mut self,
         buttons: ButtonState,
         target: &mut impl SaveTarget,
     ) -> StartMenuOutcome {
+        if self.exit_pending {
+            // `StartMenuExitCallback` (`:747-752`).
+            return StartMenuOutcome::Closed;
+        }
         if let Some(dialog) = &mut self.save {
             // `SaveCallback` (`start_menu.c:817-836`).
             return match dialog.run(buttons, &self.chrome, target) {
@@ -241,8 +267,9 @@ impl StartMenu {
                 // `StartMenuSaveCallback` -> `SaveStartCallback` ->
                 // `InitSave` (`:721-728`, `:809-815`).
                 StartMenuItem::Save => self.save = Some(SaveDialog::new()),
-                // `StartMenuExitCallback` (`:750-757`).
-                StartMenuItem::Exit => return StartMenuOutcome::Closed,
+                // `gMenuCallback = StartMenuExitCallback` (`:616`); see
+                // module docs for why this frame still returns `Open`.
+                StartMenuItem::Exit => self.exit_pending = true,
             }
             // `return FALSE` (`:626`): the A branch is the one that ends
             // the function, so a START/B on the same frame does *not* also
