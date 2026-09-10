@@ -1019,6 +1019,12 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
 /// The other pack-gated step (module docs): `START` really opening the
 /// menu through `crate::start_menu::open`, with real chrome, and a
 /// whole save running through the pack-decoded windows.
+///
+/// The press runs through [`crate::flow::advance_scene`] rather than
+/// [`OverworldPhase::advance_start_menu_frame`], because a fresh `START`
+/// reaches the menu only through that dispatch's no-menu branch and
+/// [`OverworldPhase::step`]'s field-input ordering (issue #908); the
+/// already-open frames below are `advance_start_menu_frame`'s own.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_start_opens_the_menu_and_saves() {
@@ -1027,10 +1033,15 @@ fn real_pack_start_opens_the_menu_and_saves() {
 
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     settle(&mut phase);
-    assert!(
-        phase.advance_start_menu_frame(pressed(Buttons::START), &mut slot),
-        "START must open the menu and own the frame"
+    let (next, _frame) = super::advance_scene(
+        AppScene::Overworld(Box::new(phase)),
+        pressed(Buttons::START),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
     );
+    let AppScene::Overworld(mut phase) = next else {
+        panic!("a START press must leave the overworld in place");
+    };
     assert!(
         phase.start_menu().is_some(),
         "run `cargo xtask extract` first"
