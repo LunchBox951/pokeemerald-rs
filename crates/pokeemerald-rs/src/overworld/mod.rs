@@ -60,7 +60,8 @@ use rendering::{
 /// Selects the player avatar assets used to build an overworld scene.
 pub use avatar::PlayerCharacter;
 pub(crate) use dialog::{DialogOutcome, NpcDialog};
-/// Holds event flags used to determine which map objects are visible.
+/// Holds the event flags and variables that decide which map objects are
+/// visible and which sprite a variable-graphics object uses.
 pub use engine::event_data::EventData;
 /// Describes the direction a player faces or moves.
 pub use engine::overworld::Direction;
