@@ -2,11 +2,15 @@
 //!
 //! This module resolves save paths, performs exact-length reads, and provides
 //! locking and atomic writes. Save contents and slot validation remain owned by
-//! [`SaveStore`].
+//! [`SaveStore`]; the sibling entry a write is staged into is owned by
+//! [`staging`].
+
+mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
 /// Environment variable containing an explicit save-file path.
@@ -285,7 +289,7 @@ impl SaveFile {
         self.write_with(
             store,
             Self::sync_directory_best_effort,
-            |bytes| self.stage_shrinking_on_invalid_filename(Self::real_open, bytes),
+            |bytes| StagingArea::beside(&self.path).stage(bytes),
             |_| {},
         )
     }
@@ -293,7 +297,7 @@ impl SaveFile {
     /// As [`SaveFile::write`], synchronising through the given `sync_directory`
     /// and staging through `stage`, rather than always
     /// [`SaveFile::sync_directory_best_effort`] and
-    /// [`SaveFile::stage_shrinking_on_invalid_filename`].
+    /// [`StagingArea::stage`].
     ///
     /// `before_rename` runs on the staged path once it holds the image and
     /// before anything promotes it, which is the only point from which the
@@ -317,7 +321,7 @@ impl SaveFile {
         // replacement landing between the two is still promoted; the
         // exclusive create, the unguessable name, and the handle held open
         // bound that window rather than close it.
-        match staged.still_named() {
+        match staged.still_ours() {
             Ok(true) => {}
             Ok(false) => {
                 return Err(write_error(std::io::Error::new(
@@ -337,134 +341,6 @@ impl SaveFile {
             sync_directory(containing);
         }
         Ok(())
-    }
-
-    /// Candidates one staging rung tries before reporting its namespace
-    /// exhausted. The narrowest rung [`Self::stage_shrinking_on_invalid_filename`]
-    /// can reach renders a single hex digit, and sixteen names is that
-    /// whole namespace: because [`Self::staging_candidates`] steps rather
-    /// than redraws, a walk this long tries every one of them, so stale or
-    /// concurrently held entries can never report exhaustion while a free
-    /// name remains. Wider rungs stop here too, where sixteen distinct
-    /// names all landing on taken ones is already out of reach.
-    const MAX_STAGING_ATTEMPTS: u32 = 16;
-
-    /// Stages `bytes` under a fresh name from `next_path` on every attempt,
-    /// opening each with `open`, retrying a name collision up to
-    /// [`Self::MAX_STAGING_ATTEMPTS`] times; returns the file actually
-    /// written.
-    fn stage(
-        mut next_path: impl FnMut() -> PathBuf,
-        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
-        bytes: &[u8],
-    ) -> std::io::Result<StagedSave> {
-        let mut last_collision = None;
-        for _ in 0..Self::MAX_STAGING_ATTEMPTS {
-            let path = next_path();
-            match Self::write_and_sync_with(&open, &path, bytes) {
-                Ok(staged) => return Ok(staged),
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                    last_collision = Some(err);
-                }
-                Err(err) => return Err(err),
-            }
-        }
-        Err(last_collision.unwrap_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "exhausted staging attempts",
-            )
-        }))
-    }
-
-    /// As [`Self::stage`] with [`Self::staging_path_with_caps`] as the
-    /// candidate generator, except that a candidate the host refuses
-    /// outright (`InvalidFilename`) -- rather than merely finding it
-    /// already taken (`AlreadyExists`) -- halves the stem cap on a char
-    /// boundary (the truncation in [`Self::staging_path_with_caps`] already
-    /// respects one) and starts a fresh run of collision retries there, all
-    /// the way down to an empty stem. [`Self::MAX_COMPONENT_LEN`] is only
-    /// ever a first guess at a limit this module cannot enumerate for every
-    /// host or filesystem -- eCryptfs caps a component at 143 bytes, well
-    /// under it, and a symlinked temp root can make a host's resolved path
-    /// longer than the one this process measures -- so this loop, not that
-    /// constant, is what actually keeps the sibling valid.
-    ///
-    /// An empty stem still carries the fixed-width `.tmp.<hex>` suffix,
-    /// which can itself be wider than a directory's remaining room -- a
-    /// directory that fit the former, short `.tmp.<pid>` name can be too
-    /// tight for this one. Once the stem cannot shrink any further, the hex
-    /// component does too, halving [`Self::UNIQUE_COMPONENT_HEX_DIGITS`]
-    /// down to a single digit, each retry still drawing fresh randomness.
-    /// Propagates only once even that one-digit floor is refused.
-    fn stage_shrinking_on_invalid_filename(
-        &self,
-        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
-        bytes: &[u8],
-    ) -> std::io::Result<StagedSave> {
-        let mut stem_cap = Self::first_guess_stem_cap();
-        let mut hex_digits = Self::UNIQUE_COMPONENT_HEX_DIGITS;
-        loop {
-            match Self::stage(self.staging_candidates(stem_cap, hex_digits), &open, bytes) {
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && stem_cap > 0 => {
-                    stem_cap /= 2;
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename && hex_digits > 1 => {
-                    hex_digits = (hex_digits / 2).max(1);
-                }
-                result => return result,
-            }
-        }
-    }
-
-    /// Opens `path` exclusively with the real, host `create_new` open --
-    /// refusing an existing file, directory, or symlink there instead of
-    /// following or truncating it.
-    fn real_open(path: &Path) -> std::io::Result<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-    }
-
-    /// As [`Self::write_and_sync`], opening `path` through `open` rather
-    /// than always [`Self::real_open`], so a test can substitute a host
-    /// that refuses names an injected rule finds too long.
-    fn write_and_sync_with(
-        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
-        path: &Path,
-        bytes: &[u8],
-    ) -> std::io::Result<StagedSave> {
-        use std::io::Write as _;
-
-        let file = open(path)?;
-        let staged = StagedSave {
-            path: path.to_path_buf(),
-            file,
-        };
-        let result = (|| {
-            let mut writer = std::io::BufWriter::new(&staged.file);
-            writer.write_all(bytes)?;
-            writer.flush()?;
-            staged.file.sync_all()
-        })();
-        match result {
-            Ok(()) => Ok(staged),
-            Err(source) => Err(staged.remove_after(source)),
-        }
-    }
-
-    /// Writes and syncs `bytes` to a freshly, exclusively created `path`,
-    /// removing `path` again on any failure once past that open so this
-    /// call never deletes an entry a different caller put there. A test
-    /// convenience over [`Self::write_and_sync_with`]; production staging
-    /// always goes through [`Self::stage_shrinking_on_invalid_filename`].
-    /// Gated to its only caller's platform: the re-executed-child technique
-    /// that test needs to force a write failure is Linux-specific, so this
-    /// is otherwise dead code on every other target.
-    #[cfg(all(test, target_os = "linux"))]
-    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<StagedSave> {
-        Self::write_and_sync_with(Self::real_open, path, bytes)
     }
 
     fn sync_directory_best_effort(path: &Path) {
@@ -595,220 +471,6 @@ impl SaveFile {
         name.push(".lock");
         PathBuf::from(name)
     }
-
-    /// A collision-resistant sibling staging name -- unguessable to a planted
-    /// symlink and unlikely to be shared by a second writer; [`Self::stage`]
-    /// retries the rare exact collision, so this needs resistance, not
-    /// proof. The save basename is cut to fit the suffix within
-    /// [`Self::first_guess_stem_cap`]'s first guess at
-    /// [`Self::MAX_COMPONENT_LEN`], which the first staging attempt tries
-    /// so the common case succeeds immediately; when a host's real limit
-    /// disagrees with that guess, [`Self::stage_shrinking_on_invalid_filename`]
-    /// is what actually corrects it, not this function. A test convenience;
-    /// production staging walks [`Self::staging_candidates`] instead.
-    #[cfg(test)]
-    fn staging_path(&self) -> PathBuf {
-        self.staging_path_with_caps(
-            Self::first_guess_stem_cap(),
-            Self::UNIQUE_COMPONENT_HEX_DIGITS,
-        )
-    }
-
-    /// The candidates one staging rung offers [`Self::stage`], in the
-    /// order it tries them: the basename cut to at most `max_stem_len`
-    /// bytes -- on a char boundary -- carrying a unique suffix
-    /// `hex_digits` wide, drawn fresh for the first candidate and stepped
-    /// through the namespace for each one after it.
-    ///
-    /// Stepped rather than redrawn so the walk never repeats itself. The
-    /// narrowest rung the shrink chain reaches holds only sixteen names,
-    /// and independent draws over a namespace that small revisit names
-    /// already found taken: with fifteen of them held by stale or
-    /// concurrent entries, eight draws report exhaustion about three times
-    /// in five while a free name sits untried. A walk of
-    /// [`Self::MAX_STAGING_ATTEMPTS`] distinct names cannot.
-    ///
-    /// Never the save path itself. A save whose own basename already has
-    /// the `<stem>.tmp.<hex>` shape this renders is one of the names the
-    /// walk would otherwise reach -- a save literally named `.tmp.a`, once
-    /// the chain has reached an empty stem and a single hex digit, is one
-    /// of that rung's sixteen -- and staging there is not staging at all:
-    /// with no save yet at the destination `create_new` would succeed on
-    /// it, so the image would go down in place, visible while half-written,
-    /// and a crash would leave a partial file where the rename is supposed
-    /// to publish a whole one. Skipping it costs at most one extra step,
-    /// since at most one value in the namespace renders that basename.
-    fn staging_candidates(
-        &self,
-        max_stem_len: usize,
-        hex_digits: usize,
-    ) -> impl FnMut() -> PathBuf + '_ {
-        let mut stem = self
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if stem.len() > max_stem_len {
-            let mut cut = max_stem_len;
-            while !stem.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            stem.truncate(cut);
-        }
-        let mask = Self::unique_value_mask(hex_digits);
-        let mut value = Self::unique_value(hex_digits);
-        move || loop {
-            let candidate = self
-                .path
-                .with_file_name(format!("{stem}.tmp.{value:0hex_digits$x}"));
-            value = value.wrapping_add(1) & mask;
-            if !self.aliases_save_path(&candidate) {
-                return candidate;
-            }
-        }
-    }
-
-    /// Whether `candidate` names the save path itself on any supported
-    /// file system. The candidate's stem is copied from the save's own
-    /// basename and its suffix is ASCII, so byte equality under ASCII case
-    /// folding is the only alias a case-insensitive volume can add.
-    fn aliases_save_path(&self, candidate: &Path) -> bool {
-        match (candidate.file_name(), self.path.file_name()) {
-            (Some(candidate), Some(save)) => candidate
-                .as_encoded_bytes()
-                .eq_ignore_ascii_case(save.as_encoded_bytes()),
-            _ => candidate == self.path,
-        }
-    }
-
-    /// The first candidate of a fresh walk under these caps. A test
-    /// convenience over [`Self::staging_candidates`]; production staging
-    /// hands the whole walk to [`Self::stage`].
-    #[cfg(test)]
-    fn staging_path_with_caps(&self, max_stem_len: usize, hex_digits: usize) -> PathBuf {
-        self.staging_candidates(max_stem_len, hex_digits)()
-    }
-
-    /// The stem budget [`Self::staging_path`] tries first: whatever is left
-    /// of [`Self::MAX_COMPONENT_LEN`] once the fixed-width suffix is
-    /// subtracted. A first guess, not a promise -- see
-    /// [`Self::stage_shrinking_on_invalid_filename`].
-    fn first_guess_stem_cap() -> usize {
-        let suffix_len = ".tmp.".len() + Self::UNIQUE_COMPONENT_HEX_DIGITS;
-        Self::MAX_COMPONENT_LEN.saturating_sub(suffix_len)
-    }
-
-    /// A first guess at the per-component limit most POSIX and Windows
-    /// filesystems share, in bytes -- not a promise every filesystem keeps:
-    /// eCryptfs caps a component at 143, well under this. Predicting a
-    /// host's real limit precisely is not this module's job;
-    /// [`Self::stage_shrinking_on_invalid_filename`] adapts to whatever it
-    /// actually is by retrying under a shorter stem when the host refuses
-    /// this guess outright.
-    const MAX_COMPONENT_LEN: usize = 255;
-
-    /// Width [`Self::unique_value`] is drawn at first, before
-    /// [`Self::stage_shrinking_on_invalid_filename`] narrows it under
-    /// pressure.
-    const UNIQUE_COMPONENT_HEX_DIGITS: usize = 10;
-
-    /// `std`-only entropy folded into one value that fits `width` hex
-    /// digits: process id, clock nanoseconds, and a fresh `RandomState`
-    /// key, which alone already differs between two calls at the same
-    /// nanosecond. `create_new` is what actually keeps two stagings from
-    /// colliding on purpose; this width is defence in depth on top of it,
-    /// so narrowing it under pressure -- down to a single, still-freshly-
-    /// drawn digit -- costs unpredictability, not the exclusivity
-    /// guarantee itself.
-    fn unique_value(width: usize) -> u64 {
-        use std::hash::{BuildHasher, Hasher};
-
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos());
-        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write_u32(std::process::id());
-        hasher.write_u128(nanos);
-        hasher.finish() & Self::unique_value_mask(width)
-    }
-
-    /// Every value `width` hex digits can render, and no other. `width` is
-    /// [`Self::UNIQUE_COMPONENT_HEX_DIGITS`] or a halving of it, so it is
-    /// never wide enough to overflow the shift.
-    fn unique_value_mask(width: usize) -> u64 {
-        (1_u64 << (4 * width)) - 1
-    }
-}
-
-/// A staged flash image and the handle that wrote it, held open until the
-/// image is promoted or abandoned: while the handle lives the file cannot be
-/// freed, so nothing that replaces it at the staging path can inherit its
-/// identity and pass for it.
-#[derive(Debug)]
-struct StagedSave {
-    path: PathBuf,
-    file: std::fs::File,
-}
-
-impl StagedSave {
-    /// Whether the staging path still names this staged file, rather than a
-    /// symlink, directory, or other entry that took its name.
-    ///
-    /// Where [`is_same_file`] has nothing to compare, refusing everything
-    /// that is not a regular file is the whole check. A reading that failed
-    /// is neither answer, and surfaces rather than passing for "replaced".
-    fn still_named(&self) -> std::io::Result<bool> {
-        let found = std::fs::symlink_metadata(&self.path)?;
-        Ok(found.file_type().is_file() && is_same_file(&self.file.metadata()?, &found))
-    }
-
-    /// Removes this staged file after `source`, folding a cleanup failure
-    /// into the returned error rather than swallowing it -- otherwise a
-    /// caller who only sees `source` would never learn a staging file was
-    /// left behind. An entry that replaced it belongs to whoever put it
-    /// there and is left where it is; ownership that could not be read at
-    /// all leaves the same file behind, and is reported the same way.
-    fn remove_after(&self, source: std::io::Error) -> std::io::Error {
-        let left_behind = match self.still_named() {
-            Ok(false) => return source,
-            // The same accepted bound documented at the rename above
-            // (`SaveFile::write_with`) applies to this unlink: nothing in
-            // `std` fuses the check above to the removal here, so a peer
-            // that lands a replacement in the gap acts with the same
-            // directory-write capability that window already accepts.
-            Ok(true) => std::fs::remove_file(&self.path).err(),
-            Err(unreadable) => Some(unreadable),
-        };
-        let Some(cleanup_source) = left_behind else {
-            return source;
-        };
-        std::io::Error::new(
-            source.kind(),
-            format!(
-                "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_source}",
-                self.path.display()
-            ),
-        )
-    }
-}
-
-/// Whether two metadata readings describe the same file system object:
-/// device and inode on unix.
-///
-/// Stable `std` exposes no Windows equivalent -- the file index sits behind
-/// the unstable `windows_by_handle` feature -- so off unix this cannot
-/// answer, and [`StagedSave::still_named`]'s regular-file test stands alone:
-/// a replacement that is itself a regular file goes undetected there.
-#[cfg(unix)]
-fn is_same_file(staged: &std::fs::Metadata, found: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    (staged.dev(), staged.ino()) == (found.dev(), found.ino())
-}
-
-#[cfg(not(unix))]
-fn is_same_file(_staged: &std::fs::Metadata, _found: &std::fs::Metadata) -> bool {
-    true
 }
 
 /// Holds a [`SaveFile::lock`] until dropped.
