@@ -906,4 +906,48 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
         let err = inflate(&writer.finish()).unwrap_err();
         assert_eq!(err, InflateError::BadHuffmanTable);
     }
+
+    #[test]
+    fn incomplete_code_length_tree_is_rejected() {
+        // A final dynamic block whose code-length alphabet assigns a 1-bit
+        // code to raw length 0 and a 2-bit code to raw length 1, leaving a
+        // quarter of the code space unassigned. Everything downstream is
+        // valid: the payload uses only those two assigned code-length codes,
+        // the literal/length code is the permitted length-1 singleton on the
+        // end-of-block symbol, no distance code is used, and the block would
+        // otherwise decode to the empty output. puff.c still rejects the
+        // block on the incomplete code-length code alone
+        // (`mgba/src/third-party/zlib/contrib/puff/puff.c:696-699`, -4).
+        let mut lit_len_lengths = [0u8; 257];
+        lit_len_lengths[256] = 1; // end-of-block, the permitted singleton
+        let dist_lengths = [0u8; 1]; // no distance codes used
+
+        let mut raw_lengths = Vec::new();
+        raw_lengths.extend_from_slice(&lit_len_lengths);
+        raw_lengths.extend_from_slice(&dist_lengths);
+
+        let mut code_length_lengths = [0u8; 19];
+        code_length_lengths[0] = 1;
+        code_length_lengths[1] = 2; // 1/2 + 1/4 < 1: incomplete
+        let code_length_codes = canonical_codes(&code_length_lengths);
+
+        let mut writer = BitWriter::new();
+        writer.write_bit(1); // BFINAL
+        writer.write_bits(2, 2); // BTYPE = dynamic
+        writer.write_bits(0, 5); // HLIT = 0 -> 257 literal/length codes
+        writer.write_bits(0, 5); // HDIST = 0 -> 1 distance code
+        writer.write_bits(15, 4); // HCLEN = 15 -> transmit all 19 order slots
+        for &symbol in &CODE_LENGTH_ORDER {
+            writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+        }
+        for &raw_length in &raw_lengths {
+            let (code, length) = code_length_codes[usize::from(raw_length)];
+            writer.write_code(code, length);
+        }
+        let lit_len_codes = canonical_codes(&lit_len_lengths);
+        writer.write_code(lit_len_codes[256].0, lit_len_codes[256].1); // end-of-block
+
+        let err = inflate(&writer.finish()).unwrap_err();
+        assert_eq!(err, InflateError::BadHuffmanTable);
+    }
 }
