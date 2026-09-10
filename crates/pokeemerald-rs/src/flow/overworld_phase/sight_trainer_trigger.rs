@@ -558,12 +558,8 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
-        // Cleared whenever the battle slot itself empties, not only on a
-        // reported outcome: `advance_npc_trainer_battle` can also end the
-        // battle with no outcome at all, on a failed turn
-        // (`battle_finalize::finalize_battle_turn`'s own `turn_failed`
-        // abort) -- an id retained past that point would be stale the
-        // instant a fresh cone entry reuses this field.
+        // Slot-based, not outcome-based: `Self::sight_trainer_id`'s own
+        // abort clause.
         if self.sight_trainer_battle.is_none() {
             self.sight_trainer_id = None;
         }

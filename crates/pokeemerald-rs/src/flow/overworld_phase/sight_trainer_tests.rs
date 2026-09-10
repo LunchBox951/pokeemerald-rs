@@ -1448,17 +1448,9 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
         .trainer()
 }
 
-/// [`OverworldPhase::sight_trainer_id`]'s own doc comment promises it is
-/// "cleared the instant [the battle] ends (win, loss, or abort alike), so
-/// it is never stale once [`OverworldPhase::sight_trainer_battle`] is
-/// `None` again". A turn the engine cannot play -- here a lead whose slot 0
-/// has no PP left, so `Battle::take_turn`'s pre-draw validation returns
-/// `battle::BattleError::NoPpRemaining(0)` -- empties the battle slot with
-/// **no outcome at all** (`flow::battle_finalize::finalize_battle_turn`'s
-/// own `turn_failed` arm), which is the "abort" case that doc names. The
-/// sibling `route103_rival_trigger` already clears `rival_trainer_id`
-/// whenever `rival_battle.is_none()`, off the battle slot rather than off
-/// the outcome, for exactly this reason.
+/// Pins [`OverworldPhase::sight_trainer_id`]'s abort clause: a lead with no
+/// PP left in its only move fails the turn with no outcome at all, which
+/// must still clear the id.
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
     let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
