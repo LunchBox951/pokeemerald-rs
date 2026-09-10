@@ -169,25 +169,9 @@ pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_POISON_HIT
 }
 
-/// Whether poison could land on `defender` right now, independent of any
-/// roll: the silent guards `SetMoveEffect`'s `STATUS1_POISON` case checks
-/// once the effect-chance draw has already succeeded.
-///
-/// * Poison and Steel types are immune outright
-///   (`battle_script_commands.c:2330`-`:2333`).
-/// * A defender already carrying any primary status refuses a second one
-///   (`:2334`-`:2335`).
-/// * [`AbilityId::IMMUNITY`] blocks poison specifically (`:2336`-`:2337`).
-/// * Shield Dust blocks *every* chance-based secondary this way, silently,
-///   for a plain move's own effect (`!primary`, byte `<= 9`,
-///   `:2253`-`:2255`); its "ability blocks it" message only fires for a
-///   primary or certain effect, neither of which [`EFFECT_POISON_HIT`] ever
-///   is.
-///
-/// Shared between [`ensure_admissible`]'s pre-turn screen and
-/// [`spend_effect_chance_draw`]'s post-draw application, since both ask
-/// exactly this question — the former before any roll happens, the latter
-/// after one has already succeeded.
+/// `SetMoveEffect`'s silent `STATUS1_POISON` guards
+/// (`battle_script_commands.c:2330-2337`), plus Shield Dust's silent block
+/// of a plain move's chance-based effect (`:2253-2255`).
 #[must_use]
 fn poison_can_land(defender: &BattlePokemon) -> bool {
     let types = defender.types();
