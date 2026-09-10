@@ -1,9 +1,9 @@
-//! [`Song`]/[`SongEvent`] round-trip and validation tests, split out of
-//! `song.rs` itself to keep that file under this crate's ~600-line-per-file
-//! guideline (`oop-boundaries`) — mirrors `super::super::voicegroup`'s own
-//! `mod tests;` split.
-
 use super::*;
+
+const FIRST_ID_BYTE: usize = size_of::<u16>();
+const EMPTY_ID_SONG_METADATA_BYTES: usize = size_of::<u16>() + 4;
+const FIRST_EVENT_TAG_BYTE: usize = EMPTY_ID_SONG_METADATA_BYTES + size_of::<u32>();
+const FIRST_EVENT_OPERAND_BYTE: usize = FIRST_EVENT_TAG_BYTE + 1;
 
 fn sample_track() -> Vec<SongEvent> {
     vec![
@@ -32,7 +32,18 @@ fn song(tracks: Vec<Vec<SongEvent>>) -> Song {
         None,
         tracks,
     )
-    .expect("within every documented bound")
+    .expect("test song fits schema bounds")
+}
+
+fn single_event_bytes(event: SongEvent) -> Vec<u8> {
+    Song::new(VoiceGroupId(String::new()), 0, None, vec![vec![event]])
+        .expect("single-event test song fits schema bounds")
+        .encode()
+}
+
+fn overwrite_trailing_u32(bytes: &mut [u8], value: u32) {
+    let start = bytes.len() - size_of::<u32>();
+    bytes[start..].copy_from_slice(&value.to_le_bytes());
 }
 
 #[test]
@@ -69,31 +80,62 @@ fn no_reverb_override_round_trips() {
 }
 
 #[test]
-fn every_controller_and_note_event_kind_round_trips() {
+fn every_event_variant_round_trips_with_full_width_controller_values() {
     let track = vec![
-        SongEvent::Wait(96),
+        SongEvent::Wait(u8::MAX),
         SongEvent::Note {
-            key: 0,
-            velocity: 0,
-            gate: 0,
+            key: u8::MIN,
+            velocity: u8::MIN,
+            gate: u8::MIN,
         },
-        SongEvent::EndOfTie { key: Some(72) },
-        SongEvent::Voice(127),
-        SongEvent::Volume(0),
-        SongEvent::Pan(-64),
-        SongEvent::Pan(63),
-        SongEvent::Bend(0),
-        SongEvent::BendRange(2),
-        SongEvent::Tune(-64),
-        SongEvent::KeyShift(12),
-        SongEvent::Tempo(300),
-        SongEvent::Priority(255),
-        SongEvent::LfoSpeed(16),
-        SongEvent::LfoDelay(0),
-        SongEvent::Modulation(127),
-        SongEvent::ModType(1),
-        SongEvent::PseudoEchoVolume(127),
-        SongEvent::PseudoEchoLength(0),
+        SongEvent::Note {
+            key: u8::MAX,
+            velocity: u8::MAX,
+            gate: u8::MAX,
+        },
+        SongEvent::EndOfTie { key: None },
+        SongEvent::EndOfTie { key: Some(u8::MAX) },
+        SongEvent::Voice(u8::MIN),
+        SongEvent::Voice(u8::MAX),
+        SongEvent::Volume(u8::MIN),
+        SongEvent::Volume(u8::MAX),
+        SongEvent::Pan(i8::MIN),
+        SongEvent::Pan(i8::MAX),
+        SongEvent::Bend(i8::MIN),
+        SongEvent::Bend(i8::MAX),
+        SongEvent::BendRange(u8::MIN),
+        SongEvent::BendRange(u8::MAX),
+        SongEvent::Tune(i8::MIN),
+        SongEvent::Tune(i8::MAX),
+        SongEvent::KeyShift(i8::MIN),
+        SongEvent::KeyShift(i8::MAX),
+        SongEvent::Tempo(u16::MIN),
+        SongEvent::Tempo(u16::MAX),
+        SongEvent::Priority(u8::MIN),
+        SongEvent::Priority(u8::MAX),
+        SongEvent::LfoSpeed(u8::MIN),
+        SongEvent::LfoSpeed(u8::MAX),
+        SongEvent::LfoDelay(u8::MIN),
+        SongEvent::LfoDelay(u8::MAX),
+        SongEvent::Modulation(u8::MIN),
+        SongEvent::Modulation(u8::MAX),
+        SongEvent::ModType(u8::MIN),
+        SongEvent::ModType(u8::MAX),
+        SongEvent::PseudoEchoVolume(u8::MIN),
+        SongEvent::PseudoEchoVolume(u8::MAX),
+        SongEvent::PseudoEchoLength(u8::MIN),
+        SongEvent::PseudoEchoLength(u8::MAX),
+        SongEvent::MemAcc {
+            op: MemAccOp::Set,
+            address: u8::MIN,
+            data: u8::MAX,
+        },
+        SongEvent::MemAccBranch {
+            condition: MemAccCondition::Eq,
+            address: u8::MAX,
+            data: u8::MIN,
+            target: 0,
+        },
         SongEvent::Goto(0),
         SongEvent::Fine,
     ];
@@ -109,11 +151,36 @@ fn every_controller_and_note_event_kind_round_trips() {
 }
 
 #[test]
+fn event_tags_preserve_the_append_only_wire_identities() {
+    let tags = [
+        EventTag::Wait,
+        EventTag::Note,
+        EventTag::EndOfTie,
+        EventTag::Voice,
+        EventTag::Volume,
+        EventTag::Pan,
+        EventTag::Bend,
+        EventTag::BendRange,
+        EventTag::Tune,
+        EventTag::KeyShift,
+        EventTag::Tempo,
+        EventTag::Priority,
+        EventTag::LfoSpeed,
+        EventTag::LfoDelay,
+        EventTag::Modulation,
+        EventTag::ModType,
+        EventTag::Goto,
+        EventTag::Fine,
+        EventTag::PseudoEchoVolume,
+        EventTag::PseudoEchoLength,
+        EventTag::MemAcc,
+        EventTag::MemAccBranch,
+    ];
+    assert_eq!(tags.map(EventTag::byte), (0..=21).collect::<Vec<_>>()[..]);
+}
+
+#[test]
 fn the_pseudo_echo_pair_round_trips_at_both_ends_of_its_range() {
-    // `XCMD xIECV`/`xIECL` (m4a.c `ply_xiecv`/`ply_xiecl`) are the only two
-    // extended commands mid2agb emits, and they carry the CGB decay tail --
-    // audible content, so pin both operand extremes explicitly rather than
-    // relying on the mixed-event test above.
     let track = vec![
         SongEvent::PseudoEchoVolume(0),
         SongEvent::PseudoEchoVolume(255),
@@ -128,10 +195,6 @@ fn the_pseudo_echo_pair_round_trips_at_both_ends_of_its_range() {
 
 #[test]
 fn the_pseudo_echo_pair_survives_alongside_the_notes_it_decorates() {
-    // The shape mid2agb actually emits: the echo settings precede the notes
-    // they apply to, and `ply_note` copies the track's current values onto
-    // each new channel -- so their position in the stream is meaningful and
-    // must survive a round trip unreordered.
     let track = vec![
         SongEvent::Voice(60),
         SongEvent::PseudoEchoVolume(80),
@@ -150,8 +213,6 @@ fn the_pseudo_echo_pair_survives_alongside_the_notes_it_decorates() {
 
 #[test]
 fn voice_command_selects_the_highest_slot_127() {
-    // MUS_TITLE's own MIDI source selects instrument 127 on one channel
-    // -- pin that a `Voice` event carrying that value round-trips.
     let song = song(vec![vec![SongEvent::Voice(127), SongEvent::Fine]]);
     let decoded = Song::decode(&song.encode()).unwrap();
     assert_eq!(decoded.tracks()[0][0], SongEvent::Voice(127));
@@ -159,9 +220,6 @@ fn voice_command_selects_the_highest_slot_127() {
 
 #[test]
 fn tempo_is_carried_as_a_track_event() {
-    // Upstream's `SongHeader` has no tempo field; tempo is a `TEMPO`
-    // command in a track's own stream (see the module docs), so this is
-    // where a song's starting tempo lives.
     let song = song(vec![vec![
         SongEvent::Tempo(144),
         SongEvent::Wait(1),
@@ -189,9 +247,6 @@ fn the_maximum_track_count_round_trips() {
 
 #[test]
 fn too_many_tracks_is_rejected_by_the_constructor() {
-    // The documented `MAX_TRACKS` bound is what makes `encode`'s `u8` track
-    // count total -- it must be an error at construction, not a panic
-    // inside `encode`.
     let tracks = vec![vec![SongEvent::Fine]; MAX_TRACKS + 1];
     assert_eq!(
         Song::new(VoiceGroupId("x".to_owned()), 0, None, tracks),
@@ -201,8 +256,6 @@ fn too_many_tracks_is_rejected_by_the_constructor() {
 
 #[test]
 fn an_oversize_voicegroup_id_is_rejected_by_the_constructor() {
-    // `Writer::string`'s `u16` length prefix is the bound; reaching it must
-    // be an `AudioError`, not a panic from safe code.
     let id = VoiceGroupId("x".repeat(usize::from(u16::MAX) + 1));
     assert_eq!(
         Song::new(id, 0, None, vec![]),
@@ -219,37 +272,28 @@ fn the_longest_encodable_voicegroup_id_is_accepted() {
 
 #[test]
 fn unknown_event_tag_is_rejected() {
-    let mut bytes = song(vec![vec![SongEvent::Fine]]).encode();
-    let last = bytes.len() - 1;
-    bytes[last] = 0xFF; // the lone event's tag byte
+    let mut bytes = single_event_bytes(SongEvent::Fine);
+    bytes[FIRST_EVENT_TAG_BYTE] = u8::MAX;
     assert_eq!(
         Song::decode(&bytes),
-        Err(AudioError::UnknownSongEvent(0xFF))
+        Err(AudioError::UnknownSongEvent(u8::MAX))
     );
 }
 
 #[test]
 fn a_tag_just_past_the_last_defined_one_is_rejected() {
-    // Guards the additive tag space: `TAG_MEM_ACC_BRANCH` (21) is the
-    // highest defined tag, so 22 must still be rejected rather than read as
-    // some neighbouring variant.
-    let mut bytes = song(vec![vec![SongEvent::Fine]]).encode();
-    let last = bytes.len() - 1;
-    bytes[last] = TAG_MEM_ACC_BRANCH + 1;
+    let mut bytes = single_event_bytes(SongEvent::Fine);
+    let unknown_tag = EventTag::MemAccBranch.byte() + 1;
+    bytes[FIRST_EVENT_TAG_BYTE] = unknown_tag;
     assert_eq!(
         Song::decode(&bytes),
-        Err(AudioError::UnknownSongEvent(TAG_MEM_ACC_BRANCH + 1))
+        Err(AudioError::UnknownSongEvent(unknown_tag))
     );
 }
 
-/// A `MEMACC` conditional-loop shape (review finding on #193): set a memory
-/// cell, play the body, then conditionally jump on the cell's value. No
-/// canonical song has this shape -- `mus_vs_trainer`, the only song carrying
-/// a `MEMACC` at all, issues a single unconditional `mem_set` and never
-/// branches -- so this exercises the [`SongEvent::MemAccBranch`] half of the
-/// pair as raw-ROM/defensive breadth rather than as shipped data.
 #[test]
 fn the_memacc_conditional_loop_round_trips() {
+    let final_event = 4;
     let track = vec![
         SongEvent::MemAcc {
             op: MemAccOp::Set,
@@ -265,7 +309,7 @@ fn the_memacc_conditional_loop_round_trips() {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            target: 4, // the trailing `Fine`, this track's last valid index.
+            target: final_event,
         },
         SongEvent::Goto(1),
         SongEvent::Fine,
@@ -280,9 +324,6 @@ fn the_memacc_conditional_loop_round_trips() {
     assert_eq!(Song::decode(&song.encode()).unwrap(), song);
 }
 
-/// Every [`MemAccOp`]/[`MemAccCondition`] discriminant round-trips, and
-/// each wire byte is upstream's own `mem_*` value (`sound/MPlayDef.s`) --
-/// transcribed literals, not read back from the enums under test.
 #[test]
 fn every_memacc_op_and_condition_round_trips_on_its_upstream_byte() {
     let ops = [
@@ -330,26 +371,21 @@ fn every_memacc_op_and_condition_round_trips_on_its_upstream_byte() {
     assert_eq!(Song::decode(&song.encode()).unwrap(), song);
 }
 
-/// A MEMACC op byte outside `0..=5` (or a branch condition outside
-/// `6..=17`) is structurally invalid, not a neighbouring variant.
 #[test]
 fn an_out_of_range_memacc_op_byte_is_rejected() {
-    // A track of exactly one MemAcc event: corrupt its op byte (the byte
-    // right after the event tag, which is the last-but-2 byte: tag, op,
-    // address, data).
-    let mut bytes = song(vec![vec![SongEvent::MemAcc {
+    let mut bytes = single_event_bytes(SongEvent::MemAcc {
         op: MemAccOp::Set,
         address: 0,
         data: 0,
-    }]])
-    .encode();
-    let op_at = bytes.len() - 3;
-    bytes[op_at] = 18; // first byte past mem_mem_blo -- valid for neither.
-    assert_eq!(Song::decode(&bytes), Err(AudioError::UnknownMemAccOp(18)));
+    });
+    let unknown_memacc_tag = 18;
+    bytes[FIRST_EVENT_OPERAND_BYTE] = unknown_memacc_tag;
+    assert_eq!(
+        Song::decode(&bytes),
+        Err(AudioError::UnknownMemAccOp(unknown_memacc_tag))
+    );
 }
 
-/// Review finding on #193: a decoder that ignores trailing bytes validates
-/// a corrupt (or newer-producer) payload as its own prefix.
 #[test]
 fn decode_rejects_trailing_bytes() {
     let mut bytes = song(vec![sample_track()]).encode();
@@ -359,9 +395,10 @@ fn decode_rejects_trailing_bytes() {
 
 #[test]
 fn a_non_utf8_voicegroup_id_is_rejected() {
-    let mut bytes = song(vec![]).encode();
-    // The id's bytes start right after its 2-byte length prefix.
-    bytes[2] = 0xFF;
+    let mut bytes = Song::new(VoiceGroupId("x".to_owned()), 0, None, vec![])
+        .unwrap()
+        .encode();
+    bytes[FIRST_ID_BYTE] = u8::MAX;
     assert_eq!(Song::decode(&bytes), Err(AudioError::InvalidString));
 }
 
@@ -380,11 +417,120 @@ fn truncated_input_is_rejected() {
     }
 }
 
-/// [`SongEvent::Goto`] and [`SongEvent::MemAccBranch`] targets are
-/// documented as event indices into their own track (module docs,
-/// "Looping"); a target at or past the track's own event count cannot
-/// address one. Mirrors
-/// [`super::super::sample::tests::constructor_rejects_a_loop_start_at_or_past_the_data_length`].
+mod canonical_waits {
+    use super::*;
+
+    fn canon(track: Vec<SongEvent>) -> Vec<SongEvent> {
+        song(vec![track]).tracks()[0].clone()
+    }
+
+    #[test]
+    fn adjacent_waits_merge() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(96),
+                SongEvent::Wait(4),
+                SongEvent::Fine
+            ]),
+            vec![SongEvent::Wait(100), SongEvent::Fine]
+        );
+    }
+
+    #[test]
+    fn a_long_rest_splits_greedily_with_the_remainder_last() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(96),
+                SongEvent::Wait(96),
+                SongEvent::Wait(96),
+                SongEvent::Wait(48),
+            ]),
+            vec![SongEvent::Wait(255), SongEvent::Wait(81)]
+        );
+        assert_eq!(
+            canon(vec![SongEvent::Wait(255), SongEvent::Wait(255)]),
+            vec![SongEvent::Wait(255), SongEvent::Wait(255)]
+        );
+    }
+
+    #[test]
+    fn a_zero_rest_vanishes() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(0),
+                SongEvent::Voice(1),
+                SongEvent::Wait(0)
+            ]),
+            vec![SongEvent::Voice(1)]
+        );
+    }
+
+    #[test]
+    fn a_canonical_track_is_unchanged() {
+        let track = sample_track();
+        assert_eq!(canon(track.clone()), track);
+    }
+
+    #[test]
+    fn jump_targets_follow_the_events_they_name() {
+        let voice_before_canonicalization = 4;
+        let voice_after_canonicalization = 2;
+        let track = vec![
+            SongEvent::Voice(0),
+            SongEvent::Wait(10),
+            SongEvent::Wait(10),
+            SongEvent::Wait(10),
+            SongEvent::Voice(1),
+            SongEvent::Goto(voice_before_canonicalization),
+        ];
+        assert_eq!(
+            canon(track),
+            vec![
+                SongEvent::Voice(0),
+                SongEvent::Wait(30),
+                SongEvent::Voice(1),
+                SongEvent::Goto(voice_after_canonicalization),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_does_not_merge_across_a_jump_target() {
+        let track = vec![
+            SongEvent::Wait(10),
+            SongEvent::Wait(20),
+            SongEvent::MemAccBranch {
+                condition: MemAccCondition::Eq,
+                address: 0,
+                data: 0,
+                target: 1,
+            },
+            SongEvent::Goto(1),
+        ];
+        assert_eq!(canon(track.clone()), track);
+    }
+
+    #[test]
+    fn a_target_past_the_end_is_left_alone() {
+        assert_eq!(
+            super::super::canonical::canonicalize_waits(&[SongEvent::Goto(99)]),
+            vec![SongEvent::Goto(99)]
+        );
+    }
+
+    #[test]
+    fn a_target_at_the_end_stays_at_the_end() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(1),
+                SongEvent::Wait(1),
+                SongEvent::Goto(2)
+            ]),
+            vec![SongEvent::Wait(2), SongEvent::Goto(1)]
+        );
+    }
+}
+
 #[test]
 fn the_constructor_rejects_a_jump_target_at_or_past_the_track_length() {
     for target in [2u32, 3, u32::MAX] {
@@ -429,11 +575,6 @@ fn the_constructor_rejects_a_jump_target_at_or_past_the_track_length() {
     }
 }
 
-/// Decode is the trust boundary for pack bytes, so it must reject the same
-/// out-of-range jump target its constructor does -- as
-/// [`super::super::sample::tests::decode_rejects_a_loop_start_at_or_past_the_decoded_data_length`]
-/// already does for a sample's loop start. Both target-carrying events sit
-/// last in their (only) track, so the trailing 4 bytes are the target.
 #[test]
 fn decode_rejects_a_goto_target_past_the_decoded_track_length() {
     let mut bytes = song(vec![vec![
@@ -445,8 +586,7 @@ fn decode_rejects_a_goto_target_past_the_decoded_track_length() {
         SongEvent::Goto(0),
     ]])
     .encode();
-    let target_at = bytes.len() - 4;
-    bytes[target_at..].copy_from_slice(&9_999u32.to_le_bytes());
+    overwrite_trailing_u32(&mut bytes, 9_999);
     assert_eq!(
         Song::decode(&bytes),
         Err(AudioError::JumpTargetOutOfRange {
@@ -474,8 +614,7 @@ fn decode_rejects_a_memaccbranch_target_past_the_decoded_track_length() {
         },
     ]])
     .encode();
-    let target_at = bytes.len() - 4;
-    bytes[target_at..].copy_from_slice(&9_999u32.to_le_bytes());
+    overwrite_trailing_u32(&mut bytes, 9_999);
     assert_eq!(
         Song::decode(&bytes),
         Err(AudioError::JumpTargetOutOfRange {
@@ -487,23 +626,22 @@ fn decode_rejects_a_memaccbranch_target_past_the_decoded_track_length() {
     );
 }
 
-/// A backward [`SongEvent::Goto`] and a self-targeting
-/// [`SongEvent::MemAccBranch`] both address an event strictly within their
-/// track (indices below `event_count`), so both remain accepted.
 #[test]
 fn a_song_with_backward_and_self_jump_targets_round_trips() {
+    let first_event = 0;
+    let branch_event = 2;
     let track = vec![
         SongEvent::Note {
             key: 60,
             velocity: 100,
             gate: 24,
         },
-        SongEvent::Goto(0), // backward: back to the track's first event.
+        SongEvent::Goto(first_event),
         SongEvent::MemAccBranch {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            target: 2, // self: this event's own index.
+            target: branch_event,
         },
         SongEvent::Fine,
     ];

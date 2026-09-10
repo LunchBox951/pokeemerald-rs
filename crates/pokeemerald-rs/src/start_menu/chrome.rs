@@ -1,12 +1,4 @@
-//! The start menu's windows: geometry, decoded chrome, and the Yes/No
-//! window (I-6, issue #232).
-//!
-//! Split out of [`super`] so that file keeps only the menu *state machine*
-//! (`one module = one concept` `(oop-boundaries)`): everything here is
-//! about where a window sits and what colour its pixels are, transcribed
-//! from `pokeemerald/src/menu.c`'s window templates and
-//! `src/start_menu.c`'s printer calls -- see [`super`]'s own geometry
-//! table for the full citation list.
+//! Draws the field start menu's item and confirmation windows.
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::AssetPack;
@@ -21,113 +13,87 @@ use crate::textbox::{self, FrameAssets};
 
 use super::StartMenuError;
 
-/// `AddStartMenuWindow`'s `tilemapLeft` (`pokeemerald/src/menu.c:493`).
+/// Tilemap column of the item window's content.
 pub(super) const MENU_TILEMAP_LEFT: i32 = 22;
-/// `AddStartMenuWindow`'s `tilemapTop` (`:493`).
+/// Tilemap row of the item window's content.
 pub(super) const MENU_TILEMAP_TOP: i32 = 1;
-/// `AddStartMenuWindow`'s `width`, in tiles (`:493`).
+/// Item-window content width in tiles.
 pub(super) const MENU_WIDTH: i32 = 7;
-/// `numActions * 2 + 2` (`:493`): each item is two tiles tall, plus a
-/// one-tile margin at each end.
-pub(super) fn menu_height(items: usize) -> i32 {
-    i32::try_from(items).unwrap_or(0) * 2 + 2
-}
-/// `PrintStartMenuActions`' window-local label origin: `x = 8`,
-/// `y = (index << 4) + 9` (`start_menu.c:472-473`).
-pub(super) const LABEL_ORIGIN: (i32, i32) = (8, 9);
-/// `InitMenuNormal(GetStartMenuWindowId(), FONT_NORMAL, 0, 9, 16, ...)`
-/// (`start_menu.c:511`): the cursor's own window-local `(left, top)`.
-pub(super) const CURSOR_ORIGIN: (i32, i32) = (0, 9);
-/// `sMenu.optionHeight` for both this menu (`:511`) and the Yes/No menu
-/// (`src/menu.c:1566`): one item every 16 pixels.
-pub(super) const OPTION_HEIGHT_PX: i32 = 16;
+const ITEM_HEIGHT_TILES: i32 = 2;
+const ITEM_WINDOW_VERTICAL_MARGIN_TILES: i32 = 2;
 
-/// `sYesNo_WindowTemplates` (`pokeemerald/src/menu.c:98-107`).
+/// Item-window content height in tiles.
+pub(super) fn menu_height(items: usize) -> i32 {
+    i32::try_from(items).unwrap_or(0) * ITEM_HEIGHT_TILES + ITEM_WINDOW_VERTICAL_MARGIN_TILES
+}
+
+/// Window-local pixel origin of the first item label.
+pub(super) const LABEL_ORIGIN: (i32, i32) = (8, 9);
+/// Window-local pixel origin of the item cursor.
+pub(super) const CURSOR_ORIGIN: (i32, i32) = (0, 9);
+/// Vertical distance between menu options in pixels.
+pub(super) const OPTION_HEIGHT_PX: i32 = ITEM_HEIGHT_TILES * TILE_SIZE_PX;
+
+/// Tilemap column of the confirmation window's content.
 pub(super) const YES_NO_TILEMAP_LEFT: i32 = 21;
-/// See [`YES_NO_TILEMAP_LEFT`].
+/// Tilemap row of the confirmation window's content.
 pub(super) const YES_NO_TILEMAP_TOP: i32 = 9;
-/// See [`YES_NO_TILEMAP_LEFT`].
+/// Confirmation-window content width in tiles.
 pub(super) const YES_NO_WIDTH: i32 = 5;
-/// See [`YES_NO_TILEMAP_LEFT`].
+/// Confirmation-window content height in tiles.
 pub(super) const YES_NO_HEIGHT: i32 = 4;
-/// `CreateYesNoMenu`'s `gText_YesNo` printer origin (`src/menu.c:1628-1631`)
-/// and `InitMenuInUpperLeftCorner`'s cursor `top` (`:1561`) -- the label at
-/// `(8, 1)`, the cursor at `(0, 1)`.
+/// Window-local pixel origin of the YES and NO labels.
 pub(super) const YES_NO_LABEL_ORIGIN: (i32, i32) = (8, 1);
-/// See [`YES_NO_LABEL_ORIGIN`].
+/// Window-local pixel origin of the confirmation cursor.
 pub(super) const YES_NO_CURSOR_ORIGIN: (i32, i32) = (0, 1);
 
-/// `gText_SelectorArrow3` (`pokeemerald/src/strings.c:1468`): the glyph
-/// `Menu_MoveCursor` prints at the selected row (`src/menu.c:945`).
+/// Glyph drawn beside the selected menu option.
 pub(super) const SELECTOR_ARROW: char = '▶';
 
-/// `text_window_frame`'s zero-based frame id, the same
-/// `WINDOW_FRAME_TYPE_0` [`crate::main_menu`] uses -- `DrawStdWindowFrame`
-/// draws `STD_WINDOW_BASE_TILE_NUM`, whose tiles are loaded from
-/// `GetWindowFrameTilesPal(gSaveBlock2Ptr->optionsWindowFrameType)` and
-/// default to frame 0 on a fresh save block.
-const FRAME_ID: u8 = 0;
-
-/// `FillWindowPixelBuffer(windowId, PIXEL_FILL(1))`
-/// (`DrawStdWindowFrame`, `src/menu.c:228`): the window-content fill is
-/// palette index 1 of the window's own buffer, which every window here
-/// loads onto palette bank 15 -- the message-box palette
-/// (`LoadMessageBoxAndBorderGfx`/`LoadMessageBoxGfx`,
-/// `src/text_window.c:93-112,187-190`) -- while the surrounding standard
-/// border tiles stay on bank 14, the selected frame's own palette
-/// (`pokeemerald/src/menu.c:23-27,98-107,210-213,490-494`).
-const CONTENT_FILL_INDEX: usize = 1;
-/// `gFontInfos[FONT_NORMAL].fgColor` (`src/text.c:137`).
-const FONT_FG_INDEX: usize = 2;
-/// `gFontInfos[FONT_NORMAL].shadowColor` (`src/text.c:139`).
-const FONT_SHADOW_INDEX: usize = 3;
-
-/// `engine::text::window::TILE_SIZE` as a plain `i32`, for this module's
-/// tilemap -> pixel conversions (mirrors [`crate::main_menu`]'s own).
-const TILE_PX: i32 = 8;
+const DEFAULT_WINDOW_FRAME_ID: u8 = 0;
+const CONTENT_FILL_PALETTE_INDEX: usize = 1;
+const GLYPH_COLOR_COUNT: usize = 4;
+const GLYPH_FOREGROUND_INDEX: usize = 1;
+const GLYPH_SHADOW_INDEX: usize = 2;
+const FONT_FOREGROUND_PALETTE_INDEX: usize = 2;
+const FONT_SHADOW_PALETTE_INDEX: usize = 3;
+const TILE_SIZE_PX: i32 = msgwin::TILE_SIZE.cast_signed();
 const _: () = assert!(msgwin::TILE_SIZE == 8);
 
-/// The decoded chrome every window this menu opens draws itself from: the
-/// font sheet, the standard window frame, and the field message box's own
-/// frame.
-///
-/// Owned once per opened menu rather than re-read per message: upstream
-/// loads all of it into VRAM when the menu opens
-/// (`LoadMessageBoxAndBorderGfx`) and every window from then on is a
-/// tilemap write.
+/// Assets used to draw every window owned by an open start menu.
 #[derive(Debug)]
 pub(crate) struct StartMenuChrome {
-    pub(super) sheet: OwnedFontGlyphSheet,
-    /// `GetWindowFrameTilesPal(...)`, drawn by `DrawStdWindowFrame`.
+    font_sheet: OwnedFontGlyphSheet,
     pub(super) std_frame: FrameAssets,
-    /// The dialogue frame `ShowSaveMessage`'s box draws.
     pub(super) message_frame: FrameAssets,
 }
 
 impl StartMenuChrome {
-    /// Copy the three pack entries out of an already-loaded `pack`.
+    /// Loads owned font and window assets from an asset pack.
     ///
     /// # Errors
     ///
-    /// [`StartMenuError::Pack`] if any entry is missing or malformed;
-    /// [`StartMenuError::Font`] if the font sheet doesn't decode.
+    /// Returns [`StartMenuError::Pack`] when an entry is missing or malformed,
+    /// or [`StartMenuError::Font`] when the font sheet does not decode.
     pub(super) fn from_pack(pack: &AssetPack) -> Result<Self, StartMenuError> {
         Ok(Self {
-            sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
-            std_frame: FrameAssets::from_handle(pack.text_window_frame(FRAME_ID)?),
+            font_sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
+            std_frame: FrameAssets::from_handle(pack.text_window_frame(DEFAULT_WINDOW_FRAME_ID)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
     }
 
-    /// A field message box printing `tokens` -- `ShowSaveMessage`'s window
-    /// ([`NpcDialog::new`]'s own docs on why the two share a type).
-    pub(super) fn message_box(&self, tokens: Vec<Token>) -> NpcDialog {
-        NpcDialog::new(self.sheet.clone(), self.message_frame.clone(), tokens)
+    /// Creates a field message box with the start menu's loaded assets.
+    pub(super) fn message_box(&self, tokens: Vec<Token>, text_speed: TextSpeed) -> NpcDialog {
+        NpcDialog::new(
+            self.font_sheet.clone(),
+            self.message_frame.clone(),
+            tokens,
+            text_speed,
+        )
     }
 
-    /// `AddTextPrinterParameterized`'s effect for a fixed menu label:
-    /// every glyph, revealed at once (menu labels are never paced --
-    /// [`crate::main_menu`]'s "Rendering pipeline" docs own that rationale).
+    /// Renders every glyph in a fixed menu label immediately.
     pub(super) fn render_label(&self, text: &str) -> Vec<RevealedGlyph> {
         let mut tokens: Vec<Token> = text
             .chars()
@@ -141,7 +107,7 @@ impl StartMenuChrome {
             .collect();
         tokens.push(Token::End);
         let ticks = tokens.len();
-        let mut printer = Printer::new(tokens, self.sheet.sheet(), TextSpeed::Instant, (0, 0));
+        let mut printer = Printer::new(tokens, self.font_sheet.sheet(), TextSpeed::Instant, (0, 0));
         let mut glyphs = Vec::new();
         for _ in 0..=ticks {
             match printer.tick(PrinterInput::none()) {
@@ -153,78 +119,78 @@ impl StartMenuChrome {
         glyphs
     }
 
-    /// The glyph-index -> colour mapping every window here prints with:
-    /// `FONT_NORMAL`'s own default `fgColor`/`shadowColor` indices, read
-    /// out of the message-box palette that every window buffer here loads
-    /// onto bank 15 -- not the standard frame's own bank-14 palette, which
-    /// only the border tiles use. Index 0 (background) and index 3 (box)
-    /// stay transparent -- the window content rect is already filled
-    /// [`CONTENT_FILL_INDEX`] before any glyph is drawn, exactly as
-    /// `DrawStdWindowFrame`'s own `FillWindowPixelBuffer` does.
-    fn glyph_colors(&self) -> [Option<Rgb888>; 4] {
-        let color = |index: usize| self.message_frame.palette.get(index).copied();
-        [None, color(FONT_FG_INDEX), color(FONT_SHADOW_INDEX), None]
+    fn glyph_colors(&self) -> [Option<Rgb888>; GLYPH_COLOR_COUNT] {
+        let palette_color = |index: usize| self.message_frame.palette.get(index).copied();
+        let mut colors = [None; GLYPH_COLOR_COUNT];
+        colors[GLYPH_FOREGROUND_INDEX] = palette_color(FONT_FOREGROUND_PALETTE_INDEX);
+        colors[GLYPH_SHADOW_INDEX] = palette_color(FONT_SHADOW_PALETTE_INDEX);
+        colors
     }
 
-    /// [`CONTENT_FILL_INDEX`]'s real colour, out of the message-box
-    /// palette (see [`Self::glyph_colors`]), or black for a palette too
-    /// short to have one (unreachable against an extracted pack, whose
-    /// window palettes are always a full bank).
-    fn content_fill(&self) -> Rgb888 {
+    // The game assigns standard-window borders and message-box content to
+    // separate palette banks.
+    fn content_fill_color(&self) -> Rgb888 {
         self.message_frame
             .palette
-            .get(CONTENT_FILL_INDEX)
+            .get(CONTENT_FILL_PALETTE_INDEX)
             .copied()
             .unwrap_or(Rgb888::BLACK)
     }
 
-    /// Draw one standard window: `DrawStdWindowFrame`'s content fill plus
-    /// [`msgwin::border_tiles`]' border ring, at a tilemap rect.
+    /// Draws a standard window at a tilemap rectangle.
     pub(super) fn draw_window(
         &self,
         fb: &mut Framebuffer,
-        left: i32,
-        top: i32,
-        width: i32,
-        height: i32,
+        left_tiles: i32,
+        top_tiles: i32,
+        width_tiles: i32,
+        height_tiles: i32,
     ) {
         textbox::fill_rect(
             fb,
-            (left * TILE_PX, top * TILE_PX),
-            width * TILE_PX,
-            height * TILE_PX,
-            self.content_fill(),
+            (left_tiles * TILE_SIZE_PX, top_tiles * TILE_SIZE_PX),
+            width_tiles * TILE_SIZE_PX,
+            height_tiles * TILE_SIZE_PX,
+            self.content_fill_color(),
         );
-        let tiles = msgwin::border_tiles(left, top, width, height);
+        let tiles = msgwin::border_tiles(left_tiles, top_tiles, width_tiles, height_tiles);
         textbox::blit_frame_tiles(fb, &tiles, self.std_frame.image(), &self.std_frame.palette);
     }
 
-    /// Blit `glyphs` at a window-local `origin` inside the window whose
-    /// content rect starts at tilemap `(left, top)` and is
-    /// `width`x`height` tiles, clipped to that rect.
+    /// Draws glyphs at a window-local pixel origin, clipped to its content.
     pub(super) fn draw_text(
         &self,
         fb: &mut Framebuffer,
-        window: (i32, i32, i32, i32),
-        origin: (i32, i32),
+        window_tiles: (i32, i32, i32, i32),
+        origin_px: (i32, i32),
         glyphs: &[RevealedGlyph],
     ) {
-        let (left, top, width, height) = window;
+        let (left_tiles, top_tiles, width_tiles, height_tiles) = window_tiles;
         textbox::blit_glyphs_colored(
             fb,
             glyphs,
-            (left * TILE_PX + origin.0, top * TILE_PX + origin.1),
-            (width * TILE_PX - origin.0, height * TILE_PX - origin.1),
+            (
+                left_tiles * TILE_SIZE_PX + origin_px.0,
+                top_tiles * TILE_SIZE_PX + origin_px.1,
+            ),
+            (
+                width_tiles * TILE_SIZE_PX - origin_px.0,
+                height_tiles * TILE_SIZE_PX - origin_px.1,
+            ),
             &self.glyph_colors(),
         );
     }
 }
 
-/// Test-only: blank chrome -- an all-zero glyph sheet of the real shape and
-/// two flat window frames -- so [`super`]'s own tests and
-/// `crate::flow::save_continue_tests` can drive the production menu with no
-/// extracted pack (mirrors
-/// [`crate::overworld::dialog::synthetic_dialog`]).
+#[cfg(test)]
+const FONT_SHEET_BIT_DEPTH: u8 = 2;
+#[cfg(test)]
+const STANDARD_FRAME_SIZE_TILES: (u32, u32) = (3, 3);
+#[cfg(test)]
+const MESSAGE_FRAME_SIZE_TILES: (u32, u32) = (7, 2);
+#[cfg(test)]
+const WINDOW_PALETTE_COLOR_COUNT: usize = 16;
+
 #[cfg(test)]
 impl StartMenuChrome {
     pub(super) fn synthetic() -> Self {
@@ -235,58 +201,53 @@ impl StartMenuChrome {
         let image = ImageRef {
             width: assets::fonts::SHEET_WIDTH,
             height: assets::fonts::SHEET_HEIGHT,
-            bit_depth: 2,
+            bit_depth: FONT_SHEET_BIT_DEPTH,
             pixels: &pixels,
         };
         let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
             .expect("this is the exact real glyph-sheet shape");
         Self {
-            sheet,
-            std_frame: FrameAssets {
-                pixels: vec![0u8; 24 * 24],
-                width: 24,
-                height: 24,
-                palette: vec![Rgb888::BLACK; 16],
-            },
-            message_frame: FrameAssets {
-                pixels: vec![0u8; 56 * 16],
-                width: 56,
-                height: 16,
-                palette: vec![Rgb888::BLACK; 16],
-            },
+            font_sheet: sheet,
+            std_frame: synthetic_frame(STANDARD_FRAME_SIZE_TILES),
+            message_frame: synthetic_frame(MESSAGE_FRAME_SIZE_TILES),
         }
     }
 }
 
-/// The Yes/No window `DisplayYesNoMenuDefaultYes`/`WithDefault` opens
-/// (`src/menu.c:464-472`), as a two-row cursor.
+#[cfg(test)]
+fn synthetic_frame((width_tiles, height_tiles): (u32, u32)) -> FrameAssets {
+    let width = width_tiles * msgwin::TILE_SIZE;
+    let height = height_tiles * msgwin::TILE_SIZE;
+    FrameAssets {
+        pixels: vec![0u8; (width * height) as usize],
+        width,
+        height,
+        palette: vec![Rgb888::BLACK; WINDOW_PALETTE_COLOR_COUNT],
+    }
+}
+
+const YES_OPTION: u8 = 0;
+const NO_OPTION: u8 = 1;
+
+/// Selection state for the two-row YES/NO confirmation window.
 #[derive(Debug)]
 pub(crate) struct YesNoMenu {
-    /// `sMenu.cursorPos`: `0` = YES, `1` = NO.
+    /// Zero-based selected row.
     pub(super) cursor: u8,
 }
 
 impl YesNoMenu {
-    /// `CreateYesNoMenu(..., initialCursorPos)` -- `default_no` selects
-    /// upstream's `DisplayYesNoMenuWithDefault(1)`, the *scarier* prompt's
-    /// default (`start_menu.c:1051`).
+    /// Creates a confirmation menu, optionally with NO selected.
     pub(super) fn new(default_no: bool) -> Self {
         Self {
-            cursor: u8::from(default_no),
+            cursor: if default_no { NO_OPTION } else { YES_OPTION },
         }
     }
 
-    /// `Menu_ProcessInputNoWrap` (`src/menu.c:1013-1041`): A chooses the
-    /// row under the cursor, B is `MENU_B_PRESSED` (which every caller here
-    /// treats as NO), and Up/Down move without wrapping
-    /// (`Menu_MoveCursorNoWrapAround`, `:964-978`) -- unlike the start
-    /// menu's own cursor, which does wrap.
-    ///
-    /// Returns `Some(true)` for YES, `Some(false)` for NO or B, `None`
-    /// while nothing has been chosen.
+    /// Returns the selected answer after A or B, or `None` while waiting.
     pub(super) fn process_input(&mut self, buttons: ButtonState) -> Option<bool> {
         if buttons.is_newly_pressed(Buttons::A) {
-            return Some(self.cursor == 0);
+            return Some(self.cursor == YES_OPTION);
         }
         if buttons.is_newly_pressed(Buttons::B) {
             return Some(false);
@@ -294,7 +255,7 @@ impl YesNoMenu {
         if buttons.is_newly_pressed(Buttons::UP) {
             self.cursor = self.cursor.saturating_sub(1);
         } else if buttons.is_newly_pressed(Buttons::DOWN) {
-            self.cursor = 1;
+            self.cursor = NO_OPTION;
         }
         None
     }

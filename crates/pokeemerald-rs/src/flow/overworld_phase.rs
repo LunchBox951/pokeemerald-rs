@@ -127,6 +127,18 @@ impl From<OverworldSceneError> for ContinueError {
     }
 }
 
+/// Test-only stand-in for [`OverworldPhase::build_start_menu`]'s pack load.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow) enum SyntheticStartMenu {
+    /// Load the menu from the real pack source, as production does.
+    RealPack,
+    /// Build [`crate::start_menu::synthetic_start_menu_at`] without a pack.
+    Builds,
+    /// Fail the build, as a missing or unreadable pack would.
+    Fails,
+}
+
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
@@ -193,6 +205,19 @@ pub(crate) struct OverworldPhase {
     /// would run at frame rate against a refused edge. Never consulted by
     /// anything else; warps keep their own per-transition loads.
     connection_pack: OnceCell<assets::pack::AssetPack>,
+    /// Where every pack load this phase performs after construction reads
+    /// from (issue #412): [`Self::load`]/[`Self::continue_saved_game`]'s own
+    /// `source` argument, retained for [`Self::warp_to`]/
+    /// [`Self::warp_to_position`]/[`Self::cross_connection`],
+    /// [`connections::MapConnections`]'s memoized collision pack,
+    /// [`start_menu::open`](crate::start_menu::open)'s field start menu, and
+    /// [`NpcDialog::open`]'s ordinary and sight-trainer dialog -- every load
+    /// this phase can trigger mid-session, not just the one that built it.
+    /// A headless-real scenario's [`crate::pack_source::PackSource::Repo`]
+    /// therefore reaches every one of them, not only the room
+    /// [`crate::App::boot`] loads eagerly (`crate::pack_source`'s own
+    /// module docs).
+    pub(super) pack_source: crate::pack_source::PackSource,
     /// This run's single `Random()` stream (issue #169) -- upstream's
     /// `gRngValue`, owned rather than global `(oop-boundaries)`. Every
     /// encounter roll *and* the wild battle it hands off to draw from it in
@@ -341,7 +366,7 @@ pub(crate) struct OverworldPhase {
     /// on next, retained across close/reopen for this session's whole life
     /// -- upstream's own EWRAM lifetime, since neither the START/B close
     /// (`:629-633`) nor the EXIT close (`:747-752`) resets it. Seeds every
-    /// [`crate::start_menu::open_default`] (and its test-only
+    /// [`crate::start_menu::open`] (and its test-only
     /// `open_synthetic_start_menu` counterpart) and is written back from
     /// the closing [`StartMenu`] in [`Self::advance_start_menu_frame`]
     /// before that menu is dropped. Zero (`SAVE`, the first entry of
@@ -349,6 +374,18 @@ pub(crate) struct OverworldPhase {
     /// [`Self::new`] and [`Self::from_saved`], matching a fresh boot's
     /// zeroed EWRAM.
     start_menu_cursor: usize,
+    /// Test-only: what [`Self::build_start_menu`] does instead of
+    /// [`crate::start_menu::open`]'s real pack load, so an end-to-end
+    /// [`Self::step`] test can drive a menu that genuinely opens, or one
+    /// that genuinely fails, without depending on a local pack.
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_start_menu: SyntheticStartMenu,
+    /// Test-only: the trainer
+    /// [`Self::begin_sight_trainer_approach_if_seen`] builds its battle
+    /// against, in place of the scanned object event's own, so a test can
+    /// drive a cone that claims its trigger frame through [`Self::step`].
+    #[cfg(test)]
+    pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -437,20 +474,50 @@ impl OverworldPhase {
     /// party/bag/event data), not just the in-memory spawn position, so a
     /// future save-write path has real state to persist instead of
     /// re-deriving it from scratch.
+    ///
+    /// Test-only (issue #412): every production caller now goes through
+    /// [`Self::load`] directly with [`crate::App`]'s own retained
+    /// [`crate::pack_source::PackSource`] (`crate::flow::advance_scene`'s
+    /// `Intro` -> `Overworld` arms); this thin [`PackSource::Runtime`](crate::pack_source::PackSource::Runtime)
+    /// wrapper stays only because the many real-pack tests that never cared
+    /// which source they got would otherwise all need to spell out the
+    /// default explicitly.
+    #[cfg(test)]
     pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
+        Self::load(crate::pack_source::PackSource::Runtime)
+    }
+
+    /// [`Self::load_default`], pinned to whichever
+    /// [`crate::pack_source::PackSource`] `source` names instead of always
+    /// the runtime resolver (issue #412) -- what [`crate::flow::advance_scene`]
+    /// calls with the same source [`crate::App`] resolved at construction,
+    /// so a headless-real scenario's `Intro` -> `Overworld` transition keeps
+    /// reading the checkout's own pack, and every load this phase performs
+    /// afterwards inherits the same pin ([`Self::pack_source`]'s own field
+    /// docs).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::load_default`].
+    pub(super) fn load(
+        source: crate::pack_source::PackSource,
+    ) -> Result<Self, OverworldSceneError> {
         // No session event-data exists yet at this point (`new_game::init_save_blocks`
         // hasn't run) -- a fresh store is the honest value: `SPAWN_MAP_ID` is
         // always the protagonist's bedroom, never Route 103, so nothing this
         // port's own `OBJ_EVENT_GFX_VAR_0` exception (issue #248,
         // `crate::overworld::npc`'s module docs) reads here could ever
         // differ from a fresh store's `0` in production.
-        let scene = overworld::load_default_room(&engine::event_data::EventData::new())?;
+        let scene = overworld::load_default_room_from_source(
+            source,
+            &engine::event_data::EventData::new(),
+        )?;
         let player = PlayerState::new(
             new_game::SPAWN_POSITION,
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None);
+        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source);
         // The stand-in for the un-ported starter handout (issue #207
         // review): without a lead, every I-4 encounter would be rolled and
         // dropped. Deliberately drawing nothing from `phase.rng` — see
@@ -488,7 +555,16 @@ impl OverworldPhase {
     /// [`ContinueError::UnknownLocation`] if the save's location names no
     /// known map; [`ContinueError::Scene`] if that map's scene will not load
     /// (most commonly: no extracted pack).
+    ///
+    /// `source` is [`crate::App`]'s own retained
+    /// [`crate::pack_source::PackSource`] (issue #412), the same one
+    /// [`crate::flow::advance_scene`] passes to [`Self::load`] -- a
+    /// headless-real scenario's `MainMenu` -> `Overworld` continue keeps
+    /// reading the checkout's own pack, and every load this phase performs
+    /// afterwards inherits the same pin ([`Self::pack_source`]'s own field
+    /// docs).
     pub(super) fn continue_saved_game(
+        source: crate::pack_source::PackSource,
         block1: SaveBlock1,
         block2: SaveBlock2,
     ) -> Result<Self, ContinueError> {
@@ -502,8 +578,20 @@ impl OverworldPhase {
         // and this is what lets the resumed scene resolve the rival's
         // sprite correctly on the very first composed frame -- no
         // on-transition script re-runs on a continue (module docs).
-        let scene = overworld::load_room(map_id, block2.player_gender.into(), &block1.event_data)?;
-        Ok(Self::from_saved(scene, map_id, block1, block2))
+        let scene = overworld::load_room_from_source(
+            source,
+            map_id,
+            block2.player_gender.into(),
+            &block1.event_data,
+        )?;
+        let mut phase = Self::from_saved(scene, map_id, block1, block2);
+        // `Self::from_saved` always builds with `PackSource::Runtime` (its
+        // own doc comment) -- this is the one production caller that must
+        // retain the source the room above actually loaded through, so
+        // every load this phase performs afterwards (warps, connections,
+        // dialog, the field start menu) keeps honoring it too.
+        phase.pack_source = source;
+        Ok(phase)
     }
 
     /// [`Self::continue_saved_game`]'s pack-free core: build the resumed
@@ -593,6 +681,14 @@ impl OverworldPhase {
     /// `PlayTimeCounter_Start`, and `LoadSavedMapView` -- have no
     /// counterpart here; the coverage ledger's `CB2_ContinueSavedGame`
     /// entry carries the full list.
+    ///
+    /// Always builds with [`crate::pack_source::PackSource::Runtime`]
+    /// (issue #412): [`Self::continue_saved_game`], its one production
+    /// caller, overwrites [`Self::pack_source`] on the value this returns
+    /// immediately afterwards, so every other caller of this pack-free
+    /// constructor -- every one of them a test building a custom save state
+    /// straight from an already-decoded `scene`, never a pack load -- is
+    /// spared a parameter that would be inert for all of them.
     pub(super) fn from_saved(
         scene: OverworldScene,
         map_id: assets::MapId,
@@ -633,6 +729,7 @@ impl OverworldPhase {
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
+            pack_source: crate::pack_source::PackSource::Runtime,
             // Seeded exactly as `Self::new` seeds a new game's stream:
             // `gRngValue` is zero at boot, and the only reseed upstream
             // performs on the way to the field is `SeedRngAndSetTrainerId`
@@ -670,6 +767,10 @@ impl OverworldPhase {
             // `Self::new`'s does, regardless of where the menu was left
             // the last time this file was played.
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -745,6 +846,12 @@ impl OverworldPhase {
     /// [`assets::MapHeaderTable`]/[`assets::MapEventsTable`] lookups
     /// [`Self::step`] does every frame resolve). Never reachable from
     /// production: nothing outside `#[cfg(test)]` can call it.
+    ///
+    /// Always [`crate::pack_source::PackSource::Runtime`]: no test using
+    /// this constructor exercises a pack load (the scene is already built),
+    /// so the choice is otherwise inert -- unlike [`Self::load`]/
+    /// [`Self::continue_saved_game`], which take it explicitly because their
+    /// callers' choice is the whole point.
     #[cfg(test)]
     pub(super) fn for_test(
         scene: OverworldScene,
@@ -752,7 +859,13 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        Self::new(scene, map_id, player, dialog)
+        Self::new(
+            scene,
+            map_id,
+            player,
+            dialog,
+            crate::pack_source::PackSource::Runtime,
+        )
     }
 
     /// Build a new overworld run while preserving its single RNG stream.
@@ -766,6 +879,7 @@ impl OverworldPhase {
         map_id: assets::MapId,
         player: PlayerState,
         dialog: Option<NpcDialog>,
+        pack_source: crate::pack_source::PackSource,
     ) -> Self {
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
         let (mut save1, save2) = new_game::init_save_blocks(&mut rng);
@@ -798,6 +912,7 @@ impl OverworldPhase {
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
+            pack_source,
             rng,
             wild: WildEncounterState::new(),
             wild_table_screen: None,
@@ -822,6 +937,10 @@ impl OverworldPhase {
             // `sStartMenuCursorPos` is EWRAM, zero at boot -- and this
             // *is* boot (field docs).
             start_menu_cursor: 0,
+            #[cfg(test)]
+            synthetic_start_menu: SyntheticStartMenu::RealPack,
+            #[cfg(test)]
+            synthetic_sight_trainer: None,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,

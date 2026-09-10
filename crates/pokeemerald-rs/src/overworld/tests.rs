@@ -155,6 +155,21 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
 }
 
 #[test]
+fn load_repo_default_room_looks_only_at_the_checkout_pack() {
+    // The point of the repo-pinned loader: it must never consult
+    // `AssetPack::default_path`'s earlier rungs. With no checkout pack
+    // extracted it reports "pack missing" even where a user pack *is*
+    // installed (which `load_default_room` would happily load instead),
+    // so `xtask`'s smoke e2e can never validate the wrong bytes
+    // `(test-ratchet)`.
+    if pack_format::repo_pack_path().is_file() {
+        return;
+    }
+    let err = super::load_repo_default_room(&engine::event_data::EventData::new()).unwrap_err();
+    assert!(err.is_pack_missing());
+}
+
+#[test]
 fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
     // (this function's own doc comment): `load_room` fails at the same
@@ -835,6 +850,59 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
     );
 }
 
+/// The combined world palette's global color 0 is always `RGB_BLACK`
+/// (`LoadTilesetPalette`, `pokeemerald/src/fieldmap.c:839-841`), whatever
+/// the primary tileset's own source color 0 holds. This fixture gives that
+/// source color a distinct nonblack value, and points the border at a
+/// metatile id no attribute entry covers so that screen position composes
+/// the backdrop rather than an opaque tile.
+#[test]
+fn a_nonblack_primary_source_color_zero_still_composes_a_black_backdrop() {
+    let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+
+    // Bank 0, color 0: a distinct nonblack blue that would leak into the
+    // backdrop pre-fix. Color 1: a distinct nonblack green, proving colors
+    // past index 0 stay untouched rather than shifting down to fill it.
+    let bank0 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/00")
+        .expect("the general fixture always fabricates its own bank-0 palette entry");
+    bank0.payload[0..2].copy_from_slice(&0x001Fu16.to_le_bytes());
+    bank0.payload[2..4].copy_from_slice(&0x03E0u16.to_le_bytes());
+
+    // Border: every cell now names a metatile id past the fixture's own
+    // one-entry attribute table, so `metatile_layers` resolves to `None`
+    // there instead of the fixture's normal opaque metatile.
+    let uncovered_cell = assets::MetatileCell {
+        metatile_id: 99,
+        collision: 0,
+        elevation: 3,
+    }
+    .pack();
+    let border = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/map_test/border")
+        .expect("the general fixture always fabricates its own border entry");
+    border.payload = std::iter::repeat_n(uncovered_cell.to_le_bytes(), 4)
+        .flatten()
+        .collect();
+
+    let scene = synthetic_scene_result(write_synthetic_pack(entries), "gTileset_General", 4, 4)
+        .expect("the mutated synthetic pack should still decode cleanly");
+
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let frame = scene.compose(&player, &event_data, 0);
+
+    assert_eq!(
+        frame.pixel(0, 0),
+        Some(rendering::Rgb888::BLACK),
+        "a screen corner with no covering BG layer must show upstream's \
+         forced-black backdrop, not the primary tileset's own nonblack \
+         source color 0"
+    );
+}
+
 /// Builds [`compose_applies_the_reduced_954_cycle_hblank_free_oam_budget`]'s
 /// own fixture: a synthetic room with `FILLER_COUNT` transparent
 /// `OBJ_EVENT_GFX_MOM` NPCs followed by one opaque `OBJ_EVENT_GFX_TWIN`
@@ -1249,7 +1317,12 @@ fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_o
         .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
         .expect("the connection fixture always fabricates the target's map entry");
     target_grid.kind_tag = 1;
-    target_grid.meta = 0u16.to_le_bytes().to_vec();
+    // A well-formed palette of the wrong kind: the format rejects a palette
+    // whose `color_count` does not address its payload
+    // (`pack_format::parse_directory`), and this fixture is about the *kind*
+    // reaching the caller, not about a corrupt pack failing to load.
+    let colors = u16::try_from(target_grid.payload.len() / 2).expect("a u16 grid of colours");
+    target_grid.meta = colors.to_le_bytes().to_vec();
 
     let err = synthetic_scene_result_with_connections(
         write_synthetic_pack(entries),

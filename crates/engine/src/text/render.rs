@@ -72,6 +72,22 @@ impl TextSpeed {
             Self::Instant => pixels_remaining,
         }
     }
+
+    /// `GetPlayerTextSpeedDelay`'s validation of the saved
+    /// `optionsTextSpeed` option (`OPTIONS_TEXT_SPEED_[SLOW/MID/FAST]` =
+    /// `0`/`1`/`2`, `pokeemerald/include/constants/global.h:127-129`;
+    /// `pokeemerald/src/menu.c:481-487`): `raw` selects directly at `0` or
+    /// `2`, and anything else -- `1` (`MID` itself) or an out-of-range
+    /// 3-bit value above `2` -- falls back to [`Self::Mid`], the same
+    /// fallback upstream's own clamp lands on.
+    #[must_use]
+    pub const fn from_raw_option(raw: u8) -> Self {
+        match raw {
+            0 => Self::Slow,
+            2 => Self::Fast,
+            _ => Self::Mid,
+        }
+    }
 }
 
 /// A window-local pixel position.
@@ -1265,5 +1281,25 @@ mod tests {
         assert_eq!(TextSpeed::Slow.scroll_px_per_frame(16), 1);
         assert_eq!(TextSpeed::Mid.scroll_px_per_frame(16), 2);
         assert_eq!(TextSpeed::Fast.scroll_px_per_frame(16), 4);
+    }
+
+    /// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-487`):
+    /// `OPTIONS_TEXT_SPEED_SLOW`/`_FAST` (`0`/`2`) select directly, `_MID`
+    /// (`1`) is already the fallback target, and every out-of-range 3-bit
+    /// value (`3..=7`, and `u8::MAX` as a belt-and-suspenders check) clamps
+    /// to `MID` exactly as upstream's own `optionsTextSpeed > FAST` guard
+    /// does.
+    #[test]
+    fn text_speed_from_raw_option_matches_upstreams_clamp() {
+        assert_eq!(TextSpeed::from_raw_option(0), TextSpeed::Slow);
+        assert_eq!(TextSpeed::from_raw_option(1), TextSpeed::Mid);
+        assert_eq!(TextSpeed::from_raw_option(2), TextSpeed::Fast);
+        for raw in [3, 4, 5, 6, 7, u8::MAX] {
+            assert_eq!(
+                TextSpeed::from_raw_option(raw),
+                TextSpeed::Mid,
+                "raw value {raw} is out of OPTIONS_TEXT_SPEED's 0..=2 range and must clamp to Mid"
+            );
+        }
     }
 }

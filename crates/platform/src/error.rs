@@ -16,8 +16,14 @@ pub enum PlatformError {
     Os(winit::error::OsError),
     /// `softbuffer` failed to create, resize, or present a surface.
     SoftBuffer(softbuffer::SoftBufferError),
-    /// No default audio output device is available (headless CI, no audio
+    /// No usable audio output device could be reached (headless CI, no audio
     /// hardware, no driver running, etc).
+    ///
+    /// Covers an unreachable device as well as an absent one: `cpal`'s ALSA
+    /// host hands out the logical `default` device whether or not sound
+    /// hardware exists, so `crate::audio` reports the phantom that fails its
+    /// first query here rather than as [`Self::Audio`]. See
+    /// `crate::audio::classify_query_error`.
     NoAudioDevice,
     /// The default audio output device has no stream configuration this
     /// crate can use (see `crate::audio` for the requirements).

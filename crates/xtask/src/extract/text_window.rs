@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
-use super::{jasc_pal, png, read_file, read_text, ExtractError};
+use super::{build_image_entry, jasc_pal, png, read_file, read_text, ExtractError};
+use pack_format::PackWriter;
 
 const TEXT_WINDOW_DIRECTORY: &str = "graphics/text_window";
 const PNG_EXTENSION: &str = "png";
@@ -92,7 +92,7 @@ pub(super) fn extract_text_window(
 fn decode_text_window_image_pair(
     path: &Path,
     stem: &str,
-) -> Result<(PackEntry, PackEntry), ExtractError> {
+) -> Result<(pack_format::PackEntry, pack_format::PackEntry), ExtractError> {
     let bytes = read_file(path)?;
     let image =
         png::decode(&bytes).map_err(|error| ExtractError::Png(path.to_path_buf(), error))?;
@@ -103,15 +103,7 @@ fn decode_text_window_image_pair(
     let palette_entry =
         build_text_window_palette_entry(path, &colors, text_window_palette_id(stem))?;
     validate_text_window_pixels(path, &image.pixels, colors.len())?;
-    let image_entry = PackEntry {
-        id: text_window_image_id(stem),
-        kind: PackKind::Image {
-            width: image.width,
-            height: image.height,
-            bit_depth: image.bit_depth,
-        },
-        payload: image.pixels,
-    };
+    let image_entry = build_image_entry(path, text_window_image_id(stem), image)?;
     Ok((image_entry, palette_entry))
 }
 
@@ -167,7 +159,7 @@ fn build_text_window_palette_entry(
     path: &Path,
     colors: &[jasc_pal::Rgb888],
     id: String,
-) -> Result<PackEntry, ExtractError> {
+) -> Result<pack_format::PackEntry, ExtractError> {
     validate_text_window_palette_color_count(path, colors.len())?;
     super::build_palette_entry(path, colors, id)
 }
@@ -340,7 +332,7 @@ mod tests {
         assert_eq!(entry.id, "text-window/palette/example");
         assert!(matches!(
             entry.kind,
-            super::super::pack::PackKind::Palette { color_count }
+            pack_format::EntryKind::Palette { color_count }
                 if usize::from(color_count) == COLORS_PER_GBA_PALETTE_BANK
         ));
     }

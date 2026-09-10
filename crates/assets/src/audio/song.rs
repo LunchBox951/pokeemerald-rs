@@ -1,160 +1,85 @@
-//! [`Song`]: a normalized, MIDI-semantic event stream per track, plus the
-//! song-level metadata upstream's `struct SongHeader`
-//! (`pokeemerald/include/gba/m4a_internal.h`) carries alongside it.
+//! Normalized song metadata and per-track musical event streams.
 //!
-//! # Normalized, not raw MIDI and not upstream's compiled byte-code
+//! [`SongEvent`] is independent of both MIDI encoding and compiled MP2K bytecode. Same-track jumps
+//! use event indices. [`Song::new`] removes zero-length waits, merges adjacent waits without
+//! crossing a jump target, and splits delays into `u8` chunks. [`Song::decode`] preserves the
+//! encoded wait sequence while validating its structure.
 //!
-//! [`SongEvent`] is neither a transcription of standard-MIDI file bytes
-//! (running status, variable-length quantities, the 16-channel model) nor of
-//! upstream's own compiled MP2K track byte-code (status/argument bytes,
-//! `WAIT_LO..WAIT_HI` ranges, running-status shorthand — the shape
-//! `pokeemerald/tools/mid2agb` emits and a from-ROM backend would have to
-//! decompile). It is the shared *musical* meaning both a `.mid`-source
-//! backend and a compiled-byte-code backend normalize down to: notes with
-//! an explicit gate length, ties, and named controller changes — one
-//! variant per distinct command, addressed by name rather than by the
-//! magic byte ranges either source format uses. `#115` child 2 (the MIDI
-//! compiler) is what actually produces this from a `.mid` file; this module
-//! only defines the shape.
-//!
-//! # Looping
-//!
-//! [`SongEvent::Goto`] carries a target as an *event index* into the same
-//! track's own event list (not a byte offset, and not a label name) — a
-//! self-contained addressing scheme requiring no separate symbol table,
-//! matching how a compiled form must ultimately resolve loop targets
-//! anyway.
-//!
-//! # Tempo is a track event, not header metadata
-//!
-//! [`Song`] carries no starting-tempo field, because upstream's
-//! `struct SongHeader` has none: its fields are `trackCount`, `blockCount`
-//! (dropped here because the engine never reads it —
-//! `pokeemerald/src/m4a_tables.c:262` sets it to `0` for the cry song, and
-//! `tools/mid2agb` uses its `s_blockCount` purely as an asm-label counter),
-//! `priority`, `reverb`, `tone`, and the per-track pointers. Tempo reaches
-//! the engine as a `TEMPO` command inside a track's own event stream
-//! (`ply_tempo`, `pokeemerald/src/m4a.c`), conventionally as one of track
-//! 0's first events, and is modelled here as exactly that:
-//! [`SongEvent::Tempo`]. A song with no `Tempo` event simply never sets one,
-//! same as upstream — there is no separate default for this schema to
-//! record.
-//!
-//! # Deliberately out of scope
-//!
-//! See `super`'s module docs, "Deliberately deferred", for the full list
-//! with per-command rationale: `PATT`/`PEND` (on-disk loop compression),
-//! `REPT` and `PORT` (never emitted by `tools/mid2agb`), and the `XCMD`
-//! sub-commands other than `xIECV`/`xIECL` (never emitted either) have no
-//! [`SongEvent`] variant in this slice. `MEMACC` *is* modelled
-//! ([`SongEvent::MemAcc`]/[`SongEvent::MemAccBranch`]): exactly one
-//! canonical song needs it — `mus_vs_trainer`'s single unconditional
-//! `mem_set` of `117` into cell `0`, with no branching `mem_b*` anywhere in
-//! shipped data — and a schema that cannot represent a canonical song is
-//! not a shared contract. A byte-faithful pack must carry that write rather
-//! than drop it, and the branch conditions are modelled next to it because
-//! the format defines them as one op family, not because any song jumps.
+//! [`Song`] retains the priority, reverb, voicegroup, and track order represented by upstream's
+//! `struct SongHeader` (`include/gba/m4a_internal.h`). Pattern-block bookkeeping is absent because
+//! the normalized streams contain the expanded events. Tempo remains a [`SongEvent::Tempo`] in its
+//! track because `SongHeader` has no tempo field.
 
 use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
 use super::voicegroup::VoiceGroupId;
 
-/// One normalized track command. See the module docs.
+/// One normalized command in a song track.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SongEvent {
-    /// Delay this track for `ticks` sequencer ticks before its next event.
+    /// Delays this track by `ticks` sequencer ticks.
     Wait(u8),
-    /// Play a note. `gate` is the note-off delay in ticks; `0` marks a tied
-    /// note that sounds until an [`SongEvent::EndOfTie`] or the next note.
+    /// Plays `key` at `velocity`; `gate` is the note-off delay in ticks, or zero for a tie.
     Note { key: u8, velocity: u8, gate: u8 },
-    /// End a tie. `key` is `None` when the source omitted its key operand,
-    /// in which case a player matches on the track's currently-sounding key.
+    /// Ends a tie. `None` uses the track's currently sounding key.
     EndOfTie { key: Option<u8> },
-    /// Select instrument `index` from the song's [`super::VoiceGroup`]
-    /// (`0..=255` on the wire; `0..=127` by convention, matching a MIDI
-    /// program number — see `super`'s module docs on slot 127).
+    /// Selects an instrument byte from the song's [`super::VoiceGroup`]. Normalized sources use
+    /// `0..=127`; the schema preserves the full `u8` range.
     Voice(u8),
-    /// Track volume, `0..=127`.
+    /// Sets track volume. Normalized sources use `0..=127`; the schema preserves the full `u8`
+    /// range.
     Volume(u8),
-    /// Track pan, centre-relative (`-64..=63`).
+    /// Sets centre-relative track pan. Normalized sources use `-64..=63`; the schema preserves the
+    /// full `i8` range.
     Pan(i8),
-    /// Pitch bend, centre-relative.
+    /// Sets centre-relative pitch bend across the full `i8` range.
     Bend(i8),
-    /// Pitch-bend range in semitones.
+    /// Sets the pitch-bend range in semitones across the full `u8` range.
     BendRange(u8),
-    /// Fine tune, centre-relative.
+    /// Sets centre-relative fine tuning across the full `i8` range.
     Tune(i8),
-    /// Transpose the track by whole semitones.
+    /// Transposes the track by an `i8` number of semitones.
     KeyShift(i8),
-    /// Set tempo in BPM.
+    /// Sets tempo in BPM across the full `u16` range.
     Tempo(u16),
-    /// Track priority.
+    /// Sets track priority across the full `u8` range.
     Priority(u8),
-    /// LFO speed.
+    /// Sets LFO speed across the full `u8` range.
     LfoSpeed(u8),
-    /// LFO delay.
+    /// Sets LFO delay across the full `u8` range.
     LfoDelay(u8),
-    /// Modulation depth.
+    /// Sets modulation depth across the full `u8` range.
     Modulation(u8),
-    /// Modulation type.
+    /// Selects modulation type: `0` for vibrato, `1` for tremolo, and `2` for automatic pan. The
+    /// schema preserves other byte values.
     ModType(u8),
-    /// Pseudo-echo volume, as a percentage of the note's own volume
-    /// (upstream `XCMD xIECV` — extended command `8`, `sound/MPlayDef.s`).
-    ///
-    /// `ply_xiecv` (`pokeemerald/src/m4a.c`) stores it in
-    /// `MusicPlayerTrack::pseudoEchoVolume`, which `ply_note` copies onto
-    /// each note's channel, where both families sound the decay tail once
-    /// the envelope's release completes — `DirectSound` via `SoundMainRAM`'s
-    /// `SOUND_CHANNEL_SF_IEC` branch (`pokeemerald/src/m4a_1.s:206-232`) and
-    /// CGB via `CgbSound` (`pokeemerald/src/m4a.c:925`). The channel carries
-    /// the pair for either family: `pseudoEchoVolume`/`pseudoEchoLength` are
-    /// `struct SoundChannel` fields
-    /// (`pokeemerald/include/gba/m4a_internal.h:144-145`), not CGB-only
-    /// state. That tail is audible musical content, not a compression
-    /// artifact, which is why this pair is modelled while the rest of `XCMD`
-    /// is not (see `super`'s "Deliberately deferred"). `tools/mid2agb` emits
-    /// it — and it is one of only two extended commands it emits at all —
-    /// for a large minority of upstream's MIDIs, so a song stream that
-    /// dropped it would play a noticeably drier version of those tracks.
+    /// Sets the note-release echo volume across the full `u8` range. Upstream copies this track
+    /// value onto both `DirectSound` and CGB channels (`src/m4a.c:1591-1601`,
+    /// `src/m4a_1.s:1757-1758`).
     PseudoEchoVolume(u8),
-    /// Pseudo-echo length in ticks — how long the
-    /// [`PseudoEchoVolume`](Self::PseudoEchoVolume) tail sounds for
-    /// (upstream `XCMD xIECL`, extended command `9`; `ply_xiecl` →
-    /// `MusicPlayerTrack::pseudoEchoLength`).
+    /// Sets the [`PseudoEchoVolume`](Self::PseudoEchoVolume) tail length in ticks across the full
+    /// `u8` range.
     PseudoEchoLength(u8),
-    /// Jump to another event index in this same track's event list — the
-    /// loop primitive (see the module docs).
+    /// Jumps to an event index in this track.
     Goto(u32),
-    /// Write to one of the music player's memory cells — upstream `MEMACC`
-    /// with a non-branching operation (`ply_memacc`,
-    /// `pokeemerald/src/m4a.c`; op values `mem_set..=mem_mem_sub`,
-    /// `sound/MPlayDef.s`). `address` selects the cell
-    /// (`MusicPlayerInfo::memAccArea[address]`), and `data` is either the
-    /// literal operand or, for the `Mem*` ops, the address of the cell
-    /// holding it.
+    /// Applies `op` to memory cell `address`. `data` is a literal for direct operations and a cell
+    /// address for [`MemAccOp::MemSet`], [`MemAccOp::MemAdd`], and [`MemAccOp::MemSub`].
     MemAcc { op: MemAccOp, address: u8, data: u8 },
-    /// Conditionally jump to `target` (an event index, like
-    /// [`SongEvent::Goto`]'s) — upstream `MEMACC` with a branching
-    /// operation (`mem_beq..=mem_mem_blo`): compare cell `address` against
-    /// `data` (a literal, or a cell address for the `Mem*` conditions) and
-    /// jump when the condition holds. No canonical song carries a *branching*
-    /// `MEMACC`: `mus_vs_trainer`, the only song with a `MEMACC` at all,
-    /// issues one unconditional `mem_set` (module docs). This variant covers
-    /// the branch half of the op family the format defines, so a ROM-sourced
-    /// backend reading hand-written sequence data has somewhere to put one.
+    /// Jumps to event index `target` when memory cell `address` satisfies `condition` against
+    /// `data`. Direct conditions treat `data` as a literal; `Mem*` conditions treat it as a cell
+    /// address.
     MemAccBranch {
         condition: MemAccCondition,
         address: u8,
         data: u8,
         target: u32,
     },
-    /// End of track.
+    /// Ends the track.
     Fine,
 }
 
-/// A non-branching [`SongEvent::MemAcc`] operation. Discriminants are
-/// upstream's own `mem_*` op values (`sound/MPlayDef.s:410-415`), which is
-/// also how the wire encodes them.
+/// A non-branching [`SongEvent::MemAcc`] operation. Each discriminant is its encoded `mem_*` value
+/// from `sound/MPlayDef.s:410-415`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MemAccOp {
@@ -186,10 +111,8 @@ impl MemAccOp {
     }
 }
 
-/// A [`SongEvent::MemAccBranch`] condition. Discriminants are upstream's
-/// own `mem_b*` op values (`sound/MPlayDef.s:416-427`), which is also how
-/// the wire encodes them. The `Mem*` half compares against another cell's
-/// value rather than a literal (see [`SongEvent::MemAccBranch`]).
+/// A [`SongEvent::MemAccBranch`] condition. Each discriminant is its encoded `mem_b*` value from
+/// `sound/MPlayDef.s:416-427`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MemAccCondition {
@@ -239,86 +162,120 @@ impl MemAccCondition {
     }
 }
 
-const TAG_WAIT: u8 = 0;
-const TAG_NOTE: u8 = 1;
-const TAG_END_OF_TIE: u8 = 2;
-const TAG_VOICE: u8 = 3;
-const TAG_VOLUME: u8 = 4;
-const TAG_PAN: u8 = 5;
-const TAG_BEND: u8 = 6;
-const TAG_BEND_RANGE: u8 = 7;
-const TAG_TUNE: u8 = 8;
-const TAG_KEY_SHIFT: u8 = 9;
-const TAG_TEMPO: u8 = 10;
-const TAG_PRIORITY: u8 = 11;
-const TAG_LFO_SPEED: u8 = 12;
-const TAG_LFO_DELAY: u8 = 13;
-const TAG_MODULATION: u8 = 14;
-const TAG_MOD_TYPE: u8 = 15;
-const TAG_GOTO: u8 = 16;
-const TAG_FINE: u8 = 17;
-// Appended, not renumbered: tag bytes are the wire discriminator, so new
-// variants take the next free values rather than disturbing existing ones.
-const TAG_PSEUDO_ECHO_VOLUME: u8 = 18;
-const TAG_PSEUDO_ECHO_LENGTH: u8 = 19;
-const TAG_MEM_ACC: u8 = 20;
-const TAG_MEM_ACC_BRANCH: u8 = 21;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum EventTag {
+    Wait = 0,
+    Note = 1,
+    EndOfTie = 2,
+    Voice = 3,
+    Volume = 4,
+    Pan = 5,
+    Bend = 6,
+    BendRange = 7,
+    Tune = 8,
+    KeyShift = 9,
+    Tempo = 10,
+    Priority = 11,
+    LfoSpeed = 12,
+    LfoDelay = 13,
+    Modulation = 14,
+    ModType = 15,
+    Goto = 16,
+    Fine = 17,
+    PseudoEchoVolume = 18,
+    PseudoEchoLength = 19,
+    MemAcc = 20,
+    MemAccBranch = 21,
+}
 
-/// [`SongEvent::write`]'s helper for the plain `tag, u8-operand` commands.
-fn tag_u8(w: &mut Writer, tag: u8, value: u8) {
-    w.u8(tag);
+impl EventTag {
+    const fn byte(self) -> u8 {
+        self as u8
+    }
+
+    fn read(r: &mut Reader<'_>) -> Result<Self, AudioError> {
+        Ok(match r.u8()? {
+            0 => Self::Wait,
+            1 => Self::Note,
+            2 => Self::EndOfTie,
+            3 => Self::Voice,
+            4 => Self::Volume,
+            5 => Self::Pan,
+            6 => Self::Bend,
+            7 => Self::BendRange,
+            8 => Self::Tune,
+            9 => Self::KeyShift,
+            10 => Self::Tempo,
+            11 => Self::Priority,
+            12 => Self::LfoSpeed,
+            13 => Self::LfoDelay,
+            14 => Self::Modulation,
+            15 => Self::ModType,
+            16 => Self::Goto,
+            17 => Self::Fine,
+            18 => Self::PseudoEchoVolume,
+            19 => Self::PseudoEchoLength,
+            20 => Self::MemAcc,
+            21 => Self::MemAccBranch,
+            other => return Err(AudioError::UnknownSongEvent(other)),
+        })
+    }
+}
+
+fn tag_u8(w: &mut Writer, tag: EventTag, value: u8) {
+    w.u8(tag.byte());
     w.u8(value);
 }
 
-/// [`SongEvent::write`]'s helper for the plain `tag, i8-operand` commands.
-fn tag_i8(w: &mut Writer, tag: u8, value: i8) {
-    w.u8(tag);
+fn tag_i8(w: &mut Writer, tag: EventTag, value: i8) {
+    w.u8(tag.byte());
     w.i8(value);
 }
 
 impl SongEvent {
     fn write(&self, w: &mut Writer) {
         match *self {
-            Self::Wait(ticks) => tag_u8(w, TAG_WAIT, ticks),
+            Self::Wait(ticks) => tag_u8(w, EventTag::Wait, ticks),
             Self::Note {
                 key,
                 velocity,
                 gate,
             } => {
-                w.u8(TAG_NOTE);
+                w.u8(EventTag::Note.byte());
                 w.u8(key);
                 w.u8(velocity);
                 w.u8(gate);
             }
             Self::EndOfTie { key } => {
-                w.u8(TAG_END_OF_TIE);
+                w.u8(EventTag::EndOfTie.byte());
                 w.bool(key.is_some());
                 w.u8(key.unwrap_or(0));
             }
-            Self::Voice(index) => tag_u8(w, TAG_VOICE, index),
-            Self::Volume(v) => tag_u8(w, TAG_VOLUME, v),
-            Self::Pan(v) => tag_i8(w, TAG_PAN, v),
-            Self::Bend(v) => tag_i8(w, TAG_BEND, v),
-            Self::BendRange(v) => tag_u8(w, TAG_BEND_RANGE, v),
-            Self::Tune(v) => tag_i8(w, TAG_TUNE, v),
-            Self::KeyShift(v) => tag_i8(w, TAG_KEY_SHIFT, v),
+            Self::Voice(index) => tag_u8(w, EventTag::Voice, index),
+            Self::Volume(v) => tag_u8(w, EventTag::Volume, v),
+            Self::Pan(v) => tag_i8(w, EventTag::Pan, v),
+            Self::Bend(v) => tag_i8(w, EventTag::Bend, v),
+            Self::BendRange(v) => tag_u8(w, EventTag::BendRange, v),
+            Self::Tune(v) => tag_i8(w, EventTag::Tune, v),
+            Self::KeyShift(v) => tag_i8(w, EventTag::KeyShift, v),
             Self::Tempo(v) => {
-                w.u8(TAG_TEMPO);
+                w.u8(EventTag::Tempo.byte());
                 w.u16(v);
             }
-            Self::Priority(v) => tag_u8(w, TAG_PRIORITY, v),
-            Self::LfoSpeed(v) => tag_u8(w, TAG_LFO_SPEED, v),
-            Self::LfoDelay(v) => tag_u8(w, TAG_LFO_DELAY, v),
-            Self::Modulation(v) => tag_u8(w, TAG_MODULATION, v),
-            Self::ModType(v) => tag_u8(w, TAG_MOD_TYPE, v),
-            Self::PseudoEchoVolume(v) => tag_u8(w, TAG_PSEUDO_ECHO_VOLUME, v),
-            Self::PseudoEchoLength(v) => tag_u8(w, TAG_PSEUDO_ECHO_LENGTH, v),
+            Self::Priority(v) => tag_u8(w, EventTag::Priority, v),
+            Self::LfoSpeed(v) => tag_u8(w, EventTag::LfoSpeed, v),
+            Self::LfoDelay(v) => tag_u8(w, EventTag::LfoDelay, v),
+            Self::Modulation(v) => tag_u8(w, EventTag::Modulation, v),
+            Self::ModType(v) => tag_u8(w, EventTag::ModType, v),
+            Self::PseudoEchoVolume(v) => tag_u8(w, EventTag::PseudoEchoVolume, v),
+            Self::PseudoEchoLength(v) => tag_u8(w, EventTag::PseudoEchoLength, v),
             Self::Goto(target) => {
-                w.u8(TAG_GOTO);
+                w.u8(EventTag::Goto.byte());
                 w.u32(target);
             }
             Self::MemAcc { op, address, data } => {
-                w.u8(TAG_MEM_ACC);
+                w.u8(EventTag::MemAcc.byte());
                 w.u8(op as u8);
                 w.u8(address);
                 w.u8(data);
@@ -329,20 +286,20 @@ impl SongEvent {
                 data,
                 target,
             } => {
-                w.u8(TAG_MEM_ACC_BRANCH);
+                w.u8(EventTag::MemAccBranch.byte());
                 w.u8(condition as u8);
                 w.u8(address);
                 w.u8(data);
                 w.u32(target);
             }
-            Self::Fine => w.u8(TAG_FINE),
+            Self::Fine => w.u8(EventTag::Fine.byte()),
         }
     }
 
     fn read(r: &mut Reader<'_>) -> Result<Self, AudioError> {
-        match r.u8()? {
-            TAG_WAIT => Ok(Self::Wait(r.u8()?)),
-            TAG_NOTE => {
+        match EventTag::read(r)? {
+            EventTag::Wait => Ok(Self::Wait(r.u8()?)),
+            EventTag::Note => {
                 let key = r.u8()?;
                 let velocity = r.u8()?;
                 let gate = r.u8()?;
@@ -352,36 +309,36 @@ impl SongEvent {
                     gate,
                 })
             }
-            TAG_END_OF_TIE => {
+            EventTag::EndOfTie => {
                 let has_key = r.bool()?;
                 let raw = r.u8()?;
                 Ok(Self::EndOfTie {
                     key: has_key.then_some(raw),
                 })
             }
-            TAG_VOICE => Ok(Self::Voice(r.u8()?)),
-            TAG_VOLUME => Ok(Self::Volume(r.u8()?)),
-            TAG_PAN => Ok(Self::Pan(r.i8()?)),
-            TAG_BEND => Ok(Self::Bend(r.i8()?)),
-            TAG_BEND_RANGE => Ok(Self::BendRange(r.u8()?)),
-            TAG_TUNE => Ok(Self::Tune(r.i8()?)),
-            TAG_KEY_SHIFT => Ok(Self::KeyShift(r.i8()?)),
-            TAG_TEMPO => Ok(Self::Tempo(r.u16()?)),
-            TAG_PRIORITY => Ok(Self::Priority(r.u8()?)),
-            TAG_LFO_SPEED => Ok(Self::LfoSpeed(r.u8()?)),
-            TAG_LFO_DELAY => Ok(Self::LfoDelay(r.u8()?)),
-            TAG_MODULATION => Ok(Self::Modulation(r.u8()?)),
-            TAG_MOD_TYPE => Ok(Self::ModType(r.u8()?)),
-            TAG_PSEUDO_ECHO_VOLUME => Ok(Self::PseudoEchoVolume(r.u8()?)),
-            TAG_PSEUDO_ECHO_LENGTH => Ok(Self::PseudoEchoLength(r.u8()?)),
-            TAG_GOTO => Ok(Self::Goto(r.u32()?)),
-            TAG_MEM_ACC => {
+            EventTag::Voice => Ok(Self::Voice(r.u8()?)),
+            EventTag::Volume => Ok(Self::Volume(r.u8()?)),
+            EventTag::Pan => Ok(Self::Pan(r.i8()?)),
+            EventTag::Bend => Ok(Self::Bend(r.i8()?)),
+            EventTag::BendRange => Ok(Self::BendRange(r.u8()?)),
+            EventTag::Tune => Ok(Self::Tune(r.i8()?)),
+            EventTag::KeyShift => Ok(Self::KeyShift(r.i8()?)),
+            EventTag::Tempo => Ok(Self::Tempo(r.u16()?)),
+            EventTag::Priority => Ok(Self::Priority(r.u8()?)),
+            EventTag::LfoSpeed => Ok(Self::LfoSpeed(r.u8()?)),
+            EventTag::LfoDelay => Ok(Self::LfoDelay(r.u8()?)),
+            EventTag::Modulation => Ok(Self::Modulation(r.u8()?)),
+            EventTag::ModType => Ok(Self::ModType(r.u8()?)),
+            EventTag::PseudoEchoVolume => Ok(Self::PseudoEchoVolume(r.u8()?)),
+            EventTag::PseudoEchoLength => Ok(Self::PseudoEchoLength(r.u8()?)),
+            EventTag::Goto => Ok(Self::Goto(r.u32()?)),
+            EventTag::MemAcc => {
                 let op = MemAccOp::from_byte(r.u8()?)?;
                 let address = r.u8()?;
                 let data = r.u8()?;
                 Ok(Self::MemAcc { op, address, data })
             }
-            TAG_MEM_ACC_BRANCH => {
+            EventTag::MemAccBranch => {
                 let condition = MemAccCondition::from_byte(r.u8()?)?;
                 let address = r.u8()?;
                 let data = r.u8()?;
@@ -393,29 +350,17 @@ impl SongEvent {
                     target,
                 })
             }
-            TAG_FINE => Ok(Self::Fine),
-            other => Err(AudioError::UnknownSongEvent(other)),
+            EventTag::Fine => Ok(Self::Fine),
         }
     }
 }
 
-/// The most tracks a [`Song`] may hold: the encoding's `u8` track-count
-/// field's ceiling. Upstream's own engine caps a playing song at
-/// `MAX_MUSICPLAYER_TRACKS` (16, `pokeemerald/include/gba/m4a_internal.h`),
-/// so this is a wire-format bound with a wide margin over anything a real
-/// song uses, not a limit the schema imposes on musical content.
+/// The maximum track count encodable by the schema's `u8` field.
 pub const MAX_TRACKS: usize = u8::MAX as usize;
 
-/// Cap on how many events [`Song::decode`] pre-reserves per track from the
-/// untrusted per-track event count, mirroring
-/// [`super::sample`]'s `MAX_PREALLOC_SAMPLES` and `crate::pack::format`'s
-/// `MAX_PREALLOC_ENTRIES` (same rationale: a corrupt count near `u32::MAX`
-/// must not speculatively allocate gigabytes before the first short read
-/// fails the decode). The `Vec` still grows to whatever the input holds.
+// Bound speculative allocation before the decoder proves that all declared events exist.
 const MAX_PREALLOC_EVENTS: usize = 1 << 16;
 
-/// Rejects a [`SongEvent::Goto`]/[`SongEvent::MemAccBranch`] `target` at or
-/// past `track`'s own event count (module docs, "Looping").
 fn check_jump_targets(
     track_index: usize,
     track: &[SongEvent],
@@ -437,11 +382,7 @@ fn check_jump_targets(
     Ok(())
 }
 
-/// A song: which [`super::VoiceGroup`] it plays through, its
-/// priority/reverb (the upstream `struct SongHeader` fields this schema
-/// carries — `trackCount` is implicit in [`tracks`](Self::tracks) and
-/// `blockCount` is dropped, see the module docs), and one normalized event
-/// stream per track. Build one with [`Song::new`].
+/// A song's voicegroup, priority, optional reverb override, and normalized tracks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Song {
     voicegroup: VoiceGroupId,
@@ -451,33 +392,17 @@ pub struct Song {
 }
 
 impl Song {
-    /// Build a song from its header metadata and per-track event streams.
+    /// Builds a song and canonicalizes each track's waits.
     ///
-    /// Checked rather than a plain struct literal, for the same reason
-    /// [`super::VoiceGroup::new`] is: the bounds below are what make
-    /// [`Self::encode`] total, so they are enforced where they can still be
-    /// reported as an error instead of at encode time as a panic.
-    ///
-    /// * `voicegroup` — the [`super::VoiceGroup`] pack entry this song's
-    ///   `VOICE` commands select instruments from (upstream
-    ///   `SongHeader::tone`).
-    /// * `priority` — upstream `SongHeader::priority`.
-    /// * `reverb` — upstream `SongHeader::reverb`: `None` when the song does
-    ///   not override the master reverb setting, `Some(value)` otherwise
-    ///   (mirrors `mid2agb`'s own `g_reverb >= 0` sentinel check,
-    ///   `tools/mid2agb/agb.cpp`).
-    /// * `tracks` — one normalized event stream per track,
-    ///   `MusicPlayerTrack`-order.
+    /// `voicegroup` identifies the [`super::VoiceGroup`] selected by `Voice` events. `reverb` is
+    /// `None` when the song does not override the player setting. Track order is playback order.
     ///
     /// # Errors
     ///
-    /// [`AudioError::TooManyTracks`] if `tracks.len() > `[`MAX_TRACKS`];
-    /// [`AudioError::TooManyEvents`] if any one track holds more than
-    /// `u32::MAX` events; [`AudioError::IdTooLong`] if `voicegroup`'s id
-    /// does not fit the `u16` length prefix the encoding writes for it;
-    /// [`AudioError::JumpTargetOutOfRange`] if any [`SongEvent::Goto`] or
-    /// [`SongEvent::MemAccBranch`] target does not address an event within
-    /// its own track.
+    /// Returns [`AudioError::IdTooLong`] when the voicegroup id exceeds its `u16` byte-length
+    /// field, [`AudioError::TooManyTracks`] above [`MAX_TRACKS`],
+    /// [`AudioError::TooManyEvents`] when a track length exceeds `u32::MAX`, or
+    /// [`AudioError::JumpTargetOutOfRange`] when a jump does not address its own track.
     pub fn new(
         voicegroup: VoiceGroupId,
         priority: u8,
@@ -488,6 +413,10 @@ impl Song {
         if tracks.len() > MAX_TRACKS {
             return Err(AudioError::TooManyTracks(tracks.len()));
         }
+        let tracks: Vec<Vec<SongEvent>> = tracks
+            .into_iter()
+            .map(|track| canonical::canonicalize_waits(&track))
+            .collect();
         for (track_index, track) in tracks.iter().enumerate() {
             let event_count =
                 u32::try_from(track.len()).map_err(|_| AudioError::TooManyEvents(track.len()))?;
@@ -501,41 +430,36 @@ impl Song {
         })
     }
 
-    /// The [`super::VoiceGroup`] pack entry this song plays through.
+    /// Returns the [`super::VoiceGroup`] pack id this song plays through.
     #[must_use]
     pub fn voicegroup(&self) -> &VoiceGroupId {
         &self.voicegroup
     }
 
-    /// Upstream `SongHeader::priority`.
+    /// Returns the song's playback priority.
     #[must_use]
     pub fn priority(&self) -> u8 {
         self.priority
     }
 
-    /// Upstream `SongHeader::reverb`, or `None` for no override.
+    /// Returns the song's reverb override, or `None` when it inherits the player setting.
     #[must_use]
     pub fn reverb(&self) -> Option<u8> {
         self.reverb
     }
 
-    /// Every track's event stream, `MusicPlayerTrack`-order.
+    /// Returns the event streams in playback order.
     #[must_use]
     pub fn tracks(&self) -> &[Vec<SongEvent>] {
         &self.tracks
     }
 
-    /// Encode to this schema's binary form. Staleness is gated by
-    /// [`crate::pack::FORMAT_VERSION`] — see `super`'s module docs,
-    /// "Versioning".
+    /// Encodes the song for the versioned asset-pack schema.
     ///
     /// # Panics
     ///
-    /// Unreachable: [`Self::new`] is the only way to build a `Song`, and it
-    /// rejects a track list longer than [`MAX_TRACKS`] and any track whose
-    /// event count overflows a `u32` — returning [`AudioError`] where a
-    /// caller can see it. Every field here is private, so neither count can
-    /// grow after construction.
+    /// Panics if the private track or event counts exceed their encoded widths. [`Self::new`]
+    /// prevents those states.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
@@ -557,23 +481,15 @@ impl Song {
         w.into_bytes()
     }
 
-    /// Decode from [`encode`](Self::encode)'s binary form.
-    ///
-    /// Same-track jump targets are validated here too, like
-    /// [`super::Sample::decode`] re-checks a loop start; the cross-entry
-    /// [`Song::voicegroup`] reference is not.
+    /// Decodes one complete song payload. Jump targets are validated within each track; resolving
+    /// the cross-entry [`voicegroup`](Self::voicegroup) id remains the caller's responsibility.
     ///
     /// # Errors
     ///
-    /// [`AudioError::Truncated`] if `bytes` is shorter than the format
-    /// requires; [`AudioError::InvalidString`] if the voicegroup id is not
-    /// valid UTF-8; [`AudioError::UnknownSongEvent`] for an unrecognized
-    /// event tag byte; [`AudioError::UnknownMemAccOp`] for a MEMACC
-    /// op/condition byte outside its range;
-    /// [`AudioError::JumpTargetOutOfRange`] if a [`SongEvent::Goto`] or
-    /// [`SongEvent::MemAccBranch`] target does not address an event within
-    /// its own track; [`AudioError::TrailingBytes`] if unread bytes remain
-    /// after the last track.
+    /// Returns [`AudioError::Truncated`] for incomplete or structurally malformed data,
+    /// [`AudioError::InvalidString`] for a non-UTF-8 voicegroup id, [`AudioError::UnknownSongEvent`] or
+    /// [`AudioError::UnknownMemAccOp`] for undefined tags, [`AudioError::JumpTargetOutOfRange`] for
+    /// an invalid same-track target, and [`AudioError::TrailingBytes`] for bytes after the payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let voicegroup = VoiceGroupId(r.string()?);
@@ -581,9 +497,6 @@ impl Song {
         let has_reverb = r.bool()?;
         let reverb_value = r.u8()?;
         let reverb = has_reverb.then_some(reverb_value);
-        // The encoded count is a `u8`, so it cannot exceed `MAX_TRACKS` --
-        // no decode-side bound check is reachable here, unlike
-        // `VoiceGroup::decode`, whose `u8` count can overrun its 128 slots.
         let track_count = usize::from(r.u8()?);
         let mut tracks = Vec::with_capacity(track_count);
         for track_index in 0..track_count {
@@ -606,6 +519,8 @@ impl Song {
         })
     }
 }
+
+mod canonical;
 
 #[cfg(test)]
 mod tests;
