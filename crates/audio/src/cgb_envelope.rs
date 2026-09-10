@@ -47,25 +47,16 @@ impl CgbEnvelopeCadence {
     }
 }
 
+mod hardware;
+
+use hardware::NRX2_ENV_DIR_INC;
+pub(crate) use hardware::{HardwareEnvelopePacing, HardwareEnvelopeVolume};
+
 const CGB_ENVELOPE_LEVELS: u32 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
 const PSEUDO_ECHO_SCALE: u32 = 256;
 const SUSTAIN_REFRESH_FRAMES: u8 = 7;
 const HARD_PAN_RATIO: u16 = 2;
-
-/// The nibble upstream masks its step-time-and-direction field down to before
-/// adding the volume nibble and writing the pair as one NRx2 byte
-/// (`m4a.c:1221`..`:1222`). Everything a phase's raw envelope byte sets above
-/// bit 3 is discarded before hardware sees it.
-const NRX2_ENV_FIELD_MASK: u8 = 0x0F;
-/// NRx2 bits 0-2, the envelope step time
-/// (`GBAudioRegisterSweep`, `mgba/include/mgba/internal/gb/audio.h:24`).
-const NRX2_ENV_STEP_TIME_MASK: u8 = 0x07;
-/// NRx2 bit 3, set for an upward envelope: upstream's `CGB_NRx2_ENV_DIR_INC`
-/// (`m4a_internal.h:85`, whose `CGB_NRx2_ENV_DIR_DEC` counterpart is zero at
-/// `:84`) and mGBA's direction bit
-/// (`mgba/include/mgba/internal/gb/audio.h:25`).
-const NRX2_ENV_DIR_INC: u8 = 0x08;
 
 /// CGB attack, decay, sustain, and release parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,41 +94,6 @@ enum Phase {
     Release,
     PseudoEcho,
     Retired,
-}
-
-/// How a live square or noise channel's hardware envelope paces itself
-/// between `CGB_CHANNEL_MO_VOL` writes: the NRx2 step time it reloads
-/// after each step, and NRx2's direction bit
-/// (`_updateEnvelope`, `mgba/src/gb/audio.c:931-945`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct HardwareEnvelopePacing {
-    /// Envelope iterations between hardware steps: NRx2 bits 0-2, so `1..=7`
-    /// and never zero (a zero step time is a dead envelope, not a paced one).
-    pub(crate) step_time: u8,
-    /// Whether the envelope counts up (`CGB_NRx2_ENV_DIR_INC`) rather than down.
-    pub(crate) increasing: bool,
-}
-
-impl HardwareEnvelopePacing {
-    /// Decode the pacing an NRx2 write programs from the step-time-and-direction
-    /// value upstream hands it: bits 0-2 are the step time and bit 3 the
-    /// direction, everything above them masked away first
-    /// (`m4a.c:1221`..`:1222`, `_writeEnvelope`, `mgba/src/gb/audio.c:891`..`:893`).
-    ///
-    /// A zero step time is a dead envelope rather than a slow one, whatever
-    /// bit 3 says (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948`..`:950`),
-    /// so it decodes to `None`. A phase byte above 7 therefore reaches
-    /// hardware as some *other* period and possibly the opposite direction:
-    /// an attack of 8 writes `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`, a dead
-    /// downward envelope, not an upward step every 8 iterations.
-    fn from_nrx2_step_time_and_dir(step_time_and_dir: u8) -> Option<Self> {
-        let field = step_time_and_dir & NRX2_ENV_FIELD_MASK;
-        let step_time = field & NRX2_ENV_STEP_TIME_MASK;
-        (step_time != 0).then_some(Self {
-            step_time,
-            increasing: field & NRX2_ENV_DIR_INC != 0,
-        })
-    }
 }
 
 /// Live envelope state for one CGB voice.
@@ -204,22 +160,13 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// How the hardware envelope paces itself from its last
-    /// `CGB_CHANNEL_MO_VOL` write, or `None` when that write left it dead
-    /// and holding, decoded from the exact value upstream hands NRx2
-    /// ([`HardwareEnvelopePacing::from_nrx2_step_time_and_dir`]). Attack,
-    /// decay, and release each combine their own envelope byte with a
-    /// direction bit; sustain-start and pseudo-echo-start write a bare
-    /// direction bit and no step time (`m4a.c:1132-1137`, `:1090-1098`),
-    /// which freezes the hardware envelope (`stepTime == 0` marks it dead,
-    /// `mgba/src/gb/audio.c:948-950`) until another explicit write —
-    /// [`Self::sustain_step`]'s refresh and [`Self::pseudo_echo_step`]'s
-    /// countdown write neither.
-    ///
-    /// The phase bytes are whole `u8`s, not 3-bit fields, so only the low
-    /// nibble of the combination survives to hardware; the software envelope
-    /// keeps pacing itself off the raw byte, as upstream's `envelopeCounter`
-    /// does (`m4a.c:1031`, `:1063`, `:1152`).
+    /// The pacing this phase's NRx2 store programs, decoded by
+    /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
+    /// direction bit and no step time, leaving hardware dead at its last
+    /// level (sustain-start `m4a.c:1132-1137`, pseudo-echo-start
+    /// `:1090-1098`, and the refreshes that store nothing at all).
+    /// The software envelope keeps its own pace off the raw phase byte, as
+    /// upstream's `envelopeCounter` does (`m4a.c:1031`, `:1063`, `:1152`).
     #[must_use]
     pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
         let step_time_and_dir = match self.phase {
@@ -234,19 +181,12 @@ impl CgbEnvelope {
         HardwareEnvelopePacing::from_nrx2_step_time_and_dir(step_time_and_dir)
     }
 
-    /// The pacing the attack phase's NRx2 write programs:
-    /// `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`), decoded
-    /// through the nibble mask every NRx2 store applies
-    /// ([`HardwareEnvelopePacing::from_nrx2_step_time_and_dir`]).
-    ///
-    /// Note-on raises `CGB_CHANNEL_MO_VOL` alongside this very step time
-    /// (`m4a.c:993`, `:1024`), so a fresh voice arms its hardware timer from
-    /// it before its first [`Self::step`] leaves `Starting` — the note-on
-    /// write is the attack's write.
+    /// `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`), which
+    /// note-on stores too (`m4a.c:993`), decoded.
     #[must_use]
-    pub(crate) fn attack_pacing(&self) -> Option<HardwareEnvelopePacing> {
-        // The sum is masked to a nibble before it reaches NRx2, so wrapping
-        // at a byte discards only bits the mask drops anyway.
+    fn attack_pacing(&self) -> Option<HardwareEnvelopePacing> {
+        // Only the low nibble reaches NRx2, so wrapping at a byte discards
+        // nothing the mask would keep.
         HardwareEnvelopePacing::from_nrx2_step_time_and_dir(
             self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
         )

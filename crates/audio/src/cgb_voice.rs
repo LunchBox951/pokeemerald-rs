@@ -1,7 +1,7 @@
 //! Live CGB PSG voice playback, envelopes, and stereo routing.
 
 use crate::cgb_envelope::{
-    cgb_envelope_goal, cgb_pan, CgbAdsr, CgbEnvelope, HardwareEnvelopePacing, Panning,
+    cgb_envelope_goal, cgb_pan, CgbAdsr, CgbEnvelope, HardwareEnvelopeVolume, Panning,
 };
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
@@ -120,118 +120,6 @@ impl Oscillator {
                 noise.retrigger();
                 true
             }
-        }
-    }
-}
-
-/// The NRx2 volume nibble a live Square or Noise channel's hardware envelope
-/// holds, and the hardware timer that paces it.
-///
-/// A `CGB_CHANNEL_MO_VOL` write truncates the software envelope into this
-/// four-bit domain (`*nrx2ptr = (envelopeStepTimeAndDir & 0xF) +
-/// (channels->envelopeVolume << 4)` through a `vu8 *`, `m4a.c:1219-1223`) and
-/// then sets NRx4's trigger bit (`*nrx4ptr = channels->n4 | 0x80`,
-/// `m4a.c:1222-1223`). That trigger reloads the hardware envelope timer from
-/// the write's own step-time nibble as well as the level
-/// (`_resetEnvelope`'s `currentVolume = initialVolume; nextStep = stepTime`,
-/// `mgba/src/gb/audio.c:856-860`, reached from `GBAudioWriteNR14`'s restart
-/// branch, `:180-181`), so the timer is the hardware's own and never the
-/// software envelope's counter: a live VOL, pan, or tremolo write lands
-/// partway through a phase without disturbing upstream's `envelopeCounter`
-/// (`m4a_1.s:1394-1400`), and hardware must still wait a full step time
-/// afterwards.
-///
-/// Between writes the timer steps the nibble by one in NRx2's direction and
-/// reloads, going dead at 0 or 15 rather than wrapping past them
-/// (`_updateEnvelope`, `mgba/src/gb/audio.c:931-945`). While
-/// [`CgbEnvelope::hardware_envelope_pacing`] returns `None` hardware is dead
-/// at the last write's level, regardless of how far the software envelope
-/// drifts in the meantime (that method's doc).
-#[derive(Clone, Copy, Debug)]
-struct HardwareEnvelopeVolume {
-    volume: u8,
-    /// Envelope iterations until the next hardware step; zero is a dead
-    /// envelope, which only a write revives (`envelope->dead`,
-    /// `mgba/src/gb/audio.c:711-714`).
-    iterations_until_step: u8,
-}
-
-impl HardwareEnvelopeVolume {
-    const NIBBLE_MASK: u8 = 0x0F;
-
-    /// Level upstream's attack starts a fresh voice from
-    /// (`envelopeVolume = 0`, `m4a.c:1032`).
-    const NOTE_ON_LEVEL: u8 = 0;
-
-    /// Arm a fresh voice from its note-on write. That write is the attack's
-    /// own NRx2 store ([`CgbEnvelope::attack_pacing`]'s doc), so it latches
-    /// exactly as [`Self::write`] does — decoded step time, and dead on
-    /// arrival when the note-on level is already saturated in `pacing`'s
-    /// direction, as a downward write at level zero is.
-    fn at_note_on(pacing: Option<HardwareEnvelopePacing>) -> Self {
-        let mut hardware = Self {
-            volume: Self::NOTE_ON_LEVEL,
-            iterations_until_step: 0,
-        };
-        hardware.write(Self::NOTE_ON_LEVEL, pacing);
-        if hardware.iterations_until_step != 0 {
-            // Upstream stores NRx2 at the end of the note-on `CgbSound` pass
-            // (`m4a.c:1206-1226`), after that pass's own envelope iteration,
-            // which `begin_frame` has already run by the time it advances
-            // this timer. The first step therefore owes one more iteration —
-            // the same offset `transition_frame_delay` puts on the software
-            // counter, so the two share one phase from the first frame.
-            hardware.iterations_until_step += 1;
-        }
-        hardware
-    }
-
-    /// Latch a hardware write: NRx2 takes the software level's low nibble and
-    /// NRx4's trigger restarts the timer from that write's step time (this
-    /// type's doc). A level already saturated in `pacing`'s direction is dead
-    /// on arrival (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948-954`).
-    fn write(&mut self, software_volume: u8, pacing: Option<HardwareEnvelopePacing>) {
-        self.volume = software_volume & Self::NIBBLE_MASK;
-        self.iterations_until_step = match pacing {
-            Some(pacing) if !self.is_saturated_toward(pacing) => pacing.step_time,
-            _ => 0,
-        };
-    }
-
-    /// Run the hardware timer for `iterations` envelope iterations since the
-    /// last write, stepping the nibble whenever it expires (this type's doc).
-    fn advance(&mut self, iterations: u8, pacing: Option<HardwareEnvelopePacing>) {
-        let Some(pacing) = pacing else { return };
-        for _ in 0..iterations {
-            if self.iterations_until_step == 0 {
-                return;
-            }
-            self.iterations_until_step -= 1;
-            if self.iterations_until_step != 0 {
-                continue;
-            }
-            if pacing.increasing {
-                self.volume += 1;
-            } else {
-                self.volume -= 1;
-            }
-            if self.is_saturated_toward(pacing) {
-                return;
-            }
-            self.iterations_until_step = pacing.step_time;
-        }
-    }
-
-    /// Return the nibble the hardware volume register currently holds.
-    fn volume(self) -> u8 {
-        self.volume
-    }
-
-    fn is_saturated_toward(self, pacing: HardwareEnvelopePacing) -> bool {
-        if pacing.increasing {
-            self.volume >= Self::NIBBLE_MASK
-        } else {
-            self.volume == 0
         }
     }
 }
@@ -584,7 +472,7 @@ impl CgbVoice {
     ) -> Self {
         let routing = StereoRouting::new(vol_mr, vol_ml, velocity, rhythm_pan);
         let envelope = CgbEnvelope::new(adsr, routing.envelope_goal(), echo_volume, echo_length);
-        let hardware_envelope_volume = HardwareEnvelopeVolume::at_note_on(envelope.attack_pacing());
+        let hardware_envelope_volume = HardwareEnvelopeVolume::at_note_on();
         Self {
             channel,
             oscillator,
@@ -706,16 +594,12 @@ impl CgbVoice {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
-        // Upstream applies at most one register write per `CgbSound` pass, at
-        // its end (`m4a.c:1206-1226`), so a frame either relatches and
-        // restarts the hardware timer or lets it run.
-        let pacing = self.envelope.hardware_envelope_pacing();
-        if hardware_write {
-            self.hardware_envelope_volume.write(software_volume, pacing);
-        } else {
-            self.hardware_envelope_volume
-                .advance(1 + u8::from(extra_envelope_iteration), pacing);
-        }
+        self.hardware_envelope_volume.end_frame(
+            1 + u8::from(extra_envelope_iteration),
+            hardware_write,
+            software_volume,
+            self.envelope.hardware_envelope_pacing(),
+        );
         let envelope_gain = self
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
@@ -1116,6 +1000,55 @@ mod tests {
         assert!(
             climbing[1] > 0 && climbing[2] > climbing[1] && climbing[3] > climbing[2],
             "a decoded period of 1 climbs a nibble per frame, got {climbing:?}"
+        );
+    }
+
+    #[test]
+    fn a_doubled_note_on_frame_still_owes_its_write_until_the_frame_ends() {
+        // Upstream stores NRx2 once per `CgbSound` pass, at its end
+        // (`m4a.c:1206-1226`), after that pass's envelope stepping — including
+        // the doubling re-entry (`m4a.c:1176-1180`). A note-on frame that runs
+        // two software iterations therefore still ends with a freshly armed
+        // hardware timer, exactly as the single-iteration note-on frame does
+        // (`note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period`).
+        //
+        // Attack 17 writes `(17 + CGB_NRx2_ENV_DIR_INC) & 0xF == 9`: period 1,
+        // upward, so a timer that runs during the note-on pass steps the
+        // nibble a whole frame early and the fresh voice is audible on its own
+        // note-on frame.
+        let adsr = CgbAdsr {
+            attack: 17,
+            decay: 0,
+            sustain: 15,
+            release: 0,
+        };
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            adsr,
+            centred_goal_thirty_one_note(),
+        );
+        let peak_of = |voice: &mut CgbVoice, extra_envelope_iteration: bool| {
+            voice.begin_frame(MAX_MASTER_VOLUME, extra_envelope_iteration);
+            let mut acc = vec![(0i32, 0i32); 64];
+            voice.render(&mut acc, &[]);
+            acc.iter()
+                .map(|&(left, right)| left.abs().max(right.abs()))
+                .max()
+                .unwrap_or(0)
+        };
+
+        let note_on_frame = peak_of(&mut voice, true);
+        let next_frame = peak_of(&mut voice, false);
+
+        assert_eq!(
+            note_on_frame, 0,
+            "a doubled note-on frame owes its write until the pass ends, so the \
+             hardware nibble must not step during it"
+        );
+        assert!(
+            next_frame > 0,
+            "the frame after the note-on write must show the first hardware step, got {next_frame}"
         );
     }
 
