@@ -526,7 +526,7 @@ fn to_save_pokemon_files_ev_aware_stats_after_a_level_up() {
     let created_at_level = mon.created_at_level();
 
     // The in-battle level-up that makes the EV-aware recompute apply
-    // (`to_save_pokemon`'s own doc comment): `Battle::settle_win_reward`
+    // (`to_save_pokemon`'s own doc comment): `Battle::settle_enemy_reward`
     // awards EVs before applying experience, so a KO that does both sees
     // its own gain here exactly as a real battle would.
     let next_level_experience =
@@ -1825,7 +1825,7 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     );
 
     // The KO: `BattlePokemon::gain_evs` before `apply_experience` --
-    // `Battle::settle_win_reward`'s own order (module docs) -- against a
+    // `Battle::settle_enemy_reward`'s own order (module docs) -- against a
     // real species' real yield (Poochyena, species 286, Attack yield 1),
     // crossing the `ev / 4` boundary (3 -> 4 -> floor 1).
     let poochyena = dex.species(assets::SpeciesId(286)).unwrap();
