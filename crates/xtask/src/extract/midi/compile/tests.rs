@@ -927,3 +927,44 @@ fn an_over_long_zero_delta_preserves_the_prior_absolute_tick() {
         ]
     );
 }
+
+#[test]
+fn a_same_tick_velocity_zero_note_on_precedes_an_extended_command_selector() {
+    // The retained velocity-zero note-on shares tick 4 with the selector.
+    // Upstream's type-zero event sorts before the controller, so the
+    // selector still owns the outgoing 10-tick gap and suppresses its first
+    // wait chunk; ordering it after the selector would give the selector a
+    // zero gap to suppress and surface a Wait(10) instead.
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, note_on(0, 60, 100));
+    push_timed(
+        &mut body,
+        4,
+        control_change(0, EXTENDED_COMMAND_SELECTOR, PSEUDO_ECHO_VOLUME_COMMAND),
+    );
+    push_timed(&mut body, 0, note_on(0, 60, 0));
+    push_timed(&mut body, 10, note_on(0, 64, 100));
+    push_timed(&mut body, 6, note_off(0, 64));
+
+    let compiled = compile(&single_track_midi(24, body), &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4,
+            },
+            SongEvent::Wait(4),
+            SongEvent::Note {
+                key: 64,
+                velocity: 100,
+                gate: 6,
+            },
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
