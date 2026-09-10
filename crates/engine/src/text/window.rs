@@ -70,10 +70,8 @@ pub fn tile_pixels_flipped(
     if !sheet.width.is_multiple_of(TILE_SIZE) || !sheet.height.is_multiple_of(TILE_SIZE) {
         return None;
     }
-    // Widths and heights come from a publicly constructible `ImageRef`, so
-    // every product and offset below is untrusted and must stay checked
-    // through to the final slice indexing: none of it may panic or wrap
-    // before this function can return the documented `None`.
+    // `ImageRef`'s fields are public and arbitrary, so nothing about
+    // `sheet`'s dimensions is trusted here.
     let width = sheet.width as usize;
     let height = sheet.height as usize;
     let tile_side = TILE_SIZE as usize;
