@@ -827,6 +827,93 @@ fn a_destination_spelled_as_a_directory_is_refused_with_that_name_intact() {
     assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }
 
+#[test]
+fn an_existing_directory_at_the_destination_is_refused_before_the_rom_is_read() {
+    // No trailing separator -- an ordinary file name -- but a directory
+    // already occupies it. See `Dest::name_is_directory` for why this is
+    // refused before the import runs rather than at the publishing rename.
+    let dir = TempDir::new("existing-directory");
+    let pack_path = dir.join("pokeemerald.pack");
+    fs::create_dir(&pack_path).expect("the occupying directory is created");
+
+    let ran = AtomicU32::new(0);
+    let source = SourceRom::new("existing-directory-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        ran.fetch_add(1, Ordering::Relaxed);
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ImportRomError::DestinationIsDirectory { .. }),
+        "expected an existing-directory refusal, got: {err}"
+    );
+    assert_eq!(ran.load(Ordering::Relaxed), 0, "the import must not run");
+    assert!(pack_path.is_dir(), "the occupying directory survives");
+    // No temporary file was left beside it.
+    assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
+}
+
+#[test]
+fn a_refused_directory_destination_says_which_variable_to_change() {
+    let rendered = ImportRomError::DestinationIsDirectory {
+        pack_path: PathBuf::from("/data/pokeemerald.pack"),
+    }
+    .to_string();
+    assert!(rendered.contains("/data/pokeemerald.pack"), "{rendered}");
+    assert!(rendered.contains(pack_format::PACK_PATH_ENV), "{rendered}");
+    assert!(!rendered.contains('\n'), "{rendered}");
+}
+
+#[test]
+fn an_existing_regular_file_at_the_destination_is_still_replaced() {
+    // The new directory check must fire only on an actual directory: a
+    // plain file already occupying the name is the ordinary re-import
+    // case (also covered end-to-end by
+    // `a_re_import_replaces_the_pack_that_already_held_the_name`), and has
+    // to keep being replaced rather than refused.
+    let dir = TempDir::new("existing-file");
+    let pack_path = dir.join("pokeemerald.pack");
+    fs::write(&pack_path, b"an old pack").expect("the occupying file writes");
+
+    let source = SourceRom::new("existing-file-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"a new pack"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"a new pack");
+    assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_destination_symlinked_to_a_directory_is_still_published() {
+    // A symlink to a directory must not be refused: see
+    // `Dest::name_is_directory` for why `publish` handles it like any
+    // other occupied name.
+    let dir = TempDir::new("symlink-to-directory");
+    let target = dir.join("elsewhere");
+    fs::create_dir(&target).expect("the symlink's target directory is created");
+    let pack_path = dir.join("pokeemerald.pack");
+    std::os::unix::fs::symlink(&target, &pack_path).expect("the destination symlink is created");
+
+    let source = SourceRom::new("symlink-to-directory-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    // The symlink was replaced by the finished pack, a regular file.
+    assert!(!fs::symlink_metadata(&pack_path).unwrap().is_symlink());
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+    // What it used to point at is untouched.
+    assert!(target.is_dir());
+    assert!(fs::read_dir(&target).unwrap().next().is_none());
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_non_utf8_pack_name_is_published_byte_for_byte() {
