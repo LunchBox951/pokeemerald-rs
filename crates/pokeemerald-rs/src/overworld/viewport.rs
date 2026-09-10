@@ -14,7 +14,7 @@ use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
     pack_4bpp_region, OverworldSceneError, METATILE_PX, PAD, PLAYER_VIEW_COL, PLAYER_VIEW_ROW,
-    VIEW_COLS, VIEW_ROWS,
+    RESTING_SCROLL_ROW, RESTING_SCROLL_Y, VIEW_COLS, VIEW_ROWS,
 };
 
 /// Fixed primary-tileset slot count from `include/fieldmap.h`.
@@ -32,7 +32,8 @@ const WORLD_PALETTE_BANKS: usize = 13;
 
 const ROW_MAJOR_TILEMAP_DIMENSION_LIMIT: i32 = 32;
 const _: () = assert!((VIEW_COLS + PAD) * 2 <= ROW_MAJOR_TILEMAP_DIMENSION_LIMIT);
-const _: () = assert!((VIEW_ROWS + PAD) * 2 <= ROW_MAJOR_TILEMAP_DIMENSION_LIMIT);
+const _: () =
+    assert!((VIEW_ROWS + PAD + RESTING_SCROLL_ROW) * 2 <= ROW_MAJOR_TILEMAP_DIMENSION_LIMIT);
 
 pub(super) const TOP_BG_INDEX: u8 = 1;
 pub(super) const TOP_PRIORITY: u8 = 1;
@@ -243,8 +244,9 @@ type MetatileQuad = [ScreenEntry; 4];
 
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
 ///
-/// `Normal` uses the transparent fallback instead of upstream's fixed BG3
-/// entry `0x3014`, as documented by the parent module.
+/// `Normal` leaves the bottom background transparent instead of reproducing
+/// upstream's fixed BG3 entry; the module docs' "Fidelity differences"
+/// section states that deviation and its consequence.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
@@ -292,6 +294,9 @@ pub(super) struct FrameViewport {
 /// Connected cells intentionally resolve through the active map's tilesets,
 /// matching `DrawMetatileAt` after `InitBackupMapLayoutConnections` copies raw
 /// metatile IDs (`pokeemerald/src/field_camera.c`, `src/fieldmap.c`).
+///
+/// The vertical scroll always carries [`RESTING_SCROLL_Y`], backed by
+/// [`RESTING_SCROLL_ROW`]'s extra metatile south of the crop.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_tilemaps(
     player: &PlayerState,
@@ -322,7 +327,7 @@ pub(super) fn build_tilemaps(
     let anchor_x = base_x - PLAYER_VIEW_COL - west_padding;
     let anchor_y = base_y - PLAYER_VIEW_ROW - north_padding;
     let cols_metatiles = VIEW_COLS + west_padding + east_padding;
-    let rows_metatiles = VIEW_ROWS + north_padding + south_padding;
+    let rows_metatiles = VIEW_ROWS + north_padding + south_padding + RESTING_SCROLL_ROW;
     #[expect(
         clippy::cast_sign_loss,
         reason = "the viewport dimensions plus nonnegative padding are positive"
@@ -381,9 +386,9 @@ pub(super) fn build_tilemaps(
     #[expect(
         clippy::cast_sign_loss,
         clippy::cast_possible_truncation,
-        reason = "padding minus step lag stays within one metatile"
+        reason = "the resting baseline plus padding minus step lag stays within two metatiles"
     )]
-    let scroll_y = (north_padding * METATILE_PX - lag_y) as u16;
+    let scroll_y = (RESTING_SCROLL_Y + north_padding * METATILE_PX - lag_y) as u16;
 
     FrameViewport {
         bottom,
@@ -1087,9 +1092,16 @@ mod tests {
             0,
         );
 
-        let (expected_cols, expected_rows) = ((VIEW_COLS * 2) as usize, (VIEW_ROWS * 2) as usize);
+        let (expected_cols, expected_rows) = (
+            (VIEW_COLS * 2) as usize,
+            ((VIEW_ROWS + RESTING_SCROLL_ROW) * 2) as usize,
+        );
         assert_eq!(viewport.bottom.width_tiles(), expected_cols);
-        assert_eq!(viewport.bottom.height_tiles(), expected_rows);
+        assert_eq!(
+            viewport.bottom.height_tiles(),
+            expected_rows,
+            "one extra row of southward capacity always backs the resting scroll"
+        );
 
         assert_eq!(
             viewport.bottom.entry(0, 0).unwrap().tile_index(),
@@ -1098,7 +1110,10 @@ mod tests {
         );
 
         assert_eq!(viewport.scroll_x, 0);
-        assert_eq!(viewport.scroll_y, 0);
+        assert_eq!(
+            viewport.scroll_y, 8,
+            "upstream's resting 8px BG offset (field_camera.c:74-85)"
+        );
     }
 
     #[test]
@@ -1134,7 +1149,10 @@ mod tests {
 
         let viewport = compose(&player);
         assert_eq!(viewport.scroll_x, 0);
-        assert_eq!(viewport.scroll_y, 0);
+        assert_eq!(
+            viewport.scroll_y, 8,
+            "the resting vertical baseline holds regardless of horizontal motion"
+        );
         let padded_cols = ((VIEW_COLS + PAD) * 2) as usize;
         assert_eq!(
             viewport.bottom.width_tiles(),
@@ -1153,7 +1171,7 @@ mod tests {
             u16::from(HALF_STEP),
             "eastward scroll advances one pixel per frame"
         );
-        assert_eq!(viewport.scroll_y, 0, "no vertical movement");
+        assert_eq!(viewport.scroll_y, 8, "no vertical movement");
         assert_eq!(
             viewport.bottom.width_tiles(),
             padded_cols,
@@ -1166,12 +1184,12 @@ mod tests {
         assert!(!player.in_transit());
         let viewport = compose(&player);
         assert_eq!(viewport.scroll_x, 0);
-        assert_eq!(viewport.scroll_y, 0);
+        assert_eq!(viewport.scroll_y, 8);
         let unpadded_cols = (VIEW_COLS * 2) as usize;
         assert_eq!(
             viewport.bottom.width_tiles(),
             unpadded_cols,
-            "at rest, no padding edge is needed"
+            "at rest, no directional padding edge is needed"
         );
     }
 
@@ -1249,6 +1267,162 @@ mod tests {
                 Bgr555::from_channels(u8::try_from(INTERIOR_TILE_INDEX).unwrap(), 0, 0).to_rgb888()
             ),
             "the active grid's top layer displays at the player's screen position"
+        );
+    }
+
+    /// Upstream's resting field camera puts the player's own metatile
+    /// *exactly* centred on the 160px screen (issue #977) -- the module
+    /// docs' "Camera" section owns the full upstream derivation
+    /// (`field_camera.c`/`fieldmap.c`/`event_object_movement.c` citations)
+    /// for why that lands at screen row 72 for the metatile and 56 for the
+    /// player OBJ; this test only pins those two numbers against a
+    /// synthetic, uniquely-labelled map.
+    #[test]
+    fn resting_camera_centres_the_players_metatile_like_upstreams_pan_plus_bg_offset() {
+        const UPSTREAM_METATILE_SCREEN_Y: i32 = 72;
+        const UPSTREAM_PLAYER_OBJ_SCREEN_Y: u8 = 56;
+        const MAP_SIZE: u16 = 16;
+        const PLAYER: (u16, u16) = (7, 7);
+
+        let grid_bytes = labeled_grid_bytes(MAP_SIZE, MAP_SIZE);
+        let layout = test_layout(MAP_SIZE, MAP_SIZE);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+
+        // One `Covered` metatile per labelled id, every screen entry carrying
+        // `id + 1` as its tile index, so a composed bottom-layer entry names
+        // the exact map cell it came from.
+        let max_id = labeled_metatile_id(MAP_SIZE, MAP_SIZE - 1, MAP_SIZE - 1);
+        let mut metatiles = Vec::new();
+        let mut attrs = Vec::new();
+        for id in 0..=max_id {
+            push_plain_screen_entries(&mut metatiles, id + 1, 8);
+            attrs.extend_from_slice(&encoded_layer_type(MetatileLayerType::Covered));
+        }
+        let attrs = MetatileAttributeTable::new(&attrs);
+        let no_secondary = MetatileAttributeTable::new(&[]);
+
+        let player = PlayerState::new(
+            (i32::from(PLAYER.0), i32::from(PLAYER.1)),
+            WALKABLE_ELEVATION,
+            EngineDirection::South,
+        );
+        assert!(!player.in_transit(), "a resting camera, no step in flight");
+
+        let viewport = build_tilemaps(
+            &player,
+            &grid,
+            &border,
+            &[],
+            &metatiles,
+            &[],
+            &attrs,
+            &no_secondary,
+            0,
+        );
+
+        let players_tile_index = labeled_metatile_id(MAP_SIZE, PLAYER.0, PLAYER.1) + 1;
+        let players_tile_row = (0..viewport.bottom.height_tiles())
+            .find(|&row| {
+                (0..viewport.bottom.width_tiles()).any(|col| {
+                    viewport.bottom.entry(col, row).unwrap().tile_index() == players_tile_index
+                })
+            })
+            .expect("the player's own metatile is inside its own viewport");
+
+        let tile_dim = i32::try_from(BitDepth::TILE_DIM).unwrap();
+        let metatile_screen_y =
+            i32::try_from(players_tile_row).unwrap() * tile_dim - i32::from(viewport.scroll_y);
+        assert_eq!(
+            metatile_screen_y, UPSTREAM_METATILE_SCREEN_Y,
+            "the player's standing metatile must sit where upstream's 32px \
+             resting pan plus 8px BG offset put it"
+        );
+        assert_eq!(
+            super::super::avatar::PLAYER_OBJ_Y,
+            UPSTREAM_PLAYER_OBJ_SCREEN_Y,
+            "the player OBJ's fixed screen row must match the same camera"
+        );
+    }
+
+    /// The vertical analogue of
+    /// [`build_tilemaps_scroll_lags_behind_during_a_transit_and_settles_at_rest`]:
+    /// [`RESTING_SCROLL_Y`]'s baseline must hold at both ends of a vertical
+    /// step (full lag cancels the direction padding at the start; settling
+    /// drops the padding again), and the direction padding must still stack
+    /// on top of it while a step is in flight, matching upstream's
+    /// `gSpriteCoordOffsetY`/`BGnVOFS` never dropping the `+8` term
+    /// mid-pan (`field_camera.c:74-85`, `:456-464`).
+    #[test]
+    fn build_tilemaps_vertical_scroll_carries_the_resting_baseline_through_a_transit() {
+        const MAP_SIZE: u16 = 10;
+        const HALF_STEP: u8 = WALK_FRAMES_PER_TILE / 2;
+
+        let grid_bytes = uniform_grid_bytes(MAP_SIZE, MAP_SIZE, INTERIOR_METATILE_ID);
+        let layout = test_layout(MAP_SIZE, MAP_SIZE);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+        let (metatiles, attrs) = synthetic_metatiles_and_attrs();
+        let attrs = MetatileAttributeTable::new(&attrs);
+        let no_secondary = MetatileAttributeTable::new(&[]);
+
+        let compose = |player: &PlayerState| {
+            build_tilemaps(
+                player,
+                &grid,
+                &border,
+                &[],
+                &metatiles,
+                &[],
+                &attrs,
+                &no_secondary,
+                0,
+            )
+        };
+
+        let resting_rows = ((VIEW_ROWS + RESTING_SCROLL_ROW) * 2) as usize;
+        let padded_rows = ((VIEW_ROWS + PAD + RESTING_SCROLL_ROW) * 2) as usize;
+
+        let mut player = player_after_step_frames(EngineDirection::South, 0);
+        assert_eq!(player.position(), (5, 6), "the tile commits at once");
+
+        let viewport = compose(&player);
+        assert_eq!(
+            viewport.scroll_y, 8,
+            "full lag cancels the direction padding, leaving just the resting baseline"
+        );
+        assert_eq!(
+            viewport.bottom.height_tiles(),
+            padded_rows,
+            "moving south pads the viewport by one metatile on top of the permanent resting row"
+        );
+
+        for _ in 0..HALF_STEP {
+            player.tick();
+        }
+        assert!(player.in_transit(), "the half-step remains in transit");
+        let viewport = compose(&player);
+        assert_eq!(
+            viewport.scroll_y,
+            8 + u16::from(HALF_STEP),
+            "southward scroll advances one pixel per frame past the resting baseline"
+        );
+
+        for _ in HALF_STEP..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(!player.in_transit());
+        let viewport = compose(&player);
+        assert_eq!(
+            viewport.scroll_y, 8,
+            "settling drops the direction padding, returning to the resting baseline"
+        );
+        assert_eq!(
+            viewport.bottom.height_tiles(),
+            resting_rows,
+            "at rest, only the permanent resting row remains"
         );
     }
 }

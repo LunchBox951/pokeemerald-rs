@@ -11,6 +11,15 @@
 //! clamped at map edges. It shows connected layouts where available, then the
 //! current layout's repeating border outside the resolved map area.
 //!
+//! Upstream rests the player's metatile on screen rows 72..=87 and the 16-by-32
+//! player sprite at row 56: the camera anchor sits `MAP_OFFSET` (7) metatiles
+//! above the player in `pokeemerald/src/fieldmap.c`, and
+//! `FieldUpdateBgTilemapScroll` in `pokeemerald/src/field_camera.c` writes
+//! `BGnVOFS = sVerticalCameraPan + yPixelOffset + 8` with a resting pan of 32.
+//! This module reproduces that framing with `PLAYER_VIEW_ROW`'s crop, two rows
+//! short of `MAP_OFFSET` to absorb the 32-pixel pan, plus `RESTING_SCROLL_Y`
+//! for the remaining 8.
+//!
 //! # Background layers
 //!
 //! Each 16-by-16-pixel metatile contains two layers of four 8-by-8-pixel tiles.
@@ -45,8 +54,6 @@
 //!   `0x14` in palette bank 3 -- behind the normally opaque middle layer, so
 //!   the two differ only where that layer has a transparent pixel.
 //! - Walking does not alternate the leading foot between steps.
-//! - The ten-metatile viewport has no single centre row. The selected player
-//!   row is a port-specific centring choice.
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
@@ -86,12 +93,46 @@ const METATILE_PX: i32 = 16;
 const VIEW_COLS: i32 = 240 / METATILE_PX;
 const VIEW_ROWS: i32 = 160 / METATILE_PX;
 
-/// Screen location of the player's map tile, measured in metatiles.
+/// Screen location of the player's map tile within the composed tilemap,
+/// measured in metatiles and before [`RESTING_SCROLL_Y`].
 const PLAYER_VIEW_COL: i32 = VIEW_COLS / 2;
 const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 
 /// Tilemap padding that keeps sub-metatile scrolling inside the composed area.
 const PAD: i32 = 1;
+
+/// Baseline vertical background scroll, present in every composed frame, that
+/// completes upstream's resting framing.
+const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
+
+/// Extra southward metatile row composed so [`RESTING_SCROLL_Y`] samples map
+/// content instead of wrapping.
+const RESTING_SCROLL_ROW: i32 = 1;
+
+/// The screen rectangle the player's avatar covers in a composed frame,
+/// measured in framebuffer pixels.
+///
+/// Plain data rather than a behaviour-owning type `(oop-boundaries)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvatarScreenBox {
+    /// Leftmost screen pixel column the avatar covers.
+    pub left: usize,
+    /// Topmost screen pixel row the avatar covers.
+    pub top: usize,
+    /// The avatar's width in pixels.
+    pub width: usize,
+    /// The avatar's height in pixels.
+    pub height: usize,
+}
+
+/// Where the player's avatar lands on screen, the same whether the player
+/// stands or walks.
+pub const PLAYER_AVATAR_SCREEN_BOX: AvatarScreenBox = AvatarScreenBox {
+    left: avatar::PLAYER_OBJ_X as usize,
+    top: avatar::PLAYER_OBJ_Y as usize,
+    width: avatar::FRAME_W,
+    height: avatar::FRAME_H,
+};
 
 /// Layout used by the default-room loaders.
 const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";

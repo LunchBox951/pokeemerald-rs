@@ -41,10 +41,20 @@ const PCM_S24: WavFormat = WavFormat {
     block_align: 3,
     bits_per_sample: 24,
 };
+const PCM_S32: WavFormat = WavFormat {
+    tag: 1,
+    block_align: 4,
+    bits_per_sample: 32,
+};
 const IEEE_FLOAT_F32: WavFormat = WavFormat {
     tag: 3,
     block_align: 4,
     bits_per_sample: 32,
+};
+const IEEE_FLOAT_F64: WavFormat = WavFormat {
+    tag: 3,
+    block_align: 8,
+    bits_per_sample: 64,
 };
 
 fn fmt_chunk(format: WavFormat, channel_count: u16, sample_rate: u32) -> Vec<u8> {
@@ -246,6 +256,28 @@ fn f32_format_decodes() {
     let bytes = build_wav(IEEE_FLOAT_F32, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.data, vec![-128, 0]);
+}
+
+#[test]
+fn s32_format_decodes() {
+    let mut data = Vec::new();
+    for word in [i32::MIN, 0, 1 << 30, i32::MAX] {
+        data.extend_from_slice(&word.to_le_bytes());
+    }
+    let bytes = build_wav(PCM_S32, 22050, &[], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.data, vec![-128, 0, 64, 127]);
+}
+
+#[test]
+fn f64_format_decodes() {
+    let mut data = Vec::new();
+    for value in [-1.0f64, 0.0, 0.5, 1.0] {
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    let bytes = build_wav(IEEE_FLOAT_F64, 22050, &[], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.data, vec![-128, 0, 64, 127]);
 }
 
 #[test]

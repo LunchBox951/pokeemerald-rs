@@ -1190,10 +1190,13 @@ fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge()
     )
     .expect("the connection fixture should decode cleanly");
 
-    // At rest, standing at the active grid's own origin: the resting
-    // viewport's bottom row samples world y == 4 -- one row south of the
-    // 4x4 grid's own last row (module docs' anchor math: `anchor_y == -5`,
-    // `VIEW_ROWS == 10`, so the last sampled row is `-5 + 9 == 4`).
+    // At rest, standing at the active grid's own origin: screen row 144
+    // samples world y == 4 -- one row south of the 4x4 grid's own last row
+    // (module docs' anchor math: `anchor_y == -5`, so metatile row 9 of the
+    // viewport is world row `-5 + 9 == 4`). Row 9 still lands at screen row
+    // 144 because the resting `RESTING_SCROLL_Y == 8` baseline only eats
+    // into the rows immediately above and below it: `(144 + 8) / 16 == 9`
+    // exactly.
     let player = PlayerState::new((0, 0), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
     let frame = scene.compose(&player, &event_data, 0);
@@ -2140,18 +2143,24 @@ const LITTLEROOT_TOWN_FLOWER_VIEW: (i32, i32) = (10, 17);
 /// of its descendants) to rebuild the same tilemaps [`super::OverworldScene::compose`]
 /// would, the same way [`super::viewport`]'s own tests do.
 ///
+/// A resting viewport still carries `RESTING_SCROLL_Y`'s 8px baseline
+/// vertical scroll (issue #977), so a tile's raw pixel row is shifted by
+/// `viewport.scroll_y` (never `scroll_x`: horizontal scroll is zero at
+/// rest) to reach its actual screen row; a row that shift pushes fully
+/// off-screen is dropped, since no test here samples outside `0..160`.
+///
 /// # Panics
 ///
 /// If `player` [`PlayerState::in_transit`] -- the padded/scrolled viewport
 /// that produces doesn't map tile `(col, row)` to screen pixel `(col * 8,
-/// row * 8)` in general, and no test here needs it.
+/// row * 8 - scroll_y)` in general, and no test here needs it.
 fn animated_tile_screen_rects(
     scene: &super::OverworldScene,
     player: &PlayerState,
 ) -> Vec<(usize, usize, usize, usize)> {
     assert!(
         !player.in_transit(),
-        "helper assumes a zero-scroll, unpadded viewport (doc comment)"
+        "helper assumes an unpadded, resting-baseline-only scroll (doc comment)"
     );
     let grid = scene
         .layout
@@ -2201,9 +2210,21 @@ fn animated_tile_screen_rects(
                 .into_iter()
                 .filter_map(|tilemap| tilemap.entry(col, row))
                 .any(is_animated);
-            if animated {
-                rects.push((col * 8, row * 8, col * 8 + 8, row * 8 + 8));
+            if !animated {
+                continue;
             }
+            let y0 = i32::try_from(row * 8).unwrap() - i32::from(viewport.scroll_y);
+            let y1 = y0 + 8;
+            if y1 <= 0 || y0 >= 160 {
+                continue;
+            }
+            let x0 = col * 8;
+            rects.push((
+                x0,
+                usize::try_from(y0.max(0)).unwrap(),
+                x0 + 8,
+                usize::try_from(y1.min(160)).unwrap(),
+            ));
         }
     }
     rects
@@ -2378,10 +2399,14 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     // rest, the resting viewport's own anchor (`anchor_y == y -
     // PLAYER_VIEW_ROW == 1 - 5 == -4`, `super::viewport`'s module docs)
     // samples world rows `-4..=5` -- the top four rows (screen rows 0..=3,
-    // world rows `-4..=-1`, pixel rows `0..64`) already fall north of
-    // Littleroot's own y == 0 edge, squarely in this connection's own
-    // territory. All four are inside `viewport::within_backup_map_band`'s
-    // own `y >= -7` cover, so the band bound never trims this strip.
+    // world rows `-4..=-1`) already fall north of Littleroot's own y == 0
+    // edge, squarely in this connection's own territory. All four are
+    // inside `viewport::within_backup_map_band`'s own `y >= -7` cover, so
+    // the band bound never trims this strip. `RESTING_SCROLL_Y`'s 8px
+    // resting scroll (issue #977) shifts those rows to screen pixel rows
+    // `0..56`, not `0..64`: `(56 + 8) / 16 == 4` is the first screen row
+    // that samples world row `-4 + 4 == 0`, Littleroot's own in-bounds
+    // interior rather than the connection strip.
     let player = PlayerState::new((10, 1), 3, Direction::North);
     let frame = scene.compose(&player, &data, 0);
     let frame_border_only = scene_border_only.compose(&player, &data, 0);
@@ -2396,15 +2421,15 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     let route_101_player = PlayerState::new((10, 21), 3, Direction::North);
     let frame_route_101 = route_101.compose(&route_101_player, &data, 0);
 
-    // The shared strip: screen pixel rows `0..64` -- 4 metatile rows, the
+    // The shared strip: screen pixel rows `0..56` -- 4 metatile rows, the
     // full width -- entirely north of Littleroot's own grid at this player
-    // position, per the anchor math above. The last of them (screen row 3,
-    // world row -1 on Littleroot's side, Route 101's own row 19) is the
-    // row immediately adjacent to the seam, the one the comparison most
+    // position, per the anchor math above. The last of them (screen rows
+    // 40..56, world row -1 on Littleroot's side, Route 101's own row 19) is
+    // the row immediately adjacent to the seam, the one the comparison most
     // needs to cover (review of #253: the strip used to stop at `0..48`,
     // three rows, excluding exactly that row).
     let mut any_pixel_changed_by_the_connection = false;
-    for py in 0..64usize {
+    for py in 0..56usize {
         for px in 0..240usize {
             let with_connection = frame.pixel(px, py);
             let without_connection = frame_border_only.pixel(px, py);
@@ -2471,7 +2496,7 @@ fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_e
     let frame_oldale = oldale.compose(&oldale_player, &data, 0);
 
     let mut any_pixel_changed_by_the_connection = false;
-    for py in 0..64usize {
+    for py in 0..56usize {
         for px in 0..240usize {
             let with_connection = frame.pixel(px, py);
             let without_connection = frame_border_only.pixel(px, py);
