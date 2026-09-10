@@ -63,6 +63,21 @@ struct WinitApp {
     buttons: ButtonState,
     inner: Option<Inner>,
     init_error: Option<PlatformError>,
+    /// The frame [`Self::render_latest`] draws; boxed since a [`Frame`] is
+    /// 150 KiB.
+    latest_frame: Option<Box<Frame>>,
+    /// A render failure from inside a `RedrawRequested` callback:
+    /// `window_event` returns `()`, so this is drained by the next
+    /// [`Self::take_pump_error`] call instead of returning directly.
+    pending_error: Option<PlatformError>,
+    /// Test-only stand-ins for a live `softbuffer` surface, which this
+    /// crate's headless suite never opens (see the module docs):
+    /// `render_calls` counts [`Self::render_latest`] attempts, and
+    /// `fail_next_render` makes the next one fail.
+    #[cfg(test)]
+    render_calls: usize,
+    #[cfg(test)]
+    fail_next_render: bool,
 }
 
 impl WinitApp {
@@ -74,7 +89,124 @@ impl WinitApp {
             buttons: ButtonState::new(),
             inner: None,
             init_error: None,
+            latest_frame: None,
+            pending_error: None,
+            #[cfg(test)]
+            render_calls: 0,
+            #[cfg(test)]
+            fail_next_render: false,
         }
+    }
+
+    /// Store `frame` for [`Self::render_latest`], reusing the existing
+    /// allocation rather than boxing a fresh 150 KiB frame every call.
+    fn retain_frame(&mut self, frame: &Frame) {
+        match &mut self.latest_frame {
+            Some(retained) => **retained = *frame,
+            None => self.latest_frame = Some(Box::new(*frame)),
+        }
+    }
+
+    /// Ask `winit` to schedule a `RedrawRequested` callback so an
+    /// OS-driven expose or live-resize redraw re-renders the retained
+    /// frame. A no-op before the window exists.
+    fn request_redraw(&self) {
+        if let Some(inner) = &self.inner {
+            inner.window.request_redraw();
+        }
+    }
+
+    /// Render the retained frame, shared by [`Platform::present`] and the
+    /// `RedrawRequested` callback so both blit through the same logic.
+    ///
+    /// A no-op if nothing has been retained, or the window doesn't exist
+    /// yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SoftBuffer`] if the presentation surface
+    /// could not be resized or presented.
+    fn render_latest(&mut self) -> Result<(), PlatformError> {
+        let Some(frame) = self.latest_frame.as_deref() else {
+            return Ok(());
+        };
+
+        #[cfg(test)]
+        {
+            self.render_calls += 1;
+            if self.fail_next_render {
+                self.fail_next_render = false;
+                return Err(PlatformError::SoftBuffer(
+                    softbuffer::SoftBufferError::Unimplemented,
+                ));
+            }
+        }
+
+        let Some(inner) = self.inner.as_mut() else {
+            return Ok(());
+        };
+        let size = inner.window.inner_size();
+        let (Some(width), Some(height)) =
+            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+        else {
+            return Ok(());
+        };
+
+        inner.surface.resize(width, height)?;
+        let mut buffer = inner.surface.buffer_mut()?;
+        let letterbox = Letterbox::compute(size.width, size.height);
+        present::blit(frame, &letterbox, size.width, size.height, &mut buffer[..]);
+        buffer.present()?;
+        Ok(())
+    }
+
+    /// Drain the recorded error, if any: `init_error` (no usable window)
+    /// takes priority over a later `pending_error` from a redraw callback.
+    fn take_pump_error(&mut self) -> Option<PlatformError> {
+        self.init_error.take().or_else(|| self.pending_error.take())
+    }
+
+    /// Handle one `WindowEvent`; returns whether to exit (close or
+    /// Escape). Split from `window_event` so it's testable without a real
+    /// `ActiveEventLoop`.
+    fn handle_window_event(&mut self, event: WindowEvent) -> bool {
+        match event {
+            WindowEvent::CloseRequested => return true,
+            // Winit does not synthesize key-release events on focus loss
+            // (macOS/Wayland), so a key held across an alt-tab would stay
+            // stuck in `frame_held` forever. Drop all held state instead;
+            // still-held keys re-register on the next real press.
+            WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    // Escape is a dev/emulator quit affordance, not a GBA
+                    // button (there is no hardware key it could map to), so
+                    // it is handled here directly rather than through
+                    // `Keymap` — same exit path as a window-close request.
+                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
+                        return true;
+                    }
+                    if let Some(button) = self.keymap.lookup(code) {
+                        match event.state {
+                            ElementState::Pressed => self.frame_held |= button,
+                            ElementState::Released => self.frame_held &= !button,
+                        }
+                    }
+                }
+            }
+            // winit requires rendering to finish before this callback
+            // returns (macOS dispatches it synchronously from `drawRect:`),
+            // so render here rather than waiting for the next
+            // `Platform::present`. This callback can't return an error, so
+            // the first failure is kept and surfaces from the next `pump`.
+            WindowEvent::RedrawRequested => {
+                if let Err(err) = self.render_latest() {
+                    self.pending_error.get_or_insert(err);
+                }
+            }
+            _ => {}
+        }
+        false
     }
 }
 
@@ -118,32 +250,8 @@ impl ApplicationHandler for WinitApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            // Winit does not synthesize key-release events on focus loss
-            // (macOS/Wayland), so a key held across an alt-tab would stay
-            // stuck in `frame_held` forever. Drop all held state instead;
-            // still-held keys re-register on the next real press.
-            WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
-            WindowEvent::KeyboardInput { event, .. } => {
-                if let PhysicalKey::Code(code) = event.physical_key {
-                    // Escape is a dev/emulator quit affordance, not a GBA
-                    // button (there is no hardware key it could map to), so
-                    // it is handled here directly rather than through
-                    // `Keymap` — same exit path as a window-close request.
-                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
-                        event_loop.exit();
-                        return;
-                    }
-                    if let Some(button) = self.keymap.lookup(code) {
-                        match event.state {
-                            ElementState::Pressed => self.frame_held |= button,
-                            ElementState::Released => self.frame_held &= !button,
-                        }
-                    }
-                }
-            }
-            _ => {}
+        if self.handle_window_event(event) {
+            event_loop.exit();
         }
     }
 }
@@ -280,7 +388,7 @@ impl Platform {
                 let status = window
                     .event_loop
                     .pump_app_events(Some(Duration::ZERO), &mut window.app);
-                if let Some(err) = window.app.init_error.take() {
+                if let Some(err) = window.app.take_pump_error() {
                     return Err(err);
                 }
                 window.app.buttons.update(window.app.frame_held);
@@ -350,6 +458,10 @@ impl Platform {
     /// Present a native 240x160 frame, integer-scaled and letterboxed to fit
     /// the current window size (see [`crate::present`]).
     ///
+    /// Retains and renders `frame`, and schedules a `RedrawRequested`
+    /// callback so a later OS-driven redraw (e.g. expose, live-resize)
+    /// re-renders it too.
+    ///
     /// A no-op if the window/surface has not been created yet (i.e. before
     /// the first successful [`Platform::pump`]) or the window is currently
     /// zero-sized (e.g. minimized). The null backend (see
@@ -362,8 +474,12 @@ impl Platform {
     /// Returns [`PlatformError::SoftBuffer`] if the presentation surface
     /// could not be resized or presented. Never errors for the null backend.
     pub fn present(&mut self, frame: &Frame) -> Result<(), PlatformError> {
-        let window = match &mut self.backend {
-            Backend::Window(window) => window,
+        match &mut self.backend {
+            Backend::Window(window) => {
+                window.app.retain_frame(frame);
+                window.app.request_redraw();
+                window.app.render_latest()
+            }
             Backend::Null { last_presented, .. } => {
                 // Copy into the existing box rather than allocating a fresh
                 // 150 KiB one every headless frame.
@@ -371,25 +487,9 @@ impl Platform {
                     Some(recorded) => **recorded = *frame,
                     None => *last_presented = Some(Box::new(*frame)),
                 }
-                return Ok(());
+                Ok(())
             }
-        };
-        let Some(inner) = window.app.inner.as_mut() else {
-            return Ok(());
-        };
-        let size = inner.window.inner_size();
-        let (Some(width), Some(height)) =
-            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-        else {
-            return Ok(());
-        };
-
-        inner.surface.resize(width, height)?;
-        let mut buffer = inner.surface.buffer_mut()?;
-        let letterbox = Letterbox::compute(size.width, size.height);
-        present::blit(frame, &letterbox, size.width, size.height, &mut buffer[..]);
-        buffer.present()?;
-        Ok(())
+        }
     }
 
     /// The frame most recently handed to [`Platform::present`] on the null
@@ -417,9 +517,74 @@ impl Platform {
 
 #[cfg(test)]
 mod tests {
-    use super::Platform;
+    use super::{Platform, WinitApp};
+    use crate::error::PlatformError;
     use crate::input::Buttons;
     use crate::present::test_pattern;
+    use winit::event::WindowEvent;
+
+    // These drive `WinitApp` directly rather than through `Platform`, since
+    // CI never opens a real window (see the module docs).
+
+    #[test]
+    fn redraw_requested_renders_the_retained_frame_synchronously() {
+        let mut app = WinitApp::new("test".into());
+        let frame = test_pattern();
+        app.retain_frame(&frame);
+        assert_eq!(
+            app.render_calls, 0,
+            "retaining a frame must not itself render it"
+        );
+
+        let exit = app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert!(!exit, "a redraw event must not request exit");
+        assert_eq!(
+            app.render_calls, 1,
+            "a RedrawRequested event arriving with a retained frame must render it \
+             synchronously inside the callback, not defer to the next `Platform::present`"
+        );
+    }
+
+    #[test]
+    fn redraw_requested_without_a_retained_frame_does_not_render() {
+        let mut app = WinitApp::new("test".into());
+
+        app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert_eq!(
+            app.render_calls, 0,
+            "there is nothing to render before the first `Platform::present`"
+        );
+    }
+
+    #[test]
+    fn redraw_presentation_failure_surfaces_from_the_next_pump() {
+        let mut app = WinitApp::new("test".into());
+        let frame = test_pattern();
+        app.retain_frame(&frame);
+        app.fail_next_render = true;
+
+        app.handle_window_event(WindowEvent::RedrawRequested);
+
+        assert!(
+            app.pending_error.is_some(),
+            "a render failure raised inside the RedrawRequested callback must not be \
+             silently dropped"
+        );
+
+        let err = app
+            .take_pump_error()
+            .expect("the failure recorded by the callback must surface from the next pump");
+        assert!(
+            matches!(err, PlatformError::SoftBuffer(_)),
+            "unexpected error kind: {err:?}"
+        );
+        assert!(
+            app.take_pump_error().is_none(),
+            "a drained pending error must not surface twice"
+        );
+    }
 
     #[test]
     fn headless_pump_always_reports_keep_going() {
