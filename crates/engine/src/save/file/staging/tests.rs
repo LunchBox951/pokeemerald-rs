@@ -293,7 +293,9 @@ fn a_host_component_limit_below_the_first_guess_still_gets_a_staging_sibling() {
          merely have succeeded by chance: {final_component_len} bytes"
     );
 
-    std::fs::remove_file(&staged.path).unwrap();
+    let staged_path = staged.path.clone();
+    drop(staged);
+    std::fs::remove_file(staged_path).unwrap();
 }
 
 /// A directory with less room than the widest `.tmp.<hex>` suffix needs must
@@ -339,7 +341,9 @@ fn a_directory_too_tight_for_the_fixed_width_suffix_still_gets_a_staging_sibling
          {final_component_len} bytes vs a {original_basename_len}-byte save name"
     );
 
-    std::fs::remove_file(&staged.path).unwrap();
+    let staged_path = staged.path.clone();
+    drop(staged);
+    std::fs::remove_file(staged_path).unwrap();
 }
 
 /// Whether `dir`'s filesystem will hold an entry whose name is not valid
@@ -583,7 +587,9 @@ fn a_non_utf8_basename_whose_lossy_form_is_longer_still_respects_an_injected_lim
          candidate, not merely have succeeded by chance: {final_component_len} bytes"
     );
 
-    std::fs::remove_file(&staged.path).unwrap();
+    let staged_path = staged.path.clone();
+    drop(staged);
+    std::fs::remove_file(staged_path).unwrap();
 }
 
 #[test]
