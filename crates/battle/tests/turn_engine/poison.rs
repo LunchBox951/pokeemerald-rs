@@ -40,10 +40,7 @@ fn a_landed_poison_sting_reports_poisoned_immediately_after_hit() {
     let player = max_iv_mon(&dex, RATTATA, 10, vec![POISON_STING]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Poison Sting (accuracy hit, no crit, best
-    // damage roll, a successful 30% chance draw), the enemy's ordinary
-    // Tackle (4 draws).
+    // The seventh draw, 29, is Poison Sting's successful 30% chance roll.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 29, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -204,17 +201,10 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
     let player = max_iv_mon(&dex, RATTATA, 20, vec![TACKLE]);
     let mut enemy = max_iv_mon(&dex, ZIGZAGOON, 20, vec![TACKLE]);
 
-    // Tackle cannot miss at 100 accuracy (`accuracy::accuracy_check`'s own
-    // draw-range pin), so the player's Tackle always lands this turn. Probe
-    // its exact damage with the same crit/damage-roll draws the real turn
-    // below uses, then park the enemy exactly one residual tick above that
-    // -- it survives the direct hit with precisely `lethal_damage` HP left,
-    // so the residual tick (not capped by a shorter remainder) is what
-    // brings it to zero, not Tackle.
+    // Probe Tackle's damage with the turn's own crit and variance draws, then
+    // leave the enemy one residual tick above it so the tick, not Tackle,
+    // fells it.
     let tackle_damage = {
-        // Crit draw 1 (not 0) -- an ordinary, non-critical roll, matching
-        // `ORDINARY_NO_CRIT_DRAW` in `hit`'s own unit tests -- then the best
-        // damage-variance roll.
         let mut probe = SequenceRng::new([1, 0]);
         match battle::damage_core(&dex, TACKLE, &player, &enemy, false, &mut probe).unwrap() {
             battle::HitOutcome::Hit { damage, .. } => damage,
@@ -607,15 +597,11 @@ const POUND: MoveId = MoveId(1);
 /// `MOVE_PECK`, the level-16 entry Torchic has no free slot for.
 const PECK: MoveId = MoveId(64);
 
-/// The residual pass a level-up prompt interrupted is not lost, it is
-/// resumed. Upstream never splits the two: the yes/no box lives *inside*
-/// `BattleScript_GiveExp`, which `HandleFaintedMonActions` runs to
-/// completion (`src/battle_util.c:1912`-`:1923`) before `BattleTurnPassed`
-/// is ever scheduled, so `DoBattlerEndTurnEffects`
-/// (`src/battle_main.c:3960`-`:3968`) still runs afterwards. This crate
-/// answers the box out of band through [`Battle::resolve_move_learn`], so
-/// the tick the knockout deferred has to arrive with the answer, behind the
-/// replacement it also deferred.
+/// A level-up prompt interrupts the residual pass without dropping it:
+/// upstream answers the box inside `BattleScript_GiveExp` before
+/// `DoBattlerEndTurnEffects` runs (`src/battle_util.c:1912-1923`,
+/// `src/battle_main.c:3960-3968`), so the deferred tick arrives with
+/// [`Battle::resolve_move_learn`]'s answer, after the deferred replacement.
 #[test]
 fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping_it() {
     let dex = Dex::new();

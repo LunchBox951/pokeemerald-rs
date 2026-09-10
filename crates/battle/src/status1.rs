@@ -80,10 +80,8 @@ const POISON_DAMAGE_DENOMINATOR: u32 = 8;
 
 /// `ENDTURN_POISON`'s damage for a battler with `max_hp`: an eighth of
 /// maximum HP, floored to at least one
-/// (`gBattleMoveDamage = maxHP / 8; if (gBattleMoveDamage == 0)
-/// gBattleMoveDamage = 1;`, `pokeemerald/src/battle_util.c:1528`-`:1530`).
-/// Draws nothing — the residual tick has no `Random()` call, unlike poison's
-/// own infliction.
+/// (`pokeemerald/src/battle_util.c:1528-1530`). Draws nothing: the residual
+/// tick has no `Random()` call.
 #[must_use]
 pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     let damage = max_hp / POISON_DAMAGE_DENOMINATOR;

@@ -199,41 +199,18 @@ fn poison_can_land(defender: &BattlePokemon) -> bool {
 }
 
 /// Refuses an [`EFFECT_POISON_HIT`] move whose attacker or target carries an
-/// ability this slice cannot follow past infliction — the same policy
+/// ability this slice does not follow past infliction, the policy
 /// [`crate::paralyze::ensure_admissible`] applies to
-/// [`crate::paralyze::EFFECT_PARALYZE`], now reachable through the
-/// chance-based secondary path instead of a dedicated status-move script. A
-/// no-op whenever [`poison_can_land`] is already `false`: none of these
-/// abilities matter to an infliction that could never happen anyway.
+/// [`crate::paralyze::EFFECT_PARALYZE`]. A no-op whenever
+/// [`poison_can_land`] is already `false`.
 ///
-/// * Serene Grace doubles `secondary_effect_chance` before
-///   [`spend_effect_chance_draw`]'s own draw
-///   (`battle_script_commands.c:2912`-`:2915`); this slice does not widen
-///   the comparison, so an attacker carrying it is refused outright rather
-///   than under-rolling the chance for every use of the move.
-/// * Synchronize reflects a newly-landed poison back onto the attacker
-///   (`synchronizeMoveEffect`, `:2503`-`:2511`, via
-///   `src/battle_util.c:2971`-`:2985`, `BattleScript_SynchronizeActivates`'s
-///   `seteffectprimary`, `data/battle_scripts_1.s:4204`-`:4207`); an
-///   attacker that already carries a primary status of its own is admitted,
-///   since the reflected `SetMoveEffect` re-entry then writes nothing
-///   regardless of which guard it exits through — the already-nonzero
-///   `status1` check (`:2334`-`:2335`) if the attacker is untyped for it, or
-///   (since the reflection sets `primary` and `HITMARKER_STATUS_ABILITY_EFFECT`)
-///   the Immunity- or Poison/Steel-type message branch first
-///   (`:2299`-`:2333`) if the attacker happens to carry one — upstream shows
-///   a different message depending on which exit is taken, but this crate
-///   models no message for a Synchronize reflection either way (successful
-///   or blocked), so the two exits are indistinguishable here: the
-///   attacker's status never changes in either case.
-/// * Shed Skin rolls a one-in-three end-of-turn cure while its holder is
-///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`), a
-///   draw [`crate::battle::Battle`]'s residual pass does not make.
-/// * Guts and Marvel Scale read their own holder's `status1` inside
-///   `CalculateBaseDamage` (`src/pokemon.c`) to raise a statused holder's
-///   physical Attack or Defense, which
-///   [`crate::pokemon::BattlePokemon::attacking_stat`] and
-///   [`crate::pokemon::BattlePokemon::defending_stat`] do not model.
+/// Refused: Serene Grace, which doubles the chance before the draw
+/// (`battle_script_commands.c:2912-2915`); Synchronize on a healthy
+/// attacker, whose reflection can print a prevention message this crate has
+/// no event for (`:2299-2333`), while a statused attacker's reflection exits
+/// silently (`:2334-2335`) and is admitted; Shed Skin's end-of-turn cure
+/// draw (`src/battle_util.c:2620-2621`); and Guts or Marvel Scale's stat
+/// reads in `CalculateBaseDamage` (`src/pokemon.c`).
 ///
 /// # Errors
 ///
