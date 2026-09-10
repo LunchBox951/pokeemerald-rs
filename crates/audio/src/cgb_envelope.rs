@@ -53,6 +53,20 @@ const PSEUDO_ECHO_SCALE: u32 = 256;
 const SUSTAIN_REFRESH_FRAMES: u8 = 7;
 const HARD_PAN_RATIO: u16 = 2;
 
+/// The nibble upstream masks its step-time-and-direction field down to before
+/// adding the volume nibble and writing the pair as one NRx2 byte
+/// (`m4a.c:1221`..`:1222`). Everything a phase's raw envelope byte sets above
+/// bit 3 is discarded before hardware sees it.
+const NRX2_ENV_FIELD_MASK: u8 = 0x0F;
+/// NRx2 bits 0-2, the envelope step time
+/// (`GBAudioRegisterSweep`, `mgba/include/mgba/internal/gb/audio.h:24`).
+const NRX2_ENV_STEP_TIME_MASK: u8 = 0x07;
+/// NRx2 bit 3, set for an upward envelope: upstream's `CGB_NRx2_ENV_DIR_INC`
+/// (`m4a_internal.h:85`, whose `CGB_NRx2_ENV_DIR_DEC` counterpart is zero at
+/// `:84`) and mGBA's direction bit
+/// (`mgba/include/mgba/internal/gb/audio.h:25`).
+const NRX2_ENV_DIR_INC: u8 = 0x08;
+
 /// CGB attack, decay, sustain, and release parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CgbAdsr {
@@ -92,16 +106,38 @@ enum Phase {
 }
 
 /// How a live square or noise channel's hardware envelope paces itself
-/// between `CGB_CHANNEL_MO_VOL` writes: the NRx2 step-time nibble it reloads
+/// between `CGB_CHANNEL_MO_VOL` writes: the NRx2 step time it reloads
 /// after each step, and NRx2's direction bit
 /// (`_updateEnvelope`, `mgba/src/gb/audio.c:931-945`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HardwareEnvelopePacing {
-    /// Envelope iterations between hardware steps; never zero (a zero
-    /// step-time nibble is a dead envelope, not a paced one).
+    /// Envelope iterations between hardware steps: NRx2 bits 0-2, so `1..=7`
+    /// and never zero (a zero step time is a dead envelope, not a paced one).
     pub(crate) step_time: u8,
     /// Whether the envelope counts up (`CGB_NRx2_ENV_DIR_INC`) rather than down.
     pub(crate) increasing: bool,
+}
+
+impl HardwareEnvelopePacing {
+    /// Decode the pacing an NRx2 write programs from the step-time-and-direction
+    /// value upstream hands it: bits 0-2 are the step time and bit 3 the
+    /// direction, everything above them masked away first
+    /// (`m4a.c:1221`..`:1222`, `_writeEnvelope`, `mgba/src/gb/audio.c:891`..`:893`).
+    ///
+    /// A zero step time is a dead envelope rather than a slow one, whatever
+    /// bit 3 says (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948`..`:950`),
+    /// so it decodes to `None`. A phase byte above 7 therefore reaches
+    /// hardware as some *other* period and possibly the opposite direction:
+    /// an attack of 8 writes `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`, a dead
+    /// downward envelope, not an upward step every 8 iterations.
+    fn from_nrx2_step_time_and_dir(step_time_and_dir: u8) -> Option<Self> {
+        let field = step_time_and_dir & NRX2_ENV_FIELD_MASK;
+        let step_time = field & NRX2_ENV_STEP_TIME_MASK;
+        (step_time != 0).then_some(Self {
+            step_time,
+            increasing: field & NRX2_ENV_DIR_INC != 0,
+        })
+    }
 }
 
 /// Live envelope state for one CGB voice.
@@ -170,28 +206,35 @@ impl CgbEnvelope {
 
     /// How the hardware envelope paces itself from its last
     /// `CGB_CHANNEL_MO_VOL` write, or `None` when that write left it dead
-    /// and holding. Attack, decay, and release write a nonzero NRx2
-    /// step-time nibble in their own direction; sustain-start and
-    /// pseudo-echo-start write a zero one (`m4a.c:1132-1137`, `:1090-1098`),
+    /// and holding, decoded from the exact value upstream hands NRx2
+    /// ([`HardwareEnvelopePacing::from_nrx2_step_time_and_dir`]). Attack,
+    /// decay, and release each combine their own envelope byte with a
+    /// direction bit; sustain-start and pseudo-echo-start write a bare
+    /// direction bit and no step time (`m4a.c:1132-1137`, `:1090-1098`),
     /// which freezes the hardware envelope (`stepTime == 0` marks it dead,
     /// `mgba/src/gb/audio.c:948-950`) until another explicit write —
     /// [`Self::sustain_step`]'s refresh and [`Self::pseudo_echo_step`]'s
     /// countdown write neither.
+    ///
+    /// The phase bytes are whole `u8`s, not 3-bit fields, so only the low
+    /// nibble of the combination survives to hardware; the software envelope
+    /// keeps pacing itself off the raw byte, as upstream's `envelopeCounter`
+    /// does (`m4a.c:1031`, `:1063`, `:1152`).
     #[must_use]
     pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
-        let (step_time, increasing) = match self.phase {
-            // `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1029`).
-            Phase::Attack => (self.adsr.attack, true),
-            // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1156`).
-            Phase::Decay => (self.adsr.decay, false),
-            // `channels->release | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1066`).
-            Phase::Release => (self.adsr.release, false),
+        let step_time_and_dir = match self.phase {
+            // `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`); the
+            // sum is masked to a nibble before it reaches NRx2, so wrapping
+            // at a byte discards only bits the mask drops anyway.
+            Phase::Attack => self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
+            // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1158`), whose
+            // direction constant is zero (`m4a_internal.h:84`).
+            Phase::Decay => self.adsr.decay,
+            // `channels->release | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1068`).
+            Phase::Release => self.adsr.release,
             Phase::Starting | Phase::Sustain | Phase::PseudoEcho | Phase::Retired => return None,
         };
-        (step_time != 0).then_some(HardwareEnvelopePacing {
-            step_time,
-            increasing,
-        })
+        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(step_time_and_dir)
     }
 
     /// Iterations the note-on write leaves before the hardware envelope's
@@ -633,6 +676,59 @@ mod tests {
             None,
             "the pseudo-echo tail's zero step-time nibble holds hardware dead"
         );
+    }
+
+    #[test]
+    fn envelope_bytes_above_seven_pace_hardware_through_the_nrx2_nibble() {
+        // Pins `hardware_envelope_pacing`'s decode: a phase byte wider than
+        // NRx2's 3-bit step time reaches hardware as the low nibble of the
+        // byte upstream combines with its direction constant, so it can pace
+        // at a different period and in the opposite direction from the raw
+        // byte, or not at all.
+        let up = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: true,
+            })
+        };
+        let down = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: false,
+            })
+        };
+        let attacking = |attack| {
+            let mut env = plain_envelope(adsr(attack, 0, 8, 0), 10);
+            env.step(); // Starting -> Attack
+            env
+        };
+        let decaying = |decay| {
+            let mut env = plain_envelope(adsr(0, decay, 8, 0), 10);
+            env.step(); // Starting -> Attack (attack == 0) -> Decay
+            env
+        };
+        let releasing = |release| {
+            let mut env = plain_envelope(adsr(0, 0, 8, release), 10);
+            env.step(); // ... -> Sustain
+            env.note_off(); // Sustain -> Release
+            env
+        };
+
+        // `(8 + CGB_NRx2_ENV_DIR_INC) & 0xF == 0`: a dead, downward envelope,
+        // not an upward step every 8 iterations.
+        assert_eq!(attacking(8).hardware_envelope_pacing(), None);
+        // `(9 + CGB_NRx2_ENV_DIR_INC) & 0xF == 1`.
+        assert_eq!(attacking(9).hardware_envelope_pacing(), down(1));
+        // `15 + CGB_NRx2_ENV_DIR_INC` keeps only the step time it overflows into.
+        assert_eq!(attacking(15).hardware_envelope_pacing(), down(7));
+
+        // `8 | CGB_NRx2_ENV_DIR_DEC == 8`: bit 3 alone, so dead again.
+        assert_eq!(decaying(8).hardware_envelope_pacing(), None);
+        // `9 | CGB_NRx2_ENV_DIR_DEC == 9`: bit 3 turns the decay upward.
+        assert_eq!(decaying(9).hardware_envelope_pacing(), up(1));
+
+        assert_eq!(releasing(12).hardware_envelope_pacing(), up(4));
+        assert_eq!(releasing(u8::MAX).hardware_envelope_pacing(), up(7));
     }
 
     #[test]
