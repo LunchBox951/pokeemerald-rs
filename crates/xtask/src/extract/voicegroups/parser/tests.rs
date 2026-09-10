@@ -115,6 +115,111 @@ voice_group demo
 }
 
 #[test]
+fn every_leaf_slot_decodes_all_of_its_operands() {
+    let text = "\
+voice_group operand_matrix
+\tvoice_directsound 20, 0, DirectSoundWaveData_operand_a, 40, 41, 42, 43
+\tvoice_directsound_no_resample 21, 44, DirectSoundWaveData_operand_b, 45, 46, 47, 48
+\tvoice_directsound_alt 22, 49, DirectSoundWaveData_operand_c, 50, 51, 52, 53
+\tvoice_square_1 23, 54, 55, 0, 56, 57, 58, 59
+\tvoice_square_1_alt 24, 60, 61, 1, 62, 63, 64, 65
+\tvoice_square_2 25, 66, 2, 67, 68, 69, 70
+\tvoice_square_2_alt 26, 71, 3, 72, 73, 74, 75
+\tvoice_programmable_wave 27, 76, ProgrammableWaveData_operand_a, 77, 78, 79, 80
+\tvoice_programmable_wave_alt 28, 81, ProgrammableWaveData_operand_b, 82, 83, 84, 85
+\tvoice_noise 29, 86, 87, 88, 89, 90, 91
+\tvoice_noise_alt 30, 92, 93, 94, 95, 96, 97
+";
+
+    let group = parse_voice_group(text).unwrap();
+
+    assert_eq!(
+        group.slots,
+        vec![
+            RawSlot::DirectSound {
+                base_key: 20,
+                pan: None,
+                sample_symbol: "DirectSoundWaveData_operand_a".to_owned(),
+                envelope: envelope(40, 41, 42, 43),
+                mode: DirectSoundMode::Resampled,
+            },
+            RawSlot::DirectSound {
+                base_key: 21,
+                pan: Some(44),
+                sample_symbol: "DirectSoundWaveData_operand_b".to_owned(),
+                envelope: envelope(45, 46, 47, 48),
+                mode: DirectSoundMode::Fixed,
+            },
+            RawSlot::DirectSound {
+                base_key: 22,
+                pan: Some(49),
+                sample_symbol: "DirectSoundWaveData_operand_c".to_owned(),
+                envelope: envelope(50, 51, 52, 53),
+                mode: DirectSoundMode::Reverse,
+            },
+            RawSlot::Square1 {
+                base_key: 23,
+                length: 54,
+                sweep: 55,
+                duty: 0,
+                envelope: envelope(56, 57, 58, 59),
+                fixed_rate: false,
+            },
+            RawSlot::Square1 {
+                base_key: 24,
+                length: 60,
+                sweep: 61,
+                duty: 1,
+                envelope: envelope(62, 63, 64, 65),
+                fixed_rate: true,
+            },
+            RawSlot::Square2 {
+                base_key: 25,
+                length: 66,
+                duty: 2,
+                envelope: envelope(67, 68, 69, 70),
+                fixed_rate: false,
+            },
+            RawSlot::Square2 {
+                base_key: 26,
+                length: 71,
+                duty: 3,
+                envelope: envelope(72, 73, 74, 75),
+                fixed_rate: true,
+            },
+            RawSlot::ProgrammableWave {
+                base_key: 27,
+                length: 76,
+                wave_symbol: "ProgrammableWaveData_operand_a".to_owned(),
+                envelope: envelope(77, 78, 79, 80),
+                fixed_rate: false,
+            },
+            RawSlot::ProgrammableWave {
+                base_key: 28,
+                length: 81,
+                wave_symbol: "ProgrammableWaveData_operand_b".to_owned(),
+                envelope: envelope(82, 83, 84, 85),
+                fixed_rate: true,
+            },
+            RawSlot::Noise {
+                base_key: 29,
+                length: 86,
+                period: 87,
+                envelope: envelope(88, 89, 90, 91),
+                fixed_rate: false,
+            },
+            RawSlot::Noise {
+                base_key: 30,
+                length: 92,
+                period: 93,
+                envelope: envelope(94, 95, 96, 97),
+                fixed_rate: true,
+            },
+        ]
+    );
+}
+
+#[test]
 fn parses_a_starting_note_bias_on_the_declaration_line() {
     let text = "voice_group rs_drumset, 36\n\tvoice_square_1 60, 0, 0, 2, 0, 0, 15, 0\n";
     let group = parse_voice_group(text).unwrap();
