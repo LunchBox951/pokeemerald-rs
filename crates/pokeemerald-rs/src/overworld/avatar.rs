@@ -8,7 +8,7 @@ use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
-use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW};
+use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW, RESTING_SCROLL_Y};
 
 pub(super) const FRAME_W: usize = 16;
 pub(super) const FRAME_H: usize = 32;
@@ -80,8 +80,11 @@ pub(super) fn priority_for_elevation(elevation: u8) -> u8 {
     reason = "the visible-screen coordinate is positive and fits u16"
 )]
 pub(super) const PLAYER_OBJ_X: u16 = (PLAYER_VIEW_COL * METATILE_PX) as u16;
-/// One metatile above the viewport anchor, so the 32px sprite's lower half
-/// covers the tile the player stands on rather than its head.
+/// One metatile above the viewport anchor, minus [`RESTING_SCROLL_Y`]'s
+/// resting scroll baseline the BG always carries, so the 32px sprite's
+/// lower half covers the tile the player stands on -- at the same screen
+/// row the BG itself rests at -- rather than its head (module docs' "camera
+/// model" section has the full upstream derivation).
 #[expect(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
@@ -89,7 +92,7 @@ pub(super) const PLAYER_OBJ_X: u16 = (PLAYER_VIEW_COL * METATILE_PX) as u16;
     reason = "the visible-screen coordinate is positive and fits u8"
 )]
 pub(super) const PLAYER_OBJ_Y: u8 =
-    (PLAYER_VIEW_ROW * METATILE_PX - (FRAME_H as i32 - METATILE_PX)) as u8;
+    (PLAYER_VIEW_ROW * METATILE_PX - RESTING_SCROLL_Y - (FRAME_H as i32 - METATILE_PX)) as u8;
 
 /// Selects the player avatar's sprite sheet and palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,6 +417,31 @@ mod tests {
         assert_eq!(entry.dimensions(), (16, 32));
         assert_eq!(entry.priority(), PLAYER_OBJ_PRIORITY);
         assert!(entry.enabled());
+    }
+
+    /// The crate's public [`super::super::PLAYER_AVATAR_SCREEN_BOX`] --
+    /// `xtask`'s smoke map-detail mask is its consumer -- is exactly the box
+    /// the player's own OAM entry occupies, so the mask can never name a
+    /// rectangle the avatar has moved out of (issue #1013).
+    #[test]
+    fn public_screen_box_matches_the_player_entry_the_scene_emits() {
+        let entry = player_entry(&player_at((0, 0), Direction::South));
+        let screen_box = super::super::PLAYER_AVATAR_SCREEN_BOX;
+        assert_eq!(
+            i16::try_from(screen_box.left).unwrap(),
+            entry.x(),
+            "the exported box's left edge is the player OBJ's own x"
+        );
+        assert_eq!(
+            u8::try_from(screen_box.top).unwrap(),
+            entry.y(),
+            "the exported box's top edge is the player OBJ's own y"
+        );
+        assert_eq!(
+            (screen_box.width, screen_box.height),
+            entry.dimensions(),
+            "the exported box is the player OBJ's own 16x32 shape"
+        );
     }
 
     #[test]
