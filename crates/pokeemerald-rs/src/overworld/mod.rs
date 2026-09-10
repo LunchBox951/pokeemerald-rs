@@ -100,7 +100,8 @@ pub enum OverworldSceneError {
     /// The asset pack could not be opened, read, or validated, or a
     /// required entry was missing or had the wrong kind.
     Pack(assets::PackError),
-    /// Typed asset metadata was missing or invalid.
+    /// A typed asset lookup failed, or a decoded payload such as a layout
+    /// grid or border did not validate.
     Asset(AssetError),
     /// Rendering rejected decoded asset data.
     Render(RenderError),
