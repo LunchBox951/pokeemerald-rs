@@ -26134,7 +26134,7 @@
           "status": "rewritten"
         },
         "SetSpritePosToMapCoords": {
-          "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is not modelled yet -- deferred, still in v1 scope.",
+          "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). PLAYER_OBJ_Y also folds in centerToCornerVecY (-16) and the resting gSpriteCoordOffsetY bias (-sVerticalCameraPan - 8 == -40, UpdateCameraPanning's own entry) via RESTING_SCROLL_Y (issue #977), landing the player's fixed OAM row at 56 -- matching upstream's resting 7*16 - 16 - 40. Bike pan-ahead (the only thing that would move dx/dy away from 0) is not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26215,8 +26215,20 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "FieldUpdateBgTilemapScroll": {
+          "reason": "BGnVOFS = sVerticalCameraPan + yPixelOffset + 8: the constant +8 term (issue #977) is now modeled as RESTING_SCROLL_Y, an unconditional 8px baseline build_tilemaps always adds to scroll_y, never just during a mid-step pan. yPixelOffset's own per-frame contribution is camera_lag_px (see CameraUpdate/UpdateCameraPanning's own entries); sHorizontalCameraPan/sVerticalCameraPan's dynamic bike pan-ahead is not modelled (no bike in this port yet) -- deferred, still in v1 scope.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "InstallCameraPanAheadCallback": {
+          "reason": "Installed for every ordinary field (overworld.c:2139), this sets the resting sHorizontalCameraPan/sVerticalCameraPan to 0/32. The horizontal 0 needs no representation; the vertical 32 (issue #977) is folded into PLAYER_VIEW_ROW's crop, which anchors two metatile rows short of upstream's own MAP_OFFSET-based anchor, absorbing exactly that 32px. CameraPanningCB_PanAhead's own per-frame bike-speed adjustment to sVerticalCameraPan is not modelled (no bike in this port yet) -- deferred, still in v1 scope.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "UpdateCameraPanning": {
-          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). sHorizontalCameraPan/sVerticalCameraPan's bike pan-ahead terms are not modelled yet (no bike in this port yet) -- deferred, still in v1 scope.",
+          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). The resting -sVerticalCameraPan - 8 bias this function folds into gSpriteCoordOffsetY (issue #977) is now modelled too: PLAYER_VIEW_ROW's crop absorbs the -32, and avatar::PLAYER_OBJ_Y subtracts RESTING_SCROLL_Y for the remaining -8, so the fixed player/NPC OAM origin sits at the same screen row upstream's resting gSpriteCoordOffsetY produces. sHorizontalCameraPan/sVerticalCameraPan's dynamic bike pan-ahead term is not modelled yet (no bike in this port yet) -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26442,6 +26454,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "GetCameraFocusCoords": {
+          "reason": "The inverse of SetCameraFocusCoords' own entry: reads gSaveBlock1Ptr->pos + MAP_OFFSET back out. Not a separate Rust function -- build_tilemaps derives the player's viewport row directly from PlayerState::position() rather than storing and re-deriving a camera-focus point, but the net player-metatile placement (screen row 72 at rest, issue #977) matches.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "GetMetatileAttributesById": {
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
@@ -26494,6 +26512,12 @@
           "reason": "Grid metatile-id lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::metatile_id); the MAPGRID_UNDEFINED border-block fallback is not ported (no camera/backing-buffer border scheme in this slice)",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetCameraFocusCoords": {
+          "reason": "gSaveBlock1Ptr->pos = focusTile - MAP_OFFSET (MAP_OFFSET == 7): the camera anchor sits seven metatiles above/left of the focused tile. build_tilemaps' anchor_y = base_y - PLAYER_VIEW_ROW reproduces the same relationship up to the 32px resting pan PLAYER_VIEW_ROW already absorbs (InstallCameraPanAheadCallback's own entry) -- PLAYER_VIEW_ROW (5) is two rows short of MAP_OFFSET (7) for exactly that reason.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
           "status": "rewritten"
         },
         "SetPositionFromConnection": {

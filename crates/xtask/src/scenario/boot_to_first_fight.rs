@@ -265,10 +265,12 @@ mod tests {
                 );
                 frame_index += 1;
             } else {
-                assert_ne!(
-                    frames.get(frame_index).map(|frame| frame.buttons),
-                    Some(AppButtons::A),
-                    "run {run_index} needs no confirmation"
+                let buttons = frames.get(frame_index).map(|frame| frame.buttons);
+                let confirm = AppButtons::A | AppButtons::B;
+                assert!(
+                    !buttons.is_some_and(|buttons| buttons.intersects(confirm)),
+                    "run {run_index} needs no confirmation: script index {frame_index} must press \
+                     no confirm button, not {buttons:?}"
                 );
             }
         }

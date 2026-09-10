@@ -1,101 +1,59 @@
-//! Overworld presentation (I-3 lane, issue #126): binds the engine
-//! [`overworld::MapRuntime`](engine::overworld::MapRuntime)/
-//! [`PlayerState`](engine::overworld::PlayerState) (S-5, PR #120) to the
-//! `rendering` crate -- a map viewport (layout grid + primary/secondary
-//! tilesets composed into BG layers) with a camera that follows the player,
-//! plus the player's OBJ sprite.
+//! Loads and composes the visible overworld around the player.
 //!
-//! # Which BG layers, and why
+//! An [`OverworldScene`] owns the current layout, visible map connections,
+//! tilesets, and sprites. Each frame is composed from that data plus the current
+//! [`PlayerState`] and [`EventData`].
 //!
-//! Transcribed from `pokeemerald/src/field_camera.c`'s `DrawMetatile` and
-//! `src/overworld.c`'s `sOverworldBgTemplates` `(behavioral-fidelity)`: each
-//! metatile is 16x16px (2x2 8x8 tiles) and, depending on its
-//! [`assets::MetatileLayerType`], draws into two of three conceptual
-//! layers -- bottom, middle, top -- which map onto three of the four
-//! hardware BGs:
+//! # Camera
 //!
-//! | conceptual layer | BG  | priority | covers the player? |
-//! |-------------------|-----|----------|---------------------|
-//! | top               | BG1 | 1 (front)| yes -- `DrawMetatile`'s own comment: "Draw metatile's top layer to the top background layer, which covers object event sprites." |
-//! | middle            | BG2 | 2        | tie with the player OBJ's own priority (2, `gObjectEventBaseOam_16x32`) -- the sprite wins ties (`rendering::compositor`'s rules), so this sits behind the player |
-//! | bottom            | BG3 | 3 (back) | yes |
+//! The player sprite stays at a fixed screen position while the background
+//! scroll follows the player's tile and in-progress step. The camera is not
+//! clamped at map edges. It shows connected layouts where available, then the
+//! current layout's repeating border outside the resolved map area.
 //!
-//! BG0 (weather/other overlay effects, out of this slice's scope) is not
-//! composed. [`viewport`] owns the metatile-to-BG-tilemap decode
-//! (`DrawMetatile`'s per-`MetatileLayerType` table) and the camera/scroll
-//! model; [`avatar`] owns the player OBJ's sprite tileset and per-frame
-//! selection.
+//! Upstream rests the player's metatile on screen rows 72..=87 and the 16-by-32
+//! player sprite at row 56: the camera anchor sits `MAP_OFFSET` (7) metatiles
+//! above the player in `pokeemerald/src/fieldmap.c`, and
+//! `FieldUpdateBgTilemapScroll` in `pokeemerald/src/field_camera.c` writes
+//! `BGnVOFS = sVerticalCameraPan + yPixelOffset + 8` with a resting pan of 32.
+//! This module reproduces that framing with `PLAYER_VIEW_ROW`'s crop, two rows
+//! short of `MAP_OFFSET` to absorb the 32-pixel pan, plus `RESTING_SCROLL_Y`
+//! for the remaining 8.
 //!
-//! # The camera model
+//! # Background layers
 //!
-//! The camera always tracks the player 1:1 -- there is no edge-clamp
-//! function anywhere in `field_camera.c`/`overworld.c` (checked, not
-//! assumed: neither file has a `clamp`/min/max against a layout's
-//! width/height). What upstream actually does at a layout's edge is fall
-//! back to its border block (`fieldmap.c`'s `GetBorderBlockAt`, reached
-//! through `MapGridGetMetatileIdAt`'s out-of-bounds branch) for any
-//! position the layout's own grid doesn't cover -- see
-//! [`viewport::cell_at`]. That border fallback, not a viewport-position
-//! clamp, is this module's "edge clamping": the camera pans freely, but
-//! anything it would show past the layout's own bounds resolves to a
-//! well-defined border tile rather than undefined content.
+//! Each 16-by-16-pixel metatile contains two layers of four 8-by-8-pixel tiles.
+//! Its [`assets::MetatileLayerType`] assigns those layers, or transparency, to
+//! the three composed backgrounds according to `DrawMetatile` in
+//! `pokeemerald/src/field_camera.c`:
 //!
-//! The player's own OBJ sprite is drawn at a **fixed** screen position
-//! every frame (`(avatar::PLAYER_OBJ_X`, `avatar::PLAYER_OBJ_Y)`) -- see
-//! [`avatar::PLAYER_OBJ_X`] for the upstream derivation
-//! (`SetSpritePosToMapCoords`'s `mapX - gSaveBlock1Ptr->pos.x == 0`
-//! identity for the player's own object event). It is the **BG scroll**
-//! that moves, smoothly, during an ordinary walk step: [`viewport`] derives
-//! it from [`PlayerState::step_progress`](engine::overworld::PlayerState::step_progress)
-//! against [`WALK_FRAMES_PER_TILE`](engine::overworld::WALK_FRAMES_PER_TILE),
-//! so the BG has scrolled exactly one metatile by the time a step
-//! completes.
+//! | Layer | Background | Priority relative to a priority-2 player sprite |
+//! |---|---|---|
+//! | Top | BG1, priority 1 | In front |
+//! | Middle | BG2, priority 2 | Behind on equal priority |
+//! | Bottom | BG3, priority 3 | Behind |
 //!
-//! # Scope
+//! The player sprite carries priority 2 on an ordinary floor tile and 1 or 0
+//! on a raised elevation. A sprite wins a tie with a background, so a raised
+//! player draws in front of the top layer as well.
 //!
-//! In scope: the current map's layout grid + border fill, connected-map
-//! tiles across a declared map-edge connection (issue #253: a camera near a
-//! boundary shows the neighbouring map's own edge strip instead of hard-
-//! cutting to the active map's border fill -- see [`viewport::cell_at`] and
-//! [`ConnectedLayout`]), primary/secondary tileset BG composition --
-//! including (issue #160) the primary tileset's own animated tile ranges
-//! (flowers, water, the `building` tileset's turned-on TV screen; see
-//! [`tileset_anims`]) -- camera-follow scroll, the player OBJ's
-//! facing/step animation, and (issue #161) a bounded set of the current
-//! map's *other* object events — [`npc`] renders the ones it recognizes a
-//! sprite for, hide-flag filtered via
-//! [`engine::overworld::object_event_is_visible`], and
-//! [`crate::flow::OverworldPhase`] drives the facing-tile interaction lookup
-//! ([`engine::overworld::facing_object_event`]) and the resulting
-//! [`dialog::NpcDialog`] over this module's own composed frame. Out of scope
-//! (per issue #126, tracked as future integration slices): reflections and
-//! field effects, and every `tileset_anims.c` effect outside
-//! [`tileset_anims`]'s own scope (that module's docs: palette-rotation
-//! effects and every tileset this port doesn't bundle). See [`npc`]'s own
-//! module docs for exactly which object-event graphics ids render a sprite
-//! vs. are only hide-flag/interaction tracked. Acceptance ID **I-3** stays
-//! whatever `docs/acceptance/v1.md` already has it at -- this slice does
-//! not flip acceptance markers.
+//! BG0 effects are not composed.
 //!
-//! # Documented fidelity deltas
+//! # Border fallback
 //!
-//! - **`METATILE_LAYER_TYPE_NORMAL`'s bottom layer is transparent, not
-//!   upstream's "garbage" tile.** `DrawMetatile`'s own comment calls the
-//!   `NORMAL` case's BG3 write "garbage" (`0x3014`, a leftover/undefined
-//!   value): BG3 sits fully behind the always-opaque middle layer in the
-//!   common case, so its content there never reaches the screen, and
-//!   nothing in upstream guarantees a *specific* value for the rare case
-//!   where it would (a transparent hole in the middle layer). Reproducing
-//!   implementation-defined leftover VRAM content is neither meaningful nor
-//!   deterministic; this port draws transparent instead -- pixel-identical
-//!   to upstream whenever the middle layer is opaque, and an honest "shows
-//!   nothing" rather than a fabricated pixel in the rare case it isn't.
-//! - **No left/right foot alternation across steps.** See
-//!   `avatar::FRAME_SOUTH_STEP`.
-//! - **No sub-scanline vertical centering tie-break claim.** [`VIEW_ROWS`]
-//!   (10 metatiles) is even, so there is no single upstream-verified
-//!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
-//!   than above) is this module's own pick, not a transcribed constant.
+//! Cells outside the current layout and its visible connections repeat the
+//! layout's 2-by-2 border. The coordinate offset and fallback order reproduce
+//! `GetBorderBlockAt` and `MapGridGetMetatileIdAt` in
+//! `pokeemerald/src/fieldmap.c`. The camera therefore keeps moving at an edge
+//! without exposing undefined map content.
+//!
+//! # Fidelity differences
+//!
+//! - For [`assets::MetatileLayerType::Normal`], BG3 is transparent. Upstream
+//!   `DrawMetatile` writes the fixed screen entry `0x3014` there -- tile
+//!   `0x14` in palette bank 3 -- behind the normally opaque middle layer, so
+//!   the two differ only where that layer has a transparent pixel.
+//! - Walking does not alternate the leading foot between steps.
 
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
@@ -106,18 +64,16 @@ use rendering::{
     RenderError, SpriteLayer, Tileset,
 };
 
+/// Selects the player avatar assets used to build an overworld scene.
 pub use avatar::PlayerCharacter;
 pub(crate) use dialog::{DialogOutcome, NpcDialog};
-// Re-exported so callers outside this crate (namely `xtask`'s smoke e2e
-// check, which deliberately depends only on `pokeemerald-rs` -- see that
-// crate's `Cargo.toml` docs -- not `engine` directly) can build a
-// [`PlayerState`] to pass to [`OverworldScene::compose`] without adding
-// their own `engine` dependency.
-pub use engine::overworld::{Direction, PlayerState};
-// Re-exported for the same reason as `Direction`/`PlayerState` above: the
-// current map's flag store [`OverworldScene::compose`] needs for object-event
-// hide-flag filtering (issue #161), without pulling in `engine` directly.
+/// Holds the event flags and variables that decide which map objects are
+/// visible and which sprite a variable-graphics object uses.
 pub use engine::event_data::EventData;
+/// Describes the direction a player faces or moves.
+pub use engine::overworld::Direction;
+/// Holds the player position and movement state used to compose a frame.
+pub use engine::overworld::PlayerState;
 
 mod avatar;
 pub(crate) mod dialog;
@@ -131,111 +87,110 @@ mod viewport;
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// A GBA metatile's pixel size: 16x16 (2x2 [`rendering::BitDepth::TILE_DIM`]
-/// tiles) -- shared by [`viewport`]'s camera/tilemap math and [`avatar`]'s
-/// fixed OBJ screen position.
 const METATILE_PX: i32 = 16;
 
-/// Visible screen width/height in whole metatiles (`240/16`, `160/16`).
+/// Visible framebuffer dimensions measured in whole metatiles.
 const VIEW_COLS: i32 = 240 / METATILE_PX;
 const VIEW_ROWS: i32 = 160 / METATILE_PX;
 
-/// The metatile column/row the player's own tile sits at within the visible
-/// screen (module docs' "camera model" section).
+/// Screen location of the player's map tile within the composed tilemap,
+/// measured in metatiles and before [`RESTING_SCROLL_Y`].
 const PLAYER_VIEW_COL: i32 = VIEW_COLS / 2;
 const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 
-/// One extra metatile of padding on every edge of the composed tilemap, so
-/// a mid-step sub-tile scroll (up to `WALK_FRAMES_PER_TILE - 1` px) never
-/// samples past the tilemap's own edge (see [`viewport::build_tilemaps`]).
+/// Tilemap padding that keeps sub-metatile scrolling inside the composed area.
 const PAD: i32 = 1;
 
-/// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
-/// fixed choice: the protagonist's *bedroom* (the 2F room the early playable
-/// slice in `docs/acceptance/v1.md` starts in — 1F is the downstairs living
-/// area), already shipped by `crates/xtask`'s extraction pipeline
-/// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`).
+/// Baseline vertical background scroll, present in every composed frame, that
+/// completes upstream's resting framing.
+const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
+
+/// Extra southward metatile row composed so [`RESTING_SCROLL_Y`] samples map
+/// content instead of wrapping.
+const RESTING_SCROLL_ROW: i32 = 1;
+
+/// The screen rectangle the player's avatar covers in a composed frame,
+/// measured in framebuffer pixels.
+///
+/// Plain data rather than a behaviour-owning type `(oop-boundaries)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvatarScreenBox {
+    /// Leftmost screen pixel column the avatar covers.
+    pub left: usize,
+    /// Topmost screen pixel row the avatar covers.
+    pub top: usize,
+    /// The avatar's width in pixels.
+    pub width: usize,
+    /// The avatar's height in pixels.
+    pub height: usize,
+}
+
+/// Where the player's avatar lands on screen, the same whether the player
+/// stands or walks.
+pub const PLAYER_AVATAR_SCREEN_BOX: AvatarScreenBox = AvatarScreenBox {
+    left: avatar::PLAYER_OBJ_X as usize,
+    top: avatar::PLAYER_OBJ_Y as usize,
+    width: avatar::FRAME_W,
+    height: avatar::FRAME_H,
+};
+
+/// Layout used by the default-room loaders.
 const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";
 
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`DEFAULT_ROOM_LAYOUT_ID`]'s
-/// own map id, needed (issue #161) so [`load_default_room`] can resolve this
-/// room's own [`assets::MapEvents`] to seed [`OverworldScene::from_pack`]'s
-/// NPC rendering. Kept as its own literal (mirroring
-/// [`DEFAULT_ROOM_LAYOUT_ID`]'s own hardcoded string) rather than importing
-/// `crate::new_game::SPAWN_MAP_ID` -- `new_game` already depends on this
-/// module (`PlayerCharacter`), so the reverse dependency would cycle; a test
-/// in `tests` cross-checks the two stay in agreement.
+/// Map whose events accompany [`DEFAULT_ROOM_LAYOUT_ID`].
 const DEFAULT_ROOM_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
-/// Why building or composing an [`OverworldScene`] failed.
-///
-/// Concrete per-crate-boundary enum `(oop-boundaries)` -- no `anyhow`,
-/// mirroring [`crate::title::TitleSceneError`]'s shape.
+/// An error while loading or building an [`OverworldScene`]. Composing a frame
+/// from a built scene is infallible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverworldSceneError {
-    /// Loading or reading the asset pack failed -- most commonly
-    /// [`assets::PackError::NotFound`] (see
-    /// [`OverworldSceneError::is_pack_missing`]).
+    /// The asset pack could not be opened, read, or validated, or a
+    /// required entry was missing or had the wrong kind.
     Pack(assets::PackError),
-    /// A typed lookup against already-loaded pack metadata failed (e.g. an
-    /// unknown [`LayoutId`]).
+    /// A typed asset lookup failed, or a decoded payload such as a layout
+    /// grid or border did not validate.
     Asset(AssetError),
-    /// A pack entry's bytes did not fit the `rendering` type built from it.
-    /// Never happens against a real pack produced by `cargo xtask extract`.
+    /// Rendering rejected decoded asset data.
     Render(RenderError),
-    /// A tile bitmap's payload length does not match its declared
-    /// dimensions. Guards the tile-packing helpers below against slicing
-    /// past malformed data.
+    /// An image payload length differs from its declared pixel area.
     ImagePixelCountMismatch {
-        /// A short label identifying which image (e.g. `"tileset/general"`,
-        /// `"sprite/brendan/walking"`).
+        /// A diagnostic label for the image's role, not its pack entry id.
         label: &'static str,
-        /// The entry's declared width in pixels.
+        /// The declared width in pixels.
         width: u32,
-        /// The entry's declared height in pixels.
+        /// The declared height in pixels.
         height: u32,
-        /// The number of one-byte pixels actually present.
+        /// The number of pixels in the payload.
         actual: usize,
     },
-    /// A tile bitmap's pixel dimensions are not a whole number of 8x8
-    /// tiles. Never true for the real upstream art.
+    /// An image cannot be divided into whole 8-by-8-pixel tiles.
     ImageNotTileAligned {
-        /// See [`OverworldSceneError::ImagePixelCountMismatch`].
+        /// A diagnostic label for the image's role, not its pack entry id.
         label: &'static str,
-        /// The entry's width in pixels.
+        /// The width in pixels.
         width: u32,
-        /// The entry's height in pixels.
+        /// The height in pixels.
         height: u32,
     },
-    /// The player sprite sheet's pixel dimensions did not match this
-    /// module's expectation (`avatar`'s module docs). Never true for the
-    /// real upstream art; guards the hardcoded per-frame crop coordinates.
+    /// A people sprite sheet, for the player or an NPC, has dimensions the
+    /// frame layout cannot use.
     SpriteSheetWrongDimensions {
-        /// The pack entry id.
+        /// A diagnostic label for the sheet, not its pack entry id.
         id: &'static str,
-        /// The `(width, height)` this module expects.
+        /// The required `(width, height)` in pixels.
         expected: (u32, u32),
-        /// The entry's actual `(width, height)`.
+        /// The supplied `(width, height)` in pixels.
         actual: (u32, u32),
     },
-    /// A [`MapLayout`]'s `primary_tileset`/`secondary_tileset` symbol (an
-    /// upstream `gTileset_*` linker name) is not one of the five tilesets
-    /// `cargo xtask extract` bundles (`crates/xtask/src/extract/mod.rs`'s
-    /// `TILESETS`) -- carries the offending symbol.
+    /// A map layout names a tileset that the scene loader does not support.
     UnknownTileset(&'static str),
-    /// A tileset-animation frame's packed bytes are not exactly its
-    /// region's upstream copy length ([`tileset_anims`]'s module docs'
-    /// `tiles` column). Never true for a real pack built by `cargo xtask
-    /// extract`; guards the per-compose in-place patch against a corrupt
-    /// or hand-built pack's wrong-size frame -- oversized would overwrite
-    /// a neighboring region (or panic past the primary block), undersized
-    /// would leave the region partially stale.
+    /// A packed tileset-animation frame has the wrong byte length.
     AnimFrameSizeMismatch {
-        /// The region's `anim/<anim_name>` pack id segment.
+        /// The animation region name.
         anim_name: &'static str,
-        /// The region's transcribed upstream copy length, in 8x8 tiles.
+        /// The required frame length in 8-by-8-pixel tiles.
         expected_tiles: u16,
-        /// The rejected frame's packed byte length.
+        /// The supplied frame length in bytes.
         frame_bytes: usize,
     },
 }
@@ -312,10 +267,7 @@ impl From<RenderError> for OverworldSceneError {
 }
 
 impl OverworldSceneError {
-    /// Whether this is specifically the "no pack on disk" diagnostic --
-    /// lets callers (namely `xtask`'s smoke e2e check) tell "run
-    /// `./init.sh`/`cargo xtask extract` first" apart from a genuine bug,
-    /// mirroring [`crate::title::TitleSceneError::is_pack_missing`].
+    /// Returns `true` only when the asset pack was not found on disk.
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(assets::PackError::NotFound(_)))
