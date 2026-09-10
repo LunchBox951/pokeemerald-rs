@@ -18,11 +18,15 @@
 //! the three composed backgrounds according to `DrawMetatile` in
 //! `pokeemerald/src/field_camera.c`:
 //!
-//! | Layer | Background | Priority relative to the player sprite |
+//! | Layer | Background | Priority relative to a priority-2 player sprite |
 //! |---|---|---|
 //! | Top | BG1, priority 1 | In front |
 //! | Middle | BG2, priority 2 | Behind on equal priority |
 //! | Bottom | BG3, priority 3 | Behind |
+//!
+//! The player sprite carries priority 2 on an ordinary floor tile and 1 or 0
+//! on a raised elevation. A sprite wins a tie with a background, so a raised
+//! player draws in front of the top layer as well.
 //!
 //! BG0 effects are not composed.
 //!
@@ -37,9 +41,9 @@
 //! # Fidelity differences
 //!
 //! - For [`assets::MetatileLayerType::Normal`], BG3 is transparent. Upstream
-//!   `DrawMetatile` writes its documented garbage value, `0x3014`, behind the
-//!   normally opaque middle layer; reproducing leftover VRAM would make rare
-//!   transparent pixels nondeterministic.
+//!   `DrawMetatile` writes the fixed screen entry `0x3014` there -- tile
+//!   `0x14` in palette bank 3 -- behind the normally opaque middle layer, so
+//!   the two differ only where that layer has a transparent pixel.
 //! - Walking does not alternate the leading foot between steps.
 //! - The ten-metatile viewport has no single centre row. The selected player
 //!   row is a port-specific centring choice.
@@ -94,7 +98,8 @@ const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";
 /// Map whose events accompany [`DEFAULT_ROOM_LAYOUT_ID`].
 const DEFAULT_ROOM_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
-/// An error while loading or composing an [`OverworldScene`].
+/// An error while loading or building an [`OverworldScene`]. Composing a frame
+/// from a built scene is infallible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverworldSceneError {
     /// The asset pack could not be opened, read, or validated, or a
@@ -107,7 +112,7 @@ pub enum OverworldSceneError {
     Render(RenderError),
     /// An image payload length differs from its declared pixel area.
     ImagePixelCountMismatch {
-        /// The image identifier used by the loader.
+        /// A diagnostic label for the image's role, not its pack entry id.
         label: &'static str,
         /// The declared width in pixels.
         width: u32,
@@ -118,16 +123,17 @@ pub enum OverworldSceneError {
     },
     /// An image cannot be divided into whole 8-by-8-pixel tiles.
     ImageNotTileAligned {
-        /// The image identifier used by the loader.
+        /// A diagnostic label for the image's role, not its pack entry id.
         label: &'static str,
         /// The width in pixels.
         width: u32,
         /// The height in pixels.
         height: u32,
     },
-    /// A player sprite sheet has dimensions the frame layout cannot use.
+    /// A people sprite sheet, for the player or an NPC, has dimensions the
+    /// frame layout cannot use.
     SpriteSheetWrongDimensions {
-        /// The pack entry identifier.
+        /// A diagnostic label for the sheet, not its pack entry id.
         id: &'static str,
         /// The required `(width, height)` in pixels.
         expected: (u32, u32),
