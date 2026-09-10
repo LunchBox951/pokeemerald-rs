@@ -180,8 +180,7 @@ mod tests {
         assert_eq!(
             poison_residual_damage(0),
             1,
-            "even a zero max HP still floors to one, matching upstream's unconditional \
-             `if (gBattleMoveDamage == 0) gBattleMoveDamage = 1;`"
+            "even a zero max HP still floors to one (`battle_util.c:1529-1530`)"
         );
     }
 }

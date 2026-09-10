@@ -245,10 +245,9 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
-/// (`battle_main.c:3960`-`:3966`) refuses to re-enter
-/// `DoBattlerEndTurnEffects` once a residual script's own `checkteamslost`
-/// (`data/battle_scripts_1.s:3746`) has set an outcome.
+/// Once a residual script's own `checkteamslost`
+/// (`data/battle_scripts_1.s:3746`) has decided the battle, `BattleTurnPassed`
+/// never re-enters `DoBattlerEndTurnEffects` (`battle_main.c:3960-3966`).
 #[test]
 fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_running() {
     let dex = Dex::new();
