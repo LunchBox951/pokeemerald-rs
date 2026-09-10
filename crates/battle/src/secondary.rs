@@ -12,10 +12,8 @@
 //! implemented, so an effect that would apply fails closed after consuming
 //! exactly the draw Emerald consumes.
 //!
-//! [`EFFECT_POISON_HIT`] is the one modelled trampoline: a successful roll
-//! writes [`crate::status1::Status1::Poisoned`] through `SetMoveEffect`'s
-//! `STATUS1_POISON` case (`battle_script_commands.c:2299`-`:2340`). Every
-//! other [`SECONDARY_TRAMPOLINES`] entry stays unported.
+//! [`EFFECT_POISON_HIT`] is the one ported trampoline
+//! (`battle_script_commands.c:2299-2340`).
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
