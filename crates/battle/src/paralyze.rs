@@ -1,32 +1,18 @@
-//! Admission and resolution for `BattleScript_EffectParalyze` (Thunder Wave,
-//! Stun Spore, Glare).
+//! Validation and resolution for moves that inflict paralysis.
 //!
-//! The Limber, type-immunity, and already-paralysed guards
-//! (`data/battle_scripts_1.s:1007`-`:1032`) run ahead of `accuracycheck` and
-//! draw nothing of their own; a landed hit writes
-//! [`crate::status1::Status1::Paralysed`] with `seteffectprimary`, not
-//! `seteffectwithchance`, so it spends no further draw.
+//! Limber, type immunity, and existing paralysis are checked before accuracy,
+//! so those outcomes consume no RNG. A successful accuracy check applies
+//! [`crate::status1::Status1::Paralysed`] without another draw.
 //!
 //! [`ParalyzeOutcome::Immune`] maps to [`crate::battle::BattleEvent::NoEffect`]
-//! because the type-immunity exit still resolves to the ordinary "doesn't
-//! affect" message (`battle_script_commands.c:2090`-`:2093`). Limber exits
-//! through a separate script that names the ability in its own message
-//! (`BattleScript_LimberProtected`, `data/battle_scripts_1.s:1034`-`:1038`;
-//! `gPRLZPreventionStringIds[B_MSG_ABILITY_PREVENTS_MOVE_STATUS]`,
-//! `src/battle_message.c:1223`), so [`ParalyzeOutcome::LimberProtected`]
-//! keeps its own outcome instead of collapsing into `Immune`.
+//! while Limber has a distinct event that names the ability. This ordering and
+//! split follow `BattleScript_EffectParalyze`
+//! (`pokeemerald/data/battle_scripts_1.s:1007-1038`).
 //!
-//! `jumpifstatus BS_TARGET, STATUS1_ANY, BattleScript_ButItFailed`
-//! (`data/battle_scripts_1.s:1016`) is now reachable too: once
-//! [`crate::status1::Status1::Poisoned`] exists, a poisoned target hit with
-//! Thunder Wave takes this generic failure, not the
-//! [`ParalyzeOutcome::AlreadyParalysed`] exit `:1015`'s exact-status jump
-//! reserves for [`Status1::Paralysed`] alone.
+//! A target already carrying a primary status other than paralysis takes the
+//! generic failure exit, not [`ParalyzeOutcome::AlreadyParalysed`].
 //!
-//! Not ported: `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE`
-//! (`data/battle_scripts_1.s:1012`, no Substitute), and
-//! `jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD` (`:1018`, no side
-//! conditions).
+//! Substitute and Safeguard are outside this battle model.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -37,7 +23,7 @@ use crate::error::BattleError;
 use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
-/// Thunder Wave's, Stun Spore's, and Glare's move effect.
+/// Move effect shared by Thunder Wave, Stun Spore, and Glare.
 pub const EFFECT_PARALYZE: MoveEffect = MoveEffect(67);
 
 const TYPE_EFFECTIVENESS_PROBE_DAMAGE: u32 = 1;
@@ -48,8 +34,8 @@ pub fn is_paralyze_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_PARALYZE
 }
 
-/// Validates that `move_id` can enter [`resolve_paralyze_move`] without
-/// drawing.
+/// Validates move lookup, paralysis effect, and combat type before resolution.
+/// Validation consumes no RNG.
 ///
 /// # Errors
 ///
@@ -64,37 +50,20 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
     apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
 }
 
-/// Refuses an [`EFFECT_PARALYZE`] move that would newly paralyse a defender
-/// whose ability this slice cannot follow past the infliction; see
-/// [`resolve_paralyze_move`] for where this sits among the module's other
-/// guards.
+/// Rejects a paralysis move when inflicting the status would activate an
+/// unsupported ability interaction.
 ///
-/// * Synchronize reflects the status onto the attacker
-///   (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_script_commands.c:4275`-`:4277`
-///   via `src/battle_util.c:2971`-`:2985`); an attacker that already carries
-///   any primary status is admitted, since the reflected `SetMoveEffect`
-///   re-entry then writes nothing regardless of which guard it exits
-///   through — the already-nonzero `status1` check (`:2422`-`:2423`)
-///   ordinarily, or (since the reflection sets `primary`) Limber's own
-///   message branch first (`:2396`-`:2421`) if the attacker happens to hold
-///   it. Upstream shows a different message depending on which exit is
-///   taken, but this crate models no message for a Synchronize reflection
-///   either way, so the two exits are indistinguishable here — see
-///   [`crate::secondary::ensure_admissible`]'s identical note for poison's
-///   own version of this same reflection.
-/// * Shed Skin rolls a one-in-three end-of-turn cure while its holder is
-///   statused (`ABILITYEFFECT_ENDTURN`, `src/battle_util.c:2620`-`:2621`), a
-///   draw [`crate::battle::Battle`]'s residual pass does not make.
-/// * Guts and Marvel Scale read their own holder's `status1` inside
-///   `CalculateBaseDamage` (`src/pokemon.c`) to raise a statused holder's
-///   physical Attack or Defense, which
-///   [`crate::pokemon::BattlePokemon::attacking_stat`] and
-///   [`crate::pokemon::BattlePokemon::defending_stat`] do not model.
+/// This function does not report move-data errors; callers use
+/// [`ensure_resolvable`] for those. Attempts stopped by Limber, type immunity,
+/// or an existing primary status are accepted because they cannot reach an
+/// unsupported interaction. Synchronize is also accepted when the attacker
+/// already carries a primary status and therefore cannot receive the
+/// reflected one.
 ///
 /// # Errors
 ///
-/// [`BattleError::UnportedAbilityInteraction`], carrying the offending
-/// ability, when the move would reach `seteffectprimary` against one.
+/// Returns [`BattleError::UnportedAbilityInteraction`] for Synchronize, Shed
+/// Skin, Guts, or Marvel Scale when the move would newly paralyse the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -127,35 +96,32 @@ pub fn ensure_admissible(
 /// The result of resolving an [`EFFECT_PARALYZE`] move, before any mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParalyzeOutcome {
-    /// The defender's ability is [`AbilityId::LIMBER`].
+    /// Limber protected the defender.
     LimberProtected,
-    /// The defender's typing is immune to the move.
+    /// The defender's type is immune to the move.
     Immune,
-    /// The defender already carries [`Status1::Paralysed`].
+    /// The defender is already [`crate::status1::Status1::Paralysed`].
     AlreadyParalysed,
-    /// The defender already carries some other primary status
-    /// (`STATUS1_ANY`, `data/battle_scripts_1.s:1016`) — currently only
-    /// reachable via [`Status1::Poisoned`].
+    /// The defender already carries a primary status other than paralysis.
     AlreadyStatused,
-    /// The move missed its accuracy check.
+    /// The accuracy check missed.
     Miss,
-    /// The move connected and inflicts [`Status1::Paralysed`].
+    /// The move connected; the caller must inflict
+    /// [`crate::status1::Status1::Paralysed`].
     Applied,
 }
 
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// The Limber, type-immunity and already-paralysed guards, and
-/// [`ensure_admissible`]'s refusals behind them, precede the accuracy draw
-/// and consume no randomness; a landed hit needs only that one draw, since
-/// `seteffectprimary` inflicts the status unconditionally once reached.
+/// Limber, type immunity, an existing primary status, and unsupported ability
+/// interactions are resolved before accuracy. Only the accuracy check can
+/// consume RNG.
 ///
 /// # Errors
 ///
-/// Returns the errors documented by [`ensure_resolvable`] and
-/// [`ensure_admissible`], or [`BattleError::UnsupportedMoveType`] if the move
-/// has no combat type. Admission completes before any draw.
+/// Returns the errors from [`ensure_resolvable`] or [`ensure_admissible`].
+/// Admission completes before any draw.
 pub fn resolve_paralyze_move(
     dex: &Dex,
     move_id: MoveId,
@@ -165,9 +131,8 @@ pub fn resolve_paralyze_move(
 ) -> Result<ParalyzeOutcome, BattleError> {
     ensure_resolvable(dex, move_id)?;
 
-    // `jumpifability BS_TARGET, ABILITY_LIMBER` (`data/battle_scripts_1.s:1011`)
-    // exits before `typecalc` runs, so this precedes even the move-type lookup
-    // below.
+    // Upstream checks Limber before type calculation, so preserve that order
+    // even though the outcome does not need the move's type.
     if defender.ability() == AbilityId::LIMBER {
         return Ok(ParalyzeOutcome::LimberProtected);
     }
@@ -187,9 +152,6 @@ pub fn resolve_paralyze_move(
     if !defender.status1().is_healthy() {
         return Ok(ParalyzeOutcome::AlreadyStatused);
     }
-    // The last line of defence behind the pre-turn screens, at the script's
-    // own position: every earlier exit is modelled, `accuracycheck` is not yet
-    // paid for.
     ensure_admissible(dex, move_id, attacker, defender)?;
 
     if !accuracy_check(

@@ -90,10 +90,10 @@ pub(super) fn combined_world_tileset(
     Ok((bytes, blank_tile_index))
 }
 
-/// Combines primary palette banks 0–5 with secondary banks 6–12.
-///
-/// These ranges match `LoadTilesetPalette` in `pokeemerald/src/fieldmap.c`;
-/// all other banks remain unloaded.
+/// Combines primary palette banks 0–5 with secondary banks 6–12, matching
+/// `LoadTilesetPalette` (`pokeemerald/src/fieldmap.c`), which also
+/// force-writes `RGB_BLACK` over global color 0 for a primary tileset
+/// regardless of its own source color there.
 pub(super) fn combined_world_palette(
     primary: &[PaletteRef<'_>; 16],
     secondary: &[PaletteRef<'_>; 16],
@@ -110,6 +110,7 @@ pub(super) fn combined_world_palette(
     {
         copy_bank(&mut colors, bank, *palette);
     }
+    colors[0] = Bgr555::default();
     Palette::new(colors)
 }
 
