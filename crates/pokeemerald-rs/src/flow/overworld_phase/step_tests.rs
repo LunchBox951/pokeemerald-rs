@@ -3,7 +3,7 @@
 
 use super::step::InteractionOutcome;
 use super::test_support::*;
-use super::OverworldPhase;
+use super::{OverworldPhase, SyntheticStartMenu};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
@@ -815,5 +815,143 @@ fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
         "the same tile must also refuse entry from the north \
          (IsMetatileDirectionallyImpassable's gDirectionBlockedMetatileFuncs \
          half)"
+    );
+}
+
+/// Issue #908 regression: a same-frame `A`-plus-`START` press must resolve
+/// this port's counterpart to `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) before `pressedStartButton`
+/// (`:182-187`) ever gets a look, because upstream's own
+/// `ProcessPlayerFieldInput` checks the interaction branch first and
+/// returns `TRUE` out of it before the `START` branch is even reached.
+///
+/// Stands the player where
+/// [`a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`]
+/// settles -- one tile east of Mom, at rest, already facing her -- so the
+/// same real, recognized interaction backs `field_input_claimed` here.
+/// Asserted at [`OverworldPhase::start_menu_may_open`] directly, the same
+/// decision [`OverworldPhase::step`]'s own "Field start menu ordering"
+/// section feeds from a real
+/// [`OverworldPhase::interaction_tokens_this_frame`] lookup every frame;
+/// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`]
+/// is this same claim driven through `step` itself, with a menu that
+/// genuinely builds.
+#[test]
+fn start_does_not_preempt_a_same_frame_npc_interaction() {
+    let phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    let buttons = pressed(Buttons::A | Buttons::START);
+
+    let interaction_found = {
+        let runtime = runtime_for(&phase);
+        phase
+            .interaction_tokens_this_frame(buttons, &runtime)
+            .is_some()
+    };
+    assert!(
+        interaction_found,
+        "the fixture must face an NPC whose script this port recognizes"
+    );
+
+    assert!(
+        !phase.start_menu_may_open(buttons, interaction_found),
+        "a same-frame interaction must refuse a fresh START the same frame \
+         (field_control_avatar.c:172 returns TRUE before :182)"
+    );
+    // Positive control: the same fixture, told nothing else claimed the
+    // frame, is where a fresh START normally works -- so the refusal above
+    // is really the interaction claim, not some other gate this fixture
+    // happens to fail.
+    assert!(
+        phase.start_menu_may_open(buttons, false),
+        "the fixture must otherwise be a frame START can open"
+    );
+}
+
+/// A same-frame `START` press whose menu fails to build must not cost that
+/// frame's movement ([`OverworldPhase::build_start_menu`]'s own doc comment
+/// on why the menu is built ahead of movement).
+#[test]
+fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Fails;
+
+    // Already facing west (module docs' `ONE_F` fixture notes): holding
+    // Left begins a step immediately, no separate turn frame first.
+    let mut buttons = ButtonState::new();
+    buttons.update(Buttons::LEFT);
+    buttons.update(Buttons::LEFT | Buttons::START);
+    phase.step(buttons);
+
+    assert!(
+        phase.start_menu().is_none(),
+        "a failed build must leave no menu open"
+    );
+    assert!(
+        phase.player.in_transit(),
+        "a failed pack load must leave START exactly as inert as a refused \
+         gate -- the held-direction step must still have started"
+    );
+}
+
+/// Issue #908, end to end: the ordering
+/// [`start_does_not_preempt_a_same_frame_npc_interaction`] pins at the gate
+/// directly, driven through the real [`OverworldPhase::step`] instead, with
+/// [`OverworldPhase::synthetic_start_menu`] standing in for a real
+/// pack load so a menu can genuinely open in a test.
+///
+/// Three same-frame outcomes, one fixture: `A`+`START` next to Mom leaves
+/// `START` inert; `START` alone opens a menu from inside `step` itself;
+/// and an opening menu preempts that frame's movement, the mirror of
+/// [`a_failed_pack_load_on_start_does_not_cost_the_frames_movement`].
+#[test]
+fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
+    let mut with_interaction = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    with_interaction.synthetic_start_menu = SyntheticStartMenu::Builds;
+    with_interaction.step(pressed(Buttons::A | Buttons::START));
+    assert!(
+        with_interaction.start_menu().is_none(),
+        "a same-frame interaction must claim the frame ahead of a fresh \
+         START, even when the menu would really have built"
+    );
+
+    let mut alone = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    alone.synthetic_start_menu = SyntheticStartMenu::Builds;
+    alone.step(pressed(Buttons::START));
+    assert!(
+        alone.start_menu().is_some(),
+        "with nothing else claiming the frame, START must open the menu \
+         from inside step itself"
+    );
+
+    let mut walking = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    walking.synthetic_start_menu = SyntheticStartMenu::Builds;
+    let mut buttons = ButtonState::new();
+    buttons.update(Buttons::LEFT);
+    buttons.update(Buttons::LEFT | Buttons::START);
+    walking.step(buttons);
+    assert!(walking.start_menu().is_some(), "the menu must have opened");
+    assert!(
+        !walking.player.in_transit() && walking.player.position() == (4, 6),
+        "upstream never calls PlayerStep on a frame ProcessPlayerFieldInput \
+         claims -- no step may have begun either"
+    );
+}
+
+/// Issue #436, end to end: an already-owning sight-trainer approach must
+/// keep outranking a fresh `START` driven through
+/// [`OverworldPhase::step`] itself, with the same injected build as above
+/// so the menu really would have opened. The *trigger* frame is
+/// `sight_trainer_tests::start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame`.
+#[test]
+fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    phase.begin_synthetic_sight_approach_for_test();
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_none(),
+        "the approach owns the frame ahead of pressedStartButton \
+         (field_control_avatar.c:182), even when the menu would have built"
     );
 }
