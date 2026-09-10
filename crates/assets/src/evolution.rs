@@ -627,4 +627,39 @@ mod tests {
             }
         }
     }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every source's rule list as little-endian bytes, in table
+    /// order: source id, rule count, then per rule the method id, parameter,
+    /// and target id.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        for &(source, evs) in super::ENTRIES {
+            out.extend_from_slice(&source.0.to_le_bytes());
+            out.push(u8::try_from(evs.len()).expect("branch count fits in a byte"));
+            for ev in evs {
+                out.extend_from_slice(&ev.method.method_id().to_le_bytes());
+                out.extend_from_slice(&ev.method.param().to_le_bytes());
+                out.extend_from_slice(&ev.target.0.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Digest of upstream `src/data/pokemon/evolution.h`'s `gEvolutionTable`,
+    /// every rule's method, parameter, and target rendered as `render_table_bytes` renders ours.
+    #[test]
+    fn every_rule_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "33c8216177e79054",
+            "evolution rule table diverges from the canonical upstream rows",
+        );
+    }
 }

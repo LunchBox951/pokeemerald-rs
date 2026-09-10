@@ -277,4 +277,37 @@ mod tests {
             );
         }
     }
+
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Renders every row's name and description as length-prefixed UTF-8
+    /// bytes, in table order.
+    fn render_table_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        for data in &ABILITIES {
+            for field in [data.name, data.description] {
+                let bytes = field.as_bytes();
+                let len = u16::try_from(bytes.len()).expect("display text fits in u16");
+                out.extend_from_slice(&len.to_le_bytes());
+                out.extend_from_slice(bytes);
+            }
+        }
+        out
+    }
+
+    /// Digest of upstream `src/data/text/abilities.h`'s `gAbilityNames` and
+    /// `gAbilityDescriptionPointers`, rendered as `render_table_bytes` renders ours.
+    #[test]
+    fn every_row_matches_the_canonical_digest() {
+        assert_eq!(
+            format!("{:016x}", fnv1a64(&render_table_bytes())),
+            "2f5d6ca1ca701136",
+            "ability display text diverges from the canonical upstream rows",
+        );
+    }
 }

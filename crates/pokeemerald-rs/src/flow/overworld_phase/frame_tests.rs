@@ -228,7 +228,10 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     // commits a step rather than spending a frame turning.
     phase.player = PlayerState::new((2, 7), 3, Direction::South);
     let (rest_y, rest_scroll) = mom_and_scroll(&phase);
-    assert_eq!(rest_scroll, 0, "at rest the BG scroll is 0");
+    assert_eq!(
+        rest_scroll, 8,
+        "at rest the BG scroll carries RESTING_SCROLL_Y's baseline (issue #977)"
+    );
 
     // Frame 1 of a real south step. The regression: this must be a *one
     // pixel* move, not the one-metatile snap the old code produced.
@@ -279,8 +282,9 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
     );
     assert_eq!(
         (mid_scroll, last_scroll),
-        (8, 15),
-        "and in absolute terms the scroll is just the elapsed frame count"
+        (16, 23),
+        "and in absolute terms the scroll is just the elapsed frame count \
+         past RESTING_SCROLL_Y's 8px baseline"
     );
 
     // The boundary frames, and the total.
@@ -289,7 +293,10 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
         1,
         "frame 15 owes exactly one last pixel"
     );
-    assert_eq!(settled_scroll, 0, "back at rest, the BG scroll is 0 again");
+    assert_eq!(
+        settled_scroll, 8,
+        "back at rest, the BG scroll returns to RESTING_SCROLL_Y's baseline"
+    );
     assert_eq!(
         rest_y - settled_y,
         16,

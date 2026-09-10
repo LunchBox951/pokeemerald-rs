@@ -286,15 +286,15 @@ impl Battle {
         }
         // A wild battle ends the moment its only opponent faints. A
         // trainer's does not: the replacement (or the trainer's defeat) is
-        // settled at the end of the turn instead, in `end_of_turn`, exactly
-        // where upstream's HandleFaintedMonActions sits. Either way, an
-        // open prompt defers the aftermath: upstream finishes the level-up
-        // script -- the yes/no box included -- before anything after the
-        // faint runs (`BattleScript_GiveExp` completes in
+        // settled at the end of the turn instead, in `settle_end_of_turn`,
+        // exactly where upstream's HandleFaintedMonActions sits. Either
+        // way, an open prompt defers the aftermath: upstream finishes the
+        // level-up script -- the yes/no box included -- before anything
+        // after the faint runs (`BattleScript_GiveExp` completes in
         // HandleFaintedMonActions' case 1 before case 4,
         // `battle_util.c:1894`-`:1951`), so the wild finish waits in
-        // `Battle::settle_fainted_enemy` for `Battle::resolve_move_learn`'s
-        // last answer.
+        // `Battle::settle_fainted_enemy` for
+        // `Battle::resolve_move_learn`'s last answer.
         if self.trainer().is_none() && self.player.pending_move_learn().is_none() {
             self.finish(events, BattleOutcome::PlayerWon);
         }
