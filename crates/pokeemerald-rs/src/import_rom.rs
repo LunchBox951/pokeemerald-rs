@@ -46,12 +46,18 @@
 //! on a machine is the one that creates the data directory, so this is the
 //! ordinary path rather than a corner of it.
 //!
-//! The one destination that is refused outright is the ROM being imported.
-//! `$POKEEMERALD_PACK` can name any path, including the file the player
-//! passed to `--import-rom`, and the rename would then drop the pack on
-//! top of their cartridge image. That refusal is a device and inode
-//! comparison against the destination directory's own handle, so a hard
-//! link or a symlink spelling of the ROM is still the ROM.
+//! Two destinations are refused outright before anything is built.
+//!
+//! The first is a destination that already exists as a directory --
+//! checked before the ROM is read or a temporary file is built (see
+//! [`Dest::name_is_directory`]).
+//!
+//! The second is the ROM being imported. `$POKEEMERALD_PACK` can name any
+//! path, including the file the player passed to `--import-rom`, and the
+//! rename would then drop the pack on top of their cartridge image. That
+//! refusal is a device and inode comparison against the destination
+//! directory's own handle, so a hard link or a symlink spelling of the ROM
+//! is still the ROM.
 //!
 //! The ROM is pinned for the same reason the destination is. That refusal
 //! is only as good as the two files it compares, and asking a *path* what
@@ -77,10 +83,11 @@
 //! cartridge image itself, if the destination's file name is the ROM's.
 //!
 //! So the destination directory is opened once and held ([`dest::Dest`]).
-//! On Unix that is a descriptor, and the ROM check, the temporary file's
-//! exclusive creation, the write, and the publishing rename each name
-//! their file by basename against it (`openat`/`renameat`, through
-//! `rustix`; `std` exposes them on no platform). Redirecting a component
+//! On Unix that is a descriptor, and the directory-type check, the ROM
+//! check, the temporary file's exclusive creation, the write, and the
+//! publishing rename each name their file by basename against it
+//! (`openat`/`renameat`, through `rustix`; `std` exposes them on no
+//! platform). Redirecting a component
 //! after the open moves nothing, because nothing after the open looks at a
 //! component again. What is left trusted is the final name inside that one
 //! directory, and exclusive creation covers the write: a link planted
@@ -216,6 +223,16 @@ pub enum ImportRomError {
         /// The destination that names no file.
         pack_path: PathBuf,
     },
+    /// The resolved destination already exists, and it is a directory.
+    ///
+    /// Unlike [`Self::DestinationNamesNoFile`], the path itself names a
+    /// file — no trailing separator, a real final component — but that
+    /// name is already occupied by a directory. Refused before anything
+    /// is written; see [`Dest::name_is_directory`] for how and why.
+    DestinationIsDirectory {
+        /// The destination occupied by an existing directory.
+        pack_path: PathBuf,
+    },
     /// The resolved destination *is* the ROM being imported.
     ///
     /// Publishing renames the finished pack over the destination, so a
@@ -299,6 +316,13 @@ impl fmt::Display for ImportRomError {
                 pack_path.display(),
                 pack_format::PACK_PATH_ENV
             ),
+            Self::DestinationIsDirectory { pack_path } => write!(
+                f,
+                "cannot write the asset pack to `{}`: a directory is already there — point `{}` \
+                 at a file",
+                pack_path.display(),
+                pack_format::PACK_PATH_ENV
+            ),
             Self::DestinationIsSource { rom_path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`: point `{}` at a \
@@ -371,6 +395,7 @@ impl std::error::Error for ImportRomError {
             Self::Import { source, .. } => Some(source),
             Self::NoDestination
             | Self::DestinationNamesNoFile { .. }
+            | Self::DestinationIsDirectory { .. }
             | Self::DestinationIsSource { .. } => None,
         }
     }
@@ -387,12 +412,13 @@ impl std::error::Error for ImportRomError {
 /// [`ImportRomError::CreateDirFailed`] or [`ImportRomError::OpenDirFailed`]
 /// if its directory cannot be created or opened,
 /// [`ImportRomError::DestinationNamesNoFile`] if it names no file,
-/// [`ImportRomError::DestinationIsSource`] if that location is the ROM
-/// itself, [`ImportRomError::Import`] if the ROM is not the supported build
-/// or the import otherwise fails, [`ImportRomError::TempFileFailed`] if the
-/// pack cannot be built in its temporary file, and
-/// [`ImportRomError::PublishFailed`] if the finished pack cannot be moved
-/// into place.
+/// [`ImportRomError::DestinationIsDirectory`] if a directory already
+/// exists there, [`ImportRomError::DestinationIsSource`] if that location
+/// is the ROM itself, [`ImportRomError::Import`] if the ROM is not the
+/// supported build or the import otherwise fails,
+/// [`ImportRomError::TempFileFailed`] if the pack cannot be built in its
+/// temporary file, and [`ImportRomError::PublishFailed`] if the finished
+/// pack cannot be moved into place.
 pub fn import_rom(rom_path: &Path) -> Result<ImportOutcome, ImportRomError> {
     let pack_path = destination()?;
     import_to(rom_path, &pack_path)
@@ -482,6 +508,11 @@ fn import_to_with(
             });
         }
     };
+
+    if let Err(err) = refuse_existing_directory(&dest, name, pack_path) {
+        undo_created_directories(&created);
+        return Err(err);
+    }
 
     // `$POKEEMERALD_PACK` can name the file the player passed to
     // `--import-rom`, and it is the *publishing rename* that would drop the
@@ -623,6 +654,23 @@ fn names_a_directory(pack_path: &Path) -> bool {
         Some('.') => tail.next().is_some_and(std::path::is_separator),
         Some(last) => std::path::is_separator(last),
         None => false,
+    }
+}
+
+/// Refuse `name` if it already exists inside `dest` as a directory.
+///
+/// See [`Dest::name_is_directory`] for what counts and why.
+fn refuse_existing_directory(
+    dest: &Dest,
+    name: &OsStr,
+    pack_path: &Path,
+) -> Result<(), ImportRomError> {
+    if dest.name_is_directory(name) {
+        Err(ImportRomError::DestinationIsDirectory {
+            pack_path: pack_path.to_path_buf(),
+        })
+    } else {
+        Ok(())
     }
 }
 

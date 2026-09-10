@@ -455,6 +455,63 @@ mod tests {
     }
 
     #[test]
+    fn ordered_rows_match_the_canonical_upstream_sequence() {
+        // The 110 non-neutral `gTypeEffectiveness` rows (`pokeemerald/src/battle_main.c`),
+        // transcribed row by row in upstream's own order, each as an
+        // `attacker`, `defender`, `effectiveness` code. Types use their
+        // battle-data id as a digit, `a`..=`h` continuing past nine for
+        // Fire..Dark; effectiveness uses `0`, `-`, `.`, `+`.
+        #[rustfmt::skip]
+        const GOLDEN: [&str; 110] = [
+            "05-", "08-", "aa-", "ab-", "ac+", "af+", "a6+", "a5-", "ag-", "a8+", "ba+", "bb-",
+            "bc-", "b4+", "b5+", "bg-", "db+", "dd-", "dc-", "d40", "d2+", "dg-", "ca-", "cb+",
+            "cc-", "c3-", "c4+", "c2-", "c6-", "c5+", "cg-", "c8-", "fb-", "fc+", "ff-", "f4+",
+            "f2+", "fg+", "f8-", "fa-", "10+", "1f+", "13-", "12-", "1e-", "16-", "15+", "1h+",
+            "18+", "3c+", "33-", "34-", "35-", "37-", "380", "4a+", "4d+", "4c-", "43+", "420",
+            "46-", "45+", "48+", "2d-", "2c+", "21+", "26+", "25-", "28-", "e1+", "e3+", "ee-",
+            "eh0", "e8-", "6a-", "6c+", "61-", "63-", "62-", "6e+", "67-", "6h+", "68-", "5a+",
+            "5f+", "51-", "54-", "52+", "56+", "58-", "700", "7e+", "7h-", "78-", "77+", "gg+",
+            "g8-", "h1-", "he+", "h7+", "hh-", "h8-", "8a-", "8b-", "8d-", "8f+", "85+", "88-",
+            "070", "170",
+        ];
+
+        let type_code = |ty: Type| {
+            let id = ty.id();
+            if id <= 8 {
+                char::from(b'0' + id)
+            } else {
+                char::from(b'a' + id - 10)
+            }
+        };
+        let effectiveness_code = |eff: Effectiveness| match eff {
+            Effectiveness::NoEffect => '0',
+            Effectiveness::NotVeryEffective => '-',
+            Effectiveness::Normal => '.',
+            Effectiveness::SuperEffective => '+',
+        };
+        let actual: Vec<String> = TypeChart::rows()
+            .iter()
+            .map(|&(atk, def, eff)| {
+                format!(
+                    "{}{}{}",
+                    type_code(atk),
+                    type_code(def),
+                    effectiveness_code(eff),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual, GOLDEN,
+            "ordered rule sequence diverges from upstream"
+        );
+        assert_eq!(
+            TypeChart::rows_with_foresight().len(),
+            108,
+            "Foresight prefix should end where upstream places TYPE_FORESIGHT",
+        );
+    }
+
+    #[test]
     fn chart_matches_golden_grid() {
         const GOLDEN: [&str; 17] = [
             ".....-.0-........",

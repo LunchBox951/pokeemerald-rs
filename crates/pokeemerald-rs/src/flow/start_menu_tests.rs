@@ -40,7 +40,7 @@ fn the_start_menu_does_not_open_mid_battle() {
     let mut phase = new_game_phase();
     settle(&mut phase);
     assert!(
-        phase.start_menu_may_open(pressed(Buttons::START)),
+        phase.start_menu_may_open(pressed(Buttons::START), false),
         "the fixture must start somewhere START normally works"
     );
 
@@ -80,7 +80,7 @@ fn the_start_menu_does_not_open_mid_battle() {
     assert!(phase.in_battle());
 
     assert!(
-        !phase.start_menu_may_open(pressed(Buttons::START)),
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu during a battle"
     );
     assert!(
@@ -114,7 +114,7 @@ fn the_start_menu_does_not_open_mid_sight_trainer_approach() {
     let mut phase = new_game_phase();
     settle(&mut phase);
     assert!(
-        phase.start_menu_may_open(pressed(Buttons::START)),
+        phase.start_menu_may_open(pressed(Buttons::START), false),
         "the fixture must start somewhere START normally works"
     );
 
@@ -125,7 +125,7 @@ fn the_start_menu_does_not_open_mid_sight_trainer_approach() {
     );
 
     assert!(
-        !phase.start_menu_may_open(pressed(Buttons::START)),
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu during a sight-trainer approach"
     );
     assert!(
@@ -162,7 +162,7 @@ fn the_start_menu_does_not_open_mid_first_battle() {
     assert!(phase.in_battle());
 
     assert!(
-        !phase.start_menu_may_open(pressed(Buttons::START)),
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu during the scripted first battle"
     );
     assert!(
@@ -203,7 +203,7 @@ fn the_start_menu_does_not_open_mid_step() {
     );
 
     assert!(
-        !phase.start_menu_may_open(pressed(Buttons::START)),
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu mid-step"
     );
     assert!(
@@ -239,7 +239,7 @@ fn the_start_menu_does_not_open_over_an_open_dialog() {
         ])),
     );
     assert!(
-        !phase.start_menu_may_open(pressed(Buttons::START)),
+        !phase.start_menu_may_open(pressed(Buttons::START), false),
         "START must not open the start menu while a message box is up"
     );
 }
