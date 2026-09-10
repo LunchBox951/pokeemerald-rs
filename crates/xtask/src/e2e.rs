@@ -11,6 +11,7 @@
 
 use std::fmt;
 
+use pokeemerald_rs::overworld::PLAYER_AVATAR_SCREEN_BOX;
 use pokeemerald_rs::App;
 
 const BOOT_FRAME_COUNT: u32 = 30;
@@ -29,10 +30,6 @@ const SECOND_OVERWORLD_DETERMINISM_TICK: u32 = 17;
 const SMOKE_PLAYER_TILE: (i32, i32) = (5, 5);
 const SMOKE_PLAYER_GROUND_ELEVATION: u8 = 3;
 const NATIVE_FRAME_WIDTH: usize = 240;
-const AVATAR_LEFT: usize = 112;
-const AVATAR_TOP: usize = 64;
-const AVATAR_WIDTH: usize = 16;
-const AVATAR_HEIGHT: usize = 32;
 const MIN_DISTINCT_MAP_COLORS: usize = 4;
 
 /// Why `e2e --suite smoke` failed.
@@ -261,6 +258,20 @@ fn is_blank(frame: &[u32]) -> bool {
     frame.iter().all(|&pixel| pixel == BLACK_PIXEL)
 }
 
+/// Whether the frame carries at least [`MIN_DISTINCT_MAP_COLORS`] distinct
+/// colours *outside* the player's avatar.
+///
+/// The avatar is masked out because it draws from its own sprite sheet and
+/// palette: a frame whose map failed to compose entirely would still carry
+/// the avatar's several colours, so counting them would let this check pass
+/// on a blank map `(test-ratchet)`.
+///
+/// The mask comes from the scene crate's own
+/// [`PLAYER_AVATAR_SCREEN_BOX`] rather than four literals repeated here, so
+/// a camera change moves it with the avatar. Repeated, it had already
+/// drifted: the box stayed at the pre-issue-#977 top of y 64 after the
+/// avatar moved up to y 56 (issue #1013), masking eight rows of avatar
+/// pixels *in* and eight rows of real map *out*.
 fn has_map_detail_outside_avatar(frame: &[u32]) -> bool {
     let mut distinct_colors = std::collections::BTreeSet::new();
     for (pixel_index, &pixel) in frame.iter().enumerate() {
@@ -268,8 +279,9 @@ fn has_map_detail_outside_avatar(frame: &[u32]) -> bool {
             pixel_index % NATIVE_FRAME_WIDTH,
             pixel_index / NATIVE_FRAME_WIDTH,
         );
-        let inside_avatar = (AVATAR_LEFT..AVATAR_LEFT + AVATAR_WIDTH).contains(&x)
-            && (AVATAR_TOP..AVATAR_TOP + AVATAR_HEIGHT).contains(&y);
+        let avatar = PLAYER_AVATAR_SCREEN_BOX;
+        let inside_avatar = (avatar.left..avatar.left + avatar.width).contains(&x)
+            && (avatar.top..avatar.top + avatar.height).contains(&y);
         if !inside_avatar {
             distinct_colors.insert(pixel);
         }

@@ -419,6 +419,31 @@ mod tests {
         assert!(entry.enabled());
     }
 
+    /// The crate's public [`super::super::PLAYER_AVATAR_SCREEN_BOX`] --
+    /// `xtask`'s smoke map-detail mask is its consumer -- is exactly the box
+    /// the player's own OAM entry occupies, so the mask can never name a
+    /// rectangle the avatar has moved out of (issue #1013).
+    #[test]
+    fn public_screen_box_matches_the_player_entry_the_scene_emits() {
+        let entry = player_entry(&player_at((0, 0), Direction::South));
+        let screen_box = super::super::PLAYER_AVATAR_SCREEN_BOX;
+        assert_eq!(
+            i16::try_from(screen_box.left).unwrap(),
+            entry.x(),
+            "the exported box's left edge is the player OBJ's own x"
+        );
+        assert_eq!(
+            u8::try_from(screen_box.top).unwrap(),
+            entry.y(),
+            "the exported box's top edge is the player OBJ's own y"
+        );
+        assert_eq!(
+            (screen_box.width, screen_box.height),
+            entry.dimensions(),
+            "the exported box is the player OBJ's own 16x32 shape"
+        );
+    }
+
     #[test]
     fn priority_for_elevation_matches_the_upstream_selevationtopriority_table() {
         const UPSTREAM_PRIORITY_BY_ELEVATION: [u8; 16] =

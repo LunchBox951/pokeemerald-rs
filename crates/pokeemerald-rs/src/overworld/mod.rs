@@ -196,6 +196,44 @@ const RESTING_SCROLL_Y: i32 = METATILE_PX / 2;
 /// [`viewport::build_tilemaps`]).
 const RESTING_SCROLL_ROW: i32 = 1;
 
+/// The screen rectangle the player's avatar OBJ covers in a frame
+/// [`OverworldScene::compose`] draws, in framebuffer pixels.
+///
+/// Plain data with public fields `(oop-boundaries)`: this is a measurement,
+/// not an object with behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvatarScreenBox {
+    /// Leftmost screen pixel column the avatar covers.
+    pub left: usize,
+    /// Topmost screen pixel row the avatar covers.
+    pub top: usize,
+    /// The avatar OBJ's width in pixels.
+    pub width: usize,
+    /// The avatar OBJ's height in pixels.
+    pub height: usize,
+}
+
+/// Where the player's avatar lands on screen -- fixed for a standing *and*
+/// a walking player, since the OBJ stays put and the BG scrolls under it
+/// (module docs' "camera model" section).
+///
+/// Exported for the same reason as [`PlayerState`] above: `xtask`'s
+/// `e2e --suite smoke` is the consumer. Its map-detail check masks exactly
+/// this box out of the composed overworld frame before counting distinct
+/// colours, so a blank or broken map can never pass that check on the
+/// avatar's own pixels. Deriving the box here rather than repeating its
+/// four numbers there keeps the mask moving with the camera: it had
+/// already drifted eight pixels once (issue #1013) when
+/// [`avatar::PLAYER_OBJ_Y`] took up [`RESTING_SCROLL_Y`] (issue #977).
+/// `avatar`'s `public_screen_box_matches_the_player_entry_the_scene_emits`
+/// pins it against the OAM entry the scene actually emits.
+pub const PLAYER_AVATAR_SCREEN_BOX: AvatarScreenBox = AvatarScreenBox {
+    left: avatar::PLAYER_OBJ_X as usize,
+    top: avatar::PLAYER_OBJ_Y as usize,
+    width: avatar::FRAME_W,
+    height: avatar::FRAME_H,
+};
+
 /// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
 /// fixed choice: the protagonist's *bedroom* (the 2F room the early playable
 /// slice in `docs/acceptance/v1.md` starts in — 1F is the downstairs living
