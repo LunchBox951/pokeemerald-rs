@@ -31,26 +31,36 @@
 //!      just the lead ([`crate::party::select_active_battler`]'s own doc
 //!      covers the post-heal re-scan for the newly eligible lead this
 //!      requires).
-//!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
-//!      -- clears field-effect/avatar transition state this port has no
-//!      counterpart for (cycling road, Safari Zone, etc. flags this port
-//!      does not model -- same unmodelled set `Overworld_ResetStateAfterFly`'s
-//!      sibling functions already leave alone elsewhere in this port).
+//!    - `Overworld_ResetStateAfterWhiteOut` (`:399-413`, private upstream)
+//!      -- [`engine::event_data::EventData::clear_white_out_state`] models
+//!      its persistent portion: clears `FLAG_SYS_CYCLING_ROAD`,
+//!      `FLAG_SYS_CRUISE_MODE`, `FLAG_SYS_SAFARI_MODE`,
+//!      `FLAG_SYS_USE_STRENGTH`, `FLAG_SYS_USE_FLASH`, and, when
+//!      `VAR_SHOULD_END_ABNORMAL_WEATHER == 1`, zeroes it and
+//!      `VAR_ABNORMAL_WEATHER_LOCATION` (issue #847) -- run before
+//!      resolving the destination below, since upstream runs it
+//!      unconditionally regardless of whether the warp that follows
+//!      succeeds. **Not modelled**: the leading `ResetInitialPlayerAvatarState`
+//!      call, avatar-transition state this port has no counterpart for
+//!      (same unmodelled set `Overworld_ResetStateAfterFly`'s sibling
+//!      functions already leave alone elsewhere in this port).
 //!    - `SetWarpDestinationToLastHealLocation` (`:665-668`) --
-//!      `sWarpDestination = gSaveBlock1Ptr->lastHealLocation`.
+//!      `sWarpDestination = gSaveBlock1Ptr->lastHealLocation`, the complete
+//!      saved `WarpData`, warp id included.
 //!    - `WarpIntoMap` (`:626-631`) -- `ApplyCurrentWarp` (copies
 //!      `sWarpDestination` into `gSaveBlock1Ptr->location` verbatim),
-//!      `LoadCurrentMapData`, `SetPlayerCoordsFromWarp` (`:603-624`, the
-//!      `WARP_ID_NONE` branch: use the destination's raw `x`/`y`).
-//!      [`OverworldPhase::warp_to_position`] is this port's counterpart --
-//!      see that method's own doc comment for the elevation and
-//!      `save1.location` shape this produces.
+//!      `LoadCurrentMapData`, `SetPlayerCoordsFromWarp` (`:603-624`: a
+//!      valid saved `warpId` names a real warp event's own position first,
+//!      otherwise the destination's raw `x`/`y`, otherwise the map's own
+//!      center). [`OverworldPhase::warp_to_saved_location`] is this port's
+//!      counterpart (issue #951) -- see that method's own doc comment for
+//!      the elevation and `save1.location` shape this produces.
 //! 2. `ResetInitialPlayerAvatarState`, `ScriptContext_Init`,
 //!    `UnlockPlayerFieldControls`, `FieldCB_WarpExitFadeFromBlack`,
 //!    `DoMapLoadLoop` -- the ordinary map-load/control-handoff machinery
 //!    every warp already goes through in this port
-//!    ([`OverworldPhase::warp_to_position`] itself), so nothing extra is
-//!    needed here.
+//!    ([`OverworldPhase::warp_to_saved_location`] itself), so nothing extra
+//!    is needed here.
 //!
 //! # Where this port calls it, and why both drivers share one method
 //!
@@ -116,18 +126,26 @@ impl OverworldPhase {
     ///
     /// The heal itself, and the active-battler re-scan it requires, are
     /// [`Self::heal_whole_party_and_reselect_lead`] -- this method's own
-    /// contribution is the money halving and the heal-location warp, the
-    /// two `HealPlayerParty`-adjacent steps `DoWhiteOut` runs that
+    /// contribution is the money halving, the persistent field/weather
+    /// reset, and the heal-location warp, the `HealPlayerParty`-adjacent
+    /// steps `DoWhiteOut` runs that
     /// [`super::first_battle_conclusion::OverworldPhase::conclude_first_battle`]'s
     /// own narrower `HealPlayerParty` call must not (that method's own docs
     /// explain why).
+    ///
+    /// The persistent reset
+    /// ([`engine::event_data::EventData::clear_white_out_state`]) runs
+    /// unconditionally before the destination is even resolved, matching
+    /// `Overworld_ResetStateAfterWhiteOut`'s own position ahead of
+    /// `SetWarpDestinationToLastHealLocation` in `DoWhiteOut` -- a `last_heal_location`
+    /// that fails to resolve below must not suppress it.
     ///
     /// A `last_heal_location` that cannot be resolved to a known map -- in
     /// practice only a hand-edited save: even
     /// [`crate::new_game::default_last_heal_location`]'s `Other`-gender
     /// zero default resolves, since group 0/num 0 is a real
-    /// generated-table entry -- still heals and halves money,
-    /// but logs and leaves the player exactly where the battle ended
+    /// generated-table entry -- still heals, halves money, and resets field
+    /// state, but logs and leaves the player exactly where the battle ended
     /// ([`OverworldPhase::warp_to`]'s own "leaves the player exactly where
     /// they stood" failure contract). Upstream has no such failure mode
     /// (`GetHealLocation`'s `NULL` return would itself be reached only by
@@ -145,6 +163,10 @@ impl OverworldPhase {
 
         self.heal_whole_party_and_reselect_lead("white-out");
 
+        // Overworld_ResetStateAfterWhiteOut's persistent portion (issue
+        // #847): must run even if the warp below can't resolve.
+        self.save1.event_data.clear_white_out_state();
+
         // SetWarpDestinationToLastHealLocation() + WarpIntoMap().
         let heal_location = self.save1.last_heal_location;
         let Some(map) = saved_map_id(heal_location) else {
@@ -154,7 +176,7 @@ impl OverworldPhase {
             );
             return;
         };
-        self.warp_to_position(map, heal_location.x, heal_location.y);
+        self.warp_to_saved_location(map, heal_location);
     }
 
     /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`): full
@@ -271,6 +293,77 @@ mod tests {
 
     const ROUTE_101_STATE: u16 = 0x4060;
     const FLAG_TEMP_12: u16 = 0x12;
+
+    /// Issue #847: `Overworld_ResetStateAfterWhiteOut`
+    /// (`pokeemerald/src/overworld.c:399-413`) clears the persistent
+    /// field-mode system flags and ends an abnormal weather the step
+    /// counter has already flagged for termination. Every id here is a
+    /// transcribed `include/constants/{flags,vars,weather}.h` literal in
+    /// the persistent ranges [`engine::event_data::EventData`] round-trips
+    /// through the save file, so a white-out must not carry them into the
+    /// next save. The seeded `last_heal_location` (group `-1`) deliberately
+    /// fails to resolve, so this test needs no asset pack and also proves
+    /// the reset is unconditional -- it must run even when the destination
+    /// warp cannot.
+    #[test]
+    fn white_out_clears_the_persistent_field_and_weather_state_even_without_a_warp_destination() {
+        const FLAG_SYS_USE_FLASH: u16 = 0x888;
+        const FLAG_SYS_USE_STRENGTH: u16 = 0x889;
+        const FLAG_SYS_CYCLING_ROAD: u16 = 0x88B;
+        const FLAG_SYS_SAFARI_MODE: u16 = 0x88C;
+        const FLAG_SYS_CRUISE_MODE: u16 = 0x88D;
+        const VAR_ABNORMAL_WEATHER_LOCATION: u16 = 0x4037;
+        const VAR_SHOULD_END_ABNORMAL_WEATHER: u16 = 0x4039;
+        const UNRELATED_FLAG: u16 = 0x100;
+
+        let mut phase = new_game_phase();
+        for flag in [
+            FLAG_SYS_USE_FLASH,
+            FLAG_SYS_USE_STRENGTH,
+            FLAG_SYS_CYCLING_ROAD,
+            FLAG_SYS_SAFARI_MODE,
+            FLAG_SYS_CRUISE_MODE,
+            UNRELATED_FLAG,
+        ] {
+            phase.save1.event_data.flag_set(flag).unwrap();
+        }
+        phase
+            .save1
+            .event_data
+            .var_set(VAR_SHOULD_END_ABNORMAL_WEATHER, 1)
+            .unwrap();
+        phase
+            .save1
+            .event_data
+            .var_set(VAR_ABNORMAL_WEATHER_LOCATION, 3)
+            .unwrap();
+        // An unresolvable heal location: `saved_map_id` rejects a negative
+        // group, so the warp step below never runs.
+        phase.save1.last_heal_location.map_group = -1;
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-clears-field-state");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load().block1.event_data;
+        for flag in [
+            FLAG_SYS_USE_FLASH,
+            FLAG_SYS_USE_STRENGTH,
+            FLAG_SYS_CYCLING_ROAD,
+            FLAG_SYS_SAFARI_MODE,
+            FLAG_SYS_CRUISE_MODE,
+        ] {
+            assert_eq!(saved.flag_get(flag), Ok(false), "flag {flag:#06x} survived");
+        }
+        assert_eq!(saved.var_get(VAR_SHOULD_END_ABNORMAL_WEATHER), Ok(0));
+        assert_eq!(saved.var_get(VAR_ABNORMAL_WEATHER_LOCATION), Ok(0));
+        assert_eq!(
+            saved.flag_get(UNRELATED_FLAG),
+            Ok(true),
+            "a flag outside the named set must survive the reset"
+        );
+    }
 
     #[test]
     fn white_out_clears_stored_status_before_an_immediate_save() {
@@ -519,7 +612,7 @@ mod tests {
     /// Issue #379: the relocated player's elevation must already be the
     /// heal-location tile's own real elevation the instant [`white_out`]
     /// returns, before any step ever runs -- not the `ELEVATION_TRANSITION`
-    /// wildcard [`OverworldPhase::warp_to_position`] used to hardcode.
+    /// wildcard the explicit-coordinate warp used to hardcode.
     /// [`crate::new_game::default_last_heal_location`]'s male default names
     /// `(4, 2)` on the default player's house 2F, which is elevation `3` in
     /// the real bundled layout -- confirmed by this test rather than merely
@@ -552,5 +645,66 @@ mod tests {
             3,
             "a freshly placed player's previous elevation starts equal to its current one"
         );
+    }
+
+    /// Issue #951: upstream's white-out warp copies the *whole* saved
+    /// heal `WarpData` -- warp id included -- into the destination
+    /// (`SetWarpDestinationToLastHealLocation`, `pokeemerald/src/overworld.c:665-668`,
+    /// then `ApplyCurrentWarp`), and `WarpIntoMap`'s `SetPlayerCoordsFromWarp`
+    /// (`pokeemerald/src/overworld.c:603-616`) prefers the named warp
+    /// event's own coordinates over the stored `(x, y)` whenever the id is
+    /// valid for the destination map -- the stored pair is only the
+    /// fallback `WARP_ID_NONE` reaches.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_white_out_prefers_a_valid_saved_warp_id_over_its_own_stored_coordinates() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let home = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+        let header = assets::MapHeaderTable::new()
+            .header(home)
+            .expect("the default heal location's own map must resolve");
+        let warp = assets::MapEventsTable::new()
+            .resolve(home)
+            .expect("the default heal location's own events must resolve")
+            .warp_events[0];
+        let stored_bed_position = (
+            crate::new_game::DEFAULT_HEAL_LOCATION_X,
+            crate::new_game::DEFAULT_HEAL_LOCATION_Y,
+        );
+        assert_ne!(
+            (warp.x, warp.y),
+            stored_bed_position,
+            "fixture sanity: warp event 0 must not already sit on the stored bed tile, or \
+             this test would pass vacuously"
+        );
+
+        let heal_location = WarpData {
+            map_group: i8::try_from(header.group).unwrap(),
+            map_num: i8::try_from(header.num).unwrap(),
+            warp_id: 0,
+            x: stored_bed_position.0,
+            y: stored_bed_position.1,
+        };
+        phase.save1.last_heal_location = heal_location;
+
+        phase.white_out();
+
+        assert_eq!(
+            phase.player.position(),
+            (i32::from(warp.x), i32::from(warp.y)),
+            "a valid saved warp id must name the landing tile, not the stored coordinates"
+        );
+        assert_eq!(
+            phase.save1.pos,
+            Coords16 {
+                x: warp.x,
+                y: warp.y
+            }
+        );
+        assert_eq!(
+            phase.save1.location, heal_location,
+            "ApplyCurrentWarp copies the saved heal warp verbatim, warp id included"
+        );
+        assert_eq!(phase.map_id, home);
     }
 }

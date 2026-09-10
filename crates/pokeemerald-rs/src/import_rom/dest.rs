@@ -173,6 +173,39 @@ impl Dest {
         here.st_dev == there.st_dev && here.st_ino == there.st_ino
     }
 
+    /// Whether `name`, inside this directory, is itself a directory.
+    ///
+    /// A courtesy check the caller makes before the ROM is read or a
+    /// temporary file is built: an existing directory at `name` would
+    /// otherwise only fail at the publishing rename, after both of those
+    /// have already happened. Read through the pinned handle by
+    /// basename, the same guarantee [`Self::is_same_file_as`] rests on: a
+    /// directory component redirected after [`Self::open`] cannot make
+    /// this answer about a different entry than the one the rename will
+    /// later touch. Still racy against a directory appearing at `name`
+    /// afterward -- [`Self::publish`]'s own failure stays the authority
+    /// for that window.
+    ///
+    /// A final symlink at `name` is *not* followed, unlike
+    /// [`Self::is_same_file_as`]'s read of `name`. `rename(2)`/`renameat(2)`
+    /// never dereferences their destination's last component either: a
+    /// symlink sitting at `name` is itself replaced by [`Self::publish`],
+    /// whatever it points to, so a symlink to a directory is a case
+    /// [`Self::publish`] already handles like any other occupied name and
+    /// must not be refused here as though it were the directory itself.
+    ///
+    /// `false` when `name` does not exist or cannot be stat'd — a
+    /// destination that is not there yet is not a directory occupying it,
+    /// and the caller's real work still has to run to find out what, if
+    /// anything, is wrong with a name this cannot answer for.
+    pub(super) fn name_is_directory(&self, name: &OsStr) -> bool {
+        rustix::fs::statat(&self.dir, name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW).is_ok_and(
+            |stat| {
+                rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::Directory
+            },
+        )
+    }
+
     /// Create `name` inside this directory, refusing a name already taken.
     ///
     /// `O_EXCL` is the only open that cannot be redirected: it refuses a
@@ -302,6 +335,20 @@ impl Dest {
     /// trusted.
     pub(super) fn is_same_file_as(&self, name: &OsStr, _rom: &File, rom_path: &Path) -> bool {
         rom_import::overwrites_rom(rom_path, &self.dir.join(name))
+    }
+
+    /// Whether `name`, inside this directory, is itself a directory.
+    ///
+    /// Path-based, like the rest of this arm: [`super`]'s docs state what
+    /// that leaves trusted off Unix. [`std::fs::symlink_metadata`], not
+    /// [`Path::is_dir`], for the same reason the Unix arm does not follow
+    /// a final symlink: `rename` never dereferences its destination's
+    /// last component, so a symlink to a directory is a case
+    /// [`Self::publish`] already handles like any other occupied name.
+    /// `false` when `name` does not exist — a destination that is not
+    /// there yet is not a directory occupying it.
+    pub(super) fn name_is_directory(&self, name: &OsStr) -> bool {
+        std::fs::symlink_metadata(self.dir.join(name)).is_ok_and(|meta| meta.is_dir())
     }
 
     /// Create `name` inside this directory, refusing a name already taken.
