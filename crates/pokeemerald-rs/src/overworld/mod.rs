@@ -416,19 +416,25 @@ pub struct OverworldScene {
 }
 
 impl OverworldScene {
-    /// Loads and validates the render resources for `layout` into an owned scene.
+    /// Loads the render resources for `layout` into an owned scene.
     ///
-    /// `header`, `events`, and `event_data` must belong to the same room as
-    /// `layout`; nothing here cross-checks them, so a mismatch composes a
-    /// scene with one map's grid and another's connections or NPCs. `header`
-    /// supplies the room's connections. `events` and `event_data` determine
-    /// the sprite bindings captured by the scene.
+    /// `header` and `events` must belong to the same room as `layout`; nothing
+    /// here cross-checks them, so a mismatch composes a scene with one map's
+    /// grid and another's connections or NPCs. `header` supplies the room's
+    /// connections. `event_data` is the persistent flag and variable state as
+    /// it stands after the destination map's transition updates, not a
+    /// per-room store; with `events` it determines the sprite bindings this
+    /// scene captures for the visit.
     ///
     /// # Errors
     ///
-    /// Returns an error when a tileset symbol is unsupported or required pack
-    /// data is missing or malformed. An unbundled connected map is omitted;
-    /// present but malformed connection data returns an error.
+    /// Returns an error when a tileset symbol is unsupported, a required pack
+    /// entry is missing, or the tile, animation, layout-grid, border, or
+    /// sprite-sheet bytes fail to decode. An unbundled connected map is
+    /// omitted; present but malformed connection data returns an error.
+    /// Metatile definitions and metatile attributes are copied unchecked, so a
+    /// truncated or undecodable entry leaves the cells that use it blank
+    /// rather than failing here.
     pub fn from_pack(
         pack: &AssetPack,
         header: &assets::MapHeader,
