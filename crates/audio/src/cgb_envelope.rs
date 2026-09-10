@@ -223,10 +223,7 @@ impl CgbEnvelope {
     #[must_use]
     pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
         let step_time_and_dir = match self.phase {
-            // `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`); the
-            // sum is masked to a nibble before it reaches NRx2, so wrapping
-            // at a byte discards only bits the mask drops anyway.
-            Phase::Attack => self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
+            Phase::Attack => return self.attack_pacing(),
             // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1158`), whose
             // direction constant is zero (`m4a_internal.h:84`).
             Phase::Decay => self.adsr.decay,
@@ -237,15 +234,22 @@ impl CgbEnvelope {
         HardwareEnvelopePacing::from_nrx2_step_time_and_dir(step_time_and_dir)
     }
 
-    /// Iterations the note-on write leaves before the hardware envelope's
-    /// first step, for arming a fresh voice's hardware timer. Upstream's
-    /// note-on raises `CGB_CHANNEL_MO_VOL` alongside the attack's own NRx2
-    /// step time (`m4a.c:993`, `:1029`), so hardware starts pacing from that
-    /// write; this counter carries [`transition_frame_delay`]'s note-on
-    /// offset so hardware and software share one phase from the first frame.
+    /// The pacing the attack phase's NRx2 write programs:
+    /// `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1024`), decoded
+    /// through the nibble mask every NRx2 store applies
+    /// ([`HardwareEnvelopePacing::from_nrx2_step_time_and_dir`]).
+    ///
+    /// Note-on raises `CGB_CHANNEL_MO_VOL` alongside this very step time
+    /// (`m4a.c:993`, `:1024`), so a fresh voice arms its hardware timer from
+    /// it before its first [`Self::step`] leaves `Starting` — the note-on
+    /// write is the attack's write.
     #[must_use]
-    pub(crate) fn iterations_until_first_step(&self) -> u8 {
-        self.frames_until_step
+    pub(crate) fn attack_pacing(&self) -> Option<HardwareEnvelopePacing> {
+        // The sum is masked to a nibble before it reaches NRx2, so wrapping
+        // at a byte discards only bits the mask drops anyway.
+        HardwareEnvelopePacing::from_nrx2_step_time_and_dir(
+            self.adsr.attack.wrapping_add(NRX2_ENV_DIR_INC),
+        )
     }
 
     /// Enter the release phase, reporting whether release itself is the

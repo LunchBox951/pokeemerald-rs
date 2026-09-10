@@ -159,14 +159,31 @@ struct HardwareEnvelopeVolume {
 impl HardwareEnvelopeVolume {
     const NIBBLE_MASK: u8 = 0x0F;
 
-    /// Arm a fresh voice at the level and timer its note-on write leaves
-    /// ([`CgbEnvelope::iterations_until_first_step`]'s doc); upstream's
-    /// attack starts from `envelopeVolume = 0` (`m4a.c:1032`).
-    fn at_note_on(iterations_until_first_step: u8) -> Self {
-        Self {
-            volume: 0,
-            iterations_until_step: iterations_until_first_step,
+    /// Level upstream's attack starts a fresh voice from
+    /// (`envelopeVolume = 0`, `m4a.c:1032`).
+    const NOTE_ON_LEVEL: u8 = 0;
+
+    /// Arm a fresh voice from its note-on write. That write is the attack's
+    /// own NRx2 store ([`CgbEnvelope::attack_pacing`]'s doc), so it latches
+    /// exactly as [`Self::write`] does — decoded step time, and dead on
+    /// arrival when the note-on level is already saturated in `pacing`'s
+    /// direction, as a downward write at level zero is.
+    fn at_note_on(pacing: Option<HardwareEnvelopePacing>) -> Self {
+        let mut hardware = Self {
+            volume: Self::NOTE_ON_LEVEL,
+            iterations_until_step: 0,
+        };
+        hardware.write(Self::NOTE_ON_LEVEL, pacing);
+        if hardware.iterations_until_step != 0 {
+            // Upstream stores NRx2 at the end of the note-on `CgbSound` pass
+            // (`m4a.c:1206-1226`), after that pass's own envelope iteration,
+            // which `begin_frame` has already run by the time it advances
+            // this timer. The first step therefore owes one more iteration —
+            // the same offset `transition_frame_delay` puts on the software
+            // counter, so the two share one phase from the first frame.
+            hardware.iterations_until_step += 1;
         }
+        hardware
     }
 
     /// Latch a hardware write: NRx2 takes the software level's low nibble and
@@ -567,8 +584,7 @@ impl CgbVoice {
     ) -> Self {
         let routing = StereoRouting::new(vol_mr, vol_ml, velocity, rhythm_pan);
         let envelope = CgbEnvelope::new(adsr, routing.envelope_goal(), echo_volume, echo_length);
-        let hardware_envelope_volume =
-            HardwareEnvelopeVolume::at_note_on(envelope.iterations_until_first_step());
+        let hardware_envelope_volume = HardwareEnvelopeVolume::at_note_on(envelope.attack_pacing());
         Self {
             channel,
             oscillator,
@@ -1048,6 +1064,83 @@ mod tests {
             track_left: u8::MAX,
             ..TestNote::default()
         }
+    }
+
+    /// Peak render sample of each of `frames` consecutive frames of a square
+    /// voice, counting from its note-on. Square gain is the hardware nibble
+    /// alone (`Oscillator::envelope_gain_256`), so the series reads the
+    /// hardware envelope out directly.
+    fn square_peaks_from_note_on(adsr: CgbAdsr, frames: usize) -> Vec<i32> {
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            adsr,
+            centred_goal_thirty_one_note(),
+        );
+        (0..frames)
+            .map(|_| {
+                voice.begin_frame(MAX_MASTER_VOLUME, false);
+                let mut acc = vec![(0i32, 0i32); 64];
+                voice.render(&mut acc, &[]);
+                acc.iter()
+                    .map(|&(left, right)| left.abs().max(right.abs()))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn note_on_arms_the_hardware_timer_from_the_decoded_nrx2_period() {
+        // Pins the note-on half of `HardwareEnvelopeVolume`'s contract: the
+        // note-on write programs NRx2 with the attack's decoded nibble, so a
+        // fresh voice's timer starts from the decoded period, not the raw
+        // attack byte.
+        //
+        // Attack 17 writes `(17 + CGB_NRx2_ENV_DIR_INC) & 0xF == 9`: period
+        // 1, upward. The nibble leaves zero on the second frame, not on the
+        // raw byte's eighteenth.
+        let climbing = square_peaks_from_note_on(
+            CgbAdsr {
+                attack: 17,
+                decay: 0,
+                sustain: 15,
+                release: 0,
+            },
+            4,
+        );
+        assert_eq!(
+            climbing[0], 0,
+            "the note-on write still owes one iteration on its own frame"
+        );
+        assert!(
+            climbing[1] > 0 && climbing[2] > climbing[1] && climbing[3] > climbing[2],
+            "a decoded period of 1 climbs a nibble per frame, got {climbing:?}"
+        );
+    }
+
+    #[test]
+    fn a_downward_note_on_write_at_level_zero_leaves_hardware_dead() {
+        // The other half: the note-on timer takes the same saturation check
+        // `write` applies. Attack 9 writes
+        // `(9 + CGB_NRx2_ENV_DIR_INC) & 0xF == 1`: period 1, downward, and
+        // the note-on level of zero is already saturated in that direction,
+        // so the write leaves hardware dead rather than stepping the nibble
+        // below zero.
+        let dead = square_peaks_from_note_on(
+            CgbAdsr {
+                attack: 9,
+                decay: 0,
+                sustain: 15,
+                release: 0,
+            },
+            12,
+        );
+        assert_eq!(
+            dead,
+            vec![0; 12],
+            "a downward note-on write at level zero is dead on arrival"
+        );
     }
 
     #[test]
