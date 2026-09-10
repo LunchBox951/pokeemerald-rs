@@ -47,6 +47,15 @@ impl MosaicSize {
         (x - x % self.h as usize, y - y % self.v as usize)
     }
 
+    /// Returns the horizontal block dimension.
+    ///
+    /// Used by [`crate::bg_affine::AffineBgLayer::sample_column_with_mosaic_hold`]
+    /// as its per-scanline hold length.
+    #[must_use]
+    pub(crate) const fn horizontal(self) -> u8 {
+        self.h
+    }
+
     /// Returns the sprite-local sample for a screen-aligned mosaic block.
     ///
     /// `local_coordinate` is `screen_coordinate`'s offset in a non-empty sprite
@@ -207,6 +216,11 @@ mod tests {
         for raw_end in [0, 4, -4, 240] {
             assert_eq!(none.round_trailing_edge(raw_end), raw_end);
         }
+    }
+
+    #[test]
+    fn horizontal_returns_the_h_dimension() {
+        assert_eq!(MosaicSize::new(3, 5).horizontal(), 3);
     }
 
     #[test]

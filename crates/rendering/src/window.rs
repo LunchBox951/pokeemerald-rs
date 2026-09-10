@@ -31,6 +31,18 @@ impl WindowRange {
         }
     }
 
+    /// Returns the column an empty horizontal range sits at, if it is empty.
+    ///
+    /// Equal endpoints match no pixel, yet the edge still partitions the
+    /// scanline; see [`WindowConfig::scanline_span_starts`].
+    const fn empty_edge(self) -> Option<u8> {
+        if self.start == self.end {
+            Some(self.start)
+        } else {
+            None
+        }
+    }
+
     /// Returns whether visible scanline `y` is in the vertical range.
     ///
     /// A reversed range reopens at line zero only when its start is reachable
@@ -170,7 +182,66 @@ impl WindowConfig {
         }
         (self.winout, WindowRegion::WinOut)
     }
+
+    /// Returns the ascending columns at which per-scanline window state
+    /// restarts, always including column zero.
+    ///
+    /// Spans are the maximal runs of one [`WindowRegion`], plus one
+    /// upstream-owned exception no per-column classification can show: a
+    /// window whose horizontal endpoints are equal matches no column yet
+    /// still starts a span, unless an outranking window covers that column
+    /// (`mgba/src/gba/renderers/video-software.c:446-500`)
+    /// `(behavioral-fidelity)`.
+    pub(crate) fn scanline_span_starts(&self, y: u8) -> Vec<usize> {
+        let mut starts = vec![0];
+        if !self.any_enabled() {
+            return starts;
+        }
+        let horizontal_range_on = |window: Option<(WindowRect, WindowLayerEnable)>| {
+            window
+                .filter(|(rect, _)| rect.y.contains_vertical(y))
+                .map(|(rect, _)| rect.x)
+        };
+        let win0 = horizontal_range_on(self.win0);
+        let win1 = horizontal_range_on(self.win1);
+        let region = |column: u8| {
+            if win0.is_some_and(|range| range.contains(column)) {
+                WindowRegion::Win0
+            } else if win1.is_some_and(|range| range.contains(column)) {
+                WindowRegion::Win1
+            } else {
+                WindowRegion::WinOut
+            }
+        };
+
+        let mut previous = region(0);
+        for column in 1..HORIZONTAL_PIXELS {
+            let current = region(column);
+            if current != previous {
+                starts.push(usize::from(column));
+            }
+            previous = current;
+        }
+
+        for (range, outranking) in [(win1, win0), (win0, None)] {
+            let Some(column) = range.and_then(WindowRange::empty_edge) else {
+                continue;
+            };
+            if !(1..HORIZONTAL_PIXELS).contains(&column)
+                || outranking.is_some_and(|range| range.contains(column))
+            {
+                continue;
+            }
+            starts.push(usize::from(column));
+        }
+        starts.sort_unstable();
+        starts.dedup();
+        starts
+    }
 }
+
+/// mGBA's `GBA_VIDEO_HORIZONTAL_PIXELS`: one past the last visible column.
+const HORIZONTAL_PIXELS: u8 = 240;
 
 /// Which region [`WindowConfig::classify_with_region`] selected for a pixel,
 /// in mgba's rank order `WIN0 < WIN1 < OBJWIN < WINOUT` (`video-software.c:131-134`).
@@ -194,6 +265,81 @@ impl WindowRegion {
 #[cfg(test)]
 mod tests {
     use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect, WindowRegion};
+
+    /// Builds a config whose `WIN0`/`WIN1` rects span scanline 0.
+    fn windows_on_line_zero(win0: Option<WindowRange>, win1: Option<WindowRange>) -> WindowConfig {
+        let on_line_zero = |x: WindowRange| {
+            (
+                WindowRect::new(x, WindowRange::new(0, 1)),
+                WindowLayerEnable::ALL,
+            )
+        };
+        WindowConfig {
+            win0: win0.map(on_line_zero),
+            win1: win1.map(on_line_zero),
+            obj_window: None,
+            winout: WindowLayerEnable::ALL,
+        }
+    }
+
+    #[test]
+    fn a_scanline_with_no_active_window_is_one_span() {
+        assert_eq!(WindowConfig::default().scanline_span_starts(0), vec![0]);
+        let vertically_inactive = WindowConfig {
+            win0: Some((
+                WindowRect::new(WindowRange::new(10, 20), WindowRange::new(5, 9)),
+                WindowLayerEnable::ALL,
+            )),
+            ..WindowConfig::default()
+        };
+        assert_eq!(vertically_inactive.scanline_span_starts(0), vec![0]);
+    }
+
+    #[test]
+    fn a_window_splits_the_scanline_at_both_of_its_edges() {
+        let config = windows_on_line_zero(Some(WindowRange::new(10, 20)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 10, 20]);
+    }
+
+    #[test]
+    fn a_zero_width_window_still_splits_the_span_it_falls_in() {
+        // Equal endpoints match no pixel, yet `_breakWindowInner` inserts the
+        // empty span and re-inserts the remainder behind it, so the column is
+        // a span start with identical control on both sides.
+        let config = windows_on_line_zero(Some(WindowRange::new(5, 5)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 5]);
+    }
+
+    #[test]
+    fn an_edge_wholly_covered_by_an_outranking_window_is_trimmed_away() {
+        // `WIN0` is broken over `WIN1`, and the trim loop deletes the spans
+        // it completely overwrote, so `WIN1`'s edges leave no span start.
+        let config = windows_on_line_zero(
+            Some(WindowRange::new(0, 100)),
+            Some(WindowRange::new(20, 30)),
+        );
+        assert_eq!(config.scanline_span_starts(0), vec![0, 100]);
+    }
+
+    #[test]
+    fn a_zero_width_edge_only_splits_where_no_outranking_window_covers_it() {
+        let covered =
+            windows_on_line_zero(Some(WindowRange::new(0, 100)), Some(WindowRange::new(5, 5)));
+        assert_eq!(covered.scanline_span_starts(0), vec![0, 100]);
+
+        // Nothing outranks `WIN0`, so its own zero-width edge always splits.
+        let uncovered = windows_on_line_zero(
+            Some(WindowRange::new(150, 150)),
+            Some(WindowRange::new(100, 200)),
+        );
+        assert_eq!(uncovered.scanline_span_starts(0), vec![0, 100, 150, 200]);
+    }
+
+    #[test]
+    fn a_window_wrapping_past_the_right_edge_splits_at_both_of_its_halves() {
+        let config = windows_on_line_zero(Some(WindowRange::new(200, 40)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 40, 200]);
+    }
 
     #[test]
     fn range_contains_the_normal_non_wrapping_case() {
