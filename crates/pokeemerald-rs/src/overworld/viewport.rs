@@ -244,8 +244,9 @@ type MetatileQuad = [ScreenEntry; 4];
 
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
 ///
-/// `Normal` uses the transparent fallback instead of upstream's unspecified
-/// BG3 value, as documented by the parent module.
+/// `Normal` leaves the bottom background transparent instead of reproducing
+/// upstream's fixed BG3 entry; the module docs' "Fidelity differences"
+/// section states that deviation and its consequence.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
@@ -1270,8 +1271,8 @@ mod tests {
     }
 
     /// Upstream's resting field camera puts the player's own metatile
-    /// *exactly* centred on the 160px screen (issue #977) -- module docs'
-    /// "camera model" section owns the full upstream derivation
+    /// *exactly* centred on the 160px screen (issue #977) -- the module
+    /// docs' "Camera" section owns the full upstream derivation
     /// (`field_camera.c`/`fieldmap.c`/`event_object_movement.c` citations)
     /// for why that lands at screen row 72 for the metatile and 56 for the
     /// player OBJ; this test only pins those two numbers against a
