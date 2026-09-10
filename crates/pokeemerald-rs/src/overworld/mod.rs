@@ -213,20 +213,10 @@ pub struct AvatarScreenBox {
     pub height: usize,
 }
 
-/// Where the player's avatar lands on screen -- fixed for a standing *and*
-/// a walking player, since the OBJ stays put and the BG scrolls under it
-/// (module docs' "camera model" section).
-///
-/// Exported for the same reason as [`PlayerState`] above: `xtask`'s
-/// `e2e --suite smoke` is the consumer. Its map-detail check masks exactly
-/// this box out of the composed overworld frame before counting distinct
-/// colours, so a blank or broken map can never pass that check on the
-/// avatar's own pixels. Deriving the box here rather than repeating its
-/// four numbers there keeps the mask moving with the camera: it had
-/// already drifted eight pixels once (issue #1013) when
-/// [`avatar::PLAYER_OBJ_Y`] took up [`RESTING_SCROLL_Y`] (issue #977).
-/// `avatar`'s `public_screen_box_matches_the_player_entry_the_scene_emits`
-/// pins it against the OAM entry the scene actually emits.
+/// Where the player's avatar lands on screen, fixed for a standing and a
+/// walking player alike: the OBJ stays put and the BG scrolls under it
+/// (module docs' "camera model" section). Exported for `xtask`'s smoke
+/// suite, which masks this box out of a composed frame.
 pub const PLAYER_AVATAR_SCREEN_BOX: AvatarScreenBox = AvatarScreenBox {
     left: avatar::PLAYER_OBJ_X as usize,
     top: avatar::PLAYER_OBJ_Y as usize,

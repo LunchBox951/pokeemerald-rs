@@ -266,12 +266,8 @@ fn is_blank(frame: &[u32]) -> bool {
 /// the avatar's several colours, so counting them would let this check pass
 /// on a blank map `(test-ratchet)`.
 ///
-/// The mask comes from the scene crate's own
-/// [`PLAYER_AVATAR_SCREEN_BOX`] rather than four literals repeated here, so
-/// a camera change moves it with the avatar. Repeated, it had already
-/// drifted: the box stayed at the pre-issue-#977 top of y 64 after the
-/// avatar moved up to y 56 (issue #1013), masking eight rows of avatar
-/// pixels *in* and eight rows of real map *out*.
+/// The mask is the scene crate's [`PLAYER_AVATAR_SCREEN_BOX`], so a camera
+/// change moves it with the avatar.
 fn has_map_detail_outside_avatar(frame: &[u32]) -> bool {
     let mut distinct_colors = std::collections::BTreeSet::new();
     for (pixel_index, &pixel) in frame.iter().enumerate() {
