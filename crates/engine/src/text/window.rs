@@ -70,22 +70,29 @@ pub fn tile_pixels_flipped(
     if !sheet.width.is_multiple_of(TILE_SIZE) || !sheet.height.is_multiple_of(TILE_SIZE) {
         return None;
     }
-    let columns = sheet.width / TILE_SIZE;
-    let rows = sheet.height / TILE_SIZE;
-    let tile_index = u32::from(tile_index);
-    if tile_index >= columns * rows {
+    // Widths and heights come from a publicly constructible `ImageRef`, so
+    // every product and offset below is untrusted and must stay checked
+    // through to the final slice indexing: none of it may panic or wrap
+    // before this function can return the documented `None`.
+    let width = sheet.width as usize;
+    let height = sheet.height as usize;
+    let tile_side = TILE_SIZE as usize;
+    let columns = width / tile_side;
+    let rows = height / tile_side;
+    let tile_index = usize::from(tile_index);
+    let tile_count = columns.checked_mul(rows)?;
+    if tile_index >= tile_count {
         return None;
     }
-    if sheet.pixels.len() != (sheet.width * sheet.height) as usize {
+    let pixel_count = width.checked_mul(height)?;
+    if sheet.pixels.len() != pixel_count {
         return None;
     }
 
     let tile_column = tile_index % columns;
     let tile_row = tile_index / columns;
-    let origin_x = (tile_column * TILE_SIZE) as usize;
-    let origin_y = (tile_row * TILE_SIZE) as usize;
-    let sheet_stride = sheet.width as usize;
-    let tile_side = TILE_SIZE as usize;
+    let origin_x = tile_column.checked_mul(tile_side)?;
+    let origin_y = tile_row.checked_mul(tile_side)?;
 
     let mut pixels = [0u8; TILE_PIXELS];
     for destination_y in 0..tile_side {
@@ -94,10 +101,18 @@ pub fn tile_pixels_flipped(
         } else {
             destination_y
         };
-        let source_start = (origin_y + source_y) * sheet_stride + origin_x;
-        let destination_start = destination_y * tile_side;
-        pixels[destination_start..destination_start + tile_side]
-            .copy_from_slice(&sheet.pixels[source_start..source_start + tile_side]);
+        let source_start = origin_y
+            .checked_add(source_y)?
+            .checked_mul(width)?
+            .checked_add(origin_x)?;
+        let source_end = source_start.checked_add(tile_side)?;
+        let source = sheet.pixels.get(source_start..source_end)?;
+
+        let destination_start = destination_y.checked_mul(tile_side)?;
+        let destination_end = destination_start.checked_add(tile_side)?;
+        pixels
+            .get_mut(destination_start..destination_end)?
+            .copy_from_slice(source);
     }
     Some(pixels)
 }
@@ -434,6 +449,26 @@ mod tests {
 
         let malshaped = image(&pixels[..pixels.len() - 1], width, height);
         assert!(tile_pixels(malshaped, 0).is_none());
+    }
+
+    #[test]
+    fn tile_pixels_overflowing_dimension_products_are_none() {
+        // `width * height` overflows `u32`: 2^31 * 8 == 2^34.
+        const PIXEL_COUNT_OVERFLOW_WIDTH: u32 = 1 << 31;
+        // Both dimensions are tile-aligned and equal, so `columns * rows`
+        // overflows `u32`: (2^31 / 8)^2 is far larger than u32::MAX.
+        const TILE_COUNT_OVERFLOW_SIDE: u32 = 1 << 31;
+
+        // `ImageRef`'s shape fields are public, so a caller can hand this
+        // function dimensions whose tile-count and pixel-count products
+        // overflow `u32` arithmetic (`columns * rows` and `width * height`,
+        // respectively). Both checks below reproduce the unfixed helper's
+        // panics; they must return `None` instead.
+        let overflowing_pixel_count = image(&[], PIXEL_COUNT_OVERFLOW_WIDTH, TILE_SIZE);
+        assert!(tile_pixels(overflowing_pixel_count, 0).is_none());
+
+        let overflowing_tile_count = image(&[], TILE_COUNT_OVERFLOW_SIDE, TILE_COUNT_OVERFLOW_SIDE);
+        assert!(tile_pixels_flipped(overflowing_tile_count, u8::MAX, true).is_none());
     }
 
     #[test]
