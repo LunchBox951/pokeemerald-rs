@@ -1,6 +1,8 @@
 //! Live CGB PSG voice playback, envelopes, and stereo routing.
 
-use crate::cgb_envelope::{cgb_envelope_goal, cgb_pan, CgbAdsr, CgbEnvelope, Panning};
+use crate::cgb_envelope::{
+    cgb_envelope_goal, cgb_pan, CgbAdsr, CgbEnvelope, HardwareEnvelopePacing, Panning,
+};
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
 use crate::voice::{channel_volume, pan_terms, StereoAcc};
@@ -122,44 +124,97 @@ impl Oscillator {
     }
 }
 
-/// The NRx2 byte a live Square or Noise channel's hardware envelope holds: a
-/// `CGB_CHANNEL_MO_VOL` write truncates the software envelope to this
-/// four-bit domain, and — while [`CgbEnvelope::hardware_envelope_is_paced`]
-/// holds — hardware paces from there at that write's own step-time nibble,
-/// saturating at 0 or 15 rather than wrapping past it
-/// (`m4a.c:1156-1157,1219-1226`, `mgba/src/gb/audio.c:930-943`). Once that
-/// phase ends, hardware is dead (frozen) at the last write until another
-/// explicit trigger, regardless of how far the software envelope itself
-/// drifts in the meantime (`hardware_envelope_is_paced`'s doc).
-#[derive(Clone, Copy, Debug, Default)]
+/// The NRx2 volume nibble a live Square or Noise channel's hardware envelope
+/// holds, and the hardware timer that paces it.
+///
+/// A `CGB_CHANNEL_MO_VOL` write truncates the software envelope into this
+/// four-bit domain (`*nrx2ptr = (envelopeStepTimeAndDir & 0xF) +
+/// (channels->envelopeVolume << 4)` through a `vu8 *`, `m4a.c:1219-1223`) and
+/// then sets NRx4's trigger bit (`*nrx4ptr = channels->n4 | 0x80`,
+/// `m4a.c:1222-1223`). That trigger reloads the hardware envelope timer from
+/// the write's own step-time nibble as well as the level
+/// (`_resetEnvelope`'s `currentVolume = initialVolume; nextStep = stepTime`,
+/// `mgba/src/gb/audio.c:856-860`, reached from `GBAudioWriteNR14`'s restart
+/// branch, `:180-181`), so the timer is the hardware's own and never the
+/// software envelope's counter: a live VOL, pan, or tremolo write lands
+/// partway through a phase without disturbing upstream's `envelopeCounter`
+/// (`m4a_1.s:1394-1400`), and hardware must still wait a full step time
+/// afterwards.
+///
+/// Between writes the timer steps the nibble by one in NRx2's direction and
+/// reloads, going dead at 0 or 15 rather than wrapping past them
+/// (`_updateEnvelope`, `mgba/src/gb/audio.c:931-945`). While
+/// [`CgbEnvelope::hardware_envelope_pacing`] returns `None` hardware is dead
+/// at the last write's level, regardless of how far the software envelope
+/// drifts in the meantime (that method's doc).
+#[derive(Clone, Copy, Debug)]
 struct HardwareEnvelopeVolume {
-    at_write: u8,
-    software_at_write: u8,
+    volume: u8,
+    /// Envelope iterations until the next hardware step; zero is a dead
+    /// envelope, which only a write revives (`envelope->dead`,
+    /// `mgba/src/gb/audio.c:711-714`).
+    iterations_until_step: u8,
 }
 
 impl HardwareEnvelopeVolume {
     const NIBBLE_MASK: u8 = 0x0F;
 
-    /// Latch the byte a fresh hardware write holds.
-    fn write(&mut self, software_volume: u8) {
-        self.at_write = software_volume & Self::NIBBLE_MASK;
-        self.software_at_write = software_volume;
+    /// Arm a fresh voice at the level and timer its note-on write leaves
+    /// ([`CgbEnvelope::iterations_until_first_step`]'s doc); upstream's
+    /// attack starts from `envelopeVolume = 0` (`m4a.c:1032`).
+    fn at_note_on(iterations_until_first_step: u8) -> Self {
+        Self {
+            volume: 0,
+            iterations_until_step: iterations_until_first_step,
+        }
     }
 
-    /// Resolve the current hardware byte: paces toward `software_volume`
-    /// while `paced` holds, else ignores it and holds the last write flat
-    /// (this type's doc).
-    fn track(self, software_volume: u8, paced: bool) -> u8 {
-        if !paced {
-            return self.at_write;
+    /// Latch a hardware write: NRx2 takes the software level's low nibble and
+    /// NRx4's trigger restarts the timer from that write's step time (this
+    /// type's doc). A level already saturated in `pacing`'s direction is dead
+    /// on arrival (`_updateEnvelopeDead`, `mgba/src/gb/audio.c:948-954`).
+    fn write(&mut self, software_volume: u8, pacing: Option<HardwareEnvelopePacing>) {
+        self.volume = software_volume & Self::NIBBLE_MASK;
+        self.iterations_until_step = match pacing {
+            Some(pacing) if !self.is_saturated_toward(pacing) => pacing.step_time,
+            _ => 0,
+        };
+    }
+
+    /// Run the hardware timer for `iterations` envelope iterations since the
+    /// last write, stepping the nibble whenever it expires (this type's doc).
+    fn advance(&mut self, iterations: u8, pacing: Option<HardwareEnvelopePacing>) {
+        let Some(pacing) = pacing else { return };
+        for _ in 0..iterations {
+            if self.iterations_until_step == 0 {
+                return;
+            }
+            self.iterations_until_step -= 1;
+            if self.iterations_until_step != 0 {
+                continue;
+            }
+            if pacing.increasing {
+                self.volume += 1;
+            } else {
+                self.volume -= 1;
+            }
+            if self.is_saturated_toward(pacing) {
+                return;
+            }
+            self.iterations_until_step = pacing.step_time;
         }
-        if software_volume >= self.software_at_write {
-            self.at_write
-                .saturating_add(software_volume - self.software_at_write)
-                .min(Self::NIBBLE_MASK)
+    }
+
+    /// Return the nibble the hardware volume register currently holds.
+    fn volume(self) -> u8 {
+        self.volume
+    }
+
+    fn is_saturated_toward(self, pacing: HardwareEnvelopePacing) -> bool {
+        if pacing.increasing {
+            self.volume >= Self::NIBBLE_MASK
         } else {
-            self.at_write
-                .saturating_sub(self.software_at_write - software_volume)
+            self.volume == 0
         }
     }
 }
@@ -511,10 +566,13 @@ impl CgbVoice {
         echo_length: u8,
     ) -> Self {
         let routing = StereoRouting::new(vol_mr, vol_ml, velocity, rhythm_pan);
+        let envelope = CgbEnvelope::new(adsr, routing.envelope_goal(), echo_volume, echo_length);
+        let hardware_envelope_volume =
+            HardwareEnvelopeVolume::at_note_on(envelope.iterations_until_first_step());
         Self {
             channel,
             oscillator,
-            envelope: CgbEnvelope::new(adsr, routing.envelope_goal(), echo_volume, echo_length),
+            envelope,
             adsr,
             routing,
             frame_gain: 0,
@@ -523,7 +581,7 @@ impl CgbVoice {
             dac_correction,
             pending_retrigger: false,
             hardware_muted: false,
-            hardware_envelope_volume: HardwareEnvelopeVolume::default(),
+            hardware_envelope_volume,
         }
     }
 
@@ -632,15 +690,19 @@ impl CgbVoice {
             self.apply_retrigger();
         }
         let software_volume = self.envelope.volume();
+        // Upstream applies at most one register write per `CgbSound` pass, at
+        // its end (`m4a.c:1206-1226`), so a frame either relatches and
+        // restarts the hardware timer or lets it run.
+        let pacing = self.envelope.hardware_envelope_pacing();
         if hardware_write {
-            self.hardware_envelope_volume.write(software_volume);
+            self.hardware_envelope_volume.write(software_volume, pacing);
+        } else {
+            self.hardware_envelope_volume
+                .advance(1 + u8::from(extra_envelope_iteration), pacing);
         }
-        let hardware_volume = self
-            .hardware_envelope_volume
-            .track(software_volume, self.envelope.hardware_envelope_is_paced());
         let envelope_gain = self
             .oscillator
-            .envelope_gain_256(software_volume, hardware_volume);
+            .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
         let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
         self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
     }
@@ -1040,6 +1102,90 @@ mod tests {
         assert_eq!(
             next_frame_peak, level_14_peak,
             "hardware's own envelope timer must already be one step quieter"
+        );
+    }
+
+    /// Render one frame and return its peak sample magnitude.
+    fn frame_peak(voice: &mut CgbVoice) -> i32 {
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut acc = vec![(0i32, 0i32); 64];
+        voice.render(&mut acc, &[]);
+        acc.iter()
+            .map(|&(left, right)| left.abs().max(right.abs()))
+            .max()
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn live_volume_write_mid_decay_restarts_the_hardware_envelope_timer() {
+        // A live `MPT_FLG_VOLCHG` raises `CGB_CHANNEL_MO_VOL`
+        // (`m4a_1.s:1394`..`:1400`) without touching `envelopeCounter`, and
+        // that write ends in `*nrx4ptr = channels->n4 | 0x80`
+        // (`m4a.c:1222`..`:1223`), whose trigger bit reloads the hardware
+        // envelope timer from NRx2's step-time nibble (`_resetEnvelope`'s
+        // `nextStep = stepTime`, `mgba/src/gb/audio.c:856`..`:859`, reached
+        // from `GBAudioWriteNR14`'s restart branch, `:180`..`:181`). The
+        // software counter keeps its own phase across that write, so the
+        // hardware level must pace from the write, not from whatever the
+        // stale software counter had left.
+        let level_15_peak = square_peak_at_level(130, 15);
+        let level_14_peak = square_peak_at_level(121, 14);
+        assert_ne!(
+            level_15_peak, level_14_peak,
+            "sanity: the two levels differ"
+        );
+
+        let paced_decay = CgbAdsr {
+            attack: 0,
+            decay: 4,
+            sustain: 0,
+            release: 0,
+        };
+        let goal_fifteen_note = TestNote {
+            track_right: 130,
+            track_left: 130,
+            ..TestNote::default()
+        };
+        let mut voice = square_voice_with_adsr(
+            CgbChannelNumber::Square1,
+            None,
+            paced_decay,
+            goal_fifteen_note,
+        );
+
+        assert_eq!(
+            frame_peak(&mut voice),
+            level_15_peak,
+            "sanity: the attack-to-decay write latches level 15"
+        );
+        for frame in 0..2 {
+            assert_eq!(
+                frame_peak(&mut voice),
+                level_15_peak,
+                "sanity: frame {frame} is still inside the first decay period"
+            );
+        }
+
+        // Two iterations short of the software counter's next step.
+        voice.set_track_volume(130, 130);
+        assert_eq!(
+            frame_peak(&mut voice),
+            level_15_peak,
+            "sanity: the live volume write relatches the same level 15"
+        );
+
+        for frame in 0..(paced_decay.decay - 1) {
+            assert_eq!(
+                frame_peak(&mut voice),
+                level_15_peak,
+                "frame {frame} after the live volume write: the trigger restarted the hardware \
+                 envelope timer, so a full step time must elapse before the next hardware step"
+            );
+        }
+        assert_eq!(
+            frame_peak(&mut voice),
+            level_14_peak,
+            "one full step time after the trigger, the hardware envelope steps once"
         );
     }
 

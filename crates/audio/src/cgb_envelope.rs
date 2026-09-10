@@ -91,6 +91,19 @@ enum Phase {
     Retired,
 }
 
+/// How a live square or noise channel's hardware envelope paces itself
+/// between `CGB_CHANNEL_MO_VOL` writes: the NRx2 step-time nibble it reloads
+/// after each step, and NRx2's direction bit
+/// (`_updateEnvelope`, `mgba/src/gb/audio.c:931-945`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HardwareEnvelopePacing {
+    /// Envelope iterations between hardware steps; never zero (a zero
+    /// step-time nibble is a dead envelope, not a paced one).
+    pub(crate) step_time: u8,
+    /// Whether the envelope counts up (`CGB_NRx2_ENV_DIR_INC`) rather than down.
+    pub(crate) increasing: bool,
+}
+
 /// Live envelope state for one CGB voice.
 #[derive(Clone, Debug)]
 pub struct CgbEnvelope {
@@ -155,17 +168,41 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
-    /// Whether the hardware envelope is still auto-stepping from its last
-    /// `CGB_CHANNEL_MO_VOL` write, versus held dead at that write's volume.
-    /// Attack, decay, and release write a nonzero NRx2 step-time nibble;
-    /// sustain-start and pseudo-echo-start write a zero one
-    /// (`m4a.c:1132-1137`, `:1090-1098`), which freezes the hardware envelope
-    /// (`stepTime == 0` marks it dead, `mgba/src/gb/audio.c:948-950`) until
-    /// another explicit write — [`Self::sustain_step`]'s refresh and
-    /// [`Self::pseudo_echo_step`]'s countdown write neither.
+    /// How the hardware envelope paces itself from its last
+    /// `CGB_CHANNEL_MO_VOL` write, or `None` when that write left it dead
+    /// and holding. Attack, decay, and release write a nonzero NRx2
+    /// step-time nibble in their own direction; sustain-start and
+    /// pseudo-echo-start write a zero one (`m4a.c:1132-1137`, `:1090-1098`),
+    /// which freezes the hardware envelope (`stepTime == 0` marks it dead,
+    /// `mgba/src/gb/audio.c:948-950`) until another explicit write —
+    /// [`Self::sustain_step`]'s refresh and [`Self::pseudo_echo_step`]'s
+    /// countdown write neither.
     #[must_use]
-    pub(crate) fn hardware_envelope_is_paced(&self) -> bool {
-        matches!(self.phase, Phase::Attack | Phase::Decay | Phase::Release)
+    pub(crate) fn hardware_envelope_pacing(&self) -> Option<HardwareEnvelopePacing> {
+        let (step_time, increasing) = match self.phase {
+            // `channels->attack + CGB_NRx2_ENV_DIR_INC` (`m4a.c:1029`).
+            Phase::Attack => (self.adsr.attack, true),
+            // `channels->decay | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1156`).
+            Phase::Decay => (self.adsr.decay, false),
+            // `channels->release | CGB_NRx2_ENV_DIR_DEC` (`m4a.c:1066`).
+            Phase::Release => (self.adsr.release, false),
+            Phase::Starting | Phase::Sustain | Phase::PseudoEcho | Phase::Retired => return None,
+        };
+        (step_time != 0).then_some(HardwareEnvelopePacing {
+            step_time,
+            increasing,
+        })
+    }
+
+    /// Iterations the note-on write leaves before the hardware envelope's
+    /// first step, for arming a fresh voice's hardware timer. Upstream's
+    /// note-on raises `CGB_CHANNEL_MO_VOL` alongside the attack's own NRx2
+    /// step time (`m4a.c:993`, `:1029`), so hardware starts pacing from that
+    /// write; this counter carries [`transition_frame_delay`]'s note-on
+    /// offset so hardware and software share one phase from the first frame.
+    #[must_use]
+    pub(crate) fn iterations_until_first_step(&self) -> u8 {
+        self.frames_until_step
     }
 
     /// Enter the release phase, reporting whether release itself is the
@@ -532,45 +569,68 @@ mod tests {
 
     #[test]
     fn hardware_envelope_is_paced_only_through_attack_decay_and_release() {
-        // Pins every phase `hardware_envelope_is_paced` classifies
-        // (that method's doc). Each phase gets its own minimal envelope so a
+        // Pins every phase `hardware_envelope_pacing` classifies, and the
+        // step time and direction each paced phase writes into NRx2 (that
+        // method's doc). Each phase gets its own minimal envelope so a
         // zero-delay neighbor can't skip past it before its pacing is observed.
+        let up = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: true,
+            })
+        };
+        let down = |step_time| {
+            Some(HardwareEnvelopePacing {
+                step_time,
+                increasing: false,
+            })
+        };
+
         let mut attacking = plain_envelope(adsr(5, 0, 8, 0), 10);
-        assert!(!attacking.hardware_envelope_is_paced(), "not yet started");
+        assert_eq!(
+            attacking.hardware_envelope_pacing(),
+            None,
+            "not yet started"
+        );
         attacking.step(); // Starting -> Attack, paced by attack == 5
-        assert!(
-            attacking.hardware_envelope_is_paced(),
-            "attack paces hardware"
+        assert_eq!(
+            attacking.hardware_envelope_pacing(),
+            up(5),
+            "attack paces hardware upward at its own step time"
         );
 
         let mut decaying = plain_envelope(adsr(0, 5, 8, 0), 10);
         decaying.step(); // Starting -> Attack (attack == 0) -> Decay
-        assert!(
-            decaying.hardware_envelope_is_paced(),
-            "decay paces hardware"
+        assert_eq!(
+            decaying.hardware_envelope_pacing(),
+            down(5),
+            "decay paces hardware downward at its own step time"
         );
 
         let mut sustaining = plain_envelope(adsr(0, 0, 8, 0), 10);
         sustaining.step(); // Starting -> Attack -> Decay (both == 0) -> Sustain
-        assert!(
-            !sustaining.hardware_envelope_is_paced(),
+        assert_eq!(
+            sustaining.hardware_envelope_pacing(),
+            None,
             "sustain's zero step-time nibble holds hardware dead"
         );
 
         let mut releasing = plain_envelope(adsr(0, 0, 8, 4), 10);
         releasing.step(); // ... -> Sustain
         releasing.note_off(); // Sustain -> Release, paced by release == 4
-        assert!(
-            releasing.hardware_envelope_is_paced(),
-            "release paces hardware"
+        assert_eq!(
+            releasing.hardware_envelope_pacing(),
+            down(4),
+            "release paces hardware downward at its own step time"
         );
 
         let mut echoing = CgbEnvelope::new(adsr(0, 0, 15, 0), 8, 128, 2);
         echoing.step(); // ... -> Sustain
         echoing.note_off(); // Sustain -> Release (release == 0, held for one step)
         echoing.step(); // Release -> PseudoEcho
-        assert!(
-            !echoing.hardware_envelope_is_paced(),
+        assert_eq!(
+            echoing.hardware_envelope_pacing(),
+            None,
             "the pseudo-echo tail's zero step-time nibble holds hardware dead"
         );
     }
