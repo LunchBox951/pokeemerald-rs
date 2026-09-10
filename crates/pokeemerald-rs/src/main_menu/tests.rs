@@ -1,21 +1,21 @@
-//! Unit tests for [`super::MainMenuScene`] and its private helpers.
-//!
-//! [`compose_from_synthetic_pack_...`]-style tests build a small
-//! **synthetic** pack in memory (mirroring `crate::overworld::tests`'
-//! fixture style -- CI has no `pokeemerald/` checkout and no real pack) and
-//! exercise the full `MainMenuScene::from_pack` + `compose` pipeline
-//! against it. The `real_pack_*` test is `#[ignore]`d and needs a real
-//! local pack.
-
 use super::{
     darken_outside, highlight_rect, render_label, ItemWindow, MainMenuItem, MainMenuScene,
     MainMenuSceneError, MainMenuType, HEADER_TEXT_BG, HEADER_TEXT_FG,
 };
 use crate::textbox::{self, Coverage};
 use assets::pack::{AssetPack, ImageRef, PackError};
-use rendering::{Framebuffer, Rgb888};
+use rendering::{Bgr555, Framebuffer, Rgb888};
 
-// -- `render_label` -----------------------------------------------------
+const DARKEN_WEIGHT: u8 = 7;
+const IMAGE_KIND_TAG: u8 = 0;
+const PALETTE_KIND_TAG: u8 = 1;
+const FONT_BIT_DEPTH: u8 = 2;
+const FRAME_BIT_DEPTH: u8 = 4;
+const FRAME_SIDE: u32 = 24;
+const PALETTE_COLOUR_COUNT: u16 = 16;
+const FRAME_BORDER_PALETTE_INDEX: u8 = 1;
+const TRANSPARENT_FONT_INDEX: u8 = 0;
+const OPAQUE_FOREGROUND_FONT_INDEX: u8 = 1;
 
 #[test]
 fn render_label_reveals_one_glyph_per_character_left_to_right() {
@@ -23,7 +23,7 @@ fn render_label_reveals_one_glyph_per_character_left_to_right() {
     let image = ImageRef {
         width: assets::fonts::SHEET_WIDTH,
         height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: 2,
+        bit_depth: FONT_BIT_DEPTH,
         pixels: &pixels,
     };
     let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
@@ -41,8 +41,6 @@ fn render_label_reveals_one_glyph_per_character_left_to_right() {
     );
 }
 
-// -- `MainMenuSceneError` ------------------------------------------------
-
 #[test]
 fn is_pack_missing_matches_not_found_only() {
     let err = MainMenuSceneError::Pack(PackError::NotFound(std::path::PathBuf::from("x")));
@@ -51,8 +49,6 @@ fn is_pack_missing_matches_not_found_only() {
     assert!(!err.is_pack_missing());
 }
 
-// -- `MainMenuItem` geometry (main_menu.c:259-309) -----------------------
-
 #[test]
 fn item_labels_match_upstream_strings() {
     assert_eq!(MainMenuItem::Continue.label(), "CONTINUE");
@@ -60,10 +56,8 @@ fn item_labels_match_upstream_strings() {
     assert_eq!(MainMenuItem::Option.label(), "OPTION");
 }
 
-/// `sWindowTemplates_MainMenu[0]`/`[1]` (`main_menu.c:291-309`): the
-/// `HAS_NO_SAVED_GAME` boxes, unchanged by issue #214.
 #[test]
-fn no_saved_game_item_windows_match_menu_top_win0_and_win1() {
+fn no_saved_game_items_have_the_upstream_order_and_geometry() {
     let menu = MainMenuType::NoSavedGame;
     assert_eq!(menu.items(), [MainMenuItem::NewGame, MainMenuItem::Option]);
     assert_eq!(
@@ -81,31 +75,28 @@ fn no_saved_game_item_windows_match_menu_top_win0_and_win1() {
     );
 }
 
-// -- `highlight_rect` (main_menu.c:283-284's `MENU_WIN_HCOORDS`/`MENU_WIN_VCOORDS`) --
-
 pub(super) fn window_of(menu: MainMenuType, item: MainMenuItem) -> ItemWindow {
     menu.window(item).expect("item belongs to this menu type")
 }
 
+/// `MENU_WIN_HCOORDS` is `WIN_RANGE(9, 231)` and `MENU_WIN_VCOORDS(0)` is
+/// `WIN_RANGE(1, 31)` (`main_menu.c:283-284`).
 #[test]
 fn highlight_rect_matches_upstream_win0_coords_for_new_game() {
-    // MENU_WIN_HCOORDS = WIN_RANGE(9, 231); MENU_WIN_VCOORDS(0) = WIN_RANGE(1, 31).
     assert_eq!(
         highlight_rect(window_of(MainMenuType::NoSavedGame, MainMenuItem::NewGame)),
         (9, 1, 231, 31)
     );
 }
 
+/// `MENU_WIN_VCOORDS(1)` is `WIN_RANGE(33, 63)` (`main_menu.c:284`).
 #[test]
 fn highlight_rect_matches_upstream_win0_coords_for_option() {
-    // Same MENU_WIN_HCOORDS; MENU_WIN_VCOORDS(1) = WIN_RANGE(33, 63).
     assert_eq!(
         highlight_rect(window_of(MainMenuType::NoSavedGame, MainMenuItem::Option)),
         (9, 33, 231, 63)
     );
 }
-
-// -- `move_up`/`move_down` (main_menu.c:903-925, no wrap) -----------------
 
 #[test]
 fn selection_starts_on_new_game_and_moves_without_wrapping() {
@@ -133,11 +124,6 @@ fn selection_starts_on_new_game_and_moves_without_wrapping() {
     assert_eq!(menu.selected(), MainMenuItem::NewGame);
 }
 
-// -- `darken_outside` (main_menu.c:745-753's WIN0+BLDCNT+BLDY) ------------
-
-/// A framebuffer filled `bright` everywhere, with `bg0` recording the
-/// `0..40 x 0..40` square as the only BG0-painted region -- so the rest of
-/// the frame stands in for the backdrop showing through transparent BG0.
 fn darken_fixture(bright: Rgb888) -> (Framebuffer, Coverage) {
     let mut fb = Framebuffer::new();
     fb.fill(bright);
@@ -157,13 +143,10 @@ fn darken_outside_leaves_the_rect_untouched_and_darkens_painted_pixels_outside_i
 
     darken_outside(&mut fb, &bg0, (10, 10, 20, 20));
 
-    // Inside the rect: untouched.
     assert_eq!(fb.pixel(10, 10), Some(bright));
     assert_eq!(fb.pixel(19, 19), Some(bright));
 
-    // Outside the rect but painted by BG0: darkened by the exact
-    // `rendering::darken` formula this module cites (`BLDY` EVY=7).
-    let darkened = rendering::darken(bright, 7);
+    let darkened = rendering::darken(bright, DARKEN_WEIGHT);
     assert_ne!(
         darkened, bright,
         "the fixture's darken weight must be visible"
@@ -178,10 +161,6 @@ fn darken_outside_leaves_the_rect_untouched_and_darkens_painted_pixels_outside_i
 
 #[test]
 fn darken_outside_leaves_unpainted_backdrop_pixels_alone() {
-    // `BLDCNT_EFFECT_DARKEN | BLDCNT_TGT1_BG0` (`main_menu.c:751`) names BG0
-    // alone as the first target -- never `BLDCNT_TGT1_BD`
-    // (`include/gba/io_reg.h:595`) -- so a pixel BG0 never painted keeps the
-    // backdrop's own full-brightness colour even outside `WIN0`.
     let bright = Rgb888 {
         r: 200,
         g: 200,
@@ -203,18 +182,12 @@ fn darken_outside_leaves_unpainted_backdrop_pixels_alone() {
     );
 }
 
-// -- Header text colours (main_menu.c:758/761/764) -----------------------
-
-/// Render `"A"` from a synthetic `FONT_NORMAL` sheet whose every pixel
-/// carries palette `index` -- a known, non-zero glyph pattern -- and blit it
-/// through [`super::HEADER_GLYPH_COLORS`] at `(0, 0)` onto an all-black
-/// framebuffer, so any painted pixel is unambiguous.
 fn blit_header_glyph_of_index(index: u8) -> Framebuffer {
     let pixels = vec![index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
     let image = ImageRef {
         width: assets::fonts::SHEET_WIDTH,
         height: assets::fonts::SHEET_HEIGHT,
-        bit_depth: 2,
+        bit_depth: FONT_BIT_DEPTH,
         pixels: &pixels,
     };
     let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
@@ -241,33 +214,24 @@ fn blit_header_glyph_of_index(index: u8) -> Framebuffer {
 
 #[test]
 fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
-    // The three colours `Task_DisplayMainMenu` patches into bank 15 before
-    // the first frame draws, as raw 5-bit `RGB()` literals -- deliberately
-    // spelled out here rather than imported from the constants under test:
-    // `RGB_WHITE` at 0xA (`main_menu.c:758`), `RGB(12, 12, 12)` at 0xB
-    // (`main_menu.c:761`), `RGB(26, 26, 25)` at 0xC (`main_menu.c:764`),
-    // read through `sTextColor_Headers`' bg/fg/shadow order
-    // (`main_menu.c:409`).
-    let fg = rendering::Bgr555::from_channels(12, 12, 12).to_rgb888();
-    let shadow = rendering::Bgr555::from_channels(26, 26, 25).to_rgb888();
+    const BACKGROUND_INDEX: u8 = 0;
+    const FOREGROUND_INDEX: u8 = 1;
+    const SHADOW_INDEX: u8 = 2;
+    const BOX_INDEX: u8 = 3;
+
+    let fg = Bgr555::from_channels(12, 12, 12).to_rgb888();
+    let shadow = Bgr555::from_channels(26, 26, 25).to_rgb888();
     assert_ne!(fg, shadow, "the two literals must be distinguishable");
 
-    // Font index 1 (`col[1]`) -> foreground.
-    let fb = blit_header_glyph_of_index(1);
+    let fb = blit_header_glyph_of_index(FOREGROUND_INDEX);
     assert_eq!(fb.pixel(0, 0), Some(fg));
     assert_eq!(fb.pixel(7, 7), Some(fg));
 
-    // Font index 2 (`col[2]`) -> shadow.
-    let fb = blit_header_glyph_of_index(2);
+    let fb = blit_header_glyph_of_index(SHADOW_INDEX);
     assert_eq!(fb.pixel(0, 0), Some(shadow));
     assert_eq!(fb.pixel(7, 7), Some(shadow));
 
-    // Font index 0 (`col[0]`, the glyph cell's own background) and index 3
-    // (the unused box colour) are transparent: `draw_item` has already
-    // filled the whole content rect `RGB_WHITE`
-    // (`FillWindowPixelBuffer(PIXEL_FILL(0xA))`, `main_menu.c:784`) before
-    // any glyph draws, so neither may paint anything.
-    for transparent_index in [0u8, 3] {
+    for transparent_index in [BACKGROUND_INDEX, BOX_INDEX] {
         let fb = blit_header_glyph_of_index(transparent_index);
         assert!(
             fb.pixels().iter().all(|&p| p == Rgb888::BLACK),
@@ -275,157 +239,126 @@ fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
         );
     }
 
-    // ...and the fill it relies on is that same `RGB_WHITE` literal.
     assert_eq!(
         HEADER_TEXT_BG,
-        rendering::Bgr555::from_channels(31, 31, 31).to_rgb888()
+        Bgr555::from_channels(31, 31, 31).to_rgb888()
     );
 }
-
-// -- End-to-end against a synthetic pack -----------------------------------
-
-/// One directory entry for [`write_synthetic_pack`], mirroring
-/// `crate::overworld::tests`' own fixture-building style (that module's
-/// helper is private to `overworld::tests`, so this is a small independent
-/// copy rather than a shared one).
-struct Entry {
-    id: &'static str,
+struct SyntheticPackEntry {
+    asset_id: &'static str,
     kind_tag: u8,
-    meta: Vec<u8>,
+    metadata: Vec<u8>,
     payload: Vec<u8>,
 }
 
-fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
-    entries.sort_by(|a, b| a.id.cmp(b.id));
+fn write_synthetic_pack(mut entries: Vec<SyntheticPackEntry>) -> Vec<u8> {
+    entries.sort_by(|left, right| left.asset_id.cmp(right.asset_id));
 
-    let header_size = 8 + 4 + 4;
+    let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
     let mut directory_size = 0usize;
-    for e in &entries {
-        directory_size += 2 + e.id.len() + 1 + 8 + 8 + e.meta.len();
+    for entry in &entries {
+        directory_size += size_of::<u16>()
+            + entry.asset_id.len()
+            + size_of::<u8>()
+            + size_of::<u64>()
+            + size_of::<u64>()
+            + entry.metadata.len();
     }
     let mut offset = header_size + directory_size;
-    let mut offsets = Vec::new();
-    for e in &entries {
-        offsets.push(offset);
-        offset += e.payload.len();
+    let mut payload_offsets = Vec::new();
+    for entry in &entries {
+        payload_offsets.push(offset);
+        offset += entry.payload.len();
     }
 
-    let mut out = Vec::new();
-    out.extend_from_slice(&assets::pack::MAGIC);
-    out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
-    for (e, &off) in entries.iter().zip(&offsets) {
-        out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(e.id.as_bytes());
-        out.push(e.kind_tag);
-        out.extend_from_slice(&u64::try_from(off).unwrap().to_le_bytes());
-        out.extend_from_slice(&u64::try_from(e.payload.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(&e.meta);
+    let mut pack_bytes = Vec::new();
+    pack_bytes.extend_from_slice(&assets::pack::MAGIC);
+    pack_bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
+    pack_bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
+    for (entry, &payload_offset) in entries.iter().zip(&payload_offsets) {
+        pack_bytes.extend_from_slice(&u16::try_from(entry.asset_id.len()).unwrap().to_le_bytes());
+        pack_bytes.extend_from_slice(entry.asset_id.as_bytes());
+        pack_bytes.push(entry.kind_tag);
+        pack_bytes.extend_from_slice(&u64::try_from(payload_offset).unwrap().to_le_bytes());
+        pack_bytes.extend_from_slice(&u64::try_from(entry.payload.len()).unwrap().to_le_bytes());
+        pack_bytes.extend_from_slice(&entry.metadata);
     }
-    for e in &entries {
-        out.extend_from_slice(&e.payload);
+    for entry in &entries {
+        pack_bytes.extend_from_slice(&entry.payload);
     }
-    out
+    pack_bytes
 }
 
-fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
-    let mut m = Vec::new();
-    m.extend_from_slice(&width.to_le_bytes());
-    m.extend_from_slice(&height.to_le_bytes());
-    m.push(bit_depth);
-    m
+fn image_metadata(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
+    let mut metadata = Vec::new();
+    metadata.extend_from_slice(&width.to_le_bytes());
+    metadata.extend_from_slice(&height.to_le_bytes());
+    metadata.push(bit_depth);
+    metadata
 }
 
-fn palette_meta(color_count: u16) -> Vec<u8> {
+fn palette_metadata(color_count: u16) -> Vec<u8> {
     color_count.to_le_bytes().to_vec()
 }
 
-/// A minimal pack covering exactly what [`super::MainMenuScene::from_pack`]
-/// needs: a 24x24 (3x3-tile) selectable window frame (every ring tile
-/// opaque, palette index 1, so the border is trivially distinguishable from
-/// both the content fill and the backdrop), a second selectable frame
-/// (`WINDOW_FRAME_TYPE_5`) identical in shape but a distinct colour so
-/// [`load_synthetic_scene_of_with_window_frame`] can prove which of the two
-/// a scene drew, a `font/normal/glyphs` sheet whose every pixel is
-/// `font_index`, and a `interface/palette/main_menu_bg` whose index 0 is a
-/// colour distinct from both the content fill white and the border colour.
-///
-/// `font_index` picks the fixture flavour: `0` (transparent everywhere)
-/// keeps every label pixel showing the *fill* underneath, so the
-/// fill/border/backdrop tests can assert those layers without glyph
-/// interference; `1` makes every glyph cell a solid block of the header
-/// *foreground* colour, so the label-path tests can pin the glyph blit's
-/// own darkening, clip, and origin offset (the colour mapping itself is
-/// pinned separately by
-/// [`header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette`],
-/// which drives `textbox::blit_glyphs_colored` directly).
+fn palette_with_color(index: u8, color: Bgr555) -> Vec<u8> {
+    let mut palette = vec![0u8; usize::from(PALETTE_COLOUR_COUNT) * size_of::<u16>()];
+    let offset = usize::from(index) * size_of::<u16>();
+    palette[offset..offset + size_of::<u16>()].copy_from_slice(&color.raw().to_le_bytes());
+    palette
+}
+
 fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
-    // 24x24 frame sheet: every ring tile (the 8 border cells `border_tiles`
-    // draws) opaque, palette index 1. Filling the whole sheet with index 1
-    // is simplest and correct here: `border_tiles` only ever draws pixels
-    // from within the sheet's own tile cells, and this fixture never reads
-    // interior (non-ring) tiles.
-    let frame0_pixels = vec![1u8; 24 * 24];
-
-    // Palette bank: index 0 transparent (unused by `blit_frame_tiles`),
-    // index 1 a distinct bright green, rest black.
-    let mut frame0_palette = vec![0u8; 32];
-    let green = rendering::Bgr555::from_channels(0, 31, 0).raw();
-    frame0_palette[2..4].copy_from_slice(&green.to_le_bytes());
-
-    // A second selectable frame -- `WINDOW_FRAME_TYPE_5`, source file
-    // `6.png` -- identical in shape but bright red at index 1, so which of
-    // the 20 `sWindowFrames` entries a scene drew is readable from one
-    // border pixel.
-    let frame5_pixels = vec![1u8; 24 * 24];
-    let mut frame5_palette = vec![0u8; 32];
-    let red = rendering::Bgr555::from_channels(31, 0, 0).raw();
-    frame5_palette[2..4].copy_from_slice(&red.to_le_bytes());
-
-    // Font sheet: every pixel `font_index` (see the doc comment above).
+    let frame_pixel_count = usize::try_from(FRAME_SIDE * FRAME_SIDE).unwrap();
+    let frame0_pixels = vec![FRAME_BORDER_PALETTE_INDEX; frame_pixel_count];
+    let frame0_palette =
+        palette_with_color(FRAME_BORDER_PALETTE_INDEX, Bgr555::from_channels(0, 31, 0));
+    let frame5_pixels = vec![FRAME_BORDER_PALETTE_INDEX; frame_pixel_count];
+    let frame5_palette =
+        palette_with_color(FRAME_BORDER_PALETTE_INDEX, Bgr555::from_channels(31, 0, 0));
     let font_pixels =
         vec![font_index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-
-    // Background palette: index 0 a distinct dark blue, rest black.
-    let mut bg_palette = vec![0u8; 32];
-    let dark_blue = rendering::Bgr555::from_channels(4, 4, 16).raw();
-    bg_palette[0..2].copy_from_slice(&dark_blue.to_le_bytes());
+    let bg_palette = palette_with_color(0, Bgr555::from_channels(4, 4, 16));
 
     write_synthetic_pack(vec![
-        Entry {
-            id: "text-window/image/1",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
+        SyntheticPackEntry {
+            asset_id: "text-window/image/1",
+            kind_tag: IMAGE_KIND_TAG,
+            metadata: image_metadata(FRAME_SIDE, FRAME_SIDE, FRAME_BIT_DEPTH),
             payload: frame0_pixels,
         },
-        Entry {
-            id: "text-window/palette/1",
-            kind_tag: 1,
-            meta: palette_meta(16),
+        SyntheticPackEntry {
+            asset_id: "text-window/palette/1",
+            kind_tag: PALETTE_KIND_TAG,
+            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
             payload: frame0_palette,
         },
-        Entry {
-            id: "text-window/image/6",
-            kind_tag: 0,
-            meta: image_meta(24, 24, 4),
+        SyntheticPackEntry {
+            asset_id: "text-window/image/6",
+            kind_tag: IMAGE_KIND_TAG,
+            metadata: image_metadata(FRAME_SIDE, FRAME_SIDE, FRAME_BIT_DEPTH),
             payload: frame5_pixels,
         },
-        Entry {
-            id: "text-window/palette/6",
-            kind_tag: 1,
-            meta: palette_meta(16),
+        SyntheticPackEntry {
+            asset_id: "text-window/palette/6",
+            kind_tag: PALETTE_KIND_TAG,
+            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
             payload: frame5_palette,
         },
-        Entry {
-            id: "font/normal/glyphs",
-            kind_tag: 0,
-            meta: image_meta(assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT, 2),
+        SyntheticPackEntry {
+            asset_id: "font/normal/glyphs",
+            kind_tag: IMAGE_KIND_TAG,
+            metadata: image_metadata(
+                assets::fonts::SHEET_WIDTH,
+                assets::fonts::SHEET_HEIGHT,
+                FONT_BIT_DEPTH,
+            ),
             payload: font_pixels,
         },
-        Entry {
-            id: "interface/palette/main_menu_bg",
-            kind_tag: 1,
-            meta: palette_meta(16),
+        SyntheticPackEntry {
+            asset_id: "interface/palette/main_menu_bg",
+            kind_tag: PALETTE_KIND_TAG,
+            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
             payload: bg_palette,
         },
     ])
@@ -452,31 +385,20 @@ impl Drop for TempPackGuard {
 }
 
 fn load_synthetic_scene() -> MainMenuScene {
-    load_synthetic_scene_with_font(0)
+    load_synthetic_scene_with_font(TRANSPARENT_FONT_INDEX)
 }
 
-/// [`load_synthetic_scene`], for whichever item list is under test (the
-/// `HAS_SAVED_GAME` cases live in [`super::saved_game_tests`]).
 pub(super) fn load_synthetic_scene_of(menu_type: MainMenuType) -> MainMenuScene {
-    load_synthetic_scene_inner(0, menu_type, super::FRAME_ID)
+    load_synthetic_scene_inner(TRANSPARENT_FONT_INDEX, menu_type, super::FRAME_ID)
 }
 
-/// [`load_synthetic_scene_of`], with an explicit `window_frame` instead of
-/// [`super::FRAME_ID`] -- proves
-/// [`super::MainMenuScene::from_pack_with_window_frame`] actually threads
-/// `window_frame` through to the composed border, rather than a fixed
-/// default (the `HAS_SAVED_GAME` case lives in
-/// [`super::saved_game_tests`]).
 pub(super) fn load_synthetic_scene_of_with_window_frame(
     menu_type: MainMenuType,
     window_frame: u8,
 ) -> MainMenuScene {
-    load_synthetic_scene_inner(0, menu_type, window_frame)
+    load_synthetic_scene_inner(TRANSPARENT_FONT_INDEX, menu_type, window_frame)
 }
 
-/// [`load_synthetic_scene`], with the font-sheet flavour spelled out (see
-/// [`synthetic_main_menu_pack_bytes`]'s doc comment for what each
-/// `font_index` pins).
 fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame, super::FRAME_ID)
 }
@@ -507,7 +429,11 @@ fn temp_pack_cleanup_is_unwind_safe() {
 
     let result = std::panic::catch_unwind(|| {
         let temp_pack = TempPackGuard::new(path.clone());
-        std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(0)).unwrap();
+        std::fs::write(
+            temp_pack.path(),
+            synthetic_main_menu_pack_bytes(TRANSPARENT_FONT_INDEX),
+        )
+        .unwrap();
         assert!(temp_pack.path().exists());
         panic!("deliberate panic to exercise temporary pack cleanup");
     });
@@ -517,46 +443,34 @@ fn temp_pack_cleanup_is_unwind_safe() {
 }
 
 #[test]
-fn compose_from_synthetic_pack_shows_the_extracted_bg_palette_backdrop_undarkened() {
+fn compose_leaves_the_backdrop_bright_and_darkens_unselected_bg0_pixels() {
     let scene = load_synthetic_scene();
     let fb = scene.compose();
 
-    let dark_blue = rendering::Bgr555::from_channels(4, 4, 16).to_rgb888();
-    // A pixel below both item windows (tile row 8, well past OPTION's own
-    // bordered box which ends at tile row 8 -- `MENU_TOP_WIN1` (5) +
-    // `MENU_HEIGHT_WIN1` (2) + the border's own 1 tile) shows the raw
-    // backdrop colour at *full brightness*, even though it lies outside the
-    // selection highlight: BG0 is transparent there (nothing but the two
-    // windows is ever drawn into it) and `BLDCNT`'s first-target set is
-    // `BLDCNT_TGT1_BG0` without `BLDCNT_TGT1_BD` (`main_menu.c:751`,
-    // `include/gba/io_reg.h:595`), so the darken never reaches the backdrop.
-    assert_eq!(fb.pixel(5, 130), Some(dark_blue));
+    let extracted_backdrop_color = Bgr555::from_channels(4, 4, 16).to_rgb888();
+    let uncovered_backdrop = fb.pixel(5, 130);
+    assert_eq!(uncovered_backdrop, Some(extracted_backdrop_color));
     assert_ne!(
-        fb.pixel(5, 130),
-        Some(rendering::darken(dark_blue, 7)),
+        uncovered_backdrop,
+        Some(rendering::darken(extracted_backdrop_color, DARKEN_WEIGHT)),
         "the backdrop is not a blend first target and must never darken"
     );
 
-    // Contrast: a pixel the *windows* painted outside WIN0 -- OPTION's own
-    // content fill, unselected -- is darkened by the same pass.
+    let unselected_option_content = fb.pixel(18, 42);
     assert_eq!(
-        fb.pixel(18, 42),
-        Some(rendering::darken(HEADER_TEXT_BG, 7)),
+        unselected_option_content,
+        Some(rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT)),
         "BG0's own pixels outside WIN0 are the first target and must darken"
     );
 }
 
 #[test]
-fn compose_from_synthetic_pack_fills_selected_items_content_with_the_upstream_header_bg_and_leaves_it_undarkened(
-) {
+fn compose_keeps_the_selected_items_header_background_bright() {
     let scene = load_synthetic_scene();
     let fb = scene.compose();
 
-    // NEW GAME is selected by default; a pixel well inside its content rect
-    // (tile (2,1) -> pixel (16,8), +2 to clear the border ring) must be the
-    // exact upstream `HEADER_TEXT_BG` (`RGB_WHITE` post-patch), completely
-    // undarkened.
-    assert_eq!(fb.pixel(18, 10), Some(HEADER_TEXT_BG));
+    let selected_new_game_content = fb.pixel(18, 10);
+    assert_eq!(selected_new_game_content, Some(HEADER_TEXT_BG));
 }
 
 #[test]
@@ -564,11 +478,9 @@ fn compose_from_synthetic_pack_darkens_the_unselected_items_content() {
     let scene = load_synthetic_scene();
     let fb = scene.compose();
 
-    // OPTION (tile (2,5) -> pixel (16,40), +2 to clear the border ring) is
-    // not selected -- its own content fill must be `HEADER_TEXT_BG`,
-    // darkened.
-    let expected = rendering::darken(HEADER_TEXT_BG, 7);
-    assert_eq!(fb.pixel(18, 42), Some(expected));
+    let unselected_option_content = fb.pixel(18, 42);
+    let darkened_header_background = rendering::darken(HEADER_TEXT_BG, DARKEN_WEIGHT);
+    assert_eq!(unselected_option_content, Some(darkened_header_background));
 }
 
 #[test]
@@ -576,76 +488,62 @@ fn compose_from_synthetic_pack_draws_the_border_from_the_extracted_frame_palette
     let scene = load_synthetic_scene();
     let fb = scene.compose();
 
-    // NEW GAME's own top-left border corner cell: tile (1, 0) (one tile
-    // left/up of the content rect) -- must show the frame's palette index 1
-    // colour (bright green, module docs), undarkened (inside WIN0's own
-    // highlight rect, which starts one row above the content rect too).
-    // Tile (1, 0) -> pixel (8, 0), +2 into the corner tile's own body.
-    let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
-    assert_eq!(fb.pixel(10, 2), Some(green));
+    let extracted_frame_color = Bgr555::from_channels(0, 31, 0).to_rgb888();
+    let selected_new_game_border = fb.pixel(10, 2);
+    assert_eq!(selected_new_game_border, Some(extracted_frame_color));
 
-    // OPTION's own top-left border corner -- tile (1, 4) -> pixel (8, 32),
-    // +2 in -- lies *outside* NEW GAME's WIN0 highlight rect (which ends at
-    // y=31), so it must be darkened like every other BG0 pixel outside it:
-    // the border blit is a `BLDCNT_TGT1_BG0` first target too, not just the
-    // content fill.
-    assert_eq!(fb.pixel(10, 34), Some(rendering::darken(green, 7)));
+    let unselected_option_border = fb.pixel(10, 34);
+    assert_eq!(
+        unselected_option_border,
+        Some(rendering::darken(extracted_frame_color, DARKEN_WEIGHT))
+    );
 }
 
 #[test]
 fn compose_with_opaque_font_darkens_the_unselected_items_label_glyphs() {
-    let scene = load_synthetic_scene_with_font(1);
+    let scene = load_synthetic_scene_with_font(OPAQUE_FOREGROUND_FONT_INDEX);
     let fb = scene.compose();
 
-    // The opaque fixture turns every glyph cell into a solid block of the
-    // header foreground colour (font index 1 -> `HEADER_GLYPH_COLORS[1]`).
-    // NEW GAME is selected: a pixel inside its first label glyph (label
-    // origin (16, 9), +1 into the cell) stays at full brightness...
-    assert_eq!(fb.pixel(17, 11), Some(HEADER_TEXT_FG));
+    let selected_new_game_label = fb.pixel(17, 11);
+    assert_eq!(selected_new_game_label, Some(HEADER_TEXT_FG));
 
-    // ...while OPTION's label (label origin (16, 41)) sits outside WIN0 and
-    // must darken along with its fill -- glyph pixels are BG0's own painted
-    // pixels, first targets of the same `BLDY` darken.
+    let unselected_option_label = fb.pixel(17, 43);
     assert_eq!(
-        fb.pixel(17, 43),
-        Some(rendering::darken(HEADER_TEXT_FG, 7)),
+        unselected_option_label,
+        Some(rendering::darken(HEADER_TEXT_FG, DARKEN_WEIGHT)),
         "an unselected item's label glyphs must darken with its window"
     );
 }
 
 #[test]
 fn compose_with_opaque_font_keeps_the_1px_text_origin_offset_and_clips_to_the_content_rect() {
-    let scene = load_synthetic_scene_with_font(1);
+    let scene = load_synthetic_scene_with_font(OPAQUE_FOREGROUND_FONT_INDEX);
     let fb = scene.compose();
 
-    // `AddTextPrinterParameterized3(_, FONT_NORMAL, 0, 1, ...)`'s y=1
-    // window-local origin (`main_menu.c:786-787`): NEW GAME's content rect
-    // spans y 8..24, so its top row (y=8) is still the plain content fill --
-    // the first glyph row lands one pixel down, at y=9.
+    let new_game_content_above_text = fb.pixel(17, 8);
     assert_eq!(
-        fb.pixel(17, 8),
+        new_game_content_above_text,
         Some(HEADER_TEXT_BG),
         "the content rect's own top row is above the y=1 text origin"
     );
+    let new_game_first_glyph_row = fb.pixel(17, 9);
     assert_eq!(
-        fb.pixel(17, 9),
+        new_game_first_glyph_row,
         Some(HEADER_TEXT_FG),
         "the first glyph row starts exactly at the y=1 text origin"
     );
 
-    // The clip (`label_clip`'s `content_size.1 - 1`) lets the glyph reach
-    // the content rect's own last row (y=23) and no further: the border row
-    // below (y=24) keeps the frame's own colour. Both pixels sit inside NEW
-    // GAME's WIN0 highlight, so neither is darkened.
+    let new_game_last_content_row = fb.pixel(17, 23);
     assert_eq!(
-        fb.pixel(17, 23),
+        new_game_last_content_row,
         Some(HEADER_TEXT_FG),
         "the last content row is still glyph-reachable"
     );
-    let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
+    let extracted_frame_color = Bgr555::from_channels(0, 31, 0).to_rgb888();
+    let new_game_border_below_content = fb.pixel(17, 24);
     assert_eq!(
-        fb.pixel(17, 24),
-        Some(green),
+        new_game_border_below_content,
+        Some(extracted_frame_color),
         "the border row below the content rect must never take glyph pixels"
     );
 }
@@ -671,13 +569,9 @@ fn compose_from_synthetic_pack_is_deterministic_and_selection_changes_the_frame(
     );
 }
 
-/// Loads [`AssetPack::load_repo`] directly rather than
-/// [`super::load_default`] (issue #412) -- see [`AssetPack::load_repo`]'s
-/// own docs for why a checkout-validation gate must not go through
-/// [`AssetPack::default_path`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_composes_non_blank_deterministic_frames_for_both_selection_states() {
+fn checkout_pack_composes_non_blank_deterministic_frames_for_both_selection_states() {
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let mut scene = MainMenuScene::from_pack(&pack, MainMenuType::NoSavedGame)
         .expect("run `cargo xtask extract` first");

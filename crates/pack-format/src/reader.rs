@@ -72,6 +72,12 @@ pub enum PackReadError {
     /// format does not allow and `AssetPack`'s `ImageRef` would carry a
     /// depth its own documented domain excludes. Carries the offending byte.
     BadImageBitDepth(u8),
+    /// A directory entry's id was empty. The wire format requires every id
+    /// non-empty (see [`parse_directory`]'s docs); the writer already
+    /// refuses to emit one
+    /// ([`PackWriteError::InvalidId`](crate::PackWriteError::InvalidId)), so
+    /// this can only come from a hand-built or corrupted pack.
+    EmptyId,
     /// A directory entry's id did not sort strictly after the previous
     /// entry's — the wire format requires ids strictly ascending and
     /// unique. Carries the offending id.
@@ -108,6 +114,7 @@ impl fmt::Display for PackReadError {
             Self::BadImageBitDepth(depth) => {
                 write!(f, "invalid image bit depth `{depth}` (expected 2, 4, or 8)")
             }
+            Self::EmptyId => write!(f, "directory entry id is empty"),
             Self::UnsortedOrDuplicateId(id) => {
                 write!(f, "directory entry id `{id}` is out of order or duplicated")
             }
@@ -241,7 +248,8 @@ fn check_payload_region(
 
 /// Parse the header and directory out of a pack file's bytes.
 ///
-/// Entries come back strictly ascending and unique by `id`, the order
+/// Every entry's `id` is non-empty, and entries come back strictly
+/// ascending and unique by `id`, the order
 /// [`PackWriter::finish`](crate::PackWriter::finish) writes and the wire
 /// format requires — a consumer may binary-search the result without
 /// re-checking it. Each entry's `offset`/`length` is the region the format
@@ -254,7 +262,8 @@ fn check_payload_region(
 /// [`PackReadError::UnsupportedVersion`] if the version field is not
 /// [`FORMAT_VERSION`]; [`PackReadError::BadEntryKind`] on an unrecognized
 /// entry `kind` byte; [`PackReadError::BadImageBitDepth`] on an image
-/// `bit_depth` the format does not publish;
+/// `bit_depth` the format does not publish; [`PackReadError::EmptyId`] if an
+/// entry's id is empty;
 /// [`PackReadError::UnsortedOrDuplicateId`] if an entry's
 /// id does not sort strictly after the previous entry's;
 /// [`PackReadError::MisplacedPayload`] if an entry's payload does not begin
@@ -286,6 +295,9 @@ pub fn parse_directory(bytes: &[u8]) -> Result<Vec<DirectoryEntry>, PackReadErro
         let id = std::str::from_utf8(id_bytes)
             .map_err(|_| PackReadError::Truncated)?
             .to_owned();
+        if id.is_empty() {
+            return Err(PackReadError::EmptyId);
+        }
         if entries
             .last()
             .is_some_and(|previous: &DirectoryEntry| previous.id >= id)
@@ -610,6 +622,42 @@ mod tests {
         assert_eq!(parse_directory(&bytes), Err(PackReadError::Truncated));
     }
 
+    /// An empty id has no previous entry to sort or duplicate against, so
+    /// only a dedicated check — not the ordering comparison
+    /// [`unsorted_or_repeated_ids_are_rejected`] pins — catches it.
+    #[test]
+    fn an_empty_id_is_rejected() {
+        let first_entry_empty = hand_built_pack(&[Fixture {
+            id: "",
+            kind_tag: 2,
+            meta: vec![],
+            payload: vec![],
+        }]);
+        assert_eq!(
+            parse_directory(&first_entry_empty),
+            Err(PackReadError::EmptyId)
+        );
+
+        let later_entry_empty = hand_built_pack(&[
+            Fixture {
+                id: "a/raw",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+            Fixture {
+                id: "",
+                kind_tag: 2,
+                meta: vec![],
+                payload: vec![],
+            },
+        ]);
+        assert_eq!(
+            parse_directory(&later_entry_empty),
+            Err(PackReadError::EmptyId)
+        );
+    }
+
     #[test]
     fn unsorted_or_repeated_ids_are_rejected() {
         let unsorted = hand_built_pack(&[
@@ -867,6 +915,10 @@ mod tests {
             "bad magic (not a pokeemerald-rs pack file)"
         );
         assert_eq!(PackReadError::Truncated.to_string(), "truncated or corrupt");
+        assert_eq!(
+            PackReadError::EmptyId.to_string(),
+            "directory entry id is empty"
+        );
         assert_eq!(
             PackReadError::UnsortedOrDuplicateId("a/raw".into()).to_string(),
             "directory entry id `a/raw` is out of order or duplicated"
