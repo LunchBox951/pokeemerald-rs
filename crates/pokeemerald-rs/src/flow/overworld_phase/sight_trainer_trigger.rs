@@ -834,11 +834,9 @@ mod tests {
         // flag-only, defense-curl, and poison-hit pipelines), so those seven
         // parties get past `ensure_executable` and stop at
         // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
-        // trainer AI cannot yet score any of those seven effects. Pete's
-        // Poison Sting moved the same way once the poison-hit trampoline
-        // widened `ensure_executable` (issue #784): still unscoreable, not
-        // merely non-executable. Both screens run before the first draw, so
-        // the per-frame cone check is exactly as cheap as it was.
+        // trainer AI cannot yet score any of those seven effects. Both
+        // screens run before the first draw, so the per-frame cone check
+        // stays draw-free.
         let expected = [
             (
                 "Daisy",

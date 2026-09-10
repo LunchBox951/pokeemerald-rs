@@ -123,19 +123,14 @@ impl Battle {
 
         // `tryfaintmon BS_ATTACKER` then `tryfaintmon BS_TARGET`, in that
         // script order (`:358`-`:359`). Neither call decides
-        // `gBattleOutcome`, awards experience, or replaces/pays out a
-        // trainer on its own -- upstream doesn't reach any of that until
-        // `HandleFaintedMonActions`, which the move script's own `Cmd_end`
-        // only schedules once the whole script is done
-        // (`battle_script_commands.c:3950`-`:3958`;
-        // `Battle::pass_turn`'s own docs) -- so both
-        // `tryfaintmon`s, and both `Fainted` events, fire regardless of
-        // which faint (if either) ends up mattering for the outcome. This
-        // custom double-faint settlement mirrors `Self::settle_faint`'s own
-        // report-and-clear for each battler that went down
-        // (`Cmd_cleareffectsonfaint`, `battle_script_commands.c:3063`-
-        // `:3076`), rather than calling it twice, so a battler that did not
-        // faint here is left completely untouched.
+        // `gBattleOutcome`, awards experience, or sends out a replacement:
+        // upstream defers all of that to `HandleFaintedMonActions`, which
+        // `Cmd_end` schedules only once the whole script is done
+        // (`battle_script_commands.c:3950`-`:3958`, and
+        // [`Battle::pass_turn`]) -- so both `Fainted` events fire regardless
+        // of which faint ends up deciding the outcome. Each corpse is
+        // cleared exactly as `Self::settle_faint` clears one
+        // (`Cmd_cleareffectsonfaint`, `:3063`-`:3076`).
         let (attacker_fainted, target_fainted) = {
             let (attacker, defender) = self.battlers(attacker_is_player);
             (attacker.is_fainted(), defender.is_fainted())

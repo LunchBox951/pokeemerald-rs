@@ -14,11 +14,8 @@
 //!
 //! [`EFFECT_POISON_HIT`] is the one modelled trampoline: a successful roll
 //! writes [`crate::status1::Status1::Poisoned`] through `SetMoveEffect`'s
-//! `STATUS1_POISON` case (`battle_script_commands.c:2299`-`:2340`), gated by
-//! [`poison_can_land`]'s silent guards. Every other [`SECONDARY_TRAMPOLINES`]
-//! entry, [`EFFECT_POISON_TAIL`] included, stays unported.
-//! [`ensure_admissible`] fails closed, before any draw, for the ability
-//! interactions [`poison_can_land`] cannot resolve silently.
+//! `STATUS1_POISON` case (`battle_script_commands.c:2299`-`:2340`). Every
+//! other [`SECONDARY_TRAMPOLINES`] entry stays unported.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -27,8 +24,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
 
-/// Poison Sting's, Smog's, Sludge's, and Sludge Bomb's move effect -- this
-/// slice's one resolved [`SECONDARY_TRAMPOLINES`] entry.
+/// Move effect shared by Poison Sting, Smog, Sludge, and Sludge Bomb.
 pub const EFFECT_POISON_HIT: MoveEffect = MoveEffect(2);
 const EFFECT_BURN_HIT: MoveEffect = MoveEffect(4);
 const EFFECT_FREEZE_HIT: MoveEffect = MoveEffect(5);
@@ -162,8 +158,8 @@ pub fn is_secondary_effect(effect: MoveEffect) -> bool {
     trampoline_for_effect(effect).is_some()
 }
 
-/// Returns whether `effect` is [`EFFECT_POISON_HIT`] — this slice's one
-/// resolved [`SECONDARY_TRAMPOLINES`] entry (module docs).
+/// Returns whether `effect` is [`EFFECT_POISON_HIT`], the one
+/// [`SECONDARY_TRAMPOLINES`] entry [`spend_effect_chance_draw`] resolves.
 #[must_use]
 pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_POISON_HIT
@@ -182,25 +178,20 @@ fn poison_can_land(defender: &BattlePokemon) -> bool {
         && defender.ability() != AbilityId::SHIELD_DUST
 }
 
-/// Refuses an [`EFFECT_POISON_HIT`] move whose attacker or target carries an
-/// ability this slice does not follow past infliction, the policy
-/// [`crate::paralyze::ensure_admissible`] applies to
-/// [`crate::paralyze::EFFECT_PARALYZE`]. A no-op whenever
-/// [`poison_can_land`] is already `false`.
+/// Rejects an [`EFFECT_POISON_HIT`] move when landing the status would
+/// activate an unsupported ability interaction.
 ///
-/// Refused: Serene Grace, which doubles the chance before the draw
-/// (`battle_script_commands.c:2912-2915`); Synchronize on a healthy
-/// attacker, whose reflection can print a prevention message this crate has
-/// no event for (`:2299-2333`), while a statused attacker's reflection exits
-/// silently (`:2334-2335`) and is admitted; Shed Skin's end-of-turn cure
-/// draw (`src/battle_util.c:2620-2621`); and Guts or Marvel Scale's stat
-/// reads in `CalculateBaseDamage` (`src/pokemon.c`).
+/// A no-op whenever the poison guards already refuse the target. Synchronize is
+/// also accepted when the attacker already carries a primary status, whose
+/// reflection then exits silently
+/// (`battle_script_commands.c:2334`-`:2335`).
 ///
 /// # Errors
 ///
-/// [`BattleError::UnknownMove`] if `move_id` is not in `dex`.
-/// [`BattleError::UnportedAbilityInteraction`], carrying the offending
-/// ability, when the move would reach the poison branch against one.
+/// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`, or
+/// [`BattleError::UnportedAbilityInteraction`] for the attacker's Serene
+/// Grace, or the defender's Synchronize, Shed Skin, Guts, or Marvel Scale,
+/// when the move would newly poison the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -230,19 +221,16 @@ pub fn ensure_admissible(
     }
 }
 
-/// Spends the post-damage effect-chance draw for `move_id`, applying
-/// [`EFFECT_POISON_HIT`]'s [`Status1::Poisoned`] when it succeeds.
+/// Spends the post-damage effect-chance draw for `move_id`.
 ///
 /// A certain effect on a successful hit skips the draw. Every other path
 /// spends one draw, even when the hit had no effect or the move has no
 /// modeled trampoline.
 ///
 /// The returned `bool` is whether the caller should write
-/// [`Status1::Poisoned`] to `defender` — deliberately left to the caller,
-/// since this function borrows `defender` immutably and cannot itself
-/// account for the target having fainted from the same hit's damage
-/// (`SetMoveEffect`'s leading `hp == 0` guard,
-/// `battle_script_commands.c:2261`-`:2264`, which this pure draw cannot see).
+/// [`crate::status1::Status1::Poisoned`] to `defender`, still subject to the
+/// caller's own post-damage faint check: `SetMoveEffect` leads with an
+/// `hp == 0` guard (`battle_script_commands.c:2261`-`:2264`).
 ///
 /// # Errors
 ///

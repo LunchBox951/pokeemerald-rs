@@ -23,8 +23,7 @@
 //! now models [`battle::Status1::Paralysed`] and [`battle::Status1::Poisoned`]
 //! in-battle, but neither encoder reads or writes either, so a battler
 //! paralysed or poisoned this session keeps the backing record's own stored
-//! status word through an ordinary save exactly as before -- wiring that
-//! overlay is a later slice's boundary (issue #306), not this one's.
+//! status word through an ordinary save.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both

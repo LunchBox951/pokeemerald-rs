@@ -97,9 +97,9 @@ impl Battle {
 
     /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
     /// [`crate::hit::resolve_hit`]'s pipeline, threading
-    /// `self.is_first_battle()` through as `suppress_crit` (issue #187) and,
-    /// since issue #784, [`crate::hit::HitResolution::poisons_defender`]
-    /// through to a status write.
+    /// `self.is_first_battle()` through as `suppress_crit` and
+    /// [`crate::hit::HitResolution::poisons_defender`] through to a status
+    /// write.
     fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -148,12 +148,9 @@ impl Battle {
                     is_critical,
                 });
                 // `seteffectwithchance` precedes `tryfaintmon`
-                // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`'s
-                // own leading `hp == 0` guard
-                // (`battle_script_commands.c:2261`-`:2264`) means a hit that
-                // faints its target this same turn writes no status at all --
-                // the fainted check the pure draw in `resolve_hit` could not
-                // make for itself.
+                // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
+                // leads with an `hp == 0` guard
+                // (`battle_script_commands.c:2261`-`:2264`).
                 if resolution.poisons_defender {
                     let defender = if attacker_is_player {
                         &mut self.enemy
@@ -194,14 +191,11 @@ impl Battle {
         dealt
     }
 
-    /// `tryfaintmon` for one side, reduced to its own script's scope: if
-    /// that battler is at `0` HP, report the faint and clear its battle-only
-    /// scratch. Neither the reward nor the battle's own outcome is decided
-    /// here any more (issue #784) — upstream's own direct-hit script,
-    /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`-`:2823`),
-    /// carries no `checkteamslost` either; that and `Cmd_getexp` wait for
-    /// `HandleFaintedMonActions`, which `Cmd_end` schedules once the whole
-    /// move script is done (`battle_script_commands.c:3950`-`:3958`) — see
+    /// `tryfaintmon` for one side: if that battler is at `0` HP, report the
+    /// faint and clear its battle-only scratch. The reward and the battle
+    /// outcome wait for `HandleFaintedMonActions`, which `Cmd_end` schedules
+    /// only once the whole move script is done
+    /// (`battle_script_commands.c:3950`-`:3958`) — see
     /// [`Battle::pass_turn`].
     ///
     /// A no-op when the battler is still standing, so a caller can run it

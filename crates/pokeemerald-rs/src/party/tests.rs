@@ -1052,10 +1052,8 @@ fn a_fresh_battler_never_writes_an_in_battle_primary_status_into_a_new_record() 
 
     let record = to_save_pokemon(&dex, &lead);
 
-    // `to_save_pokemon` has no backing record to retain a status from, so it
-    // falls back to `CreateMon`'s own default -- the same value regardless
-    // of whatever `battle::Status1` the in-battle model carries, since
-    // neither encoder reads it at all.
+    // With no backing record to retain a status from, `to_save_pokemon`
+    // falls back to `CreateMon`'s default whatever the in-battle status is.
     let healthy_lead = treecko_fixture();
     let healthy_record = to_save_pokemon(&dex, &healthy_lead);
     assert_eq!(

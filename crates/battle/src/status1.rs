@@ -8,13 +8,13 @@
 //! models [`Status1::Healthy`], [`Status1::Paralysed`], and
 //! [`Status1::Poisoned`] — confusion, sleep, freeze, burn, and toxic are
 //! unported, so a battler can never reach any status this enum has no
-//! variant for. Upstream's own `status1` is a bitfield with one flag per
-//! status (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
-//! infliction path this crate models guards on the field already being
-//! nonzero before writing a new one
-//! (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`), so the field is
-//! mutually exclusive in practice; this enum's single value encodes that
-//! directly rather than reproducing the bitfield.
+//! variant for.
+//!
+//! Upstream's `status1` is a bitfield with one flag per status
+//! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
+//! infliction path this crate models refuses a nonzero field
+//! (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`), so a
+//! single-valued enum loses nothing.
 
 use crate::damage::BattleRng;
 
@@ -48,9 +48,8 @@ impl Status1 {
     }
 
     /// Whether this status is [`Status1::Healthy`] — the guard every
-    /// infliction path this crate models shares, for "carries no primary
-    /// status yet" (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`,
-    /// `data/battle_scripts_1.s:1016`).
+    /// infliction path this crate models shares
+    /// (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
     #[must_use]
     pub const fn is_healthy(self) -> bool {
         matches!(self, Self::Healthy)
@@ -79,9 +78,8 @@ pub fn draws_full_paralysis(status1: Status1, rng: &mut impl BattleRng) -> bool 
 const POISON_DAMAGE_DENOMINATOR: u32 = 8;
 
 /// `ENDTURN_POISON`'s damage for a battler with `max_hp`: an eighth of
-/// maximum HP, floored to at least one
-/// (`pokeemerald/src/battle_util.c:1528-1530`). Draws nothing: the residual
-/// tick has no `Random()` call.
+/// maximum HP, floored to at least one, drawing nothing
+/// (`pokeemerald/src/battle_util.c:1528-1530`).
 #[must_use]
 pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     let damage = max_hp / POISON_DAMAGE_DENOMINATOR;

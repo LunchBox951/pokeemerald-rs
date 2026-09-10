@@ -187,19 +187,19 @@
 //! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]) and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
-//! guard left unmodelled there, though [`secondary`] does model it for
-//! poison) — held items, every primary status but
+//! guard left unmodelled there; [`secondary`] models it for poison) —
+//! held items, every primary status but
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
 //! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! five abilities that read a holder's primary status or its own draw
-//! before this crate's shared RNG stream reaches it — Synchronize, Shed
-//! Skin, Guts, Marvel Scale, and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
-//! and the move effects the eight pipelines still do not cover — the
-//! secondary-effect trampolines ([`secondary::SECONDARY_TRAMPOLINES`] lists
-//! all 31; [`secondary::EFFECT_POISON_HIT`] is the one resolved, none of the
-//! other 30 are, including [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
+//! five abilities that read a holder's primary status or the draw that
+//! inflicts it — Synchronize, Shed Skin, Guts, Marvel Scale, and (poison
+//! only) Serene Grace (see [`paralyze::ensure_admissible`] and
+//! [`secondary::ensure_admissible`]) — and the move effects the eight
+//! pipelines still do not cover — the secondary-effect trampolines
+//! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
+//! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are
+//! not, including [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
 //! `EFFECT_PARALYZE_HIT`), recoil, OHKO, Counter, Bide, Leech Seed and the
 //! rest of the end-of-turn residual family, and so on.
 //!

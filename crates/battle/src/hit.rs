@@ -114,11 +114,8 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    // `EFFECT_POISON_HIT` is not "ordinary" in `is_ordinary_hit_effect`'s own
-    // sense -- it needs the trampoline dispatch `spend_effect_chance_draw`
-    // gives it -- but it still resolves through this same damage script
-    // (issue #784), so it is admitted alongside Struggle rather than folded
-    // into that list.
+    // `EFFECT_POISON_HIT` resolves through this same damage script while
+    // keeping its own trampoline dispatch in `spend_effect_chance_draw`.
     if !is_ordinary_hit_effect(move_data.effect)
         && !is_poison_hit_effect(move_data.effect)
         && move_id != STRUGGLE
@@ -314,22 +311,13 @@ pub fn damage_core(
 
 /// [`resolve_hit`]'s full result: the damage verdict, plus whether the
 /// trailing effect-chance draw wants to poison `defender`.
-///
-/// The two are kept separate from [`HitOutcome`] itself rather than folded
-/// into a new [`HitOutcome::Hit`] field: [`HitOutcome`] is damage-only and
-/// shared by the drain, fixed-damage, and multi-hit pipelines, none of which
-/// can ever carry a poison signal (no move reaching them has
-/// [`crate::secondary::EFFECT_POISON_HIT`] as its own top-level effect).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HitResolution {
     /// The damage verdict.
     pub outcome: HitOutcome,
     /// Whether the caller should write [`crate::status1::Status1::Poisoned`]
-    /// to `defender` — still subject to the caller's own post-damage
-    /// fainted check, since [`spend_effect_chance_draw`] cannot see whether
-    /// this same hit's damage will faint the target
-    /// (`SetMoveEffect`'s leading `hp == 0` guard,
-    /// `battle_script_commands.c:2261`-`:2264`).
+    /// to `defender`, subject to the caller's own post-damage faint check
+    /// ([`spend_effect_chance_draw`]).
     pub poisons_defender: bool,
 }
 

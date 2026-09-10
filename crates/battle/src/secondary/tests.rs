@@ -24,6 +24,8 @@ const TACKLE: MoveId = MoveId(33);
 const POISON_STING: MoveId = MoveId(40);
 const POISON_TAIL: MoveId = MoveId(342);
 const THUNDER_SHOCK: MoveId = MoveId(84);
+const DRAW_WRAPPING_BELOW_THUNDER_SHOCK_CHANCE: u16 = 109;
+const DRAW_WRAPPING_ONTO_THUNDER_SHOCK_CHANCE: u16 = 110;
 const FAKE_OUT: MoveId = MoveId(252);
 const UNKNOWN_EFFECT: MoveEffect = MoveEffect(u8::MAX);
 
@@ -42,9 +44,8 @@ const WURMPLE: u16 = 290;
 const DUNSPARCE: u16 = 206;
 /// `SPECIES_RALTS`: Synchronize in its primary ability slot.
 const RALTS: u16 = 392;
-/// `SPECIES_DRATINI`: Dragon-type, Shed Skin in its only ability slot --
-/// unlike `SPECIES_SEVIPER`, not itself Poison-typed, so this fixture
-/// actually exercises the ability guard rather than the type guard.
+/// `SPECIES_DRATINI`: Shed Skin in its only ability slot, and Dragon-type,
+/// so the type guard does not pre-empt the ability guard.
 const DRATINI: u16 = 147;
 /// `SPECIES_MACHOP`: Guts in its primary ability slot.
 const MACHOP: u16 = 66;
@@ -242,9 +243,6 @@ fn only_effect_poison_hit_is_the_modelled_poison_trampoline() {
         EFFECT_POISON_HIT
     );
 
-    // Poison Tail prepares the identical `MOVE_EFFECT_POISON` symbolic effect
-    // but is a distinct move-effect byte, and stays unported (issue #784's
-    // boundary).
     assert!(!is_poison_hit_effect(EFFECT_POISON_TAIL));
     assert_eq!(
         dex.move_data(POISON_TAIL).unwrap().effect,
@@ -360,9 +358,8 @@ fn a_successful_struggle_fails_closed_without_drawing() {
 fn effect_chance_uses_the_draw_modulo_one_hundred() {
     let dex = Dex::new();
     let defender = mon(&dex, ZIGZAGOON);
-    // Thunder Shock's chance is 10 (module fixture, pinned above): 109 % 100
-    // == 9 succeeds, 110 % 100 == 10 does not.
-    let mut successful_wrapped_roll_rng = SequenceRng::new([109]);
+    let mut successful_wrapped_roll_rng =
+        SequenceRng::new([DRAW_WRAPPING_BELOW_THUNDER_SHOCK_CHANCE]);
     assert_eq!(
         spend_effect_chance_draw(
             &dex,
@@ -373,7 +370,7 @@ fn effect_chance_uses_the_draw_modulo_one_hundred() {
         ),
         Err(BattleError::UnportedSecondaryEffect(THUNDER_SHOCK))
     );
-    let mut failed_wrapped_roll_rng = SequenceRng::new([110]);
+    let mut failed_wrapped_roll_rng = SequenceRng::new([DRAW_WRAPPING_ONTO_THUNDER_SHOCK_CHANCE]);
     assert_eq!(
         spend_effect_chance_draw(
             &dex,

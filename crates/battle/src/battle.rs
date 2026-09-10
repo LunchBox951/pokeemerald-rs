@@ -3,8 +3,8 @@
 //! [`Battle`] supports ordinary wild encounters, the scripted first battle,
 //! and trainer parties. An accepted turn chooses the opponent's action before
 //! resolving a run or move order, skips queued actions once either battler
-//! faints, settles the knockouts that leaves, applies end-of-turn residuals
-//! in that same turn order, and settles whatever those residuals felled.
+//! faints, settles the knockouts that leaves, and then applies end-of-turn
+//! residuals in that same turn order.
 //!
 //! Construction consumes a turn-number draw and a conditional Speed-tie draw.
 //! Each accepted turn consumes another turn-number draw before opponent action
@@ -338,8 +338,8 @@ impl Battle {
             });
         } else {
             self.settle_fainted_enemy(&mut events);
-            // Upstream's yes/no box sits inside HandleFaintedMonActions, which
-            // every path to the residual pass runs through first
+            // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
+            // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
             if let Some(order) = self.pending_residual_order.take() {
                 self.residual_effects(order, &mut events);
@@ -563,11 +563,9 @@ impl Battle {
         order: Order,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        // Upstream reaches HandleFaintedMonActions twice a turn: once per
-        // action, through the HandleAction_TryFinish every move script's own
-        // `Cmd_end` schedules, and again behind `BattleTurnPassed`'s residual
-        // pass (`src/battle_main.c:549`, `:3960`-`:3968`). A knockout that
-        // ended the battle in the first call leaves no residual pass to run.
+        // Upstream reaches `HandleFaintedMonActions` twice a turn: from each
+        // action's own `Cmd_end`, and again behind `BattleTurnPassed`'s
+        // residual pass (`src/battle_main.c:549`, `:3960`-`:3968`).
         self.handle_fainted_mons(events)?;
         if self.player.pending_move_learn().is_some() {
             self.pending_residual_order = Some(order);
@@ -582,9 +580,8 @@ impl Battle {
             return;
         }
         // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
-        // own move order -- skips a battler that already fainted, and reaches
-        // ENDTURN_POISON before ENDTURN_CHARGE inside each battler's pass
-        // (`src/battle_util.c:1442`-`:1474`).
+        // own move order -- and reaches ENDTURN_POISON before ENDTURN_CHARGE
+        // within each battler's pass (`src/battle_util.c:1442`-`:1474`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -661,8 +658,8 @@ impl Battle {
         if !self.enemy.is_fainted() {
             return Ok(());
         }
-        // Case 1 runs BattleScript_GiveExp to completion -- the level-up's
-        // yes/no box included -- before case 4 replaces or pays out
+        // Case 1 runs `BattleScript_GiveExp` to completion, the yes/no box
+        // included, before case 4 replaces or pays out
         // (`src/battle_util.c:1912`-`:1946`).
         self.settle_enemy_reward(events)?;
         if self.player.pending_move_learn().is_some() {
@@ -673,8 +670,8 @@ impl Battle {
     }
 
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
-        // Cmd_getexp case 2 zeroes the award, and jumps past both the string
-        // and MonGainEVs, for a recipient already at the cap
+        // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
+        // and `MonGainEVs` for a recipient already at the cap
         // (`src/battle_script_commands.c:3351`-`:3356`).
         if self.player.level() >= MAX_LEVEL {
             return Ok(());
@@ -686,8 +683,8 @@ impl Battle {
         } else {
             wild_faint_exp(defeated.base_exp, level)
         };
-        // MonGainEVs runs ahead of the exp and level-up sequence, so a level
-        // crossed this turn snapshots the gain
+        // `MonGainEVs` runs ahead of the exp and level-up sequence, so a
+        // level crossed this turn snapshots the gain
         // (`src/battle_script_commands.c:3420`).
         self.player.gain_evs(defeated.ev_yield);
         let pending = self.player.apply_experience(&self.dex, exp)?;

@@ -100,9 +100,8 @@ pub fn resolve_multi_hit(
 /// # Errors
 ///
 /// Returns any error from [`spend_effect_chance_draw`]. `EFFECT_MULTI_HIT`
-/// is never `EFFECT_POISON_HIT`, so the returned poison signal is always
-/// discarded here along with every other unported secondary-effect
-/// trampoline's draw.
+/// is never `EFFECT_POISON_HIT`, so the poison signal is always `false` and
+/// the draw is discarded.
 pub fn spend_multi_hit_effect_chance_draw(
     dex: &Dex,
     move_id: MoveId,

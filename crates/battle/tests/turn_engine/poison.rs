@@ -1,15 +1,10 @@
-//! [`Status1::Poisoned`], [`EFFECT_POISON_HIT`]'s secondary infliction, and
-//! the end-of-turn poison residual, driven through real turns.
+//! Poison's secondary infliction and its end-of-turn residual, driven
+//! through real turns.
 //!
-//! Unit-level draw shapes and the residual damage formula are pinned inside
-//! `battle::secondary` (the chance draw, the immunity guards, the ability
-//! admission screens) and `battle::status1` (`poison_residual_damage`'s
-//! eighth-of-max-HP floor). What is pinned **here** is the wiring only a
-//! turn can show: that a landed hit's poison shows up as
-//! [`BattleEvent::Poisoned`] right after [`BattleEvent::Hit`], that the
-//! residual tick fires for both battlers in the same turn-order sequence
-//! their moves used, and that a lethal residual tick settles the battle
-//! exactly like a lethal hit does.
+//! The draw shapes, the immunity guards, and the damage formula are pinned
+//! in `battle::secondary` and `battle::status1`. What is pinned here is the
+//! turn wiring those cannot reach: event order, residual order, and how a
+//! residual knockout settles.
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
 use assets::MoveId;
@@ -28,11 +23,25 @@ const RATTATA: u16 = 19;
 const ZIGZAGOON: u16 = 288;
 /// `SPECIES_EKANS`: mono Poison-type, immune to poison outright.
 const EKANS: u16 = 23;
-/// `SPECIES_ABRA`: base Speed 90, faster than [`slow_runner_rattata`]'s
-/// Speed-72 Rattata even at the same level, but far too weak an attacker to
-/// one-shot it with Tackle -- forces the failed-run fixture's RNG-driven
-/// escape branch without the battle ending before residual ever runs.
+/// `SPECIES_ABRA`: faster than [`slow_runner_rattata`]'s Rattata, so a run
+/// is never automatic, and too weak to end the battle before its residuals.
 const ABRA: u16 = 63;
+
+/// A draw that clears [`POISON_STING`]'s 30% secondary chance.
+const POISON_CHANCE_HIT_DRAW: u16 = 29;
+/// An escape roll that fails for [`slow_runner_rattata`] against [`ABRA`]
+/// (`battle::escape`'s own tests pin the threshold).
+const ESCAPE_ROLL_FAILS: u16 = 65000;
+
+/// Both battlers use a damaging move, every roll on its default branch.
+const BOTH_BATTLERS_ATTACK: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+/// [`BOTH_BATTLERS_ATTACK`] with the player's [`POISON_STING`] chance draw
+/// clearing.
+const POISON_STING_LANDS: [u16; 11] = [0, 0, 0, 0, 1, 0, POISON_CHANCE_HIT_DRAW, 0, 1, 0, 0];
+/// The player's move fells the enemy before it acts.
+const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
+/// A refused run, then the enemy's damaging move.
+const FAILED_RUN_THEN_ENEMY_ATTACK: [u16; 8] = [0, 0, 0, ESCAPE_ROLL_FAILS, 0, 1, 0, 0];
 
 #[test]
 fn a_landed_poison_sting_reports_poisoned_immediately_after_hit() {
@@ -40,8 +49,7 @@ fn a_landed_poison_sting_reports_poisoned_immediately_after_hit() {
     let player = max_iv_mon(&dex, RATTATA, 10, vec![POISON_STING]);
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
 
-    // The seventh draw, 29, is Poison Sting's successful 30% chance roll.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 29, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -78,9 +86,7 @@ fn a_poison_type_target_is_never_poisoned_even_on_a_successful_roll() {
     let player = max_iv_mon(&dex, RATTATA, 10, vec![POISON_STING]);
     let enemy = max_iv_mon(&dex, EKANS, 10, vec![TACKLE]);
 
-    // Same script shape as the landed case above: the chance roll still
-    // succeeds (29 < 30), but Ekans's own typing silently blocks it.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 29, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(POISON_STING_LANDS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -103,11 +109,7 @@ fn end_of_turn_poison_damage_matches_the_pinned_formula_and_settles_no_faint() {
     let player_max_hp = player.stats().max_hp;
     let enemy = max_iv_mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Tackle (Rattata's 72 base Speed outpaces
-    // Zigzagoon's 41, so the player acts first, 4 draws), then the enemy's
-    // own Tackle (4 draws).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -135,18 +137,11 @@ fn end_of_turn_poison_damage_matches_the_pinned_formula_and_settles_no_faint() {
         }),
         "residual damage must match poison_residual_damage(max_hp): {events:?}"
     );
-    // The enemy's own Tackle also lands on the player this same turn, so
-    // only a lower bound holds here: the residual tick alone removed at
-    // least `expected_damage`, on top of whatever the direct hit took.
+    // The enemy's own Tackle lands this same turn, so only a lower bound holds.
     assert!(battle.player().current_hp() <= player_max_hp - expected_damage);
     assert!(battle.outcome().is_none());
 }
 
-/// Neither battler's residual tick is lethal here, so both run in the same
-/// order this turn's own moves used; contrast
-/// [`the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_running`],
-/// where the first tick ending the battle stops the second from running at
-/// all.
 #[test]
 fn both_battlers_poisoned_take_residual_damage_in_the_same_turn_order_their_moves_used() {
     let dex = Dex::new();
@@ -155,10 +150,7 @@ fn both_battlers_poisoned_take_residual_damage_in_the_same_turn_order_their_move
     let mut enemy = max_iv_mon(&dex, ZIGZAGOON, 20, vec![TACKLE]);
     enemy.set_status1(Status1::Poisoned);
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Tackle (faster: acts first, 4 draws), the
-    // enemy's Tackle (4 draws).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -201,9 +193,7 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
     let player = max_iv_mon(&dex, RATTATA, 20, vec![TACKLE]);
     let mut enemy = max_iv_mon(&dex, ZIGZAGOON, 20, vec![TACKLE]);
 
-    // Probe Tackle's damage with the turn's own crit and variance draws, then
-    // leave the enemy one residual tick above it so the tick, not Tackle,
-    // fells it.
+    // Park the enemy exactly one residual tick above Tackle's damage.
     let tackle_damage = {
         let mut probe = SequenceRng::new([1, 0]);
         match battle::damage_core(&dex, TACKLE, &player, &enemy, false, &mut probe).unwrap() {
@@ -220,11 +210,7 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
         "fixture sanity"
     );
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Tackle (faster: acts first, accuracy/crit/
-    // damage/chance, 4 draws matching the probe's crit and damage rolls),
-    // the enemy's own Tackle (4 draws).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -260,12 +246,9 @@ fn a_lethal_residual_tick_faints_and_ends_the_battle_like_a_lethal_hit() {
 }
 
 /// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
-/// (`battle_main.c:3960`-`:3966`) refuses to re-invoke
+/// (`battle_main.c:3960`-`:3966`) refuses to re-enter
 /// `DoBattlerEndTurnEffects` once a residual script's own `checkteamslost`
-/// (`data/battle_scripts_1.s:3746`) has set an outcome, so a battler whose
-/// own residual tick ends the battle stops the tracker walk there --
-/// leaving a *later* poisoned battler's own tick unrun this turn, no matter
-/// how lethal it would have been.
+/// (`data/battle_scripts_1.s:3746`) has set an outcome.
 #[test]
 fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_running() {
     let dex = Dex::new();
@@ -274,13 +257,8 @@ fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_runnin
     player.set_status1(Status1::Poisoned);
     enemy.set_status1(Status1::Poisoned);
 
-    // Rattata's 72 base Speed outpaces Zigzagoon's 41, so the player is
-    // processed first in residual, matching this turn's own move order.
-    // Probe the enemy's Tackle damage against the player with the same
-    // crit/damage-roll draws the real turn below uses, then park the
-    // player exactly one residual tick above that -- it survives the
-    // enemy's direct hit with precisely its own poison damage left, so the
-    // player's residual tick (processed first) is what faints it.
+    // Park the player, processed first, exactly one residual tick above the
+    // enemy's Tackle damage.
     let tackle_damage = {
         let mut probe = SequenceRng::new([1, 0]);
         match battle::damage_core(&dex, TACKLE, &enemy, &player, false, &mut probe).unwrap() {
@@ -291,11 +269,7 @@ fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_runnin
     let player_lethal_damage = poison_residual_damage(player.stats().max_hp);
     player.apply_damage(player.stats().max_hp - (tackle_damage + player_lethal_damage));
 
-    // battle-start turn number, the turn's own turn number, the enemy's
-    // selection, the player's Tackle (faster: acts first, 4 draws), the
-    // enemy's own Tackle (accuracy/crit/damage/chance, 4 draws matching the
-    // probe's crit and damage rolls).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -329,24 +303,12 @@ fn the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_runnin
 #[test]
 fn a_failed_run_still_ticks_the_poison_residual() {
     let dex = Dex::new();
-    // A player faster than the enemy escapes unconditionally
-    // (`try_run_from_battle` returns `true` with no draw); this fixture
-    // needs the RNG-driven branch instead, so it pairs `slow_runner_rattata`
-    // against a same-level [`ABRA`], faster but far too weak an attacker to
-    // one-shot it -- unlike the escape module's own level-50-Charmander
-    // fixture, which would end the battle before residual ever ran. The
-    // *enemy* carries the poison, not the player, so the fixture needs no
-    // damage-survival accounting at all.
     let player = slow_runner_rattata(&dex);
     let mut enemy = max_iv_mon(&dex, ABRA, 5, vec![TACKLE]);
     enemy.set_status1(Status1::Poisoned);
     let enemy_max_hp = enemy.stats().max_hp;
 
-    // battle-start turn number, turn number, the enemy's move pick, the
-    // escape roll (65000 & 0xFF = 232, fails against this pairing's
-    // threshold -- see `crate::escape`'s own tests), then the enemy's Tackle
-    // (accuracy / no crit / best roll / effect chance, 4 draws).
-    let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(FAILED_RUN_THEN_ENEMY_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::Run, &mut rng)
@@ -366,19 +328,10 @@ fn a_failed_run_still_ticks_the_poison_residual() {
 /// mon below with Tackle at any damage roll.
 const CHARMANDER: u16 = 4;
 
-/// A direct-hit knockout is settled in the action phase, not after the
-/// residuals: every move script ends on `Cmd_end`, which schedules
-/// `B_ACTION_TRY_FINISH` (`src/battle_script_commands.c:3950`-`:3958`) ->
-/// `HandleAction_TryFinish` (`src/battle_main.c:549`) ->
-/// `HandleFaintedMonActions` (`src/battle_util.c:638`-`:644`), whose case 1
-/// pays `BattleScript_GiveExp` (`:1912`-`:1923`) and whose case 4 runs
-/// `BattleScript_HandleFaintedMon`'s `checkteamslost`
-/// (`data/battle_scripts_1.s:2830`-`:2831`). A wild KO sets `B_OUTCOME_WON`
-/// there, and `RunTurnActionsFunctions` then routes a non-zero
-/// `gBattleOutcome` to `HandleEndTurn_BattleWon`
-/// (`src/battle_main.c:4937`-`:4952`), never to `HandleEndTurn_ContinueBattle`
-/// and its `BattleTurnPassed` -- so `DoBattlerEndTurnEffects` never runs and
-/// the poisoned winner keeps every point of the HP it won on.
+/// A won battle routes through `HandleEndTurn_BattleWon`, never
+/// `HandleEndTurn_ContinueBattle` and its `BattleTurnPassed`
+/// (`src/battle_main.c:4937`-`:4952`), so `DoBattlerEndTurnEffects` never
+/// runs for the turn the knockout ended.
 #[test]
 fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     let dex = Dex::new();
@@ -387,11 +340,7 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     let player_hp_before = player.current_hp();
     let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
-    // battle-start turn number, the turn's own turn number, the wild mon's
-    // move pick, then the player's Tackle (accuracy, crit, damage roll,
-    // discarded effect-chance roll). The wild mon never acts: the player's
-    // hit kills it.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(PLAYER_ACTS_ALONE);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -418,22 +367,10 @@ fn a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// The reward for a direct-hit knockout is settled **before** the turn's
-/// residual pass, so a winner whose own poison tick then kills it keeps the
-/// experience and EVs it just earned. Upstream never has that ordering to
-/// lose: `HandleFaintedMonActions`' `BattleScript_GiveExp`
-/// (`src/battle_util.c:1912`-`:1923`) runs from `HandleAction_TryFinish`
-/// (`:638`-`:644`) at the end of the killing move's own script, while
-/// `DoBattlerEndTurnEffects` waits for `BattleTurnPassed`
+/// `HandleFaintedMonActions`' `BattleScript_GiveExp`
+/// (`src/battle_util.c:1912`-`:1923`) runs at the end of the killing move's
+/// own script, while `DoBattlerEndTurnEffects` waits for `BattleTurnPassed`
 /// (`src/battle_main.c:3960`-`:3968`).
-///
-/// A trainer with a bench is the fixture because it is the only shape where
-/// both halves are observable: the knockout does not exhaust the opposing
-/// side, so `checkteamslost` leaves `gBattleOutcome` at `0`, the
-/// replacement is sent out, and the turn really does reach its residuals --
-/// unlike
-/// [`a_direct_hit_wild_ko_ends_the_battle_before_any_residual_can_tick`],
-/// where the same knockout ends the battle outright.
 #[test]
 fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winner() {
     let dex = Dex::new();
@@ -446,9 +383,7 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     let lead = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let benched = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
-    // A long zero script: the player one-shots the lead at any damage roll,
-    // so no draw here decides anything the assertions below read, and the
-    // trainer-AI draw count belongs to `trainer_ai`'s own tests.
+    // No draw in this turn decides anything the assertions below read.
     let mut rng = SequenceRng::new([0; 40]);
     let mut battle = Battle::new_trainer(
         dex,
@@ -510,23 +445,18 @@ fn a_direct_hit_kos_reward_is_paid_before_the_residual_tick_that_fells_the_winne
     );
 }
 
-/// `MOVE_LEER`, a non-damaging stat drop: the trainer mon's only move, so
-/// neither battler's direct action can change the other's HP this turn and
-/// the residual pass alone decides the battle.
+/// `MOVE_LEER`, non-damaging: with [`GROWL`], no direct action can change
+/// HP, so the residual pass alone decides the battle.
 const LEER: MoveId = MoveId(43);
-/// `MOVE_GROWL`, the player's own non-damaging move, for the same reason.
+/// `MOVE_GROWL`, the player's own non-damaging move.
 const GROWL: MoveId = MoveId(45);
 /// `TRAINER_MAY_ROUTE_103_MUDKIP`.
 const MAY_ROUTE_103_MUDKIP: assets::trainers::TrainerId = assets::trainers::TrainerId(529);
 
-/// A trainer's **last** mon fainting to its own residual tick ends the
-/// battle right there: `BattleScript_DoTurnDmgEnd`'s `checkteamslost`
-/// (`data/battle_scripts_1.s:3746`) runs inside the very script that
-/// fainted it, and `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
-/// (`battle_main.c:3960`-`:3966`) then refuses to walk on to the next
-/// battler -- so the player's own lethal tick never runs, exactly as
-/// [`the_first_battlers_lethal_residual_tick_stops_the_second_battlers_from_running`]
-/// pins for the wild case.
+/// `BattleScript_DoTurnDmgEnd`'s `checkteamslost`
+/// (`data/battle_scripts_1.s:3746`) runs inside the residual script that
+/// fainted the trainer's last mon, so `BattleTurnPassed`'s outcome guard
+/// (`battle_main.c:3960`-`:3966`) never reaches the player's own tick.
 #[test]
 fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_own_tick() {
     let dex = Dex::new();
@@ -544,10 +474,7 @@ fn a_trainer_last_mons_lethal_residual_tick_ends_the_battle_before_the_players_o
         "fixture sanity -- the trainer's mon must be processed first in residual"
     );
 
-    // Neither move deals damage, so no draw here decides anything the
-    // assertions below read; a long zero script covers the turn-number and
-    // trainer-AI draws without pinning their count (that belongs to
-    // `trainer_ai`'s own tests).
+    // No draw in this turn decides anything the assertions below read.
     let mut rng = SequenceRng::new([0; 40]);
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![enemy], &mut rng).unwrap();
@@ -622,8 +549,6 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
-    // The lead takes two Scratches to fall; the player's own tick on each
-    // earlier turn is ordinary and not what this test is about.
     let mut events = Vec::new();
     for _ in 0..8 {
         events = battle

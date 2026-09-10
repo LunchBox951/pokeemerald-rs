@@ -424,10 +424,14 @@ const SMOG: MoveId = MoveId(123);
 const SLUDGE: MoveId = MoveId(124);
 /// `MOVE_SLUDGE_BOMB`: `EFFECT_POISON_HIT`.
 const SLUDGE_BOMB: MoveId = MoveId(188);
-/// `MOVE_POISON_TAIL`: `EFFECT_POISON_TAIL` -- prepares the identical
-/// `MOVE_EFFECT_POISON` symbolic effect but stays unported (issue #784's
-/// boundary).
+/// `MOVE_POISON_TAIL`: `EFFECT_POISON_TAIL`, an unported trampoline.
 const POISON_TAIL: MoveId = MoveId(342);
+/// `SPECIES_EKANS`: mono Poison-type.
+const EKANS: SpeciesId = SpeciesId(23);
+/// A draw that clears [`POISON_STING`]'s 30% secondary chance.
+const POISON_CHANCE_HIT_DRAW: u16 = 29;
+/// A draw that misses it.
+const POISON_CHANCE_MISS_DRAW: u16 = 30;
 
 #[test]
 fn every_effect_poison_hit_move_is_admitted_though_not_ordinary() {
@@ -461,12 +465,11 @@ fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
         30
     );
 
-    // Accuracy, critical-hit, damage roll, then a successful 30% chance draw.
     let mut succeeds = SequenceRng::new([
         ACCURACY_HIT_DRAW,
         ORDINARY_NO_CRIT_DRAW,
         BEST_DAMAGE_DRAW,
-        29,
+        POISON_CHANCE_HIT_DRAW,
     ]);
     let succeeded = resolve_hit(
         &dex,
@@ -481,12 +484,11 @@ fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
     assert!(succeeded.poisons_defender);
     assert_eq!(succeeds.draws(), 4);
 
-    // Same shape, but the chance draw fails.
     let mut fails = SequenceRng::new([
         ACCURACY_HIT_DRAW,
         ORDINARY_NO_CRIT_DRAW,
         BEST_DAMAGE_DRAW,
-        30,
+        POISON_CHANCE_MISS_DRAW,
     ]);
     let failed = resolve_hit(&dex, POISON_STING, &attacker, &defender, false, &mut fails).unwrap();
     assert!(matches!(failed.outcome, HitOutcome::Hit { .. }));
@@ -497,13 +499,12 @@ fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
 fn a_poison_type_or_steel_type_defender_never_reports_poisons_defender() {
     let dex = Dex::new();
     let attacker = mon(&dex, BULBASAUR, 10, vec![POISON_STING]);
-    // `SPECIES_EKANS`: mono Poison, immune outright.
-    let poison_type_defender = mon(&dex, SpeciesId(23), 10, vec![TACKLE]);
+    let poison_type_defender = mon(&dex, EKANS, 10, vec![TACKLE]);
     let mut rng = SequenceRng::new([
         ACCURACY_HIT_DRAW,
         ORDINARY_NO_CRIT_DRAW,
         BEST_DAMAGE_DRAW,
-        29,
+        POISON_CHANCE_HIT_DRAW,
     ]);
     let resolution = resolve_hit(
         &dex,
