@@ -3,8 +3,8 @@
 //! [`SaveFile::write`](super::SaveFile::write) publishes by rename, so the
 //! image must first exist whole and synced at a sibling entry in the same
 //! directory. This module owns that entry: the name it takes, the exclusive
-//! create that claims it, the narrowing retries a host's real limits force,
-//! and the cleanup that abandons it.
+//! create that claims it, the hold that keeps it, the narrowing retries a
+//! host's real limits force, and the cleanup that abandons it.
 
 use std::path::{Path, PathBuf};
 
@@ -44,11 +44,23 @@ fn names_offered(hex_digits: usize) -> usize {
 /// Opens `path` for writing and fails if anything already holds that name,
 /// refusing an existing file, directory, or symlink instead of following or
 /// truncating it.
+///
+/// On Windows the returned handle shares nothing, so until it is dropped no
+/// other opener -- in this process or any other -- can open, delete, or
+/// rename that entry: the name cannot be made to mean a different file
+/// while the handle lives. Windows counts the promoting rename among the
+/// things it bars, so the handle has to be given up first; see
+/// [`StagedSave::release_hold`].
 pub(super) fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        options.share_mode(0);
+    }
+    options.open(path)
 }
 
 /// Stages `bytes` at the first of `names` that `create_new` finds free,
@@ -92,16 +104,20 @@ fn fill_new_file(
     use std::io::Write as _;
 
     let file = create_new(path)?;
-    let staged = StagedSave {
-        path: path.to_path_buf(),
-        file,
-    };
     let result = (|| {
-        let mut writer = std::io::BufWriter::new(&staged.file);
+        let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
         writer.flush()?;
-        staged.file.sync_all()
+        file.sync_all()
     })();
+    #[cfg(not(windows))]
+    let hold = file;
+    #[cfg(windows)]
+    let hold = Some(file);
+    let mut staged = StagedSave {
+        path: path.to_path_buf(),
+        hold,
+    };
     match result {
         Ok(()) => Ok(staged),
         Err(source) => Err(staged.remove_after(source)),
@@ -263,26 +279,95 @@ fn unique_value_mask(width: usize) -> u64 {
     (1_u64 << (4 * width)) - 1
 }
 
-/// A staged flash image and the handle that wrote it, held open until the
-/// image is promoted or abandoned: while the handle lives the file cannot be
-/// freed, so nothing that takes its name can inherit its identity and pass
-/// for it.
+/// The handle that wrote the staged image, kept open until the image is
+/// promoted or abandoned: while it lives the file cannot be freed, so
+/// nothing that takes its name can inherit its identity and pass for it. A
+/// rename is indifferent to it, so nothing has to give it up early.
+#[cfg(not(windows))]
+type Hold = std::fs::File;
+
+/// The handle that wrote the staged image, kept open until the image is
+/// promoted or abandoned. It shares nothing ([`create_new_exclusive`]), so
+/// while it lives the entry cannot be opened, deleted, or renamed at all --
+/// by this process either, which is why it is an `Option`:
+/// [`StagedSave::release_hold`] empties it when the name has to be given up.
+#[cfg(windows)]
+type Hold = Option<std::fs::File>;
+
+/// Ends `hold` where the platform needs it ended.
+///
+/// Nothing here is blocked by an open handle, so the hold stays for the
+/// life of the [`StagedSave`]: it is what keeps the staged inode from being
+/// freed and its number reused under the staging name.
+#[cfg(not(windows))]
+fn release(_hold: &mut Hold) {}
+
+/// Ends `hold` where the platform needs it ended.
+///
+/// Windows refuses to rename or delete an entry whose open handle shares
+/// nothing, and refuses it to the holder too, so the hold cannot outlive
+/// the last operation that needs the staging name.
+#[cfg(windows)]
+fn release(hold: &mut Hold) {
+    drop(hold.take());
+}
+
+/// Whether `found` describes the very file `hold` holds open: same device
+/// and inode.
+#[cfg(unix)]
+fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let staged = hold.metadata()?;
+    Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
+}
+
+/// Whether `found` describes the very file `hold` holds open. Off unix
+/// there is no identity to read back -- the Windows file index sits behind
+/// the unstable `windows_by_handle` feature -- so the answer rests on what
+/// the hold forbids rather than on what a reading shows.
+///
+/// On Windows it forbids everything: no one can delete or rename the entry
+/// while the hold lives, so its name cannot have come to mean another file,
+/// and [`StagedSave::still_ours`]'s regular-file test is the whole
+/// remaining question. On any other non-unix host the hold is an ordinary
+/// handle, and a regular file that replaced the entry would go undetected.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+)]
+fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+/// A staged flash image and the hold that keeps the staging name its own.
 #[derive(Debug)]
 pub(super) struct StagedSave {
     pub(super) path: PathBuf,
-    file: std::fs::File,
+    hold: Hold,
 }
 
 impl StagedSave {
     /// Whether the staging path still names this staged file, rather than a
     /// symlink, directory, or other entry that took its name.
     ///
-    /// Where [`is_same_file`] has nothing to compare, refusing everything
-    /// that is not a regular file is the whole check. A reading that failed
-    /// is neither answer, and surfaces rather than passing for "replaced".
+    /// A reading that failed is neither answer, and surfaces rather than
+    /// passing for "replaced".
     pub(super) fn still_ours(&self) -> std::io::Result<bool> {
         let found = std::fs::symlink_metadata(&self.path)?;
-        Ok(found.file_type().is_file() && is_same_file(&self.file.metadata()?, &found))
+        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
+    }
+
+    /// Gives up the hold, so that the rename which promotes the staged
+    /// image -- or the unlink which abandons it -- can take its name.
+    ///
+    /// Call this only after the last [`Self::still_ours`] whose answer the
+    /// caller relies on: off unix that answer rests on the hold (see
+    /// [`is_the_held_file`]). What is left once the hold ends is the window
+    /// [`SaveFile::write_with`](super::SaveFile::write_with) documents.
+    pub(super) fn release_hold(&mut self) {
+        release(&mut self.hold);
     }
 
     /// Removes this staged file after `source`, folding a cleanup failure into
@@ -295,10 +380,13 @@ impl StagedSave {
     /// The check-then-act bound documented at the rename in
     /// [`SaveFile::write_with`](super::SaveFile::write_with) applies to this
     /// unlink too.
-    pub(super) fn remove_after(&self, source: std::io::Error) -> std::io::Error {
+    pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
         let left_behind = match self.still_ours() {
             Ok(false) => return source,
-            Ok(true) => std::fs::remove_file(&self.path).err(),
+            Ok(true) => {
+                self.release_hold();
+                std::fs::remove_file(&self.path).err()
+            }
             Err(unreadable) => Some(unreadable),
         };
         let Some(cleanup_source) = left_behind else {
@@ -312,24 +400,6 @@ impl StagedSave {
             ),
         )
     }
-}
-
-/// Whether two metadata readings describe the same file system object:
-/// device and inode on unix.
-#[cfg(unix)]
-fn is_same_file(staged: &std::fs::Metadata, found: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    (staged.dev(), staged.ino()) == (found.dev(), found.ino())
-}
-
-/// Stable `std` exposes no Windows equivalent -- the file index sits behind
-/// the unstable `windows_by_handle` feature -- so off unix this cannot
-/// answer, and [`StagedSave::still_ours`]'s regular-file test stands alone: a
-/// replacement that is itself a regular file goes undetected there.
-#[cfg(not(unix))]
-fn is_same_file(_staged: &std::fs::Metadata, _found: &std::fs::Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

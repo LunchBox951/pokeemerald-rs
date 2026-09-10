@@ -772,7 +772,7 @@ fn cleaning_up_a_failed_staged_write_leaves_the_entry_that_replaced_it_alone() {
     std::fs::write(&bystander, b"not a save file").unwrap();
 
     let staging = dir.join("staged.tmp");
-    let staged = stage_at_first_free_name(
+    let mut staged = stage_at_first_free_name(
         std::iter::once(staging.clone()),
         create_new_exclusive,
         &vec![0u8; FLASH_IMAGE_LEN],
@@ -816,7 +816,7 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
     let dir = TempDir::new("staging-cleanup-directory-swap");
 
     let staging = dir.join("staged.tmp");
-    let staged = stage_at_first_free_name(
+    let mut staged = stage_at_first_free_name(
         std::iter::once(staging.clone()),
         create_new_exclusive,
         &vec![0u8; FLASH_IMAGE_LEN],
@@ -840,6 +840,73 @@ fn a_directory_that_replaces_the_staging_entry_survives_cleanup() {
             .is_dir(),
         "cleanup must never remove a directory that replaced this call's staging file -- \
          std::fs::remove_file cannot unlink one"
+    );
+}
+
+/// Whether `err` is Windows reporting that an open handle's share mode
+/// admits no one else. `std` categorises `ERROR_SHARING_VIOLATION` on some
+/// Windows versions and not others, so both spellings count.
+#[cfg(windows)]
+fn is_a_sharing_violation(err: &std::io::Error) -> bool {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+
+    err.kind() == std::io::ErrorKind::PermissionDenied
+        || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+}
+
+/// The Windows counterpart to the unix swap tests: rather than catching a
+/// replacement between the write and the rename, the hold makes one
+/// impossible. Those tests plant their swap by unlinking the staged entry
+/// and taking its name; here neither step can even be attempted, which is
+/// why the regular-file test is all [`StagedSave::still_ours`] has left to
+/// ask off unix.
+#[cfg(windows)]
+#[test]
+fn a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives() {
+    let dir = TempDir::new("staging-exclusive-hold");
+    let path = dir.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+    let (store, _, _) = saved_store();
+
+    let staged_path = std::cell::RefCell::new(std::path::PathBuf::new());
+    file.write_with(
+        &store,
+        SaveFile::sync_directory_best_effort,
+        |bytes| area(&file).stage(bytes),
+        |staged| {
+            staged_path.replace(staged.to_path_buf());
+            let opened = std::fs::OpenOptions::new()
+                .read(true)
+                .open(staged)
+                .expect_err("a held staging entry must refuse a second open");
+            assert!(
+                is_a_sharing_violation(&opened),
+                "opening a held staging entry must fail as a sharing violation: {opened:?}"
+            );
+
+            let removed = std::fs::remove_file(staged)
+                .expect_err("a held staging entry must refuse deletion");
+            assert!(
+                is_a_sharing_violation(&removed),
+                "deleting a held staging entry must fail as a sharing violation: {removed:?}"
+            );
+            assert!(
+                staged.exists(),
+                "a refused deletion must leave the staged image where it is"
+            );
+        },
+    )
+    .expect("a write whose staged image nobody else could touch must succeed");
+
+    assert!(
+        !staged_path.into_inner().exists(),
+        "the hold must end in time for the rename, not leave the staged image beside the save"
+    );
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(
+        reloaded.flash_image(),
+        store.flash_image(),
+        "the save must hold the bytes written under the hold"
     );
 }
 

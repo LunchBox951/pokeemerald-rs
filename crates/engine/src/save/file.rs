@@ -315,12 +315,15 @@ impl SaveFile {
             path: self.path.clone(),
             source,
         };
-        let staged = stage(store.flash_image()).map_err(write_error)?;
+        let mut staged = stage(store.flash_image()).map_err(write_error)?;
         before_rename(&staged.path);
         // Nothing in `std` fuses this check to the rename below, so a
         // replacement landing between the two is still promoted; the
-        // exclusive create, the unguessable name, and the handle held open
-        // bound that window rather than close it.
+        // exclusive create, the unguessable name, and the hold kept open
+        // across the check bound that window rather than close it. On
+        // Windows the hold admits nobody at all, so the window is only as
+        // wide as its release: from `release_hold` to the rename, and on to
+        // the cleanup unlink if that rename fails.
         match staged.still_ours() {
             Ok(true) => {}
             Ok(false) => {
@@ -334,6 +337,7 @@ impl SaveFile {
             }
             Err(unreadable) => return Err(write_error(staged.remove_after(unreadable))),
         }
+        staged.release_hold();
         if let Err(source) = std::fs::rename(&staged.path, &self.path) {
             return Err(write_error(staged.remove_after(source)));
         }
