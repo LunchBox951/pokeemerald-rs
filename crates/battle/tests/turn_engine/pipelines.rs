@@ -750,7 +750,7 @@ fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
 /// on any other, closing the doubling window on schedule even though the
 /// player spent the turn trying to flee instead of attacking. Regression
 /// test for a failed-run path that returned before
-/// [`Battle::residual_effects`] and left the timer one tick too high.
+/// [`Battle::tick_charge_effects`] and left the timer one tick too high.
 #[test]
 fn a_failed_run_still_ticks_the_charge_timer_down() {
     let dex = Dex::new();
