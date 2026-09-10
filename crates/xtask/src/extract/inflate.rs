@@ -121,6 +121,11 @@ impl<'a> BitReader<'a> {
 struct HuffmanTable {
     symbol_counts_by_length: [u16; 16],
     symbols_by_length: Vec<u16>,
+    /// Whether the code fully occupies its code space
+    /// (`remaining_code_space == 0` after construction; puff.c:311-325).
+    complete: bool,
+    /// The number of symbols assigned a code (nonzero length).
+    symbol_count: usize,
 }
 
 impl HuffmanTable {
@@ -141,8 +146,11 @@ impl HuffmanTable {
                 return Err(InflateError::BadHuffmanTable);
             }
         }
-        // Keep incomplete tables decodable: RFC 1951 section 3.2.7 requires
-        // this for one-symbol distance trees, and `decode` rejects unused codes.
+        let complete = remaining_code_space == 0;
+        // Building still accepts incomplete tables: the fixed-Huffman
+        // distance table is inherently incomplete, and RFC 1951 section
+        // 3.2.7 permits a one-symbol dynamic tree. Dynamic-block callers
+        // gate on `complete` and `is_valid_incomplete_or_complete` instead.
 
         let mut next_symbol_by_length = [0u16; 16];
         for length in 1..16 {
@@ -166,7 +174,18 @@ impl HuffmanTable {
         Ok(Self {
             symbol_counts_by_length,
             symbols_by_length,
+            complete,
+            symbol_count,
         })
+    }
+
+    /// Whether an incomplete version of this table is still permitted in a
+    /// dynamic block: complete, or every assigned code has length 1. puff.c
+    /// accepts an incomplete literal/length or distance code only in that
+    /// singleton form (puff.c:735-743), which also covers the "no distance
+    /// codes at all" case (puff.c:620-622) as zero assigned codes.
+    fn is_valid_incomplete_or_complete(&self) -> bool {
+        self.complete || self.symbol_count == usize::from(self.symbol_counts_by_length[1])
     }
 
     fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, InflateError> {
@@ -253,6 +272,13 @@ fn read_dynamic_tables(
         code_length_code_lengths[symbol] = length;
     }
     let code_length_table = HuffmanTable::build(&code_length_code_lengths)?;
+    // The code-length code (which encodes the literal/length and distance
+    // code lengths below) must be complete, unlike the trees it describes
+    // (`mgba/src/third-party/zlib/contrib/puff/puff.c:696-699`,
+    // `if (err != 0) return -4;`).
+    if !code_length_table.complete {
+        return Err(InflateError::BadHuffmanTable);
+    }
 
     let total_code_count = literal_length_code_count + distance_code_count;
     let mut lengths = Vec::with_capacity(total_code_count);
@@ -285,8 +311,31 @@ fn read_dynamic_tables(
         }
     }
 
+    // Every dynamic block must assign the end-of-block symbol a code, even
+    // one that otherwise looks like a valid (complete) descriptor
+    // (`mgba/src/third-party/zlib/contrib/puff/puff.c:731-733`,
+    // `if (lengths[256] == 0) return -9;`).
+    if lengths[256] == 0 {
+        return Err(InflateError::BadHuffmanTable);
+    }
+
     let literal_length_table = HuffmanTable::build(&lengths[..literal_length_code_count])?;
+    // An incomplete literal/length or distance code is permitted only as the
+    // single length-1 code case
+    // (`mgba/src/third-party/zlib/contrib/puff/puff.c:735-738`); any other
+    // incomplete code is rejected here even though `decode` could otherwise
+    // run it successfully on a payload that avoids the unassigned codes.
+    if !literal_length_table.is_valid_incomplete_or_complete() {
+        return Err(InflateError::BadHuffmanTable);
+    }
     let distance_table = HuffmanTable::build(&lengths[literal_length_code_count..])?;
+    // Same rule for the distance code
+    // (`mgba/src/third-party/zlib/contrib/puff/puff.c:740-743`); this also
+    // accepts the zero-codes "no distance codes used" form
+    // (`mgba/src/third-party/zlib/contrib/puff/puff.c:620-622`).
+    if !distance_table.is_valid_incomplete_or_complete() {
+        return Err(InflateError::BadHuffmanTable);
+    }
     Ok((literal_length_table, distance_table))
 }
 
@@ -505,7 +554,88 @@ pub fn inflate_zlib(data: &[u8]) -> Result<Vec<u8>, InflateError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{adler32, inflate, inflate_zlib, InflateError};
+    use super::{adler32, inflate, inflate_zlib, InflateError, CODE_LENGTH_ORDER};
+
+    /// Minimal least-significant-bit-first bit writer, mirroring the order
+    /// `BitReader::read_bits` reads in, for building DEFLATE test vectors
+    /// field-by-field instead of hand-deriving packed hex literals.
+    struct BitWriter {
+        bytes: Vec<u8>,
+        current: u8,
+        bit_count: u32,
+    }
+
+    impl BitWriter {
+        fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                current: 0,
+                bit_count: 0,
+            }
+        }
+
+        fn write_bit(&mut self, bit: u32) {
+            self.current |= u8::try_from(bit & 1).expect("masked to one bit") << self.bit_count;
+            self.bit_count += 1;
+            if self.bit_count == 8 {
+                self.bytes.push(self.current);
+                self.current = 0;
+                self.bit_count = 0;
+            }
+        }
+
+        /// Writes `count` bits of `value`, least-significant-bit first: the
+        /// order `BitReader::read_bits` uses for every non-Huffman field.
+        fn write_bits(&mut self, value: u32, count: u32) {
+            for offset in 0..count {
+                self.write_bit((value >> offset) & 1);
+            }
+        }
+
+        /// Writes a canonical Huffman code, most-significant-bit first: the
+        /// order `HuffmanTable::decode` assembles a code's bits in.
+        fn write_code(&mut self, code: u32, length: u8) {
+            for offset in (0..length).rev() {
+                self.write_bit((code >> offset) & 1);
+            }
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            if self.bit_count > 0 {
+                self.bytes.push(self.current);
+            }
+            self.bytes
+        }
+    }
+
+    /// Assigns canonical Huffman codes to `lengths` (RFC 1951 section
+    /// 3.2.2), mirroring `HuffmanTable::build`'s numbering so a table built
+    /// from `lengths` decodes the codes this produces.
+    fn canonical_codes(lengths: &[u8]) -> Vec<(u32, u8)> {
+        let mut count = [0u32; 16];
+        for &length in lengths {
+            count[usize::from(length)] += 1;
+        }
+        count[0] = 0;
+        let mut next_code = [0u32; 16];
+        let mut code = 0u32;
+        for length in 1..16 {
+            code = (code + count[length - 1]) << 1;
+            next_code[length] = code;
+        }
+        lengths
+            .iter()
+            .map(|&length| {
+                if length == 0 {
+                    (0, 0)
+                } else {
+                    let assigned = next_code[usize::from(length)];
+                    next_code[usize::from(length)] += 1;
+                    (assigned, length)
+                }
+            })
+            .collect()
+    }
 
     #[test]
     fn stored_block_decodes_literal_bytes() {
@@ -616,5 +746,164 @@ palette pokeemerald the lazy palette fox lazy sprite the pokeemerald fox";
             inflate_zlib(minimal_empty_stream).unwrap(),
             Vec::<u8>::new()
         );
+    }
+
+    #[test]
+    fn incomplete_dynamic_literal_length_tree_is_rejected() {
+        // A final dynamic block whose literal/length code holds just two
+        // codes -- a 1-bit code for literal 'A' and a 2-bit end-of-block code
+        // -- leaving a quarter of the code space unassigned, followed by a
+        // payload that uses only those two codes. RFC 1951 permits an
+        // incomplete dynamic code only for a single length-1 code, so the
+        // pinned reference rejects this descriptor outright
+        // (`mgba/src/third-party/zlib/contrib/puff/puff.c:735-738`, -7).
+        let incomplete_literal_length_tree: &[u8] = &[
+            0x05, 0xc0, 0x01, 0x09, 0x00, 0x00, 0x00, 0x80, 0xa0, 0x6d, 0xfe, 0x3f, 0x15, 0x02,
+        ];
+        let err = inflate(incomplete_literal_length_tree).unwrap_err();
+        assert_eq!(err, InflateError::BadHuffmanTable);
+    }
+
+    #[test]
+    fn missing_end_of_block_code_is_rejected() {
+        // A final dynamic block, HLIT=0 (257 literal/length codes: symbols
+        // 0..=256), HDIST=0 (1 distance code). The literal/length lengths
+        // assign symbols 65 ('A') and 66 ('B') a 1-bit code each -- filling
+        // the code space exactly, a complete tree -- but never assign symbol
+        // 256 (end-of-block) any code. puff.c requires an end-of-block code
+        // unconditionally, independent of completeness
+        // (`mgba/src/third-party/zlib/contrib/puff/puff.c:731-733`,
+        // `if (lengths[256] == 0) return -9;`).
+        let mut lit_len_lengths = [0u8; 257];
+        lit_len_lengths[65] = 1;
+        lit_len_lengths[66] = 1;
+        let dist_lengths = [0u8; 1];
+
+        let mut raw_lengths = Vec::new();
+        raw_lengths.extend_from_slice(&lit_len_lengths);
+        raw_lengths.extend_from_slice(&dist_lengths);
+
+        // The code-length alphabet only needs to describe the two distinct
+        // raw lengths above (0 and 1); one bit each fills the code space
+        // exactly, so this code-length tree is complete.
+        let mut code_length_lengths = [0u8; 19];
+        code_length_lengths[0] = 1;
+        code_length_lengths[1] = 1;
+        let code_length_codes = canonical_codes(&code_length_lengths);
+
+        let mut writer = BitWriter::new();
+        writer.write_bit(1); // BFINAL
+        writer.write_bits(2, 2); // BTYPE = dynamic
+        writer.write_bits(0, 5); // HLIT = 0 -> 257 literal/length codes
+        writer.write_bits(0, 5); // HDIST = 0 -> 1 distance code
+        writer.write_bits(15, 4); // HCLEN = 15 -> transmit all 19 order slots
+        for &symbol in &CODE_LENGTH_ORDER {
+            writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+        }
+        for &raw_length in &raw_lengths {
+            let (code, length) = code_length_codes[usize::from(raw_length)];
+            writer.write_code(code, length);
+        }
+
+        let err = inflate(&writer.finish()).unwrap_err();
+        assert_eq!(err, InflateError::BadHuffmanTable);
+    }
+
+    #[test]
+    fn singleton_distance_tree_still_decodes() {
+        // A final dynamic block, HLIT=1 (258 literal/length codes: symbols
+        // 0..=257, including the length-257 code needed for a
+        // back-reference), HDIST=0 (1 distance code). RFC 1951 section 3.2.7
+        // and puff.c permit a literal/length or distance tree to be
+        // incomplete only when it holds a single length-1 code
+        // (`mgba/src/third-party/zlib/contrib/puff/puff.c:735-743`); this
+        // exercises the permitted singleton distance tree, which must still
+        // decode rather than being rejected outright.
+        let mut lit_len_lengths = [0u8; 258];
+        lit_len_lengths[65] = 1; // 'A'
+        lit_len_lengths[256] = 2; // end-of-block
+        lit_len_lengths[257] = 2; // length code (base 3, 0 extra bits)
+        let dist_lengths = [1u8; 1]; // single distance code (base 1, 0 extra bits)
+
+        let mut raw_lengths = Vec::new();
+        raw_lengths.extend_from_slice(&lit_len_lengths);
+        raw_lengths.extend_from_slice(&dist_lengths);
+
+        // The code-length alphabet needs to describe three distinct raw
+        // lengths (0, 1, 2); one bit for the overwhelmingly common 0 and two
+        // bits each for 1 and 2 fills the code space exactly.
+        let mut code_length_lengths = [0u8; 19];
+        code_length_lengths[0] = 1;
+        code_length_lengths[1] = 2;
+        code_length_lengths[2] = 2;
+        let code_length_codes = canonical_codes(&code_length_lengths);
+
+        let mut writer = BitWriter::new();
+        writer.write_bit(1); // BFINAL
+        writer.write_bits(2, 2); // BTYPE = dynamic
+        writer.write_bits(1, 5); // HLIT = 1 -> 258 literal/length codes
+        writer.write_bits(0, 5); // HDIST = 0 -> 1 distance code
+        writer.write_bits(15, 4); // HCLEN = 15 -> transmit all 19 order slots
+        for &symbol in &CODE_LENGTH_ORDER {
+            writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+        }
+        for &raw_length in &raw_lengths {
+            let (code, length) = code_length_codes[usize::from(raw_length)];
+            writer.write_code(code, length);
+        }
+
+        let lit_len_codes = canonical_codes(&lit_len_lengths);
+        let dist_codes = canonical_codes(&dist_lengths);
+        writer.write_code(lit_len_codes[65].0, lit_len_codes[65].1); // 'A'
+        writer.write_code(lit_len_codes[257].0, lit_len_codes[257].1); // length 3
+        writer.write_code(dist_codes[0].0, dist_codes[0].1); // distance 1
+        writer.write_code(lit_len_codes[256].0, lit_len_codes[256].1); // end-of-block
+
+        assert_eq!(inflate(&writer.finish()).unwrap(), b"AAAA");
+    }
+
+    #[test]
+    fn incomplete_dynamic_distance_tree_is_rejected() {
+        // A final dynamic block, HLIT=0 (257 literal/length codes; only the
+        // end-of-block symbol is assigned a code, the permitted
+        // literal/length singleton), HDIST=1 (2 distance codes). The distance
+        // lengths assign a 1-bit code to distance symbol 0 and a 2-bit code
+        // to distance symbol 1, leaving a quarter of the code space
+        // unassigned -- an incomplete code with more than one symbol, which
+        // puff.c rejects even though the literal/length side is fine
+        // (`mgba/src/third-party/zlib/contrib/puff/puff.c:740-743`, -8).
+        let mut lit_len_lengths = [0u8; 257];
+        lit_len_lengths[256] = 1; // end-of-block, the permitted singleton
+        let dist_lengths = [1u8, 2u8];
+
+        let mut raw_lengths = Vec::new();
+        raw_lengths.extend_from_slice(&lit_len_lengths);
+        raw_lengths.extend_from_slice(&dist_lengths);
+
+        // The code-length alphabet needs to describe three distinct raw
+        // lengths (0, 1, 2); one bit for the overwhelmingly common 0 and two
+        // bits each for 1 and 2 fills the code space exactly.
+        let mut code_length_lengths = [0u8; 19];
+        code_length_lengths[0] = 1;
+        code_length_lengths[1] = 2;
+        code_length_lengths[2] = 2;
+        let code_length_codes = canonical_codes(&code_length_lengths);
+
+        let mut writer = BitWriter::new();
+        writer.write_bit(1); // BFINAL
+        writer.write_bits(2, 2); // BTYPE = dynamic
+        writer.write_bits(0, 5); // HLIT = 0 -> 257 literal/length codes
+        writer.write_bits(1, 5); // HDIST = 1 -> 2 distance codes
+        writer.write_bits(15, 4); // HCLEN = 15 -> transmit all 19 order slots
+        for &symbol in &CODE_LENGTH_ORDER {
+            writer.write_bits(u32::from(code_length_lengths[symbol]), 3);
+        }
+        for &raw_length in &raw_lengths {
+            let (code, length) = code_length_codes[usize::from(raw_length)];
+            writer.write_code(code, length);
+        }
+
+        let err = inflate(&writer.finish()).unwrap_err();
+        assert_eq!(err, InflateError::BadHuffmanTable);
     }
 }
