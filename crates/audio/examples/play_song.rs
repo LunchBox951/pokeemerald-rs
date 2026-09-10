@@ -62,9 +62,9 @@ fn main() -> ExitCode {
             };
         }
     };
-    if let Err(err) = start_playback(&mut output, AudioOutput::start) {
-        eprintln!("audio playback setup failed: {err}");
-        return ExitCode::FAILURE;
+    match start_playback(&mut output, AudioOutput::start) {
+        StartOutcome::Playing => {}
+        StartOutcome::PlaybackSetupFailure => return ExitCode::FAILURE,
     }
     println!("playing a short scale at {MIXER_RATE} Hz — Ctrl-C to stop");
 
@@ -139,16 +139,37 @@ fn classify_open_error(error: &PlatformError) -> OpenOutcome {
     }
 }
 
-/// Start playback, handing a refusal back to `main` instead of panicking on
-/// it: a device that answered [`AudioOutput::open`] and then refused `play`
-/// is the [`OpenOutcome::PlaybackSetupFailure`] case `main` already reports.
-/// `start` is injected as in [`push_frame`], so the tests below need no
-/// audio device.
+/// What `main` does after the stream-start step.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartOutcome {
+    /// The device accepted `play`: the render loop can run.
+    Playing,
+    /// The device answered [`AudioOutput::open`] and then refused `play`.
+    /// The failure has already been reported; `main` only returns
+    /// `ExitCode::FAILURE`.
+    PlaybackSetupFailure,
+}
+
+/// Start playback and decide what `main` does with the answer.
+///
+/// A device that answered [`AudioOutput::open`] and then refused `play` is
+/// the same answered-then-refused fact [`classify_open_error`] reports as a
+/// playback-setup failure, so the refusal is reported here in that same
+/// wording and handed back as [`StartOutcome::PlaybackSetupFailure`] instead
+/// of aborting this command through a panic. Reporting and classifying both
+/// live here, and `start` is injected as in [`push_frame`], so the tests
+/// below pin the outcome `main` acts on without an audio device.
 fn start_playback(
     output: &mut AudioOutput,
     start: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
-) -> Result<(), PlatformError> {
-    start(output)
+) -> StartOutcome {
+    match start(output) {
+        Ok(()) => StartOutcome::Playing,
+        Err(err) => {
+            eprintln!("audio playback setup failed: {err}");
+            StartOutcome::PlaybackSetupFailure
+        }
+    }
 }
 
 /// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
@@ -372,8 +393,8 @@ mod tests {
 
     use super::{
         classify_open_error, device_tail_wait, push_frame, start_playback, wait_for_device_tail,
-        wait_for_drain, DrainError, OpenOutcome, PushError, RetryPolicy, DEVICE_TAIL_FALLBACK,
-        DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        wait_for_drain, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
+        DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -401,19 +422,29 @@ mod tests {
     /// returns `PlatformError::Audio` when `cpal` rejects a stream that built
     /// fine (`platform/src/audio.rs`). That is the same answered-then-refused
     /// fact `classify_open_error` reports as a playback-setup failure, so the
-    /// start step must hand the error back for that controlled report rather
-    /// than panic on it. `start` is injected, so no audio device is needed.
+    /// refusal must produce the reported failure outcome `main` exits on.
+    /// Restoring an `expect` inside `start_playback` fails this assertion by
+    /// panicking here instead of returning that outcome. `start` is injected,
+    /// so no audio device is needed.
     #[test]
-    fn a_device_that_refuses_to_start_is_a_playback_setup_failure() {
+    fn a_device_that_refuses_to_start_is_a_reported_playback_setup_failure() {
         let mut output = AudioOutput::null(4);
 
-        let Err(err) = start_playback(&mut output, |_| Err(PlatformError::UnsupportedAudioConfig))
-        else {
-            panic!("a refused start must not read as playing");
-        };
-        assert_eq!(classify_open_error(&err), OpenOutcome::PlaybackSetupFailure);
+        assert_eq!(
+            start_playback(&mut output, |_| Err(PlatformError::UnsupportedAudioConfig)),
+            StartOutcome::PlaybackSetupFailure,
+            "a refused start must be reported and handed back, not panicked on"
+        );
+        assert!(
+            !output.is_running(),
+            "a refused start must not read as playing"
+        );
 
-        start_playback(&mut output, AudioOutput::start).expect("the null backend always starts");
+        assert_eq!(
+            start_playback(&mut output, AudioOutput::start),
+            StartOutcome::Playing,
+            "the null backend always starts"
+        );
         assert!(output.is_running(), "an accepted start must play");
     }
 
