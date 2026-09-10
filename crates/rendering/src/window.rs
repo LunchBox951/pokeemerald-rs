@@ -170,6 +170,124 @@ impl WindowConfig {
         }
         (self.winout, WindowRegion::WinOut)
     }
+
+    /// Returns the ascending columns that begin a span of mGBA's surviving
+    /// per-scanline window list, always starting at zero.
+    ///
+    /// mGBA partitions a scanline geometrically from the `WIN0`/`WIN1` edges
+    /// active on it and redraws every layer once per span, so a span start is
+    /// where per-span draw state restarts. Three properties of that partition
+    /// are not derivable from per-pixel classification: adjacent spans are
+    /// never coalesced when their control bits agree, a window with equal
+    /// horizontal endpoints matches no pixel yet still splits the span it
+    /// falls in, and an edge an outranking window covers completely is
+    /// trimmed back out
+    /// (`mgba/src/gba/renderers/video-software.c:446-500,628-632,903-912`)
+    /// `(behavioral-fidelity)`.
+    pub(crate) fn scanline_span_starts(&self, y: u8) -> Vec<usize> {
+        let mut spans = SpanEnds::WHOLE_SCANLINE;
+        if self.any_enabled() {
+            // `WIN0` outranks `WIN1` by being broken in second, over it.
+            for (rect, _) in [self.win1, self.win0].into_iter().flatten() {
+                if rect.y.contains_vertical(y) {
+                    break_window(&mut spans, i32::from(rect.x.start), i32::from(rect.x.end));
+                }
+            }
+        }
+        let mut starts = vec![0];
+        // The last span's end is the scanline's end, not a start; ends at or
+        // past the right edge (which a range running past it can produce)
+        // begin no visible span either.
+        for &end in &spans.ends[..spans.len.saturating_sub(1)] {
+            if !(1..HORIZONTAL_PIXELS).contains(&end) {
+                continue;
+            }
+            let Ok(column) = usize::try_from(end) else {
+                continue;
+            };
+            if !starts.contains(&column) {
+                starts.push(column);
+            }
+        }
+        starts
+    }
+}
+
+/// mGBA's `GBA_VIDEO_HORIZONTAL_PIXELS`: the column every scanline's span
+/// list ends at.
+const HORIZONTAL_PIXELS: i32 = 240;
+
+/// mGBA's window list caps at `MAX_WINDOW` (five) and logs when it overflows.
+/// Four [`break_window_inner`] calls — `WIN0` and `WIN1`, each split in two
+/// when its range wraps — each grow the list by at most two from an initial
+/// single span, so nine slots make an overflow unreachable instead.
+const MAX_SPANS: usize = 9;
+
+/// The `endX` column of each span in mGBA's `windows` array, ascending.
+///
+/// Control bits are omitted: they never affect where the partition splits.
+struct SpanEnds {
+    ends: [i32; MAX_SPANS],
+    len: usize,
+}
+
+impl SpanEnds {
+    const WHOLE_SCANLINE: Self = Self {
+        ends: [HORIZONTAL_PIXELS; MAX_SPANS],
+        len: 1,
+    };
+
+    fn insert(&mut self, index: usize, end: i32) {
+        self.ends.copy_within(index..self.len, index + 1);
+        self.ends[index] = end;
+        self.len += 1;
+    }
+}
+
+/// mGBA's `_breakWindow`: a range that wraps, or that runs past the right
+/// edge, splits into a head starting at column zero and a tail ending at the
+/// right edge (`mgba/src/gba/renderers/video-software.c:446-456`).
+fn break_window(spans: &mut SpanEnds, start: i32, end: i32) {
+    if end > HORIZONTAL_PIXELS || end < start {
+        break_window_inner(spans, 0, end);
+        break_window_inner(spans, start, HORIZONTAL_PIXELS);
+    } else {
+        break_window_inner(spans, start, end);
+    }
+}
+
+/// mGBA's `_breakWindowInner` (`video-software.c:458-500`).
+fn break_window_inner(spans: &mut SpanEnds, start: i32, end: i32) {
+    if end <= 0 {
+        return;
+    }
+    let mut span_start = 0;
+    let mut active = 0;
+    while active < spans.len {
+        if start < spans.ends[active] {
+            let old_end = spans.ends[active];
+            if start > span_start {
+                spans.insert(active, start);
+                active += 1;
+            }
+            spans.ends[active] = end;
+            active += 1;
+            if end >= old_end {
+                // Trimming shifts one span down per step and drops the last
+                // live slot, rather than closing the gap across the tail.
+                while spans.len > active + 1 && end >= spans.ends[active] {
+                    spans.ends[active] = spans.ends[active + 1];
+                    spans.len -= 1;
+                    active += 1;
+                }
+            } else {
+                spans.insert(active, old_end);
+            }
+            return;
+        }
+        span_start = spans.ends[active];
+        active += 1;
+    }
 }
 
 /// Which region [`WindowConfig::classify_with_region`] selected for a pixel,
@@ -194,6 +312,67 @@ impl WindowRegion {
 #[cfg(test)]
 mod tests {
     use super::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect, WindowRegion};
+
+    /// Builds a config whose `WIN0`/`WIN1` rects span scanline 0.
+    fn windows_on_line_zero(win0: Option<WindowRange>, win1: Option<WindowRange>) -> WindowConfig {
+        let on_line_zero = |x: WindowRange| {
+            (
+                WindowRect::new(x, WindowRange::new(0, 1)),
+                WindowLayerEnable::ALL,
+            )
+        };
+        WindowConfig {
+            win0: win0.map(on_line_zero),
+            win1: win1.map(on_line_zero),
+            obj_window: None,
+            winout: WindowLayerEnable::ALL,
+        }
+    }
+
+    #[test]
+    fn a_scanline_with_no_active_window_is_one_span() {
+        assert_eq!(WindowConfig::default().scanline_span_starts(0), vec![0]);
+        let vertically_inactive = WindowConfig {
+            win0: Some((
+                WindowRect::new(WindowRange::new(10, 20), WindowRange::new(5, 9)),
+                WindowLayerEnable::ALL,
+            )),
+            ..WindowConfig::default()
+        };
+        assert_eq!(vertically_inactive.scanline_span_starts(0), vec![0]);
+    }
+
+    #[test]
+    fn a_window_splits_the_scanline_at_both_of_its_edges() {
+        let config = windows_on_line_zero(Some(WindowRange::new(10, 20)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 10, 20]);
+    }
+
+    #[test]
+    fn a_zero_width_window_still_splits_the_span_it_falls_in() {
+        // Equal endpoints match no pixel, yet `_breakWindowInner` inserts the
+        // empty span and re-inserts the remainder behind it, so the column is
+        // a span start with identical control on both sides.
+        let config = windows_on_line_zero(Some(WindowRange::new(5, 5)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 5]);
+    }
+
+    #[test]
+    fn an_edge_wholly_covered_by_an_outranking_window_is_trimmed_away() {
+        // `WIN0` is broken over `WIN1`, and the trim loop deletes the spans
+        // it completely overwrote, so `WIN1`'s edges leave no span start.
+        let config = windows_on_line_zero(
+            Some(WindowRange::new(0, 100)),
+            Some(WindowRange::new(20, 30)),
+        );
+        assert_eq!(config.scanline_span_starts(0), vec![0, 100]);
+    }
+
+    #[test]
+    fn a_window_wrapping_past_the_right_edge_splits_at_both_of_its_halves() {
+        let config = windows_on_line_zero(Some(WindowRange::new(200, 40)), None);
+        assert_eq!(config.scanline_span_starts(0), vec![0, 40, 200]);
+    }
 
     #[test]
     fn range_contains_the_normal_non_wrapping_case() {

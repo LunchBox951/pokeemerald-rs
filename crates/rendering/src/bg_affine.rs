@@ -282,12 +282,10 @@ impl<'a> AffineBgLayer<'a> {
         }
         let block_h = usize::from(block_h);
         if !hold.span_open {
-            // A fresh span (scanline start, or the first column after a
-            // window-closed gap or a window-region boundary) starts exactly
-            // like a fresh mGBA renderer invocation: `mosaicWait` and
-            // `startX` (the snapped block origin) are re-derived from this
-            // column's absolute position, not carried over from before the
-            // gap (`mgba/src/gba/renderers/software-private.h:181-191`).
+            // A fresh span re-derives `mosaicWait` and `startX` (the snapped
+            // block origin) from this column's absolute position, never
+            // carrying them over from before the break
+            // (`mgba/src/gba/renderers/software-private.h:181-191`).
             let phase = screen_x % block_h;
             let snapped_origin_x = screen_x - phase;
             #[expect(
@@ -301,16 +299,15 @@ impl<'a> AffineBgLayer<'a> {
                     (block_h - phase) as u8
                 };
             }
-            // When the span reopens off a block boundary (phase != 0), mGBA
-            // prefetches `pixelData` from that snapped origin column before
-            // its column loop begins, so the columns spent waiting out
-            // `mosaicWait` composite that prefetched texel rather than
-            // nothing (`mgba/src/gba/renderers/software-bg.c:66-73`). A
-            // rejected origin leaves the prefetch unset (its default,
-            // transparent), matching a rejected coordinate anywhere else on
-            // this path. At phase == 0 this seed is moot: `remaining` is
-            // already 0, so the fetch below runs immediately and overwrites
-            // it.
+            // mGBA's pre-loop prefetch carries two coordinates: it
+            // bounds-tests the one at the column *before* the span, then
+            // fetches the one at the snapped origin. So a span whose
+            // preceding column is off-map holds nothing even when the
+            // snapped origin is on-map
+            // (`mgba/src/gba/renderers/software-bg.c:66-73`,
+            // `mgba/src/gba/renderers/software-private.h:173-191`). At
+            // phase == 0 `remaining` is already 0, so the fetch below
+            // overwrites this seed `(behavioral-fidelity)`.
             hold.held = if phase == 0 {
                 None
             } else {
@@ -319,9 +316,19 @@ impl<'a> AffineBgLayer<'a> {
                     reference_x,
                     reference_y,
                     Overflow::Transparent,
-                    snapped_origin_x,
+                    screen_x - 1,
                     screen_y,
                 )
+                .and_then(|_| {
+                    self.sampled_coordinate(
+                        matrix,
+                        reference_x,
+                        reference_y,
+                        Overflow::Transparent,
+                        snapped_origin_x,
+                        screen_y,
+                    )
+                })
                 .and_then(|(sample_x, sample_y)| self.sample_texel(sample_x, sample_y))
             };
             hold.span_open = true;
@@ -382,33 +389,25 @@ impl<'a> AffineBgLayer<'a> {
 }
 
 /// Per-scanline retry/hold state for
-/// [`AffineBgLayer::sample_column_with_mosaic_hold`] (issue #872): how many
-/// more columns to hold the last-fetched sample, what that sample was, and
-/// whether the current run of columns is contiguous with the last one this
-/// state advanced through.
+/// [`AffineBgLayer::sample_column_with_mosaic_hold`]: how many more columns
+/// to hold the last-fetched sample, what that sample was, and whether the
+/// current run of columns is contiguous with the last one this state
+/// advanced through.
 ///
-/// A "span" is a run of columns [`AffineMosaicHold`] has advanced through
-/// without a [`Self::close`] in between. mGBA's software renderer processes
-/// one scanline as a sequence of hardware-window regions, geometrically
-/// partitioned from `WIN0`/`WIN1` rectangle edges alone and never coalesced
-/// even where two adjacent regions share identical control bits,
-/// re-invoking its mode-2 background draw routine (and re-deriving
-/// `mosaicWait` and the snapped block origin fresh from that region's own
-/// start column) once per region the layer participates in
-/// (`mgba/src/gba/renderers/video-software.c:628-675,458-505,903-912`,
-/// `mgba/src/gba/renderers/software-private.h:173-192,210-215`) — so
-/// retry/hold state never survives a column this slot doesn't participate
-/// in for the whole region, *or* a `WIN0`/`WIN1` region boundary this slot
-/// stayed enabled across. `OBJWIN` is not one of these regions: it gates
-/// only the composite, after mosaic state for the region has already
-/// advanced (`mgba/src/gba/renderers/software-bg.c:44-53`), so a column an
-/// `OBJWIN` mask alone hides must *not* close the span. The compositor
-/// calls [`Self::close`] only for the two cases that do end a span: a
-/// column this slot doesn't participate in at all, and every column
-/// starting a new `WIN0`/`WIN1`/outside region regardless of this slot's
-/// own enable bit there — either one lets the next sampled column detect it
-/// and start a fresh span instead of continuing the old one
-/// `(behavioral-fidelity)`.
+/// A "span" is a run of columns advanced through without a [`Self::close`]
+/// in between. It must match one mGBA mode-2 draw invocation, which covers
+/// one window span of the scanline and re-derives `mosaicWait` and the
+/// snapped block origin from that span's own start column
+/// (`mgba/src/gba/renderers/video-software.c:628-675`,
+/// `mgba/src/gba/renderers/software-private.h:173-192`). So the caller must
+/// [`Self::close`] both at every window span start
+/// ([`WindowConfig::scanline_span_starts`](crate::window::WindowConfig)) and
+/// on any column this slot's span does not draw at all — the latter judged
+/// by that span's control bits, not by whether the column composites:
+/// `OBJWIN` gates only the composite, after mosaic state has already
+/// advanced (`mgba/src/gba/renderers/software-bg.c:44-53`,
+/// `software-private.h:210-215`), so an `OBJWIN`-masked column must not
+/// close the span `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AffineMosaicHold {
     remaining: u8,
@@ -417,11 +416,9 @@ pub(crate) struct AffineMosaicHold {
 }
 
 impl AffineMosaicHold {
-    /// Marks the current span closed: this column's slot doesn't
-    /// participate here at all (excluded by `WIN0`/`WIN1`/`WINOUT`, not
-    /// merely `OBJWIN`-masked), or this column starts a new `WIN0`/`WIN1`
-    /// region — so the next column that resumes sampling must start a fresh
-    /// span rather than continue this one. See the type docs for why.
+    /// Marks the current span closed, so the next column sampled starts a
+    /// fresh span instead of continuing this one. See the type docs for
+    /// which columns must do this.
     pub(crate) fn close(&mut self) {
         self.span_open = false;
     }
@@ -924,5 +921,38 @@ mod tests {
                 "x={screen_x} must hold column 4's texel, the snapped block origin"
             );
         }
+    }
+
+    #[test]
+    fn a_mid_block_span_prefetch_is_gated_on_the_column_before_the_span() {
+        // mGBA's `BACKGROUND_BITMAP_INIT` carries two distinct coordinates
+        // into the mode-2 no-overflow mosaic branch: `x`/`y`, initialized at
+        // `renderer->start - 1`, and `localX`/`localY`, initialized at the
+        // snapped block origin `startX`
+        // (`mgba/src/gba/renderers/software-private.h:173-191`). The
+        // pre-loop prefetch tests the *former* and fetches the *latter*:
+        // `if (!((x | y) & ~(sizeAdjusted - 1))) { ... MODE_2_NO_MOSAIC(); }`
+        // (`mgba/src/gba/renderers/software-bg.c:66-73`). So a span whose
+        // preceding column is off the map leaves `pixelData` at its initial
+        // 0 -- transparent for every held column -- even when the snapped
+        // origin itself is on the map.
+        //
+        // One 8px-wide tile, identity transform (texture x == screen x), a
+        // 16px block, and a span first advanced at x=9: the snapped origin
+        // is x=0 (on the map, column 0's color) but the column before the
+        // span, x=8, is off the map, so the prefetch must not happen and the
+        // seven held columns x=9..16 must stay transparent.
+        let (tileset, palette, tilemap) = gradient_affine_tile_fixture();
+        let layer = AffineBgLayer::new(&tileset, &palette, &tilemap);
+
+        let mut hold = AffineMosaicHold::default();
+        let sample =
+            layer.sample_column_with_mosaic_hold(&mut hold, AffineMatrix::IDENTITY, 0, 0, 9, 0, 16);
+
+        assert_eq!(
+            sample, None,
+            "x=8, the column before the span, is off the map, so mGBA never \
+             prefetches the snapped origin at x=0 and the held columns stay blank"
+        );
     }
 }
