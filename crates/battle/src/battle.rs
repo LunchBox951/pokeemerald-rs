@@ -578,7 +578,7 @@ impl Battle {
     /// runs *before* `BeginBattleIntro` upstream
     /// (`CB2_InitBattleInternal`, `:697` then `:713`), so the party's own
     /// construction draws belong to the caller that built it
-    /// (`crates/pokeemerald-rs/src/flow/route103_rival.rs`), exactly as the
+    /// (`crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs`), exactly as the
     /// scripted first battle's do.
     ///
     /// # Errors

@@ -171,7 +171,7 @@ fn setup_rival_gfx_id_writes_the_opposite_genders_rival_id() {
 
 /// Upstream's own no-op: `checkplayergender`'s two `goto_if_eq`s never
 /// match a raw byte outside `MALE`/`FEMALE`, so the var is left untouched
-/// (module docs, [`Rival::for_gender`]'s own citation).
+/// when [`Rival::for_gender`] returns `None`.
 #[test]
 fn setup_rival_gfx_id_leaves_an_unmodelled_gender_untouched() {
     let mut data = EventData::new();
@@ -497,8 +497,8 @@ fn winning_the_rival_battle_saturates_money_at_the_upstream_cap() {
     );
 }
 
-/// [`route103_rival::route103_rival_for`]'s full six-entry table
-/// (`route103_rival.rs:191-199`), not just the fresh-save default: whichever
+/// [`route103_rival::route103_rival_for`]'s full six-entry table, not just the
+/// fresh-save default: whichever
 /// of the six `TRAINER_*_ROUTE_103_*` ids a playthrough actually fights, a
 /// win must set that exact trainer's own `TRAINER_FLAGS_START + id` flag
 /// (`SetBattledTrainersFlags`, `src/battle_setup.c:1245-1250`) -- the same
