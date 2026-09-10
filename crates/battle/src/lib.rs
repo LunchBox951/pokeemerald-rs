@@ -91,7 +91,7 @@
 //! so nothing outside that narrowing can silently mis-draw. The battle's own
 //! construction — `CreateNPCTrainerParty`'s seeded personalities and fixed
 //! IVs — and its headless driver are
-//! `crates/pokeemerald-rs/src/flow/route103_rival.rs`, the same split issue
+//! `crates/pokeemerald-rs/src/flow/npc_trainer_battle.rs`, the same split issue
 //! #221 used for the first battle; Route 103's overworld reachability
 //! (the rival's sight cone and approach script) is a later slice.
 //!

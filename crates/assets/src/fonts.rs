@@ -590,6 +590,33 @@ mod tests {
         assert_eq!(FontId::Normal.glyph_width(511), Some(3));
     }
 
+    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        })
+    }
+
+    /// Digest of every `gFont*LatinGlyphWidths` array (`pokeemerald/src/fonts.c`),
+    /// each font's 512 widths in glyph-index order.
+    #[test]
+    fn every_width_table_matches_its_canonical_digest() {
+        let expected = [
+            (FontId::Small, "cbacce78844c765c"),
+            (FontId::Normal, "20b46c5c5a7dd5f5"),
+            (FontId::Short, "c32d2d356e91c4a2"),
+            (FontId::Narrow, "6665fbbcfd54fd41"),
+            (FontId::SmallNarrow, "7f23da167b579242"),
+        ];
+        for (font, digest) in expected {
+            assert_eq!(
+                format!("{:016x}", fnv1a64(font.glyph_widths())),
+                digest,
+                "{font:?} widths diverge from the canonical upstream array",
+            );
+        }
+    }
+
     /// Build a synthetic [`ImageRef`] the exact shape a real font sheet
     /// would be ([`SHEET_WIDTH`] x [`SHEET_HEIGHT`]), filled with a simple,
     /// checkable pattern: pixel value = `(x % 4)` -- cheap to hand-verify
