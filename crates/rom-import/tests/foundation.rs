@@ -70,23 +70,28 @@ fn a_profile_built_from_the_fixture_selects_it() {
 ///
 /// A fixed shared path would let two `cargo test` processes (two worktrees,
 /// or a workspace run alongside a targeted run) race: one process's cleanup
-/// could unlink the other's fixture mid-import.
+/// could unlink the other's fixture mid-import. Naming is settled by
+/// `std::fs::create_dir`'s exclusivity, not by any counter shared across
+/// calls: each attempt tries a candidate derived from the label, this
+/// process's id, and the attempt number, and only an `AlreadyExists` moves
+/// to the next candidate.
 struct TempDir {
     path: std::path::PathBuf,
 }
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "rom-import-foundation-{label}-{}-{unique}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("a writable temp dir");
-        Self { path }
+        let pid = std::process::id();
+        for attempt in 0..1_000u32 {
+            let path =
+                std::env::temp_dir().join(format!("rom-import-foundation-{label}-{pid}-{attempt}"));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => panic!("a writable temp dir: {err}"),
+            }
+        }
+        panic!("no unused temp directory name for {label} under pid {pid}");
     }
 
     fn join(&self, name: &str) -> std::path::PathBuf {
