@@ -647,7 +647,12 @@ impl OverworldPhase {
     /// (`field_control_avatar.c:155-178`) -- `door_warp` first, then the
     /// pre-movement preempts (mutually exclusive with it -- `step`'s "Door
     /// before arrow" doc section), then the post-movement re-poll in that
-    /// same arrow-then-door order.
+    /// same arrow-then-door order. The re-poll's own door half additionally
+    /// yields to `pre.interaction` (review finding): upstream's `TryDoorWarp`
+    /// sits *after* `TryStartInteractionScript` (`:170-178`), so an A press
+    /// that already found an NPC standing in the doorway must keep winning
+    /// here too, not just in the pre-movement check
+    /// ([`Self::resolve_pre_movement_field_input`]) that gates the same way.
     fn resolve_warp_trigger(
         &self,
         pre: &PreMovementFieldInput,
@@ -675,6 +680,17 @@ impl OverworldPhase {
                         // method is reached) is invisible to it. Re-evaluating the same
                         // facing tile here, gated the same way the arrow re-poll above
                         // is, catches exactly that frame.
+                        //
+                        // Gated on `pre.interaction.is_none()` (review finding): upstream
+                        // reaches `TryDoorWarp` only once `TryStartInteractionScript` has
+                        // already returned FALSE (`field_control_avatar.c:170-178`), so an
+                        // A press that talks to an NPC standing in a doorway must not also
+                        // let this same frame's held direction re-fire the door underneath
+                        // it. `TryArrowWarp` above needs no such gate -- it precedes the
+                        // interaction check entirely upstream (`:164-172`).
+                        if pre.interaction.is_some() {
+                            return None;
+                        }
                         let ((fx, fy), facing_elevation) =
                             facing_tile(runtime, pre.position, self.player.elevation(), direction);
                         trigger_animated_door_warp(runtime, fx, fy, facing_elevation, direction)
@@ -923,4 +939,113 @@ pub(super) enum InteractionOutcome {
     /// recognize: upstream still consumes the frame (`find_interaction_outcome`'s
     /// own doc comment), but this port has nothing to render for it.
     Unmodelled,
+}
+
+#[cfg(test)]
+mod interaction_door_precedence_tests {
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::MB_ANIMATED_DOOR;
+    use engine::overworld::{Direction, MapRuntime, PlayerState};
+    use platform::{ButtonState, Buttons};
+
+    /// Littleroot Town's Brendan's-house door warp at `(5, 8)` -- the one
+    /// tile in bundled data where a scripted object event (Mom outside,
+    /// `LittlerootTown_EventScript_Mom`) stands on a house door -- pinned
+    /// to `MB_ANIMATED_DOOR` on a synthetic scene the same way
+    /// `test_support::facing_littleroot_lab_door_phase` pins the lab door.
+    /// Mom outside is hidden on a fresh save, so her hide flag is cleared
+    /// here: this fixture is exactly upstream's "an NPC is standing in the
+    /// doorway" frame.
+    fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
+        let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+        let events = assets::MapEventsTable::new()
+            .resolve(littleroot)
+            .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+        let door = events.warp_events[1];
+        assert_eq!(
+            (door.x, door.y),
+            (5, 8),
+            "fixture precondition: Littleroot's warp #1 is Brendan's house door"
+        );
+        let mom = events.object_events[3];
+        assert_eq!(
+            (mom.x, mom.y),
+            (5, 8),
+            "fixture precondition: Mom outside stands on that same door tile"
+        );
+        assert_ne!(
+            mom.script, "0x0",
+            "fixture precondition: Mom's script is a real one, so A interacts"
+        );
+
+        let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+            20,
+            20,
+            (5, 8),
+            MB_ANIMATED_DOOR,
+        );
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            littleroot,
+            PlayerState::new((5, 9), 3, Direction::North),
+            None,
+        );
+        let hide_mom = assets::object_event_flags::resolve(mom.flag)
+            .expect("Mom outside's hide flag must resolve");
+        phase
+            .save1
+            .event_data
+            .flag_clear(hide_mom)
+            .expect("clearing Mom outside's hide flag must succeed");
+        phase
+    }
+
+    fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
+        let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+        let header = assets::MapHeaderTable::new().header(littleroot).unwrap();
+        let events = assets::MapEventsTable::new().resolve(littleroot).unwrap();
+        phase.scene.runtime(littleroot, header, events)
+    }
+
+    /// Upstream reaches `TryDoorWarp` (`field_control_avatar.c:170-178`)
+    /// only *after* `TryStartInteractionScript` (`:172`) has already
+    /// returned FALSE: an A press on an NPC standing in a doorway talks to
+    /// them, it never enters the door. The pre-movement animated-door check
+    /// honours that (`resolve_pre_movement_field_input`), but the frame's
+    /// final decision must too -- otherwise A+Up at a doorway NPC warps and
+    /// silently discards the interaction (`resolve_step_events`'s
+    /// `input_consumed` branch).
+    #[test]
+    fn an_interaction_outranks_the_animated_door_repoll() {
+        let phase = mom_standing_in_the_house_door_phase();
+        let runtime = runtime_for(&phase);
+
+        // A fresh A press with Up held, standing at rest already facing the
+        // door -- exactly what `step` feeds the two methods below.
+        let mut buttons = ButtonState::new();
+        buttons.update(Buttons::A | Buttons::UP);
+        let pre: PreMovementFieldInput =
+            phase.resolve_pre_movement_field_input(buttons, Some(Direction::North), &runtime);
+
+        assert!(
+            pre.interaction.is_some(),
+            "fixture precondition: the A press must find Mom in the doorway"
+        );
+        assert!(
+            pre.animated_door_trigger.is_none(),
+            "the pre-movement door check already yields to the interaction"
+        );
+
+        // `door_warp` is None (the interaction preempted movement, so no
+        // step completed) and no field event fired -- the exact arguments
+        // `step` passes on this frame.
+        assert_eq!(
+            phase.resolve_warp_trigger(&pre, &runtime, None, false),
+            None,
+            "the drain-frame animated-door re-poll must yield to the same-frame \
+             interaction it already yielded to pre-movement -- upstream reaches \
+             TryDoorWarp only after TryStartInteractionScript falls through \
+             (field_control_avatar.c:172-178)"
+        );
+    }
 }

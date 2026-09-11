@@ -827,7 +827,22 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
 /// a *walked* approach (two full tile crossings, not a stationary press)
 /// must still preempt the final step onto the door, on the very frame that
 /// approach's own walk animation drains -- not one frame later, and not
-/// only once a further frame is *also* held. Runs pack-free the same way
+/// only once a further frame is *also* held.
+///
+/// Slice-review follow-up: the walked approach's second crossing drains
+/// (leaves `in_transit`) on its own 32nd held frame
+/// ([`WALK_FRAMES_PER_TILE`] `* 2`), so asserting only up through that frame
+/// is vacuous -- position is committed at crossing start and every
+/// implementation, fixed or not, is at rest on `(7, 17)` there by walk
+/// arithmetic alone (`PlayerState::step`/`tick`'s own module docs). The
+/// distinguishing frame is the **next** one: without the drain-frame
+/// re-poll, a still-held Up would legally step the player from `(7, 17)`
+/// onto the (synthetic, walkable) door tile `(7, 16)` on that 33rd frame,
+/// since nothing preempted it; the fix's re-poll instead claims that frame
+/// first. Driving one frame further than the crossing's own drain is what
+/// makes this fail on unfixed code and pass on the fix.
+///
+/// Runs pack-free the same way
 /// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
 /// whether the preempting warp actually lands depends on a local pack (the
 /// `#[ignore]`d sibling above pins that), but the step it preempts must
@@ -836,7 +851,7 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
 fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
     let mut phase = approaching_littleroot_lab_door_phase();
 
-    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+    for _ in 0..=2 * u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::UP));
     }
 
@@ -844,14 +859,14 @@ fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
         phase.player.position(),
         (7, 16),
         "the animated-door check must preempt the walked approach's final step onto the \
-         (synthetic, walkable) door tile, on the very frame that approach's own walk \
-         animation drains -- not a frame later"
+         (synthetic, walkable) door tile, on the frame after the approach's own walk \
+         animation drains -- unfixed code steps onto it here instead"
     );
     assert!(
         !phase.player.in_transit(),
-        "the walked approach's second tile crossing must have fully drained by the {}th \
-         held frame",
-        2 * u32::from(WALK_FRAMES_PER_TILE)
+        "the walked approach's second tile crossing must have fully drained well before \
+         the {}th held frame",
+        2 * u32::from(WALK_FRAMES_PER_TILE) + 1
     );
 }
 
