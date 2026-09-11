@@ -212,6 +212,13 @@ impl Mixer {
     }
 
     /// Release the newest voice on `track` with the given MIDI `key`.
+    ///
+    /// Mirrors `ply_endtie` (`m4a_1.s:1835`..`:1853`): a CGB candidate must
+    /// pass [`CgbVoice::is_end_tie_eligible`], not merely `!is_stopping()`,
+    /// so an automatic pseudo-echo tail is skipped in favor of an older
+    /// same-key voice, same as upstream. DirectSound has no such divergence
+    /// (`m4a_1.s:228`..`:250` keeps `SOUND_CHANNEL_SF_ENV` set through its
+    /// own automatic tail), so its candidates still use `!is_stopping()`.
     pub fn note_off_track(&mut self, track: usize, key: u8) {
         let direct_sound_matches = self
             .direct_sound_slots
@@ -228,7 +235,7 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && !voice.is_stopping() && voice.midi_key() == key
+                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
 

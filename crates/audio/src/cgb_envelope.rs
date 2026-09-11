@@ -160,6 +160,29 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
+    /// Return whether `ply_endtie` may select this envelope's channel.
+    ///
+    /// Upstream matches only `SOUND_CHANNEL_SF_START | SOUND_CHANNEL_SF_ENV`
+    /// and rejects `SOUND_CHANNEL_SF_STOP` (`m4a_1.s:1835`..`:1848`). An
+    /// automatic zero-sustain pseudo-echo tail clears `SOUND_CHANNEL_SF_ENV`
+    /// before setting only `SOUND_CHANNEL_SF_IEC` — never `STOP`
+    /// (`m4a.c:1090`..`:1098`, `:1125`..`:1129`) — so `ply_endtie` walks past
+    /// it to the next same-key channel instead of matching it. Retirement
+    /// clears every flag (`m4a.c:1054`..`:1056`), which likewise fails that
+    /// `START | ENV` test. An explicit note-off sets `STOP`
+    /// (`m4a_1.s:1846`..`:1848`) and the next `CgbSound` pass then clears
+    /// `ENV` as it transitions to `Release` (`m4a.c:1060`..`:1062`), so
+    /// `is_stopping`'s `note_off_requested` alone already excludes exactly
+    /// the channels `Phase::Release` covers here.
+    #[must_use]
+    pub(crate) fn is_end_tie_eligible(&self) -> bool {
+        !self.note_off_requested
+            && matches!(
+                self.phase,
+                Phase::Starting | Phase::Attack | Phase::Decay | Phase::Sustain
+            )
+    }
+
     /// The pacing this phase's NRx2 store programs, decoded by
     /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
     /// direction bit and no step time, leaving hardware dead at its last
