@@ -12,6 +12,21 @@
 //! A target already carrying a primary status other than paralysis takes the
 //! generic failure exit, not [`ParalyzeOutcome::AlreadyParalysed`].
 //!
+//! A defender whose ability is Synchronize is admitted like any other target:
+//! [`ensure_admissible`] no longer refuses it. Once
+//! [`ParalyzeOutcome::Applied`] paralyses a Synchronize holder, the caller
+//! (`crate::battle::execute`) re-enters [`resolve_synchronize_reflection`]
+//! against the original attacker, mirroring `SetMoveEffect`'s
+//! `MOVE_EFFECT_AFFECTS_USER` re-entry from `ABILITYEFFECT_SYNCHRONIZE`
+//! (`pokeemerald/src/battle_util.c:2971-2984`,
+//! `pokeemerald/src/battle_script_commands.c:2240-2245`). That reflection
+//! runs neither `typecalc` nor `accuracycheck`
+//! (`pokeemerald/src/battle_script_commands.c:2395-2425`), so it draws no RNG
+//! and cannot be blocked by the original attacker's type; it can only be
+//! blocked by Limber or an existing primary status, and it never recurses
+//! because a newly-statused attacker is not itself a fresh Synchronize
+//! target.
+//!
 //! Substitute and Safeguard are outside this battle model.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
@@ -56,18 +71,19 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// This function does not report move-data errors; callers use
 /// [`ensure_resolvable`] for those. Attempts stopped by Limber, type immunity,
 /// or an existing primary status are accepted because they cannot reach an
-/// unsupported interaction. Synchronize is also accepted when the attacker
-/// already carries a primary status and therefore cannot receive the
-/// reflected one.
+/// unsupported interaction. Synchronize is accepted unconditionally: its
+/// paralysis reflection is modelled by [`resolve_synchronize_reflection`],
+/// called from `crate::battle::execute` once [`ParalyzeOutcome::Applied`]
+/// paralyses a Synchronize holder.
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::UnportedAbilityInteraction`] for Synchronize, Shed
-/// Skin, Guts, or Marvel Scale when the move would newly paralyse the defender.
+/// Returns [`BattleError::UnportedAbilityInteraction`] for Shed Skin, Guts,
+/// or Marvel Scale when the move would newly paralyse the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
-    attacker: &BattlePokemon,
+    _attacker: &BattlePokemon,
     defender: &BattlePokemon,
 ) -> Result<(), BattleError> {
     if ensure_resolvable(dex, move_id).is_err() {
@@ -86,9 +102,6 @@ pub fn ensure_admissible(
         ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
             Err(BattleError::UnportedAbilityInteraction(ability))
         }
-        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
-            BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
-        ),
         _ => Ok(()),
     }
 }
@@ -165,6 +178,41 @@ pub fn resolve_paralyze_move(
     }
 
     Ok(ParalyzeOutcome::Applied)
+}
+
+/// The result of reflecting a Synchronize holder's paralysis back onto the
+/// original attacker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynchronizeReflectionOutcome {
+    /// The original attacker's Limber protected it.
+    LimberProtected,
+    /// The original attacker already carries a primary status, so the
+    /// reflection writes nothing.
+    AlreadyStatused,
+    /// The original attacker must be paralysed.
+    Applied,
+}
+
+/// Resolves a Synchronize reflection against `attacker`, the battler whose
+/// move just paralysed a Synchronize holder.
+///
+/// This mirrors `SetMoveEffect`'s `MOVE_EFFECT_AFFECTS_USER` re-entry from
+/// `ABILITYEFFECT_SYNCHRONIZE`
+/// (`pokeemerald/src/battle_util.c:2971-2984`,
+/// `pokeemerald/src/battle_script_commands.c:2240-2245`,
+/// `:2395-2425`). That re-entry runs neither `typecalc` nor
+/// `accuracycheck`, so this resolver takes no move, no type, and no RNG:
+/// Limber is the only ability guard, type effectiveness never blocks it, and
+/// only Limber or an existing primary status can stop it.
+#[must_use]
+pub fn resolve_synchronize_reflection(attacker: &BattlePokemon) -> SynchronizeReflectionOutcome {
+    if attacker.ability() == AbilityId::LIMBER {
+        return SynchronizeReflectionOutcome::LimberProtected;
+    }
+    if !attacker.status1().is_healthy() {
+        return SynchronizeReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizeReflectionOutcome::Applied
 }
 
 #[cfg(test)]

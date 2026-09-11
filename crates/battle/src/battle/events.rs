@@ -215,6 +215,31 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
+    /// A [`BattleEvent::Paralyzed`] target's Synchronize reflected the status
+    /// at move end, and the original attacker's [`AbilityId::LIMBER`] blocked
+    /// the reflection
+    /// (`src/battle_util.c:2971`-`:2984`, `src/battle_script_commands.c:2395`-`:2415`).
+    ///
+    /// This follows the [`BattleEvent::Paralyzed`] event it reflects.
+    SynchronizeLimberProtected {
+        /// Whether the player used the paralysing move.
+        by_player: bool,
+        /// The move whose paralysis was reflected.
+        move_id: MoveId,
+    },
+    /// A [`BattleEvent::Paralyzed`] target's Synchronize reflected the status
+    /// back onto the original attacker at move end
+    /// (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_util.c:2971`-`:2984`).
+    ///
+    /// This follows the [`BattleEvent::Paralyzed`] event it reflects and
+    /// consumes no RNG: the reflection re-enters `SetMoveEffect` without
+    /// `typecalc` or `accuracycheck`.
+    ParalyzedBySynchronize {
+        /// Whether the player used the paralysing move.
+        by_player: bool,
+        /// The move whose paralysis was reflected.
+        move_id: MoveId,
+    },
     /// `STRINGID_PKMNWASPOISONED` (`data/battle_scripts_1.s:319-321`).
     Poisoned {
         /// Whether the player used the move.

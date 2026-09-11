@@ -184,7 +184,10 @@
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above),
-//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]) and the four
+//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Synchronize's
+//! paralysis reflection
+//! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
+//! stays refused, see [`secondary::ensure_admissible`]), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
@@ -192,9 +195,9 @@
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
 //! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! five abilities that read a holder's primary status or the draw that
-//! inflicts it — Synchronize, Shed Skin, Guts, Marvel Scale, and (poison
-//! only) Serene Grace (see [`paralyze::ensure_admissible`] and
+//! four other abilities that read a holder's primary status or the draw
+//! that inflicts it — Shed Skin, Guts, Marvel Scale, and (poison only)
+//! Serene Grace (see [`paralyze::ensure_admissible`] and
 //! [`secondary::ensure_admissible`]) — and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
