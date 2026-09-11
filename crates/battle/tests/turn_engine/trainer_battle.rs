@@ -19,11 +19,12 @@
 //! of `sTreeckoLevelUpLearnset`, `level_up_learnsets.h:3572`-`:3574`;
 //! Absorb is level 6).
 //!
-//! Two-mon parties do not exist on Route 103, so the send-out-in-party-order
-//! scan is exercised against a hand-built party instead — pinning it only
-//! against a one-mon party would pin nothing. That scan is this crate's own
-//! modeled fallback, not upstream's full send-out rule: see
-//! `TrainerContext::send_out_next`'s docs and issue #1040.
+//! Two-mon parties do not exist on Route 103, so the forced-replacement
+//! fixtures below use hand-built parties instead — pinning behaviour only
+//! against a one-mon party would pin nothing. A forced post-faint send-out
+//! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
+//! falling back to party order; see `TrainerContext::send_out_next`'s docs
+//! (issue #1040).
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -62,6 +63,13 @@ const SAND_ATTACK: MoveId = MoveId(28);
 const FIRE_SPIN: MoveId = MoveId(83);
 const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
+/// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
+/// move with far more power than Tackle's, for a most-damage-fallback
+/// fixture whose gap survives integer truncation against a high-level
+/// defender.
+const MEGA_KICK: MoveId = MoveId(25);
+/// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
+const WATER_GUN: MoveId = MoveId(55);
 
 /// The rival's real party: one level-5 Treecko knowing Pound and Leer.
 fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
@@ -224,16 +232,16 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
     );
 }
 
-/// The forced post-faint send-out: party order, at the *end* of the turn,
-/// and the battle carries on. Pins this crate's own fallback scan, not
-/// upstream's true send-out rule (module docs, issue #1040).
+/// Coincidence, not a party-order rule: nothing is ever super effective
+/// against a pure Normal-type player, so this fixture always reaches the
+/// damage fallback, which favors Torchic's higher-powered Scratch over
+/// Mudkip's Tackle.
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
     // A three-mon party. Route 103's is one mon, so this is a synthetic
-    // party against a real trainer id, exercising this crate's fallback
-    // scan (not upstream's rule -- see the module docs).
+    // party against a real trainer id.
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
@@ -287,6 +295,74 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })));
     assert!(events.contains(&BattleEvent::MoneyGained(300)));
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// Fire-type player: the type/super-effective pass picks the Grass member
+/// for worst typing, rejects it for lacking a super-effective move, then
+/// picks the Water member with Water Gun instead of the party-order Grass
+/// member (`pokeemerald/src/battle_ai_switch_items.c:690`-`:738`).
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TORCHIC, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE, GROWL]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN, TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(MUDKIP),
+            bench_remaining: 1,
+        }),
+        "the super-effective Mudkip comes out, not the party-order Treecko: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+}
+
+/// Proves the most-damage fallback independently of party order: a pure
+/// Normal-type player is never hit super effectively, so the type pass
+/// declines both Normal-move bench members, and the fallback -- evaluated
+/// with the fainted Zigzagoon's own stats as attacker, matching upstream
+/// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`) -- then picks
+/// whichever bench member's move has the higher power, since the shared
+/// attacker cancels out any stat difference between them.
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_highest_damage_bench_member_out_of_party_order() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    // The lead's level is 20, not this file's usual 5: Tackle's and Mega
+    // Kick's power gap needs a big enough attacking stat that the shared
+    // attacker's damage against each doesn't truncate to the same integer.
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 20, vec![TACKLE]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![MEGA_KICK]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(MUDKIP),
+            bench_remaining: 1,
+        }),
+        "Mega Kick's higher power sends out Mudkip, not the party-order Pichu: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
 }
 
 /// EXP is applied to the owned player before trainer continuation, so a

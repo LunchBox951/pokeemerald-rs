@@ -7,12 +7,24 @@
 //! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
-use assets::{MoveId, SpeciesId};
+use assets::{Effectiveness, MoveId, SpeciesId, Type, TypeChart};
 
-use crate::damage::BattleRng;
+use crate::ability::{huge_power_attack, pinch_boosts_power};
+use crate::damage::{
+    apply_dual_type_effectiveness, apply_stab, base_damage, has_stab, BattleRng, DamageInput,
+    MoveCategory, Weather,
+};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+
+/// The neutral type-effectiveness baseline (`TYPE_MUL_NORMAL`).
+const NEUTRAL_TYPE_SCORE: u32 = 10;
+
+/// `gBattleMoves[move].power`'s OHKO sentinel (`GUILLOTINE`, `HORN_DRILL`,
+/// `FISSURE`, `SHEER_COLD`), the one power value upstream's most-damage pass
+/// excludes (`pokeemerald/src/battle_ai_switch_items.c:776`).
+const OHKO_POWER_SENTINEL: u8 = 1;
 
 /// The maximum IV assigned to one stat.
 pub const MAX_PER_STAT_IVS: u16 = 31;
@@ -237,12 +249,35 @@ impl TrainerContext {
         &self.bench
     }
 
-    /// Removes and returns the next non-fainted member in party order.
+    /// Removes and returns the most suitable non-fainted member for a forced
+    /// post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type and
+    /// most-damage passes, then party order. `fainted` is the battler being
+    /// replaced. See the ledger's `GetMostSuitableMonToSwitchInto` and
+    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
+    /// and its one documented divergence (issue #1040).
     ///
-    /// This models `OpponentHandleChoosePokemon`'s fallback scan, not
-    /// `GetMostSuitableMonToSwitchInto`'s type/damage selector that a fresh
-    /// forced post-faint send-out runs first upstream (issue #1040).
-    pub(crate) fn send_out_next(&mut self) -> Option<BattlePokemon> {
+    /// # Errors
+    ///
+    /// Returns an error if a bench member's move is missing from `dex` --
+    /// never in practice, since trainer-party validation already screens
+    /// every move (see [`ensure_trainer_party_startable`]).
+    pub(crate) fn send_out_next(
+        &mut self,
+        dex: &Dex,
+        fainted: &BattlePokemon,
+        player: &BattlePokemon,
+    ) -> Result<Option<BattlePokemon>, BattleError> {
+        if let Some(index) = self.most_suitable_by_type(dex, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        if let Some(index) = self.most_suitable_by_damage(dex, fainted, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        Ok(self.send_out_first_healthy())
+    }
+
+    /// Removes and returns the next non-fainted member in party order.
+    fn send_out_first_healthy(&mut self) -> Option<BattlePokemon> {
         while !self.bench.is_empty() {
             let mon = self.bench.remove(0);
             if !mon.is_fainted() {
@@ -251,6 +286,185 @@ impl TrainerContext {
         }
         None
     }
+
+    /// The healthy bench member whose typing takes the most damage from
+    /// `player` and knows a super-effective move back, retrying the
+    /// next-worst typing otherwise.
+    fn most_suitable_by_type(
+        &self,
+        dex: &Dex,
+        player: &BattlePokemon,
+    ) -> Result<Option<usize>, BattleError> {
+        let mut invalid = vec![false; self.bench.len()];
+        loop {
+            let mut best_index = None;
+            let mut best_score = 0;
+            for (index, candidate) in self.bench.iter().enumerate() {
+                if invalid[index] || candidate.is_fainted() {
+                    continue;
+                }
+                let score = typing_suitability_score(player, candidate);
+                if best_score < score {
+                    best_score = score;
+                    best_index = Some(index);
+                }
+            }
+            let Some(index) = best_index else {
+                return Ok(None);
+            };
+            if has_super_effective_move(dex, &self.bench[index], player)? {
+                return Ok(Some(index));
+            }
+            invalid[index] = true;
+        }
+    }
+
+    /// The healthy bench member whose own move deals `fainted`'s most damage
+    /// to `player`. Matches upstream's use of `fainted` -- the battler
+    /// actually being replaced -- as the attacker for stats, ability, and
+    /// STAB (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+    /// `battle_script_commands.c:1306`-`:1311`, `:1547`-`:1552`); only each
+    /// candidate's move (not upstream's stale one) supplies power and type,
+    /// per [`send_out_next`]'s documented divergence.
+    fn most_suitable_by_damage(
+        &self,
+        dex: &Dex,
+        fainted: &BattlePokemon,
+        player: &BattlePokemon,
+    ) -> Result<Option<usize>, BattleError> {
+        let mut best_index = None;
+        let mut best_damage = 0;
+        for (index, candidate) in self.bench.iter().enumerate() {
+            if candidate.is_fainted() {
+                continue;
+            }
+            for slot in candidate.moves() {
+                let Some(damage) = damaging_move_damage(dex, slot.move_id, fainted, player)? else {
+                    continue;
+                };
+                if best_damage < damage {
+                    best_damage = damage;
+                    best_index = Some(index);
+                }
+            }
+        }
+        Ok(best_index)
+    }
+}
+
+/// Scores `candidate`'s typing against `player`'s, applying `player`'s two
+/// type slots even when they repeat (`ModulateByTypeEffectiveness`'s two
+/// unguarded calls in `pokeemerald/src/battle_ai_switch_items.c:709`-`:710`
+/// square the effect for a single-typed `player`). Plain truncating
+/// multiplication with no floor, unlike [`apply_dual_type_effectiveness`]:
+/// upstream's suitability score (unlike real damage) has no minimum-one rule
+/// (`pokeemerald/src/battle_ai_switch_items.c:605`-`:623`).
+fn typing_suitability_score(player: &BattlePokemon, candidate: &BattlePokemon) -> u32 {
+    let candidate_types = candidate.types();
+    let player_types = player.types();
+    let score = apply_raw_type_multiplier(NEUTRAL_TYPE_SCORE, player_types[0], candidate_types);
+    apply_raw_type_multiplier(score, player_types[1], candidate_types)
+}
+
+/// Applies every [`TypeChart`] row matching `attacking_type` against each of
+/// `defending_types`' distinct slots, truncating after each row with no
+/// floor (`ModulateByTypeEffectiveness`, `pokeemerald/src/battle_ai_switch_items.c:605`-`:627`).
+fn apply_raw_type_multiplier(score: u32, attacking_type: Type, defending_types: [Type; 2]) -> u32 {
+    let mut score = score;
+    let distinct = defending_types[1] != defending_types[0];
+    for &(atk, def, effectiveness) in TypeChart::rows() {
+        if atk != attacking_type {
+            continue;
+        }
+        if def == defending_types[0] {
+            score = raw_multiply(score, effectiveness);
+        }
+        if distinct && def == defending_types[1] {
+            score = raw_multiply(score, effectiveness);
+        }
+    }
+    score
+}
+
+fn raw_multiply(score: u32, effectiveness: Effectiveness) -> u32 {
+    score * u32::from(effectiveness.multiplier_x10()) / 10
+}
+
+/// Whether `candidate` knows a damaging move super effective against
+/// `player`.
+fn has_super_effective_move(
+    dex: &Dex,
+    candidate: &BattlePokemon,
+    player: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    for slot in candidate.moves() {
+        let move_data = dex.move_data(slot.move_id)?;
+        if move_data.power == 0 {
+            continue;
+        }
+        let Some(move_type) = move_data.move_type.battle_type() else {
+            continue;
+        };
+        let effectiveness =
+            apply_dual_type_effectiveness(NEUTRAL_TYPE_SCORE, move_type, player.types());
+        if effectiveness > NEUTRAL_TYPE_SCORE {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Returns the damage `move_id` would deal from `attacker` to `defender`, or
+/// `None` for the [`OHKO_POWER_SENTINEL`] upstream excludes here or a
+/// `???`-typed move this crate cannot run type math on. A power-0 status
+/// move is not excluded, matching upstream: its base-damage formula adds a
+/// flat `+2` regardless of power. Screens, weather, burn, and a random roll
+/// are not modelled: a switch-in candidate carries none of the first three,
+/// and this selector never draws RNG upstream.
+fn damaging_move_damage(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<Option<u32>, BattleError> {
+    let move_data = dex.move_data(move_id)?;
+    if move_data.power == OHKO_POWER_SENTINEL {
+        return Ok(None);
+    }
+    let Some(move_type) = move_data.move_type.battle_type() else {
+        return Ok(None);
+    };
+    let category = MoveCategory::for_type(move_type);
+    let (attack_stat, attack_stage) = attacker.attacking_stat(category);
+    let attack_stat = huge_power_attack(attacker.ability(), category, attack_stat);
+    let (defense_stat, defense_stage) = defender.defending_stat(category);
+    let input = DamageInput {
+        attacker_level: attacker.level(),
+        power: u32::from(move_data.power),
+        move_type,
+        attack_stat,
+        attack_stage,
+        defense_stat,
+        defense_stage,
+        attacker_burned: false,
+        reflect: false,
+        light_screen: false,
+        weather: Weather::None,
+        is_solar_beam: false,
+        attacker_pinch_boost: pinch_boosts_power(
+            attacker.ability(),
+            move_type,
+            attacker.current_hp(),
+            attacker.stats().max_hp,
+        ),
+    };
+    let damage = base_damage(&input);
+    let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
+    Ok(Some(apply_dual_type_effectiveness(
+        damage,
+        move_type,
+        defender.types(),
+    )))
 }
 
 /// Looks up a trainer in the extracted trainer table.

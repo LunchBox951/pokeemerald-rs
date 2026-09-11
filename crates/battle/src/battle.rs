@@ -337,7 +337,7 @@ impl Battle {
                 move_id: next.move_id(),
             });
         } else {
-            self.settle_fainted_enemy(&mut events);
+            self.settle_fainted_enemy(&mut events)?;
             // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
             // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
@@ -665,7 +665,7 @@ impl Battle {
         if self.player.pending_move_learn().is_some() {
             return Ok(());
         }
-        self.settle_fainted_enemy(events);
+        self.settle_fainted_enemy(events)?;
         Ok(())
     }
 
@@ -697,15 +697,15 @@ impl Battle {
         Ok(())
     }
 
-    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
+    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
-            return;
+            return Ok(());
         }
         let BattleKind::Trainer(context) = &mut self.kind else {
             self.finish(events, BattleOutcome::PlayerWon);
-            return;
+            return Ok(());
         };
-        if let Some(next) = context.send_out_next() {
+        if let Some(next) = context.send_out_next(&self.dex, &self.enemy, &self.player)? {
             let species = next.species();
             let bench_remaining = context.bench_len();
             self.enemy = next;
@@ -713,11 +713,12 @@ impl Battle {
                 species,
                 bench_remaining,
             });
-            return;
+            return Ok(());
         }
         let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
+        Ok(())
     }
 
     fn act(
