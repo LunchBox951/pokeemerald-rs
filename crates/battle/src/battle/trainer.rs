@@ -252,9 +252,12 @@ impl TrainerContext {
     /// Removes and returns the most suitable non-fainted member for a forced
     /// post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type and
     /// most-damage passes, then party order. `fainted` is the battler being
-    /// replaced. See the ledger's `GetMostSuitableMonToSwitchInto` and
+    /// replaced and `resolving_move` is the move whose resolution fainted it
+    /// (the turn engine's own last-executed move; upstream's `gCurrentMove`
+    /// is exactly this stale value at the point a forced replacement runs).
+    /// See the ledger's `GetMostSuitableMonToSwitchInto` and
     /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
-    /// and its one documented divergence (issue #1040).
+    /// and its one remaining documented divergence (issue #1040).
     ///
     /// # Errors
     ///
@@ -265,12 +268,13 @@ impl TrainerContext {
         &mut self,
         dex: &Dex,
         fainted: &BattlePokemon,
+        resolving_move: MoveId,
         player: &BattlePokemon,
     ) -> Result<Option<BattlePokemon>, BattleError> {
         if let Some(index) = self.most_suitable_by_type(dex, player)? {
             return Ok(Some(self.bench.remove(index)));
         }
-        if let Some(index) = self.most_suitable_by_damage(dex, fainted, player)? {
+        if let Some(index) = self.most_suitable_by_damage(dex, fainted, resolving_move, player)? {
             return Ok(Some(self.bench.remove(index)));
         }
         Ok(self.send_out_first_healthy())
@@ -319,31 +323,42 @@ impl TrainerContext {
         }
     }
 
-    /// The healthy bench member whose own move deals `fainted`'s most damage
-    /// to `player`. Matches upstream's use of `fainted` -- the battler
-    /// actually being replaced -- as the attacker for stats, ability, and
-    /// STAB (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
-    /// `battle_script_commands.c:1306`-`:1311`, `:1547`-`:1552`); only each
-    /// candidate's move (not upstream's stale one) supplies power and type,
-    /// per [`send_out_next`]'s documented divergence.
+    /// The healthy bench member whose own move, layered onto the one shared
+    /// base damage `resolving_move` deals from `fainted`, ends up highest
+    /// against `player`. Matches upstream's `AI_CalcDmg(gActiveBattler,
+    /// opposingBattler)`, which computes that base exactly once from the
+    /// stale `gCurrentMove` with the fainted battler (`gActiveBattler`) as
+    /// attacker (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+    /// `battle_script_commands.c:1306`-`:1311`); each candidate's own move
+    /// then contributes only STAB and type effectiveness through `TypeCalc`
+    /// (`battle_script_commands.c:1536`-`:1552`). The running winner is
+    /// narrowed to a byte before every comparison, reproducing the stock
+    /// (non-`BUGFIX`) `u8 bestDmg` that silently wraps a winning score above
+    /// 255 (`pokeemerald/include/config.h:48`;
+    /// `battle_ai_switch_items.c:632`-`:636`,`:781`-`:784`).
     fn most_suitable_by_damage(
         &self,
         dex: &Dex,
         fainted: &BattlePokemon,
+        resolving_move: MoveId,
         player: &BattlePokemon,
     ) -> Result<Option<usize>, BattleError> {
+        let Some(base) = stale_base_damage(dex, resolving_move, fainted, player)? else {
+            return Ok(None);
+        };
         let mut best_index = None;
-        let mut best_damage = 0;
+        let mut best_damage: u8 = 0;
         for (index, candidate) in self.bench.iter().enumerate() {
             if candidate.is_fainted() {
                 continue;
             }
             for slot in candidate.moves() {
-                let Some(damage) = damaging_move_damage(dex, slot.move_id, fainted, player)? else {
+                let Some(damage) = candidate_move_damage(dex, slot.move_id, base, fainted, player)?
+                else {
                     continue;
                 };
-                if best_damage < damage {
-                    best_damage = damage;
+                if u32::from(best_damage) < damage {
+                    best_damage = u8::try_from(damage % 256).expect("modulo 256 fits a byte");
                     best_index = Some(index);
                 }
             }
@@ -414,32 +429,29 @@ fn has_super_effective_move(
     Ok(false)
 }
 
-/// Returns the damage `move_id` would deal from `attacker` to `defender`, or
-/// `None` for the [`OHKO_POWER_SENTINEL`] upstream excludes here or a
-/// `???`-typed move this crate cannot run type math on. A power-0 status
-/// move is not excluded, matching upstream: its base-damage formula adds a
-/// flat `+2` regardless of power. Screens, weather, burn, and a random roll
-/// are not modelled: a switch-in candidate carries none of the first three,
-/// and this selector never draws RNG upstream.
-fn damaging_move_damage(
+/// Computes the most-damage pass's one shared base-damage figure from
+/// `resolving_move`, with `fainted` as attacker and `player` as defender, or
+/// `None` for a `???`-typed `resolving_move` this crate cannot run type math
+/// on. Unlike a real hit, `resolving_move`'s own power is never excluded
+/// here (only each candidate's own move can be the
+/// [`OHKO_POWER_SENTINEL`]) -- matching upstream, whose `AI_CalcDmg` runs
+/// unconditionally before the candidate move's own guard is even checked.
+fn stale_base_damage(
     dex: &Dex,
-    move_id: MoveId,
-    attacker: &BattlePokemon,
-    defender: &BattlePokemon,
+    resolving_move: MoveId,
+    fainted: &BattlePokemon,
+    player: &BattlePokemon,
 ) -> Result<Option<u32>, BattleError> {
-    let move_data = dex.move_data(move_id)?;
-    if move_data.power == OHKO_POWER_SENTINEL {
-        return Ok(None);
-    }
+    let move_data = dex.move_data(resolving_move)?;
     let Some(move_type) = move_data.move_type.battle_type() else {
         return Ok(None);
     };
     let category = MoveCategory::for_type(move_type);
-    let (attack_stat, attack_stage) = attacker.attacking_stat(category);
-    let attack_stat = huge_power_attack(attacker.ability(), category, attack_stat);
-    let (defense_stat, defense_stage) = defender.defending_stat(category);
+    let (attack_stat, attack_stage) = fainted.attacking_stat(category);
+    let attack_stat = huge_power_attack(fainted.ability(), category, attack_stat);
+    let (defense_stat, defense_stage) = player.defending_stat(category);
     let input = DamageInput {
-        attacker_level: attacker.level(),
+        attacker_level: fainted.level(),
         power: u32::from(move_data.power),
         move_type,
         attack_stat,
@@ -452,14 +464,35 @@ fn damaging_move_damage(
         weather: Weather::None,
         is_solar_beam: false,
         attacker_pinch_boost: pinch_boosts_power(
-            attacker.ability(),
+            fainted.ability(),
             move_type,
-            attacker.current_hp(),
-            attacker.stats().max_hp,
+            fainted.current_hp(),
+            fainted.stats().max_hp,
         ),
     };
-    let damage = base_damage(&input);
-    let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
+    Ok(Some(base_damage(&input)))
+}
+
+/// Applies `move_id`'s STAB (against `fainted`'s types, matching upstream's
+/// use of the fainted battler for `TypeCalc`'s STAB check) and type
+/// effectiveness (against `defender`'s types) on top of the shared `base`
+/// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`] or
+/// a `???`-typed move.
+fn candidate_move_damage(
+    dex: &Dex,
+    move_id: MoveId,
+    base: u32,
+    fainted: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<Option<u32>, BattleError> {
+    let move_data = dex.move_data(move_id)?;
+    if move_data.power == OHKO_POWER_SENTINEL {
+        return Ok(None);
+    }
+    let Some(move_type) = move_data.move_type.battle_type() else {
+        return Ok(None);
+    };
+    let damage = apply_stab(base, has_stab(fainted.types(), move_id, move_type));
     Ok(Some(apply_dual_type_effectiveness(
         damage,
         move_type,
@@ -529,10 +562,11 @@ pub fn ensure_trainer_party_startable(
 mod tests {
     use super::{
         build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, money_value_for_class,
-        roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerPartyMon,
-        DEFAULT_MONEY_VALUE, SHINY_ODDS,
+        roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerContext,
+        TrainerPartyMon, DEFAULT_MONEY_VALUE, SHINY_ODDS,
     };
     use crate::dex::Dex;
+    use crate::pokemon::BattlePokemon;
     use crate::script_rng::SequenceRng;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
@@ -554,6 +588,48 @@ mod tests {
             u16::from_le_bytes([bytes[0], bytes[1]]),
             u16::from_le_bytes([bytes[2], bytes[3]]),
         ]
+    }
+
+    /// `GetMostSuitableMonToSwitchInto`'s most-damage pass stores its running
+    /// winner in a `u8` in the stock build (`BUGFIX` is left undefined at
+    /// `pokeemerald/include/config.h:48`), so a candidate whose true score
+    /// exceeds 255 is narrowed modulo 256 before the next
+    /// `bestDmg < gBattleMoveDamage` comparison
+    /// (`pokeemerald/src/battle_ai_switch_items.c:781`-`:784`). A level-70
+    /// Metagross's stale Mega Kick against a level-50 Sandshrew gives
+    /// Mudkip's Water Gun (super effective against Sandshrew's Ground
+    /// typing, no STAB from Metagross) a true score over 255 that narrows
+    /// below Pichu's untouched, unnarrowed Tackle score, so the later bench
+    /// member wins despite the earlier one's higher true damage.
+    #[test]
+    fn the_most_damage_pass_narrows_its_running_winner_to_a_byte() {
+        const METAGROSS: SpeciesId = SpeciesId(400);
+        const SANDSHREW: SpeciesId = SpeciesId(27);
+        const MUDKIP: SpeciesId = SpeciesId(283);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const MEGA_KICK: MoveId = MoveId(25);
+        const TACKLE: MoveId = MoveId(33);
+        const WATER_GUN: MoveId = MoveId(55);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(METAGROSS, 70, vec![MEGA_KICK]);
+        let player = mon(SANDSHREW, 50, vec![TACKLE]);
+        let bench = vec![mon(MUDKIP, 5, vec![WATER_GUN]), mon(PICHU, 5, vec![TACKLE])];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
+            Ok(Some(1)),
+            "Water Gun's narrowed score loses to Tackle's unnarrowed one"
+        );
     }
 
     #[test]

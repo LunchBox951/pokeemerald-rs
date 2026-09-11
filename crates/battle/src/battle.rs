@@ -25,7 +25,7 @@ use crate::fixed_damage;
 use crate::flag_move;
 use crate::multi_hit;
 use crate::paralyze;
-use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL};
+use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
 use crate::status1::{draws_full_paralysis, poison_residual_damage};
@@ -108,6 +108,12 @@ pub struct Battle {
     turn_counter: u8,
     turn_has_started: bool,
     pending_residual_order: Option<Order>,
+    /// `gCurrentMove` (`pokeemerald/include/battle.h`): the most recently
+    /// attempted move, `MOVE_NONE` before any has been. A forced trainer
+    /// replacement's most-damage fallback reads this stale value as its
+    /// base-damage move, matching upstream
+    /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
+    last_move_used: MoveId,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +198,7 @@ impl Battle {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         })
     }
 
@@ -247,6 +254,7 @@ impl Battle {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         })
     }
 
@@ -705,7 +713,9 @@ impl Battle {
             self.finish(events, BattleOutcome::PlayerWon);
             return Ok(());
         };
-        if let Some(next) = context.send_out_next(&self.dex, &self.enemy, &self.player)? {
+        if let Some(next) =
+            context.send_out_next(&self.dex, &self.enemy, self.last_move_used, &self.player)?
+        {
             let species = next.species();
             let bench_remaining = context.bench_len();
             self.enemy = next;
@@ -729,6 +739,11 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // `gCurrentMove` is set for the chosen action before anything can
+        // gate its execution (`HandleAction_UseMove`,
+        // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
+        // even when full paralysis or empty PP stop this one from landing.
+        self.last_move_used = move_id;
         let attacker_status1 = if player_is_attacker {
             self.player.status1()
         } else {
@@ -766,6 +781,9 @@ impl Battle {
                 self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
             }
             EnemyAction::Struggle => {
+                // `gCurrentMove` is set to Struggle before anything else runs
+                // (`HandleAction_UseMove`, `pokeemerald/src/battle_util.c:103`).
+                self.last_move_used = STRUGGLE;
                 // Struggle reaches the paralysis gate before its unsupported
                 // recoil path (`data/battle_scripts_1.s:241`-`:247`).
                 if draws_full_paralysis(self.enemy.status1(), rng) {
@@ -865,6 +883,7 @@ mod tests {
             turn_counter: 0,
             turn_has_started: false,
             pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         };
         (battle, player_max_hp, player_move_max_pp)
     }

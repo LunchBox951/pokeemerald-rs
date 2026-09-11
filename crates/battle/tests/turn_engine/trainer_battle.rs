@@ -65,8 +65,8 @@ const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
 /// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
 /// move with far more power than Tackle's, for a most-damage-fallback
-/// fixture whose gap survives integer truncation against a high-level
-/// defender.
+/// fixture proving that power difference no longer matters once base
+/// damage comes from one shared, stale move.
 const MEGA_KICK: MoveId = MoveId(25);
 /// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
 const WATER_GUN: MoveId = MoveId(55);
@@ -234,8 +234,9 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
 
 /// Coincidence, not a party-order rule: nothing is ever super effective
 /// against a pure Normal-type player, so this fixture always reaches the
-/// damage fallback, which favors Torchic's higher-powered Scratch over
-/// Mudkip's Tackle.
+/// damage fallback. Scratch and Tackle are both Normal, so they score
+/// identically there too, and the tie-break keeps the earlier bench member,
+/// Torchic.
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
@@ -330,20 +331,52 @@ fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
 
 /// Proves the most-damage fallback independently of party order: a pure
 /// Normal-type player is never hit super effectively, so the type pass
-/// declines both Normal-move bench members, and the fallback -- evaluated
-/// with the fainted Zigzagoon's own stats as attacker, matching upstream
-/// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`) -- then picks
-/// whichever bench member's move has the higher power, since the shared
-/// attacker cancels out any stat difference between them.
+/// declines both bench members. Upstream's most-damage pass then scores
+/// every candidate off the *same* base damage (the fainted Zigzagoon's
+/// stats against a stale move, `pokeemerald/src/battle_ai_switch_items.c:772`-`:779`),
+/// so only each candidate's own move's STAB and type effectiveness can
+/// still differ the outcome: Water Gun earns no STAB from a Normal-type
+/// Zigzagoon, but Tackle does, so the party-order-second Pichu is sent out
+/// over the party-order-first Mudkip.
 #[test]
-fn a_fainted_trainer_mon_is_replaced_by_the_highest_damage_bench_member_out_of_party_order() {
+fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_party_order() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
-    // The lead's level is 20, not this file's usual 5: Tackle's and Mega
-    // Kick's power gap needs a big enough attacking stat that the shared
-    // attacker's damage against each doesn't truncate to the same integer.
     let party = vec![
-        max_iv_mon(&dex, ZIGZAGOON, 20, vec![TACKLE]),
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        }),
+        "Tackle's STAB from the Normal-type Zigzagoon sends out Pichu, not the party-order Mudkip: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}
+
+/// Two Normal moves against the same defender score identically once base
+/// damage comes from the one stale move rather than each candidate's own
+/// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+/// `battle_script_commands.c:1306`-`:1311`,`:1536`-`:1552`), so the strict
+/// `bestDmg < gBattleMoveDamage` comparison keeps the earlier party member
+/// regardless of Mega Kick's vastly higher power.
+#[test]
+fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
         max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
         max_iv_mon(&dex, MUDKIP, 5, vec![MEGA_KICK]),
     ];
@@ -357,12 +390,12 @@ fn a_fainted_trainer_mon_is_replaced_by_the_highest_damage_bench_member_out_of_p
         .unwrap();
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {
-            species: SpeciesId(MUDKIP),
+            species: SpeciesId(PICHU),
             bench_remaining: 1,
         }),
-        "Mega Kick's higher power sends out Mudkip, not the party-order Pichu: {events:?}"
+        "Mega Kick's power cannot outscore Tackle when both are Normal: {events:?}"
     );
-    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
 }
 
 /// EXP is applied to the owned player before trainer continuation, so a
