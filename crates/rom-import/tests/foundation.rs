@@ -68,13 +68,8 @@ fn a_profile_built_from_the_fixture_selects_it() {
 /// A fresh directory under the OS temporary directory, unique to this
 /// process and this call, removed on drop.
 ///
-/// A fixed shared path would let two `cargo test` processes (two worktrees,
-/// or a workspace run alongside a targeted run) race: one process's cleanup
-/// could unlink the other's fixture mid-import. Naming is settled by
-/// `std::fs::create_dir`'s exclusivity, not by any counter shared across
-/// calls: each attempt tries a candidate derived from the label, this
-/// process's id, and the attempt number, and only an `AlreadyExists` moves
-/// to the next candidate.
+/// A shared path lets one `cargo test` process's cleanup unlink another's
+/// fixture mid-import; `create_dir`'s exclusivity settles the name.
 struct TempDir {
     path: std::path::PathBuf,
 }
@@ -116,5 +111,30 @@ fn import_fails_closed_on_an_unsupported_rom() {
     // profile selection and nothing is written.
     let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
     assert!(matches!(err, ImportError::UnsupportedRevision { .. }));
+    assert!(!out_path.exists(), "import must never write a pack");
+}
+
+#[test]
+fn one_scratch_directory_cleanup_leaves_a_concurrent_import_alone() {
+    // Two importers running at once, the way two `cargo test` processes do.
+    let mine = TempDir::new("concurrent");
+    let theirs = TempDir::new("concurrent");
+    assert_ne!(
+        mine.path, theirs.path,
+        "two concurrent scratch directories must not be the same path"
+    );
+
+    let rom_path = mine.join("fixture.gba");
+    let out_path = mine.join("assets.pack");
+    std::fs::write(&rom_path, rom_with_a_compressed_blob().bytes()).expect("a writable temp file");
+
+    // The other importer finishes and cleans up mid-import.
+    drop(theirs);
+
+    let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
+    assert!(
+        matches!(err, ImportError::UnsupportedRevision { .. }),
+        "a neighbour's cleanup must not turn the revision check into {err}"
+    );
     assert!(!out_path.exists(), "import must never write a pack");
 }
