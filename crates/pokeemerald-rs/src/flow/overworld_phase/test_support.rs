@@ -4,7 +4,7 @@
 use super::OverworldPhase;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
-use engine::overworld::metatile_behavior::{MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
+use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
 use engine::overworld::{
     ConnectedMapData, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE,
 };
@@ -328,6 +328,72 @@ pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
     );
 
     phase
+}
+
+/// Littleroot Town's own lab-door warp event -- real event data, available
+/// pack-free (`warp_tile_behavior`'s own doc comment) -- combined with a
+/// **synthetic** scene whose only special tile pins `MB_ANIMATED_DOOR` at
+/// that exact position, `(7, 16)`, matching what the real extracted
+/// attribute data decodes there (issue #851's own evidence) without needing
+/// a local pack. Unlike the real tile, this one is walkable (`synthetic_scene_with_special_tile`'s
+/// own contract) -- deliberately, so a fixture whose pre-movement check
+/// regressed to no-op would actually let the player step onto it, rather
+/// than the fixture's own solidity silently doing the preempting's job.
+///
+/// `crate::flow::overworld_phase`'s own headless tests (issue #851) use this
+/// to prove the pre-movement animated-door check itself, independent of
+/// whether a local pack can resolve the lab as an actual destination room
+/// (the pack-gated sibling tests do that).
+pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPhase {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let events = assets::MapEventsTable::new()
+        .resolve(littleroot)
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+    let door = events.warp_events[2];
+    assert_eq!(
+        (door.x, door.y),
+        (7, 16),
+        "fixture precondition: Littleroot's warp #2 is the lab door"
+    );
+
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        20,
+        20,
+        (7, 16),
+        MB_ANIMATED_DOOR,
+    );
+    OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((7, 17), 3, facing),
+        None,
+    )
+}
+
+/// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
+/// two tiles south of the door, already facing North, instead of standing
+/// at rest right beside it -- so a caller can drive a genuine *walked*
+/// approach (holding Up the whole way) rather than a stationary press.
+/// Issue #851 review finding: the pre-movement-only animated-door check
+/// misses exactly the frame such an approach's own walk animation drains,
+/// because that check is read before this frame's own
+/// [`engine::overworld::PlayerState::tick`] runs -- one call too early to
+/// see the door from the tile the player is, by the end of that same call,
+/// already standing on.
+pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        20,
+        20,
+        (7, 16),
+        MB_ANIMATED_DOOR,
+    );
+    OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((7, 19), 3, Direction::North),
+        None,
+    )
 }
 
 /// The tile row Route 101's own extracted layout makes solid tall grass:

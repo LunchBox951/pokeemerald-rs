@@ -743,6 +743,185 @@ fn a_legal_step_in_the_arrow_direction_lands_the_warp() {
     );
 }
 
+/// The issue #851 acceptance test's pack-free half: animated doors are
+/// polled pre-movement, against the tile the player *faces*, never one they
+/// land on -- a completed-step check alone can never reach a real animated
+/// door, because every one of them is solid
+/// (`engine::overworld::warp`'s module docs). Littleroot's lab door at
+/// `(7, 16)` is this port's own real evidence for that (issue #851's own
+/// evidence section): it decodes to collision 1 with `MB_ANIMATED_DOOR`,
+/// with no alternative entrance.
+///
+/// [`facing_littleroot_lab_door_phase`] reuses that real warp event but on a
+/// **synthetic**, walkable scene (this test's own doc comment) precisely so
+/// this can assert the *negative* half, independent of whether a local pack
+/// happens to be present: before issue #851, a legal, walkable step onto an
+/// animated-door tile would simply have happened, `trigger_door_warp` only
+/// ever running (and firing) once that step's walk animation drained.
+/// Mirrors [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]'s
+/// own shape (and its own reason for asserting only the negative half) for
+/// the arrow-warp path: whether the preempting warp actually *lands*
+/// depends on a local pack ([`facing_the_lab_door_and_holding_north_enters_birchs_lab`]
+/// pins that separately), but the step it preempts must never happen either
+/// way.
+#[test]
+fn facing_the_lab_door_and_holding_north_preempts_movement_instead_of_stepping() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::North);
+
+    phase.step(held(Buttons::UP));
+
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "the pre-movement animated-door check must preempt movement before \
+         PlayerState::step ever runs (field_control_avatar.c:170-178) -- the \
+         pre-#851 completed-step-only gate would have let this walkable \
+         synthetic tile be stepped onto instead"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation was ever started -- the step never ran"
+    );
+}
+
+/// The turning half of the same gate: a fresh turn into the door's facing
+/// direction must not itself warp -- upstream reads `playerDirection` ahead
+/// of `PlayerStep` (`field_control_avatar.c:143`), so `dpadDirection ==
+/// playerDirection` can never be satisfied on the very frame that turn
+/// happens. Only the *next* held frame, now already facing the door, meets
+/// the gate. Mirrors the doormat's own
+/// `a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping`
+/// for the arrow path.
+#[test]
+fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::East);
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "holding Up while facing East must turn the player to face North"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 17),
+        "a turning frame must never also move or warp"
+    );
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "a turning frame must not warp"
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "now already facing North, the second held-Up frame satisfies the gate and \
+         the door check preempts the now-legal step onto the (synthetic, walkable) tile"
+    );
+}
+
+/// The pack-free ratchet for the review finding pinned by
+/// [`walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it`]:
+/// a *walked* approach (two full tile crossings, not a stationary press)
+/// must still preempt the final step onto the door, on the very frame that
+/// approach's own walk animation drains -- not one frame later, and not
+/// only once a further frame is *also* held. Runs pack-free the same way
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
+/// whether the preempting warp actually lands depends on a local pack (the
+/// `#[ignore]`d sibling above pins that), but the step it preempts must
+/// never happen either way.
+#[test]
+fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+
+    assert_ne!(
+        phase.player.position(),
+        (7, 16),
+        "the animated-door check must preempt the walked approach's final step onto the \
+         (synthetic, walkable) door tile, on the very frame that approach's own walk \
+         animation drains -- not a frame later"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the walked approach's second tile crossing must have fully drained by the {}th \
+         held frame",
+        2 * u32::from(WALK_FRAMES_PER_TILE)
+    );
+}
+
+/// The positive, pack-gated half of
+/// [`facing_the_lab_door_and_holding_north_preempts_movement_instead_of_stepping`]:
+/// the same real warp event, but asserting the preempting animated-door
+/// warp actually *lands* rather than only that the step never happened --
+/// so a regression that skips movement without warping (a soft-lock) fails
+/// here even though it passes the pack-free ratchet. This is the issue #851
+/// acceptance test proper: entering Littleroot's real front door (Professor
+/// Birch's lab) from outdoors.
+///
+/// Needs a local pack because `warp_to` loads the real destination room
+/// ([`crate::overworld::load_room`] over extracted tileset/map data).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
+    let mut phase = facing_littleroot_lab_door_phase(Direction::North);
+
+    phase.step(held(Buttons::UP));
+
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "holding Up in front of the lab's animated door must fire TryDoorWarp \
+         (field_control_avatar.c:170-178, 833-856)"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (6, 12),
+        "arriving at the lab's own warp #0"
+    );
+}
+
+/// Review finding on the fix above: a *walked* approach to the door -- not
+/// a player already standing beside it -- must enter on the very frame the
+/// approach's own walk animation drains, with no extra held frame required.
+/// [`approaching_littleroot_lab_door_phase`] starts the player two tiles
+/// south of the door, still facing North, so reaching the door takes two
+/// full tile crossings ([`WALK_FRAMES_PER_TILE`] frames each) before the
+/// door tile is even in front of the player. Upstream's `TryDoorWarp` reads
+/// `tileTransitionState`/`dpadDirection` fresh every
+/// `ProcessPlayerFieldInput` call, so it fires on that very tile-center
+/// frame; a version of this port that only polls the door pre-movement
+/// (before this frame's own [`PlayerState::tick`] has drained the
+/// approach) would need a 33rd held frame instead of the natural 32, and
+/// would never fire at all if Up is released the instant the player stops.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "the door must fire on the walked approach's own drain frame -- the \
+         {}th held frame, not a {}st -- matching upstream's tile-center timing",
+        2 * u32::from(WALK_FRAMES_PER_TILE),
+        2 * u32::from(WALK_FRAMES_PER_TILE) + 1
+    );
+    assert_eq!(
+        phase.player.position(),
+        (6, 12),
+        "arriving at the lab's own warp #0"
+    );
+}
+
 /// `RestartWildEncounterImmunitySteps` at upstream's `LoadMapFromWarp` call
 /// site (`src/overworld.c:850`), pinned through the whole phase: a warp must
 /// buy four fresh encounter-free steps, however many the player had already
