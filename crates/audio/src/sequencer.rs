@@ -28,7 +28,7 @@
 //! Out of scope for this slice (decoded but not executed): the remaining
 //! `XCMD` sub-commands (tone overrides, wave swap, portamento wait) and
 //! `PORT` — neither is ever emitted by `tools/mid2agb`
-//! (`crates/assets/src/audio.rs`'s "Deliberately deferred").
+//! (`crates/assets/src/audio.rs`'s "Deferred commands").
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};

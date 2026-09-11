@@ -1,216 +1,48 @@
-//! `cargo xtask extract` (S-4, F-3): builds the local, gitignored asset
-//! pack from the developer's `pokeemerald/` reference checkout.
+//! Builds the developer asset pack from a local `pokeemerald/` checkout.
 //!
-//! Implements the owner-decided "policy A" from Discussion #71: extraction
-//! reads the local checkout `./init.sh` fetches and writes a deterministic,
-//! versioned pack to disk (format: the `pack_format` crate, which owns the
-//! container layout and the writer); it never runs automatically
-//! (only an explicit `cargo xtask extract` invocation triggers it, wired in
-//! `crate::dispatch`), and the pack itself is never committed, never a CI
-//! artifact, and never embedded in a binary (`.gitignore` excludes
-//! [`OUTPUT_RELATIVE_PATH`] at the repo root).
+//! [`run`] publishes the deterministic pack at the repository's
+//! [`OUTPUT_RELATIVE_PATH`]. The runtime pack resolver is intentionally not
+//! used because this command owns the checkout-local build product.
 //!
-//! Deliberately std-only (`minimal-deps`): no image-decoding crate is
-//! available, so [`png`] and [`inflate`] reimplement just enough of PNG and
-//! DEFLATE to read upstream's own graphics sources (see their module docs
-//! for the exact subset). [`jasc_pal`] reads the JASC-PAL palette files the
-//! same sources ship alongside.
+//! The facade owns pipeline order, checkout and output paths, common pack-entry
+//! builders, and manifests for tilesets, layouts, title graphics, sprites, and
+//! interface palettes. Specialized child modules own source decoding and the
+//! remaining asset manifests; `error` defines the public failure contracts.
 //!
-//! # What this pipeline extracts
+//! # Extraction scope
 //!
-//! Per the issue's scope (v1-path maps at minimum, plus title-screen
-//! graphics, plus player/NPC sprite sheets):
+//! The pack contains:
 //!
-//! - **Five tilesets** — every one Littleroot Town's family of layouts
-//!   references (`LAYOUT_LITTLEROOT_TOWN` and its house/lab interiors, per
-//!   `pokeemerald/data/layouts/layouts.json`): primary `general` and
-//!   `building`; secondary `petalburg`, `brendans_mays_house`, `lab`. For
-//!   each, this pipeline extracts the *entire* upstream tileset directory
-//!   (`data/tilesets/{primary,secondary}/<name>/`): `tiles.png`, every
-//!   `anim/**/*.png` animation frame (present for `general` and
-//!   `building` only), all 16 `palettes/NN.pal` files, and
-//!   `metatiles.bin` / `metatile_attributes.bin` as opaque
-//!   [`pack_format::EntryKind::Raw`] blobs (upstream ships these as flat binary
-//!   files directly, not compiled from another source — see
-//!   `crates/assets/src/map_layouts.rs`'s docs for the identical
-//!   raw-binary-source situation with `map.bin`/`border.bin`). Extracting
-//!   every file in these five directories, not just `tiles.png`, is what
-//!   lets the ledger entries for them close as fully `ported` rather than
-//!   partially covered.
-//! - **Title screen** (`graphics/title_screen/`): all 6 PNGs, all 3 `.pal`
-//!   files, and the 3 `.bin` files (`pokemon_logo.bin`, `clouds.bin`,
-//!   `rayquaza.bin` — tile-arrangement data this pipeline doesn't
-//!   interpret) as raw blobs. Again the whole directory, for the same
-//!   ledger reason. Two of the six PNGs (`emerald_version.png`,
-//!   `press_start.png` — the version banner and Press Start/copyright OBJ
-//!   sprite sheets) additionally get a `title/palette/<name>` entry decoded
-//!   from their own embedded `PLTE` chunk ([`png::IndexedImage::palette`]):
-//!   unlike every other title-screen graphic, upstream's build derives
-//!   *their* in-game palette directly from the PNG
-//!   (`INCGFX_U16(...png", ".gbapal")` in `graphics.c`), not a sibling
-//!   `.pal` file, so this is the only way to recover it (see
-//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]). One of the three `.pal`
-//!   files is not extracted whole: `pokemon_logo.pal` is cut to the 224
-//!   colours upstream's own build rule keeps (see
-//!   [`TITLE_SCREEN_PALETTE_CUTS`]).
-//! - **Player/NPC sprites** (`graphics/object_events/pics/people/`): every
-//!   PNG in the directory (133 files: Brendan's and May's own animation
-//!   sheets, plus the full upstream NPC roster — nurses, gym leaders,
-//!   rivals, etc.) — one bounded, self-contained upstream directory,
-//!   matching the issue's "player/NPC sprite sheets" wording without
-//!   guessing at a narrower cut. Each image entry stands alone (no
-//!   embedded colour table, see [`png`]'s docs); the two player characters
-//!   additionally get their real in-game palette
-//!   (`graphics/object_events/palettes/{brendan,may}.pal`) extracted
-//!   alongside, since I-3 (protagonist's room) needs a paletted player
-//!   sprite and those two files are an unambiguous, direct match (no
-//!   NPC-to-palette table lookup needed, unlike the generic NPC roster).
-//!   Issue #161 (NPC object-event rendering) additionally extracts the four
-//!   generic `npc_1..4.pal` banks (`OBJ_EVENT_PAL_TAG_NPC_1..4`) every
-//!   "standard" NPC that slice renders resolves to
-//!   (`pokeemerald-rs::overworld::npc`'s own bounded graphics-id table) —
-//!   the remaining ~30 palette files in that directory (per-character
-//!   palettes like `truck.pal`/`vigoroth.pal`, and every `*_reflection.pal`)
-//!   are still *not* extracted here, documented as a deferred item.
-//!
-//! - **Map layout grids** (S-4): the Littleroot Town layout family's
-//!   `map.bin` / `border.bin` grid files — the town itself plus every
-//!   interior it contains (both player houses' floors, Professor Birch's
-//!   lab, and its rarely-referenced "with table" variant) — **plus, since
-//!   issue #177, `LAYOUT_ROUTE101`**, Littleroot's own north map connection
-//!   (`data/maps/LittlerootTown/map.json`'s `connections`) targets it, and
-//!   it is the traversal prerequisite for I-4's first wild encounter —
-//!   **and, since issue #248, `LAYOUT_OLDALE_TOWN`/`LAYOUT_ROUTE103`**:
-//!   Route 101's own north connection targets Oldale Town, and Oldale's own
-//!   north connection targets Route 103 in turn, completing the
-//!   Littleroot ↔ Route 101 ↔ Oldale Town ↔ Route 103 chain I-5's Route 103
-//!   rival battle needs to be reachable on foot (see [`LAYOUTS`]). Resolved
-//!   via `data/layouts/layouts.json` ([`layouts_json`]) rather than
-//!   hardcoded upstream paths, and extracted as opaque [`pack_format::EntryKind::Raw`]
-//!   blobs — same rationale as `metatiles.bin` / `metatile_attributes.bin`
-//!   above: these are upstream's own flat binary files, not compiled from
-//!   another source. `crates/assets::map_layouts` already ships the typed
-//!   decode layer (`MetatileCell`, `LayoutGrid`, `BorderGrid`) that reads
-//!   these bytes back out of the pack; this pipeline only needs to get the
-//!   bytes *into* the pack. Both new layouts share Littleroot/Route 101's
-//!   own `gTileset_General`+`gTileset_Petalburg` pair (already extracted,
-//!   above), so no sixth tileset is needed.
-//!
-//! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets
-//!   under `graphics/fonts/` (pack ids below; non-Latin sheets stay
-//!   unextracted, see "What is not extracted").
-//!
-//! - **Text window frames** (S-4, issue #114): every file under
-//!   `graphics/text_window/` ([`text_window`]'s manifest names each stem;
-//!   extraction rejects an image without its palette and vice versa).
-//!
-//! - **Main menu background palette** (I-3, issue #216): just
-//!   `graphics/interface/main_menu_bg.pal`, as `interface/palette/main_menu_bg`
-//!   — the one real per-pixel colour `pokeemerald-rs::main_menu::MainMenuScene`
-//!   needs (its content-fill/border/glyph colours are upstream's own
-//!   runtime-patched `LoadPalette` literals, not sourced from any file — see
-//!   that module's docs). The sibling `main_menu_text.pal` is deliberately
-//!   *not* extracted yet: every colour that no-save slice draws from bank 15
-//!   is one of those same hardcoded runtime patches, and the file's own
-//!   colours (indices `0..=9`) belong to the `CONTINUE`/Mystery Gift/Mystery
-//!   Events variants this issue's scope notes explicitly exclude.
-//!
-//! - **Audio samples** (S-4, issue #183, `#115` child 4): every
-//!   `DirectSound` instrument sample and CGB programmable-wave table
-//!   `mus_title`'s voicegroup references, transitively through its
-//!   key-split sub-groups — see [`audio_samples`]'s module docs for exactly
-//!   how that set was traced and for the wire format each entry's payload
-//!   carries (`crates/assets::audio::sample::Sample`'s encoding, duplicated
-//!   here per this module's crate-decoupling policy — see `pack_format`'s
-//!   docs). [`wav`] is the `.wav`-source decoder this needs; see its module
-//!   docs for the field-by-field derivation, cited into
-//!   `tools/wav2agb`.
-//! - **`MUS_TITLE`'s voicegroup dependency tree** (S-4, issue #182, `#115`
-//!   child 3): `MUS_TITLE`'s own voicegroup (`sound/voicegroups/title.inc`)
-//!   plus every key-split/rhythm child it transitively references (the
-//!   drum kit `sound/voicegroups/drumsets/rs.inc` and the five instrument
-//!   key-splits under `sound/voicegroups/keysplits/`), normalized to
-//!   `crates/assets/src/audio/voicegroup.rs`'s backend-neutral schema and
-//!   emitted as `audio/voicegroup/<label>` raw entries — see
-//!   [`voicegroups`]'s module docs for the resolver, the 128-slot
-//!   normalization, and why the other ~188 `.inc` files under
-//!   `sound/voicegroups/` stay `pending`. Voicegroup entries carry only
-//!   stable `audio/sample/direct-sound/<name>` /
-//!   `audio/sample/programmable-wave/<nn>` ids, matching
-//!   [`audio_samples`]'s scheme verbatim; that pass writes the entries
-//!   those ids name.
-//! - **`MUS_TITLE`'s own MIDI semantics** (S-4, issue #181, `#115` child 2):
-//!   `sound/songs/midi/mus_title.mid`, compiled the way
-//!   `tools/mid2agb`/`midi.cfg`'s own `-E -R50 -G_title -V090` flags
-//!   interpret it, into `crates/assets::audio::song::SongEvent` streams (one
-//!   per playable MIDI channel) and emitted as a single
-//!   `audio/song/mus_title` raw entry — see [`midi`]'s module docs for the
-//!   compiler pipeline and every deliberate scope cut. References
-//!   `voicegroup_title`'s `audio/voicegroup/title` id, matching
-//!   [`voicegroups`]'s scheme verbatim; that pass writes the entry that id
-//!   names. Every other song under `sound/songs/midi/` (530 total) stays
-//!   `pending`.
-//!
-//! Explicitly **not** extracted (deferred to future slices, not silently
-//! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
-//! (no decode/typed access yet — that's a rendering-layer concern once
-//! `crates/rendering` needs it), the *full* `object_event_graphics_info`
-//! palette-tag indirection (only the four generic `npc_1..4` banks above are
-//! extracted; every per-character palette it also names — `truck.pal`,
-//! `vigoroth.pal`, the `*_reflection.pal` set — stays unextracted), any tileset outside the
-//! five above (every other `data/tilesets/*` directory stays `pending` in
-//! the ledger), any map layout outside the Littleroot Town family above
-//! (every other `data/layouts/*` directory likewise stays `pending`),
-//! every non-Latin font sheet under `graphics/fonts/` (see above), every
-//! voicegroup outside `MUS_TITLE`'s own dependency tree (the other ~188
-//! `.inc` files under `sound/voicegroups/` stay `pending` — see
-//! [`voicegroups`]'s module docs), every sample payload a voicegroup
-//! entry's `audio/sample/*` ids reference (`#183`'s job), and every song
-//! under `sound/songs/midi/` other than `mus_title.mid` (529 of the 530
-//! `.mid` sources stay `pending` — see [`midi`]'s module docs for exactly
-//! which of `mus_title.mid`'s own MIDI features are modelled and which are
-//! deliberately not, independent of the other songs).
+//! - every tile image and animation, all 16 palettes, and both raw metatile
+//!   tables for the primary `general` and `building` tilesets and the secondary
+//!   `petalburg`, `brendans_mays_house`, and `lab` tilesets;
+//! - every title-screen PNG, palette, and raw tilemap, with embedded PNG
+//!   palettes for `emerald_version` and `press_start` and the upstream colour
+//!   limit applied to `pokemon_logo`;
+//! - every player and NPC PNG, the `brendan` and `may` palettes, and the four
+//!   generic `npc_1` through `npc_4` palettes;
+//! - the map and border grids named by `LAYOUTS`;
+//! - the five Latin font sheets, every text-window image and palette, and the
+//!   main-menu background palette; and
+//! - `mus_title`, its transitive voicegroup tree, and every sample that tree
+//!   references.
 //!
 //! # Asset id scheme
 //!
-//! - `tileset/<name>/tiles`
-//! - `tileset/<name>/anim/<anim-name>/<frame>`
-//! - `tileset/<name>/palette/<NN>`
-//! - `tileset/<name>/metatiles`, `tileset/<name>/metatile-attributes`
-//! - `title/image/<name>`, `title/palette/<name>`, `title/raw/<name>`
-//! - `sprite/<relative-path>` (e.g. `sprite/brendan/walking`, `sprite/nurse`)
-//! - `sprite/palette/brendan`, `sprite/palette/may`
-//! - `layout/<name>/map`, `layout/<name>/border` (e.g.
-//!   `layout/littleroot_town/map`, `layout/littleroot_town/border`)
-//! - `font/<name>/glyphs` (e.g. `font/normal/glyphs` — `<name>` is the
-//!   upstream `FONT_*` id, lowercased: `small`, `normal`, `short`, `narrow`,
-//!   `small_narrow`; see [`FONTS`])
-//! - `text-window/image/<stem>`, `text-window/palette/<stem>` — `<stem>` is
-//!   the upstream filename's stem (e.g. `1` .. `20`, `message_box`,
-//!   `text_pal1` .. `text_pal4`), mirroring `title/image/<name>` above.
-//!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
-//!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
-//!   `.pal` files.
-//! - `interface/palette/main_menu_bg` — see the main menu bullet above.
-//! - `audio/sample/direct-sound/<basename>`, `audio/sample/programmable-wave/<NN>`
-//!   — see [`audio_samples`]'s module docs for the exact derivation and why
-//!   the two live under separate sub-namespaces.
-//! - `audio/voicegroup/<label>` (e.g. `audio/voicegroup/title`,
-//!   `audio/voicegroup/rs_drumset`) — `<label>` is the upstream
-//!   `voice_group`/`voicegroup_*` symbol name verbatim (see [`voicegroups`]'s
-//!   module docs). A [`voicegroups`] entry's own payload additionally
-//!   references the `audio/sample/direct-sound/<name>` /
-//!   `audio/sample/programmable-wave/<nn>` ids above, mirroring
-//!   [`audio_samples`]'s scheme verbatim.
-//! - `audio/song/<name>` (currently only `audio/song/mus_title`) —
-//!   `<name>` is the upstream `.mid` source's filename stem; see [`midi`]'s
-//!   module docs. The entry's payload references its voicegroup by the
-//!   `audio/voicegroup/<label>` id above.
+//! - `tileset/<name>/{tiles,metatiles,metatile-attributes}`
+//! - `tileset/<name>/anim/<animation>/<frame>` and
+//!   `tileset/<name>/palette/<NN>`
+//! - `title/{image,palette,raw}/<name>`
+//! - `sprite/<relative-path>` and `sprite/palette/<name>`
+//! - `layout/<name>/{map,border}`
+//! - `font/<name>/glyphs`
+//! - `text-window/{image,palette}/<stem>`
+//! - `interface/palette/main_menu_bg`
+//! - `audio/sample/{direct-sound,programmable-wave}/<name>`
+//! - `audio/voicegroup/<label>` and `audio/song/<name>`
 //!
-//! `<name>` is always a normalized, stable identifier (upstream's own
-//! directory/file naming, which is already `snake_case` and stable across
-//! decomp revisions) — never a `gTileset_*`-style linker symbol. See
-//! `pack_format`'s crate docs for why that matters.
+//! Names preserve normalized upstream directory, file, or symbol names; they
+//! never use linker-style `gTileset_*` identifiers.
 
 mod audio_samples;
 mod error;
@@ -230,37 +62,22 @@ pub use error::ExtractError;
 pub use pack_format::OUTPUT_RELATIVE_PATH;
 use pack_format::{EntryShapeError, PackEntry, PackWriter};
 
-/// Serializes the ignored tests that touch the one real, developer-local
-/// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` publishes it by staging the
-/// replacement at a process-id-derived sibling path before renaming it into
-/// place (`write_pack_atomically`), so two `extract` calls sharing this
-/// process's pid still race over the same staging path if run concurrently;
-/// `record_snapshot`'s real-pack round-trip also reads that path, and the
-/// test harness runs ignored tests in parallel by default. Every ignored
-/// test that reads or writes that path must hold this lock for its whole
-/// body.
+/// Serializes tests that read or replace the checkout-local pack.
 #[cfg(test)]
 pub(crate) static REAL_PACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// A summary of a completed extraction, printed by `xtask`'s `main` and
-/// useful for tests.
+/// Summary of a published asset pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractReport {
-    /// Number of assets written to the pack.
+    /// Number of pack entries.
     pub entry_count: usize,
-    /// The pack file's total size in bytes.
+    /// Serialized pack size in bytes.
     pub pack_size: u64,
-    /// Where the pack was written.
+    /// Published pack path.
     pub output_path: PathBuf,
 }
 
-/// The repository root, computed from this crate's own manifest directory
-/// (`crates/xtask`) rather than the process's current directory — robust
-/// regardless of where `cargo xtask extract` is invoked from.
-///
-/// `pub(crate)`, not private: `crate::record_snapshot` (F-3, V-4) reuses it
-/// to find the same default pack path this module writes
-/// ([`OUTPUT_RELATIVE_PATH`]) rather than re-deriving it.
+/// Returns the repository root independently of the process working directory.
 pub(crate) fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -269,53 +86,23 @@ pub(crate) fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Whether a local `pokeemerald/` reference checkout looks present (i.e.
-/// `./init.sh` has been run) — a cheap, read-only check with no side
-/// effects, so tests can decide whether to exercise the real pipeline
-/// without ever triggering it accidentally. Test-only: nothing in the real
-/// `extract`/`dispatch` path needs this (they just attempt the real
-/// extraction and surface [`ExtractError::MissingUpstreamCheckout`] if it
-/// fails), so this is `#[cfg(test)]` rather than always-compiled dead code.
+/// Returns whether the local reference checkout is available for tests.
 #[cfg(test)]
 #[must_use]
 pub(crate) fn upstream_present() -> bool {
     repo_root().join("pokeemerald/graphics").is_dir()
 }
 
-/// Run the full extraction pipeline: locate the upstream checkout, decode
-/// every in-scope asset, and write the pack to
-/// `<repo root>/`[`OUTPUT_RELATIVE_PATH`].
+/// Extracts and publishes the checkout-local asset pack.
 ///
 /// # Errors
 ///
-/// See [`extract_to`].
+/// Returns [`ExtractError`] when the checkout is missing, a source is invalid
+/// or unreadable, or the pack cannot be built or published.
 pub fn run() -> Result<ExtractReport, ExtractError> {
-    // Deliberately the repo path, not `pack_format::default_pack_path()`.
-    // That resolver answers "where does a *running game* find its pack",
-    // and its earlier rungs (`$POKEEMERALD_PACK`, the OS user-data
-    // directory, the executable's own directory) would silently redirect
-    // `cargo xtask extract` away from the checkout it belongs to. This is a
-    // developer tool writing a developer's gitignored build product; the
-    // only right destination is this repository.
     extract_to(&repo_root().join(OUTPUT_RELATIVE_PATH))
 }
 
-/// The full extraction pipeline, parameterized over the output path.
-///
-/// Split out from [`run`] so tests can point separate, concurrent
-/// invocations at their own scratch paths rather than racing each other
-/// over the one real pack path `run` uses (`cargo test` runs tests on
-/// multiple threads by default).
-///
-/// # Errors
-///
-/// [`ExtractError::MissingUpstreamCheckout`] if `./init.sh` has not been
-/// run; [`ExtractError::ReadFailed`]/[`Png`](ExtractError::Png)/
-/// [`Pal`](ExtractError::Pal) if a specific source file is missing or
-/// malformed; [`ExtractError::Pack`] if assembling the final pack fails (an
-/// internal-bug case — every id is generated by this module, never
-/// user-supplied); [`ExtractError::WriteFailed`] if the pack can't be
-/// written to disk.
 fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     let upstream = repo_root().join("pokeemerald");
     if !upstream.join("graphics").is_dir() {
@@ -324,8 +111,8 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
 
     let mut writer = PackWriter::new();
 
-    for (subdir, name) in TILESETS {
-        extract_tileset(&upstream, subdir, name, &mut writer)?;
+    for tileset in TILESETS {
+        extract_tileset(&upstream, tileset, &mut writer)?;
     }
     extract_title_screen(&upstream, &mut writer)?;
     extract_sprites(&upstream, &mut writer)?;
@@ -354,66 +141,45 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     })
 }
 
-/// Atomically publishes the finished pack to `output_path`. Mirrors the
-/// save writer's stage-then-rename idiom
-/// (`engine::save::file::SaveFile::write_with`), strengthened to remove the
-/// staging file after *either* failure phase rather than only a failed
-/// rename: extraction is a one-off developer command, not a per-boot path,
-/// so a leaked `.tmp.<pid>` sibling would otherwise sit next to the pack
-/// unnoticed indefinitely.
-///
-/// # Errors
-///
-/// [`ExtractError::WriteFailed`] if the staging file could not be written,
-/// synchronised, or renamed into place. Carries `output_path`; also names
-/// the staging path if cleaning it up after such a failure itself fails, so
-/// an abandoned `.tmp.<pid>` sibling is never silently left unreported.
 fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), ExtractError> {
-    let staging_path = staging_path_for_process(output_path);
-    let write_failed =
-        |e: std::io::Error| ExtractError::WriteFailed(output_path.to_path_buf(), e.to_string());
+    let staging_path = staging_path_for_current_process(output_path);
+    let write_failed = |error: std::io::Error| {
+        ExtractError::WriteFailed(output_path.to_path_buf(), error.to_string())
+    };
 
-    if let Err(e) = write_and_sync(&staging_path, bytes) {
+    if let Err(error) = write_and_sync(&staging_path, bytes) {
         return Err(write_failed(remove_abandoned_staging_file(
             &staging_path,
-            e,
+            error,
         )));
     }
-    if let Err(e) = std::fs::rename(&staging_path, output_path) {
+    if let Err(error) = std::fs::rename(&staging_path, output_path) {
         return Err(write_failed(remove_abandoned_staging_file(
             &staging_path,
-            e,
+            error,
         )));
     }
     Ok(())
 }
 
-/// Removes the staging file left behind by a failed write or rename,
-/// folding a cleanup failure into `original` instead of discarding it --
-/// silently dropping it would mean an abandoned `.tmp.<pid>` sibling goes
-/// unreported for the one reason that most needs reporting it: its own
-/// removal failing too. Keeps `original`'s `ErrorKind` so a caller matching
-/// on it still sees the write/rename failure that actually happened. A
-/// `NotFound` from the removal means nothing was staged (the create itself
-/// failed), so there is nothing abandoned to report.
-fn remove_abandoned_staging_file(staging_path: &Path, original: std::io::Error) -> std::io::Error {
+fn remove_abandoned_staging_file(
+    staging_path: &Path,
+    original_error: std::io::Error,
+) -> std::io::Error {
     match std::fs::remove_file(staging_path) {
-        Ok(()) => original,
-        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
-        Err(cleanup_err) => std::io::Error::new(
-            original.kind(),
+        Ok(()) => original_error,
+        Err(cleanup_error) if cleanup_error.kind() == std::io::ErrorKind::NotFound => original_error,
+        Err(cleanup_error) => std::io::Error::new(
+            original_error.kind(),
             format!(
-                "{original} (additionally, failed to remove abandoned staging file `{}`: {cleanup_err})",
+                "{original_error} (additionally, failed to remove abandoned staging file `{}`: {cleanup_error})",
                 staging_path.display()
             ),
         ),
     }
 }
 
-/// Unique across concurrent processes sharing `output_path`, but not across
-/// concurrent calls that share this process's pid -- see `REAL_PACK_LOCK`'s
-/// doc comment for why that still matters to this module's own tests.
-fn staging_path_for_process(output_path: &Path) -> PathBuf {
+fn staging_path_for_current_process(output_path: &Path) -> PathBuf {
     let mut name = output_path.as_os_str().to_os_string();
     name.push(format!(".tmp.{}", std::process::id()));
     PathBuf::from(name)
@@ -429,16 +195,35 @@ fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     staged.get_ref().sync_all()
 }
 
-/// `(upstream subdir under data/tilesets/, tileset name)` — the five
-/// tilesets Littleroot Town's layout family references. See the module
-/// docs for how this list was derived.
-const TILESETS: [(&str, &str); 5] = [
-    ("primary", "general"),
-    ("primary", "building"),
-    ("secondary", "petalburg"),
-    ("secondary", "brendans_mays_house"),
-    ("secondary", "lab"),
+#[derive(Clone, Copy)]
+struct TilesetSource {
+    category: &'static str,
+    name: &'static str,
+}
+
+const TILESETS: [TilesetSource; 5] = [
+    TilesetSource {
+        category: "primary",
+        name: "general",
+    },
+    TilesetSource {
+        category: "primary",
+        name: "building",
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "petalburg",
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "brendans_mays_house",
+    },
+    TilesetSource {
+        category: "secondary",
+        name: "lab",
+    },
 ];
+const TILESET_PALETTE_COUNT: u8 = 16;
 
 fn read_file(path: &Path) -> Result<Vec<u8>, ExtractError> {
     std::fs::read(path).map_err(|e| ExtractError::ReadFailed(path.to_path_buf(), e.to_string()))
@@ -449,23 +234,13 @@ fn read_text(path: &Path) -> Result<String, ExtractError> {
         .map_err(|e| ExtractError::ReadFailed(path.to_path_buf(), e.to_string()))
 }
 
-fn decode_png_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
+fn push_png_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let bytes = read_file(path)?;
     let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
     writer.push(build_image_entry(path, id, image)?);
     Ok(())
 }
 
-/// Turn a decoded PNG into a [`EntryKind::Image`] entry through
-/// [`pack_format::image_entry`], the constructor the ROM importer also
-/// writes through. Every decoded-PNG call site in this pipeline funnels
-/// here, so no two of them can shape an image entry differently.
-///
-/// # Errors
-///
-/// [`ExtractError::EntryShape`] if the decoded pixel buffer is not
-/// `width * height` bytes. `png::decode` always produces exactly that, so
-/// this is a contract check, not a real failure mode.
 fn build_image_entry(
     path: &Path,
     id: String,
@@ -475,71 +250,42 @@ fn build_image_entry(
         .map_err(|e| ExtractError::EntryShape(path.to_path_buf(), e))
 }
 
-fn decode_palette_entry(
+fn push_palette_entry(
     path: &Path,
     id: String,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    decode_palette_entry_cut(path, id, None, writer)
+    push_palette_entry_with_limit(path, id, None, writer)
 }
 
-/// As [`decode_palette_entry`], keeping only the first `cut` colours.
-///
-/// A `.pal` file can be longer than the palette upstream's build actually
-/// compiles from it (see [`TITLE_SCREEN_PALETTE_CUTS`]). The cut is applied
-/// here rather than in [`build_palette_entry`] so every other call site
-/// keeps reading whole files.
-///
-/// # Errors
-///
-/// [`ExtractError::PaletteShorterThanCut`] if the file has fewer colours
-/// than the cut asks for. Padding it out would put colours in the pack that
-/// no source declares; the cut is a fact about upstream's build rule, so a
-/// file that cannot satisfy it means the rule and the source have diverged.
-fn decode_palette_entry_cut(
+fn push_palette_entry_with_limit(
     path: &Path,
     id: String,
-    cut: Option<usize>,
+    color_limit: Option<usize>,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
     let text = read_text(path)?;
     let mut colors =
         jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
-    if let Some(cut) = cut {
-        if colors.len() < cut {
+    if let Some(color_limit) = color_limit {
+        if colors.len() < color_limit {
             return Err(ExtractError::PaletteShorterThanCut {
                 path: path.to_path_buf(),
-                cut,
+                cut: color_limit,
                 actual: colors.len(),
             });
         }
-        colors.truncate(cut);
+        colors.truncate(color_limit);
     }
     writer.push(build_palette_entry(path, &colors, id)?);
     Ok(())
 }
 
-/// Serialize already-decoded colours (from either a JASC `.pal` file or a
-/// PNG's own `PLTE` chunk — see [`text_window`]) into a
-/// [`EntryKind::Palette`] entry. The one place the JASC (`.pal`) and
-/// embedded-PNG (`PLTE`) decode paths converge before writing the pack's
-/// `color_count` field, so both share this same bounds check rather than
-/// each narrowing `colors.len()` with its own truncating cast.
-///
-/// # Errors
-///
-/// [`ExtractError::PaletteColorCountUnrepresentable`] if `colors.len()`
-/// exceeds `u16::MAX` — the pack format's `color_count` field cannot
-/// represent it (`pack_format`'s format docs). Carries `path` purely for the error
-/// message; the returned entry is never associated back with a file.
 fn build_palette_entry(
     path: &Path,
     colors: &[jasc_pal::Rgb888],
     id: String,
 ) -> Result<PackEntry, ExtractError> {
-    // The GBA555 conversion is this pipeline's (upstream's `.pal` files are
-    // 8-bit RGB); the packing is `pack_format`'s, shared with the ROM
-    // importer, whose colours arrive GBA-native already.
     let colors: Vec<u16> = colors.iter().map(|c| c.to_gba555()).collect();
     pack_format::palette_entry(id, &colors).map_err(|e| match e {
         EntryShapeError::PaletteColorCountUnrepresentable(actual) => {
@@ -555,9 +301,6 @@ fn push_raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<()
     Ok(())
 }
 
-/// Recursively collect every `*.png` under `dir`, sorted by full path —
-/// deterministic regardless of the OS's `read_dir` order (see `pack_format`'s
-/// determinism docs).
 fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
@@ -581,82 +324,69 @@ fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     Ok(out)
 }
 
-/// Extract one tileset directory's full contents (see the module docs).
 fn extract_tileset(
     upstream: &Path,
-    subdir: &str,
-    name: &str,
+    source: TilesetSource,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    let base = upstream.join("data/tilesets").join(subdir).join(name);
+    let base = upstream
+        .join("data/tilesets")
+        .join(source.category)
+        .join(source.name);
 
-    decode_png_entry(
+    push_png_entry(
         &base.join("tiles.png"),
-        format!("tileset/{name}/tiles"),
+        format!("tileset/{}/tiles", source.name),
         writer,
     )?;
 
     let anim_dir = base.join("anim");
     if anim_dir.is_dir() {
         for png_path in collect_pngs_sorted(&anim_dir)? {
-            // `anim/<anim-name>/<frame>.png` -> id suffix `<anim-name>/<frame>`.
             let rel = png_path
                 .strip_prefix(&anim_dir)
                 .expect("collect_pngs_sorted only returns paths under anim_dir")
                 .with_extension("");
             let rel_id = rel.to_string_lossy().replace('\\', "/");
-            decode_png_entry(&png_path, format!("tileset/{name}/anim/{rel_id}"), writer)?;
+            push_png_entry(
+                &png_path,
+                format!("tileset/{}/anim/{rel_id}", source.name),
+                writer,
+            )?;
         }
     }
 
-    for slot in 0..16u8 {
+    for slot in 0..TILESET_PALETTE_COUNT {
         let pal_path = base.join("palettes").join(format!("{slot:02}.pal"));
-        decode_palette_entry(
+        push_palette_entry(
             &pal_path,
-            format!("tileset/{name}/palette/{slot:02}"),
+            format!("tileset/{}/palette/{slot:02}", source.name),
             writer,
         )?;
     }
 
     push_raw_entry(
         &base.join("metatiles.bin"),
-        format!("tileset/{name}/metatiles"),
+        format!("tileset/{}/metatiles", source.name),
         writer,
     )?;
     push_raw_entry(
         &base.join("metatile_attributes.bin"),
-        format!("tileset/{name}/metatile-attributes"),
+        format!("tileset/{}/metatile-attributes", source.name),
         writer,
     )?;
 
     Ok(())
 }
 
-/// Title-screen OBJ sprite sheets whose in-game palette upstream's build
-/// derives directly from the PNG's own embedded colour table
-/// (`INCGFX_U16("graphics/title_screen/<name>.png", ".gbapal")` in
-/// `graphics.c`), rather than a sibling `.pal` file the way every other
-/// title-screen graphic works — see `sVersionBannerLeftSpriteTemplate` /
-/// `sSpritePalette_PressStart` in `title_screen.c`. Extracted as
-/// `title/palette/<name>` alongside the normal `title/image/<name>` entry
-/// (see [`extract_title_screen`]).
+// `src/graphics.c`'s `gTitleScreenEmeraldVersionPal` and
+// `gTitleScreenPressStartPal` declarations build these palettes from each
+// PNG's embedded `PLTE` chunk instead of a sibling `.pal` file.
 const TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS: [&str; 2] = ["emerald_version", "press_start"];
 
-/// Title-screen `.pal` files upstream's own build rule cuts short, and the
-/// colour count it cuts them to.
-///
-/// `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with
-/// `-num_colors 224`, so the ROM holds 224 colours while the `.pal` file
-/// holds 256, the last 32 of them black. The game never reads past 224
-/// either (`pokeemerald_rs::title`'s `LOGO_PALETTE_COLORS`: entries
-/// `224..=255` of that flat palette come from
-/// `title/palette/rayquaza_and_clouds` and from unloaded palette RAM, not
-/// from this file). Honouring the cut here is what lets this pipeline and
-/// the ROM importer emit the same bytes for the same id, which is the whole
-/// point of the two backends sharing `pack_format`'s constructors.
+// `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with this limit.
 const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
 
-/// Extract `graphics/title_screen/`'s full contents.
 fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/title_screen");
 
@@ -696,11 +426,15 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                 )?);
             }
             Some("pal") => {
-                let cut = TITLE_SCREEN_PALETTE_CUTS
+                let color_limit = TITLE_SCREEN_PALETTE_CUTS
                     .iter()
-                    .find(|(name, _)| *name == stem)
-                    .map(|&(_, colors)| colors);
-                decode_palette_entry_cut(&path, format!("title/palette/{stem}"), cut, writer)?;
+                    .find_map(|&(sheet, limit)| (sheet == stem).then_some(limit));
+                push_palette_entry_with_limit(
+                    &path,
+                    format!("title/palette/{stem}"),
+                    color_limit,
+                    writer,
+                )?;
             }
             Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
             _ => {}
@@ -709,22 +443,20 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
     Ok(())
 }
 
-/// Extract the one interface palette the no-save main menu needs (module
-/// docs' main-menu bullet): `graphics/interface/main_menu_bg.pal`, as
-/// `interface/palette/main_menu_bg`.
 fn extract_interface_palettes(
     upstream: &Path,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    decode_palette_entry(
+    push_palette_entry(
         &upstream.join("graphics/interface/main_menu_bg.pal"),
         "interface/palette/main_menu_bg".to_owned(),
         writer,
     )
 }
 
-/// Extract every player/NPC sprite sheet plus the player and generic-NPC
-/// palettes.
+const FIRST_GENERIC_NPC_PALETTE: u8 = 1;
+const LAST_GENERIC_NPC_PALETTE: u8 = 4;
+
 fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let people_dir = upstream.join("graphics/object_events/pics/people");
     for png_path in collect_pngs_sorted(&people_dir)? {
@@ -733,29 +465,20 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
             .expect("collect_pngs_sorted only returns paths under people_dir")
             .with_extension("");
         let rel_id = rel.to_string_lossy().replace('\\', "/");
-        decode_png_entry(&png_path, format!("sprite/{rel_id}"), writer)?;
+        push_png_entry(&png_path, format!("sprite/{rel_id}"), writer)?;
     }
 
     let palettes_dir = upstream.join("graphics/object_events/palettes");
     for who in ["brendan", "may"] {
-        decode_palette_entry(
+        push_palette_entry(
             &palettes_dir.join(format!("{who}.pal")),
             format!("sprite/palette/{who}"),
             writer,
         )?;
     }
-    // The four generic NPC palette banks (`OBJ_EVENT_PAL_TAG_NPC_1..4`,
-    // issue #161's own NPC object-event rendering slice): every "standard"
-    // 16x32 NPC this port renders a sprite for (Mom, the twin, Professor
-    // Birch, ...) draws from one of these four, resolved by
-    // `pokeemerald-rs::overworld::npc`'s own graphics-id table. The
-    // remaining ~30 palette files in this directory (per-character
-    // palettes like `truck.pal`/`vigoroth.pal`, and every `*_reflection.pal`)
-    // stay unextracted -- no graphics id this port renders resolves to one
-    // yet (see that module's own "not drawn" scope list).
-    for n in 1..=4 {
+    for n in FIRST_GENERIC_NPC_PALETTE..=LAST_GENERIC_NPC_PALETTE {
         let name = format!("npc_{n}");
-        decode_palette_entry(
+        push_palette_entry(
             &palettes_dir.join(format!("{name}.pal")),
             format!("sprite/palette/{name}"),
             writer,
@@ -764,123 +487,101 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
     Ok(())
 }
 
-/// `(LAYOUT_* id, normalized pack name)` — the Littleroot Town layout
-/// family this pipeline extracts (the town itself plus every interior it
-/// contains), **plus `LAYOUT_ROUTE101`** (issue #177) **and, since issue
-/// #248, `LAYOUT_OLDALE_TOWN`/`LAYOUT_ROUTE103`**: Littleroot's own north
-/// map connection targets Route 101, Route 101's own north connection
-/// targets Oldale Town, and Oldale's own north connection targets Route
-/// 103 in turn — walking that whole chain is the traversal prerequisite
-/// for I-4's first wild encounter and I-5's Route 103 rival battle. See
-/// the module docs for why this list, not the full `data/layouts/` tree,
-/// is in scope.
-///
-/// Every id here is looked up in `layouts.json` at extract time
-/// ([`extract_layouts`]) rather than the directory name being derived
-/// mechanically from it, so a typo here surfaces as a clear
-/// [`ExtractError::UnknownLayoutInJson`] instead of a silently-wrong path.
-const LAYOUTS: [(&str, &str); 10] = [
-    ("LAYOUT_LITTLEROOT_TOWN", "littleroot_town"),
-    (
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-        "littleroot_town_brendans_house_1f",
-    ),
-    (
-        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-        "littleroot_town_brendans_house_2f",
-    ),
-    (
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-        "littleroot_town_mays_house_1f",
-    ),
-    (
-        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-        "littleroot_town_mays_house_2f",
-    ),
-    (
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-        "littleroot_town_professor_birchs_lab",
-    ),
-    (
-        // Upstream's rarely-used variant with an extra table prop; its
-        // `map.bin` is one of the handful with trailing padding beyond
-        // `width * height * 2` bytes (see
-        // `crates/assets::map_layouts`'s module docs) -- included anyway
-        // since it's the same directory family and the extraction below
-        // doesn't need to treat it specially (the padding is inside the
-        // grid `LayoutGrid` already knows to tolerate, not in how this
-        // pipeline copies the file).
-        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
-        "littleroot_town_professor_birchs_lab_with_table",
-    ),
-    // Not part of the Littleroot Town directory family (its own top-level
-    // `data/layouts/Route101/`), bundled anyway: Littleroot's north
-    // connection (`data/maps/LittlerootTown/map.json:15-21`) targets it, and
-    // Route101's own south connection (`data/maps/Route101/map.json`)
-    // targets Littleroot right back -- the one connection pair the early
-    // playable slice needs to cross.
-    ("LAYOUT_ROUTE101", "route101"),
-    // Not part of the Littleroot Town directory family either (its own
-    // top-level `data/layouts/OldaleTown/` and `data/layouts/Route103/`),
-    // bundled for issue #248 (I-5): Route 101's own north connection
-    // (`data/maps/Route101/map.json`) targets Oldale Town, and Oldale's own
-    // north connection (`data/maps/OldaleTown/map.json`) targets Route 103
-    // in turn -- the second and third links of the same walking chain
-    // `LAYOUT_ROUTE101` above is the first link of.
-    ("LAYOUT_OLDALE_TOWN", "oldale_town"),
-    ("LAYOUT_ROUTE103", "route103"),
+#[derive(Clone, Copy)]
+struct LayoutSource {
+    upstream_id: &'static str,
+    pack_name: &'static str,
+}
+
+const LAYOUTS: [LayoutSource; 10] = [
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN",
+        pack_name: "littleroot_town",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        pack_name: "littleroot_town_brendans_house_1f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        pack_name: "littleroot_town_brendans_house_2f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        pack_name: "littleroot_town_mays_house_1f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        pack_name: "littleroot_town_mays_house_2f",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+        pack_name: "littleroot_town_professor_birchs_lab",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+        pack_name: "littleroot_town_professor_birchs_lab_with_table",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_ROUTE101",
+        pack_name: "route101",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_OLDALE_TOWN",
+        pack_name: "oldale_town",
+    },
+    LayoutSource {
+        upstream_id: "LAYOUT_ROUTE103",
+        pack_name: "route103",
+    },
 ];
 
-/// Every upstream `border.bin` is a fixed 2x2 grid of `u16` cells (see
-/// `crates/assets::map_layouts::BORDER_CELLS`, duplicated here rather than
-/// shared -- this pipeline's crate never depends on `crates/assets`, and
-/// vice versa, matching `crates/assets::pack`'s documented decoupling from
-/// this module's own pack format).
-const BORDER_BLOCK_BYTES: usize = 2 * 2 * 2;
+const BORDER_SIDE_CELLS: usize = 2;
+const BORDER_BLOCK_BYTES: usize =
+    BORDER_SIDE_CELLS * BORDER_SIDE_CELLS * std::mem::size_of::<u16>();
 
-/// Extract the Littleroot Town layout family's `map.bin` / `border.bin`
-/// grid files (see [`LAYOUTS`] and the module docs).
 fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let json_path = upstream.join("data/layouts/layouts.json");
     let text = read_text(&json_path)?;
     let entries =
         layouts_json::parse(&text).map_err(|e| ExtractError::LayoutsJson(json_path.clone(), e))?;
 
-    for (layout_id, name) in LAYOUTS {
-        let entry =
-            entries
-                .iter()
-                .find(|e| e.id == layout_id)
-                .ok_or(ExtractError::UnknownLayoutInJson(
-                    json_path.clone(),
-                    layout_id,
-                ))?;
+    for layout in LAYOUTS {
+        let entry = entries
+            .iter()
+            .find(|entry| entry.id == layout.upstream_id)
+            .ok_or(ExtractError::UnknownLayoutInJson(
+                json_path.clone(),
+                layout.upstream_id,
+            ))?;
 
         let map_bytes = read_file(&upstream.join(&entry.blockdata_filepath))?;
         let width = usize::try_from(entry.width).unwrap_or(usize::MAX);
         let height = usize::try_from(entry.height).unwrap_or(usize::MAX);
-        let expected_min = width.saturating_mul(height).saturating_mul(2);
+        let expected_min = width
+            .saturating_mul(height)
+            .saturating_mul(std::mem::size_of::<u16>());
         if map_bytes.len() < expected_min {
             return Err(ExtractError::LayoutGridTooShort {
-                layout_id,
+                layout_id: layout.upstream_id,
                 expected: expected_min,
                 actual: map_bytes.len(),
             });
         }
         writer.push(pack_format::raw_entry(
-            format!("layout/{name}/map"),
+            format!("layout/{}/map", layout.pack_name),
             map_bytes,
         ));
 
         let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
         if border_bytes.len() != BORDER_BLOCK_BYTES {
             return Err(ExtractError::LayoutBorderWrongSize {
-                layout_id,
+                layout_id: layout.upstream_id,
                 actual: border_bytes.len(),
             });
         }
         writer.push(pack_format::raw_entry(
-            format!("layout/{name}/border"),
+            format!("layout/{}/border", layout.pack_name),
             border_bytes,
         ));
     }
@@ -890,19 +591,9 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_pngs_sorted, extract_to, staging_path_for_process, upstream_present,
+        collect_pngs_sorted, extract_to, staging_path_for_current_process, upstream_present,
         write_pack_atomically, ExtractError, LAYOUTS,
     };
-
-    // Real-checkout tests: `pokeemerald/` must be present locally
-    // (`./init.sh`) to run these. `cargo test --workspace` in CI never has
-    // it, so every test that calls `extract_to`/`super::run()` is
-    // `#[ignore]`d — run explicitly with `cargo test -p xtask -- --ignored`
-    // after `./init.sh`.
-    //
-    // Each test below writes to its own scratch path under `std::env::temp_dir()`
-    // (never the real `super::run()` output path) so concurrent test
-    // threads never race each other over the same file.
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -911,30 +602,13 @@ mod tests {
         ))
     }
 
-    /// Tripwire for every *bounded* table elsewhere in the workspace whose
-    /// scope is "whatever [`LAYOUTS`] bundles" -- those tables can only be
-    /// derived from this list, and `xtask` is std-only (no `assets`
-    /// dependency) so they cannot import it. Adding a layout here must
-    /// therefore fail *loudly*, right next to the change, with the list of
-    /// what else has to grow with it:
-    ///
-    /// - `crates/assets/src/object_event_flags.rs`'s `OBJECT_EVENT_FLAGS`
-    ///   (every `ObjectEvent::flag` name reachable from a bundled map must
-    ///   resolve) and its own `BUNDLED_LAYOUTS` mirror, which derives the
-    ///   reachable map set from this one.
-    /// - `crates/pokeemerald-rs/src/overworld/npc.rs`'s
-    ///   `resolve_sprite_source` (its reachable-graphics-id test asserts the
-    ///   exact drawn/not-drawn partition over the same maps).
-    /// - `crates/pokeemerald-rs/src/overworld/mod.rs`'s
-    ///   `resolve_tileset_pack_name` (a new layout may name a sixth
-    ///   tileset).
-    /// - `crates/pokeemerald-rs/src/flow/overworld_phase/decoration_tests.rs`'s
-    ///   `BUNDLED_LAYOUTS` mirror and the map count asserted beside it (its
-    ///   decoration-placeholder sweep examines only the maps that mirror
-    ///   names, so a layout missing from it is a map the sweep skips).
+    // Changes to `LAYOUTS` must also update `object_event_flags.rs`'s
+    // `BUNDLED_LAYOUTS`, `overworld/npc.rs`'s `EXTRACTED_MAPS`,
+    // `overworld/mod.rs`'s `resolve_tileset_pack_name`, and
+    // `overworld_phase/decoration_tests.rs`'s `BUNDLED_LAYOUTS`.
     #[test]
     fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
-        let ids: Vec<&str> = LAYOUTS.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<&str> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
         assert_eq!(
             ids,
             [
@@ -949,8 +623,16 @@ mod tests {
                 "LAYOUT_OLDALE_TOWN",
                 "LAYOUT_ROUTE103",
             ],
-            "this list feeds bounded tables in other crates -- see this \
-             test's own doc comment for what must be extended alongside it"
+            "update the cross-crate LAYOUTS mirrors with this manifest"
+        );
+    }
+
+    fn assert_pack_contains_entry_id(bytes: &[u8], id: &str) {
+        assert!(
+            bytes
+                .windows(id.len())
+                .any(|window| window == id.as_bytes()),
+            "missing pack entry id `{id}`"
         );
     }
 
@@ -980,23 +662,13 @@ mod tests {
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn embedded_palette_sheets_get_a_title_palette_entry() {
-        // The version banner / press-start sprite sheets have no sibling
-        // `.pal` file (module docs) -- confirm `title/palette/emerald_version`
-        // and `title/palette/press_start` made it into the pack, the same
-        // crude substring search `layout_grids_are_extracted` uses (no pack
-        // reader lives in this crate).
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("embedded-palettes");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
         for name in super::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
             let id = format!("title/palette/{name}");
-            assert!(
-                bytes
-                    .windows(id.len())
-                    .any(|window| window == id.as_bytes()),
-                "missing pack entry id `{id}`"
-            );
+            assert_pack_contains_entry_id(&bytes, &id);
         }
         let _ = std::fs::remove_file(report.output_path);
     }
@@ -1004,37 +676,23 @@ mod tests {
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn main_menu_bg_palette_gets_an_interface_palette_entry() {
-        // Same crude substring search `embedded_palette_sheets_get_a_title_palette_entry`
-        // uses (no pack reader lives in this crate) -- confirms issue #216's
-        // new `extract_interface_palettes` pass actually reached the pack.
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("interface-palette");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
         let id = "interface/palette/main_menu_bg";
-        assert!(
-            bytes
-                .windows(id.len())
-                .any(|window| window == id.as_bytes()),
-            "missing pack entry id `{id}`"
-        );
+        assert_pack_contains_entry_id(&bytes, id);
         let _ = std::fs::remove_file(report.output_path);
     }
 
     #[test]
     fn missing_upstream_checkout_message_points_to_init_sh() {
-        // Pure `Display` check -- no filesystem access -- so it runs
-        // everywhere, unlike the `#[ignore]`d tests above.
         let err = ExtractError::MissingUpstreamCheckout(std::path::PathBuf::from("/nowhere"));
         let rendered = err.to_string();
         assert!(rendered.contains("init.sh"));
         assert!(rendered.contains("cargo xtask extract"));
     }
 
-    /// A fresh scratch directory under `std::env::temp_dir()`, named for
-    /// this process and the given `label` so concurrent test threads (which
-    /// share a process id) never collide with each other. Removed and
-    /// recreated empty; callers are responsible for cleaning it up.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "pokeemerald-rs-extract-atomic-write-test-{label}-{}",
@@ -1047,18 +705,12 @@ mod tests {
 
     #[test]
     fn a_failed_staging_write_leaves_the_existing_pack_untouched() {
-        // No `pokeemerald/` checkout needed: this exercises
-        // `write_pack_atomically` directly against arbitrary bytes, not the
-        // full extraction pipeline. Pre-creating the staging path as a
-        // directory makes `File::create` on it fail deterministically
-        // (`IsADirectory`/`EISDIR`) regardless of the runner's privileges --
-        // unlike a permission-based seam, which root bypasses.
         let dir = scratch_dir("write");
         let output_path = dir.join("pokeemerald.pack");
         let original = b"an existing, usable pack";
         std::fs::write(&output_path, original).unwrap();
 
-        let staging_path = staging_path_for_process(&output_path);
+        let staging_path = staging_path_for_current_process(&output_path);
         std::fs::create_dir(&staging_path).unwrap();
 
         let err = write_pack_atomically(&output_path, b"a truncated replacement").unwrap_err();
@@ -1077,17 +729,13 @@ mod tests {
 
     #[test]
     fn a_failed_rename_removes_the_staging_file_and_leaves_the_destination_untouched() {
-        // Same no-checkout, no-privilege-dependent shape as the test above,
-        // but forces the later `rename` step to fail instead: renaming a
-        // regular file over an existing non-empty directory is rejected by
-        // every target this crate builds for, regardless of privilege.
         let dir = scratch_dir("rename");
         let output_path = dir.join("destination");
         std::fs::create_dir(&output_path).unwrap();
         let marker_path = output_path.join("marker");
         std::fs::write(&marker_path, b"unchanged").unwrap();
 
-        let staging_path = staging_path_for_process(&output_path);
+        let staging_path = staging_path_for_current_process(&output_path);
         let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
         assert!(
             matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
@@ -1104,14 +752,9 @@ mod tests {
 
     #[test]
     fn a_staging_file_that_was_never_created_is_not_reported_as_abandoned() {
-        // `File::create` fails before any staging artifact exists here (the
-        // staging path's parent directory does not exist), so `remove_file`'s
-        // `NotFound` means cleanup had nothing to do -- reporting an
-        // "abandoned staging file" sends a developer hunting a `.tmp.<pid>`
-        // sibling that was never written.
         let dir = scratch_dir("never-created");
         let output_path = dir.join("absent").join("pokeemerald.pack");
-        let staging_path = staging_path_for_process(&output_path);
+        let staging_path = staging_path_for_current_process(&output_path);
 
         let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
 
@@ -1129,14 +772,9 @@ mod tests {
 
     #[test]
     fn a_failed_staging_cleanup_names_the_artifact_it_left_behind() {
-        // The staging path is a non-empty directory here (not the empty one
-        // `a_failed_staging_write_leaves_the_existing_pack_untouched` uses):
-        // `remove_file` fails on either, but a directory with real contents
-        // pins down that this is testing "cleanup also failed", not merely
-        // "cleanup was never attempted".
         let dir = scratch_dir("cleanup");
         let output_path = dir.join("pokeemerald.pack");
-        let staging_path = staging_path_for_process(&output_path);
+        let staging_path = staging_path_for_current_process(&output_path);
         std::fs::create_dir(&staging_path).unwrap();
         std::fs::write(staging_path.join("occupant"), b"occupant").unwrap();
 
@@ -1157,13 +795,6 @@ mod tests {
 
     #[test]
     fn oversized_jasc_palette_is_rejected_not_truncated() {
-        // The pack format's `color_count` field is a `u16` (`pack_format`'s
-        // docs) -- 65 536 colours, one more than it can hold, must fail
-        // closed via `ExtractError::PaletteColorCountUnrepresentable` rather
-        // than silently narrow with an `as u16` cast (issue #301).
-        // `jasc_pal::parse` itself has no such bound (its own module docs),
-        // so this exercises the actual extraction entry point, not just the
-        // parser.
         let count = usize::from(u16::MAX) + 1;
         let mut text = String::from("JASC-PAL\r\n0100\r\n");
         text.push_str(&count.to_string());
@@ -1180,7 +811,7 @@ mod tests {
 
         let mut writer = pack_format::PackWriter::new();
         let err =
-            super::decode_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
+            super::push_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
         assert!(
             matches!(
                 &err,
@@ -1203,17 +834,12 @@ mod tests {
 
     #[test]
     fn layouts_list_has_no_duplicate_ids_or_names() {
-        // Pure data check -- no filesystem access -- so it runs everywhere.
-        let ids: Vec<_> = LAYOUTS.iter().map(|(id, _)| *id).collect();
-        let names: Vec<_> = LAYOUTS.iter().map(|(_, name)| *name).collect();
+        let ids: Vec<_> = LAYOUTS.iter().map(|layout| layout.upstream_id).collect();
+        let names: Vec<_> = LAYOUTS.iter().map(|layout| layout.pack_name).collect();
         let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
         let unique_names: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
         assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
-        // Every entry is either the Littleroot Town directory family or one
-        // of the three connection targets outside that family this
-        // pipeline bundles: `LAYOUT_ROUTE101` (issue #177),
-        // `LAYOUT_OLDALE_TOWN`/`LAYOUT_ROUTE103` (issue #248) (module docs).
         for id in &ids {
             assert!(
                 id.starts_with("LAYOUT_LITTLEROOT_TOWN")
@@ -1229,8 +855,6 @@ mod tests {
                     || *name == "oldale_town"
                     || *name == "route103"
             );
-            // Pack ids are ASCII lowercase + digits + underscores + `/` only
-            // (see `crate::extract`'s "Asset id scheme" docs).
             assert!(name
                 .chars()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
@@ -1240,25 +864,14 @@ mod tests {
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn layout_grids_are_extracted() {
-        // No pack reader lives in this crate (`crates/assets` owns that,
-        // and this crate deliberately never depends on it -- see the
-        // module docs), so this just confirms every expected `layout/*`
-        // id's bytes made it into the pack's directory, via a crude
-        // substring search over the raw file (every id is stored verbatim,
-        // UTF-8, in the directory region -- see `pack_format`'s format docs).
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("layouts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
         let bytes = std::fs::read(&report.output_path).unwrap();
-        for (_, name) in LAYOUTS {
+        for layout in LAYOUTS {
             for suffix in ["map", "border"] {
-                let id = format!("layout/{name}/{suffix}");
-                assert!(
-                    bytes
-                        .windows(id.len())
-                        .any(|window| window == id.as_bytes()),
-                    "missing pack entry id `{id}`"
-                );
+                let id = format!("layout/{}/{suffix}", layout.pack_name);
+                assert_pack_contains_entry_id(&bytes, &id);
             }
         }
         let _ = std::fs::remove_file(report.output_path);
