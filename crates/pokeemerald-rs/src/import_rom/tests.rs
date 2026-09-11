@@ -614,6 +614,29 @@ fn an_ordinary_windows_path_prints_the_literal_a_player_can_copy_back() {
     );
 }
 
+/// The line separators `U+2028`/`U+2029` and the `Bidi_Control`
+/// characters are outside `char::is_control`, so the control-byte tests
+/// above cannot see them, in the success summary or the errors.
+#[test]
+fn a_separator_or_bidi_control_in_a_path_is_escaped_too() {
+    let hostile = PathBuf::from(
+        "a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o",
+    );
+    let escaped = r"a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o";
+    let rendered = ImportRomError::DestinationIsDirectory {
+        pack_path: hostile.clone(),
+    }
+    .to_string();
+    assert!(rendered.contains(escaped), "{rendered:?}");
+    let summary = ImportOutcome {
+        pack_path: hostile,
+        entry_count: 1,
+        pack_bytes: 2,
+    }
+    .to_string();
+    assert!(summary.contains(escaped), "{summary:?}");
+}
+
 #[test]
 fn the_temp_name_is_a_bounded_name_in_the_packs_own_directory() {
     let pack_path = Path::new("/data/pokeemerald-rs/pokeemerald.pack");

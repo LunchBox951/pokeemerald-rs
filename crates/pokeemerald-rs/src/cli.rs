@@ -427,6 +427,25 @@ mod tests {
         }
     }
 
+    /// The line separators `U+2028`/`U+2029` and the `Bidi_Control`
+    /// characters are outside `char::is_control`, so the control-byte test
+    /// above cannot see them; `rom-import` pins the same spellings.
+    #[test]
+    fn a_separator_or_bidi_control_in_an_argument_is_escaped_too() {
+        let hostile = "--a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o";
+        let rendered = parse(&args(&[hostile])).unwrap_err().to_string();
+        let diagnosis = rendered
+            .strip_suffix(USAGE)
+            .and_then(|head| head.strip_suffix('\n'))
+            .expect("the usage block follows the diagnosis");
+        assert!(
+            diagnosis.contains(
+                r"--a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o"
+            ),
+            "escaped token missing from {diagnosis:?}"
+        );
+    }
+
     #[test]
     fn the_usage_text_names_the_import_flag() {
         assert!(USAGE.contains("--import-rom <path>"));
