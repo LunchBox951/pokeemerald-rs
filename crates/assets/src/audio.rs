@@ -11,8 +11,16 @@
 //! - [`Song`] stores header metadata and normalized per-track [`SongEvent`] streams. Events use
 //!   musical commands and event-index jumps, not source MIDI or compiled MP2K bytes.
 //!
-//! [`SampleId`] and [`VoiceGroupId`] name related pack entries. Pokémon cries follow a separate
-//! species-indexed playback path and are not represented by these schemas.
+//! [`SampleId`] and [`VoiceGroupId`] name related pack entries. Upstream plays Pokémon cries from a
+//! species-indexed `ToneData` table rather than through a song and voicegroup; the port has no cry
+//! playback yet, and these schemas do not model that path.
+//!
+//! # Deferred commands
+//!
+//! [`SongEvent`] has no variant for `PATT`/`PEND`, `REPT`, `PORT`, or the `XCMD` sub-commands other
+//! than `xIECV`/`xIECL`. A pattern call is expanded inline because it is a size representation, not
+//! musical content; the rest are never emitted by `tools/mid2agb`. Adding a variant extends the tag
+//! space, gated like every other content change by a [`crate::pack::FORMAT_VERSION`] bump.
 //!
 //! # Versioning
 //!
