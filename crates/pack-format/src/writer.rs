@@ -3,7 +3,7 @@
 use std::fmt;
 use std::mem::size_of;
 
-use crate::layout::{EntryKind, FORMAT_VERSION, MAGIC};
+use crate::layout::{addressed_payload_len, EntryKind, FORMAT_VERSION, IMAGE_BIT_DEPTHS, MAGIC};
 
 const ID_LENGTH_SIZE: usize = size_of::<u16>();
 const KIND_TAG_SIZE: usize = size_of::<u8>();
@@ -93,6 +93,30 @@ pub enum PackWriteError {
     InvalidId(String),
     /// The queued entry count does not fit the header's `u32` entry count field.
     EntryCountUnrepresentable(usize),
+    /// An [`EntryKind::Image`]'s `bit_depth` was not one of the depths the
+    /// format publishes (2, 4, or 8) — the reader would refuse to parse this
+    /// entry back, so `finish` refuses to emit it. Carries the offending id
+    /// and bit depth.
+    InvalidImageBitDepth {
+        /// The offending entry's id.
+        id: String,
+        /// The offending bit depth.
+        bit_depth: u8,
+    },
+    /// An [`EntryKind::Image`]'s or [`EntryKind::Palette`]'s payload was not
+    /// the length its own kind metadata addresses (`width * height` for an
+    /// image, `color_count * 2` for a palette) — the reader would refuse to
+    /// parse this entry back, so `finish` refuses to emit it. Carries the
+    /// offending id, the length the metadata addresses, and the payload's
+    /// actual length.
+    MisshapenPayload {
+        /// The offending entry's id.
+        id: String,
+        /// The length the entry's own kind metadata addresses.
+        expected: u64,
+        /// The payload's actual length.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for PackWriteError {
@@ -104,6 +128,18 @@ impl fmt::Display for PackWriteError {
                 f,
                 "pack has {count} entries, more than the format's u32 entry count field can represent"
             ),
+            Self::InvalidImageBitDepth { id, bit_depth } => write!(
+                f,
+                "asset id `{id}` has invalid image bit depth `{bit_depth}` (expected 2, 4, or 8)"
+            ),
+            Self::MisshapenPayload {
+                id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "asset id `{id}` has a {actual}-byte payload but its kind metadata addresses {expected} bytes"
+            ),
         }
     }
 }
@@ -112,6 +148,32 @@ impl std::error::Error for PackWriteError {}
 
 fn entry_count_field(entry_count: usize) -> Result<u32, PackWriteError> {
     u32::try_from(entry_count).map_err(|_| PackWriteError::EntryCountUnrepresentable(entry_count))
+}
+
+/// The two shape invariants the reader enforces on the way back
+/// ([`PackReadError::BadImageBitDepth`](crate::PackReadError::BadImageBitDepth),
+/// [`PackReadError::MisshapenPayload`](crate::PackReadError::MisshapenPayload)),
+/// checked here so `finish` never emits bytes its own reader would reject.
+fn check_entry_shape(entry: &PackEntry) -> Result<(), PackWriteError> {
+    if let EntryKind::Image { bit_depth, .. } = entry.kind {
+        if !IMAGE_BIT_DEPTHS.contains(&bit_depth) {
+            return Err(PackWriteError::InvalidImageBitDepth {
+                id: entry.id.clone(),
+                bit_depth,
+            });
+        }
+    }
+    if let Some(expected) = addressed_payload_len(entry.kind) {
+        let actual = entry.payload.len();
+        if u64::try_from(actual) != Ok(expected) {
+            return Err(PackWriteError::MisshapenPayload {
+                id: entry.id.clone(),
+                expected,
+                actual,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Accumulates [`PackEntry`] values and serializes them into the pack
@@ -128,7 +190,8 @@ impl PackWriter {
         Self::default()
     }
 
-    /// Queue one entry. Order of calls does not matter — [`finish`](Self::finish)
+    /// Queue one entry. Entry validation is deferred to
+    /// [`finish`](Self::finish); order of calls does not matter — `finish`
     /// sorts by id before serializing.
     pub fn push(&mut self, entry: PackEntry) {
         self.entries.push(entry);
@@ -148,14 +211,24 @@ impl PackWriter {
         self.entries.len()
     }
 
-    /// Sort entries by id and serialize the whole pack to bytes.
+    /// Sort entries by id, validate them, and serialize the whole pack to
+    /// bytes.
+    ///
+    /// Validation makes `finish` a strict inverse of
+    /// [`parse_directory`](crate::parse_directory): every byte string this
+    /// returns `Ok` for, that function returns `Ok` for too.
     ///
     /// # Errors
     ///
     /// [`PackWriteError::DuplicateId`] if two entries share an id;
     /// [`PackWriteError::InvalidId`] if an id is empty or exceeds
     /// `u16::MAX` bytes; [`PackWriteError::EntryCountUnrepresentable`] if
-    /// the queued entry count exceeds `u32::MAX`.
+    /// the queued entry count exceeds `u32::MAX`;
+    /// [`PackWriteError::InvalidImageBitDepth`] if an
+    /// [`EntryKind::Image`]'s `bit_depth` is not 2, 4, or 8;
+    /// [`PackWriteError::MisshapenPayload`] if an [`EntryKind::Image`]'s or
+    /// [`EntryKind::Palette`]'s payload is not the length its own kind
+    /// metadata addresses.
     pub fn finish(mut self) -> Result<Vec<u8>, PackWriteError> {
         let entry_count = entry_count_field(self.entries.len())?;
 
@@ -170,6 +243,9 @@ impl PackWriter {
             if entry.id.is_empty() || entry.id.len() > usize::from(u16::MAX) {
                 return Err(PackWriteError::InvalidId(entry.id.clone()));
             }
+        }
+        for entry in &self.entries {
+            check_entry_shape(entry)?;
         }
 
         let directory_size: usize = self.entries.iter().map(PackEntry::directory_size).sum();
@@ -203,6 +279,7 @@ mod tests {
         entry_count_field, EntryKind, PackEntry, PackWriteError, PackWriter, FORMAT_VERSION,
         ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
     };
+    use crate::reader::parse_directory;
 
     #[test]
     fn len_reflects_pushed_entries() {
@@ -350,5 +427,148 @@ mod tests {
             expected_payload_offset
         );
         assert_eq!(bytes[expected_payload_offset], 0xAB);
+    }
+
+    /// `finish` must reject an image `bit_depth` outside the format's
+    /// published set (2, 4, or 8) rather than hand back bytes
+    /// `parse_directory` would refuse with `BadImageBitDepth`.
+    #[test]
+    fn invalid_image_bit_depth_is_rejected_at_finish() {
+        let mut writer = PackWriter::new();
+        writer.push(PackEntry {
+            id: "a/image".into(),
+            kind: EntryKind::Image {
+                width: 1,
+                height: 1,
+                bit_depth: 3,
+            },
+            payload: vec![0],
+        });
+        assert_eq!(
+            writer.finish().unwrap_err(),
+            PackWriteError::InvalidImageBitDepth {
+                id: "a/image".into(),
+                bit_depth: 3,
+            }
+        );
+    }
+
+    /// `finish` must reject an image payload whose length disagrees with
+    /// `width * height` rather than hand back bytes `parse_directory` would
+    /// refuse with `MisshapenPayload`.
+    #[test]
+    fn image_payload_length_must_match_dimensions() {
+        for payload in [vec![0u8; 3], vec![0u8; 5]] {
+            let actual = payload.len();
+            let mut writer = PackWriter::new();
+            writer.push(PackEntry {
+                id: "a/image".into(),
+                kind: EntryKind::Image {
+                    width: 2,
+                    height: 2,
+                    bit_depth: 4,
+                },
+                payload,
+            });
+            assert_eq!(
+                writer.finish().unwrap_err(),
+                PackWriteError::MisshapenPayload {
+                    id: "a/image".into(),
+                    expected: 4,
+                    actual,
+                }
+            );
+        }
+    }
+
+    /// `finish` must reject a palette payload whose length disagrees with
+    /// `color_count * 2` rather than hand back bytes `parse_directory` would
+    /// refuse with `MisshapenPayload`.
+    #[test]
+    fn palette_payload_length_must_match_color_count() {
+        for payload in [vec![0u8; 3], vec![0u8; 5]] {
+            let actual = payload.len();
+            let mut writer = PackWriter::new();
+            writer.push(PackEntry {
+                id: "a/palette".into(),
+                kind: EntryKind::Palette { color_count: 2 },
+                payload,
+            });
+            assert_eq!(
+                writer.finish().unwrap_err(),
+                PackWriteError::MisshapenPayload {
+                    id: "a/palette".into(),
+                    expected: 4,
+                    actual,
+                }
+            );
+        }
+    }
+
+    /// Every image bit depth the format publishes, a correctly shaped
+    /// palette, and an arbitrary raw payload must still round-trip through
+    /// `finish` and back through `parse_directory` unchanged: the new
+    /// validation must accept everything the reader already does.
+    #[test]
+    fn valid_entry_shapes_round_trip_through_reader() {
+        let mut writer = PackWriter::new();
+        for (index, bit_depth) in [2u8, 4, 8].into_iter().enumerate() {
+            writer.push(PackEntry {
+                id: format!("image/{index}"),
+                kind: EntryKind::Image {
+                    width: 2,
+                    height: 2,
+                    bit_depth,
+                },
+                payload: vec![0u8; 4],
+            });
+        }
+        writer.push(PackEntry {
+            id: "palette".into(),
+            kind: EntryKind::Palette { color_count: 3 },
+            payload: vec![0u8; 6],
+        });
+        writer.push(PackEntry {
+            id: "raw".into(),
+            kind: EntryKind::Raw,
+            payload: vec![1, 2, 3],
+        });
+
+        let bytes = writer.finish().unwrap();
+        let entries = parse_directory(&bytes).unwrap();
+        assert_eq!(entries.len(), 5);
+        for (index, bit_depth) in [2u8, 4, 8].into_iter().enumerate() {
+            let entry = &entries[index];
+            assert_eq!(
+                entry.kind,
+                EntryKind::Image {
+                    width: 2,
+                    height: 2,
+                    bit_depth,
+                }
+            );
+            assert_eq!(entry.length, 4);
+        }
+    }
+
+    #[test]
+    fn shape_error_messages_include_the_offending_values() {
+        assert_eq!(
+            PackWriteError::InvalidImageBitDepth {
+                id: "a/image".into(),
+                bit_depth: 3,
+            }
+            .to_string(),
+            "asset id `a/image` has invalid image bit depth `3` (expected 2, 4, or 8)"
+        );
+        assert_eq!(
+            PackWriteError::MisshapenPayload {
+                id: "a/image".into(),
+                expected: 4,
+                actual: 3,
+            }
+            .to_string(),
+            "asset id `a/image` has a 3-byte payload but its kind metadata addresses 4 bytes"
+        );
     }
 }

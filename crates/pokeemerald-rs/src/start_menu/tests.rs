@@ -191,13 +191,22 @@ fn the_item_cursor_wraps_in_both_directions() {
 fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
-    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached.
+    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached
+    // but not yet closed (issue #1035, module docs).
     let mut menu = synthetic_start_menu();
     assert_eq!(menu.selected(), StartMenuItem::Save);
     assert_eq!(
         menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
+        StartMenuOutcome::Open,
+        "the A must act on the row DOWN just moved it to, not on SAVE, \
+         and StartMenuExitCallback has not run yet"
+    );
+    assert_eq!(menu.selected(), StartMenuItem::Exit);
+    assert!(!menu.saving(), "the same-frame A selected EXIT, not SAVE");
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
         StartMenuOutcome::Closed,
-        "the A must act on the row DOWN just moved it to, not on SAVE"
+        "StartMenuExitCallback runs on the next tick, reading no input"
     );
 
     // UP+A from EXIT: `Menu_MoveCursor` wraps back to SAVE and the same
@@ -228,7 +237,8 @@ fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
 
 /// `StartMenuExitCallback` (`start_menu.c:750-757`) and
 /// `HandleStartMenuInput`'s `JOY_NEW(START_BUTTON | B_BUTTON)` close
-/// (`:628-633`) -- none of the three writes anything.
+/// (`:628-633`) -- none of the three writes anything. EXIT closes on the
+/// tick after its A press (issue #1035, module docs).
 #[test]
 fn exit_start_and_b_all_close_without_writing() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
@@ -238,7 +248,13 @@ fn exit_start_and_b_all_close_without_writing() {
     assert_eq!(menu.selected(), StartMenuItem::Exit);
     assert_eq!(
         menu.tick(pressed(Buttons::A), &mut target),
-        StartMenuOutcome::Closed
+        StartMenuOutcome::Open,
+        "A on EXIT only arms StartMenuExitCallback this tick"
+    );
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Closed,
+        "StartMenuExitCallback closes the menu on the next tick"
     );
 
     for close_key in [Buttons::START, Buttons::B] {
