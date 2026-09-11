@@ -233,12 +233,12 @@ fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
     );
     assert_eq!(
         events[0],
-        BattleEvent::NoEffect {
+        BattleEvent::LevitateBlocked {
             by_player: true,
             move_id: MoveId(198),
         },
-        "the multi-hit loop must stop at the no-effect branch on its first \
-         attempt: {events:?}"
+        "the multi-hit loop must stop at the Levitate-block branch on its \
+         first attempt: {events:?}"
     );
     assert_eq!(
         battle.enemy().current_hp(),
@@ -249,4 +249,46 @@ fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
     // A no-effect hit still spends PP: ppreduce runs before typecalc
     // decides the immunity, exactly as the ordinary single-hit case does.
     assert_eq!(battle.player().moves()[0].pp, 9);
+}
+
+/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375-1383`)
+/// sets `B_MSG_GROUND_MISS`, not the ordinary type-immunity string
+/// (`battle_message.c:71` vs. `:73`), so it must not collapse into
+/// [`BattleEvent::NoEffect`].
+#[test]
+fn a_levitate_block_is_reported_distinctly_from_a_typing_immunity() {
+    let dex = Dex::new();
+    // Bone Rush (Ground, MULTI_HIT) into Gastly, whose only ability is
+    // Levitate; Rattata L10 outspeeds Gastly L5.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(198)]);
+    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "Levitate still takes no Ground damage"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::NoEffect {
+                by_player: true,
+                ..
+            }
+        )),
+        "a Levitate block must not be reported as the ordinary typing \
+         immunity event: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::LevitateBlocked {
+            by_player: true,
+            move_id: MoveId(198),
+        }),
+        "the Levitate block must be reported distinctly: {events:?}"
+    );
 }

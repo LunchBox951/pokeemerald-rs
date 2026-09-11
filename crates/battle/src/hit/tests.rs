@@ -267,16 +267,14 @@ fn type_immunity_still_draws_critical_damage_and_effect_chance() {
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
 }
 
-/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375`-`:1383`)
-/// zeroes a Ground move before the type chart runs, the same shared
-/// `damage_before_roll` boundary the ordinary single-hit pipeline
-/// (`resolve_hit` -> `damage_core`) and the multi-hit pipeline both call --
-/// this pins the ordinary-pipeline half directly, since no admitted
-/// ordinary-hit move is Ground-type to exercise it through `resolve_hit`
-/// end to end (see the multi-hit turn-level regression for that half via
-/// Bone Rush in `crates/battle/tests/turn_engine/move_resolution.rs`).
+/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375-1383`).
+/// Pins the ordinary-pipeline half of `damage_before_roll`'s shared boundary
+/// directly via `damage_core`, since no admitted ordinary-hit move is
+/// Ground-type to exercise it through `resolve_hit` end to end (see the
+/// multi-hit turn-level regression for that half via Bone Rush in
+/// `crates/battle/tests/turn_engine/move_resolution.rs`).
 #[test]
-fn levitate_zeroes_a_ground_move_before_stab_and_type_effectiveness() {
+fn levitate_blocks_a_ground_move_before_stab_and_type_effectiveness() {
     let dex = Dex::new();
     let attacker = mon(&dex, BULBASAUR, 20, vec![BONE_RUSH]);
     let levitate_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
@@ -292,11 +290,11 @@ fn levitate_zeroes_a_ground_move_before_stab_and_type_effectiveness() {
     )
     .unwrap();
 
-    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(outcome, HitOutcome::LevitateBlocked);
     assert_eq!(
         rng.draws(),
         2,
-        "a Levitate no-effect still spends the critical and damage-variance \
+        "a Levitate block still spends the critical and damage-variance \
          draws, exactly like an ordinary type immunity"
     );
 }

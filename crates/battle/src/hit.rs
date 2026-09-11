@@ -76,6 +76,9 @@ pub enum HitOutcome {
     Miss,
     /// The move connected, but the target was immune.
     NoEffect,
+    /// A Ground move was blocked by the target's Levitate
+    /// (`battle_script_commands.c:1375-1383`).
+    LevitateBlocked,
     /// The move connected and dealt damage.
     Hit {
         /// HP of damage dealt.
@@ -157,6 +160,9 @@ pub struct RawDamage {
     pub damage: u32,
     /// Whether the hit was critical.
     pub is_critical: bool,
+    /// Whether `damage` is zero because a Ground move met a Levitate holder,
+    /// rather than an ordinary type immunity.
+    pub levitate_blocked: bool,
 }
 
 fn roll_critical_hit(
@@ -257,9 +263,12 @@ pub fn damage_before_roll(
     } else {
         damage_after_critical
     };
+    let levitate_blocked = move_id != STRUGGLE
+        && move_type == Type::Ground
+        && defender.ability() == AbilityId::LEVITATE;
     let damage = if move_id == STRUGGLE {
         damage_after_charge
-    } else if move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE {
+    } else if levitate_blocked {
         0
     } else {
         let damage_after_stab = apply_stab(
@@ -272,6 +281,7 @@ pub fn damage_before_roll(
     Ok(RawDamage {
         damage,
         is_critical,
+        levitate_blocked,
     })
 }
 
@@ -304,7 +314,11 @@ pub fn damage_core(
     let damage = apply_damage_roll(raw_damage.damage, rng);
 
     if damage == 0 {
-        Ok(HitOutcome::NoEffect)
+        if raw_damage.levitate_blocked {
+            Ok(HitOutcome::LevitateBlocked)
+        } else {
+            Ok(HitOutcome::NoEffect)
+        }
     } else {
         Ok(HitOutcome::Hit {
             damage,
