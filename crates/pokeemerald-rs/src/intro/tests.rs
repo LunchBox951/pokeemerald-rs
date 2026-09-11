@@ -1,28 +1,18 @@
-//! [`IntroScene`] flow tests: page advance on confirm, B as an ordinary
-//! dialogue-advance button (issue #393 -- there is no more whole-intro skip
-//! path to test), and headless composition -- all against a synthetic font
-//! sheet + dialogue frame (no local asset pack needed, mirroring
-//! `engine::text::render`'s own synthetic-sheet test pattern). A real-pack
-//! composition check (`real_pack_composes_a_non_blank_intro_frame`) lives
-//! right here, at the bottom of this file, mirroring `main_menu::tests::
-//! real_pack_composes_a_non_blank_menu_frame`.
+use std::mem::size_of;
 
-use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
+use assets::fonts::{
+    FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT, SHEET_HEIGHT, SHEET_WIDTH,
+};
 use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 use rendering::Rgb888;
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
 use crate::textbox::{FrameAssets, STANDARD_BOX_SCREEN_ORIGIN, STANDARD_PRINTER_ORIGIN};
 
-/// No buttons pressed or held this frame -- shorthand for
-/// [`PrinterInput::none`], this file's stand-in for the old bare `false`
-/// every call here used before issue #393 replaced `IntroScene::tick`'s two
-/// bools with a [`PrinterInput`].
-const NONE: PrinterInput = PrinterInput::none();
+const NO_INPUT: PrinterInput = PrinterInput::none();
 
-/// A's just-pressed edge, nothing else held or pressed -- this file's
-/// stand-in for the old bare `true` (`confirm_pressed`).
 const PRESS_A: PrinterInput = PrinterInput {
     a_pressed: true,
     b_pressed: false,
@@ -30,9 +20,6 @@ const PRESS_A: PrinterInput = PrinterInput {
     b_held: false,
 };
 
-/// B's just-pressed edge, nothing else held or pressed -- issue #393's own
-/// point: B is an ordinary dialogue-advance button, not a whole-intro skip,
-/// so it needs its own edge here alongside [`PRESS_A`].
 const PRESS_B: PrinterInput = PrinterInput {
     a_pressed: false,
     b_pressed: true,
@@ -40,108 +27,100 @@ const PRESS_B: PrinterInput = PrinterInput {
     b_held: false,
 };
 
-const SHEET_WIDTH: u32 = 256;
-const SHEET_HEIGHT: u32 = 512;
+const APP_A_PRESS: PrinterInput = PrinterInput {
+    a_pressed: true,
+    b_pressed: false,
+    a_held: true,
+    b_held: false,
+};
 
-/// A uniformly-blank synthetic glyph sheet, the real shape (256x512, see
-/// `assets::fonts`' module docs) so [`OwnedFontGlyphSheet::new`] accepts it --
-/// mirrors `engine::text::render`'s own tests. Every pixel is palette index
-/// `0` (`textbox::GLYPH_COLORS[0] == None`, transparent), so a glyph
-/// revealed against this sheet never paints anything visible -- fine for
-/// tests that only care about state (page index, finished-ness, revealed
-/// count), but see [`distinguishable_sheet_pixels`] for tests that need to
-/// see an actual painted pixel.
-fn blank_sheet_pixels() -> Vec<u8> {
-    vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
+const TRANSPARENT_PALETTE_INDEX: u8 = 0;
+const DARK_GREY_GLYPH_PALETTE_INDEX: u8 = 1;
+const SHADOW_GLYPH_PALETTE_INDEX: u8 = 2;
+const FONT_BIT_DEPTH: u8 = 2;
+const MESSAGE_BOX_WIDTH: u32 = 56;
+const MESSAGE_BOX_HEIGHT: u32 = 16;
+const MESSAGE_BOX_BIT_DEPTH: u8 = 4;
+const MESSAGE_BOX_PALETTE_COLOUR_COUNT: u16 = 16;
+const SOLID_FRAME_PALETTE_INDEX: u8 = 1;
+const TILE_SIDE: i32 = 8;
+const GLYPH_INTERIOR_OFFSET: i32 = 4;
+const MESSAGE_BOX_INTERIOR_OFFSET: i32 = 4;
+const BACKDROP_PROBE: usize = 2;
+const FRAMEBUFFER_WIDTH: usize = 240;
+const FRAMEBUFFER_HEIGHT: usize = 160;
+const EXPECTED_GLYPH_COUNT: usize = 512;
+const MAX_FIRST_PROMPT_TICKS: usize = 200;
+const MAX_INTRO_TICKS: usize = 5_000;
+const MAX_FIRST_PAGE_TICKS: usize = 500;
+const MINIMUM_GLYPHS_BEFORE_CLEAR: usize = 5;
+const MAX_TRAVERSAL_TICKS: usize = 20_000;
+const REAL_PACK_COMPOSITION_TICKS: usize = 5;
+const MINIMUM_REAL_PACK_GLYPHS: usize = 2;
+
+fn transparent_glyph_sheet_pixels() -> Vec<u8> {
+    vec![TRANSPARENT_PALETTE_INDEX; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
 }
 
-/// A synthetic glyph sheet where every glyph cell is uniformly palette
-/// index `1` (`textbox::GLYPH_COLORS[1]`'s opaque dark grey,
-/// `Rgb888 { r: 24, g: 24, b: 24 }`) -- unlike [`blank_sheet_pixels`]'s
-/// all-transparent fixture, a glyph revealed against this sheet actually
-/// paints a recognisable colour, so a test can assert a composed frame's
-/// pixels prove a glyph was drawn, not just that [`IntroScene::compose`]
-/// ran without panicking.
-fn distinguishable_sheet_pixels() -> Vec<u8> {
-    vec![1u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
+fn dark_grey_glyph_sheet_pixels() -> Vec<u8> {
+    vec![DARK_GREY_GLYPH_PALETTE_INDEX; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
 }
 
-/// A synthetic dialogue frame the exact real shape
-/// (`assets::AssetPack::message_box`'s 7x2 tiles, 56x16px) with a plain
-/// 16-colour palette -- `FrameAssets`'s fields are `pub(crate)`, so a test
-/// in this crate can build one by hand without a real pack (see
-/// `FrameAssets`'s own docs on why the palette is already-converted
-/// `Rgb888`, not a pack-only `PaletteRef`). Every tile pixel is index `0`
-/// (transparent) and the palette is all-black, so [`crate::textbox::blit_frame_tiles`]
-/// never actually paints anything distinguishable from the black backdrop
-/// against this fixture -- see [`distinguishable_synthetic_frame`] for a
-/// frame a test can use to prove the border/fill was actually drawn.
-fn synthetic_frame() -> FrameAssets {
-    const WIDTH: u32 = 56;
-    const HEIGHT: u32 = 16;
+fn transparent_message_box() -> FrameAssets {
     FrameAssets {
-        pixels: vec![0u8; (WIDTH * HEIGHT) as usize],
-        width: WIDTH,
-        height: HEIGHT,
-        palette: vec![Rgb888::BLACK; 16],
+        pixels: vec![TRANSPARENT_PALETTE_INDEX; (MESSAGE_BOX_WIDTH * MESSAGE_BOX_HEIGHT) as usize],
+        width: MESSAGE_BOX_WIDTH,
+        height: MESSAGE_BOX_HEIGHT,
+        palette: vec![Rgb888::BLACK; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT)],
     }
 }
 
-/// A synthetic dialogue frame the same real shape as [`synthetic_frame`],
-/// but with every tile pixel set to opaque palette index `1` (a distinct
-/// colour from the black backdrop) -- so a test can assert a composed
-/// frame's border/fill pixels actually equal that colour, proving
-/// [`crate::textbox::blit_frame_tiles`] painted them rather than merely running
-/// without panicking.
-fn distinguishable_synthetic_frame() -> FrameAssets {
-    const WIDTH: u32 = 56;
-    const HEIGHT: u32 = 16;
-    let mut palette = vec![Rgb888::BLACK; 16];
-    palette[1] = FRAME_COLOR;
+fn solid_red_message_box() -> FrameAssets {
+    let mut palette = vec![Rgb888::BLACK; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT)];
+    palette[usize::from(SOLID_FRAME_PALETTE_INDEX)] = SOLID_FRAME_COLOR;
     FrameAssets {
-        pixels: vec![1u8; (WIDTH * HEIGHT) as usize],
-        width: WIDTH,
-        height: HEIGHT,
+        pixels: vec![SOLID_FRAME_PALETTE_INDEX; (MESSAGE_BOX_WIDTH * MESSAGE_BOX_HEIGHT) as usize],
+        width: MESSAGE_BOX_WIDTH,
+        height: MESSAGE_BOX_HEIGHT,
         palette,
     }
 }
 
-/// [`distinguishable_synthetic_frame`]'s chosen non-black colour.
-const FRAME_COLOR: Rgb888 = Rgb888 {
+const SOLID_FRAME_COLOR: Rgb888 = Rgb888 {
     r: 200,
     g: 40,
     b: 40,
 };
 
-/// [`distinguishable_sheet_pixels`]'s chosen colour --
-/// `textbox::GLYPH_COLORS[1]`, duplicated here since that table is private
-/// to `crate::textbox`.
-const GLYPH_COLOR: Rgb888 = Rgb888 {
+const DARK_GREY_GLYPH_COLOR: Rgb888 = Rgb888 {
     r: 24,
     g: 24,
     b: 24,
 };
 
-/// An owned glyph sheet over `pixels`, the shape
-/// [`OwnedFontGlyphSheet::new`] accepts -- the same owned decode
-/// [`IntroScene::from_pack`] performs, minus the pack.
+const SHADOW_GLYPH_COLOR: Rgb888 = Rgb888 {
+    r: 160,
+    g: 160,
+    b: 160,
+};
+
 fn synthetic_sheet(pixels: &[u8]) -> OwnedFontGlyphSheet {
     let image = ImageRef {
         width: SHEET_WIDTH,
         height: SHEET_HEIGHT,
-        bit_depth: 2,
+        bit_depth: FONT_BIT_DEPTH,
         pixels,
     };
     OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap()
 }
 
 fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
-    IntroScene::new(synthetic_sheet(pixels), synthetic_frame(), speed)
+    IntroScene::new(synthetic_sheet(pixels), transparent_message_box(), speed)
 }
 
 #[test]
 fn starts_on_the_first_page_not_finished() {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let scene = synthetic_scene(&pixels, TextSpeed::Mid);
     assert_eq!(scene.page_index(), 0);
     assert!(!scene.is_finished());
@@ -150,9 +129,9 @@ fn starts_on_the_first_page_not_finished() {
 
 #[test]
 fn a_glyph_reveals_on_the_first_tick_at_instant_speed() {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    let status = scene.tick(NONE);
+    let status = scene.tick(NO_INPUT);
     assert_eq!(status, IntroStatus::Continue);
     assert_eq!(
         scene.revealed_glyph_count(),
@@ -161,19 +140,12 @@ fn a_glyph_reveals_on_the_first_tick_at_instant_speed() {
     );
 }
 
-/// Issue #393: B used to be wired to a pre-1.0 whole-intro skip with no
-/// upstream analogue (module docs' "Advance" section) -- that shortcut is
-/// gone. B is now an ordinary dialogue-advance button, so pressing it
-/// mid-page (well before any `\p`/`\l` wait is even reached) must do
-/// nothing but advance the reveal like any other press would -- it must
-/// never finish the intro outright.
 #[test]
 fn b_mid_speech_does_not_finish_the_intro() {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Mid);
-    // Print a little first, so this is genuinely mid-page, not a no-op.
     for _ in 0..5 {
-        scene.tick(NONE);
+        scene.tick(NO_INPUT);
     }
     assert!(!scene.is_finished());
 
@@ -191,34 +163,27 @@ fn b_mid_speech_does_not_finish_the_intro() {
     );
 }
 
-/// Issue #393: upstream never distinguishes which of A/B advanced a
-/// `\p`/`\l` wait (`JOY_NEW(A_BUTTON | B_BUTTON)`, `text.c:874-879`) -- B
-/// must clear a page exactly as A does, not just fail to skip the whole
-/// intro. Drives page 0 ("Hi! Sorry to keep you waiting!{P}...") to its
-/// first `\p` with A, confirms it with B, and checks the accumulator
-/// cleared (the same observable [`super::IntroScene::tick`] docs
-/// `TickEvent::Cleared` produces for an A confirm).
+fn reveal_until_the_first_prompt_wait(scene: &mut IntroScene) -> usize {
+    let mut previous_glyph_count = scene.revealed_glyph_count();
+    for _ in 0..MAX_FIRST_PROMPT_TICKS {
+        scene.tick(NO_INPUT);
+        let glyph_count = scene.revealed_glyph_count();
+        if glyph_count == previous_glyph_count {
+            return glyph_count;
+        }
+        previous_glyph_count = glyph_count;
+    }
+    panic!("the first prompt wait was not reached");
+}
+
 #[test]
 fn b_advances_a_prompt_clear_exactly_like_a_does() {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
 
-    // Reveal every glyph up to (and including reaching) page 0's first
-    // `\p`, without ever confirming it -- `NONE` never advances a wait.
-    let mut before_clear = 0;
-    for _ in 0..200 {
-        scene.tick(NONE);
-        let count = scene.revealed_glyph_count();
-        if count == before_clear {
-            // No new glyph revealed this tick and nothing cleared yet ->
-            // the wait has been reached (Instant reveals one glyph per
-            // tick, so a repeat count this early can only mean AwaitingClear).
-            break;
-        }
-        before_clear = count;
-    }
+    let glyphs_before_clear = reveal_until_the_first_prompt_wait(&mut scene);
     assert!(
-        before_clear > 0,
+        glyphs_before_clear > 0,
         "page 0 must have revealed something first"
     );
 
@@ -243,17 +208,13 @@ fn once_finished_every_further_tick_stays_finished() {
 
 #[test]
 fn confirming_every_frame_advances_through_every_page_to_the_overworld_handoff() {
-    // At Instant speed every glyph reveals in one tick and every \p/\l wait
-    // resolves in one confirmed tick (see `IntroScene::tick`'s module
-    // docs), so this terminates quickly; the generous bound just guards
-    // against an infinite loop if a future change breaks termination.
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
 
     let mut seen_pages = std::collections::BTreeSet::new();
     seen_pages.insert(scene.page_index());
     let mut status = IntroStatus::Continue;
-    for _ in 0..5000 {
+    for _ in 0..MAX_INTRO_TICKS {
         status = scene.tick(PRESS_A);
         seen_pages.insert(scene.page_index());
         if status == IntroStatus::Finished {
@@ -264,195 +225,137 @@ fn confirming_every_frame_advances_through_every_page_to_the_overworld_handoff()
     assert_eq!(status, IntroStatus::Finished);
     assert!(scene.is_finished());
     assert_eq!(scene.page_index(), NUM_PAGES - 1);
-    // Every page in order was actually visited, not skipped over.
     assert_eq!(seen_pages, (0..NUM_PAGES).collect());
 }
 
 #[test]
 fn a_page_break_clears_the_revealed_glyph_accumulator() {
-    // The first page ("Hi! Sorry to keep you waiting!{P}...") prints past
-    // its first `\p` well before running out of pages; drive it there and
-    // confirm the accumulator drops back to (near) zero on the page clear,
-    // rather than growing unboundedly across pages.
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
 
-    let mut max_seen = 0usize;
-    let mut saw_reset = false;
-    for _ in 0..500 {
+    let mut max_revealed_glyphs = 0usize;
+    let mut glyph_count_decreased = false;
+    for _ in 0..MAX_FIRST_PAGE_TICKS {
         scene.tick(PRESS_A);
         if scene.is_finished() {
             break;
         }
-        max_seen = max_seen.max(scene.revealed_glyph_count());
-        if max_seen > 5 && scene.revealed_glyph_count() < max_seen {
-            saw_reset = true;
+        max_revealed_glyphs = max_revealed_glyphs.max(scene.revealed_glyph_count());
+        if max_revealed_glyphs > MINIMUM_GLYPHS_BEFORE_CLEAR
+            && scene.revealed_glyph_count() < max_revealed_glyphs
+        {
+            glyph_count_decreased = true;
             break;
         }
     }
     assert!(
-        saw_reset,
+        glyph_count_decreased,
         "expected the glyph accumulator to shrink after a page clear"
     );
 }
 
-/// Senior review round 3 regression: this test used to only assert
-/// `fb.width()`/`fb.height()` -- consts on [`rendering::Framebuffer`], true
-/// regardless of whether `compose` painted anything at all -- against
-/// [`blank_sheet_pixels`]'s all-transparent glyph sheet, which made real
-/// pixel colour assertions impossible. Uses [`distinguishable_sheet_pixels`]
-/// instead so the revealed glyph's own colour is actually checkable.
 #[test]
-fn compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions() {
-    let pixels = distinguishable_sheet_pixels();
+fn compose_returns_native_dimensions_and_paints_the_first_revealed_glyph() {
+    let pixels = dark_grey_glyph_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    scene.tick(NONE); // reveals the first glyph ('H' of page 0).
+    scene.tick(NO_INPUT);
+    assert_eq!(scene.revealed_glyph_count(), 1);
 
     let fb = scene.compose();
-    assert_eq!(fb.width(), 240);
-    assert_eq!(fb.height(), 160);
+    assert_eq!(fb.width(), FRAMEBUFFER_WIDTH);
+    assert_eq!(fb.height(), FRAMEBUFFER_HEIGHT);
 
-    // The first revealed glyph sits at the printer's own origin
-    // (`STANDARD_PRINTER_ORIGIN`), offset by the dialogue box's screen
-    // position (`STANDARD_BOX_SCREEN_ORIGIN`) -- a pixel comfortably inside
-    // that 16x16 cell must be the glyph's own opaque colour, proving
-    // `compose` actually painted the revealed glyph rather than merely
-    // producing a correctly-sized, still-blank framebuffer.
-    let x = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + STANDARD_PRINTER_ORIGIN.0 + 4).unwrap();
-    let y = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + STANDARD_PRINTER_ORIGIN.1 + 4).unwrap();
-    assert_eq!(fb.pixel(x, y), Some(GLYPH_COLOR));
+    let (glyph_x, glyph_y) = first_glyph_interior_position();
+    assert_eq!(fb.pixel(glyph_x, glyph_y), Some(DARK_GREY_GLYPH_COLOR));
 }
 
-/// Senior review round 3 regression: this test used to only assert
-/// `fb.width() == 240` (module docs on the sibling test above) against
-/// [`synthetic_frame`]'s all-transparent-over-all-black fixture, which made
-/// it impossible for a border pixel to ever differ from the backdrop. Uses
-/// [`distinguishable_synthetic_frame`] instead so the border's own colour
-/// is actually checkable.
 #[test]
 fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let scene = IntroScene::new(
         synthetic_sheet(&pixels),
-        distinguishable_synthetic_frame(),
+        solid_red_message_box(),
         TextSpeed::Mid,
     );
 
     let fb = scene.compose();
-    assert_eq!(fb.width(), 240);
-    assert_eq!(fb.height(), 160);
+    assert_eq!(fb.width(), FRAMEBUFFER_WIDTH);
+    assert_eq!(fb.height(), FRAMEBUFFER_HEIGHT);
 
-    // The dialogue box's own top border row (one tile row above the
-    // content rect -- `MessageBoxLayout::frame_tiles`'s top-border push,
-    // which this port's `blit_frame_tiles` draws unconditionally, before
-    // any glyph is ever revealed) must be the frame's own opaque colour.
-    let border_x = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0).unwrap();
-    let border_y = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 - 8).unwrap();
-    assert_eq!(fb.pixel(border_x, border_y), Some(FRAME_COLOR));
+    let top_border_x = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0).unwrap();
+    let top_border_y = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 - TILE_SIDE).unwrap();
+    assert_eq!(
+        fb.pixel(top_border_x, top_border_y),
+        Some(SOLID_FRAME_COLOR)
+    );
 
-    // A pixel clearly outside the box stays the untouched black backdrop --
-    // proof the border is a *distinct*, bounded shape, not a stray fill of
-    // the whole screen.
-    assert_eq!(fb.pixel(2, 2), Some(Rgb888::BLACK));
+    assert_eq!(
+        fb.pixel(BACKDROP_PROBE, BACKDROP_PROBE),
+        Some(Rgb888::BLACK)
+    );
 }
 
-// Guards `GLYPH_COUNT`'s continued use as this module's synthetic sheet
-// shape sanity check (256*32 grid => 512 glyphs), so a future change to the
-// font sheet layout constants doesn't silently desync this test file's
-// hand-picked `SHEET_WIDTH`/`SHEET_HEIGHT` from the real ones.
-const _: () = assert!(GLYPH_COUNT == 512);
+const _: () = assert!(GLYPH_COUNT == EXPECTED_GLYPH_COUNT);
 
-/// One entry of a hand-built pack: its id, its kind tag + kind-specific
-/// metadata bytes, and its payload -- the exact byte layout
-/// `assets::pack`'s module docs specify (mirrors `assets::pack`'s own
-/// `crates/assets/src/pack/tests.rs::synthetic_pack` fixtures and
-/// `pack_format::PackWriter`'s write side).
-struct PackEntry {
+fn image_entry(
     id: &'static str,
-    tag: u8,
-    meta: Vec<u8>,
-    payload: Vec<u8>,
-}
-
-/// An [`EntryKind::Image`](assets::pack::EntryKind::Image) entry (tag `0`).
-fn image_entry(id: &'static str, width: u32, height: u32, bit_depth: u8, pixel: u8) -> PackEntry {
-    let mut meta = Vec::new();
-    meta.extend_from_slice(&width.to_le_bytes());
-    meta.extend_from_slice(&height.to_le_bytes());
-    meta.push(bit_depth);
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    fill_palette_index: u8,
+) -> PackEntry {
     PackEntry {
-        id,
-        tag: 0,
-        meta,
-        payload: vec![pixel; (width * height) as usize],
+        id: id.into(),
+        kind: EntryKind::Image {
+            width,
+            height,
+            bit_depth,
+        },
+        payload: vec![fill_palette_index; (width * height) as usize],
     }
 }
 
-/// An [`EntryKind::Palette`](assets::pack::EntryKind::Palette) entry (tag
-/// `1`) of 16 packed BGR555 colours -- the one shape
-/// `AssetPack::message_box` accepts.
 fn palette_entry(id: &'static str) -> PackEntry {
     PackEntry {
-        id,
-        tag: 1,
-        meta: 16u16.to_le_bytes().to_vec(),
-        payload: vec![0u8; 32],
+        id: id.into(),
+        kind: EntryKind::Palette {
+            color_count: MESSAGE_BOX_PALETTE_COLOUR_COUNT,
+        },
+        payload: vec![0; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT) * size_of::<u16>()],
     }
 }
 
-/// Serialize `entries` into a version-1 pack file at `path`. Ids are sorted
-/// first, since `AssetPack` binary-searches its directory.
-fn write_pack(path: &std::path::Path, mut entries: Vec<PackEntry>) {
-    entries.sort_by_key(|e| e.id);
-
-    let header_size = 8 + 4 + 4;
-    let directory_size: usize = entries
-        .iter()
-        .map(|e| 2 + e.id.len() + 1 + 8 + 8 + e.meta.len())
-        .sum();
-
-    let mut directory = Vec::new();
-    let mut payloads = Vec::new();
-    let mut offset = header_size + directory_size;
-    for entry in &entries {
-        directory.extend_from_slice(&u16::try_from(entry.id.len()).unwrap().to_le_bytes());
-        directory.extend_from_slice(entry.id.as_bytes());
-        directory.push(entry.tag);
-        directory.extend_from_slice(&(offset as u64).to_le_bytes());
-        directory.extend_from_slice(&(entry.payload.len() as u64).to_le_bytes());
-        directory.extend_from_slice(&entry.meta);
-        payloads.extend_from_slice(&entry.payload);
-        offset += entry.payload.len();
+fn write_pack(path: &std::path::Path, entries: Vec<PackEntry>) {
+    let mut writer = PackWriter::new();
+    for entry in entries {
+        writer.push(entry);
     }
-
-    let mut out = Vec::new();
-    out.extend_from_slice(&assets::pack::MAGIC);
-    out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
-    out.extend_from_slice(&directory);
-    out.extend_from_slice(&payloads);
-
-    std::fs::write(path, &out).unwrap();
+    std::fs::write(path, writer.finish().unwrap()).unwrap();
 }
 
-/// The `font/normal/glyphs` entry, every glyph pixel set to `pixel` (a
-/// palette index `0..=3`, so it stays a sheet `FontGlyphSheet::new` accepts
-/// -- see `distinguishable_sheet_pixels`' docs for what each index paints).
-fn font_entry(pixel: u8) -> PackEntry {
-    image_entry("font/normal/glyphs", SHEET_WIDTH, SHEET_HEIGHT, 2, pixel)
+fn font_entry(fill_palette_index: u8) -> PackEntry {
+    image_entry(
+        "font/normal/glyphs",
+        SHEET_WIDTH,
+        SHEET_HEIGHT,
+        FONT_BIT_DEPTH,
+        fill_palette_index,
+    )
 }
 
-/// The `message_box` image/palette pair, at `AssetPack::message_box`'s
-/// required 56x16 shape and 16-colour palette bank.
 fn message_box_entries() -> Vec<PackEntry> {
     vec![
-        image_entry("text-window/image/message_box", 56, 16, 4, 1),
+        image_entry(
+            "text-window/image/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
+            MESSAGE_BOX_BIT_DEPTH,
+            SOLID_FRAME_PALETTE_INDEX,
+        ),
         palette_entry("text-window/palette/message_box"),
     ]
 }
 
-/// A unique temp path for one test's synthetic pack (`name` keeps
-/// concurrently-running tests off each other's files).
 fn temp_pack_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "pokeemerald-rs-intro-test-pack-{name}-{}.pack",
@@ -460,49 +363,34 @@ fn temp_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
-/// `super::load_default`'s exact body, against an explicit `path` instead of
-/// `AssetPack::default_path()`: load the pack, build the scene from it, drop
-/// the pack. The seam the on-disk regeneration test below needs -- there is
-/// nothing else to stub, precisely because no pack state outlives this call.
-fn load_from(path: &std::path::Path) -> Result<IntroScene, super::IntroSceneError> {
+fn load_scene_from_pack(path: &std::path::Path) -> Result<IntroScene, super::IntroSceneError> {
     let pack = assets::pack::AssetPack::load(path)?;
     IntroScene::from_pack(&pack)
 }
 
-/// The composed frame's pixel well inside the first revealed glyph's cell
-/// (the printer's own origin, offset by the dialogue box's screen position
-/// -- same probe point as
-/// [`compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions`]).
-/// Its colour is whichever `textbox::GLYPH_COLORS` entry the sheet's pixel
-/// index maps to -- mirrored here as
-/// [`GLYPH_COLOR`]/[`GLYPH_SHADOW_COLOR`], since that table is private to
-/// `crate::textbox`.
-fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
-    let fb = scene.compose();
-    fb.pixel(
-        usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + STANDARD_PRINTER_ORIGIN.0 + 4).unwrap(),
-        usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + STANDARD_PRINTER_ORIGIN.1 + 4).unwrap(),
+fn first_glyph_interior_position() -> (usize, usize) {
+    (
+        usize::try_from(
+            STANDARD_BOX_SCREEN_ORIGIN.0 + STANDARD_PRINTER_ORIGIN.0 + GLYPH_INTERIOR_OFFSET,
+        )
+        .unwrap(),
+        usize::try_from(
+            STANDARD_BOX_SCREEN_ORIGIN.1 + STANDARD_PRINTER_ORIGIN.1 + GLYPH_INTERIOR_OFFSET,
+        )
+        .unwrap(),
     )
 }
 
-/// `textbox::GLYPH_COLORS[2]`, the shadow colour -- the second
-/// distinguishable glyph colour this file needs (see `GLYPH_COLOR` for
-/// index 1), so a regenerated sheet's glyphs are visibly *different*, not
-/// merely present.
-const GLYPH_SHADOW_COLOR: Rgb888 = Rgb888 {
-    r: 160,
-    g: 160,
-    b: 160,
-};
+fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
+    let fb = scene.compose();
+    let (x, y) = first_glyph_interior_position();
+    fb.pixel(x, y)
+}
 
 #[test]
 fn a_pack_missing_message_box_fails_to_build_a_scene() {
-    // A pack with a valid font sheet but no `message_box` entry at all must
-    // fail with a `Pack` error rather than half-building a scene. `from_pack`
-    // takes a *borrowed* `&AssetPack` and returns a fully owned scene, so
-    // neither the success nor the failure path can retain (or leak) the pack.
     let path = temp_pack_path("no-message-box");
-    write_pack(&path, vec![font_entry(0)]);
+    write_pack(&path, vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
     let pack = assets::pack::AssetPack::load(&path).unwrap();
 
     let err = IntroScene::from_pack(&pack).unwrap_err();
@@ -514,66 +402,47 @@ fn a_pack_missing_message_box_fails_to_build_a_scene() {
     let _ = std::fs::remove_file(path);
 }
 
-/// The contract that replaced the process-global `OnceLock` pack cache
-/// (senior review finding 1): a scene owns every byte it renders, and a
-/// *later* load reads the pack that is on disk at that moment -- so
-/// regenerating the pack mid-session (`cargo xtask extract` re-run, or an
-/// embedding host restarting the game) is picked up by the intro exactly
-/// like it is by every other scene, and an already-running scene keeps
-/// rendering the bytes it was built from.
 #[test]
 fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
     let path = temp_pack_path("regenerated");
 
-    // Pack v1: every glyph pixel is palette index 1 (`GLYPH_COLOR`).
     let mut entries = message_box_entries();
-    entries.push(font_entry(1));
+    entries.push(font_entry(DARK_GREY_GLYPH_PALETTE_INDEX));
     write_pack(&path, entries);
 
-    let mut first = load_from(&path).expect("the synthetic pack has both required entries");
-    first.tick(NONE); // reveals page 0's first glyph.
+    let mut first =
+        load_scene_from_pack(&path).expect("the synthetic pack has both required entries");
+    first.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&first),
-        Some(GLYPH_COLOR),
+        Some(DARK_GREY_GLYPH_COLOR),
         "the first load must render the pack that was on disk then"
     );
 
-    // Regenerate the pack in place, with a visibly different glyph sheet
-    // (palette index 2, `GLYPH_SHADOW_COLOR`).
     let mut entries = message_box_entries();
-    entries.push(font_entry(2));
+    entries.push(font_entry(SHADOW_GLYPH_PALETTE_INDEX));
     write_pack(&path, entries);
 
-    let mut second = load_from(&path).expect("the regenerated pack is still well-formed");
-    second.tick(NONE);
+    let mut second =
+        load_scene_from_pack(&path).expect("the regenerated pack is still well-formed");
+    second.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&second),
-        Some(GLYPH_SHADOW_COLOR),
-        "a load after the pack changed must render the NEW bytes, not a cached first-load pack"
+        Some(SHADOW_GLYPH_COLOR),
+        "a load after the pack changed must render the new bytes, not a cached first-load pack"
     );
 
-    // The scene built from v1 owns its own copy: a later load cannot
-    // retroactively change what it draws (and nothing is shared between
-    // them).
     assert_eq!(
         first_glyph_pixel(&first),
-        Some(GLYPH_COLOR),
+        Some(DARK_GREY_GLYPH_COLOR),
         "an already-built scene must keep rendering its own owned bytes"
     );
 
     let _ = std::fs::remove_file(path);
 }
 
-/// Companion to the test above: a *failed* load must stay cleanly
-/// repeatable -- the same "missing pack" diagnostic every time, no wedged
-/// state, no panic -- leaving room for a later attempt (e.g. after
-/// `cargo xtask extract` runs) to succeed.
 #[test]
-fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
-    // This crate's own test environment never has a local pack (mirrors
-    // `title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`'s
-    // identical guard/rationale) -- step aside rather than asserting the
-    // wrong thing if it ever does.
+fn without_a_default_pack_repeated_loads_keep_reporting_missing() {
     if assets::pack::AssetPack::default_path().is_file() {
         return;
     }
@@ -584,37 +453,8 @@ fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
     assert!(second.is_pack_missing());
 }
 
-/// A one-frame confirm press, exactly as the real app produces it:
-/// `crate::flow::intro_printer_input` sets *both* `a_pressed` and `a_held`
-/// on the frame a button goes down, so a press frame is never the
-/// "pressed but not held" shape [`PRESS_A`] uses for the state-machine
-/// tests above. It makes no difference to the held-A/B speed-up (the press
-/// lands while the printer is already waiting on a `\p`/`\l`, never mid
-/// reveal-delay, so `has_print_been_sped_up` never arms), but deriving
-/// [`super::TRAVERSAL_RUNS`] from anything other than the real input shape
-/// would leave the pin proving less than it claims.
-const CONFIRM: PrinterInput = PrinterInput {
-    a_pressed: true,
-    b_pressed: false,
-    a_held: true,
-    b_held: false,
-};
-
-/// Re-derive [`super::TRAVERSAL_RUNS`] from the real printer: build the
-/// same [`Printer`] [`IntroScene::new`] builds (same speed, same origin,
-/// same `with_ab_speed_up_print`), re-armed per page exactly as
-/// [`IntroScene::advance_page`] re-arms it, and drive
-/// [`super::speech::pages`] through it with no input at all except one
-/// [`CONFIRM`] frame on each `\p`/`\l` wait.
-///
-/// Returns the runs of no-input frames between those press frames,
-/// delimited the same three ways the scenario script's own segments are: a
-/// wait being reached ([`TickEvent::AwaitingClear`]/[`TickEvent::AwaitingScroll`],
-/// a press follows), a scroll animation finishing
-/// ([`TickEvent::ScrollFinished`]), and a page's terminator being consumed
-/// ([`TickEvent::Finished`]).
 fn derive_traversal_runs() -> Vec<TraversalRun> {
-    let pixels = blank_sheet_pixels();
+    let pixels = transparent_glyph_sheet_pixels();
     let pages = super::speech::pages();
     let mut printer = Printer::new(
         pages[0].clone(),
@@ -625,46 +465,44 @@ fn derive_traversal_runs() -> Vec<TraversalRun> {
     .with_ab_speed_up_print();
 
     let mut runs = Vec::new();
-    let mut frames = 0;
-    let mut page = 0;
-    let mut confirm_next = false;
-    // A generous bound, ~5x the real total: a printer that stopped
-    // terminating should fail this test, not hang CI.
-    for _ in 0..20_000 {
-        if confirm_next {
-            printer.tick(CONFIRM);
-            confirm_next = false;
+    let mut frames_without_input = 0;
+    let mut page_index = 0;
+    let mut press_confirm_next_frame = false;
+    for _ in 0..MAX_TRAVERSAL_TICKS {
+        if press_confirm_next_frame {
+            printer.tick(APP_A_PRESS);
+            press_confirm_next_frame = false;
             continue;
         }
-        let event = printer.tick(NONE);
-        frames += 1;
+        let event = printer.tick(NO_INPUT);
+        frames_without_input += 1;
         match event {
             TickEvent::AwaitingClear | TickEvent::AwaitingScroll => {
                 runs.push(TraversalRun {
-                    frames,
+                    frames: frames_without_input,
                     confirm_after: true,
                 });
-                frames = 0;
-                confirm_next = true;
+                frames_without_input = 0;
+                press_confirm_next_frame = true;
             }
             TickEvent::ScrollFinished => {
                 runs.push(TraversalRun {
-                    frames,
+                    frames: frames_without_input,
                     confirm_after: false,
                 });
-                frames = 0;
+                frames_without_input = 0;
             }
             TickEvent::Finished => {
                 runs.push(TraversalRun {
-                    frames,
+                    frames: frames_without_input,
                     confirm_after: false,
                 });
-                frames = 0;
-                page += 1;
-                if page == NUM_PAGES {
+                frames_without_input = 0;
+                page_index += 1;
+                if page_index == NUM_PAGES {
                     return runs;
                 }
-                printer.restart(pages[page].clone());
+                printer.restart(pages[page_index].clone());
             }
             _ => {}
         }
@@ -672,20 +510,11 @@ fn derive_traversal_runs() -> Vec<TraversalRun> {
     panic!("the speech never terminated: {} runs so far", runs.len());
 }
 
-/// The pack-free pin behind `xtask`'s `boot-to-first-fight` intro script
-/// (module docs' "Traversal pacing" section): every number in
-/// [`super::TRAVERSAL_RUNS`] is what the real [`Printer`] actually does
-/// with the real [`super::speech::pages`] at [`TextSpeed::Mid`], so a
-/// change to the printer's state machine, to a speech page's text, or to
-/// the reveal-delay timing breaks *here* -- visibly, in a test CI runs
-/// without a pack -- instead of only inside the pack-gated scenario run.
 #[test]
 fn traversal_runs_match_the_pinned_table() {
     assert_eq!(derive_traversal_runs(), super::TRAVERSAL_RUNS);
 }
 
-/// [`super::TRAVERSAL_FRAMES`] is the table's own total, presses included
-/// -- the single number `xtask`'s script budgets its intro block against.
 #[test]
 fn traversal_frames_totals_the_table() {
     let total: usize = super::TRAVERSAL_RUNS
@@ -695,26 +524,15 @@ fn traversal_frames_totals_the_table() {
     assert_eq!(super::TRAVERSAL_FRAMES, total);
 }
 
-/// Senior review round 3: the one real-pack composition check this module
-/// was missing (the `A real-pack composition check lives alongside the
-/// other scenes' #[ignore] tests in app.rs` claim this file's own module
-/// docs used to make was false -- no such test exists in `app.rs`). Mirrors
-/// `main_menu::tests::real_pack_composes_a_non_blank_menu_frame`: build the
-/// real scene via [`AssetPack::load_repo`] and [`super::IntroScene::from_pack`]
-/// -- not [`super::load_default`] (issue #412; see [`AssetPack::load_repo`]'s
-/// own docs for why) -- tick it forward a few frames (so more than one
-/// glyph has actually revealed), and confirm both that *something* painted
-/// (not an all-black frame) and that the dialogue box itself is visually
-/// distinct from the empty backdrop around it -- not just "some pixel
-/// somewhere is non-black," which a stray artifact could also satisfy.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_a_non_blank_intro_frame() {
     let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let mut scene = IntroScene::from_pack(&pack).expect("run `cargo xtask extract` first");
-    for _ in 0..5 {
-        scene.tick(NONE);
+    for _ in 0..REAL_PACK_COMPOSITION_TICKS {
+        scene.tick(NO_INPUT);
     }
+    assert!(scene.revealed_glyph_count() >= MINIMUM_REAL_PACK_GLYPHS);
 
     let fb = scene.compose();
     assert!(
@@ -722,18 +540,15 @@ fn real_pack_composes_a_non_blank_intro_frame() {
         "a few ticks in, the real dialogue box and at least one glyph must have painted something"
     );
 
-    // A pixel inside the dialogue box's own content rect must differ from
-    // one clearly outside it (near the top-left corner, well clear of the
-    // box -- this scene's own black backdrop, module docs).
-    let inside = fb
+    let message_box_interior = fb
         .pixel(
-            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + 4).unwrap(),
-            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + 4).unwrap(),
+            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + MESSAGE_BOX_INTERIOR_OFFSET).unwrap(),
+            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + MESSAGE_BOX_INTERIOR_OFFSET).unwrap(),
         )
         .expect("in bounds");
-    let outside = fb.pixel(2, 2).expect("in bounds");
+    let empty_backdrop = fb.pixel(BACKDROP_PROBE, BACKDROP_PROBE).expect("in bounds");
     assert_ne!(
-        inside, outside,
+        message_box_interior, empty_backdrop,
         "the real dialogue box must look different from the empty backdrop around it"
     );
 }
