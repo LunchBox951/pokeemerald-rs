@@ -1,74 +1,84 @@
-//! Borrowed, typed views over a loaded [`AssetPack`](super::AssetPack)'s
-//! entries: [`ImageRef`], [`PaletteRef`], and the bundling [`TilesetHandle`].
+//! Borrowed fields and typed bundles from a loaded [`AssetPack`](super::AssetPack).
+//!
+//! Pack loading validates payload ranges and declared shapes, then accessors
+//! validate entry kinds before constructing these views. Their references point
+//! into the pack's owned bytes and therefore cannot outlive it.
 
-/// A borrowed view over one [`EntryKind::Image`](super::EntryKind::Image)
-/// entry's decoded pixels.
+use std::mem::size_of;
+
+const BYTES_PER_PALETTE_COLOR: usize = size_of::<u16>();
+
+/// A palette-index image borrowing its pixel payload for `'a`.
+///
+/// Pack loading validates the declared shape and bit depth, and
+/// [`AssetPack::image`](super::AssetPack::image) checks the entry kind before
+/// returning this view.
 #[derive(Debug, Clone, Copy)]
 pub struct ImageRef<'a> {
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// The source PNG's bit depth (2, 4, or 8; 2 is the Latin font
-    /// sheets' `gbagfx` shape — see `xtask::extract::png`'s docs) —
-    /// informational.
+    /// Source bit depth: 2, 4, or 8 bits per pixel.
+    ///
+    /// Pack payloads store one palette index byte per pixel at every depth.
     pub bit_depth: u8,
-    /// `width * height` palette-index bytes, row-major.
+    /// Palette indices in row-major order, one byte per pixel.
     pub pixels: &'a [u8],
 }
 
-/// A borrowed view over one [`EntryKind::Palette`](super::EntryKind::Palette)
-/// entry's colours.
+/// A palette borrowing little-endian GBA BGR555 colours for `'a`.
+///
+/// Pack loading validates the declared colour count against the payload length,
+/// and [`AssetPack::palette`](super::AssetPack::palette) checks the entry kind
+/// before returning this view.
 #[derive(Debug, Clone, Copy)]
 pub struct PaletteRef<'a> {
-    /// Number of colours.
+    /// Number of complete colours in the palette.
     pub color_count: u16,
     pub(super) raw: &'a [u8],
 }
 
 impl<'a> PaletteRef<'a> {
-    /// The colour at `index`, as a packed GBA BGR555 value (bits 0-4 red,
-    /// 5-9 green, 10-14 blue), or `None` if out of range.
+    /// Returns the BGR555 colour at `index`, or `None` when out of range.
     #[must_use]
     pub fn color(&self, index: usize) -> Option<u16> {
-        let start = index.checked_mul(2)?;
-        let end = start.checked_add(2)?;
+        let start = index.checked_mul(BYTES_PER_PALETTE_COLOR)?;
+        let end = start.checked_add(BYTES_PER_PALETTE_COLOR)?;
         let bytes = self.raw.get(start..end)?;
         Some(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
-    /// Every colour, in order, as packed GBA BGR555 values.
+    /// Iterates over the palette's BGR555 colours in storage order.
     pub fn colors(&self) -> impl Iterator<Item = u16> + 'a {
         self.raw
-            .chunks_exact(2)
+            .chunks_exact(BYTES_PER_PALETTE_COLOR)
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
     }
 }
 
-/// A tileset's bundled graphics: its tile bitmap, all 16 palette slots, and
-/// its raw metatile tables (see `xtask::extract::mod`'s module docs for
-/// exactly what's in each). `metatiles` stays undecoded (metatile-to-tile
-/// mapping is a future rendering-layer concern); `metatile_attributes` has a
-/// typed view available via
-/// [`metatile_attribute_table`](TilesetHandle::metatile_attribute_table).
+/// Graphics and metatile data borrowing one tileset's payloads for `'a`.
+///
+/// [`AssetPack::tileset`](super::AssetPack::tileset) requires the tile image,
+/// all 16 palettes, and both encoded metatile tables before returning this
+/// handle.
 #[derive(Debug, Clone, Copy)]
 pub struct TilesetHandle<'a> {
-    /// The tileset's tile bitmap.
+    /// Palette-index tile bitmap.
     pub tiles: ImageRef<'a>,
-    /// The tileset's 16 palette slots, in upstream `palettes/00..15` order.
+    /// Sixteen palettes in slot order.
     pub palettes: [PaletteRef<'a>; 16],
-    /// Raw `metatiles.bin` bytes (undecoded).
+    /// Encoded metatile-to-tile mappings.
     pub metatiles: &'a [u8],
-    /// Raw `metatile_attributes.bin` bytes. See
-    /// [`metatile_attribute_table`](TilesetHandle::metatile_attribute_table)
-    /// for the typed decode.
+    /// Encoded metatile attributes.
     pub metatile_attributes: &'a [u8],
 }
 
 impl<'a> TilesetHandle<'a> {
-    /// A typed view over this tileset's `metatile_attributes` bytes,
-    /// indexed by local metatile id. See
-    /// [`crate::metatile_attributes`] for the decode.
+    /// Returns attributes indexed by this tileset's local metatile identity.
+    ///
+    /// The table borrows the pack bytes for `'a`, independently of the handle's
+    /// temporary borrow.
     #[must_use]
     pub const fn metatile_attribute_table(
         &self,
@@ -77,46 +87,34 @@ impl<'a> TilesetHandle<'a> {
     }
 }
 
-/// A message-box/text-window border frame's bundled graphics: its tile
-/// bitmap and its one palette (S-4, issue #114). Bundles
-/// [`AssetPack::text_window_frame`](super::AssetPack::text_window_frame)'s
-/// and [`AssetPack::message_box`](super::AssetPack::message_box)'s image +
-/// palette pair, mirroring [`TilesetHandle`] minus the metatile tables (text
-/// window frames have none). Unlike a tileset's per-slot palettes (which
-/// come from sibling JASC `.pal` files), a frame's palette is read out of
-/// its own PNG's `PLTE` chunk (`xtask::extract::png::decode_palette`) — see
-/// `crate::pack`'s module docs.
+/// A window-frame tile sheet and 16-colour palette borrowing their payloads for
+/// `'a`.
 ///
-/// This crate deliberately stops at the raw tile bitmap: interpreting the
-/// 3x3-tile border layout (which tile goes where relative to a window's
-/// size, per upstream `DrawTextBorderOuter`/`DrawTextBorderInner`,
-/// `pokeemerald/src/text_window.c`) is rendering behaviour, out of scope
-/// here.
+/// [`AssetPack::text_window_frame`](super::AssetPack::text_window_frame) and
+/// [`AssetPack::message_box`](super::AssetPack::message_box) validate the
+/// expected image dimensions, pixel count, palette size, and pixel indices
+/// before returning this handle. Rendering code assigns the tiles to window
+/// positions.
 #[derive(Debug, Clone, Copy)]
 pub struct WindowFrameHandle<'a> {
-    /// The frame's tile bitmap.
+    /// Palette-index tile bitmap.
     pub tiles: ImageRef<'a>,
-    /// The frame's 16-colour palette.
+    /// Palette used by the tile bitmap.
     pub palette: PaletteRef<'a>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PaletteRef;
+    use super::{PaletteRef, BYTES_PER_PALETTE_COLOR};
 
     #[test]
     fn palette_color_returns_none_when_range_end_overflows() {
-        // `index.checked_mul(2)` succeeds here (`usize::MAX - 1`), so a
-        // naive `start + 2` on the following line overflows `usize` before
-        // `.get()` ever gets a chance to reject the out-of-range access —
-        // panicking in overflow-checked builds and wrapping in release,
-        // contradicting `color`'s documented "`None` if out of range"
-        // contract (issue #402).
         let palette = PaletteRef {
             color_count: 1,
             raw: &[0x34, 0x12],
         };
+        let index_with_overflowing_range_end = usize::MAX / BYTES_PER_PALETTE_COLOR;
 
-        assert_eq!(palette.color(usize::MAX / 2), None);
+        assert_eq!(palette.color(index_with_overflowing_range_end), None);
     }
 }
