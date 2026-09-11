@@ -596,14 +596,9 @@ fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
     path
 }
 
-/// Issue #923 regression: the pin above only covers
-/// [`title_music_start_failure_message`]'s pure formatter, not the
-/// `eprintln!` at [`App::start_title_music`]'s own song-start `Err` arm that
-/// actually emits it -- a caller-side `music: ` re-added there would pass
-/// that test unnoticed (`crates/README.md`'s regression-test convention).
 /// Re-executes this test binary as a child against a scratch entryless pack
-/// (pack load succeeds, song lookup fails), so it reads back what the
-/// production `eprintln!` actually wrote.
+/// (pack load succeeds, song lookup fails), because only a subprocess can
+/// read back what [`App::start_title_music`]'s own `eprintln!` wrote.
 #[test]
 fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
     if std::env::var_os(START_TITLE_MUSIC_BOUNDARY_CHILD).is_some() {
@@ -640,14 +635,14 @@ fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bou
     drop(std::fs::remove_file(&pack_path));
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr
-        .lines()
-        .find(|line| line.contains("the title screen will play without music"))
-        .unwrap_or_else(|| panic!("the child never reached the boundary; stderr:\n{stderr}"));
+    assert!(
+        stderr.contains("the title screen will play without music"),
+        "the child never reached the boundary; stderr:\n{stderr}"
+    );
     assert_eq!(
-        line.matches("music:").count(),
+        stderr.matches("music:").count(),
         1,
-        "the eprintln! boundary must name its subsystem once, not once per prefix layer: {line}"
+        "the eprintln! boundary must name its subsystem once across all of stderr, not once per prefix layer:\n{stderr}"
     );
     assert!(
         output.status.success(),
