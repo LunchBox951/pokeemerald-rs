@@ -56,11 +56,8 @@
 //! See [`crate::flow::overworld_phase`]'s `start_menu` module for the gate
 //! that decides when `START` may open one at all.
 //!
-//! `EXIT` closes one tick after its A press (issue #1035): `HandleStartMenuInput`'s A branch
-//! only arms `gMenuCallback = StartMenuExitCallback` and returns `FALSE` (`:607-626`), so the
-//! item window stays drawn for the press frame and the callback closes the menu on the next
-//! tick, reading no input (`:747-752`). `START`/`B` hide the window inline and return `TRUE`
-//! on the press frame (`:629-634`). [`StartMenu::exit_pending`] models the armed callback.
+//! A on `EXIT` only arms `gMenuCallback = StartMenuExitCallback` (`:607-626`), which closes the
+//! menu on the next tick (`:747-752`); `START`/`B` close it on the press frame (`:629-634`).
 
 use assets::pack::PackError;
 use engine::text::render::RevealedGlyph;
