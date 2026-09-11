@@ -248,13 +248,8 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     )
 }
 
-/// The pass/fail logic [`check_overworld_scene`] applies to its two composed
-/// animation-tick probes: each tick's repeated compose must match, and each
-/// tick's frame must clear [`check_overworld_frame_content`].
-///
-/// Factored out from [`check_overworld_scene`] so this is the exact
-/// production check under test -- not a stand-in -- when the unit tests
-/// below probe it with synthetic frames instead of a loaded pack.
+/// Each tick's repeated compose must match, and each tick's frame must
+/// clear [`check_overworld_frame_content`].
 ///
 /// # Errors
 ///
@@ -284,12 +279,8 @@ fn is_blank(frame: &[u32]) -> bool {
     frame.iter().all(|&pixel| pixel == BLACK_PIXEL)
 }
 
-/// The shared content bar every checked overworld animation tick's frame
-/// must clear: non-blank, and carrying map detail outside the avatar.
-///
-/// Applied identically to each probed tick's frame in
-/// [`check_overworld_probe_frames`] so a regression that only corrupts one
-/// tick cannot hide behind a passing check on the other.
+/// A composed overworld frame must be non-blank and carry map detail
+/// outside the avatar.
 ///
 /// # Errors
 ///
