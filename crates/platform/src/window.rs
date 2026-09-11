@@ -107,15 +107,6 @@ impl WinitApp {
         }
     }
 
-    /// Ask `winit` to schedule a `RedrawRequested` callback so an
-    /// OS-driven expose or live-resize redraw re-renders the retained
-    /// frame. A no-op before the window exists.
-    fn request_redraw(&self) {
-        if let Some(inner) = &self.inner {
-            inner.window.request_redraw();
-        }
-    }
-
     /// Render the retained frame, shared by [`Platform::present`] and the
     /// `RedrawRequested` callback so both blit through the same logic.
     ///
@@ -381,7 +372,14 @@ impl Platform {
     /// Returns an error if window or presentation-surface creation failed.
     /// That failure happens asynchronously (once `winit` resumes the app),
     /// so it is only observable via this method's return value, typically
-    /// on the first call. Never errors for the null backend.
+    /// on the first call.
+    ///
+    /// Also returns [`PlatformError::SoftBuffer`] if an OS-driven redraw
+    /// (expose, live-resize) failed to resize or present the surface from
+    /// inside its callback: that callback cannot return an error, so the
+    /// first such failure is recorded and surfaces from the pump that
+    /// follows it. Any call can therefore fail this way, not just the
+    /// first. Never errors for the null backend.
     pub fn pump(&mut self) -> Result<bool, PlatformError> {
         match &mut self.backend {
             Backend::Window(window) => {
@@ -458,9 +456,9 @@ impl Platform {
     /// Present a native 240x160 frame, integer-scaled and letterboxed to fit
     /// the current window size (see [`crate::present`]).
     ///
-    /// Retains and renders `frame`, and schedules a `RedrawRequested`
-    /// callback so a later OS-driven redraw (e.g. expose, live-resize)
-    /// re-renders it too.
+    /// Renders `frame` immediately and retains it, so a later OS-driven
+    /// redraw (e.g. expose, live-resize) can re-present the same pixels
+    /// from its own callback without waiting for the next call.
     ///
     /// A no-op if the window/surface has not been created yet (i.e. before
     /// the first successful [`Platform::pump`]) or the window is currently
@@ -477,7 +475,15 @@ impl Platform {
         match &mut self.backend {
             Backend::Window(window) => {
                 window.app.retain_frame(frame);
-                window.app.request_redraw();
+                // Renders here and now; deliberately does *not* call
+                // `Window::request_redraw`. That would queue a
+                // `RedrawRequested` for the next `pump` to render the frame
+                // a second time, doubling the window-sized blit and surface
+                // present every frame for no visible gain. OS-driven
+                // redraws (expose, live-resize) arrive on their own —
+                // macOS from `drawRect:`, X11 from `Expose`, Wayland from
+                // `configure` — and the `RedrawRequested` arm renders the
+                // retained frame for those.
                 window.app.render_latest()
             }
             Backend::Null { last_presented, .. } => {
