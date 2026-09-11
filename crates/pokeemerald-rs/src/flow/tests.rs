@@ -224,6 +224,77 @@ fn main_menu_load_failure_names_its_subsystem_once() {
     );
 }
 
+/// Set only on the child process re-executed below -- see
+/// `app::tests::START_TITLE_MUSIC_BOUNDARY_CHILD` for why this must not be
+/// an `#[ignore]`d test picked up on its own by CI's blanket `cargo test -p
+/// pokeemerald-rs -- --ignored` real-pack sweep.
+const MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD: &str =
+    "POKEEMERALD_RS_923_MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD";
+
+/// A scratch, valid but entryless asset pack -- see
+/// `app::tests::write_empty_scratch_pack` for the rationale; duplicated
+/// because the two boundary tests live in sibling modules with no shared
+/// test-only module to hold it.
+fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-flow-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let bytes = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    std::fs::write(&path, bytes).expect("the scratch pack path must be writable");
+    path
+}
+
+/// Re-executes this test binary as a child against [`empty_slot`] and a
+/// scratch entryless pack, because only a subprocess can read back what
+/// [`title_to_main_menu`]'s own `eprintln!` wrote.
+#[test]
+fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
+    if std::env::var_os(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD).is_some() {
+        let (_temp, mut save_slot) = empty_slot("main-menu-load-failure-boundary-child");
+        let transitioned =
+            super::title_to_main_menu(crate::pack_source::PackSource::Runtime, &mut save_slot);
+        assert!(
+            transitioned.is_none(),
+            "an entryless pack must fail the main menu load, not build one"
+        );
+        return;
+    }
+
+    let pack_path = write_empty_scratch_pack("main-menu-load-failure-boundary");
+    let exe = std::env::current_exe().expect("the running test binary has a path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "--nocapture",
+            "flow::tests::title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary",
+        ])
+        .env(MAIN_MENU_LOAD_FAILURE_BOUNDARY_CHILD, "1")
+        .env(pack_format::PACK_PATH_ENV, &pack_path)
+        .output()
+        .expect("re-running this test binary must succeed");
+    drop(std::fs::remove_file(&pack_path));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("staying on the title screen"),
+        "the child never reached the boundary; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("main menu:").count(),
+        1,
+        "the eprintln! boundary must name its subsystem once across all of stderr, not once per prefix layer:\n{stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "the child test must pass: status {:?}\nstderr:\n{stderr}",
+        output.status
+    );
+}
+
 /// Issue #795: `advance_scene`'s own `Title` -> `MainMenu` transition --
 /// not a hand-called construction helper -- must border the menu with a
 /// continued save's own `optionsWindowFrameType`

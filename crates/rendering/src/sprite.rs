@@ -261,20 +261,6 @@ impl<'a> SpriteLayer<'a> {
         })
     }
 
-    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`, honoring
-    /// its OBJ mosaic if set: [`Texel::Outside`] beyond the sprite's footprint
-    /// (or with its tile absent from the tileset), [`Texel::Transparent`] on a
-    /// palette-index-0 texel, else [`Texel::Opaque`] with the resolved color.
-    ///
-    /// [`footprint`](Self::footprint) tests the raw coordinate and extends a
-    /// mosaic entry's trailing edge to the next block boundary. A
-    /// [`Regular`](AffineMode::Regular) entry then snaps the block origin
-    /// back into the footprint ([`MosaicSize::snap_local`]), an affine entry
-    /// holds the transformed source position across the block
-    /// ([`sample_affine_local`](Self::sample_affine_local)), and an
-    /// [`ObjMode::Window`] entry keeps only the vertical snap
-    /// ([`MosaicSize::vertical_only`]). The upstream contract behind each
-    /// branch is the ledger's `oam_mosaic` reason.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
@@ -291,6 +277,7 @@ impl<'a> SpriteLayer<'a> {
             return Texel::Outside;
         };
         if entry.mode() == ObjMode::Window {
+            // mGBA applies only vertical mosaic to OBJ-window sampling (`video-software.c:1027,1042-1050`; `software-obj.c:287-304,344-361`).
             let vertical_only = mosaic.vertical_only();
             if matches!(entry.affine(), AffineMode::Regular) {
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
@@ -306,32 +293,11 @@ impl<'a> SpriteLayer<'a> {
         }
     }
 
-    /// Whether framebuffer coordinate `(x, y)` lands on `entry`'s footprint —
-    /// its raw bounding box, extended past the raw right edge out to the next
-    /// H mosaic-block boundary when `mosaic` is not [`MosaicSize::NONE`] — and
-    /// if so its footprint-local offset `(dx, dy)`. `dx` is `< bounding box`
-    /// for a raw-footprint hit, but can run past it (up to the mosaic-block
-    /// boundary) for a trailing mosaic sample; a
-    /// [`Regular`](AffineMode::Regular) entry's [`MosaicSize::snap_local`]
-    /// clamps it back before it reaches [`sample_local`](Self::sample_local),
-    /// while an affine entry's [`sample_affine_local`](Self::sample_affine_local)
-    /// transforms the oversized `dx` and rejects it after, unclamped, per
-    /// mgba's transformed mosaic loop.
-    ///
-    /// `x`/`y` are framebuffer coordinates (`<240`, `<160`) — enforced by
-    /// [`resolve_pixel_inner`](Self::resolve_pixel_inner) and
-    /// [`objwin_mask_inner`](Self::objwin_mask_inner), the only callers that
-    /// reach this method, both of which reject an out-of-framebuffer `(x,
-    /// y)` before admission or sampling. Sprite dimensions never exceed 64,
-    /// and OBJ mosaic block sizes never exceed 16 (`MosaicSize`'s 4-bit
-    /// register field), so the `i32` round-trips below — including the
-    /// mosaic-extended `dx` — never truncate, wrap, or lose their sign; the
-    /// `#[allow]`s document that, rather than threading `TryFrom` through
-    /// arithmetic that cannot actually fail here.
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "framebuffer coordinates, OBJ bounds, and mosaic spill fit in i32"
     )]
     fn footprint(
         entry: &OamEntry,
@@ -339,70 +305,29 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Option<(usize, usize)> {
-        // Footprint clipping uses the *bounding box* — equal to
-        // `entry.dimensions()` for a regular or plain-affine sprite, but
-        // doubled for `AffineMode::AffineDoubleSize` (oam.rs's module docs)
-        // — so a double-size sprite's larger on-screen box is honored before
-        // any affine-specific sampling happens.
         let (width, _height) = entry.bounding_box();
 
-        // X: no positional wrap (the 9-bit field already decoded to a
-        // signed screen position, see oam.rs's module docs) — just
-        // offset+clip. A raw miss past the right edge (`dx >= width`) is not
-        // necessarily a footprint miss: OBJ mosaic draws through to the next
-        // H mosaic-block boundary past the raw edge (mgba's `SPRITE_MOSAIC_LOOP`
-        // and `SPRITE_TRANSFORMED_MOSAIC_LOOP` share this `condition` rounding,
-        // software-obj.c:236-239, 320-325), so accept it there too —
-        // `sample_entry_mosaic` resolves the oversized `dx` per affine mode
-        // (`sample_local`'s edge clamp or `sample_affine_local`'s
-        // transform-then-reject). At `MosaicSize::NONE` (or a raw-footprint
-        // hit) this extension is a no-op: only an entry with its own mosaic
-        // bit set reaches this branch with a non-`NONE` `mosaic`
-        // (`sample_entry_mosaic`).
         let entry_x = i32::from(entry.x());
         let dx = x as i32 - entry_x;
         if dx < 0 {
             return None;
         }
         if dx as usize >= width {
+            // mGBA rounds a mosaic OBJ's trailing edge to a screen-aligned block (`software-obj.c:236-239,320-325`).
             let raw_end = entry_x + width as i32;
             if x as i32 >= mosaic.round_trailing_edge(raw_end) {
                 return None;
             }
         }
 
-        // Y: delegated to `OamEntry::vertical_offset`, the single source of
-        // truth for "does this sprite reach scanline y" — also consulted by
-        // the OAM admission stage (`oam_budget.rs`, S-2 issue #329) to decide
-        // whether an entry is vertically off-scanline. Its own docs cover the
-        // single-contiguous-band wrap rule (a 128-tall double-size OBJ at raw
-        // Y in 129..159 must render only its top-wrapped rows, never a second
-        // band down at its raw Y — the modulo-per-scanline reading drew both).
         let dy = entry.vertical_offset(y)?;
         Some((dx as usize, dy))
     }
 
-    /// Fetch a [`Regular`](AffineMode::Regular) entry's texel at
-    /// footprint-local offset `(dx, dy)`. `dy` is always inside the bounding
-    /// box (from [`footprint`](Self::footprint)); `dx` usually is too, but
-    /// an [`ObjMode::Window`] entry's mosaic-rounded trailing block
-    /// (`sample_entry_mosaic`) can push it past `width - 1` — mgba's
-    /// unclamped `inX` for that case addresses on past the sprite's own
-    /// tiles, forwards into the next in-VRAM tile or, under H flip,
-    /// backwards into the previous one, which the signed column and
-    /// tile-index wrap below reproduce in both directions. Applies H/V flip
-    /// and tile addressing; an affine entry never reaches this method — see
-    /// [`sample_affine_local`](Self::sample_affine_local).
-    ///
-    /// Sprite dimensions never exceed 64 and an OBJ mosaic block never
-    /// exceeds 16 (`MosaicSize`'s 4-bit register field), so the signed
-    /// column spans `-16..80` and the tile offset `-2..72`, so the casts
-    /// below neither truncate nor wrap; only the derived tile index is meant
-    /// to (`OamEntry::tile_index` is a 10-bit field).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        reason = "documented above: every value here is bounded well inside i16"
+        reason = "OBJ bounds plus mosaic spill keep every tile offset within i16"
     )]
     fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
         const DIM: usize = BitDepth::TILE_DIM;
@@ -412,43 +337,32 @@ impl<'a> SpriteLayer<'a> {
         );
         let (width, height) = entry.bounding_box();
 
-        // H/V flip mirrors the whole sprite footprint, not each tile
-        // independently (unlike a BG ScreenEntry's per-tile flip bits). The
-        // mirrored column is signed because an OBJ-window trailing block's
-        // `dx` can exceed `width - 1`: mgba's h-flip walk decrements a raw
-        // `inX` straight past 0 into negative source columns, addressing the
-        // tiles *before* the sprite's own exactly as the unflipped walk
-        // addresses those after it.
-        let local_col = if entry.h_flip() {
+        // Regular OBJ flips mirror the complete sprite, not each tile.
+        let source_x = if entry.h_flip() {
             width as i32 - 1 - dx as i32
         } else {
             dx as i32
         };
-        let local_row = if entry.v_flip() { height - 1 - dy } else { dy };
+        let source_y = if entry.v_flip() { height - 1 - dy } else { dy };
 
-        let tiles_per_row = width / DIM;
-        let tile_col = local_col.div_euclid(DIM as i32);
-        let tile_row = local_row / DIM;
-        let tile_offset = (tile_row * tiles_per_row) as i32 + tile_col;
-        // A multi-tile sprite's derived tile index wraps within the 32 KiB
-        // OBJ VRAM window (mgba's `(xBase + charBase) & maskLo` byte-address
-        // wrap), so a base index near either end of OBJ tile space rolls over
-        // rather than reading past it — the mask depends on bit depth (see
-        // [`BitDepth::obj_tile_index_mask`]).
+        let tile_columns = width / DIM;
+        let tile_x = source_x.div_euclid(DIM as i32);
+        let tile_y = source_y / DIM;
+        let tile_offset = (tile_y * tile_columns) as i32 + tile_x;
         let bit_depth = entry.bit_depth();
-        let tile_idx = entry.tile_index().wrapping_add_signed(tile_offset as i16)
+        // Derived tile indices wrap inside the 32 KiB OBJ character window.
+        let tile_index = entry.tile_index().wrapping_add_signed(tile_offset as i16)
             & bit_depth.obj_tile_index_mask();
 
         let tileset = match bit_depth {
             BitDepth::Bpp4 => self.tileset_4bpp,
             BitDepth::Bpp8 => self.tileset_8bpp,
         };
-        let Some(tile) = tileset.tile(tile_idx) else {
+        let Some(tile) = tileset.tile(tile_index) else {
             return Texel::Outside;
         };
-        let index = tile.index(local_col.rem_euclid(DIM as i32) as usize, local_row % DIM);
-        // Palette index 0 is transparent, in every bank and for 8bpp, same
-        // as a regular BG (see bg.rs's sample_pixel).
+        let index = tile.index(source_x.rem_euclid(DIM as i32) as usize, source_y % DIM);
+        // Hardware reserves palette index zero as transparent at both depths.
         if index == 0 {
             return Texel::Transparent;
         }
@@ -459,17 +373,8 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Fetch an affine (or affine-double-size) entry's texel at
-    /// footprint-local offset `(dx, dy)`, honoring OBJ mosaic. H/V flip does
-    /// not apply (the matrix supplies any mirroring; oam.rs's module docs),
-    /// so this stays out of [`sample_local`](Self::sample_local) and defers
-    /// to `sprite_affine.rs`, kept out of this already-large module.
-    ///
-    /// The row snaps like a regular entry's ([`MosaicSize::snap_local`]);
-    /// the column holds the transformed source position across a block, and
-    /// a leading block that starts before the sprite's edge holds the
-    /// column one before it (the ledger's `oam_mosaic` reason). At
-    /// [`MosaicSize::NONE`] `local_x` is the raw `dx`.
+    /// Samples an affine entry from one footprint-local coordinate for each
+    /// horizontal mosaic block.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -484,15 +389,16 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        let (_, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+        const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
 
-        // `software-obj.c:241` seeds the held column at `inX - 1`.
+        let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
         let block_origin_x = mosaic.snap(x, y).0 as i32;
         let local_x = if block_origin_x >= entry_x {
             block_origin_x - entry_x
         } else {
-            -1
+            // mGBA seeds a leading partial block from `inX - 1` (`software-obj.c:241`).
+            LOCAL_COLUMN_BEFORE_FOOTPRINT
         };
 
         sprite_affine::sample_texel(
@@ -502,7 +408,7 @@ impl<'a> SpriteLayer<'a> {
             self.tileset_8bpp,
             self.palette,
             local_x,
-            ly,
+            local_y,
         )
     }
 }
@@ -614,18 +520,9 @@ mod tests {
         layer.composite(&mut fb);
 
         assert_eq!(fb.pixel(0, 0), Some(backdrop));
-        assert_eq!(
-            fb.pixel(1, 0),
-            Some(Bgr555::from_channels(0x1F, 0, 0).to_rgb888())
-        );
-        assert_eq!(
-            fb.pixel(0, 1),
-            Some(Bgr555::from_channels(0, 0x1F, 0).to_rgb888())
-        );
-        assert_eq!(
-            fb.pixel(1, 1),
-            Some(Bgr555::from_channels(0, 0, 0x1F).to_rgb888())
-        );
+        assert_eq!(fb.pixel(1, 0), Some(RED.to_rgb888()));
+        assert_eq!(fb.pixel(0, 1), Some(GREEN.to_rgb888()));
+        assert_eq!(fb.pixel(1, 1), Some(BLUE.to_rgb888()));
     }
 
     fn corner_marked_tile() -> [u8; BPP4_TILE_BYTES] {
@@ -654,14 +551,14 @@ mod tests {
         let entries = [OamEntry::new(
             0,
             0,
-            0,
-            0,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
-            true, // h_flip
+            true,
             false,
             ObjShape::Square,
-            0,
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
@@ -669,16 +566,8 @@ mod tests {
         let mut fb = Framebuffer::new();
         layer.composite(&mut fb);
 
-        // Unflipped (7,0)=green is now at (0,0); unflipped (0,0)=red is now
-        // at (7,0).
-        assert_eq!(
-            fb.pixel(0, 0),
-            Some(Bgr555::from_channels(0, 0x1F, 0).to_rgb888())
-        );
-        assert_eq!(
-            fb.pixel(7, 0),
-            Some(Bgr555::from_channels(0x1F, 0, 0).to_rgb888())
-        );
+        assert_eq!(fb.pixel(0, 0), Some(GREEN.to_rgb888()));
+        assert_eq!(fb.pixel(7, 0), Some(RED.to_rgb888()));
     }
 
     #[test]
@@ -688,14 +577,14 @@ mod tests {
         let entries = [OamEntry::new(
             0,
             0,
-            0,
-            0,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             false,
-            true, // v_flip
+            true,
             ObjShape::Square,
-            0,
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
@@ -703,76 +592,66 @@ mod tests {
         let mut fb = Framebuffer::new();
         layer.composite(&mut fb);
 
-        // Unflipped (0,7)=blue is now at (0,0); unflipped (0,0)=red is now
-        // at (0,7).
-        assert_eq!(
-            fb.pixel(0, 0),
-            Some(Bgr555::from_channels(0, 0, 0x1F).to_rgb888())
-        );
-        assert_eq!(
-            fb.pixel(0, 7),
-            Some(Bgr555::from_channels(0x1F, 0, 0).to_rgb888())
-        );
+        assert_eq!(fb.pixel(0, 0), Some(BLUE.to_rgb888()));
+        assert_eq!(fb.pixel(0, 7), Some(RED.to_rgb888()));
     }
 
     #[test]
     fn composite_clips_a_sprite_partially_off_the_left_edge() {
-        // x=-4 means only the sprite's rightmost 4 columns (local col 4..8)
-        // are on-screen, landing at framebuffer x=0..4.
-        let mut bytes = [0xFFu8; 32]; // every pixel index 15 (opaque)
-        bytes[0] = 0x00; // still make col0-1 of row0 transparent as a marker
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
-        let palette = Palette::new(colors);
+        const NEGATIVE_FOUR_RAW_X: u16 = 508;
+        const SOURCE_X_AT_SCREEN_EDGE: usize = 4;
 
-        let entries = [entry(0x1FC /* 508 -> -4 */, 0, true)];
+        // The whole first row is opaque, so a sampler that ran past the
+        // sprite's width would paint the backdrop at screen x=4.
+        let opaque_row: Vec<((usize, usize), u8)> = (0..BitDepth::TILE_DIM)
+            .map(|x| ((x, 0), RED_INDEX))
+            .collect();
+        let tile = bpp4_tile(&opaque_row);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let mut fb = Framebuffer::new();
-        layer.composite(&mut fb); // must not panic
+        layer.composite(&mut fb);
 
-        // Local col 4 (on-screen col 0) is opaque (index 15).
-        assert_eq!(fb.pixel(0, 0), Some(colors[15].to_rgb888()));
-        // Local col 8 would be off the 8-wide sprite; on-screen col 4 must
-        // stay untouched (default black backdrop).
-        assert_eq!(fb.pixel(4, 0), Some(Rgb888::BLACK));
+        assert_eq!(fb.pixel(0, 0), Some(RED.to_rgb888()));
+        assert_eq!(
+            fb.pixel(SOURCE_X_AT_SCREEN_EDGE - 1, 0),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(fb.pixel(SOURCE_X_AT_SCREEN_EDGE, 0), Some(Rgb888::BLACK));
     }
 
     #[test]
     fn composite_wraps_a_sprite_hanging_off_the_bottom_to_the_top() {
-        // y=250 with an 8-tall sprite: 250+8>256, so the box is placed once
-        // at negative origin y0 = 250-256 = -6, covering screen rows -6..2,
-        // i.e. only rows 0..1 on-screen. Screen row 0 -> dy = 0 - (-6) = 6, so
-        // an opaque pixel at tile row 6 must be visible at screen row 0.
-        let mut bytes = [0u8; 32];
-        bytes[6 * 4] = 0x11; // tile row 6, col 0 -> index 1 (opaque)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
+        const WRAPPED_RAW_Y: u8 = 250;
+        const SOURCE_ROW_AT_SCREEN_TOP: usize = 6;
+        const ROW_BELOW_WRAPPED_FOOTPRINT: usize = 5;
+        const UNRELATED_SCREEN_ROW: usize = 100;
 
-        let entries = [entry(0, 250, true)];
+        let tile = bpp4_tile(&[((0, SOURCE_ROW_AT_SCREEN_TOP), RED_INDEX)]);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(0, WRAPPED_RAW_Y, true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[1].to_rgb888())
+            Some(RED.to_rgb888())
         );
-        // Screen row 5 -> dy = 5 - (-6) = 11, past the 8-tall footprint
-        // (>= height), so nothing is drawn there.
-        assert_eq!(layer.resolve_pixel(0, 5), None);
-        // The single-band rule must also leave screen row 100 (far from both
-        // the wrapped top band and the raw Y=250 origin) empty.
-        assert_eq!(layer.resolve_pixel(0, 100), None);
+        assert_eq!(layer.resolve_pixel(0, ROW_BELOW_WRAPPED_FOOTPRINT), None);
+        assert_eq!(
+            layer.resolve_pixel(0, UNRELATED_SCREEN_ROW),
+            None,
+            "Y wrapping creates one contiguous footprint"
+        );
     }
 
     #[test]
     fn composite_disabled_sprite_draws_nothing() {
-        let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
-        let palette = Palette::new(colors);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &solid_4bpp_tile(RED_INDEX)).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
         let entries = [entry(0, 0, false)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
@@ -830,40 +709,41 @@ mod tests {
 
     #[test]
     fn multi_tile_sprite_addresses_tiles_row_major_from_its_base_index() {
-        // A 16x8 (2 tiles wide, 1 tall) sprite: tile 5 (top-left, opaque
-        // red) then tile 6 (top-right, opaque green), matching 1D OBJ
-        // character mapping's contiguous row-major layout.
-        let mut tiles = vec![0u8; 32 * 7];
-        tiles[5 * 32] = 0x11; // tile 5, pixel(0,0) index 1
-        tiles[6 * 32] = 0x22; // tile 6, pixel(0,0) index 2
+        const BASE_TILE: u16 = 5;
+        const NEXT_TILE: u16 = BASE_TILE + 1;
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let tile_count = usize::from(NEXT_TILE) + 1;
+        let mut tiles = vec![0u8; BPP4_TILE_BYTES * tile_count];
+        let base_start = usize::from(BASE_TILE) * BPP4_TILE_BYTES;
+        let next_start = usize::from(NEXT_TILE) * BPP4_TILE_BYTES;
+        tiles[base_start] = RED_INDEX;
+        tiles[next_start] = GREEN_INDEX;
         let tileset = Tileset::decode(BitDepth::Bpp4, &tiles).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        let palette = Palette::new(colors);
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
 
         let entries = [OamEntry::new(
             0,
             0,
-            5,
-            0,
+            BASE_TILE,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             false,
             false,
             ObjShape::Horizontal,
-            0, // 16x8
-            0,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[1].to_rgb888())
+            Some(RED.to_rgb888())
         );
         assert_eq!(
             layer.resolve_pixel(8, 0).map(|p| p.color),
-            Some(colors[2].to_rgb888())
+            Some(GREEN.to_rgb888())
         );
     }
 
@@ -970,358 +850,302 @@ mod tests {
 
     #[test]
     fn multi_tile_sprite_wraps_a_4bpp_tile_index_off_the_end_of_obj_vram() {
-        // Finding 2: a 16x8 (2-tile-wide) 4bpp sprite based at tile 1023 —
-        // the last 4bpp OBJ tile. Its left half reads tile 1023; its right
-        // half's derived index 1024 must wrap modulo 1024 back to tile 0
-        // rather than falling off the end and vanishing.
-        let mut tiles = vec![0u8; 32 * 1024]; // all 1024 4bpp OBJ tiles
-        tiles[0] = 0x11; // tile 0, pixel(0,0) -> index 1 (green)
-        tiles[1023 * 32] = 0x22; // tile 1023, pixel(0,0) -> index 2 (red)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &tiles).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0, 0x1F, 0); // green (tile 0)
-        colors[2] = Bgr555::from_channels(0x1F, 0, 0); // red (tile 1023)
-        let palette = Palette::new(colors);
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let bit_depth = BitDepth::Bpp4;
+        let tile_count = usize::from(bit_depth.obj_tile_index_mask()) + 1;
+        let last_tile = bit_depth.obj_tile_index_mask();
+        let last_tile_start = usize::from(last_tile) * BPP4_TILE_BYTES;
+        let mut tiles = vec![0u8; BPP4_TILE_BYTES * tile_count];
+        tiles[0] = GREEN_INDEX;
+        tiles[last_tile_start] = RED_INDEX;
+        let tileset = Tileset::decode(bit_depth, &tiles).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
 
         let entries = [OamEntry::new(
             0,
             0,
-            1023,
-            0,
-            BitDepth::Bpp4,
+            last_tile,
+            FIRST_PALETTE_BANK,
+            bit_depth,
             false,
             false,
             ObjShape::Horizontal,
-            0, // 16x8
-            0,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[2].to_rgb888()),
-            "left half reads base tile 1023"
+            Some(RED.to_rgb888())
         );
         assert_eq!(
             layer.resolve_pixel(8, 0).map(|p| p.color),
-            Some(colors[1].to_rgb888()),
-            "right half's index 1024 wraps to tile 0, not dropped"
+            Some(GREEN.to_rgb888())
         );
     }
 
     #[test]
     fn multi_tile_sprite_wraps_an_8bpp_tile_index_off_the_end_of_obj_vram() {
-        // Finding 2, 8bpp: OBJ VRAM holds 512 native 8bpp tiles, so a 16x8
-        // sprite based at tile 511 wraps its right half (derived index 512)
-        // modulo 512 back to tile 0.
-        let mut tiles = vec![0u8; 64 * 512]; // all 512 8bpp OBJ tiles
-        tiles[0] = 100; // tile 0, pixel(0,0) -> index 100
-        tiles[511 * 64] = 200; // tile 511, pixel(0,0) -> index 200
-        let tileset = Tileset::decode(BitDepth::Bpp8, &tiles).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[100] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[200] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
+        const HORIZONTAL_16_BY_8_SIZE: u8 = 0;
+
+        let bit_depth = BitDepth::Bpp8;
+        let tile_bytes = bit_depth.tile_byte_len();
+        let tile_count = usize::from(bit_depth.obj_tile_index_mask()) + 1;
+        let last_tile = bit_depth.obj_tile_index_mask();
+        let last_tile_start = usize::from(last_tile) * tile_bytes;
+        let mut tiles = vec![0u8; tile_bytes * tile_count];
+        tiles[0] = GREEN_INDEX;
+        tiles[last_tile_start] = RED_INDEX;
+        let tileset = Tileset::decode(bit_depth, &tiles).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
 
         let entries = [OamEntry::new(
             0,
             0,
-            511,
-            0,
-            BitDepth::Bpp8,
+            last_tile,
+            FIRST_PALETTE_BANK,
+            bit_depth,
             false,
             false,
             ObjShape::Horizontal,
-            0, // 16x8
-            0,
+            HORIZONTAL_16_BY_8_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
-        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap();
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
         let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[200].to_rgb888()),
-            "left half reads base tile 511"
+            Some(RED.to_rgb888())
         );
         assert_eq!(
             layer.resolve_pixel(8, 0).map(|p| p.color),
-            Some(colors[100].to_rgb888()),
-            "right half's index 512 wraps to tile 0, not dropped"
+            Some(GREEN.to_rgb888())
         );
     }
 
-    #[test]
-    fn mosaic_sprite_leading_partial_block_replicates_the_edge_column() {
-        // Finding 1: OBJ mosaic with a sprite whose left edge is not
-        // block-aligned. mosaicH=4, sprite x=2: the screen-aligned block [0,4)
-        // straddles the sprite's leading edge (only screen x=2,3 sit on the
-        // sprite). mgba clamps the snapped sample coordinate back into the
-        // footprint — `localX` to `[0, width-1]` (software-obj.c:20-25) — so
-        // that partial block samples the sprite's edge column (local col 0) and
-        // stays visible. The pre-fix screen-space snap floored to block origin
-        // 0, which fell outside the footprint and was discarded, leaving a
-        // transparent leading band.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)   -- the edge column
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green) -- first full block
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
-        let palette = Palette::new(colors);
-
-        let entries = [entry(2, 0, true).with_mosaic(true)];
-        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        // 4-wide blocks horizontally; no vertical mosaic (isolate the H edge).
-        let mosaic = MosaicSize::new(4, 1);
-
-        // Leading partial block (screen x = 2, 3): must replicate the edge
-        // column (local col 0 = red), not stay transparent.
-        assert_eq!(
-            layer.resolve_pixel_with_mosaic(2, 0, mosaic).map(|p| p.color),
-            Some(colors[1].to_rgb888()),
-            "the block straddling the leading edge must show the edge column, not a transparent band"
-        );
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(3, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[1].to_rgb888()),
-        );
-
-        // Interior block [4,8): its origin is inside the footprint, so it still
-        // samples local col 2 (green) exactly as the pre-fix screen-space snap
-        // did — interior behavior is unchanged.
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(4, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[2].to_rgb888()),
-            "interior block still samples its block-origin column (unchanged)"
-        );
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(7, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[2].to_rgb888()),
-        );
+    fn horizontal_mosaic_fixture() -> ([u8; BPP4_TILE_BYTES], Palette) {
+        (
+            bpp4_tile(&[
+                ((0, 0), RED_INDEX),
+                ((2, 0), GREEN_INDEX),
+                ((6, 0), BLUE_INDEX),
+            ]),
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN), (BLUE_INDEX, BLUE)]),
+        )
     }
 
     #[test]
-    fn mosaic_sprite_trailing_partial_block_extends_past_the_raw_edge() {
-        // Issue #132: an opaque regular 8x8 OBJ at decoded x = -4 (raw OAM
-        // field 0x1fc) with H mosaic size 3. The sprite's raw right edge sits
-        // at screen x = 4 (-4 + 8); mgba rounds that up to the next mosaic-H
-        // boundary (6) and keeps drawing through it, clamping every sample
-        // past the raw edge (screen x = 3, 4, 5) to the edge column (local
-        // col 7) — screen x = 6 falls outside the rounded block and must stay
-        // uncovered.
-        // Every texel -> index 1 (opaque), both nibbles.
-        let bytes = [0x11u8; 32];
+    fn regular_mosaic_leading_partial_block_replicates_the_edge_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F); // opaque white
-        let palette = Palette::new(colors);
-
-        let entries = [entry(0x1fc, 0, true).with_mosaic(true)];
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(3, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        // Screen x = 0..=5 must all resolve opaque: 0..=2 sample the raw
-        // footprint directly (pre-fix behavior, unchanged), 3..=5 fall in the
-        // rounded trailing block and must now extend past the raw edge
-        // (screen x = 4) instead of the pre-fix `None`.
-        for x in 0..=5 {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "screen x = {x} must be covered by the trailing mosaic block"
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        // Screen x = 6 is past the rounded block boundary (6) and must stay
-        // outside the sprite's footprint entirely.
-        assert_eq!(
-            layer.resolve_pixel_with_mosaic(6, 0, mosaic),
-            None,
-            "screen x = 6 is past the rounded trailing block and must not be covered"
-        );
-    }
-
-    #[test]
-    fn mosaic_sprite_leading_partial_block_is_unaffected_by_the_affine_split() {
-        // Guard for the affine/regular split in `sample_entry_mosaic` and
-        // `sample_affine_local`: the same x = 2, mosaicH = 4 geometry as
-        // `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
-        // on a `Regular` entry must still replicate the edge column — the
-        // new affine dispatch must leave this path untouched.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
-
-        let entries = [entry(2, 0, true).with_mosaic(true)];
-        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
-
-        for x in [2, 3] {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "regular-sprite leading block still replicates the edge column"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_mosaic_trailing_partial_block_extends_past_the_raw_edge() {
+        const NEGATIVE_FOUR_RAW_X: u16 = 0x01FC;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 3;
+        const LAST_COVERED_X: usize = 5;
+        const FIRST_UNCOVERED_X: usize = 6;
+
+        let bytes = solid_4bpp_tile(RED_INDEX);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+
+        for x in 0..=LAST_COVERED_X {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(FIRST_UNCOVERED_X, 0, mosaic),
+            None,
+            "screen x = {FIRST_UNCOVERED_X}"
+        );
+    }
+
+    #[test]
+    fn regular_mosaic_leading_partial_block_uses_the_nearest_source_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_mosaic_leading_partial_block_leaves_the_source_unwritten() {
-        // Same geometry as `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
-        // (8x8 OBJ at screen x = 2, mosaicH = 4, so the screen-aligned block
-        // [0,4) straddles the sprite's left edge) but affine with the
-        // identity matrix. mgba's `SPRITE_TRANSFORMED_MOSAIC_LOOP`
-        // (software-obj.c:49-70) holds the transform from one column before
-        // the footprint for a block whose screen-space origin precedes the
-        // sprite's edge, instead of the regular loop's edge clamp; for this
-        // geometry that transforms to source col -1, outside the texture, so
-        // the block draws nothing at all rather than replicating col 0.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
 
-        let entries = [entry(2, 0, true)
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
         let matrices = [AffineMatrix::IDENTITY];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        for x in [2, 3] {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer.resolve_pixel_with_mosaic(x, 0, mosaic),
                 None,
-                "screen x = {x}: the leading block holds the transform one \
-                 column before the footprint, out of source bounds here, so \
-                 it must stay unwritten instead of replicating col 0"
+                "screen x = {x}"
             );
         }
-        for x in 4..=7 {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[2].to_rgb888()),
-                "screen x = {x} samples source col 2"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 8..=11 {
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[3].to_rgb888()),
-                "screen x = {x} samples source col 6"
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_mosaic_leading_partial_block_holds_the_transform_not_the_footprint_edge() {
-        // Same x = 2, mosaicH = 4 geometry, but a non-identity (2x magnify)
-        // matrix, showing the held position tracks the matrix rather than
-        // coincidentally landing out of bounds. Row 2 (this matrix maps row
-        // 0 to source row 2) is marked at column 0 (yellow — what clamping
-        // to the footprint edge, local col 0, would sample) and columns 1,
-        // 3, 5 (red/green/blue — the transformed positions this test
-        // expects for the leading, interior, and trailing blocks).
-        let mut bytes = [0u8; 32];
-        let row2 = 2 * (BitDepth::TILE_DIM / 2);
-        bytes[row2] = 0x14; // col 0 -> index 4 (yellow), col 1 -> index 1 (red)
-        bytes[row2 + 1] = 0x20; // col 3 -> index 2 (green)
-        bytes[row2 + 2] = 0x30; // col 5 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        colors[4] = Bgr555::from_channels(0x1F, 0x1F, 0);
-        let palette = Palette::new(colors);
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+        const TRANSFORMED_SOURCE_ROW: usize = 2;
 
-        let entries = [entry(2, 0, true)
+        let bytes = bpp4_tile(&[
+            ((0, TRANSFORMED_SOURCE_ROW), YELLOW_INDEX),
+            ((1, TRANSFORMED_SOURCE_ROW), RED_INDEX),
+            ((3, TRANSFORMED_SOURCE_ROW), GREEN_INDEX),
+            ((5, TRANSFORMED_SOURCE_ROW), BLUE_INDEX),
+        ]);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[
+            (RED_INDEX, RED),
+            (GREEN_INDEX, GREEN),
+            (BLUE_INDEX, BLUE),
+            (YELLOW_INDEX, YELLOW),
+        ]);
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
-        let magnify = AffineMatrix::ONE / 2;
-        let matrices = [AffineMatrix::new(magnify, 0, 0, magnify)];
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        let matrices = [AffineMatrix::new(
+            two_times_magnification,
+            0,
+            0,
+            two_times_magnification,
+        )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        for x in [2, 3] {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "screen x = {x} holds the transform at source col 1, not the \
-                 clamped footprint edge (col 0, yellow)"
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 4..=7 {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[2].to_rgb888()),
-                "screen x = {x} samples source col 3"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 8..=11 {
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[3].to_rgb888()),
-                "screen x = {x} samples source col 5"
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_objwin_mask_ignores_horizontal_obj_mosaic() {
-        let bytes = bpp4_tile(&[((0, 0), 1), ((2, 0), 2), ((6, 0), 3)]);
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
-        let entries = [entry(2, 0, true)
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
         let matrices = [AffineMatrix::IDENTITY];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
-        for x in 0..16 {
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
             assert_eq!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
                 layer.objwin_mask(x, 0),
                 "screen x = {x}"
             );
@@ -1333,6 +1157,7 @@ mod tests {
         const SPRITE_X: u16 = 2;
         const RAW_END_X: usize = 10;
         const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
 
         let mut bytes = [0u8; 64];
         bytes[..32].copy_from_slice(&solid_4bpp_tile(1));
@@ -1343,7 +1168,7 @@ mod tests {
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
 
         for x in usize::from(SPRITE_X)..RAW_END_X {
             assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
@@ -1362,6 +1187,7 @@ mod tests {
         const OPAQUE_WRAPPED_TAIL_X: usize = 10;
         const TRANSPARENT_WRAPPED_TAIL_X: usize = 11;
         const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
 
         let mut bytes = [0u8; 64];
         bytes[..32].copy_from_slice(&bpp4_tile(&[((7, 0), 1)]));
@@ -1372,19 +1198,19 @@ mod tests {
             SPRITE_X,
             0,
             SPRITE_TILE_INDEX,
-            0,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             true,
             false,
             ObjShape::Square,
-            0,
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )
         .with_mode(ObjMode::Window)
         .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
 
         for x in usize::from(SPRITE_X)..RAW_END_X {
             assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
@@ -1396,17 +1222,20 @@ mod tests {
 
     #[test]
     fn regular_objwin_mask_ignores_horizontal_obj_mosaic() {
-        let bytes = bpp4_tile(&[((0, 0), 1), ((2, 0), 2), ((6, 0), 3)]);
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
-        let entries = [entry(2, 0, true)
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
-        for x in 0..16 {
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
             assert_eq!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
                 layer.objwin_mask(x, 0),
                 "screen x = {x}"
             );
@@ -1416,6 +1245,7 @@ mod tests {
     #[test]
     fn objwin_mask_still_applies_vertical_obj_mosaic() {
         const OPAQUE_SOURCE_ROW: usize = 1;
+        const VERTICAL_MOSAIC_SIZE: u8 = 4;
 
         let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
         let palette = quadrant_palette();
@@ -1425,37 +1255,40 @@ mod tests {
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert!(layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::NONE));
-        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::new(1, 4)));
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, vertical_mosaic));
     }
 
     #[test]
     fn composite_8bpp_sprite_uses_the_flat_palette_and_its_own_tileset() {
-        let mut bytes = [0u8; 64];
-        bytes[0] = 200;
+        const FLAT_PALETTE_INDEX: u8 = 200;
+        const IGNORED_4BPP_PALETTE_BANK: u8 = 3;
+
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len()];
+        bytes[0] = FLAT_PALETTE_INDEX;
         let tileset_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
-        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[200] = Bgr555::from_channels(0x1F, 0x10, 0);
-        let palette = Palette::new(colors);
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
+        let palette = palette_with_colors(&[(FLAT_PALETTE_INDEX, RED)]);
 
         let entries = [OamEntry::new(
             0,
             0,
-            0,
-            3, // palette bank bits set but must be ignored for 8bpp
+            FIRST_TILE,
+            IGNORED_4BPP_PALETTE_BANK,
             BitDepth::Bpp8,
             false,
             false,
             ObjShape::Square,
-            0,
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )];
         let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset_8bpp, &palette);
 
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
-            Some(colors[200].to_rgb888())
+            Some(RED.to_rgb888())
         );
     }
 

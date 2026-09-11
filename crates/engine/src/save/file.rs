@@ -2,11 +2,15 @@
 //!
 //! This module resolves save paths, performs exact-length reads, and provides
 //! locking and atomic writes. Save contents and slot validation remain owned by
-//! [`SaveStore`].
+//! [`SaveStore`]; the sibling entry a write is staged into is owned by
+//! [`staging`].
+
+mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
 /// Environment variable containing an explicit save-file path.
@@ -58,7 +62,7 @@ pub enum SaveFileError {
         /// Required image length.
         expected: usize,
         /// The length actually found.
-        got: usize,
+        got: u64,
     },
 }
 
@@ -248,7 +252,9 @@ impl SaveFile {
         };
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
-        file.take(oversized_image_probe_len as u64)
+        // Borrow so the handle survives for `observed_length`'s metadata query.
+        (&file)
+            .take(oversized_image_probe_len as u64)
             .read_to_end(&mut bytes)
             .map_err(|source| SaveFileError::Read {
                 path: self.path.clone(),
@@ -258,7 +264,7 @@ impl SaveFile {
             return Err(SaveFileError::BadLength {
                 path: self.path.clone(),
                 expected: store::FLASH_IMAGE_LEN,
-                got: bytes.len(),
+                got: self.observed_length(&file, &bytes)?,
             });
         }
         SaveStore::from_flash_image(&bytes)
@@ -266,8 +272,28 @@ impl SaveFile {
             .ok_or_else(|| SaveFileError::BadLength {
                 path: self.path.clone(),
                 expected: store::FLASH_IMAGE_LEN,
-                got: bytes.len(),
+                got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// The real length behind a bounded probe read's `bytes.len()`: exact
+    /// already if the probe finished short, else asked of `file`'s
+    /// metadata, since the probe cap is identical for every oversized file.
+    fn observed_length(&self, file: &std::fs::File, bytes: &[u8]) -> Result<u64, SaveFileError> {
+        let probed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if bytes.len() < store::FLASH_IMAGE_LEN {
+            return Ok(probed);
+        }
+        let metadata_len = file
+            .metadata()
+            .map_err(|source| SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            })?
+            .len();
+        // A shrink between the read and this call must not under-report
+        // what was actually read.
+        Ok(metadata_len.max(probed))
     }
 
     /// Atomically replaces the save file with `store`'s synchronised image.
@@ -279,44 +305,68 @@ impl SaveFile {
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
-    /// be written, synced, or renamed into place.
+    /// be written, synced, or renamed into place, or if something replaced
+    /// it between those two steps.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        self.write_with(store, Self::sync_directory_best_effort)
+        self.write_with(
+            store,
+            Self::sync_directory_best_effort,
+            |bytes| StagingArea::beside(&self.path).stage(bytes),
+            |_| {},
+        )
     }
 
     /// As [`SaveFile::write`], synchronising through the given `sync_directory`
-    /// rather than always [`SaveFile::sync_directory_best_effort`].
+    /// and staging through `stage`, rather than always
+    /// [`SaveFile::sync_directory_best_effort`] and
+    /// [`StagingArea::stage`].
+    ///
+    /// `before_rename` runs on the staged path once it holds the image and
+    /// before anything promotes it, which is the only point from which the
+    /// window this call has to defend can be occupied on purpose.
     fn write_with(
         &self,
         store: &SaveStore,
         mut sync_directory: impl FnMut(&Path),
+        stage: impl FnOnce(&[u8]) -> std::io::Result<StagedSave>,
+        before_rename: impl FnOnce(&Path),
     ) -> Result<(), SaveFileError> {
         self.ensure_parent_directory()?;
 
-        let staging_path = self.staging_path_for_process();
         let write_error = |source: std::io::Error| SaveFileError::Write {
             path: self.path.clone(),
             source,
         };
-        Self::write_and_sync(&staging_path, store.flash_image()).map_err(write_error)?;
-        if let Err(source) = std::fs::rename(&staging_path, &self.path) {
-            drop(std::fs::remove_file(&staging_path));
-            return Err(write_error(source));
+        let mut staged = stage(store.flash_image()).map_err(write_error)?;
+        before_rename(&staged.path);
+        // Nothing in `std` fuses this check to the rename below, so a
+        // replacement landing between the two is still promoted; the
+        // exclusive create, the unguessable name, and the hold kept open
+        // across the check bound that window rather than close it. On
+        // Windows the hold admits nobody at all, so the window is only as
+        // wide as its release: from `release_hold` to the rename, and on to
+        // the cleanup unlink if that rename fails.
+        match staged.still_ours() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(write_error(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "the staged image at {} was replaced before it could be renamed into place",
+                        staged.path.display()
+                    ),
+                )))
+            }
+            Err(unreadable) => return Err(write_error(staged.remove_after(unreadable))),
+        }
+        staged.release_hold();
+        if let Err(source) = std::fs::rename(&staged.path, &self.path) {
+            return Err(write_error(staged.remove_after(source)));
         }
         if let Some(containing) = Self::directory_containing(&self.path) {
             sync_directory(containing);
         }
         Ok(())
-    }
-
-    fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-        use std::io::Write as _;
-
-        let file = std::fs::File::create(path)?;
-        let mut staged = std::io::BufWriter::new(file);
-        staged.write_all(bytes)?;
-        staged.flush()?;
-        staged.get_ref().sync_all()
     }
 
     fn sync_directory_best_effort(path: &Path) {
@@ -445,12 +495,6 @@ impl SaveFile {
     fn lock_path(&self) -> PathBuf {
         let mut name = self.path.as_os_str().to_os_string();
         name.push(".lock");
-        PathBuf::from(name)
-    }
-
-    fn staging_path_for_process(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(format!(".tmp.{}", std::process::id()));
         PathBuf::from(name)
     }
 }
