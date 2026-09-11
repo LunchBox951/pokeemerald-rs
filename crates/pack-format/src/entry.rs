@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use crate::layout::EntryKind;
+use crate::layout::{EntryKind, IMAGE_BIT_DEPTHS};
 use crate::writer::PackEntry;
 
 /// The GBA's tile side, in pixels.
@@ -167,7 +167,7 @@ pub fn image_entry(
     bit_depth: u8,
     pixels: Vec<u8>,
 ) -> Result<PackEntry, EntryShapeError> {
-    if !matches!(bit_depth, 2 | 4 | 8) {
+    if !IMAGE_BIT_DEPTHS.contains(&bit_depth) {
         return Err(EntryShapeError::UnpublishedImageBitDepth(bit_depth));
     }
     let expected = (width as usize).checked_mul(height as usize);

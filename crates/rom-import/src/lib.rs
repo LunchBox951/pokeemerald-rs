@@ -469,7 +469,7 @@ fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
             original.kind(),
             format!(
                 "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
-                path.display()
+                crate::error::OneLinePath(path)
             ),
         ),
     }
@@ -748,6 +748,39 @@ mod tests {
         assert!(
             out.is_dir(),
             "cleanup should have failed, leaving the directory behind"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_cleanup_keeps_its_message_on_one_line() {
+        // The path folded into `original`'s message by `remove_after` is
+        // the caller's own `out_path`, exactly as untrusted as the path
+        // `ImportError::WriteFailed` renders directly (see
+        // `error::path_bearing_messages_are_escaped_and_stay_one_line`), so
+        // a newline or ESC byte in the destination name must not survive
+        // into this cleanup-failure message either.
+        let dir = TempDir::new("write-cleanup-fails-hostile");
+        let out = dir.join("one\ntwo\u{1b}[2Kthree.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            drop(std::fs::remove_file(&out));
+            std::fs::create_dir(&out).expect("the directory takes the freed name");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        let text = err.to_string();
+        assert!(!text.contains('\n'), "{text:?}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(
+            text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
+            "escaped name missing from {text:?}"
         );
     }
 

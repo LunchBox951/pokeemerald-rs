@@ -2,9 +2,19 @@
 //!
 //! Each playable `(chunk, channel)` pair becomes one output track, ordered by
 //! chunk and then channel. A channel is playable only when a note-on has a
-//! later same-key note-off in that channel. Track zero supplies tempo, timing,
-//! and loop events, and only the first output track receives tempo. These rules
-//! reproduce `midi.cpp:434-490,916-964` without its seek-based parsing.
+//! later same-key note-off or velocity-zero note-on in that channel. Track
+//! zero supplies tempo, timing, and loop events, and only the first output
+//! track receives tempo. These rules reproduce `midi.cpp:434-490,916-964`
+//! without its seek-based parsing.
+//!
+//! A velocity-zero note-on still ends the note it matches, but unlike an
+//! explicit note-off it is also retained as a silent [`ItemKind::SilentNoteOn`]
+//! timing boundary, mirroring the type-zero event upstream's `ReadTrackEvent`
+//! keeps for it (`midi.cpp:471-490,514,551-557`; see [`super::parse::RawEvent::VelocityZeroNoteOn`]).
+//! It sorts before every other item at its tick, matching upstream's
+//! default-initialized `EventType` of zero sorting before every declared type
+//! (`midi.h:32-50`, `midi.cpp:565-594`), and contributes only its own outgoing
+//! wait, never a [`SongEvent::Note`] (`agb.cpp:461-520`).
 //!
 //! Exact gates and the default clock scale are required because [`SongEvent`]
 //! has no clock-scale metadata. Notes and tie ends keep every operand explicit;
@@ -41,7 +51,11 @@ const FULL_MIDI_VALUE: u8 = 127;
 
 #[derive(Debug, Clone)]
 enum ItemKind {
-    EndOfTie { key: u8 },
+    /// A velocity-zero note-on's silent timing boundary; see the module docs.
+    SilentNoteOn,
+    EndOfTie {
+        key: u8,
+    },
     SilentLabel,
     LoopEnd,
     LoopEndBegin,
@@ -53,11 +67,16 @@ enum ItemKind {
     ExtendedCommandSelector,
     SilentController,
     PitchBend(i8),
-    Note { key: u8, velocity: u8, gate: u8 },
+    Note {
+        key: u8,
+        velocity: u8,
+        gate: u8,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ItemPriority {
+    SilentNoteOn,
     EndOfTie,
     SilentLabel,
     LoopEnd,
@@ -74,6 +93,7 @@ enum ItemPriority {
 impl ItemKind {
     fn sort_key(&self) -> (ItemPriority, u8) {
         match *self {
+            Self::SilentNoteOn => (ItemPriority::SilentNoteOn, 0),
             Self::EndOfTie { key } => (ItemPriority::EndOfTie, key),
             Self::SilentLabel => (ItemPriority::SilentLabel, 0),
             Self::LoopEnd => (ItemPriority::LoopEnd, 0),
@@ -107,7 +127,14 @@ fn find_note_end(
 ) -> Result<u32, MidiError> {
     channel_events
         .iter()
-        .find_map(|&(t, e)| matches!(e, RawEvent::NoteOff { key: k, .. } if k == key).then_some(t))
+        .find_map(|&(t, e)| {
+            matches!(
+                e,
+                RawEvent::NoteOff { key: k, .. } | RawEvent::VelocityZeroNoteOn { key: k, .. }
+                    if k == key
+            )
+            .then_some(t)
+        })
         .ok_or(MidiError::UnterminatedNote {
             channel: error_channel,
             key,
@@ -196,6 +223,10 @@ fn compile_track(
     let mut extended_command: Option<u8> = None;
     for &(time, event) in channel_events {
         match event {
+            RawEvent::VelocityZeroNoteOn { .. } => {
+                let converted = convert_ticks(time, division)?;
+                items.push((converted, ItemKind::SilentNoteOn));
+            }
             RawEvent::ProgramChange { program, .. } => {
                 let converted = convert_ticks(time, division)?;
                 items.push((converted, ItemKind::ProgramChange(program)));
@@ -370,7 +401,8 @@ fn emit_track(
         timing_grid.update_for_item(*time, kind)?;
         match kind {
             ItemKind::EndOfTie { key } => out.push(SongEvent::EndOfTie { key: *key }),
-            ItemKind::SilentLabel
+            ItemKind::SilentNoteOn
+            | ItemKind::SilentLabel
             | ItemKind::ExtendedCommandSelector
             | ItemKind::SilentController
             | ItemKind::TimingGridChange(_) => {}
