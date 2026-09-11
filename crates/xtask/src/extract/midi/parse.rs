@@ -51,6 +51,22 @@ pub(super) enum RawEvent {
         channel: u8,
         key: u8,
     },
+    /// A note-on (status `0x90`) whose velocity is zero.
+    ///
+    /// Upstream keeps this distinguishable from both [`Self::NoteOn`] and
+    /// [`Self::NoteOff`]: `ReadTrackEvent` only assigns `EventType::Note`
+    /// when velocity is nonzero, but still returns `true` for a
+    /// velocity-zero note-on, so `ReadTrackEvents` retains it as a
+    /// default-initialized (type-zero) event (`tools/mid2agb/midi.cpp:471-490,514,551-557`).
+    /// An explicit `0x80` note-off has no matching case in that same switch
+    /// and is dropped instead (`midi.cpp:471-514`). Both forms still end
+    /// sustain for duration purposes (`midi.cpp:368-404`), so [`super::compile`]
+    /// treats them alike for note-end lookup while keeping this variant a
+    /// distinct, retained selector boundary.
+    VelocityZeroNoteOn {
+        channel: u8,
+        key: u8,
+    },
     Controller {
         channel: u8,
         controller: u8,
@@ -83,6 +99,7 @@ impl RawEvent {
         match self {
             Self::NoteOn { channel, .. }
             | Self::NoteOff { channel, .. }
+            | Self::VelocityZeroNoteOn { channel, .. }
             | Self::Controller { channel, .. }
             | Self::ProgramChange { channel, .. }
             | Self::PitchBend { channel, .. } => Some(channel),
@@ -142,7 +159,7 @@ fn read_channel_voice_event(
             let key = read_data_byte(r)?;
             let velocity = read_data_byte(r)?;
             let event = if velocity == 0 {
-                RawEvent::NoteOff { channel, key }
+                RawEvent::VelocityZeroNoteOn { channel, key }
             } else {
                 RawEvent::NoteOn {
                     channel,
