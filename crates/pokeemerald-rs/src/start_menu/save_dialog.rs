@@ -23,6 +23,11 @@ pub(crate) enum SaveMode {
     Normal,
     /// Writes a new-game session over another save.
     ///
+    /// Upstream adds only a Hall of Fame erase over `SAVE_NORMAL`
+    /// (`src/save.c:751-760`), which this port does not model, so both modes
+    /// reach the same write. Which bytes a session writes is
+    /// [`crate::game_save::SaveLineage`]'s property, never this mode's.
+    ///
     /// `prompted` is false only when the boot status was empty or corrupt. The
     /// store must then reject a foreign save that appeared after boot.
     OverwriteDifferentFile {
