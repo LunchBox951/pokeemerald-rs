@@ -260,24 +260,18 @@ fn image_entry_from_tiles_rejects_a_raster_whose_size_overflows_a_32_bit_usize()
     );
 }
 
-#[test]
-fn a_zero_tile_grid_accepts_a_metatile_wider_than_any_real_image() {
-    // `tiles_wide` is 0, and 0 is a multiple of every nonzero metatile
-    // side, so this shape is valid; it must produce the (empty) zero
-    // raster rather than walking a metatile grid that does not exist.
-    let entry = image_entry_from_tiles("i".into(), &[], 8, 0, 16, Some((1_000_000, 2))).unwrap();
-    assert_eq!(entry.payload, Vec::<u8>::new());
-    let packed = tiles_from_image(&[], 8, 0, 16, Some((1_000_000, 2))).unwrap();
-    assert_eq!(packed, Vec::<u8>::new());
-}
-
 #[cfg(target_pointer_width = "32")]
 #[test]
 fn a_zero_tile_grid_with_a_huge_metatile_width_does_not_overflow_a_32_bit_usize() {
-    // Same shape as above, but `metatile_width * metatile_height` alone
-    // overflows a 32-bit `usize` (8,589,934,590 > u32::MAX). Computing that
-    // product eagerly, before noticing the tile grid is empty, would panic
-    // on a 32-bit target even though the metatile shape is valid.
+    // `tiles_wide` is 0, and 0 is a multiple of every nonzero metatile
+    // side, so `Some((u32::MAX, 2))` is a valid shape here; it must produce
+    // the (empty) zero raster rather than walk a metatile grid that does
+    // not exist. `metatile_width * metatile_height` alone overflows a
+    // 32-bit `usize` (8,589,934,590 > u32::MAX; on 64-bit targets no
+    // `u32` pair can overflow this product, so this case only exists at
+    // 32 bits). Computing that product eagerly, before noticing the tile
+    // grid is empty, would panic on a 32-bit target even though the
+    // metatile shape is valid.
     let entry = image_entry_from_tiles("i".into(), &[], 8, 0, 16, Some((u32::MAX, 2))).unwrap();
     assert_eq!(entry.payload, Vec::<u8>::new());
     let packed = tiles_from_image(&[], 8, 0, 16, Some((u32::MAX, 2))).unwrap();
