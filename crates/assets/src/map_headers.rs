@@ -1,126 +1,50 @@
-//! Map headers, groups, and connections (S-4): the `gMapGroups` /
-//! `gMapHeaders` / `gMapConnections` tables.
+//! Typed map headers, groups, connections, and position-based lookup.
 //!
-//! Ports every map's header metadata and its inter-map connections from the
-//! upstream reference `pokeemerald/data/maps/map_groups.json` (the
-//! `MAP_GROUP`/`MAP_NUM` position table, 34 groups / 518 maps) plus each
-//! map's own `pokeemerald/data/maps/<Name>/map.json` (header fields +
-//! `connections`; the `struct MapHeader` layout is
-//! `pokeemerald/include/global.h`). Object/warp/coord/bg *events* — the rest
-//! of `map.json` — are explicitly **not** extracted here; that is issue
-//! #77's scope, and the module docs make no claim over that data.
+//! Map positions preserve `data/maps/map_groups.json` order. A group's
+//! position is its `MAP_GROUP`, and a map's position within [`MapGroup::maps`]
+//! is its `MAP_NUM`. [`MapHeader::group`] and [`MapHeader::num`] store those
+//! positions.
 //!
-//! **`(group, num)`, honestly derived.** `wild_encounters`' [`MapId`]
-//! (reused here rather than redefined — see below) deferred a numeric
-//! `mapGroup`/`mapNum` pair because deriving it required this exact
-//! group/position table, which didn't exist in this workspace yet. It does
-//! now: `map_groups.json`'s `group_order` array gives the upstream
-//! `MAP_GROUP(map)` index, and each named group's array gives
-//! `MAP_NUM(map)` (its position within that group). [`MapHeader::group`] /
-//! [`MapHeader::num`] carry these, cross-checked at extraction time against
-//! every map directory appearing in exactly one group exactly once (518 in,
-//! 518 out, no duplicates — verified by a structural test below).
-//!
-//! **Reusing [`MapId`].** Map headers and `gWildMonHeaders` entries name the
-//! same `MAP_*` id space, so this module imports
-//! [`wild_encounters::MapId`](crate::wild_encounters::MapId) rather than
-//! defining a second, incompatible "map id" type.
-//!
-//! **Fields without an extracted owning table get an opaque id, not a
-//! number.** Three fields reference tables this workspace hasn't extracted
-//! yet:
-//! - `music`: [`MusicId`] wraps the *numeric* `MUS_*` id, resolved from
-//!   `pokeemerald/include/constants/songs.h` at extraction time (that header
-//!   is self-contained and small enough to resolve safely without owning
-//!   the full audio-song table this crate doesn't have yet).
-//! - `region_map_section`: [`RegionMapSectionId`] wraps the `MAPSEC_*`
-//!   *name* — no `constants/region_map_sections.h` exists in this reference
-//!   checkout (the ids live in `src/data/region_map/region_map_sections.json`,
-//!   a separate region-map slice), so, per the same reasoning as
-//!   [`MapId`](crate::wild_encounters::MapId), the symbolic name is
-//!   transcribed rather than a guessed number.
-//! - `layout`: [`crate::map_layouts::LayoutId`] (already a name-wrapping
-//!   newtype for the same reason — see that module).
-//!
-//! **Fields with a complete, self-contained upstream enum become real Rust
-//! enums**, not opaque ids: [`Weather`] (`constants/weather.h`), [`MapType`]
-//! / [`BattleScene`] (`constants/map_types.h`), and [`Direction`]
-//! (`CONNECTION_*`, `constants/global.h`). Each has a `from_id`/`id` pair
-//! mirroring [`type_chart::Type`](crate::type_chart::Type).
-//!
-//! **Field renames.** Upstream's `allow_cycling` / `allow_escaping` /
-//! `allow_running` / `show_map_name` JSON keys are transcribed as
-//! `allow_bike` / `allow_escape` / `allow_run` / `show_name` (the issue's
-//! own wording) — same booleans, no upstream `struct MapHeader` field name
-//! to preserve exactly since Porymap's `map.json` is JSON, not the compiled
-//! struct.
-//!
-//! **`shared_events_map` / `shared_scripts_map` are events/scripts
-//! metadata**, not header metadata — 50 maps have one — and are left for
-//! issue #77 alongside the event lists themselves, exactly like
-//! `object_events`/`warp_events`/`coord_events`/`bg_events`.
-//!
-//! **Re-running the extraction.** As with `map_layouts` (and, before it,
-//! `wild_encounters`/`trainers`), this module's transcribed table was
-//! produced by a development-time-only script, not checked into the
-//! workspace. To regenerate: walk `map_groups.json`'s `group_order`, and for
-//! each named group's map list (in array order) open that map's
-//! `data/maps/<Name>/map.json` and transcribe `id`, `name`, `layout`,
-//! `music` (resolved against `songs.h`), `region_map_section`,
-//! `requires_flash`, `weather`, `map_type`, `allow_cycling`/`allow_escaping`/
-//! `allow_running`/`show_map_name` (renamed per above), `battle_scene`, and
-//! `connections` (each entry's `direction` string mapped `up`->`North`,
-//! `down`->`South`, `left`->`West`, `right`->`East`, `dive`->`Dive`,
-//! `emerge`->`Emerge`, matching `CONNECTION_*`) into one [`MapHeader`]
-//! literal, plus a [`MapGroup`] listing per group — both emitted in
-//! `group_order` / group-array order, giving [`MapHeader::group`] /
-//! [`MapHeader::num`] their meaning directly from position.
-//!
-//! The upstream-tie tests at the bottom pin Petalburg City (music id,
-//! connections, flags), Route 101's connections (Oldale Town north,
-//! Littleroot Town south — *not* a direct Route 103 connection; the two
-//! only meet by way of Oldale Town, see the test doc comment), and a
-//! structural round-trip of the whole group/position table.
+//! [`MusicId`] stores the numeric `MUS_*` value, while
+//! [`RegionMapSectionId`], [`MapId`], and [`crate::map_layouts::LayoutId`]
+//! retain symbolic identities. Header literals therefore keep their `MUS_*`
+//! annotations. [`Weather`], [`MapType`], [`BattleScene`], and [`Direction`]
+//! are typed and need no parallel annotations.
 
 use crate::error::AssetError;
 use crate::map_layouts::LayoutId;
 use crate::wild_encounters::MapId;
 
-/// The number of per-map header entries (one per `data/maps/*/map.json`).
+/// Number of map headers.
 pub const MAP_COUNT: usize = 518;
-/// The number of upstream `gMapGroup_*` arrays (`map_groups.json`'s
-/// `group_order` length).
+/// Number of map groups.
 pub const MAP_GROUP_COUNT: usize = 34;
 
-/// A background music track id — the upstream numeric `MUS_*` value
-/// (resolved from `constants/songs.h`; see the module docs for why this is
-/// a number rather than the [`MapId`]-style name wrapper).
+/// A numeric `MUS_*` background-music identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MusicId(pub u16);
 
 impl MusicId {
-    /// The raw upstream `MUS_*` id.
+    /// Returns the numeric `MUS_*` value.
     #[must_use]
     pub const fn id(self) -> u16 {
         self.0
     }
 }
 
-/// A region-map section id — the upstream `MAPSEC_*` name (see the module
-/// docs for why this wraps the symbolic name, not a number).
+/// A symbolic `MAPSEC_*` region-map identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegionMapSectionId(pub &'static str);
 
 impl RegionMapSectionId {
-    /// The upstream `MAPSEC_*` name.
+    /// Returns the symbolic `MAPSEC_*` name.
     #[must_use]
     pub const fn name(self) -> &'static str {
         self.0
     }
 }
 
-/// A map's persistent weather effect, matching the upstream `WEATHER_*`
-/// identifiers (`pokeemerald/include/constants/weather.h`).
+/// A map's persistent weather effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Weather {
@@ -145,18 +69,17 @@ pub enum Weather {
 }
 
 impl Weather {
-    /// The upstream `WEATHER_*` id for this weather.
+    /// Returns the corresponding `WEATHER_*` value.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Resolve an upstream `WEATHER_*` id into a [`Weather`].
+    /// Resolves a `WEATHER_*` value.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownWeather`] if `id` is not one of the
-    /// eighteen modelled values.
+    /// Returns [`AssetError::UnknownWeather`] for an unsupported value.
     pub const fn from_id(id: u8) -> Result<Self, AssetError> {
         match id {
             0 => Ok(Self::None),
@@ -182,8 +105,7 @@ impl Weather {
     }
 }
 
-/// A map's terrain/UI classification, matching the upstream `MAP_TYPE_*`
-/// identifiers (`pokeemerald/include/constants/map_types.h`).
+/// A map's terrain and interface classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum MapType {
@@ -194,25 +116,24 @@ pub enum MapType {
     Underground = 4,
     Underwater = 5,
     OceanRoute = 6,
-    /// `MAP_TYPE_UNKNOWN` — defined upstream but not used by any map.
+    /// `MAP_TYPE_UNKNOWN`, which no map uses.
     Unknown = 7,
     Indoor = 8,
     SecretBase = 9,
 }
 
 impl MapType {
-    /// The upstream `MAP_TYPE_*` id for this type.
+    /// Returns the corresponding `MAP_TYPE_*` value.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Resolve an upstream `MAP_TYPE_*` id into a [`MapType`].
+    /// Resolves a `MAP_TYPE_*` value.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMapType`] if `id` is not one of the ten
-    /// modelled values.
+    /// Returns [`AssetError::UnknownMapType`] for an unsupported value.
     pub const fn from_id(id: u8) -> Result<Self, AssetError> {
         match id {
             0 => Ok(Self::None),
@@ -230,9 +151,7 @@ impl MapType {
     }
 }
 
-/// A trainer-battle backdrop override for battles fought on this map,
-/// matching the upstream `MAP_BATTLE_SCENE_*` identifiers
-/// (`pokeemerald/include/constants/map_types.h`).
+/// A map-specific battle backdrop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum BattleScene {
@@ -248,18 +167,17 @@ pub enum BattleScene {
 }
 
 impl BattleScene {
-    /// The upstream `MAP_BATTLE_SCENE_*` id for this scene.
+    /// Returns the corresponding `MAP_BATTLE_SCENE_*` value.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Resolve an upstream `MAP_BATTLE_SCENE_*` id into a [`BattleScene`].
+    /// Resolves a `MAP_BATTLE_SCENE_*` value.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownBattleScene`] if `id` is not one of the
-    /// nine modelled values.
+    /// Returns [`AssetError::UnknownBattleScene`] for an unsupported value.
     pub const fn from_id(id: u8) -> Result<Self, AssetError> {
         match id {
             0 => Ok(Self::Normal),
@@ -276,10 +194,10 @@ impl BattleScene {
     }
 }
 
-/// The direction a [`MapConnection`] joins two maps in, matching the
-/// upstream `CONNECTION_*` identifiers (`pokeemerald/include/constants/global.h`;
-/// `CONNECTION_NONE`/`CONNECTION_INVALID` are sentinels with no connection
-/// entry to represent and are not modelled).
+/// The direction in which a [`MapConnection`] joins two maps.
+///
+/// `CONNECTION_NONE` and `CONNECTION_INVALID` are sentinels, so neither has a
+/// variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Direction {
@@ -292,18 +210,18 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// The upstream `CONNECTION_*` id for this direction.
+    /// Returns the corresponding `CONNECTION_*` value.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Resolve an upstream `CONNECTION_*` id into a [`Direction`].
+    /// Resolves a `CONNECTION_*` value.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownConnectionDirection`] if `id` is not one
-    /// of the six modelled directions.
+    /// Returns [`AssetError::UnknownConnectionDirection`] for an unsupported
+    /// value.
     pub const fn from_id(id: u8) -> Result<Self, AssetError> {
         match id {
             1 => Ok(Self::South),
@@ -317,83 +235,70 @@ impl Direction {
     }
 }
 
-/// One connection from a map to a neighbour — the owned form of upstream
-/// `struct MapConnection`.
+/// A connection from one map to a neighbour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapConnection {
-    /// Which edge of the map this connection joins from (upstream
-    /// `direction`).
+    /// Direction from the source map to its neighbour.
     pub direction: Direction,
-    /// The neighbour's offset, in metatiles, along the shared edge
-    /// (upstream `offset`); can be negative.
+    /// Metatile offset along the shared edge for cardinal connections. May be
+    /// negative.
     pub offset: i32,
-    /// The neighbouring map (upstream `mapGroup`/`mapNum`, resolved here to
-    /// the target's [`MapId`]).
+    /// Neighbouring map.
     pub target: MapId,
 }
 
-/// One `gMapGroup_*` array: the ordered list of maps in one upstream map
-/// group. Position within [`MAP_GROUPS`] is `MAP_GROUP(map)`; position
-/// within [`maps`](MapGroup::maps) is `MAP_NUM(map)`.
+/// An ordered group of maps.
+///
+/// Its position in the canonical group table is its `MAP_GROUP`; a map's
+/// position in [`Self::maps`] is its `MAP_NUM`.
 #[derive(Debug, Clone, Copy)]
 pub struct MapGroup {
-    /// The upstream `gMapGroup_*` symbol (e.g. `"gMapGroup_TownsAndRoutes"`).
+    /// Canonical `gMapGroup_*` symbol.
     pub label: &'static str,
-    /// The maps in this group, in `MAP_NUM` order.
+    /// Maps in `MAP_NUM` order.
     pub maps: &'static [MapId],
 }
 
-/// One map's header metadata and connections — the owned form of upstream
-/// `struct MapHeader` (object/warp/coord/bg events excluded; see the module
-/// docs).
-// Five independent flags, matching upstream's own `struct MapHeader`
-// (`requiresFlash`/`allowCycling`/`allowEscaping`/`allowRunning`/
-// `showMapName` are five separate bitfields there too) — they don't share
-// enough structure to collapse into a state machine or enum.
-#[allow(clippy::struct_excessive_bools)]
+/// A map's header metadata and connections.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "map-header flags are independent canonical fields"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapHeader {
-    /// This map's id (upstream `MAP_*` name).
+    /// Symbolic `MAP_*` identity.
     pub id: MapId,
-    /// This map's `MAP_GROUP` index: position in [`MAP_GROUPS`].
+    /// `MAP_GROUP` position in the canonical group table.
     pub group: u8,
-    /// This map's `MAP_NUM` index: position in its group's
-    /// [`MapGroup::maps`].
+    /// `MAP_NUM` position in [`MapGroup::maps`].
     pub num: u8,
-    /// The upstream Porymap label (upstream `name`, e.g. `"PetalburgCity"`).
+    /// Porymap label, such as `"PetalburgCity"`.
     pub name: &'static str,
-    /// This map's layout (upstream `layout`).
+    /// Map layout.
     pub layout: LayoutId,
-    /// This map's background music (upstream `music`).
+    /// Background music.
     pub music: MusicId,
-    /// This map's region-map section (upstream `regionMapSectionId`).
+    /// Region-map section.
     pub region_map_section: RegionMapSectionId,
-    /// Whether the map requires Flash to see (upstream `requiresFlash`).
+    /// Whether the map requires Flash to be visible.
     pub requires_flash: bool,
-    /// This map's persistent weather (upstream `weather`).
+    /// Persistent weather.
     pub weather: Weather,
-    /// This map's terrain/UI classification (upstream `mapType`).
+    /// Terrain and interface classification.
     pub map_type: MapType,
-    /// Whether the player may use the bike here (upstream `allowCycling`).
+    /// Whether the player may cycle here.
     pub allow_bike: bool,
-    /// Whether the player may use Fly/Dig/Escape Rope here (upstream
-    /// `allowEscaping`).
+    /// Whether the player may use Dig or an Escape Rope here.
     pub allow_escape: bool,
-    /// Whether the player may run here (upstream `allowRunning`).
+    /// Whether the player may run here.
     pub allow_run: bool,
-    /// Whether entering the map pops up its name banner (upstream
-    /// `showMapName`).
+    /// Whether entering the map displays its name banner.
     pub show_name: bool,
-    /// The battle backdrop override for battles on this map (upstream
-    /// `battleType`/`mapBattleScene`).
+    /// Map-specific battle backdrop.
     pub battle_scene: BattleScene,
-    /// This map's connections to neighbouring maps (upstream `connections`;
-    /// empty when the map has none, e.g. most indoor maps).
+    /// Connections to neighbouring maps.
     pub connections: &'static [MapConnection],
 }
-
-// --- GENERATED: transcribed from pokeemerald/data/maps/map_groups.json and
-// pokeemerald/data/maps/*/map.json ---
 
 static MAP_GROUPS: [MapGroup; 34] = [
     MapGroup {
@@ -11203,10 +11108,7 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
     },
 ];
 
-// --- end generated ---
-
-/// The map-header table: owned, read-only access to every map's header
-/// metadata and connections with typed lookup `(oop-boundaries)`.
+/// Read-only access to map headers and groups.
 #[derive(Debug, Clone, Copy)]
 pub struct MapHeaderTable {
     headers: &'static [MapHeader; MAP_COUNT],
@@ -11214,10 +11116,10 @@ pub struct MapHeaderTable {
 }
 
 impl MapHeaderTable {
-    /// The number of entries in the table ([`MAP_COUNT`]).
+    /// Number of map headers.
     pub const LEN: usize = MAP_COUNT;
 
-    /// Build the table over the extracted upstream data.
+    /// Returns the canonical map-header table.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -11226,23 +11128,22 @@ impl MapHeaderTable {
         }
     }
 
-    /// The header for `id`, or `None` if no entry names that map.
+    /// Returns the header for `id`, if present.
     #[must_use]
     pub fn get(&self, id: MapId) -> Option<&'static MapHeader> {
         self.headers.iter().find(|h| h.id == id)
     }
 
-    /// The header for `id`.
+    /// Returns the header for `id`.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMapHeader`] if no entry names that map.
+    /// Returns [`AssetError::UnknownMapHeader`] if `id` is absent.
     pub fn header(&self, id: MapId) -> Result<&'static MapHeader, AssetError> {
         self.get(id).ok_or(AssetError::UnknownMapHeader(id.0))
     }
 
-    /// The header at the given `(group, num)` position, or `None` if out of
-    /// range.
+    /// Returns the header at `(group, num)`, if the position exists.
     #[must_use]
     pub fn get_by_position(&self, group: u8, num: u8) -> Option<&'static MapHeader> {
         self.headers
@@ -11250,30 +11151,29 @@ impl MapHeaderTable {
             .find(|h| h.group == group && h.num == num)
     }
 
-    /// The map group at index `group` (`MAP_GROUP` index into
-    /// [`MAP_GROUPS`]), or `None` if out of range.
+    /// Returns the map group at its `MAP_GROUP` position, if present.
     #[must_use]
     pub fn group(&self, group: u8) -> Option<&'static MapGroup> {
         self.groups.get(usize::from(group))
     }
 
-    /// Every map group, in `group_order` order.
+    /// Returns every map group in `MAP_GROUP` order.
     pub fn groups(&self) -> impl Iterator<Item = &'static MapGroup> {
         self.groups.iter()
     }
 
-    /// Iterate over every header, in upstream group/position order.
+    /// Returns every header in `MAP_GROUP`, then `MAP_NUM`, order.
     pub fn iter(&self) -> impl Iterator<Item = &'static MapHeader> {
         self.headers.iter()
     }
 
-    /// The number of entries in the table (`MAP_COUNT`).
+    /// Returns the number of map headers.
     #[must_use]
     pub const fn len(&self) -> usize {
         MAP_COUNT
     }
 
-    /// Always `false` — the table is never empty. Present for API convention.
+    /// Returns `false` because the canonical table is not empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
@@ -11308,7 +11208,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tie_petalburg_city() {
+    fn petalburg_city_header_matches_canonical_data() {
         let table = MapHeaderTable::new();
         let h = table.header(MapId("MAP_PETALBURG_CITY")).unwrap();
         assert_eq!(h.name, "PetalburgCity");
@@ -11332,11 +11232,7 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tie_route_101_connections() {
-        // Route 101 connects north to Oldale Town and south to Littleroot
-        // Town. It does *not* connect directly to Route 103 (both only
-        // border Oldale Town, one to its west/north and the other to its
-        // north) — verified against the extracted data, not assumed.
+    fn route_101_connects_to_its_canonical_neighbours() {
         let table = MapHeaderTable::new();
         let h = table.header(MapId("MAP_ROUTE101")).unwrap();
         assert_eq!(h.connections.len(), 2);
@@ -11358,9 +11254,6 @@ mod tests {
 
     #[test]
     fn group_and_num_round_trip_through_position_lookup() {
-        // Every header's (group, num) resolves back to itself, and every
-        // group's map list is exactly MAP_COUNT long in total with no
-        // duplicates or gaps.
         let table = MapHeaderTable::new();
         let mut seen = std::collections::HashSet::new();
         for h in table.iter() {
@@ -11436,9 +11329,7 @@ mod tests {
     }
 
     #[test]
-    fn every_header_weather_map_type_battle_scene_are_in_range() {
-        // Structural guard: every transcribed enum value round-trips its own
-        // id (i.e. was constructed from a value `from_id` also accepts).
+    fn every_header_uses_supported_enum_values() {
         let table = MapHeaderTable::new();
         for h in table.iter() {
             assert!(Weather::from_id(h.weather.id()).is_ok());

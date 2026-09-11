@@ -62,7 +62,7 @@ pub enum SaveFileError {
         /// Required image length.
         expected: usize,
         /// The length actually found.
-        got: usize,
+        got: u64,
     },
 }
 
@@ -252,7 +252,9 @@ impl SaveFile {
         };
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
-        file.take(oversized_image_probe_len as u64)
+        // Borrow so the handle survives for `observed_length`'s metadata query.
+        (&file)
+            .take(oversized_image_probe_len as u64)
             .read_to_end(&mut bytes)
             .map_err(|source| SaveFileError::Read {
                 path: self.path.clone(),
@@ -262,7 +264,7 @@ impl SaveFile {
             return Err(SaveFileError::BadLength {
                 path: self.path.clone(),
                 expected: store::FLASH_IMAGE_LEN,
-                got: bytes.len(),
+                got: self.observed_length(&file, &bytes)?,
             });
         }
         SaveStore::from_flash_image(&bytes)
@@ -270,8 +272,28 @@ impl SaveFile {
             .ok_or_else(|| SaveFileError::BadLength {
                 path: self.path.clone(),
                 expected: store::FLASH_IMAGE_LEN,
-                got: bytes.len(),
+                got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// The real length behind a bounded probe read's `bytes.len()`: exact
+    /// already if the probe finished short, else asked of `file`'s
+    /// metadata, since the probe cap is identical for every oversized file.
+    fn observed_length(&self, file: &std::fs::File, bytes: &[u8]) -> Result<u64, SaveFileError> {
+        let probed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if bytes.len() < store::FLASH_IMAGE_LEN {
+            return Ok(probed);
+        }
+        let metadata_len = file
+            .metadata()
+            .map_err(|source| SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            })?
+            .len();
+        // A shrink between the read and this call must not under-report
+        // what was actually read.
+        Ok(metadata_len.max(probed))
     }
 
     /// Atomically replaces the save file with `store`'s synchronised image.
