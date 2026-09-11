@@ -457,11 +457,8 @@ mod tests {
         // overflows `u32`: (2^31 / 8)^2 is far larger than u32::MAX.
         const TILE_COUNT_OVERFLOW_SIDE: u32 = 1 << 31;
 
-        // `ImageRef`'s shape fields are public, so a caller can hand this
-        // function dimensions whose tile-count and pixel-count products
-        // overflow `u32` arithmetic (`columns * rows` and `width * height`,
-        // respectively). Both checks below reproduce the unfixed helper's
-        // panics; they must return `None` instead.
+        // `ImageRef`'s shape fields are public, so a caller can hand over
+        // dimensions the constructor never validated.
         let overflowing_pixel_count = image(&[], PIXEL_COUNT_OVERFLOW_WIDTH, TILE_SIZE);
         assert!(tile_pixels(overflowing_pixel_count, 0).is_none());
 
