@@ -313,14 +313,10 @@ fn item_window_pixels(phase: &OverworldPhase) -> Vec<u32> {
 }
 
 /// Issue #1035 regression: the composed frame the `A` press selecting
-/// `EXIT` lands on must still draw the item window. Upstream's A handler
-/// only arms `gMenuCallback = StartMenuExitCallback` and returns `FALSE`
-/// (`start_menu.c:607-626`), so `Task_ShowStartMenu`'s `case 1` does not
-/// tear the window down that same frame (`:561-577`) -- `StartMenuExitCallback`
-/// itself, which actually hides it, does not run until the next tick
-/// (`:747-752`). A menu dropped one tick early instead composes the bare
-/// overworld on the press frame, which this pixel comparison catches where
-/// a bare `StartMenuOutcome`/`Option` assertion cannot.
+/// `EXIT` lands on must still draw the item window (`start_menu` module
+/// docs). A menu dropped one tick early composes the bare overworld on the
+/// press frame, which this pixel comparison catches where a bare
+/// `StartMenuOutcome`/`Option` assertion cannot.
 #[test]
 fn a_on_exit_still_draws_the_menu_on_its_own_press_frame() {
     let temp = TempSave::new("menu-exit-press-frame-still-drawn");

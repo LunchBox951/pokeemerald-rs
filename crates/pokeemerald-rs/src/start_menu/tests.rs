@@ -191,10 +191,8 @@ fn the_item_cursor_wraps_in_both_directions() {
 fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
-    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached --
-    // but not yet closed (issue #1035): the A branch only arms
-    // `StartMenuExitCallback` (`start_menu.c:607-626`), which does not run
-    // until the following tick.
+    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached
+    // but not yet closed (issue #1035, module docs).
     let mut menu = synthetic_start_menu();
     assert_eq!(menu.selected(), StartMenuItem::Save);
     assert_eq!(
@@ -239,9 +237,8 @@ fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
 
 /// `StartMenuExitCallback` (`start_menu.c:750-757`) and
 /// `HandleStartMenuInput`'s `JOY_NEW(START_BUTTON | B_BUTTON)` close
-/// (`:628-633`) -- none of the three writes anything. EXIT takes one tick
-/// longer than START/B (issue #1035): its A press only arms the callback,
-/// which runs -- and actually closes the menu -- on the tick after.
+/// (`:628-633`) -- none of the three writes anything. EXIT closes on the
+/// tick after its A press (issue #1035, module docs).
 #[test]
 fn exit_start_and_b_all_close_without_writing() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
