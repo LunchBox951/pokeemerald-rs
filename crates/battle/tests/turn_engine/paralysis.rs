@@ -718,6 +718,32 @@ fn a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
     assert_eq!(battle.enemy().status1(), Status1::Healthy);
 }
 
+/// `src/battle_util.c:2620`-`:2621`: Shed Skin's end-turn cure roll is a draw
+/// this engine's residual pass does not make, so an attacker the reflection
+/// would newly paralyse is refused just like a direct-hit Shed Skin defender.
+#[test]
+fn a_shed_skin_attacker_refuses_a_synchronize_target_before_any_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, SEVIPER, 5, vec![THUNDER_WAVE]);
+    assert_eq!(player.ability(), assets::AbilityId::SHED_SKIN);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), assets::AbilityId::SYNCHRONIZE);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let draws_before = rng.draws();
+
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect_err("the reflection would paralyse a Shed Skin holder");
+
+    assert_eq!(
+        rejected.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+    );
+    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+}
+
 /// A spent slot never reaches `seteffectprimary` — `Cmd_attackcanceler` aborts
 /// it at `battle_script_commands.c:934`-`:939` — so it carries no ability
 /// interaction to screen, and the battle must still start.
