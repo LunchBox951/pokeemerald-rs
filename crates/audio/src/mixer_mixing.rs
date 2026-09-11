@@ -316,14 +316,8 @@ fn cgb_endtie_voice(
 
 #[test]
 fn end_tie_skips_a_cgb_channel_in_its_automatic_pseudo_echo_tail() {
-    // A zero-sustain CGB envelope completes on its own into the pseudo-echo
-    // tail: upstream clears `SOUND_CHANNEL_SF_ENV` and sets only
-    // `SOUND_CHANNEL_SF_IEC`, never `SOUND_CHANNEL_SF_STOP`
-    // (`m4a.c:1125`..`:1129`, `:1090`..`:1098`; the note-on branch had
-    // already cleared `SOUND_CHANNEL_SF_START` at `m4a.c:992`).
-    // `ply_endtie` matches only channels with `SOUND_CHANNEL_SF_START` or
-    // `SOUND_CHANNEL_SF_ENV` set (`m4a_1.s:1835`..`:1845`), so it walks past
-    // such a channel and stops the next same-key channel on the track.
+    // A zero-sustain CGB envelope completes on its own into the automatic
+    // pseudo-echo tail that `CgbEnvelope::is_end_tie_eligible`'s doc excludes.
     const TRACK: usize = 0;
     const KEY: u8 = 60;
 
