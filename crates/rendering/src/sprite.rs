@@ -459,8 +459,8 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Samples an affine entry while holding its transformed source position
-    /// across each horizontal mosaic block.
+    /// Samples an affine entry from one footprint-local coordinate for each
+    /// horizontal mosaic block.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -475,16 +475,16 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        const SOURCE_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
+        const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
 
-        let (_, source_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+        let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
         let block_origin_x = mosaic.snap(x, y).0 as i32;
-        let source_x = if block_origin_x >= entry_x {
+        let local_x = if block_origin_x >= entry_x {
             block_origin_x - entry_x
         } else {
             // mGBA seeds a leading partial block from `inX - 1` (`software-obj.c:241`).
-            SOURCE_COLUMN_BEFORE_FOOTPRINT
+            LOCAL_COLUMN_BEFORE_FOOTPRINT
         };
 
         sprite_affine::sample_texel(
@@ -493,8 +493,8 @@ impl<'a> SpriteLayer<'a> {
             self.tileset_4bpp,
             self.tileset_8bpp,
             self.palette,
-            source_x,
-            source_y,
+            local_x,
+            local_y,
         )
     }
 }
