@@ -69,7 +69,9 @@ impl fmt::Display for CliError {
                 writeln!(f, "`{IMPORT_ROM}` requires a path to a ROM file")?;
             }
             Self::UnexpectedArg(arg) => {
-                writeln!(f, "unexpected argument `{arg}`")?;
+                write!(f, "unexpected argument `")?;
+                write_one_line(f, arg)?;
+                writeln!(f, "`")?;
             }
             Self::DuplicateImportRom => {
                 writeln!(f, "`{IMPORT_ROM}` was given more than once")?;
@@ -80,6 +82,49 @@ impl fmt::Display for CliError {
 }
 
 impl Error for CliError {}
+
+/// Write `text` escaped for a one-line, one-terminal-row diagnosis.
+///
+/// `text` is `arg.to_string_lossy()`'d straight off `args_os` ([`parse`]),
+/// so it is a token the player did not choose and may carry a newline or an
+/// ESC byte. Only what would break the row or steer the terminal is
+/// escaped, so an ordinary token still prints as the literal string a
+/// player can copy back into a shell.
+///
+/// Mirrors `rom_import::error::OneLinePath` and `import_rom`'s own
+/// `OneLinePath` (`crate::import_rom`): both are private to their own
+/// modules and neither is reachable from this binary's `main.rs`, so this
+/// is a third copy of the same rule over a token rather than a path.
+fn write_one_line(f: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    for c in text.chars() {
+        match c {
+            '\n' => f.write_str(r"\n")?,
+            '\r' => f.write_str(r"\r")?,
+            '\t' => f.write_str(r"\t")?,
+            // `is_control` is the Unicode `Cc` category: C0, DEL, and C1.
+            // `U+2028`/`U+2029` are line breaks outside it, and the bidi
+            // embedding, override, isolate, and mark controls
+            // (`Bidi_Control`) can reorder the text after the token on a
+            // bidi-aware terminal.
+            c if c.is_control()
+                || matches!(
+                    c,
+                    '\u{2028}'
+                        | '\u{2029}'
+                        | '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                ) =>
+            {
+                write!(f, "\\u{{{:x}}}", c as u32)?;
+            }
+            c => f.write_str(c.encode_utf8(&mut [0u8; 4]))?,
+        }
+    }
+    Ok(())
+}
 
 /// Parse the post-program-name arguments into a [`Command`].
 ///
@@ -175,6 +220,32 @@ mod tests {
 
     fn args(parts: &[&str]) -> Vec<OsString> {
         parts.iter().map(OsString::from).collect()
+    }
+
+    /// The diagnosis is one terminal row (module docs on [`CliError`]), and
+    /// the token it quotes comes straight from `args_os`. A newline or an
+    /// ESC in that token must not reach the terminal: `rom-import` already
+    /// masks unprintable bytes before interpolating them
+    /// (`crates/rom-import/src/error.rs`, `OneLinePath`), and the same
+    /// holds for an argument here.
+    #[test]
+    fn an_unexpected_argument_cannot_add_rows_to_the_diagnosis() {
+        let rendered = parse(&args(&["--bad\nforged: import succeeded\u{1b}]0;x\u{7}"]))
+            .unwrap_err()
+            .to_string();
+        let diagnosis = rendered
+            .strip_suffix(USAGE)
+            .and_then(|head| head.strip_suffix('\n'))
+            .expect("the usage block follows the diagnosis");
+        assert!(
+            !diagnosis.chars().any(char::is_control),
+            "the diagnosis must stay one printable row: {diagnosis:?}"
+        );
+        // Escaped, not silently dropped: the token is still legible.
+        assert!(
+            diagnosis.contains(r"--bad\nforged: import succeeded\u{1b}]0;x\u{7}"),
+            "escaped token missing from {diagnosis:?}"
+        );
     }
 
     #[cfg(unix)]

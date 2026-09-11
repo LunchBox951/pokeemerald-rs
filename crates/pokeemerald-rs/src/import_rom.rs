@@ -117,6 +117,59 @@ use rom_import::{ImportError, ImportedPack};
 
 use dest::Dest;
 
+/// A path rendered for a one-line diagnostic.
+///
+/// A player names their own ROM path, and `$POKEEMERALD_PACK` names their
+/// own destination, so either is untrusted the same way a ROM's header
+/// bytes are (`rom_import::error`'s `OneLinePath`, which this mirrors: that
+/// one is crate-private to `rom-import` and covers only its own
+/// [`ImportError`] variants, so this module's own path-bearing messages need
+/// their own copy). A name may carry a newline or an ESC byte, and this
+/// module's one-terminal-row promise has to survive it. Only what would
+/// break the row or steer the terminal is escaped, so an ordinary path -- a
+/// Windows one included, whose separators are backslashes -- still prints as
+/// the literal string a player can copy back into a shell.
+///
+/// The rendering is therefore ambiguous rather than reversible: a name
+/// holding the two characters `\` and `n` prints the same as one holding a
+/// newline. A diagnostic is read, not parsed, and doubling every separator
+/// on the platform where every path has them costs more than the ambiguity
+/// does.
+struct OneLinePath<'a>(&'a Path);
+
+impl fmt::Display for OneLinePath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for c in self.0.to_string_lossy().chars() {
+            match c {
+                '\n' => f.write_str(r"\n")?,
+                '\r' => f.write_str(r"\r")?,
+                '\t' => f.write_str(r"\t")?,
+                // `is_control` is the Unicode `Cc` category: C0, DEL, and
+                // C1. `U+2028`/`U+2029` are line breaks outside it, and the
+                // bidi embedding, override, isolate, and mark controls
+                // (`Bidi_Control`) can reorder the text after the path on a
+                // bidi-aware terminal.
+                c if c.is_control()
+                    || matches!(
+                        c,
+                        '\u{2028}'
+                            | '\u{2029}'
+                            | '\u{061c}'
+                            | '\u{200e}'
+                            | '\u{200f}'
+                            | '\u{202a}'..='\u{202e}'
+                            | '\u{2066}'..='\u{2069}'
+                    ) =>
+                {
+                    write!(f, "\\u{{{:x}}}", c as u32)?;
+                }
+                c => f.write_str(c.encode_utf8(&mut [0u8; 4]))?,
+            }
+        }
+        Ok(())
+    }
+}
+
 /// What a successful import produced.
 ///
 /// Its [`Display`](fmt::Display) is the exact one-line summary the binary
@@ -158,7 +211,7 @@ impl fmt::Display for ImportOutcome {
             "imported {} entries ({} bytes) to {}",
             self.entry_count,
             self.pack_bytes,
-            self.pack_path.display()
+            OneLinePath(&self.pack_path)
         )
     }
 }
@@ -289,10 +342,10 @@ impl fmt::Display for ImportRomError {
                 pack_format::PACK_PATH_ENV
             ),
             Self::CreateDirFailed { path, source } => {
-                write!(f, "could not create `{}`: {source}", path.display())
+                write!(f, "could not create `{}`: {source}", OneLinePath(path))
             }
             Self::OpenDirFailed { path, source } => {
-                write!(f, "could not open `{}`: {source}", path.display())
+                write!(f, "could not open `{}`: {source}", OneLinePath(path))
             }
             Self::Import {
                 source,
@@ -304,7 +357,7 @@ impl fmt::Display for ImportRomError {
                     Some(temp_path) if !*temp_removed => write!(
                         f,
                         " (the partial file `{}` could not be removed and is still there)",
-                        temp_path.display()
+                        OneLinePath(temp_path)
                     ),
                     _ => Ok(()),
                 }
@@ -313,21 +366,21 @@ impl fmt::Display for ImportRomError {
                 f,
                 "cannot write the asset pack to `{}`: the path names no file — point `{}` at a \
                  file",
-                pack_path.display(),
+                OneLinePath(pack_path),
                 pack_format::PACK_PATH_ENV
             ),
             Self::DestinationIsDirectory { pack_path } => write!(
                 f,
                 "cannot write the asset pack to `{}`: a directory is already there — point `{}` \
                  at a file",
-                pack_path.display(),
+                OneLinePath(pack_path),
                 pack_format::PACK_PATH_ENV
             ),
             Self::DestinationIsSource { rom_path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`: point `{}` at a \
                  different file, or unset it to use the default location",
-                rom_path.display(),
+                OneLinePath(rom_path),
                 pack_format::PACK_PATH_ENV
             ),
             Self::TempFileFailed {
@@ -338,7 +391,7 @@ impl fmt::Display for ImportRomError {
                 write!(
                     f,
                     "could not build the asset pack in `{}`: {source}",
-                    temp_path.display()
+                    OneLinePath(temp_path)
                 )?;
                 if *temp_removed {
                     Ok(())
@@ -358,13 +411,13 @@ impl fmt::Display for ImportRomError {
                 write!(
                     f,
                     "could not publish the finished pack to `{}`: {source}",
-                    pack_path.display()
+                    OneLinePath(pack_path)
                 )?;
                 if *temp_removed {
                     write!(
                         f,
                         " (the temporary file `{}` was removed)",
-                        temp_path.display()
+                        OneLinePath(temp_path)
                     )
                 } else {
                     // The pack itself is finished and synced, so this is not
@@ -375,7 +428,7 @@ impl fmt::Display for ImportRomError {
                         f,
                         " (the finished pack is still at `{}`; move it to the destination or \
                          delete it yourself)",
-                        temp_path.display()
+                        OneLinePath(temp_path)
                     )
                 }
             }
