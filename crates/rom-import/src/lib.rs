@@ -469,7 +469,7 @@ fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
             original.kind(),
             format!(
                 "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
-                path.to_string_lossy().escape_debug()
+                crate::error::OneLinePath(path)
             ),
         ),
     }

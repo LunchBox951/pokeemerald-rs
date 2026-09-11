@@ -11,7 +11,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::profile::EMERALD_US_REV0;
 use crate::sha1::Digest;
@@ -346,7 +346,7 @@ impl fmt::Display for ImportError {
             Self::ReadFailed { path, source } => write!(
                 f,
                 "could not read ROM `{}`: {source}",
-                path.to_string_lossy().escape_debug()
+                OneLinePath(path)
             ),
             Self::WrongSize { actual } => write!(
                 f,
@@ -438,12 +438,12 @@ impl fmt::Display for ImportError {
             Self::SameFile { path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`",
-                path.to_string_lossy().escape_debug()
+                OneLinePath(path)
             ),
             Self::WriteFailed { path, source } => write!(
                 f,
                 "could not write `{}`: {source}",
-                path.to_string_lossy().escape_debug()
+                OneLinePath(path)
             ),
             Self::EmptyPack => f.write_str(
                 "the ROM's profile records no assets, so no pack was written",
@@ -467,6 +467,40 @@ impl std::error::Error for ImportError {
 impl From<pack_format::PackWriteError> for ImportError {
     fn from(source: pack_format::PackWriteError) -> Self {
         Self::PackWrite(source)
+    }
+}
+
+/// A path rendered for a one-line diagnostic.
+///
+/// A player names their own ROM, so the path is untrusted the same way the
+/// cartridge header's bytes are: a name may carry a newline or an ESC byte,
+/// and the module's one-terminal-row promise has to survive it. Only what
+/// would break the row or steer the terminal is escaped, so an ordinary path
+/// -- a Windows one included, whose separators are backslashes -- still
+/// prints as the literal string a player can copy back into a shell.
+///
+/// The rendering is therefore ambiguous rather than reversible: a name
+/// holding the two characters `\` and `n` prints the same as one holding a
+/// newline. A diagnostic is read, not parsed, and doubling every separator on
+/// the platform where every path has them costs more than the ambiguity does.
+pub(crate) struct OneLinePath<'a>(pub &'a Path);
+
+impl fmt::Display for OneLinePath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for c in self.0.to_string_lossy().chars() {
+            match c {
+                '\n' => f.write_str(r"\n")?,
+                '\r' => f.write_str(r"\r")?,
+                '\t' => f.write_str(r"\t")?,
+                // `is_control` is the Unicode `Cc` category: C0, DEL, and C1.
+                // `U+2028`/`U+2029` are line breaks outside it.
+                c if c.is_control() || c == '\u{2028}' || c == '\u{2029}' => {
+                    write!(f, "\\u{{{:x}}}", c as u32)?;
+                }
+                c => f.write_str(c.encode_utf8(&mut [0u8; 4]))?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -552,6 +586,28 @@ mod tests {
                 "escaped path missing from {text:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_ordinary_path_prints_the_literal_a_player_can_copy_back() {
+        let err = ImportError::SameFile {
+            path: std::path::PathBuf::from(r#"C:\Users\me\my "roms"\emerald.gba"#),
+        };
+        assert!(
+            err.to_string()
+                .contains(r#"`C:\Users\me\my "roms"\emerald.gba`"#),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn every_line_breaker_and_terminal_control_is_escaped() {
+        let path = std::path::PathBuf::from("a\rb\tc\u{7f}d\u{9b}e\u{2028}f\u{2029}g");
+        let text = ImportError::SameFile { path }.to_string();
+        assert!(
+            text.contains(r"a\rb\tc\u{7f}d\u{9b}e\u{2028}f\u{2029}g"),
+            "{text}"
+        );
     }
 
     #[test]
