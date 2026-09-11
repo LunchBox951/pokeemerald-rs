@@ -214,11 +214,15 @@ impl ImportedPack {
 /// than followed and truncated (`write_new`); the caller publishes the
 /// finished file over the real destination itself.
 ///
-/// A failed import leaves nothing at `out_path`. Exclusive creation would
-/// otherwise make a half-written pack permanent — the retry would fail on
-/// its own leftover — so a write that dies part-way removes the file it
-/// created before returning [`ImportError::WriteFailed`]. The one failure
-/// that leaves the path occupied is the one that found it occupied.
+/// A write that dies part-way removes the partial file this call created at
+/// `out_path` before returning [`ImportError::WriteFailed`] — exclusive
+/// creation would otherwise make it permanent, since the retry would fail
+/// on its own leftover. That removal only ever takes this call's own file:
+/// an entry a concurrent writer installs at `out_path` in its place belongs
+/// to whoever put it there, is left exactly where it is, and is what a
+/// retry or the caller finds occupying the name afterward. The one failure
+/// that leaves the path occupied from the start, before this call ever
+/// creates anything, is the one that found it occupied.
 ///
 /// # Errors
 ///
@@ -410,6 +414,15 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// `O_CREAT | O_EXCL` refuses a symlink even a dangling one, and Windows'
 /// `CREATE_NEW` refuses an existing name the same way. The attack becomes
 /// a refused import naming the path, not a truncated file.
+///
+/// On Windows the handle also shares nothing (`share_mode(0)`, the same
+/// deny-all `StagedSave` opens its own exclusive create with in
+/// `crates/engine/src/save/file/staging.rs`): until it is dropped, no other
+/// opener can delete or rename the entry, so the name cannot come to mean a
+/// different file while [`write_new_with`] still holds it. That is what
+/// lets [`is_the_created_file`]'s non-unix arm answer "still ours" without
+/// reading an identity back off unix -- the check runs before the handle is
+/// given up, not on faith that nothing else touched the name.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
@@ -424,55 +437,165 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// A write that fails part-way leaves a prefix of the pack at a name this
 /// call created, and exclusive creation is what makes that unrecoverable:
 /// the retry would hit its own leftover and fail with `AlreadyExists`
-/// forever. So a failed write takes the file with it. Only this call could
-/// have created that name — creation succeeded here, exclusively — which
-/// is what makes removing it safe; the same reasoning already governs the
-/// CLI's cleanup of a failed import.
+/// forever. So a failed write takes the file with it -- but only if
+/// `out_path` still names the file this call created by the time cleanup
+/// runs. Exclusive creation proves that only this call could have created
+/// the name at open time; it says nothing about what the name means once
+/// the write closure has run and can fail after ceding control to arbitrary
+/// code, including, in a directory another account can write to, a
+/// concurrent peer that renames the partial file aside and puts its own
+/// file at `out_path` in the gap. [`remove_after`] checks the entry's
+/// identity against the still-open handle before it unlinks anything, the
+/// same standard `StagedSave::remove_after` holds its own cleanup to
+/// (`crates/engine/src/save/file/staging.rs`).
 ///
-/// The handle is dropped before the unlink because Windows refuses to
+/// The handle is passed to [`remove_after`] rather than dropped here, so
+/// the identity check has something to compare against; it drops the
+/// handle itself, immediately before the unlink, because Windows refuses to
 /// remove a file that is still open. The original I/O error is what the
-/// caller sees, via [`remove_after`], which keeps `error`'s own kind: the
+/// caller sees, via `remove_after`, which keeps `error`'s own kind: the
 /// write is why the import failed, and a cleanup that also fails augments
 /// that diagnosis instead of replacing it.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out_path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        options.share_mode(0);
+    }
+    let mut file = options.open(out_path)?;
     match write(&mut file) {
         Ok(()) => Ok(()),
-        Err(error) => {
-            drop(file);
-            Err(remove_after(out_path, error))
-        }
+        Err(error) => Err(remove_after(out_path, file, error)),
     }
 }
 
+/// Whether `found` -- the entry currently at `path` -- identifies the very
+/// file `file` holds open, judged by Unix device and inode: the one pair no
+/// rename or replacement at `path` can produce for an unrelated file.
+#[cfg(unix)]
+fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    let created = file.metadata()?;
+    Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
+}
+
+/// Off Unix there is no stable per-file identity to read back, so this arm
+/// answers from what the still-open handle already guarantees instead: on
+/// Windows, [`write_new`]'s exclusive create shares nothing, so no other
+/// opener can delete or rename `path` for as long as `_file` stays open, and
+/// this call always runs before [`remove_after_with`] gives the handle up.
+/// The name cannot have come to mean another file while it is still held,
+/// so [`still_the_created_file`]'s regular-file test is the whole remaining
+/// question (mirrors `is_the_held_file`'s non-unix arm in
+/// `crates/engine/src/save/file/staging.rs`, which rests on the identical
+/// deny-all hold).
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+)]
+fn is_the_created_file(_file: &std::fs::File, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+/// Whether `path` still names the file `file` holds open, rather than a
+/// symlink, directory, or other entry that took its name in the window
+/// between the write failure and this check.
+fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+    let found = std::fs::symlink_metadata(path)?;
+    Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
+}
+
 /// Removes the partial file `write_new_with` leaves behind after `original`,
-/// folding a cleanup failure into `original` instead of discarding it --
-/// silently dropping it would leave a partial file at `path` unreported for
-/// the one reason that most needs reporting it: its own removal failing
-/// too, which then blocks a retry with `AlreadyExists` and no clue why.
-/// Keeps `original`'s `ErrorKind` so a caller matching on it still sees the
-/// write failure that actually happened. A `NotFound` from the removal
-/// means nothing was left to remove, so there is nothing abandoned to
-/// report (`crates/xtask/src/extract/mod.rs`'s `remove_abandoned_staging_file`
-/// mirrors this for the extractor's own staged write).
-fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
-    match std::fs::remove_file(path) {
+/// but only if `path` still names that very file -- an entry that replaced
+/// it belongs to whoever put it there and is left exactly where it is,
+/// `original` returned unchanged, mirroring `StagedSave::remove_after`
+/// (`crates/engine/src/save/file/staging.rs`). An identity that could not be
+/// read is folded into `original` the same way a failed removal is: it is
+/// itself worth reporting alongside the write failure that caused this
+/// cleanup, and is not silently treated as either "ours" or "not ours".
+///
+/// This is a bound on what a pathname check can prove, not a guarantee:
+/// nothing stops a peer from replacing `path` in the gap between the kernel
+/// reading this call's last identity check and its own `unlink`, and this
+/// crate has no handle-bound removal that would close that gap outright.
+/// [`remove_after_with`] holds the identity check as late as it can --
+/// through the removal itself where the platform allows it -- so that gap
+/// is as small as a pathname-based check can make it, not smaller.
+///
+/// Folding a genuine removal failure into `original` instead of discarding
+/// it keeps the diagnosis: silently dropping it would leave a partial file
+/// at `path` unreported for the one reason that most needs reporting it:
+/// its own removal failing too, which then blocks a retry with
+/// `AlreadyExists` and no clue why. Keeps `original`'s `ErrorKind` so a
+/// caller matching on it still sees the write failure that actually
+/// happened. A `NotFound` -- whether from reading the entry's identity or
+/// from removing it -- means nothing was left to clean up, so there is
+/// nothing abandoned to report (`crates/xtask/src/extract/mod.rs`'s
+/// `remove_abandoned_staging_file` mirrors the removal half of this for the
+/// extractor's own staged write).
+fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> std::io::Error {
+    remove_after_with(path, file, original, |path| std::fs::remove_file(path))
+}
+
+/// [`remove_after`] with the removal injected, so a cleanup failure is
+/// testable without a privilege the test runner might lack (the same reason
+/// [`write_new_with`]'s own doc comment gives for injecting the write).
+///
+/// Unlinking a file through its own open handle is legal on Unix, so there
+/// `file` stays open across the call to `remove` and is dropped only once
+/// it returns: nothing of this function's own runs between the identity
+/// check just above and the unlink. Off Unix, [`write_new`]'s deny-all
+/// share mode is what that check rests on (see [`is_the_created_file`]'s
+/// non-unix arm), and it holds only while `file` stays open, so there the
+/// drop has to happen right before `remove` is called -- as late as the
+/// platform permits, not before.
+fn remove_after_with(
+    path: &Path,
+    file: std::fs::File,
+    original: std::io::Error,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Error {
+    match still_the_created_file(&file, path) {
+        Ok(true) => {}
+        Ok(false) => return original,
+        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return original,
+        Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
+    }
+    #[cfg(not(unix))]
+    drop(file);
+    let removed = remove(path);
+    #[cfg(unix)]
+    drop(file);
+    match removed {
         Ok(()) => original,
         Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
-        Err(cleanup_err) => std::io::Error::new(
-            original.kind(),
-            format!(
-                "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
-                crate::error::OneLinePath(path)
-            ),
-        ),
+        Err(cleanup_err) => cleanup_failed(path, &original, &cleanup_err),
     }
+}
+
+/// Folds a cleanup-side error into `original`, keeping `original`'s
+/// `ErrorKind` (see [`remove_after`]) and rendering `path` through
+/// [`error::OneLinePath`] since it is the caller's own destination path,
+/// exactly as untrusted as anywhere else this crate renders it.
+fn cleanup_failed(
+    path: &Path,
+    original: &std::io::Error,
+    cleanup_err: &std::io::Error,
+) -> std::io::Error {
+    std::io::Error::new(
+        original.kind(),
+        format!(
+            "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
+            crate::error::OneLinePath(path)
+        ),
+    )
 }
 
 /// Run every domain reader over `rom` and serialize the pack.
@@ -494,8 +617,8 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
-        ImportError, ImportReport, Roots,
+        build_pack, import, import_to_bytes, overwrites_rom, remove_after_with, write_new,
+        write_new_with, ImportError, ImportReport, Roots,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -710,19 +833,14 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn a_failed_cleanup_names_the_partial_file_it_left_behind() {
-        // `remove_after`'s own removal must also be able to fail -- silently
-        // dropping that failure (as the unfixed code did) would leave
-        // `out`'s name permanently taken with no clue why, and every retry
-        // would fail with `AlreadyExists` and no mention of the artifact
-        // blocking it. The write closure swaps the partial file for a
-        // non-empty directory before returning its error, so `remove_after`'s
-        // `remove_file` fails deterministically (`remove_file` refuses any
-        // directory, empty or not, regardless of the runner's privileges --
-        // unlike a permission-based seam, which root bypasses). Mirrors
-        // `crates/xtask/src/extract/mod.rs`'s
-        // `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
-        let dir = TempDir::new("write-cleanup-fails");
+    fn cleanup_leaves_a_directory_that_replaced_the_partial_file_alone() {
+        // The write closure swaps the partial file for a non-empty
+        // directory before returning its error. A directory is not a
+        // regular file, so `remove_after`'s identity check classifies it as
+        // a replacement and never attempts to remove it, mirroring
+        // `StagedSave::remove_after`'s `Ok(false) => return source`
+        // (`crates/engine/src/save/file/staging.rs`).
+        let dir = TempDir::new("write-cleanup-directory-swap");
         let out = dir.join("pokeemerald.pack");
 
         let err = write_new_with(&out, |file| {
@@ -738,16 +856,61 @@ mod tests {
         })
         .unwrap_err();
 
-        // The write's own error kind survives the additional cleanup
-        // failure, and the message names what cleanup left behind.
+        // Cleanup never touched the directory, so the write's own error
+        // comes back unmodified -- no removal failure to fold in.
         assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
-        assert!(
-            err.to_string().contains(&out.display().to_string()),
-            "a failed cleanup must name the artifact it left behind: {err}"
-        );
+        assert_eq!(err.to_string(), "no space left on device");
         assert!(
             out.is_dir(),
-            "cleanup should have failed, leaving the directory behind"
+            "cleanup must leave a directory that replaced the partial file alone"
+        );
+        assert_eq!(
+            std::fs::read(out.join("occupant")).expect("the occupant survives"),
+            b"occupant"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_leaves_a_file_that_replaced_the_partial_one_alone() {
+        // Exclusive creation proves this call created the name, not that
+        // the name still means this call's file when cleanup runs: a peer
+        // that renames the partial file aside and drops its own file at
+        // that name in the gap would make a pathname-only
+        // `remove_file(out)` unlink a file the importer never created.
+        // `StagedSave::remove_after` (`crates/engine/src/save/file/staging.rs`)
+        // is the standard -- it re-reads the entry's identity and leaves
+        // "an entry that replaced it" where it is. The closure stands in
+        // for the peer, as
+        // `cleanup_leaves_a_directory_that_replaced_the_partial_file_alone`
+        // already does for a swapped-in directory.
+        let dir = TempDir::new("write-cleanup-file-swap");
+        let out = dir.join("pokeemerald.pack");
+        let renamed_aside = dir.join("pokeemerald.pack.moved");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::rename(&out, &renamed_aside).expect("the peer renames the partial file aside");
+            std::fs::write(&out, b"the replacement").expect("the peer's own file takes the name");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(err.to_string(), "no space left on device");
+        assert_eq!(
+            std::fs::read(&out).expect("the replacement survives"),
+            b"the replacement",
+            "cleanup must never remove an entry that replaced this call's partial file"
+        );
+        assert_eq!(
+            std::fs::read(&renamed_aside).expect("the renamed-aside partial file survives"),
+            b"half a ",
+            "cleanup must not disturb the partial file once it is no longer at `out`"
         );
     }
 
@@ -759,22 +922,29 @@ mod tests {
         // `ImportError::WriteFailed` renders directly (see
         // `error::path_bearing_messages_are_escaped_and_stay_one_line`), so
         // a newline or ESC byte in the destination name must not survive
-        // into this cleanup-failure message either.
+        // into this cleanup-failure message either. The removal is
+        // injected via `remove_after_with`: cleanup only reaches a removal
+        // attempt for a name that still identifies the file this call
+        // created, and there is no privilege-independent way to make
+        // `remove_file` itself fail on such a name.
         let dir = TempDir::new("write-cleanup-fails-hostile");
         let out = dir.join("one\ntwo\u{1b}[2Kthree.pack");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        let original =
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device");
 
-        let err = write_new_with(&out, |file| {
-            use std::io::Write as _;
-            file.write_all(b"half a ")?;
-            drop(std::fs::remove_file(&out));
-            std::fs::create_dir(&out).expect("the directory takes the freed name");
+        let err = remove_after_with(&out, file, original, |_path| {
             Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
-                "no space left on device",
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
             ))
-        })
-        .unwrap_err();
+        });
 
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
         let text = err.to_string();
         assert!(!text.contains('\n'), "{text:?}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
