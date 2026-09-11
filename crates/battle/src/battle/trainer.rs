@@ -239,8 +239,9 @@ impl TrainerContext {
 
     /// Removes and returns the next non-fainted member in party order.
     ///
-    /// This models `OpponentHandleChoosePokemon`'s fallback scan, not its type-match
-    /// preference.
+    /// This models `OpponentHandleChoosePokemon`'s fallback scan, not
+    /// `GetMostSuitableMonToSwitchInto`'s type/damage selector that a fresh
+    /// forced post-faint send-out runs first upstream (issue #1040).
     pub(crate) fn send_out_next(&mut self) -> Option<BattlePokemon> {
         while !self.bench.is_empty() {
             let mon = self.bench.remove(0);

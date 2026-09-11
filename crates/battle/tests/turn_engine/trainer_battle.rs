@@ -20,9 +20,10 @@
 //! Absorb is level 6).
 //!
 //! Two-mon parties do not exist on Route 103, so the send-out-in-party-order
-//! rule is exercised against a hand-built party instead — the rule is
-//! upstream's, and pinning it only against a one-mon party would pin
-//! nothing.
+//! scan is exercised against a hand-built party instead — pinning it only
+//! against a one-mon party would pin nothing. That scan is this crate's own
+//! modeled fallback, not upstream's full send-out rule: see
+//! `TrainerContext::send_out_next`'s docs and issue #1040.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -224,14 +225,15 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
 }
 
 /// The forced post-faint send-out: party order, at the *end* of the turn,
-/// and the battle carries on.
+/// and the battle carries on. Pins this crate's own fallback scan, not
+/// upstream's true send-out rule (module docs, issue #1040).
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
     // A three-mon party. Route 103's is one mon, so this is a synthetic
-    // party against a real trainer id -- the send-out *rule* is upstream's
-    // regardless of who is fielding it.
+    // party against a real trainer id, exercising this crate's fallback
+    // scan (not upstream's rule -- see the module docs).
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
