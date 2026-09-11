@@ -7,8 +7,8 @@
 //! [`Resampler`] drains all the source frames a callback needs in **one**
 //! [`crate::ring::Consumer::fill`] call into a preallocated scratch buffer,
 //! then linearly interpolates from that scratch. That honours `crate::ring`'s
-//! invariant — one queue-lock acquisition per callback, never one per source
-//! frame — so the resampled path locks no more often than the direct path,
+//! invariant — one non-blocking bulk drain per callback, never one per source
+//! frame — so the resampled path is no more contended than the direct path,
 //! and underrun accounting (counted inside `Consumer::fill`) is identical
 //! whether or not resampling is in play.
 //!
@@ -45,9 +45,9 @@ pub struct Resampler {
     frac: f64,
     prev: Vec<f32>,
     next: Vec<f32>,
-    /// Preallocated interleaved source-frame scratch, bulk-drained under one
-    /// lock per callback (grown off the hot path only if a callback is larger
-    /// than the constructor's estimate).
+    /// Preallocated interleaved source-frame scratch, bulk-drained in one
+    /// non-blocking call per callback (grown off the hot path only if a
+    /// callback is larger than the constructor's estimate).
     scratch: Vec<f32>,
     primed: bool,
     /// Whether the next output frame should first advance the interpolation
@@ -66,7 +66,7 @@ impl Resampler {
     /// `max_output_frames` is the device's largest advertised callback size
     /// in frames (`0` if the device advertises none); it bounds — and lets
     /// the constructor preallocate — the per-callback source scratch buffer
-    /// so the real-time [`Self::fill`] never locks per frame and, in steady
+    /// so the real-time [`Self::fill`] never drains per frame and, in steady
     /// state, never allocates.
     #[must_use]
     pub fn new(
@@ -120,12 +120,13 @@ impl Resampler {
     /// `out.len()` should be a multiple of `channels`; a short trailing
     /// partial frame is filled as far as it goes and otherwise ignored.
     ///
-    /// A zero-length `out` is a no-op: it does not lock the ring buffer,
+    /// A zero-length `out` is a no-op: it does not drain the ring buffer,
     /// prime the interpolator, or count an underrun.
     ///
-    /// Locks the ring buffer exactly once: all the source frames this call
+    /// Drains the ring buffer exactly once: all the source frames this call
     /// needs are bulk-drained up front (see the module docs), then the
-    /// interpolation loop reads them from scratch without touching the queue.
+    /// interpolation loop reads them from scratch without touching the ring
+    /// again.
     pub fn fill(&mut self, out: &mut [f32]) {
         // A zero-length fill must not move the stream: no priming frames
         // drained, no queue occupancy change, no underrun accounted. Every
@@ -168,8 +169,9 @@ impl Resampler {
         let source_frames = prime + crossings;
         let needed = source_frames * self.channels;
 
-        // Bulk-drain every needed source frame under ONE lock. Grow only here,
-        // off the per-frame hot loop, for a larger-than-estimated callback.
+        // Bulk-drain every needed source frame in ONE non-blocking call. Grow
+        // only here, off the per-frame hot loop, for a larger-than-estimated
+        // callback.
         if self.scratch.len() < needed {
             self.scratch.resize(needed, 0.0);
         }
