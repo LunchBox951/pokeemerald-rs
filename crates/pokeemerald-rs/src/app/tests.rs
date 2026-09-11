@@ -572,3 +572,86 @@ fn title_music_start_failure_names_its_subsystem_once() {
         "the recovery log must name its subsystem once, not once per error layer: {message}"
     );
 }
+
+/// Set only on the child process re-executed below, so it can tell that run
+/// apart from an ordinary one -- including CI's blanket `cargo test -p
+/// pokeemerald-rs -- --ignored` real-pack sweep, where this stays unset.
+const START_TITLE_MUSIC_BOUNDARY_CHILD: &str =
+    "POKEEMERALD_RS_923_START_TITLE_MUSIC_BOUNDARY_CHILD";
+
+/// A scratch, valid but entryless asset pack: an empty
+/// [`pack_format::PackWriter`] already serializes exactly this, at the live
+/// [`pack_format::FORMAT_VERSION`]. Path is unique per test/thread, mirroring
+/// `flow::tests::TempSave::new`.
+fn write_empty_scratch_pack(label: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-923-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let bytes = pack_format::PackWriter::new()
+        .finish()
+        .expect("an entryless pack always serializes");
+    std::fs::write(&path, bytes).expect("the scratch pack path must be writable");
+    path
+}
+
+/// Issue #923 regression: the pin above only covers
+/// [`title_music_start_failure_message`]'s pure formatter, not the
+/// `eprintln!` at [`App::start_title_music`]'s own song-start `Err` arm that
+/// actually emits it -- a caller-side `music: ` re-added there would pass
+/// that test unnoticed (`crates/README.md`'s regression-test convention).
+/// Re-executes this test binary as a child against a scratch entryless pack
+/// (pack load succeeds, song lookup fails), so it reads back what the
+/// production `eprintln!` actually wrote.
+#[test]
+fn start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary() {
+    if std::env::var_os(START_TITLE_MUSIC_BOUNDARY_CHILD).is_some() {
+        let mut context = crate::music::MusicContext::new();
+        // Never actually called: the song lookup fails first.
+        let played = App::start_title_music(
+            crate::pack_source::PackSource::Runtime,
+            &mut context,
+            || {
+                Ok(platform::AudioOutput::null(
+                    crate::music::RING_CAPACITY_FRAMES,
+                ))
+            },
+        );
+        assert!(
+            played.is_none(),
+            "an entryless pack has no `mus_title` entry, so the song lookup must fail"
+        );
+        return;
+    }
+
+    let pack_path = write_empty_scratch_pack("start-title-music-boundary");
+    let exe = std::env::current_exe().expect("the running test binary has a path");
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "--nocapture",
+            "app::tests::start_title_music_failure_emits_its_subsystem_prefix_once_at_the_eprintln_boundary",
+        ])
+        .env(START_TITLE_MUSIC_BOUNDARY_CHILD, "1")
+        .env(pack_format::PACK_PATH_ENV, &pack_path)
+        .output()
+        .expect("re-running this test binary must succeed");
+    drop(std::fs::remove_file(&pack_path));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|line| line.contains("the title screen will play without music"))
+        .unwrap_or_else(|| panic!("the child never reached the boundary; stderr:\n{stderr}"));
+    assert_eq!(
+        line.matches("music:").count(),
+        1,
+        "the eprintln! boundary must name its subsystem once, not once per prefix layer: {line}"
+    );
+    assert!(
+        output.status.success(),
+        "the child test must pass: status {:?}\nstderr:\n{stderr}",
+        output.status
+    );
+}
