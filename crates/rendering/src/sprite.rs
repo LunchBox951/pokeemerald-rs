@@ -609,7 +609,12 @@ mod tests {
         const NEGATIVE_FOUR_RAW_X: u16 = 508;
         const SOURCE_X_AT_SCREEN_EDGE: usize = 4;
 
-        let tile = bpp4_tile(&[((SOURCE_X_AT_SCREEN_EDGE, 0), RED_INDEX)]);
+        // The whole first row is opaque, so a sampler that ran past the
+        // sprite's width would paint the backdrop at screen x=4.
+        let opaque_row: Vec<((usize, usize), u8)> = (0..BitDepth::TILE_DIM)
+            .map(|x| ((x, 0), RED_INDEX))
+            .collect();
+        let tile = bpp4_tile(&opaque_row);
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile).unwrap();
         let palette = palette_with_colors(&[(RED_INDEX, RED)]);
         let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true)];
@@ -619,7 +624,11 @@ mod tests {
         layer.composite(&mut fb);
 
         assert_eq!(fb.pixel(0, 0), Some(RED.to_rgb888()));
-        assert_eq!(fb.pixel(4, 0), Some(Rgb888::BLACK));
+        assert_eq!(
+            fb.pixel(SOURCE_X_AT_SCREEN_EDGE - 1, 0),
+            Some(RED.to_rgb888())
+        );
+        assert_eq!(fb.pixel(SOURCE_X_AT_SCREEN_EDGE, 0), Some(Rgb888::BLACK));
     }
 
     #[test]
