@@ -496,4 +496,30 @@ mod tests {
             assert_eq!(consumer.underruns(), 0);
         }
     }
+
+    /// The rollover this ring has no exposure to is the counter's own, at
+    /// `usize::MAX + 1`; it is unreachable because each cursor is reduced
+    /// `% capacity` on every advance. An unbounded-counter implementation
+    /// fails this on the second iteration for either capacity.
+    #[test]
+    fn cursors_stay_bounded_by_capacity_so_no_usize_rollover_exists() {
+        for capacity in [3usize, 4] {
+            let (producer, mut consumer) = ring_buffer(capacity);
+            for _ in 0..=(2 * capacity) {
+                assert_eq!(producer.push(&[1.0, 2.0]), 2);
+                let mut out = [0.0; 2];
+                consumer.fill(&mut out);
+                assert_eq!(out, [1.0, 2.0], "capacity {capacity}");
+                assert!(
+                    *lock_head(&producer.shared.head) < capacity,
+                    "head left unbounded at capacity {capacity}"
+                );
+                assert!(
+                    consumer.tail < capacity,
+                    "tail left unbounded at capacity {capacity}"
+                );
+            }
+            assert_eq!(consumer.underruns(), 0);
+        }
+    }
 }
