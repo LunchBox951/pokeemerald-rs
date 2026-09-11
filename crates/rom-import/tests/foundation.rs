@@ -65,13 +65,46 @@ fn a_profile_built_from_the_fixture_selects_it() {
     assert_eq!(selected.sha1, rom.digest());
 }
 
+/// A fresh directory under the OS temporary directory, unique to this
+/// process and this call, removed on drop.
+///
+/// A fixed shared path would let two `cargo test` processes (two worktrees,
+/// or a workspace run alongside a targeted run) race: one process's cleanup
+/// could unlink the other's fixture mid-import.
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "rom-import-foundation-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("a writable temp dir");
+        Self { path }
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.path.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 #[test]
 fn import_fails_closed_on_an_unsupported_rom() {
-    let dir = std::env::temp_dir().join("rom-import-foundation-test");
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    let dir = TempDir::new("test");
     let rom_path = dir.join("fixture.gba");
     let out_path = dir.join("assets.pack");
-    let _ = std::fs::remove_file(&out_path);
     std::fs::write(&rom_path, rom_with_a_compressed_blob().bytes()).expect("a writable temp file");
 
     // The fixture is not the supported revision, so the import stops at
@@ -79,6 +112,4 @@ fn import_fails_closed_on_an_unsupported_rom() {
     let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
     assert!(matches!(err, ImportError::UnsupportedRevision { .. }));
     assert!(!out_path.exists(), "import must never write a pack");
-
-    std::fs::remove_file(&rom_path).expect("cleanup");
 }
