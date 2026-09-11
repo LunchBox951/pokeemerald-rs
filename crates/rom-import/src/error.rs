@@ -494,13 +494,14 @@ impl fmt::Display for OneLinePath<'_> {
                 '\t' => f.write_str(r"\t")?,
                 // `is_control` is the Unicode `Cc` category: C0, DEL, and C1.
                 // `U+2028`/`U+2029` are line breaks outside it, and the bidi
-                // embedding, override, isolate, and mark controls can reorder
+                // embedding, override, isolate, and mark controls (`Bidi_Control`) can reorder
                 // the text after the path on a bidi-aware terminal.
                 c if c.is_control()
                     || matches!(
                         c,
                         '\u{2028}'
                             | '\u{2029}'
+                            | '\u{061c}'
                             | '\u{200e}'
                             | '\u{200f}'
                             | '\u{202a}'..='\u{202e}'
@@ -625,12 +626,12 @@ mod tests {
     #[test]
     fn bidi_controls_cannot_reorder_the_text_after_the_path() {
         let path = std::path::PathBuf::from(
-            "a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l",
+            "a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l\u{61c}m",
         );
         let text = ImportError::SameFile { path }.to_string();
         assert!(
             text.contains(
-                r"a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l"
+                r"a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l\u{61c}m"
             ),
             "{text}"
         );
