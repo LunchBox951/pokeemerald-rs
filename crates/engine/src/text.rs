@@ -440,7 +440,11 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
                 out.push(*sub);
                 out.extend_from_slice(args);
             }
-            Token::End => out.push(EOS),
+            Token::End => {
+                out.push(EOS);
+                // Each string starts Latin, as [`decode`] does from its own slice.
+                active_font = Font::Latin;
+            }
         }
     }
     Ok(out)
@@ -1344,8 +1348,13 @@ mod tests {
             TextError::UnsupportedJapanese(byte_from_symbol(Symbol::Lv))
         );
         assert_eq!(
-            encode(&[jpn_switch, Token::BardWordDelimit, Token::End]).unwrap_err(),
+            encode(&[jpn_switch.clone(), Token::BardWordDelimit, Token::End]).unwrap_err(),
             TextError::UnsupportedJapanese(CHAR_BARD_WORD_DELIMIT)
+        );
+        assert_eq!(
+            encode(&[jpn_switch, Token::End, Token::Char('A'), Token::End]).unwrap(),
+            vec![EXT_CTRL_CODE_BEGIN, EXT_CTRL_CODE_JPN, EOS, latin_a, EOS],
+            "a terminator ends the Japanese font along with the string"
         );
     }
 
