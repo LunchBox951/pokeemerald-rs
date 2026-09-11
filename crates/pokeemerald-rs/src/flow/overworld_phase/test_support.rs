@@ -108,6 +108,14 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
 /// unlike `MapRuntime`, is pack-backed -- see the sibling test modules'
 /// pack-dependent, `#[ignore]`d tests).
 pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
+    runtime_with_connections(width, height, &[])
+}
+
+fn runtime_with_connections(
+    width: u16,
+    height: u16,
+    connections: &'static [assets::MapConnection],
+) -> MapRuntime<'static> {
     let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
     for _ in 0..width * height {
         let raw = MetatileCell {
@@ -136,7 +144,7 @@ pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
-        connections: &[],
+        connections,
     }));
     let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
         id: MapId("MAP_TEST"),
@@ -239,8 +247,7 @@ pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
 /// `target` with `offset` -- the fixture the coordinate-translation tests
 /// below step off the edge of. Mirrors [`flat_runtime`] plus
 /// `engine::overworld::map_runtime::tests::south_connected_runtime`'s own
-/// shape (that fixture is private to `engine`, so this is a small
-/// reimplementation, not a shared helper).
+/// shape (that fixture is private to `engine`).
 pub(super) fn connected_runtime(
     width: u16,
     height: u16,
@@ -248,69 +255,13 @@ pub(super) fn connected_runtime(
     offset: i32,
     target: MapId,
 ) -> MapRuntime<'static> {
-    let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
-    for _ in 0..width * height {
-        let raw = MetatileCell {
-            metatile_id: 1,
-            collision: 0,
-            elevation: 3,
-        }
-        .pack();
-        bytes.extend_from_slice(&raw.to_le_bytes());
-    }
-    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-
     let connections: &'static [assets::MapConnection] =
         Box::leak(Box::new([assets::MapConnection {
             direction,
             offset,
             target,
         }]));
-    let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
-        id: MapId("MAP_TEST"),
-        group: 0,
-        num: 0,
-        name: "MapTest",
-        layout: assets::LayoutId("MAP_TEST"),
-        music: assets::MusicId(0),
-        region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
-        requires_flash: false,
-        weather: assets::Weather::None,
-        map_type: assets::MapType::Route,
-        allow_bike: true,
-        allow_escape: true,
-        allow_run: true,
-        show_name: false,
-        battle_scene: assets::BattleScene::Normal,
-        connections,
-    }));
-    let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
-        id: MapId("MAP_TEST"),
-        shared_events_map: None,
-        object_events: &[],
-        warp_events: &[],
-        coord_events: &[],
-        bg_events: &[],
-    }));
-
-    let layout: &'static MapLayout = Box::leak(Box::new(MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width,
-        height,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    }));
-    let grid = layout.grid(bytes).unwrap();
-
-    MapRuntime::new(
-        MapId("MAP_TEST"),
-        header,
-        events,
-        grid,
-        assets::MetatileAttributeTable::new(&[]),
-        assets::MetatileAttributeTable::new(&[]),
-    )
+    runtime_with_connections(width, height, connections)
 }
 
 /// A phase standing on 1F's own floor, for `warp_tests`' doormat tests: a real
