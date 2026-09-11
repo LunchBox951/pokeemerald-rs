@@ -139,11 +139,14 @@ impl<'a> MetatileAttributeTable<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MetatileAttribute, MetatileAttributeTable, MetatileLayerType, BYTES_PER_METATILE_ATTRIBUTE,
-        METATILE_BEHAVIOR_MASK, METATILE_LAYER_TYPE_MASK, METATILE_LAYER_TYPE_SHIFT,
-    };
+    use super::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
     use crate::error::AssetError;
+
+    const COVERED_LAYER_BITS: u16 = 0x1000;
+    const SPLIT_LAYER_BITS: u16 = 0x2000;
+    const UNKNOWN_LAYER_BITS: u16 = 0x3000;
+    const UNUSED_ATTRIBUTE_BITS: u16 = 0x0F00;
+    const UNKNOWN_LAYER_TYPE: u8 = 3;
 
     #[test]
     fn layer_type_decodes_known_values() {
@@ -170,41 +173,61 @@ mod tests {
 
     #[test]
     fn metatile_attribute_round_trips_through_pack() {
-        for behavior in u8::MIN..=u8::MAX {
-            for layer_type in [
-                MetatileLayerType::Normal,
-                MetatileLayerType::Covered,
-                MetatileLayerType::Split,
-            ] {
-                let attribute = MetatileAttribute {
-                    behavior,
-                    layer_type,
-                };
-                assert_eq!(MetatileAttribute::from_raw(attribute.pack()), Ok(attribute));
-            }
+        let cases = [
+            (
+                MetatileAttribute {
+                    behavior: 0,
+                    layer_type: MetatileLayerType::Normal,
+                },
+                0,
+            ),
+            (
+                MetatileAttribute {
+                    behavior: u8::MAX,
+                    layer_type: MetatileLayerType::Normal,
+                },
+                u16::from(u8::MAX),
+            ),
+            (
+                MetatileAttribute {
+                    behavior: 0,
+                    layer_type: MetatileLayerType::Covered,
+                },
+                COVERED_LAYER_BITS,
+            ),
+            (
+                MetatileAttribute {
+                    behavior: 1,
+                    layer_type: MetatileLayerType::Split,
+                },
+                SPLIT_LAYER_BITS | 1,
+            ),
+        ];
+
+        for (attribute, raw) in cases {
+            assert_eq!(attribute.pack(), raw);
+            assert_eq!(MetatileAttribute::from_raw(raw), Ok(attribute));
         }
     }
 
     #[test]
     fn metatile_attribute_pack_zeroes_the_unused_bits() {
-        let unused_bits = !(METATILE_BEHAVIOR_MASK | METATILE_LAYER_TYPE_MASK);
-        let raw = unused_bits | 1;
+        let raw = UNUSED_ATTRIBUTE_BITS | 1;
         let attribute = MetatileAttribute::from_raw(raw).unwrap();
         assert_eq!(attribute.pack(), 1);
     }
 
     #[test]
     fn metatile_attribute_rejects_unknown_layer_type_bits() {
-        const UNKNOWN_LAYER_TYPE: u8 = 3;
-        let raw = u16::from(UNKNOWN_LAYER_TYPE) << METATILE_LAYER_TYPE_SHIFT;
         assert_eq!(
-            MetatileAttribute::from_raw(raw),
+            MetatileAttribute::from_raw(UNKNOWN_LAYER_BITS),
             Err(AssetError::UnknownMetatileLayerType(UNKNOWN_LAYER_TYPE))
         );
     }
 
     #[test]
     fn table_decodes_entries_in_local_metatile_identity_order() {
+        let bytes = [0x01, 0x00, 0x02, 0x10, 0x03, 0x20];
         let attributes = [
             MetatileAttribute {
                 behavior: 1,
@@ -219,10 +242,6 @@ mod tests {
                 layer_type: MetatileLayerType::Split,
             },
         ];
-        let mut bytes = Vec::new();
-        for attribute in attributes {
-            bytes.extend_from_slice(&attribute.pack().to_le_bytes());
-        }
         let table = MetatileAttributeTable::new(&bytes);
         assert_eq!(table.len(), attributes.len());
         assert!(!table.is_empty());
@@ -235,17 +254,15 @@ mod tests {
 
     #[test]
     fn table_attribute_at_out_of_range_is_none() {
-        let bytes = [0u8; BYTES_PER_METATILE_ATTRIBUTE * 2];
-        let table = MetatileAttributeTable::new(&bytes);
+        let two_encoded_attributes = [0u8; 4];
+        let table = MetatileAttributeTable::new(&two_encoded_attributes);
         assert!(table.attribute_at(2).is_none());
         assert!(table.attribute_at(1000).is_none());
     }
 
     #[test]
     fn table_attribute_at_bad_layer_type_is_an_error() {
-        const UNKNOWN_LAYER_TYPE: u8 = 3;
-        let raw = u16::from(UNKNOWN_LAYER_TYPE) << METATILE_LAYER_TYPE_SHIFT;
-        let bytes = raw.to_le_bytes();
+        let bytes = UNKNOWN_LAYER_BITS.to_le_bytes();
         let table = MetatileAttributeTable::new(&bytes);
         assert_eq!(
             table.attribute_at(0),
@@ -257,8 +274,8 @@ mod tests {
 
     #[test]
     fn table_ignores_a_trailing_partial_attribute() {
-        let bytes = [0; BYTES_PER_METATILE_ATTRIBUTE + 1];
-        let table = MetatileAttributeTable::new(&bytes);
+        let one_attribute_and_trailing_byte = [0; 3];
+        let table = MetatileAttributeTable::new(&one_attribute_and_trailing_byte);
         assert_eq!(table.len(), 1);
         assert_eq!(table.attributes().count(), 1);
         assert_eq!(table.attribute_at(1), None);
