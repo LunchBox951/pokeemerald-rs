@@ -9,8 +9,10 @@
 //! split follow `BattleScript_EffectParalyze`
 //! (`pokeemerald/data/battle_scripts_1.s:1007-1038`).
 //!
-//! Substitute, Safeguard, and non-paralysis primary statuses are outside this
-//! battle model.
+//! A target already carrying a primary status other than paralysis takes the
+//! generic failure exit, not [`ParalyzeOutcome::AlreadyParalysed`].
+//!
+//! Substitute and Safeguard are outside this battle model.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -53,9 +55,10 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 ///
 /// This function does not report move-data errors; callers use
 /// [`ensure_resolvable`] for those. Attempts stopped by Limber, type immunity,
-/// or existing paralysis are accepted because they cannot reach an unsupported
-/// interaction. Synchronize is also accepted when the attacker is already
-/// paralysed and therefore cannot receive the reflected status.
+/// or an existing primary status are accepted because they cannot reach an
+/// unsupported interaction. Synchronize is also accepted when the attacker
+/// already carries a primary status and therefore cannot receive the
+/// reflected one.
 ///
 /// # Errors
 ///
@@ -75,7 +78,7 @@ pub fn ensure_admissible(
     };
     if defender.ability() == AbilityId::LIMBER
         || defender_is_immune(move_type, defender)
-        || defender.status1().is_paralysed()
+        || !defender.status1().is_healthy()
     {
         return Ok(());
     }
@@ -83,7 +86,7 @@ pub fn ensure_admissible(
         ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
             Err(BattleError::UnportedAbilityInteraction(ability))
         }
-        AbilityId::SYNCHRONIZE if !attacker.status1().is_paralysed() => Err(
+        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
             BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
         ),
         _ => Ok(()),
@@ -99,6 +102,8 @@ pub enum ParalyzeOutcome {
     Immune,
     /// The defender is already [`crate::status1::Status1::Paralysed`].
     AlreadyParalysed,
+    /// The defender already carries a primary status other than paralysis.
+    AlreadyStatused,
     /// The accuracy check missed.
     Miss,
     /// The move connected; the caller must inflict
@@ -109,7 +114,7 @@ pub enum ParalyzeOutcome {
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// Limber, type immunity, existing paralysis, and unsupported ability
+/// Limber, type immunity, an existing primary status, and unsupported ability
 /// interactions are resolved before accuracy. Only the accuracy check can
 /// consume RNG.
 ///
@@ -143,6 +148,9 @@ pub fn resolve_paralyze_move(
     }
     if defender.status1().is_paralysed() {
         return Ok(ParalyzeOutcome::AlreadyParalysed);
+    }
+    if !defender.status1().is_healthy() {
+        return Ok(ParalyzeOutcome::AlreadyStatused);
     }
     ensure_admissible(dex, move_id, attacker, defender)?;
 

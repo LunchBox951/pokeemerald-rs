@@ -1038,7 +1038,7 @@ fn a_level_up_on_a_loaded_ev_trained_mon_grows_current_hp_by_the_zero_ev_delta()
 /// `Cmd_getexp`'s own order, `MonGainEVs` before the
 /// `CalculateMonStats`-triggering exp write
 /// (`pokeemerald/src/battle_script_commands.c:3420`, module docs).
-/// [`crate::battle::Battle::settle_win_reward`] is the real call site for
+/// [`crate::battle::Battle::settle_enemy_reward`] is the real call site for
 /// the ordering; `pokeemerald-rs::party`'s own tests pin the save-file
 /// outcome end to end. This pins the [`BattlePokemon`]-level half: the
 /// gain survives the level-up, and [`BattlePokemon::stats`] itself stays

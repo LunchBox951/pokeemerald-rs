@@ -6,20 +6,18 @@ use crate::damage::BattleRng;
 use crate::defense_curl::is_defense_curl_effect;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
-use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::multi_hit::is_multi_hit_effect;
 use crate::paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
-use crate::pokemon::MAX_LEVEL;
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
 };
 use crate::status1::Status1;
 
-use super::{Battle, BattleEvent, BattleOutcome};
+use super::{Battle, BattleEvent};
 
 mod pipelines;
 
@@ -100,7 +98,7 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let outcome = {
+        let resolution = {
             let (attacker, defender) = self.battlers(attacker_is_player);
             resolve_hit(
                 &self.dex,
@@ -112,7 +110,7 @@ impl Battle {
             )?
         };
 
-        match outcome {
+        match resolution.outcome {
             HitOutcome::Miss => {
                 events.push(BattleEvent::Missed {
                     by_player: attacker_is_player,
@@ -136,7 +134,25 @@ impl Battle {
                     damage: hp_lost,
                     is_critical,
                 });
-                self.settle_faint(!attacker_is_player, events)?;
+                // `seteffectwithchance` precedes `tryfaintmon`
+                // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
+                // leads with an `hp == 0` guard
+                // (`battle_script_commands.c:2261`-`:2264`).
+                if resolution.poisons_defender {
+                    let defender = if attacker_is_player {
+                        &mut self.enemy
+                    } else {
+                        &mut self.player
+                    };
+                    if !defender.is_fainted() {
+                        defender.set_status1(Status1::Poisoned);
+                        events.push(BattleEvent::Poisoned {
+                            by_player: attacker_is_player,
+                            move_id,
+                        });
+                    }
+                }
+                self.settle_faint(!attacker_is_player, events);
             }
         }
         Ok(())
@@ -154,37 +170,27 @@ impl Battle {
         hp_lost
     }
 
-    /// Settles one fainted battler unless the battle already ended.
+    /// `tryfaintmon` for one side: reports the faint and clears the corpse's
+    /// battle-only state.
     ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if the fainted opponent's species is
-    /// missing from the dex, which the experience award has to look up.
-    pub(super) fn settle_faint(
-        &mut self,
-        fainted_is_player: bool,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        if self.outcome().is_some() {
-            return Ok(());
-        }
+    /// The reward and the battle outcome wait for `HandleFaintedMonActions`,
+    /// which `Cmd_end` schedules only once the whole move script is done
+    /// (`battle_script_commands.c:3950`-`:3958`) — see [`Battle::pass_turn`].
+    /// A no-op when the battler is still standing, so a caller can run it
+    /// unconditionally at each `tryfaintmon` in a script.
+    pub(super) fn settle_faint(&mut self, fainted_is_player: bool, events: &mut Vec<BattleEvent>) {
         let battler_is_fainted = if fainted_is_player {
             self.player.is_fainted()
         } else {
             self.enemy.is_fainted()
         };
         if !battler_is_fainted {
-            return Ok(());
+            return;
         }
         events.push(BattleEvent::Fainted {
             by_player: fainted_is_player,
         });
         self.clear_fainted_battler_state(fainted_is_player);
-        if fainted_is_player {
-            self.finish(events, BattleOutcome::PlayerLost);
-            return Ok(());
-        }
-        self.settle_win_reward(events)
     }
 
     fn clear_fainted_battler_state(&mut self, fainted_is_player: bool) {
@@ -195,53 +201,6 @@ impl Battle {
         };
         fainted_battler.clear_battle_scratch();
         fainted_battler.set_status1(Status1::Healthy);
-    }
-
-    /// Awards an enemy faint and finishes a wild battle when no prompt remains.
-    ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnknownSpecies`] if the fainted opponent's species is
-    /// missing from the dex, which the experience award has to look up.
-    pub(super) fn settle_win_reward(
-        &mut self,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        if self.player.level() < MAX_LEVEL {
-            self.award_enemy_faint_experience(events)?;
-        }
-
-        let wild_battle_can_finish =
-            self.trainer().is_none() && self.player.pending_move_learn().is_none();
-        if wild_battle_can_finish {
-            self.finish(events, BattleOutcome::PlayerWon);
-        }
-        Ok(())
-    }
-
-    fn award_enemy_faint_experience(
-        &mut self,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        let defeated = self.dex.species(self.enemy.species())?;
-        let defeated_level = self.enemy.level();
-        let experience = if self.trainer().is_some() {
-            trainer_faint_exp(defeated.base_exp, defeated_level)
-        } else {
-            wild_faint_exp(defeated.base_exp, defeated_level)
-        };
-
-        // `Cmd_getexp` awards EVs before applying experience
-        // (`battle_script_commands.c:3420`).
-        self.player.gain_evs(defeated.ev_yield);
-        let pending_move_learn = self.player.apply_experience(&self.dex, experience)?;
-        events.push(BattleEvent::ExpGained(experience));
-        if let Some(prompt) = pending_move_learn {
-            events.push(BattleEvent::MoveLearnPrompt {
-                move_id: prompt.move_id(),
-            });
-        }
-        Ok(())
     }
 
     fn execute_stat_change_move(
@@ -347,6 +306,12 @@ impl Battle {
             }
             ParalyzeOutcome::AlreadyParalysed => {
                 events.push(BattleEvent::AlreadyParalyzed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            ParalyzeOutcome::AlreadyStatused => {
+                events.push(BattleEvent::ButItFailed {
                     by_player: attacker_is_player,
                     move_id,
                 });

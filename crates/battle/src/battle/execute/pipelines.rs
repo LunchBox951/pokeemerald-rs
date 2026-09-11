@@ -13,7 +13,7 @@ use crate::hit::{damage_before_roll, HitOutcome};
 use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
 use crate::stat_change::set_stage;
 
-use super::{Battle, BattleEvent, BattleOutcome};
+use super::{Battle, BattleEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MultiHitConclusion {
@@ -85,7 +85,8 @@ impl Battle {
             self.apply_drain_to_attacker(attacker_is_player, move_id, drain, events);
         }
 
-        self.settle_drain_faints(attacker_is_player, events)
+        self.settle_drain_faints(attacker_is_player, events);
+        Ok(())
     }
 
     fn apply_drain_to_attacker(
@@ -120,18 +121,17 @@ impl Battle {
         }
     }
 
-    fn settle_drain_faints(
-        &mut self,
-        attacker_is_player: bool,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
+    fn settle_drain_faints(&mut self, attacker_is_player: bool, events: &mut Vec<BattleEvent>) {
         let (attacker_fainted, target_fainted) = {
             let (attacker, defender) = self.battlers(attacker_is_player);
             (attacker.is_fainted(), defender.is_fainted())
         };
 
-        // The drain script reports attacker then target; a simultaneous double faint
-        // uses the loss path (`data/battle_scripts_1.s:358-359`; `src/battle_main.c:557-559`).
+        // The drain script reports attacker then target
+        // (`data/battle_scripts_1.s:358`-`:359`); neither report decides
+        // `gBattleOutcome` or awards experience, which upstream defers to
+        // `HandleFaintedMonActions` (`src/battle_script_commands.c:3950`-
+        // `:3958`, and [`Battle::pass_turn`]).
         let faints_in_script_order = [
             (attacker_fainted, attacker_is_player),
             (target_fainted, !attacker_is_player),
@@ -148,23 +148,6 @@ impl Battle {
                 self.clear_fainted_battler_state(is_player);
             }
         }
-
-        let player_fainted = if attacker_is_player {
-            attacker_fainted
-        } else {
-            target_fainted
-        };
-        let enemy_fainted = if attacker_is_player {
-            target_fainted
-        } else {
-            attacker_fainted
-        };
-        if player_fainted {
-            self.finish(events, BattleOutcome::PlayerLost);
-        } else if enemy_fainted {
-            self.settle_win_reward(events)?;
-        }
-        Ok(())
     }
 
     /// Applies a fixed-damage outcome and settles the target's faint.
@@ -196,7 +179,8 @@ impl Battle {
             damage: hp_lost,
             is_critical,
         });
-        self.settle_faint(!attacker_is_player, events)
+        self.settle_faint(!attacker_is_player, events);
+        Ok(())
     }
 
     /// Applies live HP between multi-hit attempts and settles the target's faint.
@@ -234,13 +218,16 @@ impl Battle {
             });
         }
 
+        let defender = self.battlers(attacker_is_player).1;
         spend_multi_hit_effect_chance_draw(
             &self.dex,
             move_id,
             result.conclusion.permits_secondary_effect(),
+            defender,
             rng,
         )?;
-        self.settle_faint(!attacker_is_player, events)
+        self.settle_faint(!attacker_is_player, events);
+        Ok(())
     }
 
     fn apply_multi_hit_attempts(

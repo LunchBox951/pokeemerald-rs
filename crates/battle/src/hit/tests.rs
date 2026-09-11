@@ -98,9 +98,10 @@ fn a_miss_draws_only_for_accuracy() {
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new([TACKLE_MISS_DRAW]);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
-    assert_eq!(outcome, HitOutcome::Miss);
+    assert_eq!(resolution.outcome, HitOutcome::Miss);
+    assert!(!resolution.poisons_defender);
     assert_eq!(rng.draws(), 1);
 }
 
@@ -111,9 +112,13 @@ fn an_ordinary_hit_draws_accuracy_critical_damage_and_effect_chance() {
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
-    assert!(matches!(outcome, HitOutcome::Hit { .. }));
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
+    assert!(
+        !resolution.poisons_defender,
+        "Tackle has no secondary effect"
+    );
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
 }
 
@@ -146,10 +151,10 @@ fn best_roll_non_critical_damage_matches_the_independent_pin() {
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: TACKLE_DAMAGE,
             is_critical: false,
@@ -165,10 +170,10 @@ fn a_confirmed_critical_hit_doubles_the_pinned_damage_and_is_reported() {
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: TACKLE_CRITICAL_DAMAGE,
             is_critical: true,
@@ -198,10 +203,10 @@ fn a_special_move_uses_nature_adjusted_special_stats() {
     assert_eq!(defender.stats().sp_defense, 16);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, WATER_GUN, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, WATER_GUN, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: MODEST_WATER_GUN_DAMAGE,
             is_critical: false,
@@ -217,10 +222,11 @@ fn struggle_bypasses_stab_type_effectiveness_and_the_effect_chance_draw() {
     let ghost_defender = mon(&dex, GASTLY, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(STRUGGLE_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, STRUGGLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
+    let resolution =
+        resolve_hit(&dex, STRUGGLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: STRUGGLE_DAMAGE_TO_GASTLY,
             is_critical: false,
@@ -230,7 +236,7 @@ fn struggle_bypasses_stab_type_effectiveness_and_the_effect_chance_draw() {
 
     let ordinary_attacker = mon(&dex, BULBASAUR, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
-    let outcome = resolve_hit(
+    let resolution = resolve_hit(
         &dex,
         TACKLE,
         &ordinary_attacker,
@@ -239,7 +245,7 @@ fn struggle_bypasses_stab_type_effectiveness_and_the_effect_chance_draw() {
         &mut rng,
     )
     .unwrap();
-    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(resolution.outcome, HitOutcome::NoEffect);
 }
 
 #[test]
@@ -249,9 +255,10 @@ fn type_immunity_still_draws_critical_damage_and_effect_chance() {
     let ghost_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
+    let resolution =
+        resolve_hit(&dex, TACKLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
 
-    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(resolution.outcome, HitOutcome::NoEffect);
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
 }
 
@@ -263,15 +270,15 @@ fn an_accuracy_bypassing_hit_starts_with_the_critical_draw() {
     assert!(always_hits(dex.move_data(SWIFT).unwrap().effect));
     let mut rng = SequenceRng::new(ALWAYS_HIT_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, SWIFT, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, SWIFT, &attacker, &defender, false, &mut rng).unwrap();
 
-    assert!(matches!(outcome, HitOutcome::Hit { .. }));
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
     assert_eq!(rng.draws(), ALWAYS_HIT_NON_CRITICAL_DRAWS.len());
 
     let draws = [TACKLE_MISS_DRAW, BEST_DAMAGE_DRAW, DISCARDED_EFFECT_DRAW];
     let mut rng = SequenceRng::new(draws);
-    let outcome = resolve_hit(&dex, SWIFT, &attacker, &defender, false, &mut rng).unwrap();
-    assert!(matches!(outcome, HitOutcome::Hit { .. }));
+    let resolution = resolve_hit(&dex, SWIFT, &attacker, &defender, false, &mut rng).unwrap();
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
     assert_eq!(rng.draws(), draws.len());
 }
 
@@ -290,7 +297,7 @@ fn a_high_crit_move_crits_on_a_draw_an_ordinary_move_does_not() {
     let mut slash_rng = SequenceRng::new(separating_draws);
     let slash = resolve_hit(&dex, SLASH, &attacker, &defender, false, &mut slash_rng).unwrap();
     assert!(matches!(
-        slash,
+        slash.outcome,
         HitOutcome::Hit {
             is_critical: true,
             ..
@@ -300,7 +307,7 @@ fn a_high_crit_move_crits_on_a_draw_an_ordinary_move_does_not() {
     let mut tackle_rng = SequenceRng::new(separating_draws);
     let tackle = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut tackle_rng).unwrap();
     assert!(matches!(
-        tackle,
+        tackle.outcome,
         HitOutcome::Hit {
             is_critical: false,
             ..
@@ -315,10 +322,10 @@ fn caller_critical_suppression_skips_the_critical_draw_and_never_crits() {
     let defender = mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new(CRITICAL_SUPPRESSED_DRAWS);
 
-    let outcome = resolve_hit(&dex, SLASH, &attacker, &defender, true, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, SLASH, &attacker, &defender, true, &mut rng).unwrap();
 
     assert!(matches!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             is_critical: false,
             ..
@@ -336,19 +343,19 @@ fn critical_suppression_removes_only_the_critical_draw() {
     let mut ordinary_rng = SequenceRng::new(CRITICAL_SUPPRESSED_DRAWS);
     let ordinary =
         resolve_hit(&dex, TACKLE, &attacker, &defender, true, &mut ordinary_rng).unwrap();
-    assert!(matches!(ordinary, HitOutcome::Hit { .. }));
+    assert!(matches!(ordinary.outcome, HitOutcome::Hit { .. }));
     assert_eq!(ordinary_rng.draws(), CRITICAL_SUPPRESSED_DRAWS.len());
 
     let always_hit_draws = [BEST_DAMAGE_DRAW, DISCARDED_EFFECT_DRAW];
     let mut always_hit_rng = SequenceRng::new(always_hit_draws);
     let always_hit =
         resolve_hit(&dex, SWIFT, &attacker, &defender, true, &mut always_hit_rng).unwrap();
-    assert!(matches!(always_hit, HitOutcome::Hit { .. }));
+    assert!(matches!(always_hit.outcome, HitOutcome::Hit { .. }));
     assert_eq!(always_hit_rng.draws(), always_hit_draws.len());
 
     let mut miss_rng = SequenceRng::new([TACKLE_MISS_DRAW]);
     let miss = resolve_hit(&dex, TACKLE, &attacker, &defender, true, &mut miss_rng).unwrap();
-    assert_eq!(miss, HitOutcome::Miss);
+    assert_eq!(miss.outcome, HitOutcome::Miss);
     assert_eq!(miss_rng.draws(), 1);
 }
 
@@ -409,6 +416,113 @@ fn ordinary_hit_shaped_moves_and_struggle_are_accepted() {
     assert_eq!(ensure_resolvable(&dex, STRUGGLE), Ok(()));
 }
 
+/// `MOVE_POISON_STING`: `EFFECT_POISON_HIT`.
+const POISON_STING: MoveId = MoveId(40);
+/// `MOVE_SMOG`: `EFFECT_POISON_HIT`.
+const SMOG: MoveId = MoveId(123);
+/// `MOVE_SLUDGE`: `EFFECT_POISON_HIT`.
+const SLUDGE: MoveId = MoveId(124);
+/// `MOVE_SLUDGE_BOMB`: `EFFECT_POISON_HIT`.
+const SLUDGE_BOMB: MoveId = MoveId(188);
+/// `MOVE_POISON_TAIL`: `EFFECT_POISON_TAIL`, an unported trampoline.
+const POISON_TAIL: MoveId = MoveId(342);
+/// `SPECIES_EKANS`: mono Poison-type.
+const EKANS: SpeciesId = SpeciesId(23);
+/// A draw that clears [`POISON_STING`]'s 30% secondary chance.
+const POISON_CHANCE_HIT_DRAW: u16 = 29;
+/// A draw that misses it.
+const POISON_CHANCE_MISS_DRAW: u16 = 30;
+
+#[test]
+fn every_effect_poison_hit_move_is_admitted_though_not_ordinary() {
+    let dex = Dex::new();
+    for move_id in [POISON_STING, SMOG, SLUDGE, SLUDGE_BOMB] {
+        let effect = dex.move_data(move_id).unwrap().effect;
+        assert!(
+            !is_ordinary_hit_effect(effect),
+            "{move_id:?} needs the poison trampoline, not the plain hit script"
+        );
+        assert_eq!(ensure_resolvable(&dex, move_id), Ok(()), "{move_id:?}");
+    }
+}
+
+#[test]
+fn poison_tail_is_still_rejected_like_every_other_unported_trampoline() {
+    let dex = Dex::new();
+    assert_eq!(
+        ensure_resolvable(&dex, POISON_TAIL),
+        Err(BattleError::UnsupportedMoveEffect(POISON_TAIL))
+    );
+}
+
+#[test]
+fn a_landed_poison_sting_reports_poisons_defender_only_on_a_successful_roll() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![POISON_STING]);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    assert_eq!(
+        dex.move_data(POISON_STING).unwrap().secondary_effect_chance,
+        30
+    );
+
+    let mut succeeds = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+    ]);
+    let succeeded = resolve_hit(
+        &dex,
+        POISON_STING,
+        &attacker,
+        &defender,
+        false,
+        &mut succeeds,
+    )
+    .unwrap();
+    assert!(matches!(succeeded.outcome, HitOutcome::Hit { .. }));
+    assert!(succeeded.poisons_defender);
+    assert_eq!(succeeds.draws(), 4);
+
+    let mut fails = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_MISS_DRAW,
+    ]);
+    let failed = resolve_hit(&dex, POISON_STING, &attacker, &defender, false, &mut fails).unwrap();
+    assert!(matches!(failed.outcome, HitOutcome::Hit { .. }));
+    assert!(!failed.poisons_defender);
+}
+
+#[test]
+fn a_poison_type_or_steel_type_defender_never_reports_poisons_defender() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![POISON_STING]);
+    let poison_type_defender = mon(&dex, EKANS, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+    ]);
+    let resolution = resolve_hit(
+        &dex,
+        POISON_STING,
+        &attacker,
+        &poison_type_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+    assert!(
+        matches!(resolution.outcome, HitOutcome::Hit { .. }),
+        "fixture sanity: Poison is only not-very-effective against Poison, not immune, \
+         so the hit must land for this to test the status guard rather than a coincidental miss"
+    );
+    assert!(!resolution.poisons_defender);
+}
+
 #[test]
 fn admission_reports_unknown_and_non_damaging_moves_in_order() {
     let dex = Dex::new();
@@ -436,10 +550,10 @@ fn armor_abilities_skip_the_critical_draw_and_prevent_critical_hits() {
         assert!(suppresses_critical_hits(defender.ability()));
         let mut rng = SequenceRng::new(CRITICAL_SUPPRESSED_DRAWS);
 
-        let outcome = resolve_hit(&dex, SLASH, &attacker, &defender, false, &mut rng).unwrap();
+        let resolution = resolve_hit(&dex, SLASH, &attacker, &defender, false, &mut rng).unwrap();
 
         assert!(matches!(
-            outcome,
+            resolution.outcome,
             HitOutcome::Hit {
                 is_critical: false,
                 ..
@@ -472,7 +586,8 @@ fn huge_power_in_ability_slot_two_doubles_a_physical_hit() {
             false,
             &mut thick_fat_rng,
         )
-        .unwrap(),
+        .unwrap()
+        .outcome,
         HitOutcome::Hit {
             damage: THICK_FAT_MARILL_TACKLE_DAMAGE,
             is_critical: false,
@@ -489,7 +604,8 @@ fn huge_power_in_ability_slot_two_doubles_a_physical_hit() {
             false,
             &mut huge_power_rng,
         )
-        .unwrap(),
+        .unwrap()
+        .outcome,
         HitOutcome::Hit {
             damage: HUGE_POWER_MARILL_TACKLE_DAMAGE,
             is_critical: false,
@@ -505,10 +621,10 @@ fn pure_power_doubles_a_physical_hit() {
     assert_eq!(attacker.ability(), PURE_POWER);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: PURE_POWER_MEDITITE_TACKLE_DAMAGE,
             is_critical: false,
@@ -548,7 +664,7 @@ fn huge_power_never_touches_a_special_move() {
     )
     .unwrap();
 
-    assert_eq!(thick_fat_outcome, huge_power_outcome);
+    assert_eq!(thick_fat_outcome.outcome, huge_power_outcome.outcome);
 }
 
 #[test]
@@ -561,10 +677,10 @@ fn huge_power_doubles_raw_attack_before_stat_stage_scaling() {
     let defender = mon(&dex, ABRA, 15, vec![TACKLE]);
     let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
 
-    let outcome = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
+    let resolution = resolve_hit(&dex, TACKLE, &attacker, &defender, false, &mut rng).unwrap();
 
     assert_eq!(
-        outcome,
+        resolution.outcome,
         HitOutcome::Hit {
             damage: HUGE_POWER_BEFORE_STAGE_DAMAGE,
             is_critical: false,

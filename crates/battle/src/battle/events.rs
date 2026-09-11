@@ -215,6 +215,20 @@ pub enum BattleEvent {
         /// The move the ability blocked.
         move_id: MoveId,
     },
+    /// `STRINGID_PKMNWASPOISONED` (`data/battle_scripts_1.s:319-321`).
+    Poisoned {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move that inflicted poison.
+        move_id: MoveId,
+    },
+    /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
+    HurtByPoison {
+        /// Whether the player's battler was hurt.
+        by_player: bool,
+        /// HP removed, capped at the battler's HP before the tick.
+        damage: u32,
+    },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
         /// The replacement's species.

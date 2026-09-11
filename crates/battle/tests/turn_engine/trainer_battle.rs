@@ -333,6 +333,7 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
             &mut hit_rng,
         )
         .unwrap()
+        .outcome
         {
             HitOutcome::Hit { damage, .. } => damage,
             other => panic!("the deterministic Slash should hit: {other:?}"),

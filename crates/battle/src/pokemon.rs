@@ -702,8 +702,9 @@ impl BattlePokemon {
     /// unlike stages and volatiles: `crates/pokeemerald-rs`'s
     /// `finalize_battle_turn` calls this on the surviving lead mon after
     /// *every* battle outcome, including an ordinary win, and upstream
-    /// paralysis outlives a win precisely because nothing but a faint, a
-    /// heal, or a cure clears it — only `Cmd_cleareffectsonfaint`'s `hp == 0`
+    /// paralysis or poison outlives a win precisely because nothing but a
+    /// faint, a heal, or a cure clears either — only
+    /// `Cmd_cleareffectsonfaint`'s `hp == 0`
     /// branch zeroes `status1` (`battle_script_commands.c:3063`-`:3077`), a
     /// narrower precondition than "this battler is leaving battle" that this
     /// one shared method cannot express for both of its callers at once.

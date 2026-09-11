@@ -526,7 +526,7 @@ fn to_save_pokemon_files_ev_aware_stats_after_a_level_up() {
     let created_at_level = mon.created_at_level();
 
     // The in-battle level-up that makes the EV-aware recompute apply
-    // (`to_save_pokemon`'s own doc comment): `Battle::settle_win_reward`
+    // (`to_save_pokemon`'s own doc comment): `Battle::settle_enemy_reward`
     // awards EVs before applying experience, so a KO that does both sees
     // its own gain here exactly as a real battle would.
     let next_level_experience =
@@ -1017,6 +1017,48 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
         merged.hp <= merged.max_hp,
         "and cannot contradict a retained maximum: the model's own maximum \
          is the 0-EV one, and EVs only add"
+    );
+}
+
+#[test]
+fn an_in_battle_primary_status_never_overwrites_the_saves_own_status_word() {
+    let dex = Dex::new();
+    let stored = stored_record_with_retained_fields();
+    for in_battle_status in [battle::Status1::Paralysed, battle::Status1::Poisoned] {
+        let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+        lead.set_status1(in_battle_status);
+
+        let merged = merge_into_save_pokemon(
+            &dex,
+            &lead,
+            &stored,
+            &mut hp_hidden_by_load(&dex, &stored, &lead),
+        );
+
+        assert_eq!(
+            merged.status, RETAINED_STATUS,
+            "{in_battle_status:?} in `battle::BattlePokemon` must not leak into the save's \
+             own non-volatile status word -- neither encoder reads or writes `Status1` \
+             (issue #306 owns wiring that overlay)"
+        );
+    }
+}
+
+#[test]
+fn a_fresh_battler_never_writes_an_in_battle_primary_status_into_a_new_record() {
+    let dex = Dex::new();
+    let mut lead = treecko_fixture();
+    lead.set_status1(battle::Status1::Poisoned);
+
+    let record = to_save_pokemon(&dex, &lead);
+
+    // With no backing record to retain a status from, `to_save_pokemon`
+    // falls back to `CreateMon`'s default whatever the in-battle status is.
+    let healthy_lead = treecko_fixture();
+    let healthy_record = to_save_pokemon(&dex, &healthy_lead);
+    assert_eq!(
+        record.status, healthy_record.status,
+        "a poisoned battler must not write a different status word than a healthy one"
     );
 }
 
@@ -1781,7 +1823,7 @@ fn a_ko_that_crosses_a_level_and_an_ev_slash_4_boundary_saves_both() {
     );
 
     // The KO: `BattlePokemon::gain_evs` before `apply_experience` --
-    // `Battle::settle_win_reward`'s own order (module docs) -- against a
+    // `Battle::settle_enemy_reward`'s own order (module docs) -- against a
     // real species' real yield (Poochyena, species 286, Attack yield 1),
     // crossing the `ev / 4` boundary (3 -> 4 -> floor 1).
     let poochyena = dex.species(assets::SpeciesId(286)).unwrap();

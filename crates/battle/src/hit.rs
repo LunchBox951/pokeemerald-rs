@@ -18,7 +18,7 @@ use crate::damage::{
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
-use crate::secondary::spend_effect_chance_draw;
+use crate::secondary::{is_poison_hit_effect, spend_effect_chance_draw};
 
 const EFFECT_HIT: MoveEffect = MoveEffect(0);
 const EFFECT_SPEED_UP: MoveEffect = MoveEffect(12);
@@ -114,7 +114,12 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    if !is_ordinary_hit_effect(move_data.effect) && move_id != STRUGGLE {
+    // `EFFECT_POISON_HIT` resolves through this same damage script while
+    // keeping its own trampoline dispatch in `spend_effect_chance_draw`.
+    if !is_ordinary_hit_effect(move_data.effect)
+        && !is_poison_hit_effect(move_data.effect)
+        && move_id != STRUGGLE
+    {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
     }
     Ok(())
@@ -304,6 +309,18 @@ pub fn damage_core(
     }
 }
 
+/// [`resolve_hit`]'s full result: the damage verdict, plus whether the
+/// trailing effect-chance draw wants to poison `defender`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HitResolution {
+    /// The damage verdict.
+    pub outcome: HitOutcome,
+    /// Whether the caller should write [`crate::status1::Status1::Poisoned`]
+    /// to `defender`, subject to the caller's own post-damage faint check
+    /// ([`spend_effect_chance_draw`]).
+    pub poisons_defender: bool,
+}
+
 /// Resolves an ordinary hit against one target.
 ///
 /// A landed ordinary move consumes accuracy, critical-hit, damage-variance,
@@ -323,11 +340,14 @@ pub fn resolve_hit(
     defender: &BattlePokemon,
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
-) -> Result<HitOutcome, BattleError> {
+) -> Result<HitResolution, BattleError> {
     ensure_resolvable(dex, move_id)?;
 
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
-        return Ok(HitOutcome::Miss);
+        return Ok(HitResolution {
+            outcome: HitOutcome::Miss,
+            poisons_defender: false,
+        });
     }
 
     let outcome = damage_core(
@@ -339,12 +359,17 @@ pub fn resolve_hit(
         rng,
     )?;
 
-    if move_id != STRUGGLE {
+    let poisons_defender = if move_id == STRUGGLE {
+        false
+    } else {
         let hit_had_effect = outcome != HitOutcome::NoEffect;
-        spend_effect_chance_draw(dex, move_id, hit_had_effect, rng)?;
-    }
+        spend_effect_chance_draw(dex, move_id, hit_had_effect, defender, rng)?
+    };
 
-    Ok(outcome)
+    Ok(HitResolution {
+        outcome,
+        poisons_defender,
+    })
 }
 
 #[cfg(test)]
