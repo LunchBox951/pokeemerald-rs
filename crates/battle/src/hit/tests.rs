@@ -1,4 +1,4 @@
-use super::{ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
+use super::{damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
 use crate::ability::{suppresses_critical_hits, HUGE_POWER, PURE_POWER};
 use crate::accuracy::always_hits;
 use crate::damage::STRUGGLE;
@@ -23,6 +23,11 @@ const ANORITH: SpeciesId = SpeciesId(390);
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const HORN_DRILL: MoveId = MoveId(32);
 const TACKLE: MoveId = MoveId(33);
+/// `MOVE_BONE_RUSH` -- `EFFECT_MULTI_HIT`, Ground. Used below only for its
+/// typing: no admitted `is_ordinary_hit_effect` move is Ground-type, so
+/// [`damage_core`] is exercised directly instead of through [`resolve_hit`],
+/// which would reject Bone Rush's effect at [`ensure_resolvable`].
+const BONE_RUSH: MoveId = MoveId(198);
 const GROWL: MoveId = MoveId(45);
 const SONIC_BOOM: MoveId = MoveId(49);
 const WATER_GUN: MoveId = MoveId(55);
@@ -260,6 +265,40 @@ fn type_immunity_still_draws_critical_damage_and_effect_chance() {
 
     assert_eq!(resolution.outcome, HitOutcome::NoEffect);
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
+}
+
+/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375`-`:1383`)
+/// zeroes a Ground move before the type chart runs, the same shared
+/// `damage_before_roll` boundary the ordinary single-hit pipeline
+/// (`resolve_hit` -> `damage_core`) and the multi-hit pipeline both call --
+/// this pins the ordinary-pipeline half directly, since no admitted
+/// ordinary-hit move is Ground-type to exercise it through `resolve_hit`
+/// end to end (see the multi-hit turn-level regression for that half via
+/// Bone Rush in `crates/battle/tests/turn_engine/move_resolution.rs`).
+#[test]
+fn levitate_zeroes_a_ground_move_before_stab_and_type_effectiveness() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![BONE_RUSH]);
+    let levitate_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome = damage_core(
+        &dex,
+        BONE_RUSH,
+        &attacker,
+        &levitate_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(
+        rng.draws(),
+        2,
+        "a Levitate no-effect still spends the critical and damage-variance \
+         draws, exactly like an ordinary type immunity"
+    );
 }
 
 #[test]

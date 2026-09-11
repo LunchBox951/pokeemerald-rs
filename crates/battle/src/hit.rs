@@ -6,7 +6,7 @@
 //! type immunity still consumes the damage and effect-chance draws. Struggle
 //! skips the trailing effect-chance draw.
 
-use assets::{MoveEffect, MoveId, Type};
+use assets::{AbilityId, MoveEffect, MoveId, Type};
 
 use crate::ability::{huge_power_attack, pinch_boosts_power, suppresses_critical_hits};
 use crate::accuracy::accuracy_check;
@@ -215,7 +215,9 @@ fn damage_input(
 /// variance.
 ///
 /// The critical-hit draw is skipped when either the caller or defender's
-/// ability suppresses critical hits.
+/// ability suppresses critical hits. A Ground move against a Levitate holder
+/// is zeroed before the type chart is consulted, matching
+/// `Cmd_typecalc`'s dedicated Levitate branch upstream.
 ///
 /// # Errors
 ///
@@ -257,6 +259,8 @@ pub fn damage_before_roll(
     };
     let damage = if move_id == STRUGGLE {
         damage_after_charge
+    } else if move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE {
+        0
     } else {
         let damage_after_stab = apply_stab(
             damage_after_charge,

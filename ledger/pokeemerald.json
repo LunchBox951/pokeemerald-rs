@@ -24714,7 +24714,7 @@
           "status": "stubbed"
         },
         "Cmd_typecalc": {
-          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Still pending: Levitate/Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
+          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Since issue #1081, the Levitate branch (:1375-:1383) is modelled too: hit::damage_before_roll zeroes a Ground move's damage ahead of this call when the defender's ability is Levitate, reusing the same zero-damage/NoEffect signal an ordinary type immunity produces, so both the single-hit and multi-hit pipelines stop the way jumpifmovehadnoeffect does upstream. Still pending: Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"
