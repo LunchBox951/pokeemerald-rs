@@ -18,14 +18,17 @@ use super::{Battle, BattleEvent, BattleOutcome};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MultiHitConclusion {
     HitLimitReached,
-    AttackerFainted,
-    TargetFainted,
+    AttackerFaintedSkipHitCount,
+    TargetFaintedReportHitCount,
     TargetImmune,
 }
 
 impl MultiHitConclusion {
     const fn reports_hit_count(self) -> bool {
-        matches!(self, Self::HitLimitReached | Self::TargetFainted)
+        matches!(
+            self,
+            Self::HitLimitReached | Self::TargetFaintedReportHitCount
+        )
     }
 
     const fn permits_secondary_effect(self) -> bool {
@@ -254,13 +257,13 @@ impl Battle {
             if attacker.is_fainted() {
                 return Ok(MultiHitResult {
                     hits_landed,
-                    conclusion: MultiHitConclusion::AttackerFainted,
+                    conclusion: MultiHitConclusion::AttackerFaintedSkipHitCount,
                 });
             }
             if defender.is_fainted() {
                 return Ok(MultiHitResult {
                     hits_landed,
-                    conclusion: MultiHitConclusion::TargetFainted,
+                    conclusion: MultiHitConclusion::TargetFaintedReportHitCount,
                 });
             }
             let raw_damage = damage_before_roll(
