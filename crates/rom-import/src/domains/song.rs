@@ -23,7 +23,7 @@
 //!   way, and the event always names the key the engine would end.
 //!
 //! `PATT` calls a block ending in `PEND` and is expanded inline; the pack
-//! has no pattern primitive (`assets::audio`'s "Deliberately deferred").
+//! has no pattern primitive (`assets::audio`'s "Deferred commands").
 //! `GOTO` and a branching `MEMACC` carry absolute pointers, which become
 //! event indices into the same track once it is fully decoded; a target
 //! that is not a command boundary of this track is refused. `TEMPO` stores
