@@ -459,17 +459,8 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Fetch an affine (or affine-double-size) entry's texel at
-    /// footprint-local offset `(dx, dy)`, honoring OBJ mosaic. H/V flip does
-    /// not apply (the matrix supplies any mirroring; oam.rs's module docs),
-    /// so this stays out of [`sample_local`](Self::sample_local) and defers
-    /// to `sprite_affine.rs`, kept out of this already-large module.
-    ///
-    /// The row snaps like a regular entry's ([`MosaicSize::snap_local`]);
-    /// the column holds the transformed source position across a block, and
-    /// a leading block that starts before the sprite's edge holds the
-    /// column one before it (the ledger's `oam_mosaic` reason). At
-    /// [`MosaicSize::NONE`] `local_x` is the raw `dx`.
+    /// Samples an affine entry while holding its transformed source position
+    /// across each horizontal mosaic block.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -484,15 +475,16 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        let (_, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+        const SOURCE_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
 
-        // `software-obj.c:241` seeds the held column at `inX - 1`.
+        let (_, source_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
         let block_origin_x = mosaic.snap(x, y).0 as i32;
-        let local_x = if block_origin_x >= entry_x {
+        let source_x = if block_origin_x >= entry_x {
             block_origin_x - entry_x
         } else {
-            -1
+            // mGBA seeds a leading partial block from `inX - 1` (`software-obj.c:241`).
+            SOURCE_COLUMN_BEFORE_FOOTPRINT
         };
 
         sprite_affine::sample_texel(
@@ -501,8 +493,8 @@ impl<'a> SpriteLayer<'a> {
             self.tileset_4bpp,
             self.tileset_8bpp,
             self.palette,
-            local_x,
-            ly,
+            source_x,
+            source_y,
         )
     }
 }
@@ -1052,276 +1044,223 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mosaic_sprite_leading_partial_block_replicates_the_edge_column() {
-        // Finding 1: OBJ mosaic with a sprite whose left edge is not
-        // block-aligned. mosaicH=4, sprite x=2: the screen-aligned block [0,4)
-        // straddles the sprite's leading edge (only screen x=2,3 sit on the
-        // sprite). mgba clamps the snapped sample coordinate back into the
-        // footprint — `localX` to `[0, width-1]` (software-obj.c:20-25) — so
-        // that partial block samples the sprite's edge column (local col 0) and
-        // stays visible. The pre-fix screen-space snap floored to block origin
-        // 0, which fell outside the footprint and was discarded, leaving a
-        // transparent leading band.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)   -- the edge column
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green) -- first full block
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
-        let palette = Palette::new(colors);
-
-        let entries = [entry(2, 0, true).with_mosaic(true)];
-        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        // 4-wide blocks horizontally; no vertical mosaic (isolate the H edge).
-        let mosaic = MosaicSize::new(4, 1);
-
-        // Leading partial block (screen x = 2, 3): must replicate the edge
-        // column (local col 0 = red), not stay transparent.
-        assert_eq!(
-            layer.resolve_pixel_with_mosaic(2, 0, mosaic).map(|p| p.color),
-            Some(colors[1].to_rgb888()),
-            "the block straddling the leading edge must show the edge column, not a transparent band"
-        );
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(3, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[1].to_rgb888()),
-        );
-
-        // Interior block [4,8): its origin is inside the footprint, so it still
-        // samples local col 2 (green) exactly as the pre-fix screen-space snap
-        // did — interior behavior is unchanged.
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(4, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[2].to_rgb888()),
-            "interior block still samples its block-origin column (unchanged)"
-        );
-        assert_eq!(
-            layer
-                .resolve_pixel_with_mosaic(7, 0, mosaic)
-                .map(|p| p.color),
-            Some(colors[2].to_rgb888()),
-        );
+    fn horizontal_mosaic_fixture() -> ([u8; BPP4_TILE_BYTES], Palette) {
+        (
+            bpp4_tile(&[
+                ((0, 0), RED_INDEX),
+                ((2, 0), GREEN_INDEX),
+                ((6, 0), BLUE_INDEX),
+            ]),
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN), (BLUE_INDEX, BLUE)]),
+        )
     }
 
     #[test]
-    fn mosaic_sprite_trailing_partial_block_extends_past_the_raw_edge() {
-        // Issue #132: an opaque regular 8x8 OBJ at decoded x = -4 (raw OAM
-        // field 0x1fc) with H mosaic size 3. The sprite's raw right edge sits
-        // at screen x = 4 (-4 + 8); mgba rounds that up to the next mosaic-H
-        // boundary (6) and keeps drawing through it, clamping every sample
-        // past the raw edge (screen x = 3, 4, 5) to the edge column (local
-        // col 7) — screen x = 6 falls outside the rounded block and must stay
-        // uncovered.
-        // Every texel -> index 1 (opaque), both nibbles.
-        let bytes = [0x11u8; 32];
+    fn regular_mosaic_leading_partial_block_replicates_the_edge_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F); // opaque white
-        let palette = Palette::new(colors);
-
-        let entries = [entry(0x1fc, 0, true).with_mosaic(true)];
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(3, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        // Screen x = 0..=5 must all resolve opaque: 0..=2 sample the raw
-        // footprint directly (pre-fix behavior, unchanged), 3..=5 fall in the
-        // rounded trailing block and must now extend past the raw edge
-        // (screen x = 4) instead of the pre-fix `None`.
-        for x in 0..=5 {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "screen x = {x} must be covered by the trailing mosaic block"
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        // Screen x = 6 is past the rounded block boundary (6) and must stay
-        // outside the sprite's footprint entirely.
-        assert_eq!(
-            layer.resolve_pixel_with_mosaic(6, 0, mosaic),
-            None,
-            "screen x = 6 is past the rounded trailing block and must not be covered"
-        );
-    }
-
-    #[test]
-    fn mosaic_sprite_leading_partial_block_is_unaffected_by_the_affine_split() {
-        // Guard for the affine/regular split in `sample_entry_mosaic` and
-        // `sample_affine_local`: the same x = 2, mosaicH = 4 geometry as
-        // `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
-        // on a `Regular` entry must still replicate the edge column — the
-        // new affine dispatch must leave this path untouched.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
-
-        let entries = [entry(2, 0, true).with_mosaic(true)];
-        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
-
-        for x in [2, 3] {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "regular-sprite leading block still replicates the edge column"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn regular_mosaic_trailing_partial_block_extends_past_the_raw_edge() {
+        const NEGATIVE_FOUR_RAW_X: u16 = 0x01FC;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 3;
+        const LAST_COVERED_X: usize = 5;
+        const FIRST_UNCOVERED_X: usize = 6;
+
+        let bytes = solid_4bpp_tile(RED_INDEX);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED)]);
+        let entries = [entry(NEGATIVE_FOUR_RAW_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+
+        for x in 0..=LAST_COVERED_X {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
+            );
+        }
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(FIRST_UNCOVERED_X, 0, mosaic),
+            None,
+            "screen x = {FIRST_UNCOVERED_X}"
+        );
+    }
+
+    #[test]
+    fn regular_mosaic_leading_partial_block_uses_the_nearest_source_column() {
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
+
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_mosaic_leading_partial_block_leaves_the_source_unwritten() {
-        // Same geometry as `mosaic_sprite_leading_partial_block_replicates_the_edge_column`
-        // (8x8 OBJ at screen x = 2, mosaicH = 4, so the screen-aligned block
-        // [0,4) straddles the sprite's left edge) but affine with the
-        // identity matrix. mgba's `SPRITE_TRANSFORMED_MOSAIC_LOOP`
-        // (software-obj.c:49-70) holds the transform from one column before
-        // the footprint for a block whose screen-space origin precedes the
-        // sprite's edge, instead of the regular loop's edge clamp; for this
-        // geometry that transforms to source col -1, outside the texture, so
-        // the block draws nothing at all rather than replicating col 0.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)
-        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green)
-        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
 
-        let entries = [entry(2, 0, true)
+        let (bytes, palette) = horizontal_mosaic_fixture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
         let matrices = [AffineMatrix::IDENTITY];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        for x in [2, 3] {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer.resolve_pixel_with_mosaic(x, 0, mosaic),
                 None,
-                "screen x = {x}: the leading block holds the transform one \
-                 column before the footprint, out of source bounds here, so \
-                 it must stay unwritten instead of replicating col 0"
+                "screen x = {x}"
             );
         }
-        for x in 4..=7 {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[2].to_rgb888()),
-                "screen x = {x} samples source col 2"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 8..=11 {
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[3].to_rgb888()),
-                "screen x = {x} samples source col 6"
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_mosaic_leading_partial_block_holds_the_transform_not_the_footprint_edge() {
-        // Same x = 2, mosaicH = 4 geometry, but a non-identity (2x magnify)
-        // matrix, showing the held position tracks the matrix rather than
-        // coincidentally landing out of bounds. Row 2 (this matrix maps row
-        // 0 to source row 2) is marked at column 0 (yellow — what clamping
-        // to the footprint edge, local col 0, would sample) and columns 1,
-        // 3, 5 (red/green/blue — the transformed positions this test
-        // expects for the leading, interior, and trailing blocks).
-        let mut bytes = [0u8; 32];
-        let row2 = 2 * (BitDepth::TILE_DIM / 2);
-        bytes[row2] = 0x14; // col 0 -> index 4 (yellow), col 1 -> index 1 (red)
-        bytes[row2 + 1] = 0x20; // col 3 -> index 2 (green)
-        bytes[row2 + 2] = 0x30; // col 5 -> index 3 (blue)
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        colors[4] = Bgr555::from_channels(0x1F, 0x1F, 0);
-        let palette = Palette::new(colors);
+        const SPRITE_X: u16 = 2;
+        const MOSAIC_WIDTH: u8 = 4;
+        const TRANSFORMED_SOURCE_ROW: usize = 2;
 
-        let entries = [entry(2, 0, true)
+        let bytes = bpp4_tile(&[
+            ((0, TRANSFORMED_SOURCE_ROW), YELLOW_INDEX),
+            ((1, TRANSFORMED_SOURCE_ROW), RED_INDEX),
+            ((3, TRANSFORMED_SOURCE_ROW), GREEN_INDEX),
+            ((5, TRANSFORMED_SOURCE_ROW), BLUE_INDEX),
+        ]);
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let palette = palette_with_colors(&[
+            (RED_INDEX, RED),
+            (GREEN_INDEX, GREEN),
+            (BLUE_INDEX, BLUE),
+            (YELLOW_INDEX, YELLOW),
+        ]);
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
-        let magnify = AffineMatrix::ONE / 2;
-        let matrices = [AffineMatrix::new(magnify, 0, 0, magnify)];
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        let matrices = [AffineMatrix::new(
+            two_times_magnification,
+            0,
+            0,
+            two_times_magnification,
+        )];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(MOSAIC_WIDTH, 1);
 
-        for x in [2, 3] {
+        for x in usize::from(SPRITE_X)..usize::from(MOSAIC_WIDTH) {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[1].to_rgb888()),
-                "screen x = {x} holds the transform at source col 1, not the \
-                 clamped footprint edge (col 0, yellow)"
+                Some(RED.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 4..=7 {
+        for x in usize::from(MOSAIC_WIDTH)..usize::from(MOSAIC_WIDTH) * 2 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[2].to_rgb888()),
-                "screen x = {x} samples source col 3"
+                Some(GREEN.to_rgb888()),
+                "screen x = {x}"
             );
         }
-        for x in 8..=11 {
+        for x in usize::from(MOSAIC_WIDTH) * 2..usize::from(MOSAIC_WIDTH) * 3 {
             assert_eq!(
                 layer
                     .resolve_pixel_with_mosaic(x, 0, mosaic)
                     .map(|p| p.color),
-                Some(colors[3].to_rgb888()),
-                "screen x = {x} samples source col 5"
+                Some(BLUE.to_rgb888()),
+                "screen x = {x}"
             );
         }
     }
 
     #[test]
     fn affine_objwin_mask_ignores_horizontal_obj_mosaic() {
-        let bytes = bpp4_tile(&[((0, 0), 1), ((2, 0), 2), ((6, 0), 3)]);
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
-        let entries = [entry(2, 0, true)
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)
             .with_affine(AffineMode::Affine { matrix_num: 0 })];
         let matrices = [AffineMatrix::IDENTITY];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
             .with_affine_matrices(&matrices);
-        let mosaic = MosaicSize::new(4, 1);
-        for x in 0..16 {
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
             assert_eq!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
                 layer.objwin_mask(x, 0),
                 "screen x = {x}"
             );
@@ -1333,6 +1272,7 @@ mod tests {
         const SPRITE_X: u16 = 2;
         const RAW_END_X: usize = 10;
         const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
 
         let mut bytes = [0u8; 64];
         bytes[..32].copy_from_slice(&solid_4bpp_tile(1));
@@ -1343,7 +1283,7 @@ mod tests {
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
 
         for x in usize::from(SPRITE_X)..RAW_END_X {
             assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
@@ -1362,6 +1302,7 @@ mod tests {
         const OPAQUE_WRAPPED_TAIL_X: usize = 10;
         const TRANSPARENT_WRAPPED_TAIL_X: usize = 11;
         const ROUNDED_END_X: usize = 12;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
 
         let mut bytes = [0u8; 64];
         bytes[..32].copy_from_slice(&bpp4_tile(&[((7, 0), 1)]));
@@ -1372,19 +1313,19 @@ mod tests {
             SPRITE_X,
             0,
             SPRITE_TILE_INDEX,
-            0,
+            FIRST_PALETTE_BANK,
             BitDepth::Bpp4,
             true,
             false,
             ObjShape::Square,
-            0,
-            0,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
             true,
         )
         .with_mode(ObjMode::Window)
         .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
+        let mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
 
         for x in usize::from(SPRITE_X)..RAW_END_X {
             assert!(layer.objwin_mask_with_mosaic(x, 0, mosaic));
@@ -1396,17 +1337,20 @@ mod tests {
 
     #[test]
     fn regular_objwin_mask_ignores_horizontal_obj_mosaic() {
-        let bytes = bpp4_tile(&[((0, 0), 1), ((2, 0), 2), ((6, 0), 3)]);
+        const SPRITE_X: u16 = 2;
+        const HORIZONTAL_MOSAIC_SIZE: u8 = 4;
+        const OBSERVED_WIDTH: usize = 16;
+
+        let (bytes, palette) = horizontal_mosaic_fixture();
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
-        let entries = [entry(2, 0, true)
+        let entries = [entry(SPRITE_X, 0, true)
             .with_mode(ObjMode::Window)
             .with_mosaic(true)];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-        let mosaic = MosaicSize::new(4, 1);
-        for x in 0..16 {
+        let horizontal_mosaic = MosaicSize::new(HORIZONTAL_MOSAIC_SIZE, 1);
+        for x in 0..OBSERVED_WIDTH {
             assert_eq!(
-                layer.objwin_mask_with_mosaic(x, 0, mosaic),
+                layer.objwin_mask_with_mosaic(x, 0, horizontal_mosaic),
                 layer.objwin_mask(x, 0),
                 "screen x = {x}"
             );
@@ -1416,6 +1360,7 @@ mod tests {
     #[test]
     fn objwin_mask_still_applies_vertical_obj_mosaic() {
         const OPAQUE_SOURCE_ROW: usize = 1;
+        const VERTICAL_MOSAIC_SIZE: u8 = 4;
 
         let tileset = Tileset::decode(BitDepth::Bpp4, &quadrant_tile()).unwrap();
         let palette = quadrant_palette();
@@ -1425,7 +1370,8 @@ mod tests {
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         assert!(layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::NONE));
-        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, MosaicSize::new(1, 4)));
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+        assert!(!layer.objwin_mask_with_mosaic(0, OPAQUE_SOURCE_ROW, vertical_mosaic));
     }
 
     #[test]
