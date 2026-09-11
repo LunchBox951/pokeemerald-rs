@@ -1,57 +1,41 @@
-//! Metatile attribute decode (S-4): typed access over a tileset's
-//! `metatile_attributes.bin` bytes.
+//! Typed access to a tileset's borrowed `metatile_attributes.bin` bytes.
 //!
-//! Each tileset's `metatile_attributes.bin` (bundled raw, undecoded, as
-//! [`TilesetHandle::metatile_attributes`](crate::pack::TilesetHandle::metatile_attributes)
-//! — extraction of the file itself is `cargo xtask extract`'s job, per
-//! Discussion #71 policy A; see `crate::pack`'s and
-//! `crate::map_layouts`'s module docs for the identical situation with
-//! `metatiles.bin`/`map.bin`) is a flat array of little-endian `u16`, one
-//! per metatile, indexed by that tileset's local metatile id — the same id
-//! [`MetatileCell::metatile_id`](crate::map_layouts::MetatileCell::metatile_id)
-//! carries.
-//!
-//! Bit layout (upstream `include/global.fieldmap.h`,
-//! `METATILE_ATTR_*_MASK`/`_SHIFT`):
-//! - bits 0-7: **behavior** (`METATILE_ATTR_BEHAVIOR_MASK`, `0x00FF`) — the
-//!   upstream `MB_*` behavior id (`constants/metatile_behaviors.h` defines
-//!   around 200 of them, e.g. tall grass, ice, a warp). Kept as a raw `u8`
-//!   rather than modelled as an enum of every `MB_*` value — matching how
-//!   [`MetatileCell::collision`](crate::map_layouts::MetatileCell::collision)
-//!   / `elevation` also stay raw bit-fields rather than closed enums;
-//!   decoding the full behavior table is future movement/interaction-system
-//!   work, out of scope here.
-//! - bits 8-11: unused.
-//! - bits 12-15: **layer type** (`METATILE_ATTR_LAYER_MASK`, `0xF000`) —
-//!   which two of the three background layers this metatile draws into
-//!   ([`MetatileLayerType`]).
+//! Each entry is a little-endian `u16` indexed by the local metatile identity
+//! carried by [`MetatileCell::metatile_id`](crate::map_layouts::MetatileCell::metatile_id).
+//! Upstream `include/global.fieldmap.h` assigns bits 0 through 7 to a terrain
+//! behaviour identity, leaves bits 8 through 11 unused, and assigns bits 12
+//! through 15 to [`MetatileLayerType`]. Behaviour identities remain raw because
+//! the assets crate does not own their movement and interaction semantics. A
+//! behaviour belongs to the tileset entry; placement-specific collision belongs
+//! to [`MetatileCell::collision`](crate::map_layouts::MetatileCell::collision).
 
 use crate::error::AssetError;
+use std::mem::size_of;
 
-/// The three upstream `METATILE_LAYER_TYPE_*` values
-/// (`pokeemerald/include/global.fieldmap.h`): which two of the three
-/// background layers a metatile draws into.
+const BYTES_PER_METATILE_ATTRIBUTE: usize = size_of::<u16>();
+const METATILE_BEHAVIOR_MASK: u16 = 0x00FF;
+const METATILE_LAYER_TYPE_MASK: u16 = 0xF000;
+const METATILE_LAYER_TYPE_SHIFT: u32 = 12;
+
+/// The pair of background layers used to draw a metatile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetatileLayerType {
-    /// `METATILE_LAYER_TYPE_NORMAL` (0): middle and top bg layers.
+    /// Middle and top background layers.
     Normal = 0,
-    /// `METATILE_LAYER_TYPE_COVERED` (1): bottom and middle bg layers.
+    /// Bottom and middle background layers.
     Covered = 1,
-    /// `METATILE_LAYER_TYPE_SPLIT` (2): bottom and top bg layers.
+    /// Bottom and top background layers.
     Split = 2,
 }
 
 impl MetatileLayerType {
-    /// Decode a raw 4-bit layer-type value (already shifted down to
-    /// `0..=15`).
+    /// Decodes a four-bit layer-type value.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMetatileLayerType`] if `raw` is not
-    /// `0..=2` — upstream never emits another value, though nothing in the
-    /// file format itself rules one out, so this stays a real (if
-    /// practically unreachable against real upstream data) failure mode
-    /// rather than a silent default.
+    /// Returns [`AssetError::UnknownMetatileLayerType`] when `raw` is not one
+    /// of the three defined layer types. The four-bit field can represent
+    /// other values, so malformed data fails instead of selecting a default.
     pub const fn from_raw(raw: u8) -> Result<Self, AssetError> {
         match raw {
             0 => Ok(Self::Normal),
@@ -62,35 +46,25 @@ impl MetatileLayerType {
     }
 }
 
-/// One decoded metatile-attribute entry — the unpacked form of a raw `u16`
-/// in a tileset's `metatile_attributes.bin` (upstream `UNPACK_BEHAVIOR` /
-/// `UNPACK_LAYER_TYPE`, `include/global.fieldmap.h`).
+/// One decoded metatile attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetatileAttribute {
-    /// The metatile's behavior id (bits 0-7, `METATILE_ATTR_BEHAVIOR_MASK`):
-    /// the raw upstream `MB_*` value, not decoded further (see the module
-    /// docs).
+    /// Terrain behaviour identity stored in bits 0 through 7.
     pub behavior: u8,
-    /// Which background layers this metatile draws into (bits 12-15,
-    /// `METATILE_ATTR_LAYER_MASK`).
+    /// Background-layer pair stored in bits 12 through 15.
     pub layer_type: MetatileLayerType,
 }
 
 impl MetatileAttribute {
-    /// Decode a raw packed `u16` attribute entry.
-    ///
-    /// Only the modeled fields — behavior (bits 0-7) and layer type (bits
-    /// 12-15) — are extracted; the unused bits 8-11 are ignored.
+    /// Decodes the behaviour and layer type from a packed attribute.
     ///
     /// # Errors
     ///
-    /// See [`MetatileLayerType::from_raw`].
-    // The `as u8` cast is lossless: masking to `0x00FF` leaves at most 8
-    // significant bits, always `<= u8::MAX`.
-    #[allow(clippy::cast_possible_truncation)]
+    /// Returns [`AssetError::UnknownMetatileLayerType`] when the packed layer
+    /// value is not defined.
     pub const fn from_raw(raw: u16) -> Result<Self, AssetError> {
-        let behavior = (raw & 0x00FF) as u8;
-        let layer_type_raw = ((raw & 0xF000) >> 12) as u8;
+        let behavior = (raw & METATILE_BEHAVIOR_MASK) as u8;
+        let layer_type_raw = ((raw & METATILE_LAYER_TYPE_MASK) >> METATILE_LAYER_TYPE_SHIFT) as u8;
         match MetatileLayerType::from_raw(layer_type_raw) {
             Ok(layer_type) => Ok(Self {
                 behavior,
@@ -100,83 +74,75 @@ impl MetatileAttribute {
         }
     }
 
-    /// Repack the modeled fields — behavior (bits 0-7) and layer type
-    /// (bits 12-15) — into a `u16`. The unused bits 8-11 are always zero,
-    /// so this does not reconstruct the exact original raw value if those
-    /// bits were nonzero.
-    // `as u16` widens u8 -> u16 (lossless).
-    #[allow(clippy::cast_lossless)]
+    /// Packs the behaviour and layer type into their 16-bit representation.
+    /// Bits 8 through 11 are always zero.
     #[must_use]
     pub const fn pack(self) -> u16 {
-        (self.behavior as u16) | ((self.layer_type as u16) << 12)
+        (self.behavior as u16) | ((self.layer_type as u16) << METATILE_LAYER_TYPE_SHIFT)
     }
 }
 
-/// A borrowed, validated view over a tileset's decoded
-/// `metatile_attributes.bin` bytes, indexed by local metatile id.
-///
-/// Wraps caller-supplied bytes — this module ships no attribute bytes of
-/// its own; the bytes come from the local, gitignored asset pack (`cargo
-/// xtask extract`; see the module docs). Build one from
-/// [`TilesetHandle::metatile_attributes`](crate::pack::TilesetHandle::metatile_attributes)'s
-/// raw bytes.
+/// A view borrowing encoded attributes for `'a`, indexed by local metatile
+/// identity.
 #[derive(Debug, Clone, Copy)]
 pub struct MetatileAttributeTable<'a> {
     bytes: &'a [u8],
 }
 
 impl<'a> MetatileAttributeTable<'a> {
-    /// Build a view over `bytes` (a `metatile_attributes.bin`-shaped
-    /// buffer). Never fails at construction time — an odd-length trailing
-    /// byte (which never occurs in real upstream files) simply isn't
-    /// reachable by any whole-cell index; decode errors (an out-of-range
-    /// layer-type value) only surface once a specific entry is read.
+    /// Builds a view over caller-owned bytes without eagerly validating them.
+    ///
+    /// A trailing partial entry remains inaccessible. Layer types are validated
+    /// when their entries are read.
     #[must_use]
     pub const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes }
     }
 
-    /// The number of whole `u16` entries available.
+    /// Returns the number of complete attributes.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.bytes.len() / 2
+        self.bytes.len() / BYTES_PER_METATILE_ATTRIBUTE
     }
 
-    /// Whether this table has no entries.
+    /// Returns whether the table contains no complete attributes.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// The decoded attribute entry for `metatile_id`, or `None` if that id
-    /// is out of range for this table.
+    /// Returns the decoded attribute for `metatile_id`, or `None` when the
+    /// identity is outside the table.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMetatileLayerType`] if the entry exists
-    /// but its layer-type bits don't decode (see
-    /// [`MetatileAttribute::from_raw`]).
+    /// Returns [`AssetError::UnknownMetatileLayerType`] when the entry contains
+    /// an undefined layer type.
     #[must_use]
     pub fn attribute_at(&self, metatile_id: u16) -> Option<Result<MetatileAttribute, AssetError>> {
-        let offset = usize::from(metatile_id) * 2;
-        let bytes = self.bytes.get(offset..offset + 2)?;
+        let offset = usize::from(metatile_id) * BYTES_PER_METATILE_ATTRIBUTE;
+        let bytes = self
+            .bytes
+            .get(offset..offset + BYTES_PER_METATILE_ATTRIBUTE)?;
         Some(MetatileAttribute::from_raw(u16::from_le_bytes([
             bytes[0], bytes[1],
         ])))
     }
 
-    /// Every decoded attribute entry, in upstream storage order (index 0 is
-    /// metatile id 0, and so on).
+    /// Iterates over complete attributes in local metatile identity order.
     pub fn attributes(&self) -> impl Iterator<Item = Result<MetatileAttribute, AssetError>> + 'a {
         self.bytes
-            .chunks_exact(2)
+            .chunks_exact(BYTES_PER_METATILE_ATTRIBUTE)
             .map(|b| MetatileAttribute::from_raw(u16::from_le_bytes([b[0], b[1]])))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
+    use super::{
+        MetatileAttribute, MetatileAttributeTable, MetatileLayerType, BYTES_PER_METATILE_ATTRIBUTE,
+        METATILE_BEHAVIOR_MASK, METATILE_LAYER_TYPE_MASK, METATILE_LAYER_TYPE_SHIFT,
+    };
     use crate::error::AssetError;
 
     #[test]
@@ -204,63 +170,72 @@ mod tests {
 
     #[test]
     fn metatile_attribute_round_trips_through_pack() {
-        for raw in [0x0000u16, 0x00FF, 0x1000, 0x2001, 0x00AB] {
-            let attr = MetatileAttribute::from_raw(raw).unwrap();
-            assert_eq!(attr.behavior, (raw & 0x00FF) as u8);
-            assert_eq!(attr.pack(), raw);
+        for behavior in u8::MIN..=u8::MAX {
+            for layer_type in [
+                MetatileLayerType::Normal,
+                MetatileLayerType::Covered,
+                MetatileLayerType::Split,
+            ] {
+                let attribute = MetatileAttribute {
+                    behavior,
+                    layer_type,
+                };
+                assert_eq!(MetatileAttribute::from_raw(attribute.pack()), Ok(attribute));
+            }
         }
     }
 
-    /// The other half of [`MetatileAttribute::pack`]'s documented contract:
-    /// the cases above all have the unused bits 8-11 clear, so only this
-    /// case exercises "the unused bits are always zero" -- a raw value
-    /// carrying them must repack without them, not round-trip exactly.
     #[test]
     fn metatile_attribute_pack_zeroes_the_unused_bits() {
-        let attr = MetatileAttribute::from_raw(0x0F01).unwrap();
-        assert_eq!(attr.pack(), 0x0001);
+        let unused_bits = !(METATILE_BEHAVIOR_MASK | METATILE_LAYER_TYPE_MASK);
+        let raw = unused_bits | 1;
+        let attribute = MetatileAttribute::from_raw(raw).unwrap();
+        assert_eq!(attribute.pack(), 1);
     }
 
     #[test]
     fn metatile_attribute_rejects_unknown_layer_type_bits() {
-        // Layer type bits (12-15) = 3, an upstream-unused value.
-        let raw = 0x3000u16;
+        const UNKNOWN_LAYER_TYPE: u8 = 3;
+        let raw = u16::from(UNKNOWN_LAYER_TYPE) << METATILE_LAYER_TYPE_SHIFT;
         assert_eq!(
             MetatileAttribute::from_raw(raw),
-            Err(AssetError::UnknownMetatileLayerType(3))
+            Err(AssetError::UnknownMetatileLayerType(UNKNOWN_LAYER_TYPE))
         );
     }
 
     #[test]
-    fn table_decodes_row_major_entries() {
-        let raws: [u16; 3] = [0x0001, 0x1002, 0x2003];
+    fn table_decodes_entries_in_local_metatile_identity_order() {
+        let attributes = [
+            MetatileAttribute {
+                behavior: 1,
+                layer_type: MetatileLayerType::Normal,
+            },
+            MetatileAttribute {
+                behavior: 2,
+                layer_type: MetatileLayerType::Covered,
+            },
+            MetatileAttribute {
+                behavior: 3,
+                layer_type: MetatileLayerType::Split,
+            },
+        ];
         let mut bytes = Vec::new();
-        for raw in raws {
-            bytes.extend_from_slice(&raw.to_le_bytes());
+        for attribute in attributes {
+            bytes.extend_from_slice(&attribute.pack().to_le_bytes());
         }
         let table = MetatileAttributeTable::new(&bytes);
-        assert_eq!(table.len(), 3);
+        assert_eq!(table.len(), attributes.len());
         assert!(!table.is_empty());
 
         let decoded: Vec<_> = table.attributes().map(Result::unwrap).collect();
-        assert_eq!(decoded.len(), 3);
-        for (i, raw) in raws.iter().enumerate() {
-            assert_eq!(decoded[i], MetatileAttribute::from_raw(*raw).unwrap());
-        }
-
-        assert_eq!(
-            table.attribute_at(0).unwrap().unwrap(),
-            MetatileAttribute::from_raw(raws[0]).unwrap()
-        );
-        assert_eq!(
-            table.attribute_at(2).unwrap().unwrap(),
-            MetatileAttribute::from_raw(raws[2]).unwrap()
-        );
+        assert_eq!(decoded, attributes);
+        assert_eq!(table.attribute_at(0), Some(Ok(attributes[0])));
+        assert_eq!(table.attribute_at(2), Some(Ok(attributes[2])));
     }
 
     #[test]
     fn table_attribute_at_out_of_range_is_none() {
-        let bytes = [0u8; 4]; // 2 entries
+        let bytes = [0u8; BYTES_PER_METATILE_ATTRIBUTE * 2];
         let table = MetatileAttributeTable::new(&bytes);
         assert!(table.attribute_at(2).is_none());
         assert!(table.attribute_at(1000).is_none());
@@ -268,13 +243,25 @@ mod tests {
 
     #[test]
     fn table_attribute_at_bad_layer_type_is_an_error() {
-        let raw = 0x3000u16; // layer type bits = 3
+        const UNKNOWN_LAYER_TYPE: u8 = 3;
+        let raw = u16::from(UNKNOWN_LAYER_TYPE) << METATILE_LAYER_TYPE_SHIFT;
         let bytes = raw.to_le_bytes();
         let table = MetatileAttributeTable::new(&bytes);
         assert_eq!(
             table.attribute_at(0),
-            Some(Err(AssetError::UnknownMetatileLayerType(3)))
+            Some(Err(AssetError::UnknownMetatileLayerType(
+                UNKNOWN_LAYER_TYPE
+            )))
         );
+    }
+
+    #[test]
+    fn table_ignores_a_trailing_partial_attribute() {
+        let bytes = [0; BYTES_PER_METATILE_ATTRIBUTE + 1];
+        let table = MetatileAttributeTable::new(&bytes);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.attributes().count(), 1);
+        assert_eq!(table.attribute_at(1), None);
     }
 
     #[test]
