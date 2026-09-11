@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::{AudioOutput, PlatformError};
+use platform::{AudioOutput, PlatformError, Producer};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -62,12 +62,6 @@ fn main() -> ExitCode {
             };
         }
     };
-    match start_playback(&mut output, AudioOutput::start) {
-        StartOutcome::Playing => {}
-        StartOutcome::PlaybackSetupFailure => return ExitCode::FAILURE,
-    }
-    println!("playing a short scale at {MIXER_RATE} Hz — Ctrl-C to stop");
-
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
     let frame_samples = u32::try_from(audio::SAMPLES_PER_FRAME).expect("frame fits u32");
@@ -78,7 +72,26 @@ fn main() -> ExitCode {
     };
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
+    // Queue samples the device can consume the instant it starts, before the
+    // stream exists to consume anything.
+    let dropped = prefill(&mut seq, &producer, &mut buffer, |chunk| {
+        producer.push(chunk)
+    });
+    if dropped > 0 {
+        eprintln!("audio playback setup failed: prefill dropped {dropped} sample(s)");
+        return ExitCode::FAILURE;
+    }
+    match start_playback(&mut output, AudioOutput::start) {
+        StartOutcome::Playing => {}
+        StartOutcome::PlaybackSetupFailure => return ExitCode::FAILURE,
+    }
+    println!("playing a short scale at {MIXER_RATE} Hz — Ctrl-C to stop");
+
     // Render frame by frame, pacing to real time, until the song finishes.
+    // Each deadline is derived from the last one rather than from `now()`
+    // after the work below, so render/push time is subtracted from the wait
+    // instead of stacking on top of it.
+    let mut next_deadline = Instant::now() + frame_period;
     while !seq.is_finished() {
         seq.render_frame(&mut buffer);
         let pushed = push_frame(
@@ -93,7 +106,12 @@ fn main() -> ExitCode {
             eprintln!("audio playback stopped: {}", err.describe());
             return ExitCode::FAILURE;
         }
-        std::thread::sleep(frame_period);
+        wait_for_frame_deadline(
+            &mut next_deadline,
+            frame_period,
+            Instant::now,
+            std::thread::sleep,
+        );
     }
     if let Err(err) = wait_for_drain(
         ring_capacity_samples,
@@ -164,6 +182,38 @@ fn start_playback(
             StartOutcome::PlaybackSetupFailure
         }
     }
+}
+
+/// Fraction of the ring's available space [`prefill`] queues before playback
+/// starts, matching the product player's own startup rule
+/// (`pokeemerald_rs::music::player`): half absorbs a full frame's worth of
+/// startup jitter while leaving the other half free for producer/consumer
+/// drift once the device is running.
+const PREFILL_DIVISOR: usize = 2;
+
+/// Render and queue whole frames up to half the ring's currently available
+/// space, so the device has samples queued the instant it starts instead of
+/// consuming an empty ring on its first callback.
+///
+/// Returns the number of rendered samples `push` refused; a real, unstarted
+/// device should never refuse a fill this far under capacity. `push` is
+/// injected as in [`push_frame`] so tests need no audio device.
+fn prefill(
+    seq: &mut Sequencer,
+    producer: &Producer,
+    buffer: &mut [f32],
+    mut push: impl FnMut(&[f32]) -> usize,
+) -> usize {
+    let target = producer.available_space() / PREFILL_DIVISOR;
+    let mut queued = 0;
+    let mut dropped = 0;
+    while queued + buffer.len() <= target {
+        seq.render_frame(buffer);
+        let pushed = push(buffer);
+        dropped += buffer.len() - pushed;
+        queued += buffer.len();
+    }
+    dropped
 }
 
 /// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
@@ -244,6 +294,24 @@ fn push_frame(
         }
         sleep(policy.interval);
     }
+}
+
+/// Sleep until `*next_deadline`, then advance it by one `frame_period`.
+///
+/// The deadline is tracked absolutely rather than derived from `now()` after
+/// each call, so render and push time already spent is subtracted from the
+/// wait instead of stacking on top of it: a call that lands late sleeps zero
+/// and the following deadline still advances from the missed one, rather
+/// than resetting from the late `now()` and letting drift compound. `now`
+/// and `sleep` are injected as in [`push_frame`].
+fn wait_for_frame_deadline(
+    next_deadline: &mut Instant,
+    frame_period: Duration,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) {
+    sleep(next_deadline.saturating_duration_since(now()));
+    *next_deadline += frame_period;
 }
 
 /// Why [`wait_for_drain`] gave up before confirming the ring emptied.
@@ -383,12 +451,14 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
+    use audio::Sequencer;
     use platform::{AudioOutput, PlatformError};
 
     use super::{
-        classify_open_error, device_tail_wait, push_frame, start_playback, wait_for_device_tail,
-        wait_for_drain, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
-        DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        build_song, classify_open_error, device_tail_wait, prefill, push_frame, start_playback,
+        wait_for_device_tail, wait_for_drain, wait_for_frame_deadline, DrainError, OpenOutcome,
+        PushError, RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
+        DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -435,6 +505,109 @@ mod tests {
             "the null backend always starts"
         );
         assert!(output.is_running(), "an accepted start must play");
+    }
+
+    /// The device's first callback can fire the instant `start` returns, so
+    /// samples must already be sitting in the ring before that call — not
+    /// queued afterward, by which point a real callback could already have
+    /// drained an empty ring into an underrun.
+    #[test]
+    fn samples_are_queued_before_the_starter_runs() {
+        let mut output = AudioOutput::null(512);
+        let producer = output.producer();
+        let capacity = producer.capacity();
+        let mut seq = Sequencer::new(build_song());
+        let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+
+        let dropped = prefill(&mut seq, &producer, &mut buffer, |chunk| {
+            producer.push(chunk)
+        });
+        assert_eq!(
+            dropped, 0,
+            "a fresh ring must accept the whole prefill with room to spare"
+        );
+        assert!(
+            producer.available_space() < capacity,
+            "prefill must have queued samples before the starter ever runs"
+        );
+
+        let starter_saw_queued_samples = Cell::new(false);
+        let result = start_playback(&mut output, |output| {
+            starter_saw_queued_samples.set(producer.available_space() < capacity);
+            AudioOutput::start(output)
+        });
+
+        assert_eq!(result, StartOutcome::Playing);
+        assert!(
+            starter_saw_queued_samples.get(),
+            "samples must already be queued when the starter is invoked, not after"
+        );
+    }
+
+    /// Pacing must subtract render/push work already spent from each wait
+    /// rather than sleeping a full period on top of it, and a late iteration
+    /// must not let that deficit compound into the next one.
+    #[test]
+    fn frame_deadline_waits_subtract_work_without_accumulating_drift() {
+        let period = std::time::Duration::from_millis(10);
+        let start = std::time::Instant::now();
+        let clock = Rc::new(RefCell::new(start));
+        let sleeps = Rc::new(RefCell::new(Vec::new()));
+        let mut next_deadline = start + period;
+
+        // Five iterations whose simulated work comfortably fits under the
+        // period, the steady-state case.
+        for _ in 0..5 {
+            *clock.borrow_mut() += std::time::Duration::from_millis(3);
+            let clock_now = Rc::clone(&clock);
+            let clock_sleep = Rc::clone(&clock);
+            let sleeps_sleep = Rc::clone(&sleeps);
+            wait_for_frame_deadline(
+                &mut next_deadline,
+                period,
+                move || *clock_now.borrow(),
+                move |duration| {
+                    sleeps_sleep.borrow_mut().push(duration);
+                    *clock_sleep.borrow_mut() += duration;
+                },
+            );
+        }
+        assert_eq!(
+            *sleeps.borrow(),
+            vec![std::time::Duration::from_millis(7); 5],
+            "work already spent must be subtracted from each wait, not added on top of it"
+        );
+        assert_eq!(
+            *clock.borrow(),
+            start + 5 * period,
+            "five rounds of work-plus-wait must land on exactly five periods elapsed, proving no \
+             drift accumulated"
+        );
+        assert_eq!(next_deadline, start + 6 * period);
+
+        // A sixth iteration whose work overruns the period entirely.
+        sleeps.borrow_mut().clear();
+        *clock.borrow_mut() += std::time::Duration::from_millis(15);
+        let clock_now = Rc::clone(&clock);
+        let sleeps_sleep = Rc::clone(&sleeps);
+        wait_for_frame_deadline(
+            &mut next_deadline,
+            period,
+            move || *clock_now.borrow(),
+            move |duration| sleeps_sleep.borrow_mut().push(duration),
+        );
+
+        assert_eq!(
+            *sleeps.borrow(),
+            vec![std::time::Duration::ZERO],
+            "a late iteration must not sleep a negative duration"
+        );
+        assert_eq!(
+            next_deadline,
+            start + 7 * period,
+            "the cadence must still advance by exactly one period from the missed deadline, not \
+             reset from the late clock reading"
+        );
     }
 
     #[test]
