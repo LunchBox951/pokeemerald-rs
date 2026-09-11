@@ -58,15 +58,15 @@ const DEFAULT_TRACK_VOLUME: u8 = 127;
 const DEFAULT_BEND_RANGE: u8 = 2;
 
 /// Default LFO rate (`track->lfoSpeed = 0x16`, `m4a_1.s:1226`); harmless
-/// while `mod_depth` defaults to `0` (`m4a_1.s:1288`).
+/// while `lfo_depth` defaults to `0` (`m4a_1.s:1288`).
 const DEFAULT_LFO_SPEED: u8 = 22;
 
 /// Max nested `PATT` depth (`track->patternStack`'s capacity, `ply_patt`,
 /// `m4a_1.s:851`).
 const MAX_PATTERN_DEPTH: usize = 3;
 
-/// The instrument volume scaler `volX` (`0x40`, set at track init).
-const VOL_X: u32 = 0x40;
+/// Fixed `volX` input to `TrkVolPitSet` (`m4a.c:772`).
+const TRACK_VOLUME_SCALE: u32 = 0x40;
 
 /// Safety bound on commands processed for one track in one tick, so a
 /// malformed loop with no `Wait` cannot hang the mixer.
@@ -114,6 +114,23 @@ impl MemAccArea {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ModulationTarget(u8);
+
+impl ModulationTarget {
+    const PITCH: Self = Self(0);
+    const AMPLITUDE: Self = Self(1);
+    const PAN: Self = Self(2);
+
+    fn from_command(value: u8) -> Self {
+        Self(value)
+    }
+
+    fn is_pitch(self) -> bool {
+        self == Self::PITCH
+    }
+}
+
 /// Per-track runtime state (the mutable half of `struct MusicPlayerTrack`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrackState {
@@ -130,21 +147,13 @@ struct TrackState {
     /// The track's current MIDI key (`track->key`): the raw key of the last
     /// note, reused when an `EOT` omits its key operand (`m4a_1.s:1830`).
     key: u8,
-    /// LFO depth (`MOD`, `track->mod`).
-    mod_depth: u8,
-    /// LFO target: `0` = pitch, `1` = amplitude (volume), `2` = pan (`MODT`).
-    mod_type: u8,
-    /// LFO rate (`LFOS`, `track->lfoSpeed`).
+    lfo_depth: u8,
+    modulation_target: ModulationTarget,
     lfo_speed: u8,
-    /// Ticks to hold before the LFO starts after a note-on (`LFODL`).
     lfo_delay: u8,
-    /// Countdown from `lfo_delay`, reloaded on every note-on.
-    lfo_delay_c: u8,
-    /// Wrapping triangle-wave phase (`track->lfoSpeedC`).
-    lfo_speed_c: u8,
-    /// The LFO's current signed output (`track->modM`), folded into pitch or
-    /// volume depending on `mod_type`.
-    mod_m: i8,
+    lfo_delay_remaining: u8,
+    lfo_phase: u8,
+    modulation: i8,
     pattern_return_stack: [usize; MAX_PATTERN_DEPTH],
     pattern_depth: usize,
     repeat_counter: u8,
@@ -175,13 +184,13 @@ impl TrackState {
             // Upstream zeroes `track->key` at init; no `EOT` should fire before
             // a note sets it in real data.
             key: 0,
-            mod_depth: 0,
-            mod_type: 0,
+            lfo_depth: 0,
+            modulation_target: ModulationTarget::PITCH,
             lfo_speed: DEFAULT_LFO_SPEED,
             lfo_delay: 0,
-            lfo_delay_c: 0,
-            lfo_speed_c: 0,
-            mod_m: 0,
+            lfo_delay_remaining: 0,
+            lfo_phase: 0,
+            modulation: 0,
             pattern_return_stack: [0; MAX_PATTERN_DEPTH],
             pattern_depth: 0,
             repeat_counter: 0,
@@ -191,6 +200,11 @@ impl TrackState {
             // `m4a_1.s:1219`); only `PRIO` raises it again.
             priority: 0,
         }
+    }
+
+    fn reset_lfo(&mut self) {
+        self.modulation = 0;
+        self.lfo_phase = 0;
     }
 
     /// Saves the return cursor and calls `target`; upstream ends the track at
@@ -447,11 +461,6 @@ impl Sequencer {
             }
             Event::Goto(index) => track.cursor = index,
             Event::Voice(v) => track.voice = usize::from(v),
-            // Volume/pan set `MPT_FLG_VOLCHG`; pitch commands set
-            // `MPT_FLG_PITCHG`. Upstream re-runs `TrkVolPitSet` + per-channel
-            // `ChnVolSetAsm`/`MidiKeyToFreq` for the flagged track each tick;
-            // here every event executes before the frame renders, so applying
-            // the change to the track's live voices immediately is equivalent.
             Event::Volume(v) => {
                 track.vol = v;
                 Self::apply_track_volume(track, mixer, track_id);
@@ -485,16 +494,15 @@ impl Sequencer {
                 Self::apply_track_pitch(track, mixer, track_id);
             }
             Event::Modulation(depth) => {
-                track.mod_depth = depth;
+                track.lfo_depth = depth;
                 if depth == 0 {
-                    Self::clear_mod_m(track, mixer, track_id);
+                    Self::reset_lfo(track, mixer, track_id);
                 }
             }
             Event::ModType(kind) => {
-                // `ply_modt` only reapplies pitch/volume when the type
-                // actually changes (`m4a_1.s:1031`..`:1038`).
-                if track.mod_type != kind {
-                    track.mod_type = kind;
+                let target = ModulationTarget::from_command(kind);
+                if track.modulation_target != target {
+                    track.modulation_target = target;
                     Self::apply_track_volume(track, mixer, track_id);
                     Self::apply_track_pitch(track, mixer, track_id);
                 }
@@ -502,7 +510,7 @@ impl Sequencer {
             Event::LfoSpeed(speed) => {
                 track.lfo_speed = speed;
                 if speed == 0 {
-                    Self::clear_mod_m(track, mixer, track_id);
+                    Self::reset_lfo(track, mixer, track_id);
                 }
             }
             Event::LfoDelay(delay) => track.lfo_delay = delay,
@@ -516,26 +524,15 @@ impl Sequencer {
                 velocity,
                 gate,
             } => {
-                // `ply_note` records the raw command key as `track->key`.
                 track.key = key;
-                // A successful note with an LFO delay is initialized from the
-                // reset modulation state. Use a temporary view for allocation
-                // so a refused note cannot mutate the real track or its live
-                // voices before acceptance is known.
                 let mut note_track = track.clone();
                 if note_track.lfo_delay != 0 {
-                    note_track.mod_m = 0;
-                    note_track.lfo_speed_c = 0;
+                    note_track.reset_lfo();
                 }
                 if Self::note_on(song, &note_track, mixer, track_id, key, velocity, gate) {
-                    // Once allocation succeeds, reload the LFO delay. A
-                    // nonzero delay also resets the phase and clears any live
-                    // modulation, mirroring the inline `clear_modM` call in
-                    // `ply_note` (`m4a_1.s:1732`..`:1738`). Refused notes
-                    // return before this block and leave that state untouched.
-                    track.lfo_delay_c = track.lfo_delay;
+                    track.lfo_delay_remaining = track.lfo_delay;
                     if track.lfo_delay != 0 {
-                        Self::clear_mod_m(track, mixer, track_id);
+                        Self::reset_lfo(track, mixer, track_id);
                     }
                 }
             }
@@ -693,76 +690,49 @@ impl Sequencer {
         }
     }
 
-    /// `clear_modM` (`m4a_1.s:1859`): zero the LFO's phase and output, then
-    /// reapply whichever of pitch/volume the current `MODT` targets so the
-    /// reset is immediately audible.
-    fn clear_mod_m(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
-        track.mod_m = 0;
-        track.lfo_speed_c = 0;
-        if track.mod_type == 0 {
+    fn reset_lfo(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
+        track.reset_lfo();
+        Self::apply_modulation_target(track, mixer, track_id);
+    }
+
+    fn apply_modulation_target(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
+        if track.modulation_target.is_pitch() {
             Self::apply_track_pitch(track, mixer, track_id);
         } else {
             Self::apply_track_volume(track, mixer, track_id);
         }
     }
 
-    /// Advance the per-tick LFO triangle wave and, on a change, reapply it
-    /// to pitch or volume.
-    ///
-    /// Behavioural port of `MPlayMain`'s wait-tick tail (`m4a_1.s:1285`..
-    /// `:1330`): skips while there is no rate or depth, holds during the
-    /// post-note-on delay, then advances a wrapping `0..=255` phase and
-    /// derives a signed triangle value from it, scaled by depth `(no-verbatim)`.
     fn apply_lfo(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
-        if track.lfo_speed == 0 || track.mod_depth == 0 {
+        if track.lfo_speed == 0 || track.lfo_depth == 0 {
             return;
         }
-        if track.lfo_delay_c > 0 {
-            track.lfo_delay_c -= 1;
+        if track.lfo_delay_remaining > 0 {
+            track.lfo_delay_remaining -= 1;
             return;
         }
 
-        // The asm adds `lfoSpeed` into `lfoSpeedC` in a wide register, stores
-        // only the low byte back (`strb`, `m4a_1.s:1298`..`:1300`), but keeps
-        // the FULL sum live in `r1` for the falling-half mirror. Carry that
-        // untruncated `u16` sum (up to 510) into `lfo_triangle`.
-        let full_sum = u16::from(track.lfo_speed_c) + u16::from(track.lfo_speed);
+        let phase_sum = u16::from(track.lfo_phase) + u16::from(track.lfo_speed);
         #[allow(clippy::cast_possible_truncation)]
         {
-            track.lfo_speed_c = full_sum as u8;
+            track.lfo_phase = phase_sum as u8;
         }
-        let value = lfo_triangle(full_sum);
-        let raw = (i32::from(track.mod_depth) * value) >> 6;
-        // `strb` truncates the product to a byte before it is compared and
-        // stored, so only the low 8 bits (reinterpreted as signed) survive.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let truncated = raw as u32 as u8;
-        let new_mod_m = i8::from_ne_bytes([truncated]);
-        if new_mod_m == track.mod_m {
+        let modulation = scale_lfo(track.lfo_depth, lfo_triangle(phase_sum));
+        if modulation == track.modulation {
             return;
         }
-        track.mod_m = new_mod_m;
-        if track.mod_type == 0 {
-            Self::apply_track_pitch(track, mixer, track_id);
-        } else {
-            Self::apply_track_volume(track, mixer, track_id);
-        }
+        track.modulation = modulation;
+        Self::apply_modulation_target(track, mixer, track_id);
     }
 
-    /// Re-run `TrkVolPitSet`'s volume half for the track and push the new
-    /// `volMR`/`volML` onto its live voices (`MPT_FLG_VOLCHG`,
-    /// `m4a_1.s:1391`..`:1394`).
     fn apply_track_volume(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
-        let (vol_mr, vol_ml) = track_volume(track);
-        mixer.set_track_volume(track_id, vol_mr, vol_ml);
+        let (right, left) = track_volume(track);
+        mixer.set_track_volume(track_id, right, left);
     }
 
-    /// Re-run `TrkVolPitSet`'s pitch half for the track and push the new
-    /// `keyM`/`pitM` onto its live voices (`MPT_FLG_PITCHG`,
-    /// `m4a_1.s:1403`..`:1451`).
     fn apply_track_pitch(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
-        let (key_m, pit_m) = track_pitch(track);
-        mixer.set_track_pitch(track_id, key_m, pit_m);
+        let (key_offset, fine_adjust) = track_pitch(track);
+        mixer.set_track_pitch(track_id, key_offset, fine_adjust);
     }
 
     /// Allocate a voice for a note, resolving its stereo volume and pitch from
@@ -973,83 +943,68 @@ fn resolve_instrument(instrument: &Instrument, key: u8) -> Option<(&Instrument, 
     Some(resolved)
 }
 
-/// `TrkVolPitSet`'s volume half: track vol/pan → right/left channel base
-/// volumes (`volMR`/`volML`), with `volX = 0x40`, `panX = 0` (`m4a.c:772`).
-/// `mod_type == 1` (amplitude/tremolo) scales the volume term by `modM`;
-/// `mod_type == 2` (pan) offsets the pan term by it (`m4a.c:774`..`:780`).
 fn track_volume(track: &TrackState) -> (u8, u8) {
-    let mut x = (u32::from(track.vol) * VOL_X) >> 5;
-    if track.mod_type == 1 {
-        // `modM + 128` is always `0..=255` since `modM` is a signed byte.
-        let factor = u32::try_from(i32::from(track.mod_m) + 128).unwrap_or(0);
-        x = (x * factor) >> 7;
+    let mut volume = (u32::from(track.vol) * TRACK_VOLUME_SCALE) >> 5;
+    if track.modulation_target == ModulationTarget::AMPLITUDE {
+        let modulation_scale = u32::try_from(i32::from(track.modulation) + 128).unwrap_or(0);
+        volume = (volume * modulation_scale) >> 7;
     }
 
-    let mut y = 2 * i32::from(track.pan);
-    if track.mod_type == 2 {
-        y += i32::from(track.mod_m);
+    let mut pan = 2 * i32::from(track.pan);
+    if track.modulation_target == ModulationTarget::PAN {
+        pan += i32::from(track.modulation);
     }
-    let y = y.clamp(-128, 127);
-    // `(y + 128)` and `(127 - y)` are both in `0..=255`.
-    let vol_mr = (u32::try_from(y + 128).unwrap_or(0) * x) >> 8;
-    let vol_ml = (u32::try_from(127 - y).unwrap_or(0) * x) >> 8;
-    // Upstream stores the `>> 8` result straight into the `u8` fields
-    // `volMR`/`volML` (`m4a.c:787`..`:788`, `m4a_internal.h:290`..`:291`): the
-    // byte store truncates modulo 256, so a tremolo (`modT == 1`) peak past
-    // `0xFF` wraps rather than saturating (e.g. a raw 504 stores 248, not 255).
+    let pan = pan.clamp(-128, 127);
+    let right = (u32::try_from(pan + 128).unwrap_or(0) * volume) >> 8;
+    let left = (u32::try_from(127 - pan).unwrap_or(0) * volume) >> 8;
+
+    // `TrkVolPitSet` stores these wide products into byte fields, so peaks wrap
+    // instead of saturating (`m4a.c:787`..`:788`).
     (
-        u8::try_from(vol_mr & 0xFF).unwrap_or(0),
-        u8::try_from(vol_ml & 0xFF).unwrap_or(0),
+        u8::try_from(right & 0xFF).unwrap_or(0),
+        u8::try_from(left & 0xFF).unwrap_or(0),
     )
 }
 
-/// `TrkVolPitSet`'s pitch half: track key-shift/bend/tune → integer key offset
-/// (`keyM`) and 8-bit fine adjust (`pitM`), with `keyShiftX`/`pitX = 0`
-/// (`m4a.c:791`). `mod_type == 0` (pitch/vibrato) adds `16 * modM`
-/// (`m4a.c:800`..`:801`).
 fn track_pitch(track: &TrackState) -> (i32, u8) {
     let bend = i32::from(track.bend) * i32::from(track.bend_range);
-    let mut x = (i32::from(track.tune) + bend) * 4 + (i32::from(track.key_shift) << 8);
-    if track.mod_type == 0 {
-        x += 16 * i32::from(track.mod_m);
+    let mut pitch = (i32::from(track.tune) + bend) * 4 + (i32::from(track.key_shift) << 8);
+    if track.modulation_target.is_pitch() {
+        pitch += 16 * i32::from(track.modulation);
     }
-    // Hardware stores `keyM = x >> 8` into a `u8` field
-    // (`m4a_internal.h:282`) and reads it back with a signed byte load
-    // (`ldrsb r0, [keyM]`, `m4a_1.s:1762`): the effective offset is
-    // `(s8)((x >> 8) & 0xFF)`, wrapping modulo 256 rather than staying full
-    // width. Truncate to a byte, then reinterpret those bits as signed.
-    let key_m_byte = u8::try_from((x >> 8) & 0xFF).unwrap_or(0);
-    let key_m = i32::from(i8::from_le_bytes([key_m_byte]));
-    let pit_m = u8::try_from(x & 0xFF).unwrap_or(0);
-    (key_m, pit_m)
+
+    // `TrkVolPitSet` stores the key offset and fine adjustment in byte fields
+    // (`m4a.c:803`..`:804`); the former is later loaded as signed.
+    let key_offset = u8::try_from((pitch >> 8) & 0xFF).unwrap_or(0);
+    let key_offset = i32::from(i8::from_le_bytes([key_offset]));
+    let fine_adjust = u8::try_from(pitch & 0xFF).unwrap_or(0);
+    (key_offset, fine_adjust)
 }
 
-/// The LFO's triangle-wave shape: given the running phase sum
-/// `lfoSpeedC + lfoSpeed` (`m4a_1.s:1298`..`:1300`, an untruncated `u16` up to
-/// 510), derive the signed slope value later scaled by depth.
-///
-/// Behavioural port of `MPlayMain`'s inline triangle computation
-/// (`m4a_1.s:1301`..`:1311`). The rising-vs-falling branch keys off the
-/// *truncated* 8-bit phase (`full_sum & 0xFF`, the byte written back to
-/// `lfoSpeedC`), but the falling half computes `0x80 - r1` where `r1` still
-/// holds the *full* pre-`strb` sum (`_081DD96E`, `m4a_1.s:1308`..`:1310`). When
-/// `lfoSpeed >= 65` that sum can reach the falling half (truncated phase in
-/// `[0x40, 0xBF]`) while exceeding 255, so the mirror term stays wide and the
-/// slope drops below `-128`. Reproduced faithfully by returning the full signed
-/// slope (an `i32`); the caller scales by depth and truncates the product to a
-/// byte with `strb`, exactly as the asm does `(no-verbatim)`.
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-fn lfo_triangle(full_sum: u16) -> i32 {
-    let phase = full_sum as u8;
-    if (phase.wrapping_sub(0x40) as i8) >= 0 {
-        // Falling half: mirror around 0x80 using the FULL untruncated sum
-        // (`movs r0, 0x80; subs r2, r0, r1` with `r1 = lfoSpeedC + lfoSpeed`).
-        0x80i32 - i32::from(full_sum)
+/// `MPlayMain` selects the triangle half from the stored phase byte, but mirrors
+/// its falling half against the full pre-store sum (`m4a_1.s:1298`..`:1310`).
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "MPlayMain selects the slope from the stored phase byte"
+)]
+fn lfo_triangle(phase_sum: u16) -> i32 {
+    let stored_phase = phase_sum as u8;
+    if (stored_phase.wrapping_sub(0x40) as i8) >= 0 {
+        0x80i32 - i32::from(phase_sum)
     } else {
-        // Rising half: the truncated phase, reinterpreted as signed
-        // (`lsls r2, r1, 24; asrs r2, 24`).
-        i32::from(phase as i8)
+        i32::from(stored_phase as i8)
     }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "MPlayMain stores the scaled LFO result through strb"
+)]
+fn scale_lfo(depth: u8, triangle: i32) -> i8 {
+    let scaled = (i32::from(depth) * triangle) >> 6;
+    i8::from_ne_bytes([scaled as u32 as u8])
 }
 
 #[cfg(test)]
@@ -1105,6 +1060,21 @@ mod tests {
             mem_acc,
             event,
         );
+    }
+
+    fn tied_note(key: u8) -> Event {
+        Event::Note {
+            key,
+            velocity: 127,
+            gate: 0,
+        }
+    }
+
+    fn render_frames(seq: &mut Sequencer, frames: usize) {
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..frames {
+            seq.render_frame(&mut output);
+        }
     }
 
     #[test]
@@ -2120,30 +2090,20 @@ mod tests {
 
     #[test]
     fn volume_change_updates_a_held_notes_gains() {
-        // Start a tied note at full volume, then drop VOL mid-note: the live
-        // voice's base gains must follow (before the fix, note-on baked the
-        // gains once and later VOL commands never touched the voice).
         let track = vec![
             Event::Voice(0),
             Event::Volume(127),
-            Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
+            tied_note(60),
             Event::Wait(4),
             Event::Volume(20),
             Event::Wait(4),
             Event::Fine,
         ];
         let mut seq = Sequencer::new(held_note_song(track));
-        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
-        seq.render_frame(&mut out); // tick 1: note on at full volume
+        render_frames(&mut seq, 1);
         let (loud_r, loud_l) = seq.mixer.voices()[0].base_volume();
-        // Advance past the mid-note `VOL 20` (fires once the first wait drains).
-        for _ in 0..5 {
-            seq.render_frame(&mut out);
-        }
+
+        render_frames(&mut seq, 5);
         let (soft_r, soft_l) = seq.mixer.voices()[0].base_volume();
         assert!(
             soft_r < loud_r && soft_l < loud_l,
@@ -2154,30 +2114,22 @@ mod tests {
 
     #[test]
     fn bend_changes_a_held_notes_frequency() {
-        // Start a tied note, then BEND up mid-note: the live voice's frequency
-        // must rise (before the fix, BEND only mutated track state).
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         let track = vec![
             Event::Voice(0),
             Event::BendRange(2),
-            Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
+            tied_note(60),
             Event::Wait(4),
             Event::Bend(63),
             Event::Wait(4),
             Event::Fine,
         ];
         let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
-        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
-        seq.render_frame(&mut out); // tick 1: note on, unbent
+        render_frames(&mut seq, 1);
         let base_freq = seq.mixer.voices()[0].frequency();
-        for _ in 0..5 {
-            seq.render_frame(&mut out);
-        }
+
+        render_frames(&mut seq, 5);
         let bent_freq = seq.mixer.voices()[0].frequency();
         assert!(
             bent_freq > base_freq,
@@ -2187,51 +2139,54 @@ mod tests {
 
     #[test]
     fn track_pitch_key_m_stays_full_width_within_a_signed_byte() {
-        // In-range key offsets pass through untouched: `keyM = x >> 8` fits a
-        // signed byte, so truncation is a no-op.
         let mut track = TrackState::new();
-        track.key_shift = 127; // x >> 8 == 127
+        track.key_shift = 127;
         assert_eq!(track_pitch(&track).0, 127);
-        track.key_shift = -128; // x >> 8 == -128
+        track.key_shift = -128;
         assert_eq!(track_pitch(&track).0, -128);
     }
 
     #[test]
     fn track_pitch_key_m_wraps_through_a_signed_byte() {
-        // KEYSH 127 with a positive bend pushes `x >> 8` to 128, one past the
-        // signed-byte range. Hardware stores it in a `u8` and reads it back
-        // signed, so the effective offset wraps to `(s8)128 == -128`, not +128.
         let mut track = TrackState::new();
         track.key_shift = 127;
         track.bend = 1;
-        track.bend_range = 64; // bend == 64; (64*4 + 127*256) >> 8 == 128
+        track.bend_range = 64;
         assert_eq!(track_pitch(&track).0, -128);
     }
 
     #[test]
     fn track_volume_in_range_channels_pass_through() {
-        // A plain centred track stays well within a byte, so truncation is a
-        // no-op: guards the fix against changing ordinary volumes.
-        let track = TrackState::new(); // vol 127, pan 0, modT 0
-                                       // x = (127*0x40)>>5 = 254; y = 0.
-                                       // volMR = (128*254)>>8 = 127; volML = (127*254)>>8 = 126.
+        let track = TrackState::new();
         assert_eq!(track_volume(&track), (127, 126));
     }
 
     #[test]
     fn track_volume_tremolo_peak_wraps_through_a_byte() {
-        // TrkVolPitSet stores `(u32)((y+128)*x)>>8` straight into the u8 fields
-        // volMR/volML (m4a.c:787-788, m4a_internal.h:290-291), so a tremolo peak
-        // past 0xFF wraps modulo 256 rather than saturating at 255.
         let mut track = TrackState::new();
         track.vol = 127;
-        track.mod_type = 1; // amplitude LFO scales the volume term
-        track.mod_m = 127; // factor = 127+128 = 255
-        track.pan = 63; // hard right: y = 126, y+128 = 254
-                        // x = (127*0x40)>>5 = 254; x = (254*255)>>7 = 506.
-                        // raw volMR = (254*506)>>8 = 502 -> 502 & 0xFF = 246 (not 255).
-                        // raw volML = (1*506)>>8 = 1, unaffected.
+        track.modulation_target = ModulationTarget::AMPLITUDE;
+        track.modulation = 127;
+        track.pan = 63;
         assert_eq!(track_volume(&track), (246, 1));
+    }
+
+    #[test]
+    fn modulation_target_selects_pitch_amplitude_or_pan() {
+        let mut track = TrackState::new();
+        track.modulation = 32;
+
+        track.modulation_target = ModulationTarget::PITCH;
+        assert_eq!(track_pitch(&track), (2, 0));
+        assert_eq!(track_volume(&track), (127, 126));
+
+        track.modulation_target = ModulationTarget::AMPLITUDE;
+        assert_eq!(track_pitch(&track), (0, 0));
+        assert_eq!(track_volume(&track), (158, 157));
+
+        track.modulation_target = ModulationTarget::PAN;
+        assert_eq!(track_pitch(&track), (0, 0));
+        assert_eq!(track_volume(&track), (158, 94));
     }
 
     #[test]
@@ -2259,31 +2214,23 @@ mod tests {
 
     #[test]
     fn lfo_pitch_modulation_changes_a_held_notes_frequency_over_time() {
-        // A tied note with MOD depth and LFOS set (default MODT = pitch):
-        // the held voice's live frequency must eventually diverge from its
-        // unmodulated note-on value as the LFO's triangle wave ramps up.
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         let track = vec![
             Event::Voice(0),
             Event::Modulation(40),
             Event::LfoSpeed(30),
-            Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
+            tied_note(60),
             Event::Wait(96),
             Event::Fine,
         ];
         let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
-        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
-        seq.render_frame(&mut out); // tick 1: note on, unmodulated
+        render_frames(&mut seq, 1);
         let base_freq = seq.mixer.voices()[0].frequency();
 
         let mut changed = false;
         for _ in 0..40 {
-            seq.render_frame(&mut out);
+            render_frames(&mut seq, 1);
             if seq.mixer.voices()[0].frequency() != base_freq {
                 changed = true;
                 break;
@@ -2294,10 +2241,6 @@ mod tests {
 
     #[test]
     fn lfo_measurably_changes_the_rendered_output_vs_no_lfo() {
-        // Isolate the LFO's own contribution: an otherwise-identical track
-        // with and without MOD/LFOS must diverge in its rendered samples —
-        // not merely because the wave keeps playing (both renders share the
-        // same starting phase and duration).
         let make_wave = || {
             Arc::new(WaveData::looping(
                 1 << 20,
@@ -2311,11 +2254,7 @@ mod tests {
                 track.push(Event::Modulation(60));
                 track.push(Event::LfoSpeed(40));
             }
-            track.push(Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            });
+            track.push(tied_note(60));
             track.push(Event::Wait(96));
             track.push(Event::Fine);
             track
@@ -2342,8 +2281,6 @@ mod tests {
 
     #[test]
     fn lfo_delay_holds_off_modulation_until_it_elapses() {
-        // LFODL holds the LFO inactive (mod_m stays 0) for the first N
-        // ticks after note-on; the frequency should not move until then.
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         let track = vec![
@@ -2351,30 +2288,30 @@ mod tests {
             Event::Modulation(60),
             Event::LfoSpeed(80),
             Event::LfoDelay(10),
-            Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
+            tied_note(60),
             Event::Wait(96),
             Event::Fine,
         ];
         let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
-        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
-        seq.render_frame(&mut out); // tick 1: note on
+        render_frames(&mut seq, 1);
         let base_freq = seq.mixer.voices()[0].frequency();
-        for _ in 0..8 {
-            seq.render_frame(&mut out);
+        for _ in 0..9 {
+            render_frames(&mut seq, 1);
             assert_eq!(
                 seq.mixer.voices()[0].frequency(),
                 base_freq,
                 "frequency must not move during the LFO delay"
             );
         }
+        assert_eq!(seq.tracks[0].lfo_delay_remaining, 0);
+
+        render_frames(&mut seq, 1);
+        assert_eq!(seq.tracks[0].lfo_phase, 80);
+        assert_ne!(seq.mixer.voices()[0].frequency(), base_freq);
     }
 
     #[test]
-    fn refused_cgb_note_does_not_reset_track_modulation() {
+    fn cgb_note_resets_modulation_only_after_allocation() {
         let instruments = vec![
             direct_sound(100),
             Instrument::CgbSquare1(SquareTone {
@@ -2387,53 +2324,26 @@ mod tests {
         let song = Song::new(instruments, vec![vec![], vec![]], 150);
         let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
 
-        // Track 0 occupies square 1 at a priority track 1 cannot displace.
         seq.tracks[0].voice = 1;
         seq.tracks[0].priority = 10;
-        apply_test_event(
-            &mut seq,
-            0,
-            &Event::Note {
-                key: 50,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        apply_test_event(&mut seq, 0, &tied_note(50));
 
-        // Give track 1 a live DirectSound voice whose gain exposes any
-        // spurious amplitude-modulation reset caused by the refused note.
         seq.tracks[1].voice = 0;
-        seq.tracks[1].mod_type = 1;
-        seq.tracks[1].mod_m = 64;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        seq.tracks[1].modulation_target = ModulationTarget::AMPLITUDE;
+        seq.tracks[1].modulation = 64;
+        apply_test_event(&mut seq, 1, &tied_note(60));
         let modulated_volume = seq.mixer.voices()[0].base_volume();
 
         seq.tracks[1].voice = 1;
         seq.tracks[1].lfo_delay = 7;
-        seq.tracks[1].lfo_delay_c = 3;
-        seq.tracks[1].lfo_speed_c = 91;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 70,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        seq.tracks[1].lfo_delay_remaining = 3;
+        seq.tracks[1].lfo_phase = 91;
+        apply_test_event(&mut seq, 1, &tied_note(70));
 
         assert_eq!(seq.tracks[1].key, 70, "the raw track key still updates");
-        assert_eq!(seq.tracks[1].lfo_delay_c, 3);
-        assert_eq!(seq.tracks[1].lfo_speed_c, 91);
-        assert_eq!(seq.tracks[1].mod_m, 64);
+        assert_eq!(seq.tracks[1].lfo_delay_remaining, 3);
+        assert_eq!(seq.tracks[1].lfo_phase, 91);
+        assert_eq!(seq.tracks[1].modulation, 64);
         assert_eq!(seq.mixer.voices()[0].base_volume(), modulated_volume);
         let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
             .as_ref()
@@ -2441,20 +2351,11 @@ mod tests {
         assert_eq!(square1.track(), 0);
         assert_eq!(square1.midi_key(), 50);
 
-        // An accepted note retains the established note-on reset behaviour.
         seq.tracks[1].priority = 20;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 70,
-                velocity: 127,
-                gate: 0,
-            },
-        );
-        assert_eq!(seq.tracks[1].lfo_delay_c, 7);
-        assert_eq!(seq.tracks[1].lfo_speed_c, 0);
-        assert_eq!(seq.tracks[1].mod_m, 0);
+        apply_test_event(&mut seq, 1, &tied_note(70));
+        assert_eq!(seq.tracks[1].lfo_delay_remaining, 7);
+        assert_eq!(seq.tracks[1].lfo_phase, 0);
+        assert_eq!(seq.tracks[1].modulation, 0);
         let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
             .as_ref()
             .expect("the higher-priority note must replace square 1");
@@ -2464,32 +2365,26 @@ mod tests {
 
     #[test]
     fn accepted_cgb_sweep_note_uses_reset_pitch_modulation() {
+        const ADDING_SWEEP_PERIOD_1_SHIFT_1: u8 = 0x11;
+
         let instruments = vec![Instrument::CgbSquare1(SquareTone {
             duty: 2,
-            sweep: 0x11, // period 1, add, shift 1
+            sweep: ADDING_SWEEP_PERIOD_1_SHIFT_1,
             adsr: CgbAdsr::flat(),
             fixed_rate: false,
         })];
         let song = Song::new(instruments, vec![vec![]], 150);
         let mut seq = Sequencer::new(song);
 
-        seq.tracks[0].mod_type = 0;
-        seq.tracks[0].mod_m = 127;
+        seq.tracks[0].modulation_target = ModulationTarget::PITCH;
+        seq.tracks[0].modulation = 127;
         seq.tracks[0].lfo_delay = 7;
-        seq.tracks[0].lfo_speed_c = 91;
-        apply_test_event(
-            &mut seq,
-            0,
-            &Event::Note {
-                key: 48,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        seq.tracks[0].lfo_phase = 91;
+        apply_test_event(&mut seq, 0, &tied_note(48));
 
-        assert_eq!(seq.tracks[0].lfo_delay_c, 7);
-        assert_eq!(seq.tracks[0].lfo_speed_c, 0);
-        assert_eq!(seq.tracks[0].mod_m, 0);
+        assert_eq!(seq.tracks[0].lfo_delay_remaining, 7);
+        assert_eq!(seq.tracks[0].lfo_phase, 0);
+        assert_eq!(seq.tracks[0].modulation, 0);
         let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
             .as_ref()
             .expect("the accepted square-1 note must occupy its channel");
@@ -2500,33 +2395,15 @@ mod tests {
     }
 
     #[test]
-    fn refused_direct_sound_note_does_not_reset_track_modulation() {
+    fn direct_sound_note_resets_modulation_only_after_allocation() {
         let song = Song::new(vec![direct_sound(100)], vec![vec![], vec![]], 150);
         let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
 
-        // Start a pitch-modulated track-1 voice, then fill the other pool
-        // slot with another priority-10 voice.
         seq.tracks[1].priority = 10;
-        seq.tracks[1].mod_m = 32;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 60,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        seq.tracks[1].modulation = 32;
+        apply_test_event(&mut seq, 1, &tied_note(60));
         seq.tracks[0].priority = 10;
-        apply_test_event(
-            &mut seq,
-            0,
-            &Event::Note {
-                key: 50,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        apply_test_event(&mut seq, 0, &tied_note(50));
         let modulated_frequency = seq
             .mixer
             .voices()
@@ -2543,22 +2420,14 @@ mod tests {
 
         seq.tracks[1].priority = 0;
         seq.tracks[1].lfo_delay = 7;
-        seq.tracks[1].lfo_delay_c = 3;
-        seq.tracks[1].lfo_speed_c = 91;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 70,
-                velocity: 127,
-                gate: 0,
-            },
-        );
+        seq.tracks[1].lfo_delay_remaining = 3;
+        seq.tracks[1].lfo_phase = 91;
+        apply_test_event(&mut seq, 1, &tied_note(70));
 
         assert_eq!(seq.tracks[1].key, 70, "the raw track key still updates");
-        assert_eq!(seq.tracks[1].lfo_delay_c, 3);
-        assert_eq!(seq.tracks[1].lfo_speed_c, 91);
-        assert_eq!(seq.tracks[1].mod_m, 32);
+        assert_eq!(seq.tracks[1].lfo_delay_remaining, 3);
+        assert_eq!(seq.tracks[1].lfo_phase, 91);
+        assert_eq!(seq.tracks[1].modulation, 32);
         let voices = seq.mixer.voices();
         assert_eq!(
             voices
@@ -2577,21 +2446,11 @@ mod tests {
             "a refused note must not replace either pool occupant"
         );
 
-        // Raising the incoming priority makes allocation succeed and keeps
-        // the accepted-note LFO reset covered for DirectSound too.
         seq.tracks[1].priority = 20;
-        apply_test_event(
-            &mut seq,
-            1,
-            &Event::Note {
-                key: 70,
-                velocity: 127,
-                gate: 0,
-            },
-        );
-        assert_eq!(seq.tracks[1].lfo_delay_c, 7);
-        assert_eq!(seq.tracks[1].lfo_speed_c, 0);
-        assert_eq!(seq.tracks[1].mod_m, 0);
+        apply_test_event(&mut seq, 1, &tied_note(70));
+        assert_eq!(seq.tracks[1].lfo_delay_remaining, 7);
+        assert_eq!(seq.tracks[1].lfo_phase, 0);
+        assert_eq!(seq.tracks[1].modulation, 0);
         assert!(seq
             .mixer
             .voices()
@@ -2600,35 +2459,15 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::cast_sign_loss)] // mirrors `apply_lfo`'s `strb` truncation
-    fn lfo_triangle_falling_half_uses_the_untruncated_phase_sum() {
-        // Regression for the wide-register corner at `_081DD96E`
-        // (`m4a_1.s:1308`..`:1310`). With `lfoSpeed >= 65` the running phase
-        // sum `lfoSpeedC + lfoSpeed` can exceed 255 while its low byte still
-        // lands in the falling half (`0x40..=0xBF`). The asm mirrors the FULL
-        // pre-`strb` sum (`0x80 - r1`), not the byte written back to lfoSpeedC.
-        //
-        // Hand computation for the cited corner, full_sum = 400 (0x190),
-        // MOD (mod_depth) = 40:
-        //   truncated phase = 400 & 0xFF = 0x90 (144) -> in [0x40,0xBF] -> falling
-        //   value = 0x80 - r1 = 128 - 400 = -272        (r1 = full sum, not 144)
-        //   raw   = (40 * -272) >> 6 = -10880 >> 6 = -170   (muls; asrs r2, #6)
-        //   modM  = (i8)(-170 & 0xFF) = (i8)0x56 = +86      (strb truncation)
-        // The old truncated-phase port used 0x80 - 144 = -16 instead, giving
-        //   raw = (40 * -16) >> 6 = -640 >> 6 = -10, modM = -10 -- the divergence.
-        assert_eq!(lfo_triangle(400), -272);
+    fn lfo_triangle_uses_the_wide_phase_sum_before_byte_truncation() {
+        let wide_phase_sum = 400;
+        let triangle = lfo_triangle(wide_phase_sum);
+        assert_eq!(triangle, -272);
+        assert_eq!(scale_lfo(40, triangle), 86);
 
-        // Replicate `apply_lfo`'s depth-scale + `strb` truncation on that slope.
-        let value = lfo_triangle(400);
-        let raw = (i32::from(40u8) * value) >> 6;
-        let modm = i8::from_ne_bytes([raw as u32 as u8]);
-        assert_eq!(modm, 86, "falling half must mirror the full 16-bit sum");
-
-        // Sanity: sums <= 255 (no wide corner) still behave as before -- the
-        // falling half only reaches here for full_sum in [0x140, 0x1BF].
-        assert_eq!(lfo_triangle(0x80), 0); // p=0x80 -> 0x80 - 0x80 == 0
-        assert_eq!(lfo_triangle(0x20), 0x20); // rising: (i8)0x20
-        assert_eq!(lfo_triangle(0xC0), -64); // rising: (i8)0xC0
+        assert_eq!(lfo_triangle(0x80), 0);
+        assert_eq!(lfo_triangle(0x20), 0x20);
+        assert_eq!(lfo_triangle(0xC0), -64);
     }
 
     // --- Pattern execution (`PATT`/`PEND`/`REPT`) ---------------------------
