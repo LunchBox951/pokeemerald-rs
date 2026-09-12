@@ -196,6 +196,7 @@ impl Consumer {
     /// The single-sample form of the underrun-safe rule; the callback hot
     /// path uses the bulk [`Consumer::fill`] instead, but the accounting is
     /// identical.
+    #[must_use]
     pub fn pop_or_silence(&mut self) -> f32 {
         self.try_pop().unwrap_or_else(|| {
             self.shared.underruns.fetch_add(1, Ordering::Relaxed);
