@@ -514,35 +514,17 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
     Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
 }
 
-/// Removes the partial file `write_new_with` leaves behind after `original`,
-/// but only if `path` still names that very file -- an entry that replaced
-/// it belongs to whoever put it there and is left exactly where it is,
-/// `original` returned unchanged, mirroring `StagedSave::remove_after`
-/// (`crates/engine/src/save/file/staging.rs`). An identity that could not be
-/// read is folded into `original` the same way a failed removal is: it is
-/// itself worth reporting alongside the write failure that caused this
-/// cleanup, and is not silently treated as either "ours" or "not ours".
+/// Removes the partial file `write_new_with` left at `path` after `original`,
+/// but only while `path` still names that file; a replacement is left alone
+/// (mirrors `StagedSave::remove_after`, `crates/engine/src/save/file/staging.rs`).
+/// Cleanup-side failures fold into `original`, keeping its `ErrorKind`; a
+/// `NotFound` means nothing was left to clean up.
 ///
-/// This is a bound on what a pathname check can prove, not a guarantee: a
-/// peer can still replace `path` between the last identity check and the
-/// `unlink`, and stable `std` offers no handle-bound removal to close that
-/// gap (`FILE_FLAG_DELETE_ON_CLOSE` cannot be rescinded once the reopen
-/// succeeds, so it would only move the race). Unix identity is device and
-/// inode; off Unix it is `creation_time`, `file_size`, and `last_write_time`
-/// ([`is_the_created_file`]), three fields that can coincide where an inode
-/// cannot. Every other mention of the bound in this crate points here.
-///
-/// Folding a genuine removal failure into `original` instead of discarding
-/// it keeps the diagnosis: silently dropping it would leave a partial file
-/// at `path` unreported for the one reason that most needs reporting it:
-/// its own removal failing too, which then blocks a retry with
-/// `AlreadyExists` and no clue why. Keeps `original`'s `ErrorKind` so a
-/// caller matching on it still sees the write failure that actually
-/// happened. A `NotFound` -- whether from reading the entry's identity or
-/// from removing it -- means nothing was left to clean up, so there is
-/// nothing abandoned to report (`crates/xtask/src/extract/mod.rs`'s
-/// `remove_abandoned_staging_file` mirrors the removal half of this for the
-/// extractor's own staged write).
+/// Bound, owned here: the identity check is by pathname, so a replacement
+/// installed between that check and the `unlink` is still removed. Stable
+/// `std` has no handle-bound removal to close the gap. Unix identity is
+/// device and inode; off Unix it is creation time, size, and last write
+/// ([`is_the_created_file`]), which can coincide where an inode cannot.
 fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> std::io::Error {
     remove_after_with(path, file, original, |path| std::fs::remove_file(path))
 }
