@@ -82,17 +82,10 @@ impl FramePacer {
         if deadline < now {
             let overdue_nanos = now.duration_since(deadline).as_nanos();
             let period_nanos = self.period.as_nanos().max(1);
-            // Land on the first boundary *at or after* `now` by computing
-            // the phase remainder directly, rather than counting how many
-            // periods were missed and multiplying back up: that count can
-            // exceed `u32::MAX` (the widest multiplier `Duration`
-            // multiplication accepts) for a small period and a long enough
-            // delay, which would silently under-advance the deadline.
+            // A phase remainder, not a periods-missed count multiplied back
+            // up: that count can exceed `u32`, `Duration` multiplication's
+            // widest multiplier, and silently under-advance the deadline.
             let remainder_nanos = overdue_nanos % period_nanos;
-            // `remainder_nanos` is always strictly less than `period_nanos`
-            // (a real `Duration`'s nanosecond count), so it always fits
-            // back into a `Duration` — the `unwrap_or` fallbacks below are
-            // unreachable, kept only so the conversion cannot panic.
             let remainder = Duration::new(
                 u64::try_from(remainder_nanos / 1_000_000_000).unwrap_or(u64::MAX),
                 u32::try_from(remainder_nanos % 1_000_000_000).unwrap_or(0),
@@ -224,26 +217,17 @@ mod tests {
 
     #[test]
     fn catch_up_beyond_u32_periods_reaches_next_boundary_in_one_tick() {
-        // Regression for a u32-narrowed period count under-advancing the
-        // deadline: a period small enough (and a delay long enough) that
-        // more than `u32::MAX` periods are missed must still resolve to
-        // the next boundary at or after `now` in a single `tick` call,
-        // rather than leaving the deadline in the past and returning a
-        // zero wait.
+        // More than `u32::MAX` periods missed still lands on the next
+        // boundary at or after `now` in a single tick.
         let period = Duration::from_nanos(2);
         let mut pacer = FramePacer::with_period(period);
         let t0 = Instant::now();
-        assert_eq!(pacer.tick(t0), Duration::ZERO); // next_deadline = t0 + 2ns
+        assert_eq!(pacer.tick(t0), Duration::ZERO);
 
-        // Overdue by `2 * u32::MAX + 1` ns, i.e. `u32::MAX + 1` periods:
-        // more than a `u32` can hold as a `Duration` multiplier.
         let very_late = t0 + Duration::from_nanos(2 * u64::from(u32::MAX) + 3);
 
         let wait = pacer.tick(very_late);
         assert_eq!(wait, Duration::from_nanos(1));
-
-        // Normal cadence resumes immediately after that single catch-up -
-        // no further catch-up ticks are needed.
         assert_eq!(pacer.tick(very_late + wait), period);
     }
 }
