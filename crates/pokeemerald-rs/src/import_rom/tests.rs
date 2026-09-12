@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use rom_import::fixture::RomFixture;
 use rom_import::{ImportError, ImportedPack};
 
-use super::dest::Dest;
+use super::dest::{not_a_directory_error, Dest};
 use super::{
     create_directories, directories_to_create, import_to, import_to_with, pack_directory,
     pack_name, ImportOutcome, ImportRomError,
@@ -597,6 +597,45 @@ fn every_path_bearing_variant_escapes_control_bytes_and_stays_legible() {
         assert!(!text.contains('\u{1b}'), "{text:?}");
         assert!(text.contains(escaped), "escaped path missing from {text:?}");
     }
+}
+
+/// A hostile destination appears exactly once, escaped, in
+/// [`ImportRomError::OpenDirFailed`]'s rendering of
+/// [`not_a_directory_error`].
+#[test]
+fn a_non_directory_open_error_names_the_destination_once() {
+    let hostile = PathBuf::from("one\ntwo\u{1b}[2Kthree");
+    let rendered = ImportRomError::OpenDirFailed {
+        path: hostile,
+        source: not_a_directory_error(),
+    }
+    .to_string();
+    assert_eq!(
+        rendered,
+        r"could not open `one\ntwo\u{1b}[2Kthree`: not a directory"
+    );
+    assert!(
+        !rendered.chars().any(char::is_control),
+        "the diagnosis must stay one printable row: {rendered:?}"
+    );
+}
+
+/// The non-Unix [`Dest::open`] itself keeps `dir` out of the failure it
+/// reports, not just [`not_a_directory_error`] built independently.
+#[cfg(not(unix))]
+#[test]
+fn the_non_unix_open_of_a_non_directory_does_not_name_it() {
+    let dir = TempDir::new("open-non-directory");
+    let path = dir.join("pokeemerald.pack");
+    fs::write(&path, b"a file, not a directory").expect("a file to open");
+
+    let source = Dest::open(&path).err().expect("a file is not a directory");
+
+    assert_eq!(source.to_string(), not_a_directory_error().to_string());
+    assert!(
+        !source.to_string().contains("pokeemerald"),
+        "the inner error must not carry the path: {source}"
+    );
 }
 
 /// An ordinary path -- a Windows one included, whose separators are
