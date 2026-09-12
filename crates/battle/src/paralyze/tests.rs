@@ -433,57 +433,51 @@ const MACHOP: SpeciesId = SpeciesId(66);
 const MILOTIC: SpeciesId = SpeciesId(329);
 
 #[test]
-fn a_guts_defender_is_refused_before_the_accuracy_draw() {
+fn a_guts_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, MACHOP, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::GUTS);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::GUTS),
-        "CalculateBaseDamage raises a statused Guts holder's physical Attack, which \
-         BattlePokemon::attacking_stat does not model"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "Guts is modelled by BattlePokemon::attacking_stat, so admission never refuses it"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
 #[test]
-fn a_marvel_scale_defender_is_refused_before_the_accuracy_draw() {
+fn a_marvel_scale_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, MILOTIC, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::MARVEL_SCALE);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::MARVEL_SCALE),
-        "CalculateBaseDamage raises a statused Marvel Scale holder's Defense, which \
-         BattlePokemon::defending_stat does not model"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "Marvel Scale is modelled by BattlePokemon::defending_stat, so admission never refuses it"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
-/// The stat-reading pair is refused for the damage every later turn would
-/// miscompute, not for a draw, so the refusal must not depend on which
-/// paralyzing move carries it.
+/// The stat-reading pair is admitted for every paralyzing move, not just one,
+/// since the interaction is modelled generically at the accessor boundary.
 #[test]
-fn every_paralyze_move_refuses_the_stat_reading_abilities() {
+fn every_paralyze_move_admits_the_stat_reading_abilities() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE, STUN_SPORE, GLARE]);
-    for (species, ability) in [
-        (MACHOP, assets::AbilityId::GUTS),
-        (MILOTIC, assets::AbilityId::MARVEL_SCALE),
-    ] {
+    for species in [MACHOP, MILOTIC] {
         let defender = mon(&dex, species, 10, vec![TACKLE]);
         for move_id in [THUNDER_WAVE, STUN_SPORE, GLARE] {
             assert_eq!(
                 ensure_admissible(&dex, move_id, &attacker, &defender),
-                Err(BattleError::UnportedAbilityInteraction(ability)),
+                Ok(()),
                 "{move_id:?} against {species:?}"
             );
         }

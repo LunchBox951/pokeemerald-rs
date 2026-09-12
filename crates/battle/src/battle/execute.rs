@@ -126,6 +126,12 @@ impl Battle {
                     move_id,
                 });
             }
+            HitOutcome::LevitateBlocked => {
+                events.push(BattleEvent::LevitateBlocked {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
             HitOutcome::Hit {
                 damage,
                 is_critical,

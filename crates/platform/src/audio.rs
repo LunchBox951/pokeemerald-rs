@@ -32,7 +32,7 @@
 //!   [`PlatformError::UnsupportedAudioConfig`].
 //! - **Underruns**: `Source::fill` always fills its output buffer
 //!   completely; any shortfall is silence, counted via
-//!   [`crate::ring::Consumer::fill`]'s single-lock bulk drain (see
+//!   [`crate::ring::Consumer::fill`]'s non-blocking bulk drain (see
 //!   `crate::ring` and `crate::resample`) so audio-health checks can
 //!   observe shortfalls.
 //! - **Stream health**: underruns cover the producer-outran-consumer case,
@@ -61,7 +61,7 @@ use crate::ring::{ring_buffer, Consumer, Producer};
 /// Either play ring-buffer samples straight through, or bridge a sample-rate
 /// mismatch via [`Resampler`] — see the module docs.
 ///
-/// Both variants bottom out in [`crate::ring::Consumer::fill`]'s single-lock
+/// Both variants bottom out in [`crate::ring::Consumer::fill`]'s non-blocking
 /// bulk drain, so the underrun-safe behaviour tested against the null backend
 /// below is exactly what the real device callback runs.
 enum Source {

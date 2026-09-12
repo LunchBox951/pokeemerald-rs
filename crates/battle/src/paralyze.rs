@@ -31,6 +31,11 @@
 //! so [`ensure_admissible`] refuses that pick too, before any draw.
 //!
 //! Substitute and Safeguard are outside this battle model.
+//!
+//! Guts and Marvel Scale are modelled as raw-stat modifiers in
+//! [`crate::pokemon::BattlePokemon::attacking_stat`] and
+//! [`crate::pokemon::BattlePokemon::defending_stat`], so admission never
+//! refuses either.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -74,9 +79,7 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// Scale's damage-calculation reads).
 fn unported_paralysis_ability(ability: AbilityId) -> Option<AbilityId> {
     match ability {
-        ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
-            Some(ability)
-        }
+        AbilityId::SHED_SKIN => Some(AbilityId::SHED_SKIN),
         _ => None,
     }
 }
@@ -92,13 +95,16 @@ fn unported_paralysis_ability(ability: AbilityId) -> Option<AbilityId> {
 /// attacker is checked too: the move-end reflection resolved by
 /// [`resolve_synchronize_reflection`] would newly paralyse it exactly as a
 /// direct hit would paralyse an unsupported-ability defender, so the same
-/// ability set is refused on either side.
+/// ability set is refused on either side. Guts and Marvel Scale are
+/// modelled by [`BattlePokemon::attacking_stat`] and
+/// [`BattlePokemon::defending_stat`], so newly paralysing either holder is
+/// admitted.
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::UnportedAbilityInteraction`] for Shed Skin, Guts,
-/// or Marvel Scale, whichever battler the move (directly, or via reflection)
-/// would newly paralyse.
+/// Returns [`BattleError::UnportedAbilityInteraction`] for Shed Skin,
+/// whichever battler the move (directly, or via reflection) would newly
+/// paralyse.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
