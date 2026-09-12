@@ -14,12 +14,7 @@
 //!
 //! Paralysing a Synchronize holder reflects onto the attacker through
 //! [`resolve_synchronize_reflection`] (`ABILITYEFFECT_SYNCHRONIZE`,
-//! `pokeemerald/src/battle_util.c:2971-2984`, re-entering `SetMoveEffect`
-//! with `MOVE_EFFECT_AFFECTS_USER`, `battle_script_commands.c:2240-2245`):
-//! Limber and an existing primary status block it, `typecalc` and
-//! `accuracycheck` do not run (`:2395-2425`), and it never recurses.
-//! [`ensure_admissible`] screens the attacker for Shed Skin on that path
-//! exactly as it screens a defender.
+//! `pokeemerald/src/battle_util.c:2971-2984`).
 //!
 //! Substitute and Safeguard are outside this battle model.
 //!
@@ -213,16 +208,9 @@ pub enum SynchronizeReflectionOutcome {
 }
 
 /// Resolves a Synchronize reflection against `attacker`, the battler whose
-/// move just paralysed a Synchronize holder.
-///
-/// This mirrors `SetMoveEffect`'s `MOVE_EFFECT_AFFECTS_USER` re-entry from
-/// `ABILITYEFFECT_SYNCHRONIZE`
-/// (`pokeemerald/src/battle_util.c:2971-2984`,
-/// `pokeemerald/src/battle_script_commands.c:2240-2245`,
-/// `:2395-2425`). That re-entry runs neither `typecalc` nor
-/// `accuracycheck`, so this resolver takes no move, no type, and no RNG:
-/// Limber is the only ability guard, type effectiveness never blocks it, and
-/// only Limber or an existing primary status can stop it.
+/// move just paralysed a Synchronize holder: `SetMoveEffect`'s
+/// `MOVE_EFFECT_AFFECTS_USER` re-entry (`battle_script_commands.c:2240-2245`,
+/// `:2395-2425`), which runs neither `typecalc` nor `accuracycheck`.
 #[must_use]
 pub fn resolve_synchronize_reflection(attacker: &BattlePokemon) -> SynchronizeReflectionOutcome {
     if attacker.ability() == AbilityId::LIMBER {
