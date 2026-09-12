@@ -523,24 +523,14 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
 /// itself worth reporting alongside the write failure that caused this
 /// cleanup, and is not silently treated as either "ours" or "not ours".
 ///
-/// This is a bound on what a pathname check can prove, not a guarantee:
-/// nothing stops a peer from replacing `path` in the gap between the kernel
-/// reading this call's last identity check and its own `unlink`, and this
-/// crate has no handle-bound removal that would close that gap outright.
-/// Reopening `path` with `FILE_FLAG_DELETE_ON_CLOSE` would bind the removal
-/// itself to a handle instead of a name, but that flag takes effect the
-/// moment `CreateFile` succeeds and stable `std` exposes no call that
-/// rescinds it afterward, so checking identity first would only relocate
-/// this race between two reopens, not close it -- this crate keeps the
-/// plain path-based `remove` for that reason. Off Unix the identity read by
-/// the check that runs before it now rests on the created file's
-/// `creation_time`, `file_size`, and `last_write_time` (see
-/// [`is_the_created_file`]), which lets it refuse an entry reached through a
-/// retargeted ancestor symlink or junction that `write_new`'s `share_mode(0)`
-/// alone cannot pin, at the cost of three fields that could in principle
-/// coincide rather than the single stable identity Unix's device and inode
-/// give it. [`remove_after_with`] narrows it to what the platform permits,
-/// and every other mention of the bound in this crate points here.
+/// This is a bound on what a pathname check can prove, not a guarantee: a
+/// peer can still replace `path` between the last identity check and the
+/// `unlink`, and stable `std` offers no handle-bound removal to close that
+/// gap (`FILE_FLAG_DELETE_ON_CLOSE` cannot be rescinded once the reopen
+/// succeeds, so it would only move the race). Unix identity is device and
+/// inode; off Unix it is `creation_time`, `file_size`, and `last_write_time`
+/// ([`is_the_created_file`]), three fields that can coincide where an inode
+/// cannot. Every other mention of the bound in this crate points here.
 ///
 /// Folding a genuine removal failure into `original` instead of discarding
 /// it keeps the diagnosis: silently dropping it would leave a partial file
