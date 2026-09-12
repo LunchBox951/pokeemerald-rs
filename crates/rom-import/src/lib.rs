@@ -447,9 +447,8 @@ fn write_new_with(
     }
 }
 
-/// Whether `found` -- the entry currently at `path` -- identifies the very
-/// file `file` holds open, judged by Unix device and inode: the one pair no
-/// rename or replacement at `path` can produce for an unrelated file.
+/// Whether `found`, the entry now at `path`, is the file `file` holds open:
+/// Unix device and inode.
 #[cfg(unix)]
 fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt as _;
@@ -457,10 +456,8 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
     Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
 }
 
-/// Off Unix there is no inode, so the identity is the held handle's
-/// `creation_time`, `file_size`, and `last_write_time` against `found`'s;
-/// an entry reached through a retargeted ancestor junction, which the
-/// `share_mode(0)` hold never pinned, fails it unless all three coincide.
+/// Off Unix there is no inode: creation time, size, and last write from the
+/// held handle, which an ancestor-junction retarget cannot pin, stand in.
 #[cfg(not(unix))]
 fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::windows::fs::MetadataExt as _;
@@ -824,17 +821,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn cleanup_leaves_a_file_that_replaced_the_partial_one_alone() {
-        // Exclusive creation proves this call created the name, not that
-        // the name still means this call's file when cleanup runs: a peer
-        // that renames the partial file aside and drops its own file at
-        // that name in the gap would make a pathname-only
-        // `remove_file(out)` unlink a file the importer never created.
-        // `StagedSave::remove_after` (`crates/engine/src/save/file/staging.rs`)
-        // is the standard -- it re-reads the entry's identity and leaves
-        // "an entry that replaced it" where it is. The closure stands in
-        // for the peer, as
-        // `cleanup_leaves_a_directory_that_replaced_the_partial_file_alone`
-        // already does for a swapped-in directory.
+        // A peer swaps its own file in at `out` during the write; cleanup
+        // must leave it (`remove_after`'s contract).
         let dir = TempDir::new("write-cleanup-file-swap");
         let out = dir.join("pokeemerald.pack");
         let renamed_aside = dir.join("pokeemerald.pack.moved");
