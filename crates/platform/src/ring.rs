@@ -44,7 +44,7 @@ struct Shared {
     capacity: usize,
     /// The producer-side write index (`< capacity`), guarded by the mutex
     /// that also serializes concurrent [`Producer`] clones. Never locked by
-    /// [`Consumer`] — see the module docs' "Design" section.
+    /// [`Consumer`] — see the module docs' "Invariants" section.
     head: Mutex<usize>,
     /// Samples published and not yet consumed; the only state the producer
     /// and consumer sides share. Always in `[0, capacity]`.
@@ -166,7 +166,7 @@ impl Producer {
 pub struct Consumer {
     shared: Arc<Shared>,
     /// This consumer's own read index (`< capacity`). Touched by no one
-    /// else, ever — see the module docs' "Design" section.
+    /// else, ever — see the module docs' "Invariants" section.
     tail: usize,
 }
 
