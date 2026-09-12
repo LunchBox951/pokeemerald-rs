@@ -12,23 +12,14 @@
 //! A target already carrying a primary status other than paralysis takes the
 //! generic failure exit, not [`ParalyzeOutcome::AlreadyParalysed`].
 //!
-//! A defender whose ability is Synchronize is admitted unless the reflection
-//! it would trigger cannot be resolved: once [`ParalyzeOutcome::Applied`]
-//! paralyses a Synchronize holder, the caller (`crate::battle::execute`)
-//! re-enters [`resolve_synchronize_reflection`] against the original
-//! attacker, mirroring `SetMoveEffect`'s `MOVE_EFFECT_AFFECTS_USER` re-entry
-//! from `ABILITYEFFECT_SYNCHRONIZE`
-//! (`pokeemerald/src/battle_util.c:2971-2984`,
-//! `pokeemerald/src/battle_script_commands.c:2240-2245`). That reflection
-//! runs neither `typecalc` nor `accuracycheck`
-//! (`pokeemerald/src/battle_script_commands.c:2395-2425`), so it draws no RNG
-//! and cannot be blocked by the original attacker's type; it can only be
-//! blocked by Limber or an existing primary status, and it never recurses
-//! because a newly-statused attacker is not itself a fresh Synchronize
-//! target. A healthy attacker whose own ability is one of the same
-//! unsupported set (Shed Skin, Guts, Marvel Scale) would be newly paralysed
-//! by the reflection just as a direct hit would paralyse it as a defender,
-//! so [`ensure_admissible`] refuses that pick too, before any draw.
+//! Paralysing a Synchronize holder reflects onto the attacker through
+//! [`resolve_synchronize_reflection`] (`ABILITYEFFECT_SYNCHRONIZE`,
+//! `pokeemerald/src/battle_util.c:2971-2984`, re-entering `SetMoveEffect`
+//! with `MOVE_EFFECT_AFFECTS_USER`, `battle_script_commands.c:2240-2245`):
+//! Limber and an existing primary status block it, `typecalc` and
+//! `accuracycheck` do not run (`:2395-2425`), and it never recurses.
+//! [`ensure_admissible`] screens the attacker for Shed Skin on that path
+//! exactly as it screens a defender.
 //!
 //! Substitute and Safeguard are outside this battle model.
 //!
