@@ -8,8 +8,7 @@
 //! single [`Consumer`] (read side) sharing one fixed-capacity array of
 //! atomic slots. The consumer side — the real-time device callback — never
 //! takes a lock at all: it only loads and stores plain atomics, so a
-//! producer stalled or descheduled mid-push can never block it. See
-//! "Design" below.
+//! producer stalled or descheduled mid-push can never block it.
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
@@ -21,60 +20,18 @@
 //! underrun when the buffer runs dry" rule for a single sample, retained for
 //! callers that genuinely want one sample at a time.
 //!
-//! ## Design
+//! ## Invariants
 //!
-//! The backing store is a fixed-size `Box<[AtomicU32]>` (each slot an
-//! `f32`'s bit pattern, via [`f32::to_bits`]/[`f32::from_bits`] — plain
-//! `AtomicU32` rather than `UnsafeCell<f32>` plus a hand-proved
-//! `unsafe impl Sync`, because there is no need to take on that soundness
-//! burden when the platform's native atomics already give the same result
-//! safely).
-//!
-//! Each side keeps its own plain (non-atomic) index into that array, always
-//! `< capacity`, and wraps by `% capacity` directly rather than by letting an
-//! unbounded counter wrap on its own — see below for why that distinction
-//! matters. `head` (next slot [`Producer::push`] will write) lives inside
-//! `Shared::head`'s `Mutex<usize>`: [`Producer`] is `Clone`, so more than one
-//! handle could in principle push concurrently, and that mutex is what
-//! serializes them. `tail` (next slot [`Consumer::fill`]/[`Consumer::try_pop`]
-//! will read) is a plain field on [`Consumer`] itself — there is only ever
-//! one `Consumer` (not `Clone`), and its draining methods take `&mut self`,
-//! so the borrow checker (not a runtime lock) rules out two threads racing
-//! on it. Neither index is ever read by the other side: the *only* state the
-//! two sides share is `Shared::occupied`, an `AtomicUsize` always in
-//! `[0, capacity]` counting samples published but not yet consumed. The
-//! producer publishes with `fetch_add(n, Release)`, the consumer frees with
-//! `fetch_sub(n, Release)`, and each side reads it with `Acquire` — that
-//! Acquire/Release pairing is what makes a slot write on one side visible
-//! before the other side's matching read (buffer writes, then `Release`;
-//! `Acquire`, then buffer reads), and, symmetrically, what stops the
-//! producer from overwriting a slot the consumer has not finished reading.
-//! Because the consumer never touches `Shared::head`'s lock, a producer
-//! stalled while holding it still cannot block [`Consumer::fill`],
-//! [`Consumer::try_pop`], or [`Consumer::available`].
-//!
-//! Both indices stay `< capacity` at all times — wrapped by `% capacity`
-//! immediately, on every advance, rather than left to run as unbounded
-//! monotonic counters that only get reduced `% capacity` at the point of
-//! indexing. That distinction is deliberate, not stylistic: a `capacity`
-//! that does not evenly divide the width an unbounded counter wraps at
-//! (`usize::MAX + 1`, a power of two) would alias two different sequence
-//! positions onto the same slot the instant that counter wrapped, silently
-//! corrupting playback for any non-power-of-two capacity (and this ring's
-//! capacity is caller-chosen and not required to be one). Keeping each index
-//! bounded by `capacity` from the start sidesteps that: there is no
-//! wide-counter wraparound to alias against, so the arithmetic is correct
-//! for every capacity, not only powers of two. It also means neither index
-//! can ever overflow `usize` — the concern a wide monotonic counter would
-//! eventually raise over a long enough session — without any `wrapping_*`
-//! arithmetic standing in for that proof. `occupied` itself never exceeds
-//! `capacity`, by construction: [`Producer::push`] only ever adds up to the
-//! free space it just computed, and [`Consumer::fill`]/[`Consumer::try_pop`]
-//! only ever subtract what they just confirmed was published. A
-//! zero-capacity ring never indexes the backing slice at all: `occupied` is
-//! always `0` there (free space is always `0`, so `push` never accepts a
-//! sample), so every drain/write loop below runs zero iterations and the
-//! `% capacity` used to wrap an index is never evaluated.
+//! The only state both sides share is `Shared::occupied`, an `AtomicUsize`
+//! in `[0, capacity]`: the producer publishes with `fetch_add(Release)`
+//! after its slot stores, the consumer frees with `fetch_sub(Release)` after
+//! its slot loads, and each side reads it with `Acquire`, which orders every
+//! slot access against the other side's. The consumer never takes
+//! `Shared::head`'s mutex, which only serialises cloned producers, so a
+//! producer stalled mid-push cannot block the callback. Each index is
+//! reduced `% capacity` on every advance rather than left as an unbounded
+//! counter: a capacity that does not divide `usize::MAX + 1` would alias
+//! two sequence positions onto one slot the instant such a counter wrapped.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
