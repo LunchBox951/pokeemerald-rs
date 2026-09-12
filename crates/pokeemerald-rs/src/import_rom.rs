@@ -113,62 +113,9 @@ use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use rom_import::{ImportError, ImportedPack};
+use rom_import::{ImportError, ImportedPack, OneLinePath};
 
 use dest::Dest;
-
-/// A path rendered for a one-line diagnostic.
-///
-/// A player names their own ROM path, and `$POKEEMERALD_PACK` names their
-/// own destination, so either is untrusted the same way a ROM's header
-/// bytes are (`rom_import::error`'s `OneLinePath`, which this mirrors: that
-/// one is crate-private to `rom-import` and covers only its own
-/// [`ImportError`] variants, so this module's own path-bearing messages need
-/// their own copy). A name may carry a newline or an ESC byte, and this
-/// module's one-terminal-row promise has to survive it. Only what would
-/// break the row or steer the terminal is escaped, so an ordinary path -- a
-/// Windows one included, whose separators are backslashes -- still prints as
-/// the literal string a player can copy back into a shell.
-///
-/// The rendering is therefore ambiguous rather than reversible: a name
-/// holding the two characters `\` and `n` prints the same as one holding a
-/// newline. A diagnostic is read, not parsed, and doubling every separator
-/// on the platform where every path has them costs more than the ambiguity
-/// does.
-struct OneLinePath<'a>(&'a Path);
-
-impl fmt::Display for OneLinePath<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for c in self.0.to_string_lossy().chars() {
-            match c {
-                '\n' => f.write_str(r"\n")?,
-                '\r' => f.write_str(r"\r")?,
-                '\t' => f.write_str(r"\t")?,
-                // `is_control` is the Unicode `Cc` category: C0, DEL, and
-                // C1. `U+2028`/`U+2029` are line breaks outside it, and the
-                // bidi embedding, override, isolate, and mark controls
-                // (`Bidi_Control`) can reorder the text after the path on a
-                // bidi-aware terminal.
-                c if c.is_control()
-                    || matches!(
-                        c,
-                        '\u{2028}'
-                            | '\u{2029}'
-                            | '\u{061c}'
-                            | '\u{200e}'
-                            | '\u{200f}'
-                            | '\u{202a}'..='\u{202e}'
-                            | '\u{2066}'..='\u{2069}'
-                    ) =>
-                {
-                    write!(f, "\\u{{{:x}}}", c as u32)?;
-                }
-                c => f.write_str(c.encode_utf8(&mut [0u8; 4]))?,
-            }
-        }
-        Ok(())
-    }
-}
 
 /// What a successful import produced.
 ///
@@ -219,7 +166,9 @@ impl fmt::Display for ImportOutcome {
 /// Why `--import-rom` failed.
 ///
 /// Concrete per-crate enum `(oop-boundaries)`; no `anyhow`. Every message
-/// is one line, because the binary prints it on one terminal row.
+/// is one line, because the binary prints it on one terminal row. The paths
+/// they quote come from `$POKEEMERALD_PACK` and from `--import-rom`, so they
+/// render through [`OneLinePath`] to keep that row intact.
 #[derive(Debug)]
 pub enum ImportRomError {
     /// No destination could be resolved: `$POKEEMERALD_PACK` is unset and

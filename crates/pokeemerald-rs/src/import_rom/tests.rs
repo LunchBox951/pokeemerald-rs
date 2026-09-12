@@ -515,9 +515,8 @@ fn the_outcome_renders_the_one_line_summary() {
 /// Every message here is one terminal row (module docs on
 /// [`ImportRomError`]), and the paths they quote are user-supplied:
 /// `--import-rom`'s argument and `$POKEEMERALD_PACK`. Control bytes in
-/// either must be masked before interpolation, exactly as `rom-import`
-/// masks the ROM's own header bytes (`crates/rom-import/src/error.rs`,
-/// `OneLinePath`).
+/// either must be escaped before interpolation, which is what routing them
+/// through `OneLinePath` (`crates/rom-import/src/one_line.rs`) buys.
 #[test]
 fn a_destination_carrying_control_bytes_stays_one_printable_row() {
     let rendered = ImportRomError::DestinationIsDirectory {
