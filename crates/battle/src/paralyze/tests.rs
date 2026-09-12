@@ -1,6 +1,6 @@
 use super::{
     ensure_admissible, ensure_resolvable, is_paralyze_effect, resolve_paralyze_move,
-    ParalyzeOutcome, EFFECT_PARALYZE,
+    resolve_synchronize_reflection, ParalyzeOutcome, SynchronizeReflectionOutcome, EFFECT_PARALYZE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -216,20 +216,25 @@ fn a_limber_defender_reports_the_limber_protected_outcome() {
 const RALTS: SpeciesId = SpeciesId(392);
 
 #[test]
-fn a_synchronize_defender_is_refused_before_the_accuracy_draw() {
+fn a_healthy_synchronize_defender_is_admitted_and_paralysed() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, RALTS, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::SYNCHRONIZE);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE),
-        "the unmodelled MOVEEND_SYNCHRONIZE_TARGET reflection fails closed"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "ensure_admissible no longer refuses Synchronize; the caller in \
+         crate::battle::execute reflects the status at move end"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(
+        rng.draws(),
+        1,
+        "reflection is not resolved here and draws nothing itself"
+    );
 }
 
 #[test]
@@ -301,8 +306,8 @@ fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "the reflection's SetMoveEffect pass writes nothing to an already-statused \
-         attacker (src/battle_script_commands.c:2422-2423), so nothing is unmodelled"
+        "ensure_admissible no longer reads the attacker's status at all; the \
+         reflection itself is resolved separately by resolve_synchronize_reflection"
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
@@ -319,14 +324,54 @@ fn a_poisoned_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "an attacker carrying any primary status, not just Paralysed, leaves the \
-         reflection's SetMoveEffect re-entry nothing to write"
+        "an attacker carrying any primary status does not change whether the \
+         defender is paralysed; only resolve_synchronize_reflection reads it"
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
     assert_eq!(
         attacker.status1(),
         Status1::Poisoned,
-        "the attacker's own status is never rewritten by the reflection"
+        "resolve_paralyze_move never mutates the attacker"
+    );
+}
+
+#[test]
+fn resolve_synchronize_reflection_applies_to_a_healthy_attacker() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    assert_eq!(
+        resolve_synchronize_reflection(&attacker),
+        SynchronizeReflectionOutcome::Applied
+    );
+}
+
+#[test]
+fn resolve_synchronize_reflection_reports_an_existing_status_without_changing_it() {
+    let dex = Dex::new();
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        let mut attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+        attacker.set_status1(status);
+        assert_eq!(
+            resolve_synchronize_reflection(&attacker),
+            SynchronizeReflectionOutcome::AlreadyStatused,
+            "{status:?}"
+        );
+        assert_eq!(
+            attacker.status1(),
+            status,
+            "resolve_synchronize_reflection never mutates its argument"
+        );
+    }
+}
+
+#[test]
+fn resolve_synchronize_reflection_is_blocked_by_the_attackers_own_limber() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, PERSIAN, 10, vec![THUNDER_WAVE]);
+    assert_eq!(attacker.ability(), assets::species::AbilityId::LIMBER);
+    assert_eq!(
+        resolve_synchronize_reflection(&attacker),
+        SynchronizeReflectionOutcome::LimberProtected
     );
 }
 

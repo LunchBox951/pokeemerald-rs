@@ -1,6 +1,6 @@
 //! Dispatch and stateful execution for moves admitted by [`crate::battle`].
 
-use assets::{MoveEffect, MoveId};
+use assets::{AbilityId, MoveEffect, MoveId};
 
 use crate::damage::BattleRng;
 use crate::defense_curl::is_defense_curl_effect;
@@ -10,7 +10,10 @@ use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::multi_hit::is_multi_hit_effect;
-use crate::paralyze::{is_paralyze_effect, resolve_paralyze_move, ParalyzeOutcome};
+use crate::paralyze::{
+    is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection, ParalyzeOutcome,
+    SynchronizeReflectionOutcome,
+};
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
@@ -329,19 +332,65 @@ impl Battle {
                 });
             }
             ParalyzeOutcome::Applied => {
-                let defender = if attacker_is_player {
-                    &mut self.enemy
-                } else {
-                    &mut self.player
+                let defender_ability = {
+                    let defender = if attacker_is_player {
+                        &mut self.enemy
+                    } else {
+                        &mut self.player
+                    };
+                    defender.set_status1(Status1::Paralysed);
+                    defender.ability()
                 };
-                defender.set_status1(Status1::Paralysed);
                 events.push(BattleEvent::Paralyzed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+                // `MOVEEND_SYNCHRONIZE_TARGET` (`include/constants/battle_script_commands.h:392-410`)
+                // runs the reflection right after the initial status message,
+                // before the rest of move-end processing.
+                if defender_ability == AbilityId::SYNCHRONIZE {
+                    self.reflect_synchronize_paralysis(attacker_is_player, move_id, events);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reflects a Synchronize holder's freshly-applied paralysis back onto
+    /// the original attacker, re-entering `SetMoveEffect` for
+    /// `MOVE_EFFECT_AFFECTS_USER` (`src/battle_util.c:2971`-`:2984`).
+    fn reflect_synchronize_paralysis(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let original_attacker = if attacker_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        match resolve_synchronize_reflection(original_attacker) {
+            SynchronizeReflectionOutcome::LimberProtected => {
+                events.push(BattleEvent::SynchronizeLimberProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizeReflectionOutcome::AlreadyStatused => {}
+            SynchronizeReflectionOutcome::Applied => {
+                let original_attacker = if attacker_is_player {
+                    &mut self.player
+                } else {
+                    &mut self.enemy
+                };
+                original_attacker.set_status1(Status1::Paralysed);
+                events.push(BattleEvent::ParalyzedBySynchronize {
                     by_player: attacker_is_player,
                     move_id,
                 });
             }
         }
-        Ok(())
     }
 
     const fn battlers(
