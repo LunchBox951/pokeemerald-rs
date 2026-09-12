@@ -440,24 +440,9 @@ impl<'a> SpriteLayer<'a> {
     }
 
     /// Samples an affine entry from one footprint-local coordinate for each
-    /// horizontal mosaic block.
-    ///
-    /// mGBA re-invokes sprite preprocessing once per hardware-window span and
-    /// seeds `xAccum`/`localX` from that span's own `start`, not the
-    /// screen-aligned mosaic block origin (`video-software.c:1052-1062`,
-    /// `software-obj.c:227-242`), so a span that opens inside a mosaic block
-    /// holds the column one left of the span's start until the next
-    /// screen-aligned block boundary.
-    ///
-    /// A `dx` at or past the sprite's own width exists only because
-    /// [`Self::footprint`] rounds the trailing edge out to the next
-    /// screen-aligned block; mGBA computes that rounding once, in whichever
-    /// span contains the sprite's raw right edge (`entry_x + width`), not the
-    /// span containing `x` (`software-obj.c:227-239`). That owning span is
-    /// also the only pass that writes those trailing columns, so when it is
-    /// one of the spans mGBA skips entirely they stay unwritten in the sprite
-    /// buffer, whatever a later span's control enables
-    /// (`video-software.c:1052-1062`).
+    /// horizontal mosaic block, seeding each hardware-window span's mosaic
+    /// hold the way mGBA reruns sprite preprocessing per span
+    /// (`software-obj.c:227-242`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -481,40 +466,48 @@ impl<'a> SpriteLayer<'a> {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
         let (width, _) = entry.bounding_box();
-        let spills_past_raw_edge = dx >= width;
-        let span_query_x = if spills_past_raw_edge {
-            (entry_x + width as i32).max(0) as usize
-        } else {
-            x
-        };
-        let span = window_spans.index_at(span_query_x);
-        if spills_past_raw_edge && !window_spans.span_draws_obj(span) {
-            return Texel::Outside;
-        }
-        let window_span_start = window_spans.span_start(span);
-        // The preprocessing pass covering `x` starts at the sprite's own
-        // edge, or later at the window span's start if that span opens after
-        // the sprite begins (`software-obj.c:227-229`).
-        let pass_start_x = entry_x.max(window_span_start as i32);
         let block_origin_x = mosaic.snap(x, y).0 as i32;
-        let held_screen_x = if block_origin_x >= pass_start_x {
-            block_origin_x
-        } else {
-            // mGBA seeds a leading partial block from `inX - 1`, one column
-            // left of the pass start (`software-obj.c:241`).
-            pass_start_x - 1
-        };
-        let local_x = held_screen_x - entry_x;
 
-        sprite_affine::sample_texel(
-            entry,
-            self.matrices,
-            self.tileset_4bpp,
-            self.tileset_8bpp,
-            self.palette,
-            local_x,
-            local_y,
-        )
+        // The preprocessing pass covering `x` starts at the sprite's own
+        // edge, or later at the window span's start (`software-obj.c:227-229`);
+        // a partial leading block holds from `inX - 1`, one column left of
+        // that start (`software-obj.c:241`).
+        let sample_from_span_start = |window_span_start: i32| {
+            let pass_start_x = entry_x.max(window_span_start);
+            let held_screen_x = if block_origin_x >= pass_start_x {
+                block_origin_x
+            } else {
+                pass_start_x - 1
+            };
+            sprite_affine::sample_texel(
+                entry,
+                self.matrices,
+                self.tileset_4bpp,
+                self.tileset_8bpp,
+                self.palette,
+                held_screen_x - entry_x,
+                local_y,
+            )
+        };
+
+        if dx < width {
+            let span = window_spans.index_at(x);
+            return sample_from_span_start(window_spans.span_start(span) as i32);
+        }
+
+        // `dx` past the sprite's own width exists only because
+        // `Self::footprint` rounds the trailing edge out to a screen-aligned
+        // block; mGBA reruns that rounding in every span whose own end
+        // doesn't bind it, and a span that skips OBJ entirely never runs it
+        // (`software-obj.c:227-239`, `video-software.c:1052-1062`), so try
+        // each OBJ-drawing span from the raw edge through `x` in turn.
+        let raw_edge = (entry_x + width as i32).max(0) as usize;
+        let last_span = window_spans.index_at(x);
+        (window_spans.index_at(raw_edge)..=last_span)
+            .filter(|&span| window_spans.span_draws_obj(span))
+            .map(|span| sample_from_span_start(window_spans.span_start(span) as i32))
+            .find(|texel| !matches!(texel, Texel::Outside))
+            .unwrap_or(Texel::Outside)
     }
 }
 
