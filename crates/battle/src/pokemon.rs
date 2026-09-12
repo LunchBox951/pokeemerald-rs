@@ -808,19 +808,39 @@ impl BattlePokemon {
     }
 
     /// Attacking stat and stage for the move category.
+    ///
+    /// A statused Guts holder's raw physical Attack is raised 150% before the
+    /// stage is applied, matching upstream's `CalculateBaseDamage`
+    /// (`pokeemerald/src/pokemon.c:3211-3212`); special Attack never changes.
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
-            crate::damage::MoveCategory::Physical => (self.stats.attack, self.stages.attack),
+            crate::damage::MoveCategory::Physical => {
+                let raw_attack =
+                    crate::ability::guts_attack(self.ability(), self.status1, self.stats.attack);
+                (raw_attack, self.stages.attack)
+            }
             crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),
         }
     }
 
     /// Defending stat and stage for the move category.
+    ///
+    /// A statused Marvel Scale holder's raw physical Defense is raised 150%
+    /// before the stage is applied, matching upstream's
+    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
+    /// Defense never changes.
     #[must_use]
     pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
-            crate::damage::MoveCategory::Physical => (self.stats.defense, self.stages.defense),
+            crate::damage::MoveCategory::Physical => {
+                let raw_defense = crate::ability::marvel_scale_defense(
+                    self.ability(),
+                    self.status1,
+                    self.stats.defense,
+                );
+                (raw_defense, self.stages.defense)
+            }
             crate::damage::MoveCategory::Special => (self.stats.sp_defense, self.stages.sp_defense),
         }
     }

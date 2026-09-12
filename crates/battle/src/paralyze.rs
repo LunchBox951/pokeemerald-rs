@@ -13,6 +13,11 @@
 //! generic failure exit, not [`ParalyzeOutcome::AlreadyParalysed`].
 //!
 //! Substitute and Safeguard are outside this battle model.
+//!
+//! Guts and Marvel Scale are modelled as raw-stat modifiers in
+//! [`crate::pokemon::BattlePokemon::attacking_stat`] and
+//! [`crate::pokemon::BattlePokemon::defending_stat`], so admission never
+//! refuses either.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -58,12 +63,14 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
 /// or an existing primary status are accepted because they cannot reach an
 /// unsupported interaction. Synchronize is also accepted when the attacker
 /// already carries a primary status and therefore cannot receive the
-/// reflected one.
+/// reflected one. Guts and Marvel Scale are modelled by
+/// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
+/// newly paralysing either holder is admitted.
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::UnportedAbilityInteraction`] for Synchronize, Shed
-/// Skin, Guts, or Marvel Scale when the move would newly paralyse the defender.
+/// Returns [`BattleError::UnportedAbilityInteraction`] for Synchronize or
+/// Shed Skin when the move would newly paralyse the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -83,9 +90,9 @@ pub fn ensure_admissible(
         return Ok(());
     }
     match defender.ability() {
-        ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
-            Err(BattleError::UnportedAbilityInteraction(ability))
-        }
+        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SHED_SKIN,
+        )),
         AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
             BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
         ),

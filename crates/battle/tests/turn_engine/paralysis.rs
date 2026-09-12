@@ -10,7 +10,9 @@
 //! its own script (immunity) still spends it, and that the quarter-speed
 //! modifier really reorders who acts first.
 
-use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
+use crate::common::{
+    max_iv_mon, max_iv_mon_with_personality, SequenceRng, MAX_IVS, SECONDARY_ABILITY_PERSONALITY,
+};
 use assets::{MoveId, SpeciesId};
 use battle::{
     Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE,
@@ -44,6 +46,12 @@ const GASTLY: u16 = 92;
 const ZIGZAGOON: u16 = 288;
 /// `SPECIES_SANDSHREW`: pure Ground, immune to Thunder Wave's Electric type.
 const SANDSHREW: u16 = 27;
+/// `SPECIES_MAKUHITA`: Fighting/Fighting, Guts in ability slot 1 (Thick Fat
+/// is slot 0).
+const MAKUHITA: u16 = 335;
+/// `SPECIES_MILOTIC`: Water/Water, Marvel Scale in its primary (and only)
+/// ability slot.
+const MILOTIC: u16 = 329;
 
 #[test]
 fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
@@ -651,4 +659,94 @@ fn a_depleted_enemy_paralyze_slot_does_not_block_a_synchronize_lead() {
         "a spent Thunder Wave cannot paralyse the Synchronize lead: {:?}",
         battle.err()
     );
+}
+
+/// Guts and Marvel Scale are modelled as raw physical Attack/Defense
+/// modifiers in [`battle::BattlePokemon::attacking_stat`] and
+/// [`battle::BattlePokemon::defending_stat`], so the pick is admitted and
+/// paralysis lands exactly like it would against any other ability.
+#[test]
+fn thunder_wave_newly_paralyses_a_healthy_guts_defender() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        MAKUHITA,
+        5,
+        vec![TACKLE],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::GUTS,
+        "fixture sanity: personality 25 fields the secondary ability slot"
+    );
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the type
+    // and already-paralysed guards draw nothing), the enemy's own
+    // full-paralysis draw against the status the player's move just wrote
+    // (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Guts is modelled, so the pick is admitted");
+
+    assert_eq!(
+        events[0],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}
+
+#[test]
+fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, MILOTIC, 5, vec![TACKLE]);
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::MARVEL_SCALE,
+        "fixture sanity: the primary slot fields Marvel Scale"
+    );
+
+    // Unlike the Guts fixture above, level-5 Milotic (raw Speed 14) outpaces
+    // level-5 Rattata (raw Speed 13), so the enemy's ordinary Tackle resolves
+    // first this turn (accuracy, crit, damage roll, discarded effect chance:
+    // 4 draws) and the player's Thunder Wave -- which lands second and pays
+    // only its own accuracy draw -- never gets a same-turn full-paralysis
+    // check to cancel, since Milotic already moved.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Marvel Scale is modelled, so the pick is admitted");
+
+    assert!(
+        matches!(
+            events[0],
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "the faster Milotic acts first: {events:?}"
+    );
+    assert_eq!(
+        events[1],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
 }
