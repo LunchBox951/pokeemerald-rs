@@ -385,6 +385,10 @@ impl Voice {
             let sample = self.source_position.interpolated_sample(&self.wave);
             self.frame_gain.accumulate(sample, output);
             self.source_position.advance_wrapping(phase_step);
+            if !self.wave.is_looping() && self.source_position.sample_index >= self.wave.len() {
+                self.envelope.retire();
+                break;
+            }
         }
     }
 }
@@ -527,6 +531,27 @@ mod tests {
             (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
         );
         assert_eq!(acc[7], (0, 0));
+    }
+
+    #[test]
+    fn one_shot_voice_retires_when_its_last_sample_fills_the_final_output_slot() {
+        let mut voice = voice(
+            wave(0, vec![10, 20, 30, 40]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
+            0,
+        )
+        .fixed_rate(true);
+        let mut acc = vec![(0, 0); 4];
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert_eq!(voice.source_index(), 4, "the whole wave was consumed");
+        assert!(
+            !voice.is_active(),
+            "a one-shot whose last sample lands in the final output slot must \
+             retire on that mixer iteration"
+        );
     }
 
     #[test]

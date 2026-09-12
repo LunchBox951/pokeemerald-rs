@@ -121,20 +121,22 @@ fn parse_voice_group_declaration(line: &str) -> Result<VoiceGroupDeclaration, Vo
     if invocation.name != "voice_group" {
         return Err(VoiceGroupError::MissingVoiceGroupDeclaration);
     }
-    let [label, optional_operands @ ..] = invocation.operands.as_slice() else {
-        return Err(VoiceGroupError::MissingVoiceGroupDeclaration);
+    let (label, optional_operand) = match invocation.operands.as_slice() {
+        [label] => (*label, None),
+        [label, starting_note] => (*label, Some(*starting_note)),
+        _ => return Err(VoiceGroupError::MissingVoiceGroupDeclaration),
     };
     if label.is_empty() {
         return Err(VoiceGroupError::MissingVoiceGroupDeclaration);
     }
-    let starting_note = match optional_operands.first() {
+    let starting_note = match optional_operand {
         Some(operand) => operand
             .parse::<u8>()
             .map_err(|_| VoiceGroupError::InvalidVoiceGroupStartingNote)?,
         None => 0,
     };
     Ok(VoiceGroupDeclaration {
-        label: (*label).to_owned(),
+        label: label.to_owned(),
         starting_note,
     })
 }
@@ -227,8 +229,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
 
     match invocation.name {
         "voice_directsound" | "voice_directsound_no_resample" | "voice_directsound_alt" => {
-            let [base_key, pan, sample_symbol, attack, decay, sustain, release, ..] = operands
-            else {
+            let [base_key, pan, sample_symbol, attack, decay, sustain, release] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             let mode = match invocation.name {
@@ -246,8 +247,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_square_1" | "voice_square_1_alt" => {
-            let [base_key, length, sweep, duty, attack, decay, sustain, release, ..] = operands
-            else {
+            let [base_key, length, sweep, duty, attack, decay, sustain, release] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::Square1 {
@@ -260,7 +260,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_square_2" | "voice_square_2_alt" => {
-            let [base_key, length, duty, attack, decay, sustain, release, ..] = operands else {
+            let [base_key, length, duty, attack, decay, sustain, release] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::Square2 {
@@ -272,8 +272,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_programmable_wave" | "voice_programmable_wave_alt" => {
-            let [base_key, length, wave_symbol, attack, decay, sustain, release, ..] = operands
-            else {
+            let [base_key, length, wave_symbol, attack, decay, sustain, release] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::ProgrammableWave {
@@ -285,7 +284,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_noise" | "voice_noise_alt" => {
-            let [base_key, length, period, attack, decay, sustain, release, ..] = operands else {
+            let [base_key, length, period, attack, decay, sustain, release] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::Noise {
@@ -297,7 +296,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_keysplit" => {
-            let [voice_group_symbol, key_split_symbol, ..] = operands else {
+            let [voice_group_symbol, key_split_symbol] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::KeySplit {
@@ -306,7 +305,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             })
         }
         "voice_keysplit_all" => {
-            let [voice_group_symbol, ..] = operands else {
+            let [voice_group_symbol] = operands else {
                 return Err(malformed_voice_slot(group, line));
             };
             Ok(RawSlot::Rhythm {
@@ -350,20 +349,22 @@ struct KeySplitBuilder {
 
 impl KeySplitBuilder {
     fn parse_declaration(operands: &[&str]) -> Result<Self, VoiceGroupError> {
-        let [label, optional_operands @ ..] = operands else {
-            return Err(VoiceGroupError::MissingKeySplitLabel);
+        let (label, optional_operand) = match operands {
+            [label] => (*label, None),
+            [label, starting_note] => (*label, Some(*starting_note)),
+            _ => return Err(VoiceGroupError::MissingKeySplitLabel),
         };
         if label.is_empty() {
             return Err(VoiceGroupError::MissingKeySplitLabel);
         }
-        let starting_note = match optional_operands.first() {
+        let starting_note = match optional_operand {
             Some(operand) => operand
                 .parse::<u8>()
                 .map_err(|_| VoiceGroupError::InvalidKeySplitStartingNote)?,
             None => 0,
         };
         Ok(Self {
-            label: (*label).to_owned(),
+            label: label.to_owned(),
             starting_note,
             next_note: starting_note,
             table: Vec::new(),
@@ -393,7 +394,7 @@ fn parse_key_split_range(operands: &[&str], table: &str) -> Result<KeySplitRange
     let invalid_operands = || VoiceGroupError::InvalidSplitOperands {
         table: table.to_owned(),
     };
-    let [child_slot, exclusive_end_note, ..] = operands else {
+    let [child_slot, exclusive_end_note] = operands else {
         return Err(invalid_operands());
     };
     Ok(KeySplitRange {
