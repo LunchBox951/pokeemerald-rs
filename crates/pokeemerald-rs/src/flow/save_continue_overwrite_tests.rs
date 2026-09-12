@@ -1,6 +1,5 @@
 //! Overwrite confirmation, corruption fallback, and the foreign-save
-//! consent gate (issue #232), split from [`super::save_continue_tests`]'s
-//! round trip (`one module = one concept` `(oop-boundaries)`).
+//! consent gate (issue #232).
 
 use super::menu_type_for;
 use super::save_continue_tests::{

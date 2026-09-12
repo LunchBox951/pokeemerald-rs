@@ -1,6 +1,4 @@
-//! `GetPlayerTextSpeedDelay`'s save-message pacing (`optionsTextSpeed`),
-//! split from [`super::save_continue_tests`]'s round trip (`one module =
-//! one concept` `(oop-boundaries)`).
+//! `GetPlayerTextSpeedDelay`'s save-message pacing (`optionsTextSpeed`).
 
 use platform::Buttons;
 

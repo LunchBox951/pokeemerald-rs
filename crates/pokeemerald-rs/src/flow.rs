@@ -97,33 +97,26 @@ pub(crate) use overworld_phase::OverworldPhase;
 #[cfg(test)]
 mod save_continue_tests;
 
-/// Legacy/malformed-save migrations on continue (facing, elevation, heal
-/// location, fainted lead) -- split from [`save_continue_tests`] into its
-/// own ownership domain (`one module = one concept` `(oop-boundaries)`).
+/// Legacy/malformed-save migrations on continue: facing, elevation, heal
+/// location, and fainted-lead fallbacks.
 #[cfg(test)]
 mod save_continue_migration_tests;
 
 /// Overwrite confirmation, corruption fallback, and the foreign-save
-/// consent gate (issue #232) -- split from [`save_continue_tests`] into its
-/// own ownership domain (`one module = one concept` `(oop-boundaries)`).
+/// consent gate (issue #232).
 #[cfg(test)]
 mod save_continue_overwrite_tests;
 
-/// Issue #353's undecodable-slot retention -- split from
-/// [`save_continue_tests`] into its own ownership domain (`one module = one
-/// concept` `(oop-boundaries)`).
+/// Issue #353's undecodable-slot retention: a party slot whose secure
+/// region fails its own checksum.
 #[cfg(test)]
 mod save_continue_retention_tests;
 
-/// The saved `optionsTextSpeed`'s start-menu message pacing -- split from
-/// [`save_continue_tests`] into its own ownership domain (`one module = one
-/// concept` `(oop-boundaries)`).
+/// The saved `optionsTextSpeed`'s start-menu message pacing.
 #[cfg(test)]
 mod save_continue_text_speed_tests;
 
-/// Issue #795's main-menu window-frame chrome for a continuable save --
-/// split from [`save_continue_tests`] into its own ownership domain (`one
-/// module = one concept` `(oop-boundaries)`).
+/// Issue #795's main-menu window-frame chrome for a continuable save.
 #[cfg(test)]
 mod save_continue_window_frame_tests;
 

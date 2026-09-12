@@ -1,6 +1,5 @@
 //! Issue #795: the main-menu window-frame chrome a continuable save renders
-//! with, split from [`super::save_continue_tests`]'s round trip (`one
-//! module = one concept` `(oop-boundaries)`).
+//! with.
 
 use super::save_continue_tests::{new_game_phase, save_from_the_start_menu};
 use super::tests::TempSave;

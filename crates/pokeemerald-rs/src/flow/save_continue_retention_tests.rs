@@ -1,6 +1,5 @@
 //! Issue #353's undecodable-slot retention: a party slot whose secure region
-//! fails its own checksum, split from [`super::save_continue_tests`]'s round
-//! trip (`one module = one concept` `(oop-boundaries)`).
+//! fails its own checksum.
 
 use engine::save::{BoxPokemon, Pokemon};
 

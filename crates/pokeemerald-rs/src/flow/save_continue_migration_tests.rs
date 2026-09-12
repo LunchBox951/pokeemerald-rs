@@ -1,7 +1,5 @@
-//! Continue-time migrations of legacy or malformed save data -- facing,
-//! elevation, heal-location, and fainted-lead fallbacks -- split from
-//! [`super::save_continue_tests`]'s round trip (`one module = one concept`
-//! `(oop-boundaries)`).
+//! Continue-time migrations of legacy or malformed save data: facing,
+//! elevation, heal-location, and fainted-lead fallbacks.
 
 use engine::overworld::Direction;
 use engine::save::{SaveBlock1, SaveBlock2, WarpData};
