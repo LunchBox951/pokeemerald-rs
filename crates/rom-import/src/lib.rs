@@ -216,11 +216,10 @@ impl ImportedPack {
 /// than followed and truncated (`write_new`); the caller publishes the
 /// finished file over the real destination itself.
 ///
-/// A failed import leaves nothing at `out_path`. Exclusive creation would
-/// otherwise make a half-written pack permanent — the retry would fail on
-/// its own leftover — so a write that dies part-way removes the file it
-/// created before returning [`ImportError::WriteFailed`]. The one failure
-/// that leaves the path occupied is the one that found it occupied.
+/// A write that dies part-way removes the partial file this call created at
+/// `out_path` before returning [`ImportError::WriteFailed`], so a retry is
+/// not refused by its own leftover; a replacement a concurrent writer put
+/// there is left alone, within the bound `remove_after` states.
 ///
 /// # Errors
 ///
@@ -412,6 +411,10 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// `O_CREAT | O_EXCL` refuses a symlink even a dangling one, and Windows'
 /// `CREATE_NEW` refuses an existing name the same way. The attack becomes
 /// a refused import naming the path, not a truncated file.
+///
+/// On Windows the handle also shares nothing (`share_mode(0)`, as
+/// `create_new_exclusive` in `crates/engine/src/save/file/staging.rs`), so
+/// no other opener can rename or delete `out_path`'s entry while it lives.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
@@ -423,58 +426,124 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
 /// precedent).
 ///
-/// A write that fails part-way leaves a prefix of the pack at a name this
-/// call created, and exclusive creation is what makes that unrecoverable:
-/// the retry would hit its own leftover and fail with `AlreadyExists`
-/// forever. So a failed write takes the file with it. Only this call could
-/// have created that name — creation succeeded here, exclusively — which
-/// is what makes removing it safe; the same reasoning already governs the
-/// CLI's cleanup of a failed import.
-///
-/// The handle is dropped before the unlink because Windows refuses to
-/// remove a file that is still open. The original I/O error is what the
-/// caller sees, via [`remove_after`], which keeps `error`'s own kind: the
-/// write is why the import failed, and a cleanup that also fails augments
-/// that diagnosis instead of replacing it.
+/// A failed write hands the still-open handle to [`remove_after`], which
+/// owns the cleanup and its bound; the caller sees the original error.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(out_path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        options.share_mode(0);
+    }
+    let mut file = options.open(out_path)?;
     match write(&mut file) {
         Ok(()) => Ok(()),
-        Err(error) => {
-            drop(file);
-            Err(remove_after(out_path, error))
-        }
+        Err(error) => Err(remove_after(out_path, file, error)),
     }
 }
 
-/// Removes the partial file `write_new_with` leaves behind after `original`,
-/// folding a cleanup failure into `original` instead of discarding it --
-/// silently dropping it would leave a partial file at `path` unreported for
-/// the one reason that most needs reporting it: its own removal failing
-/// too, which then blocks a retry with `AlreadyExists` and no clue why.
-/// Keeps `original`'s `ErrorKind` so a caller matching on it still sees the
-/// write failure that actually happened. A `NotFound` from the removal
-/// means nothing was left to remove, so there is nothing abandoned to
-/// report (`crates/xtask/src/extract/mod.rs`'s `remove_abandoned_staging_file`
-/// mirrors this for the extractor's own staged write).
-fn remove_after(path: &Path, original: std::io::Error) -> std::io::Error {
-    match std::fs::remove_file(path) {
+/// Whether `found`, the entry now at `path`, is the file `file` holds open:
+/// Unix device and inode.
+#[cfg(unix)]
+fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+    let created = file.metadata()?;
+    Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
+}
+
+/// Off Unix there is no inode: creation time, size, and last write from the
+/// held handle, which an ancestor-junction retarget cannot pin, stand in.
+#[cfg(not(unix))]
+fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let created = file.metadata()?;
+    Ok((
+        created.creation_time(),
+        created.file_size(),
+        created.last_write_time(),
+    ) == (
+        found.creation_time(),
+        found.file_size(),
+        found.last_write_time(),
+    ))
+}
+
+/// Whether `path` still names the file `file` holds open, rather than a
+/// symlink, directory, or other entry that took its name in the window
+/// between the write failure and this check.
+fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+    let found = std::fs::symlink_metadata(path)?;
+    Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
+}
+
+/// Removes the partial file `write_new_with` left at `path` after `original`,
+/// but only while `path` still names that file; a replacement is left alone
+/// (mirrors `StagedSave::remove_after`, `crates/engine/src/save/file/staging.rs`).
+/// Cleanup-side failures fold into `original`, keeping its `ErrorKind`; a
+/// `NotFound` means nothing was left to clean up.
+///
+/// Bound, owned here: the identity check is by pathname, so a replacement
+/// installed between that check and the `unlink` is still removed. Stable
+/// `std` has no handle-bound removal to close the gap. Unix identity is
+/// device and inode; off Unix it is creation time, size, and last write
+/// ([`is_the_created_file`]), which can coincide where an inode cannot.
+fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> std::io::Error {
+    remove_after_with(path, file, original, |path| std::fs::remove_file(path))
+}
+
+/// [`remove_after`] with the removal injected, so a cleanup failure is
+/// testable without a privilege the test runner might lack (the same reason
+/// [`write_new_with`]'s own doc comment gives for injecting the write).
+///
+/// `file` drops after `remove` on Unix and before it elsewhere: Windows
+/// refuses to remove an open file, so the hold is given up as late as the
+/// platform permits.
+fn remove_after_with(
+    path: &Path,
+    file: std::fs::File,
+    original: std::io::Error,
+    remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Error {
+    match still_the_created_file(&file, path) {
+        Ok(true) => {}
+        Ok(false) => return original,
+        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return original,
+        Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
+    }
+    #[cfg(not(unix))]
+    drop(file);
+    let removed = remove(path);
+    #[cfg(unix)]
+    drop(file);
+    match removed {
         Ok(()) => original,
         Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
-        Err(cleanup_err) => std::io::Error::new(
-            original.kind(),
-            format!(
-                "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
-                crate::OneLinePath(path)
-            ),
-        ),
+        Err(cleanup_err) => cleanup_failed(path, &original, &cleanup_err),
     }
+}
+
+/// Folds a cleanup-side error into `original`, keeping `original`'s
+/// `ErrorKind` (see [`remove_after`]) and rendering `path` through
+/// [`OneLinePath`] since it is the caller's own destination path,
+/// exactly as untrusted as anywhere else this crate renders it.
+fn cleanup_failed(
+    path: &Path,
+    original: &std::io::Error,
+    cleanup_err: &std::io::Error,
+) -> std::io::Error {
+    std::io::Error::new(
+        original.kind(),
+        format!(
+            "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
+            OneLinePath(path)
+        ),
+    )
 }
 
 /// Run every domain reader over `rom` and serialize the pack.
@@ -712,19 +781,14 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn a_failed_cleanup_names_the_partial_file_it_left_behind() {
-        // `remove_after`'s own removal must also be able to fail -- silently
-        // dropping that failure (as the unfixed code did) would leave
-        // `out`'s name permanently taken with no clue why, and every retry
-        // would fail with `AlreadyExists` and no mention of the artifact
-        // blocking it. The write closure swaps the partial file for a
-        // non-empty directory before returning its error, so `remove_after`'s
-        // `remove_file` fails deterministically (`remove_file` refuses any
-        // directory, empty or not, regardless of the runner's privileges --
-        // unlike a permission-based seam, which root bypasses). Mirrors
-        // `crates/xtask/src/extract/mod.rs`'s
-        // `a_failed_staging_cleanup_names_the_artifact_it_left_behind`.
-        let dir = TempDir::new("write-cleanup-fails");
+    fn cleanup_leaves_a_directory_that_replaced_the_partial_file_alone() {
+        // The write closure swaps the partial file for a non-empty
+        // directory before returning its error. A directory is not a
+        // regular file, so `remove_after`'s identity check classifies it as
+        // a replacement and never attempts to remove it, mirroring
+        // `StagedSave::remove_after`'s `Ok(false) => return source`
+        // (`crates/engine/src/save/file/staging.rs`).
+        let dir = TempDir::new("write-cleanup-directory-swap");
         let out = dir.join("pokeemerald.pack");
 
         let err = write_new_with(&out, |file| {
@@ -740,16 +804,225 @@ mod tests {
         })
         .unwrap_err();
 
-        // The write's own error kind survives the additional cleanup
-        // failure, and the message names what cleanup left behind.
+        // Cleanup never touched the directory, so the write's own error
+        // comes back unmodified -- no removal failure to fold in.
         assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
-        assert!(
-            err.to_string().contains(&out.display().to_string()),
-            "a failed cleanup must name the artifact it left behind: {err}"
-        );
+        assert_eq!(err.to_string(), "no space left on device");
         assert!(
             out.is_dir(),
-            "cleanup should have failed, leaving the directory behind"
+            "cleanup must leave a directory that replaced the partial file alone"
+        );
+        assert_eq!(
+            std::fs::read(out.join("occupant")).expect("the occupant survives"),
+            b"occupant"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_leaves_a_file_that_replaced_the_partial_one_alone() {
+        // A peer swaps its own file in at `out` during the write; cleanup
+        // must leave it (`remove_after`'s contract).
+        let dir = TempDir::new("write-cleanup-file-swap");
+        let out = dir.join("pokeemerald.pack");
+        let renamed_aside = dir.join("pokeemerald.pack.moved");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::rename(&out, &renamed_aside).expect("the peer renames the partial file aside");
+            std::fs::write(&out, b"the replacement").expect("the peer's own file takes the name");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(err.to_string(), "no space left on device");
+        assert_eq!(
+            std::fs::read(&out).expect("the replacement survives"),
+            b"the replacement",
+            "cleanup must never remove an entry that replaced this call's partial file"
+        );
+        assert_eq!(
+            std::fs::read(&renamed_aside).expect("the renamed-aside partial file survives"),
+            b"half a ",
+            "cleanup must not disturb the partial file once it is no longer at `out`"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
+        // The peer never touches the created file or its name: it retargets
+        // an *ancestor* link, so the same `out` pathname comes to resolve to
+        // an unrelated regular file in another directory. Only an identity
+        // read of the entry found there can tell cleanup that the name no
+        // longer means the file it created -- a hold on the created file
+        // says nothing about which directory the path now walks through.
+        let dir = TempDir::new("write-cleanup-ancestor-swap");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("the ancestor link");
+        let out = link.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::remove_file(&link).expect("the peer drops the ancestor link");
+            std::os::unix::fs::symlink(&elsewhere, &link)
+                .expect("the peer retargets the ancestor link");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "cleanup must never remove a file the path only reaches through a retargeted ancestor"
+        );
+    }
+
+    /// Whether `err` is Windows reporting that an open handle's share mode
+    /// admits no one else. `std` categorises `ERROR_SHARING_VIOLATION` on
+    /// some Windows versions and not others, so both spellings count
+    /// (`crates/engine/src/save/file/staging/tests.rs` says the same).
+    #[cfg(windows)]
+    fn is_a_sharing_violation(err: &std::io::Error) -> bool {
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+
+        err.kind() == std::io::ErrorKind::PermissionDenied
+            || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_output_cannot_be_replaced_or_removed_while_its_handle_lives() {
+        // The Windows counterpart to the two swap regressions above: there a
+        // peer plants the swap and the identity check catches it, while here
+        // `write_new`'s deny-all share mode makes the swap unattemptable,
+        // which is the whole of what `is_the_created_file`'s non-unix arm
+        // rests on. Drop that share mode and each of these three steps
+        // succeeds again, restoring the deletion of a swapped-in regular
+        // file. Mirrors
+        // `a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives`
+        // in `crates/engine/src/save/file/staging/tests.rs`.
+        let dir = TempDir::new("write-exclusive-hold");
+        let out = dir.join("pokeemerald.pack");
+        let aside = dir.join("pokeemerald.pack.moved");
+        let replacement = dir.join("replacement.pack");
+        std::fs::write(&replacement, b"the replacement").expect("the peer's own file exists");
+
+        write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+
+            let renamed = std::fs::rename(&out, &aside)
+                .expect_err("a held output must refuse being renamed aside");
+            assert!(
+                is_a_sharing_violation(&renamed),
+                "renaming a held output aside must fail as a sharing violation: {renamed:?}"
+            );
+
+            let replaced = std::fs::rename(&replacement, &out)
+                .expect_err("a held output must refuse being replaced");
+            assert!(
+                is_a_sharing_violation(&replaced),
+                "replacing a held output must fail as a sharing violation: {replaced:?}"
+            );
+
+            let removed =
+                std::fs::remove_file(&out).expect_err("a held output must refuse deletion");
+            assert!(
+                is_a_sharing_violation(&removed),
+                "deleting a held output must fail as a sharing violation: {removed:?}"
+            );
+
+            Ok(())
+        })
+        .expect("a write whose output nobody else could touch must succeed");
+
+        assert_eq!(
+            std::fs::read(&out).expect("the output survives the refused attempts"),
+            b"half a "
+        );
+        assert!(
+            !aside.exists(),
+            "a refused rename must not leave the output under the peer's name"
+        );
+        assert_eq!(
+            std::fs::read(&replacement).expect("the peer's own file is untouched"),
+            b"the replacement"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
+        // The Windows counterpart to the identically named Unix test above:
+        // a directory junction stands in for the ancestor link a peer
+        // retargets, closing the gap `write_new`'s deny-all `share_mode(0)`
+        // leaves open, since that hold only ever covers `out`'s own entry
+        // and never the directories the path walks through to reach it. A
+        // junction, unlike a directory symlink, needs no privilege, so the
+        // test never has to skip.
+        fn junction(link: &Path, target: &Path) {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("cmd runs mklink");
+            assert!(
+                status.success(),
+                "mklink /J {} {}: {status}",
+                link.display(),
+                target.display()
+            );
+        }
+
+        let dir = TempDir::new("write-cleanup-ancestor-swap");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        junction(&link, &target);
+        let out = link.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+            junction(&link, &elsewhere);
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "cleanup must never remove a file the path only reaches through a retargeted ancestor"
         );
     }
 
@@ -761,22 +1034,29 @@ mod tests {
         // `ImportError::WriteFailed` renders directly (see
         // `error::path_bearing_messages_are_escaped_and_stay_one_line`), so
         // a newline or ESC byte in the destination name must not survive
-        // into this cleanup-failure message either.
+        // into this cleanup-failure message either. The removal is
+        // injected via `remove_after_with`: cleanup only reaches a removal
+        // attempt for a name that still identifies the file this call
+        // created, and there is no privilege-independent way to make
+        // `remove_file` itself fail on such a name.
         let dir = TempDir::new("write-cleanup-fails-hostile");
         let out = dir.join("one\ntwo\u{1b}[2Kthree.pack");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        let original =
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device");
 
-        let err = write_new_with(&out, |file| {
-            use std::io::Write as _;
-            file.write_all(b"half a ")?;
-            drop(std::fs::remove_file(&out));
-            std::fs::create_dir(&out).expect("the directory takes the freed name");
+        let err = super::remove_after_with(&out, file, original, |_path| {
             Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
-                "no space left on device",
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
             ))
-        })
-        .unwrap_err();
+        });
 
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
         let text = err.to_string();
         assert!(!text.contains('\n'), "{text:?}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
