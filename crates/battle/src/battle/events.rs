@@ -56,6 +56,13 @@ pub enum BattleEvent {
         /// The move that had no effect.
         move_id: MoveId,
     },
+    /// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375-1383`).
+    LevitateBlocked {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The Ground move Levitate blocked.
+        move_id: MoveId,
+    },
     /// A move dealt damage.
     Hit {
         /// Whether the player used the move.
