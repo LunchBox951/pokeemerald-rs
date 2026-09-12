@@ -526,7 +526,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let first = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .expect("run `cargo xtask extract` first");
@@ -538,7 +538,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let second = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .unwrap();
