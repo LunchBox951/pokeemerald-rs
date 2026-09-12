@@ -146,7 +146,7 @@ impl<'a> SpriteLayer<'a> {
     /// when no opaque sprite covers the coordinate.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, MosaicSize::NONE, 0, false)
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE, &[0], false)
     }
 
     /// Resolves a sprite pixel after applying `mosaic` to enabled entries.
@@ -158,7 +158,7 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, 0, false)
+        self.resolve_pixel_inner(x, y, mosaic, &[0], false)
     }
 
     /// Resolves a mosaic sprite pixel, optionally skipping OBJ-window entries.
@@ -167,19 +167,21 @@ impl<'a> SpriteLayer<'a> {
     /// drawing those regions (`software-obj.c:161`,
     /// `video-software.c:131-134`).
     ///
-    /// `window_span_start` is the screen column where the hardware-window
-    /// span containing `x` begins; see [`Self::sample_affine_local`] for what
-    /// it seeds and why.
+    /// `window_spans` is the sorted, `0`-led list of screen columns where
+    /// each hardware-window span on this scanline begins (see
+    /// [`crate::window::WindowConfig::scanline_span_starts`]); see
+    /// [`Self::sample_affine_local`] for what it seeds and why an affine
+    /// mosaic sample may need a span other than the one containing `x`.
     #[must_use]
     pub(crate) fn resolve_pixel_with_mosaic_windowed(
         &self,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        window_span_start: usize,
+        window_spans: &[usize],
         skip_objwin_entries: bool,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, window_span_start, skip_objwin_entries)
+        self.resolve_pixel_inner(x, y, mosaic, window_spans, skip_objwin_entries)
     }
 
     fn resolve_pixel_inner(
@@ -187,7 +189,7 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        window_span_start: usize,
+        window_spans: &[usize],
         skip_objwin_entries: bool,
     ) -> Option<SpritePixel> {
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
@@ -204,7 +206,7 @@ impl<'a> SpriteLayer<'a> {
                     continue;
                 }
 
-                let texel = self.sample_entry_mosaic(entry, x, y, mosaic, window_span_start);
+                let texel = self.sample_entry_mosaic(entry, x, y, mosaic, window_spans);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -263,7 +265,7 @@ impl<'a> SpriteLayer<'a> {
                 // it never restarts an affine mosaic hold
                 // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(entry, x, y, mosaic, 0),
+                    self.sample_entry_mosaic(entry, x, y, mosaic, &[0]),
                     Texel::Opaque(_)
                 )
             })
@@ -276,7 +278,7 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        window_span_start: usize,
+        window_spans: &[usize],
     ) -> Texel {
         let mosaic = if entry.mosaic() {
             mosaic
@@ -293,13 +295,13 @@ impl<'a> SpriteLayer<'a> {
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
                 self.sample_local(entry, dx, ly)
             } else {
-                self.sample_affine_local(entry, dx, dy, x, y, vertical_only, window_span_start)
+                self.sample_affine_local(entry, dx, dy, x, y, vertical_only, window_spans)
             }
         } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
             self.sample_local(entry, lx, ly)
         } else {
-            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_span_start)
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans)
         }
     }
 
@@ -383,25 +385,46 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
+    /// Returns the greatest span start in `spans` that is at most `x`, or `0`
+    /// if none is (`spans` is normally
+    /// [`crate::window::WindowConfig::scanline_span_starts`], which is
+    /// sorted ascending and always starts with `0`).
+    fn span_start_at(spans: &[usize], x: usize) -> usize {
+        let index = spans.partition_point(|&start| start <= x);
+        index
+            .checked_sub(1)
+            .and_then(|last| spans.get(last))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Samples an affine entry from one footprint-local coordinate for each
     /// horizontal mosaic block.
     ///
-    /// `window_span_start` is the screen column where the current
-    /// hardware-window span begins (`0` when the caller has no span state,
-    /// which reproduces whole-scanline sampling). mGBA re-invokes sprite
-    /// preprocessing once per span and seeds `xAccum`/`localX` from that
-    /// span's own `start`, not the screen-aligned mosaic block origin
-    /// (`video-software.c:1052-1062`, `software-obj.c:227-242`), so a span
-    /// that opens inside a mosaic block holds the column one left of the
-    /// span's start until the next screen-aligned block boundary.
+    /// `window_spans` is the sorted, `0`-led list of screen columns where
+    /// each hardware-window span on this scanline begins (`&[0]` when the
+    /// caller has no span state, which reproduces whole-scanline sampling).
+    /// mGBA re-invokes sprite preprocessing once per span and seeds
+    /// `xAccum`/`localX` from that span's own `start`, not the
+    /// screen-aligned mosaic block origin (`video-software.c:1052-1062`,
+    /// `software-obj.c:227-242`), so a span that opens inside a mosaic block
+    /// holds the column one left of the span's start until the next
+    /// screen-aligned block boundary.
+    ///
+    /// A `dx` at or past the sprite's own width exists only because
+    /// [`Self::footprint`] rounds the trailing edge out to the next
+    /// screen-aligned block; mGBA computes that rounding once, for whichever
+    /// span contains the sprite's raw right edge (`entry_x + width`), not
+    /// the span containing `x` (`software-obj.c:227-239`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        reason = "x < Framebuffer::WIDTH, so the mosaic block origin and window span start fit in i32"
+        clippy::cast_sign_loss,
+        reason = "x < Framebuffer::WIDTH, so the mosaic block origin, window span start, and sprite trailing edge fit in i32 and, once clamped non-negative, in usize"
     )]
     #[expect(
         clippy::too_many_arguments,
-        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, span start)"
+        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, span starts)"
     )]
     fn sample_affine_local(
         &self,
@@ -411,10 +434,17 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        window_span_start: usize,
+        window_spans: &[usize],
     ) -> Texel {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
+        let (width, _) = entry.bounding_box();
+        let span_query_x = if dx >= width {
+            (entry_x + width as i32).max(0) as usize
+        } else {
+            x
+        };
+        let window_span_start = Self::span_start_at(window_spans, span_query_x);
         // The preprocessing pass covering `x` starts at the sprite's own
         // edge, or later at the window span's start if that span opens after
         // the sprite begins (`software-obj.c:227-229`).
@@ -843,12 +873,12 @@ mod tests {
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
         let suppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, 0, true)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, &[0], true)
             .unwrap();
         assert_eq!(suppressed.priority, 2);
 
         let unsuppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, 0, false)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, &[0], false)
             .unwrap();
         assert_eq!(unsuppressed.priority, 0);
     }
