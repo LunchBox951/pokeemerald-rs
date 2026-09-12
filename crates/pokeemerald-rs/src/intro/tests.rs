@@ -1,11 +1,9 @@
-use std::mem::size_of;
-
 use assets::fonts::{
     FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT, SHEET_HEIGHT, SHEET_WIDTH,
 };
 use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use pack_format::PackEntry;
 use rendering::Rgb888;
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
@@ -297,44 +295,12 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
 
 const _: () = assert!(GLYPH_COUNT == EXPECTED_GLYPH_COUNT);
 
-fn image_entry(
-    id: &'static str,
-    width: u32,
-    height: u32,
-    bit_depth: u8,
-    fill_palette_index: u8,
-) -> PackEntry {
-    PackEntry {
-        id: id.into(),
-        kind: EntryKind::Image {
-            width,
-            height,
-            bit_depth,
-        },
-        payload: vec![fill_palette_index; (width * height) as usize],
-    }
-}
-
-fn palette_entry(id: &'static str) -> PackEntry {
-    PackEntry {
-        id: id.into(),
-        kind: EntryKind::Palette {
-            color_count: MESSAGE_BOX_PALETTE_COLOUR_COUNT,
-        },
-        payload: vec![0; usize::from(MESSAGE_BOX_PALETTE_COLOUR_COUNT) * size_of::<u16>()],
-    }
-}
-
 fn write_pack(path: &std::path::Path, entries: Vec<PackEntry>) {
-    let mut writer = PackWriter::new();
-    for entry in entries {
-        writer.push(entry);
-    }
-    std::fs::write(path, writer.finish().unwrap()).unwrap();
+    std::fs::write(path, crate::pack_test_support::pack_bytes(entries)).unwrap();
 }
 
 fn font_entry(fill_palette_index: u8) -> PackEntry {
-    image_entry(
+    crate::pack_test_support::image_entry(
         "font/normal/glyphs",
         SHEET_WIDTH,
         SHEET_HEIGHT,
@@ -345,14 +311,17 @@ fn font_entry(fill_palette_index: u8) -> PackEntry {
 
 fn message_box_entries() -> Vec<PackEntry> {
     vec![
-        image_entry(
+        crate::pack_test_support::image_entry(
             "text-window/image/message_box",
             MESSAGE_BOX_WIDTH,
             MESSAGE_BOX_HEIGHT,
             MESSAGE_BOX_BIT_DEPTH,
             SOLID_FRAME_PALETTE_INDEX,
         ),
-        palette_entry("text-window/palette/message_box"),
+        crate::pack_test_support::palette_entry(
+            "text-window/palette/message_box",
+            MESSAGE_BOX_PALETTE_COLOUR_COUNT,
+        ),
     ]
 }
 
