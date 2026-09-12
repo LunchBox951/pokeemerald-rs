@@ -11,8 +11,8 @@ use assets::{Effectiveness, MoveId, SpeciesId, Type, TypeChart};
 
 use crate::ability::{huge_power_attack, pinch_boosts_power};
 use crate::damage::{
-    apply_dual_type_effectiveness, apply_stab, base_damage, has_stab, BattleRng, DamageInput,
-    MoveCategory, Weather,
+    apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
+    BattleRng, DamageInput, MoveCategory, Weather,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -493,11 +493,37 @@ fn candidate_move_damage(
         return Ok(None);
     };
     let damage = apply_stab(base, has_stab(fainted.types(), move_id, move_type));
-    Ok(Some(apply_dual_type_effectiveness(
+    Ok(Some(most_suitable_type_effectiveness(
         damage,
         move_type,
         defender.types(),
     )))
+}
+
+/// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
+/// contribution has no cross-row terminal-immunity override, unlike
+/// [`apply_dual_type_effectiveness`]: a later effective row still floors a
+/// running damage already zeroed by an earlier immune row back up to one
+/// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`).
+fn most_suitable_type_effectiveness(
+    damage: u32,
+    attacking_type: Type,
+    defender_types: [Type; 2],
+) -> u32 {
+    let mut damage = damage;
+    let distinct = defender_types[1] != defender_types[0];
+    for &(atk, def, effectiveness) in TypeChart::rows() {
+        if atk != attacking_type {
+            continue;
+        }
+        if def == defender_types[0] {
+            damage = apply_type_effectiveness(damage, effectiveness);
+        }
+        if distinct && def == defender_types[1] {
+            damage = apply_type_effectiveness(damage, effectiveness);
+        }
+    }
+    damage
 }
 
 /// Looks up a trainer in the extracted trainer table.
@@ -629,6 +655,51 @@ mod tests {
             context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
             Ok(Some(1)),
             "Water Gun's narrowed score loses to Tackle's unnarrowed one"
+        );
+    }
+
+    /// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
+    /// contribution has no cross-row terminal-immunity override
+    /// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`), unlike
+    /// [`crate::damage::apply_dual_type_effectiveness`]: a later
+    /// nonzero-effectiveness row still floors a running damage already
+    /// zeroed by an earlier immune row back up to one. A level-70 Metagross's
+    /// stale Mega Kick against a level-50 Gligar (Ground/Flying) gives
+    /// Pichu's Thunder Shock a score of one, not zero, once Flying's super
+    /// effectiveness floors the zero Ground's immunity left behind -- reopening
+    /// the most-damage pass instead of falling through to party order.
+    /// Pinsir's Guillotine is the [`OHKO_POWER_SENTINEL`] and never scores.
+    #[test]
+    fn the_most_damage_pass_floors_an_immunity_a_later_row_reopens() {
+        const METAGROSS: SpeciesId = SpeciesId(400);
+        const GLIGAR: SpeciesId = SpeciesId(207);
+        const PINSIR: SpeciesId = SpeciesId(127);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const MEGA_KICK: MoveId = MoveId(25);
+        const GUILLOTINE: MoveId = MoveId(12);
+        const THUNDER_SHOCK: MoveId = MoveId(84);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(METAGROSS, 70, vec![MEGA_KICK]);
+        let player = mon(GLIGAR, 50, vec![THUNDER_SHOCK]);
+        let bench = vec![
+            mon(PINSIR, 5, vec![GUILLOTINE]),
+            mon(PICHU, 5, vec![THUNDER_SHOCK]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
+            Ok(Some(1)),
+            "Ground's immunity is floored back to one by Flying's super effectiveness"
         );
     }
 
