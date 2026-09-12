@@ -217,14 +217,9 @@ impl ImportedPack {
 /// finished file over the real destination itself.
 ///
 /// A write that dies part-way removes the partial file this call created at
-/// `out_path` before returning [`ImportError::WriteFailed`] — exclusive
-/// creation would otherwise make it permanent, since the retry would fail
-/// on its own leftover. That removal is aimed at this call's own file: an
-/// entry a concurrent writer installed at `out_path` in its place belongs
-/// to whoever put it there and is left where it is, up to the residual
-/// window `remove_after` bounds. The one failure that leaves the path
-/// occupied from the start, before this call ever creates anything, is the
-/// one that found it occupied.
+/// `out_path` before returning [`ImportError::WriteFailed`], so a retry is
+/// not refused by its own leftover; a replacement a concurrent writer put
+/// there is left alone, within the bound `remove_after` states.
 ///
 /// # Errors
 ///
@@ -417,14 +412,9 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// `CREATE_NEW` refuses an existing name the same way. The attack becomes
 /// a refused import naming the path, not a truncated file.
 ///
-/// On Windows the handle also shares nothing (`share_mode(0)`, the same
-/// deny-all `create_new_exclusive` uses in
-/// `crates/engine/src/save/file/staging.rs`), which keeps any other Windows
-/// opener from renaming or deleting `out_path`'s own entry while the handle
-/// lives -- but not from retargeting an *ancestor* directory symlink or
-/// junction `out_path` walks through, which the hold never touches.
-/// [`is_the_created_file`]'s non-unix arm layers a metadata identity check
-/// on top of the hold for exactly that gap.
+/// On Windows the handle also shares nothing (`share_mode(0)`, as
+/// `create_new_exclusive` in `crates/engine/src/save/file/staging.rs`), so
+/// no other opener can rename or delete `out_path`'s entry while it lives.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
@@ -436,14 +426,8 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
 /// precedent).
 ///
-/// A write that fails part-way leaves a prefix of the pack at a name this
-/// call created, and exclusive creation is what makes that unrecoverable:
-/// the retry would hit its own leftover and fail with `AlreadyExists`
-/// forever. So a failed write takes the file with it, through
-/// [`remove_after`], which owns both the check that `out_path` still names
-/// this call's own file and the bound on that check. The handle goes there
-/// rather than being dropped here because it is what the check compares
-/// against; the caller sees the original write error either way.
+/// A failed write hands the still-open handle to [`remove_after`], which
+/// owns the cleanup and its bound; the caller sees the original error.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -473,23 +457,10 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
     Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
 }
 
-/// Off Unix there is no inode to read back, but Windows still exposes an
-/// identity through the handle `write_new_with` still holds:
-/// `creation_time`, `file_size`, and `last_write_time`
-/// (`std::os::windows::fs::MetadataExt`), read from `file` and compared
-/// against `found`, the entry [`still_the_created_file`] just re-read at
-/// `path`. The kernel stamps creation time once, at create, and nothing
-/// between then and this call touches size or last-write time except
-/// `write_new_with`'s own write, so an unrelated file -- planted directly at
-/// `path`, or reached because a peer retargeted an *ancestor* directory
-/// symlink or junction `write_new`'s `share_mode(0)` never pinned -- would
-/// have to fabricate all three to be mistaken for it.
-///
-/// This is a comparison, not proof of non-collision: two files created and
-/// last written in the same tick at the same length would still compare
-/// equal, the same shape of residual [`remove_after`]'s own doc already
-/// accepts for the window between this check and the removal that follows
-/// it, just measured in fields instead of in time.
+/// Off Unix there is no inode, so the identity is the held handle's
+/// `creation_time`, `file_size`, and `last_write_time` against `found`'s;
+/// an entry reached through a retargeted ancestor junction, which the
+/// `share_mode(0)` hold never pinned, fails it unless all three coincide.
 #[cfg(not(unix))]
 fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
     use std::os::windows::fs::MetadataExt as _;
@@ -533,11 +504,9 @@ fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> s
 /// testable without a privilege the test runner might lack (the same reason
 /// [`write_new_with`]'s own doc comment gives for injecting the write).
 ///
-/// The drop of `file` straddles `remove` by platform, so that the identity
-/// check above is given up as late as each platform permits: Unix can
-/// unlink a file through its own open handle, while off Unix the check
-/// rests on the hold itself (see [`is_the_created_file`]) and Windows
-/// refuses to remove a file that is still open.
+/// `file` drops after `remove` on Unix and before it elsewhere: Windows
+/// refuses to remove an open file, so the hold is given up as late as the
+/// platform permits.
 fn remove_after_with(
     path: &Path,
     file: std::fs::File,
