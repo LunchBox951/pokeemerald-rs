@@ -212,6 +212,10 @@ impl Mixer {
     }
 
     /// Release the newest voice on `track` with the given MIDI `key`.
+    ///
+    /// A CGB candidate must be [`CgbVoice::is_end_tie_eligible`] rather than
+    /// merely non-stopping (that method's doc); DirectSound has no such
+    /// divergence and keeps the plain `!is_stopping()` test.
     pub fn note_off_track(&mut self, track: usize, key: u8) {
         let direct_sound_matches = self
             .direct_sound_slots
@@ -228,7 +232,7 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && !voice.is_stopping() && voice.midi_key() == key
+                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
 
