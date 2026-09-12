@@ -217,12 +217,15 @@ impl ImportedPack {
 /// A write that dies part-way removes the partial file this call created at
 /// `out_path` before returning [`ImportError::WriteFailed`] — exclusive
 /// creation would otherwise make it permanent, since the retry would fail
-/// on its own leftover. That removal only ever takes this call's own file:
-/// an entry a concurrent writer installs at `out_path` in its place belongs
-/// to whoever put it there, is left exactly where it is, and is what a
-/// retry or the caller finds occupying the name afterward. The one failure
-/// that leaves the path occupied from the start, before this call ever
-/// creates anything, is the one that found it occupied.
+/// on its own leftover. That removal is aimed at this call's own file: an
+/// entry a concurrent writer installs at `out_path` in its place belongs
+/// to whoever put it there, is left where it is, and is what a retry or
+/// the caller finds occupying the name afterward. The check behind that is
+/// a pathname identity check, not a handle-bound unlink, so a replacement
+/// installed in the gap between the last identity check and the unlink
+/// itself is still removed (`remove_after` states the bound). The one
+/// failure that leaves the path occupied from the start, before this call
+/// ever creates anything, is the one that found it occupied.
 ///
 /// # Errors
 ///
@@ -617,8 +620,8 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pack, import, import_to_bytes, overwrites_rom, remove_after_with, write_new,
-        write_new_with, ImportError, ImportReport, Roots,
+        build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
+        ImportError, ImportReport, Roots,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -937,7 +940,7 @@ mod tests {
         let original =
             std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device");
 
-        let err = remove_after_with(&out, file, original, |_path| {
+        let err = super::remove_after_with(&out, file, original, |_path| {
             Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "permission denied",
