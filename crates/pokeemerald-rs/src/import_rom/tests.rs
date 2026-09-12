@@ -599,15 +599,9 @@ fn every_path_bearing_variant_escapes_control_bytes_and_stays_legible() {
     }
 }
 
-/// [`not_a_directory_error`] is what the non-Unix [`Dest::open`] reports
-/// for a destination that exists but is not a directory (issue #1093): its
-/// message used to fold in `dir.display()` unescaped, which reached the
-/// terminal raw through this same `{source}` interpolation. The fix drops
-/// the path from the inner error entirely -- [`ImportRomError::OpenDirFailed`]
-/// already carries and escapes it once, in `path` -- so this test runs on
-/// every platform, not just the non-Unix one that builds the error in
-/// production, and pins that the escaped path appears exactly once in the
-/// rendered diagnostic rather than a second, raw time inside `source`.
+/// A hostile destination appears exactly once, escaped, in
+/// [`ImportRomError::OpenDirFailed`]'s rendering of
+/// [`not_a_directory_error`].
 #[test]
 fn a_non_directory_open_error_names_the_destination_once() {
     let hostile = PathBuf::from("one\ntwo\u{1b}[2Kthree");
@@ -623,6 +617,24 @@ fn a_non_directory_open_error_names_the_destination_once() {
     assert!(
         !rendered.chars().any(char::is_control),
         "the diagnosis must stay one printable row: {rendered:?}"
+    );
+}
+
+/// The non-Unix [`Dest::open`] itself keeps `dir` out of the failure it
+/// reports, not just [`not_a_directory_error`] built independently.
+#[cfg(not(unix))]
+#[test]
+fn the_non_unix_open_of_a_non_directory_does_not_name_it() {
+    let dir = TempDir::new("open-non-directory");
+    let path = dir.join("pokeemerald.pack");
+    fs::write(&path, b"a file, not a directory").expect("a file to open");
+
+    let source = Dest::open(&path).err().expect("a file is not a directory");
+
+    assert_eq!(source.to_string(), not_a_directory_error().to_string());
+    assert!(
+        !source.to_string().contains("pokeemerald"),
+        "the inner error must not carry the path: {source}"
     );
 }
 

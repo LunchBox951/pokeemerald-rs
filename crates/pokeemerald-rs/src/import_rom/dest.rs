@@ -284,22 +284,9 @@ impl Dest {
     }
 }
 
-/// The failure [`Dest::open`]'s non-Unix arm reports when `dir` exists but
-/// is not a directory.
-///
-/// Deliberately path-free: `dir` is untrusted -- it comes from
-/// `$POKEEMERALD_PACK` or `--import-rom` -- and escaping it is
-/// `rom_import::OneLinePath`'s one job (module docs there), not this
-/// module's. [`super::ImportRomError::OpenDirFailed`] already carries the
-/// path as its own field and renders it through that escaper exactly once;
-/// a second, unescaped copy folded into this `io::Error`'s own message
-/// would sit in the source chain `{source}` interpolates verbatim, next to
-/// the one already escaped.
-///
-/// `#[cfg(any(not(unix), test))]` rather than `#[cfg(not(unix))]` alone:
-/// this box's non-Unix arm cannot run on Unix, but the message it builds
-/// has no OS dependence at all, so a Unix test still calls this directly to
-/// pin what it says without needing the platform that produces it.
+/// The failure [`Dest::open`]'s non-Unix arm reports when `dir` is not a
+/// directory. Carries no path: [`super::ImportRomError::OpenDirFailed`]
+/// renders that once, through `rom_import::OneLinePath`.
 #[cfg(any(not(unix), test))]
 pub(super) fn not_a_directory_error() -> io::Error {
     io::Error::other("not a directory")
