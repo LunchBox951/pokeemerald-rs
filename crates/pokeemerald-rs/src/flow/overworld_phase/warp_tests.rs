@@ -822,25 +822,18 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
     );
 }
 
-/// The pack-free ratchet for the review finding pinned by
+/// The pack-free half of
 /// [`walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it`]:
 /// a *walked* approach (two full tile crossings, not a stationary press)
-/// must still preempt the final step onto the door, on the very frame that
-/// approach's own walk animation drains -- not one frame later, and not
-/// only once a further frame is *also* held.
+/// must preempt the final step onto the door on the very frame that
+/// approach's own walk animation drains, not one frame later.
 ///
-/// Slice-review follow-up: the walked approach's second crossing drains
-/// (leaves `in_transit`) on its own 32nd held frame
-/// ([`WALK_FRAMES_PER_TILE`] `* 2`), so asserting only up through that frame
-/// is vacuous -- position is committed at crossing start and every
-/// implementation, fixed or not, is at rest on `(7, 17)` there by walk
-/// arithmetic alone (`PlayerState::step`/`tick`'s own module docs). The
-/// distinguishing frame is the **next** one: without the drain-frame
-/// re-poll, a still-held Up would legally step the player from `(7, 17)`
-/// onto the (synthetic, walkable) door tile `(7, 16)` on that 33rd frame,
-/// since nothing preempted it; the fix's re-poll instead claims that frame
-/// first. Driving one frame further than the crossing's own drain is what
-/// makes this fail on unfixed code and pass on the fix.
+/// The walked approach's second crossing drains on its own 32nd held frame
+/// ([`WALK_FRAMES_PER_TILE`] `* 2`); position is committed at crossing
+/// start, so the player is already at rest on `(7, 17)` by then regardless
+/// of the pre-movement check. The distinguishing frame is the **next**
+/// one, the 33rd: without the drain-frame re-poll, a still-held Up would
+/// legally step onto the (synthetic, walkable) door tile `(7, 16)` there.
 ///
 /// Runs pack-free the same way
 /// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
@@ -901,19 +894,15 @@ fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
     );
 }
 
-/// Review finding on the fix above: a *walked* approach to the door -- not
-/// a player already standing beside it -- must enter on the very frame the
-/// approach's own walk animation drains, with no extra held frame required.
-/// [`approaching_littleroot_lab_door_phase`] starts the player two tiles
-/// south of the door, still facing North, so reaching the door takes two
-/// full tile crossings ([`WALK_FRAMES_PER_TILE`] frames each) before the
-/// door tile is even in front of the player. Upstream's `TryDoorWarp` reads
-/// `tileTransitionState`/`dpadDirection` fresh every
-/// `ProcessPlayerFieldInput` call, so it fires on that very tile-center
-/// frame; a version of this port that only polls the door pre-movement
-/// (before this frame's own [`PlayerState::tick`] has drained the
-/// approach) would need a 33rd held frame instead of the natural 32, and
-/// would never fire at all if Up is released the instant the player stops.
+/// The pack-gated half of
+/// [`walking_up_to_the_lab_door_preempts_the_final_step_onto_it`]: a
+/// *walked* approach to the door must enter on the very frame the
+/// approach's own walk animation drains, with no extra held frame
+/// required, matching `TryDoorWarp`'s fresh-every-frame read of
+/// `tileTransitionState`/`dpadDirection`. [`approaching_littleroot_lab_door_phase`]
+/// starts the player two tiles south of the door, still facing North, so
+/// reaching it takes two full tile crossings
+/// ([`WALK_FRAMES_PER_TILE`] frames each).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it() {

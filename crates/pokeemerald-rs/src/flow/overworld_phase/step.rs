@@ -195,39 +195,22 @@ impl OverworldPhase {
     /// the tile the player faces.** Real animated-door tiles are solid, so
     /// [`PlayerState::try_start_resolved_step`]'s collision check rejects
     /// them before a landing can ever exist -- the completed-step door path
-    /// above can only ever see a tile the player actually stepped onto, and
-    /// so can never reach one (`engine::overworld::warp`'s module docs).
-    /// Upstream instead recomputes the facing tile and calls `TryDoorWarp`
-    /// *before* `PlayerStep`, gated on `heldDirection2 && dpadDirection ==
-    /// playerDirection`
-    /// (`pokeemerald/src/field_control_avatar.c:170-178`), itself set
-    /// alongside `heldDirection` by the very same condition
-    /// (`:109-113`) -- so this reuses `arrow_direction` above rather than
-    /// deriving a second "held direction matching pre-movement facing"
-    /// value. [`trigger_animated_door_warp`] additionally requires facing
-    /// north, matching `TryDoorWarp`'s own `direction == DIR_NORTH` branch
-    /// (`:833-841`); a resolved trigger preempts this frame's movement the
-    /// same way a preempting arrow warp does, below.
+    /// above can never reach one. Mirrors `TryDoorWarp`, called *before*
+    /// `PlayerStep` and gated on `heldDirection2 && dpadDirection ==
+    /// playerDirection` (`pokeemerald/src/field_control_avatar.c:170-178`,
+    /// `DIR_NORTH` branch at `:833-841`), reusing `arrow_direction` above,
+    /// which upstream sets from the same condition (`:109-113`). A resolved
+    /// trigger preempts this frame's movement the same way a preempting
+    /// arrow warp does, below.
     ///
-    /// A second, post-movement poll shadows this one, the same way the arrow
-    /// path's own does (doc comment above) -- for a different reason. The
-    /// door tile itself still can never be landed on (above); the tile *one
-    /// south of it*, the ordinary approach ground, can. `at_rest` above is
-    /// read from [`resolve_pre_movement_field_input`], which runs *before*
-    /// this frame's own [`PlayerState::tick`] ([`advance_or_skip_for_preempt`]
-    /// below). So a walked approach's own drain frame -- the call whose
-    /// `tick` finally clears [`PlayerState::in_transit`] -- still reads
-    /// `at_rest == false` when the pre-movement check runs: one call too
-    /// early to see the door from the tile the player is, by the end of that
-    /// same call, already standing on. Upstream has no such lag -- `TryDoorWarp`
-    /// reads `tileTransitionState`/`dpadDirection` fresh every
-    /// `ProcessPlayerFieldInput` call, so the tile-center frame itself
-    /// already sees it. This method's `warp_trigger` therefore re-evaluates
-    /// the same facing tile once movement has resolved, gated the same way
-    /// the arrow path's own second poll is
-    /// ([`wild_encounter::arrow_poll_open`]): the frame a walked approach
-    /// lands at rest on the tile short of the door is exactly the frame that
-    /// gate opens. (Review finding, mirroring #191's arrow-path fix.)
+    /// A walked approach's own drain frame -- read by
+    /// [`resolve_pre_movement_field_input`] before this frame's own
+    /// [`PlayerState::tick`] runs ([`advance_or_skip_for_preempt`] below) --
+    /// is one call too early to see the door from the tile the player is,
+    /// by that call's end, already standing on. [`Self::resolve_warp_trigger`]
+    /// re-polls the same facing tile once movement has resolved to cover
+    /// exactly that frame, the same way the arrow path's own second poll
+    /// does (above).
     ///
     /// # Field input before movement (issue #194)
     ///
@@ -648,11 +631,9 @@ impl OverworldPhase {
     /// pre-movement preempts (mutually exclusive with it -- `step`'s "Door
     /// before arrow" doc section), then the post-movement re-poll in that
     /// same arrow-then-door order. The re-poll's own door half additionally
-    /// yields to `pre.interaction` (review finding): upstream's `TryDoorWarp`
-    /// sits *after* `TryStartInteractionScript` (`:170-178`), so an A press
-    /// that already found an NPC standing in the doorway must keep winning
-    /// here too, not just in the pre-movement check
-    /// ([`Self::resolve_pre_movement_field_input`]) that gates the same way.
+    /// yields to `pre.interaction`, matching `TryDoorWarp`'s own position
+    /// after `TryStartInteractionScript` (`:170-178`) -- see the gate below
+    /// and [`Self::resolve_pre_movement_field_input`]'s matching one.
     fn resolve_warp_trigger(
         &self,
         pre: &PreMovementFieldInput,
@@ -671,23 +652,14 @@ impl OverworldPhase {
                 let (x, y) = pre.position;
                 trigger_arrow_warp(runtime, x, y, self.player.elevation(), direction).or_else(
                     || {
-                        // The animated-door drain-frame re-check (issue #851, `step`'s
-                        // "Warp timing" section): `pre.animated_door_trigger` only ever
-                        // resolves against a frame the player was *already* at rest
-                        // before movement ran, so the frame a walked approach's own
-                        // crossing drains (this call's own `tick`, inside
-                        // `advance_or_skip_for_preempt`, already ran by the time this
-                        // method is reached) is invisible to it. Re-evaluating the same
-                        // facing tile here, gated the same way the arrow re-poll above
-                        // is, catches exactly that frame.
+                        // The drain-frame animated-door re-check (issue #851): see
+                        // `step`'s "Warp timing" section for why this poll exists.
                         //
-                        // Gated on `pre.interaction.is_none()` (review finding): upstream
-                        // reaches `TryDoorWarp` only once `TryStartInteractionScript` has
-                        // already returned FALSE (`field_control_avatar.c:170-178`), so an
-                        // A press that talks to an NPC standing in a doorway must not also
-                        // let this same frame's held direction re-fire the door underneath
-                        // it. `TryArrowWarp` above needs no such gate -- it precedes the
-                        // interaction check entirely upstream (`:164-172`).
+                        // Gated on `pre.interaction.is_none()`, mirroring `TryDoorWarp`'s
+                        // position after `TryStartInteractionScript`
+                        // (`field_control_avatar.c:170-178`); `TryArrowWarp` above needs
+                        // no such gate -- it precedes the interaction check entirely
+                        // upstream (`:164-172`).
                         if pre.interaction.is_some() {
                             return None;
                         }

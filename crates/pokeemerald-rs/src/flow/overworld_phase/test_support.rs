@@ -332,18 +332,12 @@ pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
 
 /// Littleroot Town's own lab-door warp event -- real event data, available
 /// pack-free (`warp_tile_behavior`'s own doc comment) -- combined with a
-/// **synthetic** scene whose only special tile pins `MB_ANIMATED_DOOR` at
-/// that exact position, `(7, 16)`, matching what the real extracted
-/// attribute data decodes there (issue #851's own evidence) without needing
-/// a local pack. Unlike the real tile, this one is walkable (`synthetic_scene_with_special_tile`'s
-/// own contract) -- deliberately, so a fixture whose pre-movement check
-/// regressed to no-op would actually let the player step onto it, rather
-/// than the fixture's own solidity silently doing the preempting's job.
-///
-/// `crate::flow::overworld_phase`'s own headless tests (issue #851) use this
-/// to prove the pre-movement animated-door check itself, independent of
-/// whether a local pack can resolve the lab as an actual destination room
-/// (the pack-gated sibling tests do that).
+/// **synthetic**, walkable `MB_ANIMATED_DOOR` tile at that same position,
+/// `(7, 16)`, matching what the real extracted attribute data decodes there
+/// (issue #851). Walkable so a regressed (no-op) pre-movement check would
+/// let the player step onto it instead of the fixture's own solidity doing
+/// the preempting's job; used by this module's headless tests to exercise
+/// the check pack-free (the pack-gated sibling tests cover the real room).
 pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPhase {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let events = assets::MapEventsTable::new()
@@ -371,15 +365,10 @@ pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPh
 }
 
 /// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
-/// two tiles south of the door, already facing North, instead of standing
-/// at rest right beside it -- so a caller can drive a genuine *walked*
-/// approach (holding Up the whole way) rather than a stationary press.
-/// Issue #851 review finding: the pre-movement-only animated-door check
-/// misses exactly the frame such an approach's own walk animation drains,
-/// because that check is read before this frame's own
-/// [`engine::overworld::PlayerState::tick`] runs -- one call too early to
-/// see the door from the tile the player is, by the end of that same call,
-/// already standing on.
+/// two tiles south of the door, already facing North, so a caller can drive
+/// a genuine *walked* approach (holding Up the whole way) instead of a
+/// stationary press -- exercising the drain-frame re-poll described in
+/// [`OverworldPhase::step`]'s "Warp timing" section.
 pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
