@@ -154,7 +154,37 @@ fn declining_a_prompt_preserves_the_pp_up_bits() {
     let player = torchic_one_point_from_a_full_moveset_level_up(&dex)
         .with_pp_bonuses(&dex, bonuses)
         .unwrap();
+    let original_moves: Vec<MoveId> = player.moves().iter().map(|slot| slot.move_id).collect();
     let party = two_treecko_party(&dex);
+
+    // Prove the PP-Up fixture actually reaches and settles the Peck prompt;
+    // otherwise the preservation assertions below would be vacuous.
+    let mut probe_rng = Rng::new(1);
+    let mut probe = Battle::new_trainer(
+        dex.clone(),
+        player.clone(),
+        MAY_ROUTE_103_MUDKIP,
+        party.clone(),
+        &mut SharedRng::new(&mut probe_rng),
+    )
+    .unwrap();
+    play_until_move_learn_prompt(&mut probe, &mut probe_rng);
+    assert_eq!(
+        probe.pending_move_learn().map(|pending| pending.move_id()),
+        Some(PECK),
+        "fixture sanity: the PP-Up fixture reaches the Peck prompt"
+    );
+    assert_eq!(
+        settle_move_learn_prompts(&mut probe).first(),
+        Some(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
+        "settling the prompt declines it"
+    );
+    assert_eq!(
+        probe.player().pp_bonuses(),
+        bonuses,
+        "declining leaves the PP Ups alone"
+    );
+
     let mut rng = Rng::new(1);
     let battle = Battle::new_trainer(
         dex,
@@ -168,13 +198,29 @@ fn declining_a_prompt_preserves_the_pp_up_bits() {
     let mut lead = None;
     let mut money = 0;
 
+    let mut outcome = None;
     for _ in 0..MAX_TEST_TURNS {
-        if advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng).is_some() {
+        outcome = advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng);
+        if outcome.is_some() {
             break;
         }
     }
 
+    assert_eq!(
+        outcome,
+        Some(BattleOutcome::PlayerWon),
+        "an unanswered prompt would have stalled the battle instead"
+    );
     let lead = lead.expect("the driver writes the player's mon back");
+    assert!(lead.level() >= 16, "the award crossed the threshold");
+    assert_eq!(
+        lead.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        original_moves,
+        "the declined prompt left the moveset untouched"
+    );
     assert_eq!(lead.pp_bonuses(), bonuses);
 }
 
