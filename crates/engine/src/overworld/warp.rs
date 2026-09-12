@@ -2,9 +2,20 @@
 //!
 //! Door and arrow triggers are separate because callers poll doors after a
 //! completed step and arrows while the player holds their facing direction.
-//! Upstream checks animated doors one tile early for opening animation
-//! (`pokeemerald/src/field_control_avatar.c:833-856`); until that animation is
-//! modelled, this port checks every door after a completed step.
+//! Animated doors are also polled a second way, pre-movement and against the
+//! tile the player *faces* rather than one they have landed on (issue #851):
+//! upstream's `ProcessPlayerFieldInput` computes the tile in front of the
+//! player and calls `TryDoorWarp` there, gated on `heldDirection2 &&
+//! dpadDirection == playerDirection`
+//! (`pokeemerald/src/field_control_avatar.c:170-178`), which only ever fires
+//! facing `DIR_NORTH` (`:833-856`) -- see [`trigger_animated_door_warp`].
+//! That is the *only* reachable door path for an animated door in bundled
+//! data: every animated-door tile is solid, so
+//! [`super::player::PlayerState::try_start_resolved_step`]'s collision check
+//! rejects it before a landing can ever exist, and [`trigger_door_warp`]'s
+//! completed-step poll can only ever see a tile the player stood on.
+//! Non-animated doors have no such restriction and stay on the
+//! completed-step path alone.
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
@@ -55,6 +66,38 @@ pub fn trigger_door_warp(
 ) -> Option<WarpTrigger> {
     let behavior = runtime.metatile_behavior(x, y)?;
     if !is_warp_trigger(behavior) {
+        return None;
+    }
+    let warp = runtime.warp_event_at(x, y, elevation)?;
+    Some(resolve_warp_event(warp))
+}
+
+/// Resolves a pre-movement animated-door warp at `(x, y, elevation)` for the
+/// held facing `direction`.
+///
+/// Callers check this against the tile *in front of* the player, before that
+/// frame's movement runs, gated on the held direction already matching the
+/// player's pre-movement facing (module docs' issue #851 section). Only
+/// [`MB_ANIMATED_DOOR`] triggers, and only while facing north, matching
+/// `TryDoorWarp`'s own `direction == DIR_NORTH` gate
+/// (`pokeemerald/src/field_control_avatar.c:833-841`) -- non-animated doors
+/// have no pre-movement path and stay on [`trigger_door_warp`]'s
+/// completed-step poll. Missing tiles, direction mismatches, and absent or
+/// elevation-mismatched events return `None`, same as the other two
+/// triggers.
+#[must_use]
+pub fn trigger_animated_door_warp(
+    runtime: &MapRuntime<'_>,
+    x: i32,
+    y: i32,
+    elevation: u8,
+    direction: Direction,
+) -> Option<WarpTrigger> {
+    if direction != Direction::North {
+        return None;
+    }
+    let behavior = runtime.metatile_behavior(x, y)?;
+    if behavior != MB_ANIMATED_DOOR {
         return None;
     }
     let warp = runtime.warp_event_at(x, y, elevation)?;
@@ -253,6 +296,42 @@ mod tests {
     }
 
     #[test]
+    fn animated_door_triggers_a_pre_movement_warp_when_facing_north() {
+        let runtime = runtime_with_warp_behavior(MB_ANIMATED_DOOR, sample_warp());
+        assert_eq!(
+            trigger_animated_door_warp(&runtime, 1, 0, 0, Direction::North),
+            Some(WarpTrigger::Resolved {
+                map: MapId("MAP_DEST"),
+                warp_id: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn animated_door_does_not_trigger_pre_movement_facing_any_other_direction() {
+        let runtime = runtime_with_warp_behavior(MB_ANIMATED_DOOR, sample_warp());
+        for direction in [Direction::South, Direction::East, Direction::West] {
+            assert_eq!(
+                trigger_animated_door_warp(&runtime, 1, 0, 0, direction),
+                None,
+                "MB_ANIMATED_DOOR must not trigger the pre-movement path while facing \
+                 {direction:?} -- TryDoorWarp's own DIR_NORTH gate"
+            );
+        }
+    }
+
+    #[test]
+    fn non_animated_door_never_triggers_the_pre_movement_path() {
+        let runtime = runtime_with_warp_behavior(MB_NON_ANIMATED_DOOR, sample_warp());
+        assert_eq!(
+            trigger_animated_door_warp(&runtime, 1, 0, 0, Direction::North),
+            None,
+            "a non-animated door has no pre-movement path -- it stays on \
+             trigger_door_warp's completed-step poll"
+        );
+    }
+
+    #[test]
     fn south_arrow_warp_triggers_a_resolved_warp_when_facing_south() {
         let runtime = runtime_with_warp_behavior(MB_SOUTH_ARROW_WARP, sample_warp());
         assert_eq!(
@@ -356,6 +435,37 @@ mod tests {
             trigger_arrow_warp(&runtime, 1, 0, 5, Direction::South),
             None
         );
+    }
+
+    #[test]
+    fn wrong_elevation_does_not_trigger_animated_door_warp() {
+        let runtime = runtime_with_warp_behavior(
+            MB_ANIMATED_DOOR,
+            assets::WarpEvent {
+                elevation: 3,
+                ..sample_warp()
+            },
+        );
+        assert_eq!(
+            trigger_animated_door_warp(&runtime, 1, 0, 5, Direction::North),
+            None
+        );
+    }
+
+    #[test]
+    fn unrecognized_warp_behavior_fails_closed_for_the_animated_door_pre_movement_path() {
+        let runtime = runtime_with_warp_behavior(MB_LADDER, sample_warp());
+        for direction in [
+            Direction::North,
+            Direction::South,
+            Direction::East,
+            Direction::West,
+        ] {
+            assert_eq!(
+                trigger_animated_door_warp(&runtime, 1, 0, 0, direction),
+                None
+            );
+        }
     }
 
     #[test]

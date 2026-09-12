@@ -4,7 +4,7 @@
 use super::OverworldPhase;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
-use engine::overworld::metatile_behavior::{MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
+use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
 use engine::overworld::{
     ConnectedMapData, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE,
 };
@@ -328,6 +328,61 @@ pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
     );
 
     phase
+}
+
+/// Littleroot Town's own lab-door warp event -- real event data, available
+/// pack-free (`warp_tile_behavior`'s own doc comment) -- combined with a
+/// **synthetic**, walkable `MB_ANIMATED_DOOR` tile at that same position,
+/// `(7, 16)`, matching what the real extracted attribute data decodes there
+/// (issue #851). Walkable so a regressed (no-op) pre-movement check would
+/// let the player step onto it instead of the fixture's own solidity doing
+/// the preempting's job; used by this module's headless tests to exercise
+/// the check pack-free (the pack-gated sibling tests cover the real room).
+pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPhase {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let events = assets::MapEventsTable::new()
+        .resolve(littleroot)
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+    let door = events.warp_events[2];
+    assert_eq!(
+        (door.x, door.y),
+        (7, 16),
+        "fixture precondition: Littleroot's warp #2 is the lab door"
+    );
+
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        20,
+        20,
+        (7, 16),
+        MB_ANIMATED_DOOR,
+    );
+    OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((7, 17), 3, facing),
+        None,
+    )
+}
+
+/// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
+/// two tiles south of the door, already facing North, so a caller can drive
+/// a genuine *walked* approach (holding Up the whole way) instead of a
+/// stationary press -- exercising the drain-frame re-poll described in
+/// [`OverworldPhase::step`]'s "Warp timing" section.
+pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        20,
+        20,
+        (7, 16),
+        MB_ANIMATED_DOOR,
+    );
+    OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((7, 19), 3, Direction::North),
+        None,
+    )
 }
 
 /// The tile row Route 101's own extracted layout makes solid tall grass:

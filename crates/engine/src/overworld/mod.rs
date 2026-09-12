@@ -24,8 +24,8 @@ pub use object_event::{
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use trainer_sight::trainer_can_see_player;
 pub use warp::{
-    resolve_warp_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
-    warp_in_facing, WarpTrigger,
+    resolve_warp_event, trigger_animated_door_warp, trigger_arrow_warp, trigger_door_warp,
+    warp_destination_position, warp_in_facing, WarpTrigger,
 };
 pub use wild_encounter::{
     standard_wild_encounter, WildEncounter, WildEncounterState, WILD_ENCOUNTER_IMMUNITY_STEPS,
