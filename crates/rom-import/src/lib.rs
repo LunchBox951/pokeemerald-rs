@@ -1043,14 +1043,27 @@ mod tests {
     #[cfg(windows)]
     fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
         // The Windows counterpart to the identically named Unix test above:
-        // a directory symlink stands in for the ancestor link a peer
+        // a directory junction stands in for the ancestor link a peer
         // retargets, closing the gap `write_new`'s deny-all `share_mode(0)`
         // leaves open, since that hold only ever covers `out`'s own entry
-        // and never the directories the path walks through to reach it.
-        // Creating a directory symlink needs `SeCreateSymbolicLinkPrivilege`,
-        // a privilege the test runner may lack, so a `PermissionDenied`
-        // there skips the test rather than failing it.
-        use std::os::windows::fs::symlink_dir;
+        // and never the directories the path walks through to reach it. A
+        // junction, unlike a directory symlink, needs no privilege, so the
+        // test never has to skip.
+        fn junction(link: &Path, target: &Path) {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("cmd runs mklink");
+            assert!(
+                status.success(),
+                "mklink /J {} {}: {status}",
+                link.display(),
+                target.display()
+            );
+        }
 
         let dir = TempDir::new("write-cleanup-ancestor-swap");
         let target = dir.join("a");
@@ -1061,23 +1074,14 @@ mod tests {
         std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
 
         let link = dir.join("link");
-        if let Err(err) = symlink_dir(&target, &link) {
-            if err.kind() == std::io::ErrorKind::PermissionDenied {
-                eprintln!(
-                    "skipping cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone: \
-                     creating a directory symlink needs a privilege this test runner lacks: {err}"
-                );
-                return;
-            }
-            panic!("the ancestor link: {err}");
-        }
+        junction(&link, &target);
         let out = link.join("pokeemerald.pack");
 
         let err = write_new_with(&out, |file| {
             use std::io::Write as _;
             file.write_all(b"half a ")?;
-            std::fs::remove_dir(&link).expect("the peer drops the ancestor link");
-            symlink_dir(&elsewhere, &link).expect("the peer retargets the ancestor link");
+            std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+            junction(&link, &elsewhere);
             Err(std::io::Error::new(
                 std::io::ErrorKind::StorageFull,
                 "no space left on device",
