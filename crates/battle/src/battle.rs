@@ -756,17 +756,8 @@ impl Battle {
     }
 
     /// PP a move spends: two against a distinct target with Pressure, one
-    /// otherwise (`battle_script_commands.c:1205`-`:1228`). This battle owns
-    /// exactly one battler per side, so every non-self-targeting move's
-    /// static target reduces to "the opposing battler," matching upstream's
-    /// per-branch Pressure counts once doubles' extra slots are absent.
-    ///
-    /// This reads each move's *static* target field, like upstream's own
-    /// `gBattleMoves[gCurrentMove].target` does. A move whose script
-    /// redirects it to the user at selection time despite a non-`USER`
-    /// static target (non-Ghost Curse, `data/battle_moves.h`) would need
-    /// that redirection modelled before reaching this method; none of the
-    /// currently admitted move effects do that yet.
+    /// otherwise; self-targeted moves are exempt
+    /// (`battle_script_commands.c:1205`-`:1228`).
     fn move_pp_cost(&self, player_is_attacker: bool, move_id: MoveId) -> Result<u8, BattleError> {
         let target = self.dex.move_data(move_id)?.target;
         if target == MoveTarget::USER {
