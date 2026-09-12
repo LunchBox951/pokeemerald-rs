@@ -7,12 +7,24 @@
 //! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
-use assets::{MoveId, SpeciesId};
+use assets::{Effectiveness, MoveId, SpeciesId, Type, TypeChart};
 
-use crate::damage::BattleRng;
+use crate::ability::{huge_power_attack, pinch_boosts_power};
+use crate::damage::{
+    apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness, base_damage, has_stab,
+    BattleRng, DamageInput, MoveCategory, Weather,
+};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+
+/// The neutral type-effectiveness baseline (`TYPE_MUL_NORMAL`).
+const NEUTRAL_TYPE_SCORE: u32 = 10;
+
+/// `gBattleMoves[move].power`'s OHKO sentinel (`GUILLOTINE`, `HORN_DRILL`,
+/// `FISSURE`, `SHEER_COLD`), the one power value upstream's most-damage pass
+/// excludes (`pokeemerald/src/battle_ai_switch_items.c:776`).
+const OHKO_POWER_SENTINEL: u8 = 1;
 
 /// The maximum IV assigned to one stat.
 pub const MAX_PER_STAT_IVS: u16 = 31;
@@ -237,11 +249,39 @@ impl TrainerContext {
         &self.bench
     }
 
-    /// Removes and returns the next non-fainted member in party order.
+    /// Removes and returns the most suitable non-fainted member for a forced
+    /// post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type and
+    /// most-damage passes, then party order. `fainted` is the battler being
+    /// replaced and `resolving_move` is the move whose resolution fainted it
+    /// (the turn engine's own last-executed move; upstream's `gCurrentMove`
+    /// is exactly this stale value at the point a forced replacement runs).
+    /// See the ledger's `GetMostSuitableMonToSwitchInto` and
+    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
+    /// and its one remaining documented divergence (issue #1040).
     ///
-    /// This models `OpponentHandleChoosePokemon`'s fallback scan, not its type-match
-    /// preference.
-    pub(crate) fn send_out_next(&mut self) -> Option<BattlePokemon> {
+    /// # Errors
+    ///
+    /// Returns an error if a bench member's move is missing from `dex` --
+    /// never in practice, since trainer-party validation already screens
+    /// every move (see [`ensure_trainer_party_startable`]).
+    pub(crate) fn send_out_next(
+        &mut self,
+        dex: &Dex,
+        fainted: &BattlePokemon,
+        resolving_move: MoveId,
+        player: &BattlePokemon,
+    ) -> Result<Option<BattlePokemon>, BattleError> {
+        if let Some(index) = self.most_suitable_by_type(dex, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        if let Some(index) = self.most_suitable_by_damage(dex, fainted, resolving_move, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        Ok(self.send_out_first_healthy())
+    }
+
+    /// Removes and returns the next non-fainted member in party order.
+    fn send_out_first_healthy(&mut self) -> Option<BattlePokemon> {
         while !self.bench.is_empty() {
             let mon = self.bench.remove(0);
             if !mon.is_fainted() {
@@ -250,6 +290,240 @@ impl TrainerContext {
         }
         None
     }
+
+    /// The healthy bench member whose typing takes the most damage from
+    /// `player` and knows a super-effective move back, retrying the
+    /// next-worst typing otherwise.
+    fn most_suitable_by_type(
+        &self,
+        dex: &Dex,
+        player: &BattlePokemon,
+    ) -> Result<Option<usize>, BattleError> {
+        let mut invalid = vec![false; self.bench.len()];
+        loop {
+            let mut best_index = None;
+            let mut best_score = 0;
+            for (index, candidate) in self.bench.iter().enumerate() {
+                if invalid[index] || candidate.is_fainted() {
+                    continue;
+                }
+                let score = typing_suitability_score(player, candidate);
+                if best_score < score {
+                    best_score = score;
+                    best_index = Some(index);
+                }
+            }
+            let Some(index) = best_index else {
+                return Ok(None);
+            };
+            if has_super_effective_move(dex, &self.bench[index], player)? {
+                return Ok(Some(index));
+            }
+            invalid[index] = true;
+        }
+    }
+
+    /// The healthy bench member whose own move, layered onto the one shared
+    /// base damage `resolving_move` deals from `fainted`, ends up highest
+    /// against `player`. Matches upstream's `AI_CalcDmg(gActiveBattler,
+    /// opposingBattler)`, which computes that base exactly once from the
+    /// stale `gCurrentMove` with the fainted battler (`gActiveBattler`) as
+    /// attacker (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+    /// `battle_script_commands.c:1306`-`:1311`); each candidate's own move
+    /// then contributes only STAB and type effectiveness through `TypeCalc`
+    /// (`battle_script_commands.c:1536`-`:1552`). The running winner is
+    /// narrowed to a byte before every comparison, reproducing the stock
+    /// (non-`BUGFIX`) `u8 bestDmg` that silently wraps a winning score above
+    /// 255 (`pokeemerald/include/config.h:48`;
+    /// `battle_ai_switch_items.c:632`-`:636`,`:781`-`:784`).
+    fn most_suitable_by_damage(
+        &self,
+        dex: &Dex,
+        fainted: &BattlePokemon,
+        resolving_move: MoveId,
+        player: &BattlePokemon,
+    ) -> Result<Option<usize>, BattleError> {
+        let Some(base) = stale_base_damage(dex, resolving_move, fainted, player)? else {
+            return Ok(None);
+        };
+        let mut best_index = None;
+        let mut best_damage: u8 = 0;
+        for (index, candidate) in self.bench.iter().enumerate() {
+            if candidate.is_fainted() {
+                continue;
+            }
+            for slot in candidate.moves() {
+                let Some(damage) = candidate_move_damage(dex, slot.move_id, base, fainted, player)?
+                else {
+                    continue;
+                };
+                if u32::from(best_damage) < damage {
+                    best_damage = u8::try_from(damage % 256).expect("modulo 256 fits a byte");
+                    best_index = Some(index);
+                }
+            }
+        }
+        Ok(best_index)
+    }
+}
+
+/// Scores `candidate`'s typing against `player`'s, applying `player`'s two
+/// type slots even when they repeat (`ModulateByTypeEffectiveness`'s two
+/// unguarded calls in `pokeemerald/src/battle_ai_switch_items.c:709`-`:710`
+/// square the effect for a single-typed `player`). Plain truncating
+/// multiplication with no floor, unlike [`apply_dual_type_effectiveness`]:
+/// upstream's suitability score (unlike real damage) has no minimum-one rule
+/// (`pokeemerald/src/battle_ai_switch_items.c:605`-`:623`).
+fn typing_suitability_score(player: &BattlePokemon, candidate: &BattlePokemon) -> u32 {
+    let candidate_types = candidate.types();
+    let player_types = player.types();
+    let score = apply_raw_type_multiplier(NEUTRAL_TYPE_SCORE, player_types[0], candidate_types);
+    apply_raw_type_multiplier(score, player_types[1], candidate_types)
+}
+
+/// Applies every [`TypeChart`] row matching `attacking_type` against each of
+/// `defending_types`' distinct slots, truncating after each row with no
+/// floor (`ModulateByTypeEffectiveness`, `pokeemerald/src/battle_ai_switch_items.c:605`-`:627`).
+fn apply_raw_type_multiplier(score: u32, attacking_type: Type, defending_types: [Type; 2]) -> u32 {
+    let mut score = score;
+    let distinct = defending_types[1] != defending_types[0];
+    for &(atk, def, effectiveness) in TypeChart::rows() {
+        if atk != attacking_type {
+            continue;
+        }
+        if def == defending_types[0] {
+            score = raw_multiply(score, effectiveness);
+        }
+        if distinct && def == defending_types[1] {
+            score = raw_multiply(score, effectiveness);
+        }
+    }
+    score
+}
+
+fn raw_multiply(score: u32, effectiveness: Effectiveness) -> u32 {
+    score * u32::from(effectiveness.multiplier_x10()) / 10
+}
+
+/// Whether `candidate` knows a damaging move super effective against
+/// `player`.
+fn has_super_effective_move(
+    dex: &Dex,
+    candidate: &BattlePokemon,
+    player: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    for slot in candidate.moves() {
+        let move_data = dex.move_data(slot.move_id)?;
+        if move_data.power == 0 {
+            continue;
+        }
+        let Some(move_type) = move_data.move_type.battle_type() else {
+            continue;
+        };
+        let effectiveness =
+            apply_dual_type_effectiveness(NEUTRAL_TYPE_SCORE, move_type, player.types());
+        if effectiveness > NEUTRAL_TYPE_SCORE {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Computes the most-damage pass's one shared base-damage figure from
+/// `resolving_move`, with `fainted` as attacker and `player` as defender, or
+/// `None` for a `???`-typed `resolving_move` this crate cannot run type math
+/// on. Unlike a real hit, `resolving_move`'s own power is never excluded
+/// here (only each candidate's own move can be the
+/// [`OHKO_POWER_SENTINEL`]) -- matching upstream, whose `AI_CalcDmg` runs
+/// unconditionally before the candidate move's own guard is even checked.
+fn stale_base_damage(
+    dex: &Dex,
+    resolving_move: MoveId,
+    fainted: &BattlePokemon,
+    player: &BattlePokemon,
+) -> Result<Option<u32>, BattleError> {
+    let move_data = dex.move_data(resolving_move)?;
+    let Some(move_type) = move_data.move_type.battle_type() else {
+        return Ok(None);
+    };
+    let category = MoveCategory::for_type(move_type);
+    let (attack_stat, attack_stage) = fainted.attacking_stat(category);
+    let attack_stat = huge_power_attack(fainted.ability(), category, attack_stat);
+    let (defense_stat, defense_stage) = player.defending_stat(category);
+    let input = DamageInput {
+        attacker_level: fainted.level(),
+        power: u32::from(move_data.power),
+        move_type,
+        attack_stat,
+        attack_stage,
+        defense_stat,
+        defense_stage,
+        attacker_burned: false,
+        reflect: false,
+        light_screen: false,
+        weather: Weather::None,
+        is_solar_beam: false,
+        attacker_pinch_boost: pinch_boosts_power(
+            fainted.ability(),
+            move_type,
+            fainted.current_hp(),
+            fainted.stats().max_hp,
+        ),
+    };
+    Ok(Some(base_damage(&input)))
+}
+
+/// Applies `move_id`'s STAB (against `fainted`'s types, matching upstream's
+/// use of the fainted battler for `TypeCalc`'s STAB check) and type
+/// effectiveness (against `defender`'s types) on top of the shared `base`
+/// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`] or
+/// a `???`-typed move.
+fn candidate_move_damage(
+    dex: &Dex,
+    move_id: MoveId,
+    base: u32,
+    fainted: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<Option<u32>, BattleError> {
+    let move_data = dex.move_data(move_id)?;
+    if move_data.power == OHKO_POWER_SENTINEL {
+        return Ok(None);
+    }
+    let Some(move_type) = move_data.move_type.battle_type() else {
+        return Ok(None);
+    };
+    let damage = apply_stab(base, has_stab(fainted.types(), move_id, move_type));
+    Ok(Some(most_suitable_type_effectiveness(
+        damage,
+        move_type,
+        defender.types(),
+    )))
+}
+
+/// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
+/// contribution has no cross-row terminal-immunity override, unlike
+/// [`apply_dual_type_effectiveness`]: a later effective row still floors a
+/// running damage already zeroed by an earlier immune row back up to one
+/// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`).
+fn most_suitable_type_effectiveness(
+    damage: u32,
+    attacking_type: Type,
+    defender_types: [Type; 2],
+) -> u32 {
+    let mut damage = damage;
+    let distinct = defender_types[1] != defender_types[0];
+    for &(atk, def, effectiveness) in TypeChart::rows() {
+        if atk != attacking_type {
+            continue;
+        }
+        if def == defender_types[0] {
+            damage = apply_type_effectiveness(damage, effectiveness);
+        }
+        if distinct && def == defender_types[1] {
+            damage = apply_type_effectiveness(damage, effectiveness);
+        }
+    }
+    damage
 }
 
 /// Looks up a trainer in the extracted trainer table.
@@ -314,10 +588,11 @@ pub fn ensure_trainer_party_startable(
 mod tests {
     use super::{
         build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, money_value_for_class,
-        roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerPartyMon,
-        DEFAULT_MONEY_VALUE, SHINY_ODDS,
+        roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerContext,
+        TrainerPartyMon, DEFAULT_MONEY_VALUE, SHINY_ODDS,
     };
     use crate::dex::Dex;
+    use crate::pokemon::BattlePokemon;
     use crate::script_rng::SequenceRng;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
@@ -339,6 +614,93 @@ mod tests {
             u16::from_le_bytes([bytes[0], bytes[1]]),
             u16::from_le_bytes([bytes[2], bytes[3]]),
         ]
+    }
+
+    /// `GetMostSuitableMonToSwitchInto`'s most-damage pass stores its running
+    /// winner in a `u8` in the stock build (`BUGFIX` is left undefined at
+    /// `pokeemerald/include/config.h:48`), so a candidate whose true score
+    /// exceeds 255 is narrowed modulo 256 before the next
+    /// `bestDmg < gBattleMoveDamage` comparison
+    /// (`pokeemerald/src/battle_ai_switch_items.c:781`-`:784`). A level-70
+    /// Metagross's stale Mega Kick against a level-50 Sandshrew gives
+    /// Mudkip's Water Gun (super effective against Sandshrew's Ground
+    /// typing, no STAB from Metagross) a true score over 255 that narrows
+    /// below Pichu's untouched, unnarrowed Tackle score, so the later bench
+    /// member wins despite the earlier one's higher true damage.
+    #[test]
+    fn the_most_damage_pass_narrows_its_running_winner_to_a_byte() {
+        const METAGROSS: SpeciesId = SpeciesId(400);
+        const SANDSHREW: SpeciesId = SpeciesId(27);
+        const MUDKIP: SpeciesId = SpeciesId(283);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const MEGA_KICK: MoveId = MoveId(25);
+        const TACKLE: MoveId = MoveId(33);
+        const WATER_GUN: MoveId = MoveId(55);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(METAGROSS, 70, vec![MEGA_KICK]);
+        let player = mon(SANDSHREW, 50, vec![TACKLE]);
+        let bench = vec![mon(MUDKIP, 5, vec![WATER_GUN]), mon(PICHU, 5, vec![TACKLE])];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
+            Ok(Some(1)),
+            "Water Gun's narrowed score loses to Tackle's unnarrowed one"
+        );
+    }
+
+    /// `TypeCalc`'s per-row modulation for the most-damage pass's candidate
+    /// contribution has no cross-row terminal-immunity override
+    /// (`battle_script_commands.c:1504`-`:1506`, `:1570`-`:1580`), unlike
+    /// [`crate::damage::apply_dual_type_effectiveness`]: a later
+    /// nonzero-effectiveness row still floors a running damage already
+    /// zeroed by an earlier immune row back up to one. A level-70 Metagross's
+    /// stale Mega Kick against a level-50 Gligar (Ground/Flying) gives
+    /// Pichu's Thunder Shock a score of one, not zero, once Flying's super
+    /// effectiveness floors the zero Ground's immunity left behind -- reopening
+    /// the most-damage pass instead of falling through to party order.
+    /// Pinsir's Guillotine is the [`OHKO_POWER_SENTINEL`] and never scores.
+    #[test]
+    fn the_most_damage_pass_floors_an_immunity_a_later_row_reopens() {
+        const METAGROSS: SpeciesId = SpeciesId(400);
+        const GLIGAR: SpeciesId = SpeciesId(207);
+        const PINSIR: SpeciesId = SpeciesId(127);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const MEGA_KICK: MoveId = MoveId(25);
+        const GUILLOTINE: MoveId = MoveId(12);
+        const THUNDER_SHOCK: MoveId = MoveId(84);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(METAGROSS, 70, vec![MEGA_KICK]);
+        let player = mon(GLIGAR, 50, vec![THUNDER_SHOCK]);
+        let bench = vec![
+            mon(PINSIR, 5, vec![GUILLOTINE]),
+            mon(PICHU, 5, vec![THUNDER_SHOCK]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
+            Ok(Some(1)),
+            "Ground's immunity is floored back to one by Flying's super effectiveness"
+        );
     }
 
     #[test]
