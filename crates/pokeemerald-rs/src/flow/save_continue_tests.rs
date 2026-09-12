@@ -1881,3 +1881,49 @@ fn save_messages_pace_at_the_saved_text_speed() {
          {fast} and {slow} frames"
     );
 }
+
+/// `OPTIONS_TEXT_SPEED_MID` (`pokeemerald/include/constants/global.h:127-129`).
+const OPTIONS_TEXT_SPEED_MID: u8 = 1;
+
+/// `GetPlayerTextSpeedDelay` repairs an out-of-range `optionsTextSpeed` in
+/// `gSaveBlock2Ptr` itself before it picks a delay
+/// (`pokeemerald/src/menu.c:481-487`), so the very first SAVE-flow message --
+/// `ShowSaveMessage`'s `gText_ConfirmSave` (`start_menu.c:902-909`) --
+/// normalizes the live block to `OPTIONS_TEXT_SPEED_MID`, and the write that
+/// follows persists MID rather than the raw value the file carried.
+#[test]
+fn save_normalizes_an_out_of_range_text_speed_option() {
+    /// Out of `optionsTextSpeed`'s 0..=2 range, but inside its 3 saved bits,
+    /// so a checksum-valid file can carry it.
+    const RAW_OUT_OF_RANGE: u8 = 5;
+
+    let temp = TempSave::new("text-speed-out-of-range");
+    write_save_with_text_speed(&temp, RAW_OUT_OF_RANGE);
+
+    let mut slot = temp.slot();
+    let saved = slot.load();
+    assert_eq!(
+        saved.block2.options_text_speed, RAW_OUT_OF_RANGE,
+        "the fixture's raw optionsTextSpeed must survive the write/load round trip"
+    );
+    let map = saved_map_id(saved.block1.location).expect("the saved location must resolve");
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        saved.block1,
+        saved.block2,
+    );
+    settle(&mut phase);
+
+    save_from_the_start_menu(&mut phase, &mut slot);
+
+    assert_eq!(
+        phase.save2.options_text_speed, OPTIONS_TEXT_SPEED_MID,
+        "printing a save message must repair the live block's optionsTextSpeed"
+    );
+    assert_eq!(
+        slot.load().block2.options_text_speed,
+        OPTIONS_TEXT_SPEED_MID,
+        "the save must persist the repaired OPTIONS_TEXT_SPEED_MID, not the raw value"
+    );
+}

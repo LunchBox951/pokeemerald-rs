@@ -547,6 +547,13 @@ impl CgbVoice {
         self.envelope.is_stopping()
     }
 
+    /// Return whether `ply_endtie` may select this voice
+    /// ([`CgbEnvelope::is_end_tie_eligible`]'s doc).
+    #[must_use]
+    pub(crate) fn is_end_tie_eligible(&self) -> bool {
+        self.envelope.is_end_tie_eligible()
+    }
+
     /// Advance the note-off gate by one sequencer tick.
     pub fn tick_gate(&mut self) {
         if self.gate.tick() && self.envelope.note_off() {

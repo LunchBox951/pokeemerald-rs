@@ -611,6 +611,7 @@ mod tests {
     const DEFAULT_PERSONALITY: u32 = 0;
     const SECOND_TURN: u8 = 1;
     const HUGE_POWER_ABILITY_SLOT: u8 = 1;
+    const GUTS_ABILITY_SLOT: u8 = 1;
     const MAXIMUM_SIMULATED_DAMAGE_DRAW: u16 = 0;
     const SELECT_FIRST_TIED_MOVE: u16 = 0;
     const SELECT_SECOND_TIED_MOVE: u16 = 1;
@@ -621,6 +622,10 @@ mod tests {
     const MUDKIP: SpeciesId = SpeciesId(283);
     const MARILL: SpeciesId = SpeciesId(183);
     const SQUIRTLE: SpeciesId = SpeciesId(7);
+    /// `SPECIES_MAKUHITA`: Guts in ability slot 1 (Thick Fat is slot 0).
+    const MAKUHITA: SpeciesId = SpeciesId(335);
+    /// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
+    const MILOTIC: SpeciesId = SpeciesId(329);
 
     const POUND: MoveId = MoveId(1);
     const SCRATCH: MoveId = MoveId(10);
@@ -901,5 +906,100 @@ mod tests {
             estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
 
         assert_eq!(estimated_damage, real_damage);
+    }
+
+    #[test]
+    fn a_statused_guts_attackers_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let mut attacker = BattlePokemon::new(
+            &dex,
+            MAKUHITA,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap()
+        .with_ability_slot(GUTS_ABILITY_SLOT);
+        assert_eq!(attacker.ability(), crate::ability::GUTS);
+        attacker.set_status1(crate::status1::Status1::Paralysed);
+        let defender = pokemon(MILOTIC, vec![TACKLE]);
+
+        let critical_hits_suppressed = true;
+        let mut no_draws = SequenceRng::new([]);
+        let damage_before_roll = crate::hit::damage_before_roll(
+            &dex,
+            TACKLE,
+            &attacker,
+            &defender,
+            critical_hits_suppressed,
+            &mut no_draws,
+        )
+        .unwrap();
+        let mut best_damage_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+        let real_damage =
+            crate::damage::apply_damage_roll(damage_before_roll.damage, &mut best_damage_roll);
+        let estimated_damage =
+            estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
+
+        assert_eq!(estimated_damage, real_damage);
+        assert!(
+            estimated_damage
+                > estimated_damage_of_a_healthy_attacker(&dex, &defender)
+                    .expect("healthy control must resolve"),
+            "the statused Guts attacker's estimate must exceed the healthy control's"
+        );
+    }
+
+    fn estimated_damage_of_a_healthy_attacker(
+        dex: &Dex,
+        defender: &BattlePokemon,
+    ) -> Result<u32, BattleError> {
+        let healthy_attacker = BattlePokemon::new(
+            dex,
+            MAKUHITA,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap()
+        .with_ability_slot(GUTS_ABILITY_SLOT);
+        estimated_damage(dex, TACKLE, &healthy_attacker, defender, PERCENT_SCALE)
+    }
+
+    #[test]
+    fn a_statused_marvel_scale_defenders_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let attacker = pokemon(MAKUHITA, vec![TACKLE]);
+        let mut defender = pokemon(MILOTIC, vec![TACKLE]);
+        assert_eq!(defender.ability(), crate::ability::MARVEL_SCALE);
+        defender.set_status1(crate::status1::Status1::Poisoned);
+
+        let critical_hits_suppressed = true;
+        let mut no_draws = SequenceRng::new([]);
+        let damage_before_roll = crate::hit::damage_before_roll(
+            &dex,
+            TACKLE,
+            &attacker,
+            &defender,
+            critical_hits_suppressed,
+            &mut no_draws,
+        )
+        .unwrap();
+        let mut best_damage_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+        let real_damage =
+            crate::damage::apply_damage_roll(damage_before_roll.damage, &mut best_damage_roll);
+        let statused_estimate =
+            estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
+
+        assert_eq!(statused_estimate, real_damage);
+        let healthy_defender = pokemon(MILOTIC, vec![TACKLE]);
+        let healthy_estimate =
+            estimated_damage(&dex, TACKLE, &attacker, &healthy_defender, PERCENT_SCALE).unwrap();
+        assert!(
+            statused_estimate < healthy_estimate,
+            "the statused Marvel Scale defender's estimate must be lower than the healthy control's"
+        );
     }
 }
