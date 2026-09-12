@@ -82,7 +82,7 @@ pub enum AffineMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "flip, enabled, and mosaic are independent packed sprite attributes"
+    reason = "flip, enabled, mosaic, and half_tile_offset are independent packed sprite attributes"
 )]
 pub struct OamEntry {
     x: i16,
@@ -99,6 +99,7 @@ pub struct OamEntry {
     affine: AffineMode,
     mode: ObjMode,
     mosaic: bool,
+    half_tile_offset: bool,
 }
 
 impl OamEntry {
@@ -157,6 +158,7 @@ impl OamEntry {
             affine: AffineMode::Regular,
             mode: ObjMode::Normal,
             mosaic: false,
+            half_tile_offset: false,
         }
     }
 
@@ -189,6 +191,26 @@ impl OamEntry {
         self
     }
 
+    /// Records that this 8bpp sprite's packed OAM tile number had its low
+    /// bit set.
+    ///
+    /// A packed 8bpp OAM tile number counts 32-byte units, but
+    /// [`tile_index`](Self::tile_index) counts whole (64-byte) tiles, so
+    /// constructing this entry from a packed number requires dividing it by
+    /// two first, discarding that low bit. Passing `true` here restores the
+    /// 32-byte (four-row) offset the discarded bit represented: sampling
+    /// starts four rows into the decoded tile at `tile_index` and continues
+    /// into the next wrapped tile, matching mGBA's one-dimensional OBJ
+    /// addressing for an odd packed tile number
+    /// (`mgba/src/gba/renderers/software-obj.c:168-171`)
+    /// `(behavioral-fidelity)`. Has no effect on 4bpp sprites, whose tiles
+    /// are already 32-byte aligned.
+    #[must_use]
+    pub const fn with_half_tile_offset(mut self, half_tile_offset: bool) -> Self {
+        self.half_tile_offset = half_tile_offset;
+        self
+    }
+
     /// Decoded screen X position (`-256..=255`).
     #[must_use]
     pub const fn x(self) -> i16 {
@@ -205,7 +227,10 @@ impl OamEntry {
     ///
     /// The index counts [`Tileset`](crate::tile::Tileset) tiles at this
     /// sprite's bit depth. A packed 8bpp OAM index counts 32-byte units and
-    /// must therefore be divided by two before construction.
+    /// must therefore be divided by two before construction; pass the
+    /// discarded low bit to
+    /// [`with_half_tile_offset`](Self::with_half_tile_offset) so its 32-byte
+    /// offset is not lost.
     #[must_use]
     pub const fn tile_index(self) -> u16 {
         self.tile_index
@@ -272,6 +297,13 @@ impl OamEntry {
     #[must_use]
     pub const fn mosaic(self) -> bool {
         self.mosaic
+    }
+
+    /// Whether [`tile_index`](Self::tile_index) carries a 32-byte half-tile
+    /// offset, set via [`with_half_tile_offset`](Self::with_half_tile_offset).
+    #[must_use]
+    pub const fn half_tile_offset(self) -> bool {
+        self.half_tile_offset
     }
 
     /// Returns the footprint-local offset for a covered scanline in `0..160`.
@@ -468,6 +500,18 @@ mod tests {
         let window = entry(0, 0, true).with_mode(ObjMode::Window);
         assert_eq!(window.mode(), ObjMode::Window);
         assert!(!window.mosaic());
+    }
+
+    #[test]
+    fn new_defaults_half_tile_offset_to_false_and_with_half_tile_offset_sets_it() {
+        let e = entry(0, 0, true);
+        assert!(!e.half_tile_offset());
+
+        let with_offset = e.with_half_tile_offset(true);
+        assert!(with_offset.half_tile_offset());
+        // Independent of the entry's other builders.
+        assert_eq!(with_offset.mode(), ObjMode::Normal);
+        assert!(!with_offset.mosaic());
     }
 
     #[test]

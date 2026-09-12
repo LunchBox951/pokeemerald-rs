@@ -358,10 +358,13 @@ impl<'a> SpriteLayer<'a> {
             BitDepth::Bpp4 => self.tileset_4bpp,
             BitDepth::Bpp8 => self.tileset_8bpp,
         };
-        let Some(tile) = tileset.tile(tile_index) else {
+        let local_x = source_x.rem_euclid(DIM as i32) as usize;
+        let local_y = source_y % DIM;
+        let Some(index) =
+            tileset.obj_pixel_index(tile_index, entry.half_tile_offset(), local_x, local_y)
+        else {
             return Texel::Outside;
         };
-        let index = tile.index(source_x.rem_euclid(DIM as i32) as usize, source_y % DIM);
         // Hardware reserves palette index zero as transparent at both depths.
         if index == 0 {
             return Texel::Transparent;
@@ -1289,6 +1292,54 @@ mod tests {
         assert_eq!(
             layer.resolve_pixel(0, 0).map(|p| p.color),
             Some(RED.to_rgb888())
+        );
+    }
+
+    /// A packed 8bpp OAM tile number with its low bit set starts sampling
+    /// four rows (32 bytes) into the decoded tile at `tile_index` and
+    /// continues into the next wrapped tile, matching mGBA's one-dimensional
+    /// OBJ addressing (`mgba/src/gba/renderers/software-obj.c:168-171`)
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn composite_8bpp_sprite_honours_a_half_tile_offset_across_the_decoded_tile_boundary() {
+        const IGNORED_4BPP_PALETTE_BANK: u8 = 3;
+        const UNUSED_FIRST_TILE_TOP_HALF: u8 = 9;
+        const HALF_TILE_ROW_BYTES: usize = BitDepth::TILE_DIM * (BitDepth::TILE_DIM / 2);
+
+        let mut bytes = [0u8; 2 * BitDepth::Bpp8.tile_byte_len()];
+        bytes[0] = UNUSED_FIRST_TILE_TOP_HALF;
+        bytes[HALF_TILE_ROW_BYTES] = GREEN_INDEX;
+        bytes[BitDepth::Bpp8.tile_byte_len()] = RED_INDEX;
+        let tileset_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let empty_4bpp_tile = [0u8; BPP4_TILE_BYTES];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &empty_4bpp_tile).unwrap();
+        let palette = palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            IGNORED_4BPP_PALETTE_BANK,
+            BitDepth::Bpp8,
+            false,
+            false,
+            ObjShape::Square,
+            EIGHT_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_half_tile_offset(true)];
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset_8bpp, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888()),
+            "row 0 of the offset sprite is row 4 of decoded tile 0"
+        );
+        assert_eq!(
+            layer.resolve_pixel(0, 4).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "row 4 of the offset sprite is row 0 of decoded tile 1"
         );
     }
 

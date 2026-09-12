@@ -89,10 +89,16 @@ pub(crate) fn sample_texel(
         BitDepth::Bpp4 => tileset_4bpp,
         BitDepth::Bpp8 => tileset_8bpp,
     };
-    let Some(tile) = tileset.tile(wrapped_tile_index) else {
+    let local_x = source_x % BitDepth::TILE_DIM;
+    let local_y = source_y % BitDepth::TILE_DIM;
+    let Some(palette_index) = tileset.obj_pixel_index(
+        wrapped_tile_index,
+        entry.half_tile_offset(),
+        local_x,
+        local_y,
+    ) else {
         return Texel::Outside;
     };
-    let palette_index = tile.index(source_x % BitDepth::TILE_DIM, source_y % BitDepth::TILE_DIM);
     if palette_index == 0 {
         return Texel::Transparent;
     }
@@ -206,6 +212,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A packed 8bpp OAM tile number with its low bit set starts sampling
+    /// four rows (32 bytes) into the decoded tile at `tile_index` and
+    /// continues into the next wrapped tile, matching mGBA's
+    /// one-dimensional OBJ addressing
+    /// (`mgba/src/gba/renderers/software-obj.c:168-171`)
+    /// `(behavioral-fidelity)`. Affine sampling must apply the same offset
+    /// as regular sampling.
+    #[test]
+    fn affine_8bpp_sprite_honours_a_half_tile_offset_across_the_decoded_tile_boundary() {
+        const HALF_TILE_ROW_BYTES: usize = BitDepth::TILE_DIM * (BitDepth::TILE_DIM / 2);
+
+        let mut bytes = [0u8; 2 * BitDepth::Bpp8.tile_byte_len()];
+        bytes[HALF_TILE_ROW_BYTES] = GREEN_INDEX;
+        bytes[BitDepth::Bpp8.tile_byte_len()] = RED_INDEX;
+        let tileset_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        let tileset_4bpp =
+            Tileset::decode(BitDepth::Bpp4, &[0u8; BitDepth::Bpp4.tile_byte_len()]).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[usize::from(RED_INDEX)] = RED;
+        colors[usize::from(GREEN_INDEX)] = GREEN;
+        let palette = Palette::new(colors);
+
+        let entry = OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp8,
+            false,
+            false,
+            ObjShape::Square,
+            SIZE_8_BY_8,
+            0,
+            true,
+        )
+        .with_affine(AffineMode::Affine { matrix_num: 0 })
+        .with_half_tile_offset(true);
+        let entries = [entry];
+        let matrices = [AffineMatrix::IDENTITY];
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset_8bpp, &palette)
+            .with_affine_matrices(&matrices);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(GREEN.to_rgb888()),
+            "row 0 of the offset sprite is row 4 of decoded tile 0"
+        );
+        assert_eq!(
+            layer.resolve_pixel(0, 4).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "row 4 of the offset sprite is row 0 of decoded tile 1"
+        );
     }
 
     #[test]
