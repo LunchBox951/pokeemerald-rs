@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use rom_import::fixture::RomFixture;
 use rom_import::{ImportError, ImportedPack};
 
-use super::dest::Dest;
+use super::dest::{not_a_directory_error, Dest};
 use super::{
     create_directories, directories_to_create, import_to, import_to_with, pack_directory,
     pack_name, ImportOutcome, ImportRomError,
@@ -597,6 +597,33 @@ fn every_path_bearing_variant_escapes_control_bytes_and_stays_legible() {
         assert!(!text.contains('\u{1b}'), "{text:?}");
         assert!(text.contains(escaped), "escaped path missing from {text:?}");
     }
+}
+
+/// [`not_a_directory_error`] is what the non-Unix [`Dest::open`] reports
+/// for a destination that exists but is not a directory (issue #1093): its
+/// message used to fold in `dir.display()` unescaped, which reached the
+/// terminal raw through this same `{source}` interpolation. The fix drops
+/// the path from the inner error entirely -- [`ImportRomError::OpenDirFailed`]
+/// already carries and escapes it once, in `path` -- so this test runs on
+/// every platform, not just the non-Unix one that builds the error in
+/// production, and pins that the escaped path appears exactly once in the
+/// rendered diagnostic rather than a second, raw time inside `source`.
+#[test]
+fn a_non_directory_open_error_names_the_destination_once() {
+    let hostile = PathBuf::from("one\ntwo\u{1b}[2Kthree");
+    let rendered = ImportRomError::OpenDirFailed {
+        path: hostile,
+        source: not_a_directory_error(),
+    }
+    .to_string();
+    assert_eq!(
+        rendered,
+        r"could not open `one\ntwo\u{1b}[2Kthree`: not a directory"
+    );
+    assert!(
+        !rendered.chars().any(char::is_control),
+        "the diagnosis must stay one printable row: {rendered:?}"
+    );
 }
 
 /// An ordinary path -- a Windows one included, whose separators are

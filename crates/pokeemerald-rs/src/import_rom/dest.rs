@@ -284,6 +284,27 @@ impl Dest {
     }
 }
 
+/// The failure [`Dest::open`]'s non-Unix arm reports when `dir` exists but
+/// is not a directory.
+///
+/// Deliberately path-free: `dir` is untrusted -- it comes from
+/// `$POKEEMERALD_PACK` or `--import-rom` -- and escaping it is
+/// `rom_import::OneLinePath`'s one job (module docs there), not this
+/// module's. [`super::ImportRomError::OpenDirFailed`] already carries the
+/// path as its own field and renders it through that escaper exactly once;
+/// a second, unescaped copy folded into this `io::Error`'s own message
+/// would sit in the source chain `{source}` interpolates verbatim, next to
+/// the one already escaped.
+///
+/// `#[cfg(any(not(unix), test))]` rather than `#[cfg(not(unix))]` alone:
+/// this box's non-Unix arm cannot run on Unix, but the message it builds
+/// has no OS dependence at all, so a Unix test still calls this directly to
+/// pin what it says without needing the platform that produces it.
+#[cfg(any(not(unix), test))]
+pub(super) fn not_a_directory_error() -> io::Error {
+    io::Error::other("not a directory")
+}
+
 /// The destination directory, addressed by path.
 ///
 /// Off Unix there is no descriptor to pin: `std` exposes no `openat` on
@@ -304,14 +325,12 @@ impl Dest {
     ///
     /// # Errors
     ///
-    /// If `dir` is not a directory. Nothing is pinned, so this is a
-    /// question about the path now, not a guarantee about it later.
+    /// [`not_a_directory_error`] if `dir` is not a directory. Nothing is
+    /// pinned, so this is a question about the path now, not a guarantee
+    /// about it later.
     pub(super) fn open(dir: &Path) -> io::Result<Self> {
         if !dir.is_dir() {
-            return Err(io::Error::other(format!(
-                "`{}` is not a directory",
-                dir.display()
-            )));
+            return Err(not_a_directory_error());
         }
         Ok(Self {
             dir: dir.to_path_buf(),
