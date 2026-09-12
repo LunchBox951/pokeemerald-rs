@@ -289,6 +289,15 @@ fn a_bad_starting_note_is_rejected() {
 }
 
 #[test]
+fn a_voice_group_declaration_with_a_surplus_operand_is_rejected() {
+    let text = "voice_group demo, 36, surplus\n";
+    assert_eq!(
+        parse_voice_group(text),
+        Err(VoiceGroupError::MissingVoiceGroupDeclaration)
+    );
+}
+
+#[test]
 fn a_line_with_too_few_operands_is_malformed() {
     let text = "voice_group demo\n\tvoice_square_1 60, 0\n";
     assert_eq!(
@@ -298,6 +307,55 @@ fn a_line_with_too_few_operands_is_malformed() {
             line: "voice_square_1 60, 0".to_owned(),
         })
     );
+}
+
+#[test]
+fn a_voice_slot_with_a_surplus_operand_is_rejected() {
+    let lines = [
+        "voice_directsound 60, 0, DirectSoundWaveData_test, 255, 0, 255, 0, surplus",
+        "voice_directsound_no_resample 60, 0, DirectSoundWaveData_test, 255, 0, 255, 0, surplus",
+        "voice_directsound_alt 60, 0, DirectSoundWaveData_test, 255, 0, 255, 0, surplus",
+        "voice_square_1 60, 0, 0, 2, 0, 0, 15, 0, surplus",
+        "voice_square_1_alt 60, 0, 0, 2, 0, 0, 15, 0, surplus",
+        "voice_square_2 60, 0, 2, 0, 0, 15, 0, surplus",
+        "voice_square_2_alt 60, 0, 2, 0, 0, 15, 0, surplus",
+        "voice_programmable_wave 60, 0, ProgrammableWaveData_1, 0, 0, 15, 0, surplus",
+        "voice_programmable_wave_alt 60, 0, ProgrammableWaveData_1, 0, 0, 15, 0, surplus",
+        "voice_noise 60, 0, 0, 0, 0, 15, 0, surplus",
+        "voice_noise_alt 60, 0, 0, 0, 0, 15, 0, surplus",
+    ];
+
+    for line in lines {
+        let text = format!("voice_group demo\n\t{line}\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::MalformedVoiceSlot {
+                group: "demo".to_owned(),
+                line: line.to_owned(),
+            }),
+            "expected a surplus operand to be rejected: {line}"
+        );
+    }
+}
+
+#[test]
+fn a_keysplit_slot_with_a_surplus_operand_is_rejected() {
+    let lines = [
+        "voice_keysplit voicegroup_piano_keysplit, keysplit_piano, surplus",
+        "voice_keysplit_all voicegroup_rs_drumset, surplus",
+    ];
+
+    for line in lines {
+        let text = format!("voice_group demo\n\t{line}\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::MalformedVoiceSlot {
+                group: "demo".to_owned(),
+                line: line.to_owned(),
+            }),
+            "expected a surplus operand to be rejected: {line}"
+        );
+    }
 }
 
 #[test]
@@ -517,8 +575,28 @@ fn a_non_numeric_keysplit_starting_note_is_rejected() {
 }
 
 #[test]
+fn a_keysplit_header_with_a_surplus_operand_is_rejected() {
+    let text = "keysplit demo, 36, surplus\n\tsplit 0, 40\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::MissingKeySplitLabel)
+    );
+}
+
+#[test]
 fn non_numeric_split_operands_are_rejected() {
     let text = "keysplit demo, 0\n\tsplit not_a_slot, 4\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::InvalidSplitOperands {
+            table: "demo".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn a_split_with_a_surplus_operand_is_rejected() {
+    let text = "keysplit demo, 0\n\tsplit 0, 4, surplus\n";
     assert_eq!(
         parse_keysplit_tables(text),
         Err(VoiceGroupError::InvalidSplitOperands {

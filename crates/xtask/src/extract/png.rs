@@ -221,6 +221,9 @@ impl Header {
     }
 
     fn validate(&self) -> Result<(), PngError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(PngError::Unsupported("width or height is zero"));
+        }
         if self.color_type != INDEXED_COLOR_TYPE {
             return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
         }
@@ -603,6 +606,19 @@ mod tests {
             image.pixels,
             vec![0, 1, 2, 3, 3, 2, 1, 0, 3, 3, 3, 3, 0, 0, 0, 0]
         );
+    }
+
+    #[test]
+    fn rejects_zero_width_or_height_ihdr() {
+        let zero_width = indexed_png_from_raw(super::EIGHT_BIT_DEPTH, 0, 1, &[super::FILTER_NONE]);
+        let zero_height = indexed_png_from_raw(super::EIGHT_BIT_DEPTH, 1, 0, &[]);
+
+        for png in [zero_width, zero_height] {
+            assert_eq!(
+                decode(&png),
+                Err(PngError::Unsupported("width or height is zero"))
+            );
+        }
     }
 
     #[test]

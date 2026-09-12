@@ -190,8 +190,11 @@
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, and Marvel
 //! Scale (all eight above),
-//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]) and the four
-//! stat-drop guards — Clear Body, White Smoke, Keen Eye,
+//! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Levitate's
+//! Ground-move damage immunity ([`hit::damage_before_roll`] — grounding
+//! effects like Gravity and Smack Down are not modelled, so Levitate is
+//! otherwise unconditional) and the four stat-drop guards — Clear Body,
+//! White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
 //! held items, every primary status but

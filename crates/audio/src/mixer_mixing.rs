@@ -287,6 +287,81 @@ fn note_off_releases_newest_match_across_voice_kinds_cgb_then_pcm() {
     assert!(!cgb.is_stopping(), "older CGB voice must keep sounding");
 }
 
+/// A square-channel voice on `channel` with the given envelope and
+/// pseudo-echo tail, on track 0 and key 60 like [`cgb_keyed_voice`].
+fn cgb_endtie_voice(
+    channel: CgbChannelNumber,
+    adsr: CgbAdsr,
+    echo_volume: u8,
+    echo_length: u8,
+) -> CgbVoice {
+    CgbVoice::square(
+        channel,
+        2,
+        None,
+        adsr,
+        60,
+        0,
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        60,
+        0,
+        0,
+        echo_volume,
+        echo_length,
+    )
+}
+
+#[test]
+fn end_tie_skips_a_cgb_channel_in_its_automatic_pseudo_echo_tail() {
+    // A zero-sustain CGB envelope completes on its own into the automatic
+    // pseudo-echo tail that `CgbEnvelope::is_end_tie_eligible`'s doc excludes.
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut mixer = Mixer::default();
+    let older_sustaining_voice = cgb_endtie_voice(CgbChannelNumber::Square2, CgbAdsr::flat(), 0, 0);
+    let newer_echo_voice = cgb_endtie_voice(
+        CgbChannelNumber::Square1,
+        CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        },
+        128,
+        60,
+    );
+    assert!(mixer.add_cgb_voice(older_sustaining_voice));
+    assert!(mixer.add_cgb_voice(newer_echo_voice));
+
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    assert!(
+        mixer.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some(),
+        "the zero-sustain voice must have entered its pseudo-echo tail, not retired"
+    );
+
+    mixer.note_off_track(TRACK, KEY);
+
+    let echo = mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+        .as_ref()
+        .expect("echo voice present");
+    assert!(
+        !echo.is_stopping(),
+        "the end-tie must walk past the IEC-only pseudo-echo channel"
+    );
+    let older = mixer.cgb_voices()[CgbChannelNumber::Square2.slot()]
+        .as_ref()
+        .expect("older voice present");
+    assert!(
+        older.is_stopping(),
+        "the older same-key channel must be the one the end-tie stops"
+    );
+}
+
 #[test]
 fn voice_cap_drops_extra_notes() {
     let mut mixer = Mixer::new(DEFAULT_MASTER_VOLUME, 2);
