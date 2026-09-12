@@ -220,14 +220,11 @@ impl ImportedPack {
 /// `out_path` before returning [`ImportError::WriteFailed`] — exclusive
 /// creation would otherwise make it permanent, since the retry would fail
 /// on its own leftover. That removal is aimed at this call's own file: an
-/// entry a concurrent writer installs at `out_path` in its place belongs
-/// to whoever put it there, is left where it is, and is what a retry or
-/// the caller finds occupying the name afterward. The check behind that is
-/// a pathname identity check, not a handle-bound unlink, so a replacement
-/// installed in the gap between the last identity check and the unlink
-/// itself is still removed (`remove_after` states the bound). The one
-/// failure that leaves the path occupied from the start, before this call
-/// ever creates anything, is the one that found it occupied.
+/// entry a concurrent writer installed at `out_path` in its place belongs
+/// to whoever put it there and is left where it is, up to the residual
+/// window `remove_after` bounds. The one failure that leaves the path
+/// occupied from the start, before this call ever creates anything, is the
+/// one that found it occupied.
 ///
 /// # Errors
 ///
@@ -421,13 +418,9 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// a refused import naming the path, not a truncated file.
 ///
 /// On Windows the handle also shares nothing (`share_mode(0)`, the same
-/// deny-all `StagedSave` opens its own exclusive create with in
-/// `crates/engine/src/save/file/staging.rs`): until it is dropped, no other
-/// opener can delete or rename the entry, so the name cannot come to mean a
-/// different file while [`write_new_with`] still holds it. That is what
-/// lets [`is_the_created_file`]'s non-unix arm answer "still ours" without
-/// reading an identity back off unix -- the check runs before the handle is
-/// given up, not on faith that nothing else touched the name.
+/// deny-all `create_new_exclusive` uses in
+/// `crates/engine/src/save/file/staging.rs`), which is what
+/// [`is_the_created_file`]'s non-unix arm rests on.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
@@ -442,25 +435,11 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// A write that fails part-way leaves a prefix of the pack at a name this
 /// call created, and exclusive creation is what makes that unrecoverable:
 /// the retry would hit its own leftover and fail with `AlreadyExists`
-/// forever. So a failed write takes the file with it -- but only if
-/// `out_path` still names the file this call created by the time cleanup
-/// runs. Exclusive creation proves that only this call could have created
-/// the name at open time; it says nothing about what the name means once
-/// the write closure has run and can fail after ceding control to arbitrary
-/// code, including, in a directory another account can write to, a
-/// concurrent peer that renames the partial file aside and puts its own
-/// file at `out_path` in the gap. [`remove_after`] checks the entry's
-/// identity against the still-open handle before it unlinks anything, the
-/// same standard `StagedSave::remove_after` holds its own cleanup to
-/// (`crates/engine/src/save/file/staging.rs`).
-///
-/// The handle is passed to [`remove_after`] rather than dropped here, so
-/// the identity check has something to compare against; it drops the
-/// handle itself, immediately before the unlink, because Windows refuses to
-/// remove a file that is still open. The original I/O error is what the
-/// caller sees, via `remove_after`, which keeps `error`'s own kind: the
-/// write is why the import failed, and a cleanup that also fails augments
-/// that diagnosis instead of replacing it.
+/// forever. So a failed write takes the file with it, through
+/// [`remove_after`], which owns both the check that `out_path` still names
+/// this call's own file and the bound on that check. The handle goes there
+/// rather than being dropped here because it is what the check compares
+/// against; the caller sees the original write error either way.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -490,16 +469,13 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
     Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
 }
 
-/// Off Unix there is no stable per-file identity to read back, so this arm
-/// answers from what the still-open handle already guarantees instead: on
-/// Windows, [`write_new`]'s exclusive create shares nothing, so no other
-/// opener can delete or rename `path` for as long as `_file` stays open, and
-/// this call always runs before [`remove_after_with`] gives the handle up.
-/// The name cannot have come to mean another file while it is still held,
-/// so [`still_the_created_file`]'s regular-file test is the whole remaining
-/// question (mirrors `is_the_held_file`'s non-unix arm in
-/// `crates/engine/src/save/file/staging.rs`, which rests on the identical
-/// deny-all hold).
+/// Off Unix there is no identity to read back, so this arm rests on what
+/// the hold forbids instead: [`write_new`]'s deny-all share mode bars any
+/// Windows opener from deleting or renaming `path` while `_file` lives, and
+/// this always runs before [`remove_after_with`] gives the handle up. That
+/// leaves [`still_the_created_file`]'s regular-file test as the whole
+/// remaining question, as it does for `is_the_held_file`'s non-unix arm in
+/// `crates/engine/src/save/file/staging.rs`.
 #[cfg(not(unix))]
 #[expect(
     clippy::unnecessary_wraps,
@@ -530,9 +506,8 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
 /// nothing stops a peer from replacing `path` in the gap between the kernel
 /// reading this call's last identity check and its own `unlink`, and this
 /// crate has no handle-bound removal that would close that gap outright.
-/// [`remove_after_with`] holds the identity check as late as it can --
-/// through the removal itself where the platform allows it -- so that gap
-/// is as small as a pathname-based check can make it, not smaller.
+/// [`remove_after_with`] narrows it to what the platform permits, and every
+/// other mention of the bound in this crate points here.
 ///
 /// Folding a genuine removal failure into `original` instead of discarding
 /// it keeps the diagnosis: silently dropping it would leave a partial file
@@ -553,14 +528,11 @@ fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> s
 /// testable without a privilege the test runner might lack (the same reason
 /// [`write_new_with`]'s own doc comment gives for injecting the write).
 ///
-/// Unlinking a file through its own open handle is legal on Unix, so there
-/// `file` stays open across the call to `remove` and is dropped only once
-/// it returns: nothing of this function's own runs between the identity
-/// check just above and the unlink. Off Unix, [`write_new`]'s deny-all
-/// share mode is what that check rests on (see [`is_the_created_file`]'s
-/// non-unix arm), and it holds only while `file` stays open, so there the
-/// drop has to happen right before `remove` is called -- as late as the
-/// platform permits, not before.
+/// The drop of `file` straddles `remove` by platform, so that the identity
+/// check above is given up as late as each platform permits: Unix can
+/// unlink a file through its own open handle, while off Unix the check
+/// rests on the hold itself (see [`is_the_created_file`]) and Windows
+/// refuses to remove a file that is still open.
 fn remove_after_with(
     path: &Path,
     file: std::fs::File,
@@ -916,6 +888,79 @@ mod tests {
             std::fs::read(&renamed_aside).expect("the renamed-aside partial file survives"),
             b"half a ",
             "cleanup must not disturb the partial file once it is no longer at `out`"
+        );
+    }
+
+    /// Whether `err` is Windows reporting that an open handle's share mode
+    /// admits no one else. `std` categorises `ERROR_SHARING_VIOLATION` on
+    /// some Windows versions and not others, so both spellings count
+    /// (`crates/engine/src/save/file/staging/tests.rs` says the same).
+    #[cfg(windows)]
+    fn is_a_sharing_violation(err: &std::io::Error) -> bool {
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+
+        err.kind() == std::io::ErrorKind::PermissionDenied
+            || err.raw_os_error() == Some(ERROR_SHARING_VIOLATION)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_output_cannot_be_replaced_or_removed_while_its_handle_lives() {
+        // The Windows counterpart to the two swap regressions above: there a
+        // peer plants the swap and the identity check catches it, while here
+        // `write_new`'s deny-all share mode makes the swap unattemptable,
+        // which is the whole of what `is_the_created_file`'s non-unix arm
+        // rests on. Drop that share mode and each of these three steps
+        // succeeds again, restoring the deletion of a swapped-in regular
+        // file. Mirrors
+        // `a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives`
+        // in `crates/engine/src/save/file/staging/tests.rs`.
+        let dir = TempDir::new("write-exclusive-hold");
+        let out = dir.join("pokeemerald.pack");
+        let aside = dir.join("pokeemerald.pack.moved");
+        let replacement = dir.join("replacement.pack");
+        std::fs::write(&replacement, b"the replacement").expect("the peer's own file exists");
+
+        write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+
+            let renamed = std::fs::rename(&out, &aside)
+                .expect_err("a held output must refuse being renamed aside");
+            assert!(
+                is_a_sharing_violation(&renamed),
+                "renaming a held output aside must fail as a sharing violation: {renamed:?}"
+            );
+
+            let replaced = std::fs::rename(&replacement, &out)
+                .expect_err("a held output must refuse being replaced");
+            assert!(
+                is_a_sharing_violation(&replaced),
+                "replacing a held output must fail as a sharing violation: {replaced:?}"
+            );
+
+            let removed =
+                std::fs::remove_file(&out).expect_err("a held output must refuse deletion");
+            assert!(
+                is_a_sharing_violation(&removed),
+                "deleting a held output must fail as a sharing violation: {removed:?}"
+            );
+
+            Ok(())
+        })
+        .expect("a write whose output nobody else could touch must succeed");
+
+        assert_eq!(
+            std::fs::read(&out).expect("the output survives the refused attempts"),
+            b"half a "
+        );
+        assert!(
+            !aside.exists(),
+            "a refused rename must not leave the output under the peer's name"
+        );
+        assert_eq!(
+            std::fs::read(&replacement).expect("the peer's own file is untouched"),
+            b"the replacement"
         );
     }
 
