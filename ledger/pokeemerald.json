@@ -26366,13 +26366,13 @@
           "status": "rewritten"
         },
         "PlayerNotOnBikeTurningInPlace": {
-          "reason": "Turn-in-place (no tile movement, facing updated) re-implemented as PlayerState::step's StepOutcome::Turned branch",
+          "reason": "On-foot standstill direction changes are re-implemented by PlayerState::step as StepOutcome::Turned: facing updates without tile movement, and an eight-frame WALK_IN_PLACE_FAST-equivalent busy timer (TURN_IN_PLACE_FRAMES) now starts, keeping ordinary direction polls Idle through frames 2-8 so a held direction can only begin moving on frame 9 (issue #976).",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "PlayerStep": {
-          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step",
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step; the WALK_IN_PLACE_FAST turn-in-place case of TryInterruptObjectEventSpecialAnim's non-interruptible window is now modeled via the eight-frame turn_frames_remaining busy timer (issue #976), so ordinary movement input stays gated for the turn's full duration.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
