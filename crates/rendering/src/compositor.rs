@@ -38,7 +38,7 @@ use crate::effects::{self, EffectsConfig, LayerKind};
 use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
-use crate::sprite::SpriteLayer;
+use crate::sprite::{SpriteLayer, WindowSpans};
 use crate::window::{WindowConfig, WindowLayerEnable};
 
 /// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
@@ -379,9 +379,18 @@ pub fn compose_frame_with_effects(
         }
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "the framebuffer is 160 scanlines tall, well within u8"
+            reason = "the framebuffer is 160 scanlines tall and 240 columns wide, both well within u8"
         )]
-        let span_starts = effects.windows.scanline_span_starts(y as u8);
+        let (span_starts, span_draws_obj) = {
+            let scanline = y as u8;
+            let starts = effects.windows.scanline_span_starts(scanline);
+            let runs_obj_pass: Vec<bool> = starts
+                .iter()
+                .map(|&start| span_runs_obj_pass(&effects.windows, start as u8, scanline))
+                .collect();
+            (starts, runs_obj_pass)
+        };
+        let window_spans = WindowSpans::new(&span_starts, &span_draws_obj);
         for x in 0..width {
             if span_starts.contains(&x) {
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
@@ -394,6 +403,7 @@ pub fn compose_frame_with_effects(
                 effects,
                 any_target2,
                 &mut affine_mosaic_holds,
+                window_spans,
                 x,
                 y,
             );
@@ -401,6 +411,19 @@ pub fn compose_frame_with_effects(
         }
     }
     framebuffer
+}
+
+/// Whether the hardware-window span starting at column `start` runs the OBJ
+/// pass on scanline `y` at all.
+///
+/// mGBA skips a span's whole sprite-preprocessing pass unless that span's own
+/// control enables OBJ or `OBJWIN` is enabled in `DISPCNT`; a skipped span
+/// writes nothing into the once-per-scanline sprite buffer
+/// (`mgba/src/gba/renderers/video-software.c:1052-1062`). A span is one run of
+/// a single window region, so its start column classifies all of it, and an
+/// `OBJWIN` mask never partitions the scanline `(behavioral-fidelity)`.
+fn span_runs_obj_pass(windows: &WindowConfig, start: u8, y: u8) -> bool {
+    windows.classify(start, y, false).obj || windows.obj_window.is_some()
 }
 
 /// Whether `bg_index`'s affine mosaic hold should keep advancing given
@@ -434,13 +457,25 @@ fn affine_mosaic_hold_participates(
 /// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
 /// [`AffineMosaicHold`] (or `None`) per slot, advanced one column at a time
 /// across a scanline; see [`compose_frame_with_effects`]'s docs.
-#[allow(clippy::cast_possible_truncation)] // Framebuffer coordinates are always < 240/160, well within u8.
+///
+/// `window_spans` carries this scanline's hardware-window spans and which of
+/// them run the OBJ pass; see `sprite::SpriteLayer::sample_affine_local` for
+/// what it seeds and why.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "framebuffer coordinates are always < 240/160, well within u8"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the per-pixel state compose_frame_with_effects threads through every column"
+)]
 fn compose_pixel(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
     effects: &FrameEffects,
     any_target2: bool,
     affine_mosaic_holds: &mut [Option<AffineMosaicHold>],
+    window_spans: WindowSpans<'_>,
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -465,6 +500,7 @@ fn compose_pixel(
             x,
             y,
             effects.mosaic.obj,
+            window_spans,
             region.suppresses_objwin_hole(),
         ) {
             insert_candidate(
@@ -1861,6 +1897,433 @@ mod tests {
             fb.pixel(1, 1),
             Some(origin_color),
             "snapped from (1,1) to (0,0)"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_hold_restarts_at_a_hardware_window_span_boundary() {
+        // mGBA re-invokes sprite preprocessing once per hardware-window span
+        // and seeds an affine OBJ's mosaic hold from the column one left of
+        // that span's start, not the screen-aligned block origin
+        // (`mgba/src/gba/renderers/video-software.c:1052-1062`,
+        // `software-obj.c:227-242,49-70`).
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0: col 0 -> index 1
+        bytes[2] = 0x32; // row 0: col 4 -> index 2, col 5 -> index 3
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(6, 240), WindowRange::new(0, 1)),
+                    obj_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: obj_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
+        let green = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
+        let blue = Bgr555::from_channels(0, 0, 0x1F).to_rgb888();
+
+        assert_eq!(fb.pixel(0, 0), Some(red), "x=0 samples source col 0");
+        assert_eq!(
+            fb.pixel(4, 0),
+            Some(green),
+            "x=4 starts the global block [4, 8) and samples source col 4"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(green),
+            "x=5 still holds source col 4, before the window span boundary"
+        );
+        assert_eq!(
+            fb.pixel(6, 0),
+            Some(blue),
+            "x=6 restarts the hold at the WIN0 span boundary, seeding from \
+             source col 5 (inX - 1) -- not col 4, the global block origin"
+        );
+        assert_eq!(
+            fb.pixel(7, 0),
+            Some(blue),
+            "x=7 still holds the span-restarted source col 5"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_trailing_spill_survives_a_later_window_span() {
+        // mGBA rounds an affine mosaic OBJ's trailing edge past its own span
+        // end when the sprite's raw right edge binds it instead of the span,
+        // and the once-per-scanline sprite buffer keeps that spill visible
+        // under a later span (`software-obj.c:227-242`).
+        //
+        // Identity 8x8 affine OBJ at x = 1, OBJ mosaic H = 4, WIN0 opening at
+        // x = 10. Raw right edge 9 rounds to 12, so x = 10..=11 are the spill
+        // of block [8, 12) and must still show source col 7.
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0: col 0 -> index 1
+        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            1,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                    obj_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: obj_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let green = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
+
+        assert_eq!(
+            fb.pixel(9, 0),
+            Some(green),
+            "x=9 is inside the WINOUT span and holds source col 7"
+        );
+        assert_eq!(
+            fb.pixel(10, 0),
+            Some(green),
+            "x=10 was already written by the WINOUT pass's mosaic spill"
+        );
+        assert_eq!(
+            fb.pixel(11, 0),
+            Some(green),
+            "x=11 was already written by the WINOUT pass's mosaic spill"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_hold_restarts_when_the_window_span_starts_at_the_raw_edge() {
+        // A span ending exactly at the sprite's raw right edge never rounds
+        // (`condition == end`); the next span, starting at that same edge,
+        // owns the rounding instead and seeds its own hold
+        // (`software-obj.c:227-241`).
+        //
+        // Identity 8x8 affine OBJ at x = 2 (raw right edge 10), OBJ mosaic H
+        // = 4, WIN0 opening at x = 10 (exactly the raw edge). The leading
+        // block [8, 12) is split: x = 8..=9 hold source col 6 from the
+        // WINOUT pass, and x = 10..=11 hold source col 7, restarted by WIN0.
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0: col 0 -> index 1
+        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            2,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                    obj_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: obj_on,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let blue = Bgr555::from_channels(0, 0, 0x1F).to_rgb888();
+        let green = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
+
+        assert_eq!(
+            fb.pixel(8, 0),
+            Some(blue),
+            "x=8 is inside the WINOUT span and holds source col 6"
+        );
+        assert_eq!(
+            fb.pixel(9, 0),
+            Some(blue),
+            "x=9 still holds the WINOUT pass's source col 6 -- its own pass \
+             never rounds past the raw edge"
+        );
+        assert_eq!(
+            fb.pixel(10, 0),
+            Some(green),
+            "x=10 restarts at the WIN0 span, which starts exactly at the raw \
+             edge and seeds source col 7 (inX - 1)"
+        );
+        assert_eq!(
+            fb.pixel(11, 0),
+            Some(green),
+            "x=11 still holds the WIN0 pass's restarted source col 7"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_trailing_spill_needs_its_owning_span_to_draw_obj() {
+        // mGBA skips a span's sprite pass entirely when its control disables
+        // OBJ (`video-software.c:1052-1062`); an identity matrix's later
+        // OBJ-enabled span still fails its own bounds test, so the spill
+        // stays unwritten (`software-obj.c:241`, `49-70`).
+        //
+        // Identity 8x8 affine OBJ at x = 1 (raw right edge 9), OBJ mosaic
+        // H = 4, WIN0 opening at x = 10 with OBJ on, WINOUT with OBJ off. The
+        // spill columns x = 10..=11 belong to the skipped WINOUT pass, so the
+        // backdrop shows through.
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0: col 0 -> index 1
+        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            1,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::IDENTITY];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+        let backdrop = Bgr555::from_channels(0x1F, 0x1F, 0).to_rgb888();
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                    obj_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: WindowLayerEnable::NONE,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            backdrop,
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        assert_eq!(
+            fb.pixel(9, 0),
+            Some(backdrop),
+            "x=9 is inside the WINOUT span, which disables OBJ"
+        );
+        assert_eq!(
+            fb.pixel(10, 0),
+            Some(backdrop),
+            "x=10 is WIN0's spill column, but the WINOUT pass that owns the \
+             trailing rounding never ran"
+        );
+        assert_eq!(
+            fb.pixel(11, 0),
+            Some(backdrop),
+            "x=11 is likewise unwritten by the skipped WINOUT pass"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_trailing_spill_renders_from_a_later_obj_enabled_span() {
+        // Same geometry as
+        // `affine_obj_mosaic_trailing_spill_needs_its_owning_span_to_draw_obj`,
+        // but the matrix mirrors x (pa = -1.0): mGBA reruns the trailing-edge
+        // rounding in every span whose own end doesn't bind it, so the
+        // OBJ-enabled WIN0 pass draws the spill itself once the skipped
+        // WINOUT pass leaves it unwritten (`software-obj.c:227-242`).
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0: col 0 -> index 1
+        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            1,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 })];
+        let matrices = [AffineMatrix::new(
+            -AffineMatrix::ONE,
+            0,
+            0,
+            AffineMatrix::ONE,
+        )];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+        let backdrop = Bgr555::from_channels(0x1F, 0x1F, 0).to_rgb888();
+        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
+                    obj_on,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: WindowLayerEnable::NONE,
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            backdrop,
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        assert_eq!(
+            fb.pixel(9, 0),
+            Some(backdrop),
+            "x=9 is inside the WINOUT span, which disables OBJ"
+        );
+        assert_eq!(
+            fb.pixel(10, 0),
+            Some(red),
+            "x=10 is the WIN0 pass's own first column: it rounds the trailing \
+             edge to 12 itself and seeds source col 0"
+        );
+        assert_eq!(
+            fb.pixel(11, 0),
+            Some(red),
+            "x=11 still holds the WIN0 pass's source col 0"
         );
     }
 
