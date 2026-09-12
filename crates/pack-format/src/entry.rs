@@ -291,10 +291,8 @@ pub fn image_entry_from_tiles(
         .map_err(|_| too_large())?;
     pixels.resize(raster_len, 0u8);
     if needed_tiles == 0 {
-        // A zero-tile grid (`width_px` or `height_px` is 0) has no tiles to
-        // walk, and an unpaired huge `mw`/`mh` would otherwise overflow the
-        // `per_metatile` product below for no reason: the metatile shape
-        // only has to divide a grid that does not exist.
+        // Skip `per_metatile`: an oversized metatile shape need not divide a grid
+        // that does not exist, and could overflow the product.
         return image_entry(id, width_px, height_px, bit_depth, pixels);
     }
     let metatiles_wide = (tiles_wide / mw) as usize;
@@ -391,10 +389,8 @@ pub fn tiles_from_image(
 
     let tile_count = (tiles_wide as usize) * (tiles_high as usize);
     if tile_count == 0 {
-        // A zero-tile grid (`width_px` or `height_px` is 0) has no tiles to
-        // walk, and an unpaired huge `mw`/`mh` would otherwise overflow the
-        // `per_metatile` product below for no reason: the metatile shape
-        // only has to divide a grid that does not exist.
+        // Skip `per_metatile`: an oversized metatile shape need not divide a grid
+        // that does not exist, and could overflow the product.
         return Ok(Vec::new());
     }
     let metatiles_wide = (tiles_wide / mw) as usize;
