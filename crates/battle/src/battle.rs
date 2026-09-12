@@ -12,7 +12,7 @@
 //! (`src/battle_main.c:3140`, `:3852`-`:3861`, `:3923`, `:4013`).
 
 use assets::trainers::TrainerId;
-use assets::MoveId;
+use assets::{AbilityId, MoveId, MoveTarget};
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::defense_curl;
@@ -740,8 +740,9 @@ impl Battle {
             });
             return Ok(());
         }
+        let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         if player_is_attacker {
-            self.player.deduct_pp(slot)?;
+            self.player.deduct_pp_by(slot, pp_cost)?;
         } else if self.enemy.moves()[slot].pp == 0 {
             events.push(BattleEvent::FailedNoPp {
                 by_player: false,
@@ -749,9 +750,38 @@ impl Battle {
             });
             return Ok(());
         } else {
-            self.enemy.deduct_pp(slot)?;
+            self.enemy.deduct_pp_by(slot, pp_cost)?;
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// PP a move spends: two against a distinct target with Pressure, one
+    /// otherwise (`battle_script_commands.c:1205`-`:1228`). This battle owns
+    /// exactly one battler per side, so every non-self-targeting move's
+    /// static target reduces to "the opposing battler," matching upstream's
+    /// per-branch Pressure counts once doubles' extra slots are absent.
+    ///
+    /// This reads each move's *static* target field, like upstream's own
+    /// `gBattleMoves[gCurrentMove].target` does. A move whose script
+    /// redirects it to the user at selection time despite a non-`USER`
+    /// static target (non-Ghost Curse, `data/battle_moves.h`) would need
+    /// that redirection modelled before reaching this method; none of the
+    /// currently admitted move effects do that yet.
+    fn move_pp_cost(&self, player_is_attacker: bool, move_id: MoveId) -> Result<u8, BattleError> {
+        let target = self.dex.move_data(move_id)?.target;
+        if target == MoveTarget::USER {
+            return Ok(1);
+        }
+        let defender = if player_is_attacker {
+            &self.enemy
+        } else {
+            &self.player
+        };
+        if defender.ability() == AbilityId::PRESSURE {
+            Ok(2)
+        } else {
+            Ok(1)
+        }
     }
 
     fn resolve_enemy_action(
