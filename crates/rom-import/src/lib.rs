@@ -419,8 +419,12 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 ///
 /// On Windows the handle also shares nothing (`share_mode(0)`, the same
 /// deny-all `create_new_exclusive` uses in
-/// `crates/engine/src/save/file/staging.rs`), which is what
-/// [`is_the_created_file`]'s non-unix arm rests on.
+/// `crates/engine/src/save/file/staging.rs`), which keeps any other Windows
+/// opener from renaming or deleting `out_path`'s own entry while the handle
+/// lives -- but not from retargeting an *ancestor* directory symlink or
+/// junction `out_path` walks through, which the hold never touches.
+/// [`is_the_created_file`]'s non-unix arm layers a metadata identity check
+/// on top of the hold for exactly that gap.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
@@ -469,20 +473,37 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
     Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
 }
 
-/// Off Unix there is no identity to read back, so this arm rests on what
-/// the hold forbids instead: [`write_new`]'s deny-all share mode bars any
-/// Windows opener from deleting or renaming `path` while `_file` lives, and
-/// this always runs before [`remove_after_with`] gives the handle up. That
-/// leaves [`still_the_created_file`]'s regular-file test as the whole
-/// remaining question, as it does for `is_the_held_file`'s non-unix arm in
-/// `crates/engine/src/save/file/staging.rs`.
+/// Off Unix there is no inode to read back, but Windows still exposes an
+/// identity through the handle `write_new_with` still holds:
+/// `creation_time`, `file_size`, and `last_write_time`
+/// (`std::os::windows::fs::MetadataExt`), read from `file` and compared
+/// against `found`, the entry [`still_the_created_file`] just re-read at
+/// `path`. The kernel stamps creation time once, at create, and nothing
+/// between then and this call touches size or last-write time except
+/// `write_new_with`'s own write, so an unrelated file -- planted directly at
+/// `path`, or reached because a peer retargeted an *ancestor* directory
+/// symlink or junction `write_new`'s `share_mode(0)` never pinned -- would
+/// have to fabricate all three to be mistaken for it.
+///
+/// This is a comparison, not proof of non-collision: two files created and
+/// last written in the same tick at the same length would still compare
+/// equal, the same shape of residual [`remove_after`]'s own doc already
+/// accepts for the window between this check and the removal that follows
+/// it, just measured in fields instead of in time.
 #[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
-)]
-fn is_the_created_file(_file: &std::fs::File, _found: &std::fs::Metadata) -> std::io::Result<bool> {
-    Ok(true)
+fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let created = file.metadata()?;
+    Ok((
+        created.creation_time(),
+        created.file_size(),
+        created.last_write_time(),
+    ) == (
+        found.creation_time(),
+        found.file_size(),
+        found.last_write_time(),
+    ))
 }
 
 /// Whether `path` still names the file `file` holds open, rather than a
@@ -506,8 +527,20 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
 /// nothing stops a peer from replacing `path` in the gap between the kernel
 /// reading this call's last identity check and its own `unlink`, and this
 /// crate has no handle-bound removal that would close that gap outright.
-/// [`remove_after_with`] narrows it to what the platform permits, and every
-/// other mention of the bound in this crate points here.
+/// Reopening `path` with `FILE_FLAG_DELETE_ON_CLOSE` would bind the removal
+/// itself to a handle instead of a name, but that flag takes effect the
+/// moment `CreateFile` succeeds and stable `std` exposes no call that
+/// rescinds it afterward, so checking identity first would only relocate
+/// this race between two reopens, not close it -- this crate keeps the
+/// plain path-based `remove` for that reason. Off Unix the identity read by
+/// the check that runs before it now rests on the created file's
+/// `creation_time`, `file_size`, and `last_write_time` (see
+/// [`is_the_created_file`]), which lets it refuse an entry reached through a
+/// retargeted ancestor symlink or junction that `write_new`'s `share_mode(0)`
+/// alone cannot pin, at the cost of three fields that could in principle
+/// coincide rather than the single stable identity Unix's device and inode
+/// give it. [`remove_after_with`] narrows it to what the platform permits,
+/// and every other mention of the bound in this crate points here.
 ///
 /// Folding a genuine removal failure into `original` instead of discarding
 /// it keeps the diagnosis: silently dropping it would leave a partial file
@@ -891,6 +924,48 @@ mod tests {
         );
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
+        // The peer never touches the created file or its name: it retargets
+        // an *ancestor* link, so the same `out` pathname comes to resolve to
+        // an unrelated regular file in another directory. Only an identity
+        // read of the entry found there can tell cleanup that the name no
+        // longer means the file it created -- a hold on the created file
+        // says nothing about which directory the path now walks through.
+        let dir = TempDir::new("write-cleanup-ancestor-swap");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("the ancestor link");
+        let out = link.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::remove_file(&link).expect("the peer drops the ancestor link");
+            std::os::unix::fs::symlink(&elsewhere, &link)
+                .expect("the peer retargets the ancestor link");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "cleanup must never remove a file the path only reaches through a retargeted ancestor"
+        );
+    }
+
     /// Whether `err` is Windows reporting that an open handle's share mode
     /// admits no one else. `std` categorises `ERROR_SHARING_VIOLATION` on
     /// some Windows versions and not others, so both spellings count
@@ -961,6 +1036,60 @@ mod tests {
         assert_eq!(
             std::fs::read(&replacement).expect("the peer's own file is untouched"),
             b"the replacement"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
+        // The Windows counterpart to the identically named Unix test above:
+        // a directory symlink stands in for the ancestor link a peer
+        // retargets, closing the gap `write_new`'s deny-all `share_mode(0)`
+        // leaves open, since that hold only ever covers `out`'s own entry
+        // and never the directories the path walks through to reach it.
+        // Creating a directory symlink needs `SeCreateSymbolicLinkPrivilege`,
+        // a privilege the test runner may lack, so a `PermissionDenied`
+        // there skips the test rather than failing it.
+        use std::os::windows::fs::symlink_dir;
+
+        let dir = TempDir::new("write-cleanup-ancestor-swap");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        if let Err(err) = symlink_dir(&target, &link) {
+            if err.kind() == std::io::ErrorKind::PermissionDenied {
+                eprintln!(
+                    "skipping cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone: \
+                     creating a directory symlink needs a privilege this test runner lacks: {err}"
+                );
+                return;
+            }
+            panic!("the ancestor link: {err}");
+        }
+        let out = link.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            std::fs::remove_dir(&link).expect("the peer drops the ancestor link");
+            symlink_dir(&elsewhere, &link).expect("the peer retargets the ancestor link");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "cleanup must never remove a file the path only reaches through a retargeted ancestor"
         );
     }
 
