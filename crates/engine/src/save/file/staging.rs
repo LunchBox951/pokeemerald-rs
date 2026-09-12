@@ -2,9 +2,8 @@
 //!
 //! [`SaveFile::write`](super::SaveFile::write) publishes by rename, so the
 //! image must first exist whole and synced at a sibling entry in the same
-//! directory. This module owns that entry: the name it takes, the exclusive
-//! create that claims it, the hold that keeps it, the narrowing retries a
-//! host's real limits force, and the cleanup that abandons it.
+//! directory. This module owns that entry, from the name it takes through
+//! the cleanup that abandons it.
 
 use std::path::{Path, PathBuf};
 
@@ -33,10 +32,7 @@ const WIDEST_EXHAUSTIBLE_HEX_DIGITS: usize = 2;
 
 /// The names a walk at `hex_digits` offers before reporting the namespace
 /// exhausted: every name that width renders, or, past
-/// [`WIDEST_EXHAUSTIBLE_HEX_DIGITS`], as many as that width would. Because
-/// [`StagingArea::names`] steps rather than redraws, a walk over a whole
-/// namespace reaches every name in it, so occupancy alone can never hide the
-/// last free one.
+/// [`WIDEST_EXHAUSTIBLE_HEX_DIGITS`], as many as that width would.
 fn names_offered(hex_digits: usize) -> usize {
     1_usize << (4 * hex_digits.min(WIDEST_EXHAUSTIBLE_HEX_DIGITS))
 }
@@ -65,11 +61,6 @@ pub(super) fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File
 
 /// Stages `bytes` at the first of `names` that `create_new` finds free,
 /// reporting the last collision once they have all turned out to be taken.
-///
-/// The walk is only as long as the names handed to it, and
-/// [`StagingArea::names`] hands over its width's whole namespace wherever
-/// that namespace is small enough to walk. Exhaustion at a narrow width is
-/// therefore reported only once every name the width renders has been tried.
 pub(super) fn stage_at_first_free_name(
     names: impl IntoIterator<Item = PathBuf>,
     create_new: impl Fn(&Path) -> std::io::Result<std::fs::File>,
@@ -94,8 +85,8 @@ pub(super) fn stage_at_first_free_name(
 }
 
 /// Writes and syncs `bytes` into a `path` `create_new` has just claimed,
-/// removing `path` again on any failure past that open so this call never
-/// deletes an entry a different caller put there.
+/// cleaning up through [`StagedSave::remove_after`] on any failure past
+/// that open.
 fn fill_new_file(
     create_new: impl Fn(&Path) -> std::io::Result<std::fs::File>,
     path: &Path,
@@ -287,26 +278,20 @@ fn unique_value_mask(width: usize) -> u64 {
 type Hold = std::fs::File;
 
 /// The handle that wrote the staged image, kept open until the image is
-/// promoted or abandoned. It shares nothing ([`create_new_exclusive`]), so
-/// while it lives the entry cannot be opened, deleted, or renamed at all --
-/// by this process either, which is why it is an `Option`:
+/// promoted or abandoned. [`create_new_exclusive`]'s share mode forbids
+/// renaming or deleting it while any handle stays open, including this
+/// process's own, which is why it is an `Option`:
 /// [`StagedSave::release_hold`] empties it when the name has to be given up.
 #[cfg(windows)]
 type Hold = Option<std::fs::File>;
 
-/// Ends `hold` where the platform needs it ended.
-///
-/// Nothing here is blocked by an open handle, so the hold stays for the
-/// life of the [`StagedSave`]: it is what keeps the staged inode from being
-/// freed and its number reused under the staging name.
+/// Ends `hold` where the platform needs it ended: nothing, since the hold
+/// stays for the life of the [`StagedSave`] (see [`Hold`]).
 #[cfg(not(windows))]
 fn release(_hold: &mut Hold) {}
 
-/// Ends `hold` where the platform needs it ended.
-///
-/// Windows refuses to rename or delete an entry whose open handle shares
-/// nothing, and refuses it to the holder too, so the hold cannot outlive
-/// the last operation that needs the staging name.
+/// Ends `hold` where the platform needs it ended: drops the handle so the
+/// staging name can be renamed or deleted again (see [`Hold`]).
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
     drop(hold.take());
@@ -325,13 +310,13 @@ fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<b
 /// Whether `found` describes the very file `hold` holds open. Off unix
 /// there is no identity to read back -- the Windows file index sits behind
 /// the unstable `windows_by_handle` feature -- so the answer rests on what
-/// the hold forbids rather than on what a reading shows.
+/// the hold forbids (see [`create_new_exclusive`]) rather than on what a
+/// reading shows.
 ///
-/// On Windows it forbids everything: no one can delete or rename the entry
-/// while the hold lives, so its name cannot have come to mean another file,
-/// and [`StagedSave::still_ours`]'s regular-file test is the whole
-/// remaining question. On any other non-unix host the hold is an ordinary
-/// handle, and a regular file that replaced the entry would go undetected.
+/// On Windows that leaves [`StagedSave::still_ours`]'s regular-file test as
+/// the whole remaining question. On any other non-unix host the hold is an
+/// ordinary handle, and a regular file that replaced the entry would go
+/// undetected.
 #[cfg(not(unix))]
 #[expect(
     clippy::unnecessary_wraps,
