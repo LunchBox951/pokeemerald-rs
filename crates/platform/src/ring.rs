@@ -152,7 +152,7 @@ impl Producer {
         let mut head = lock_head(&self.shared.head);
         // Acquire: synchronizes-with the consumer's `Release` `fetch_sub`,
         // so the slots it already read are visible as free before this call
-        // overwrites them. May already be stale-low (the consumer can free
+        // overwrites them. May already be stale-high (the consumer can free
         // more concurrently) — that only makes `space` an underestimate,
         // never wrong in a way that corrupts the buffer.
         let occupied = self.shared.occupied.load(Ordering::Acquire);
@@ -448,24 +448,31 @@ mod tests {
         // Stand in for the producer being preempted while it holds
         // `Shared::head`'s lock: a real scheduler can stall it for an
         // arbitrary slice, far past one callback period.
+        // The stall lasts until `fill` reports back, so a `fill` that waits
+        // on the lock can only report after the hold gives up on it: the
+        // verdict is which side let go first, not how long the host
+        // scheduler happened to take. The hold's timeout is a ceiling for a
+        // regressed `fill`, never a bound this test measures against.
         let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let (filled_tx, filled_rx) = std::sync::mpsc::channel();
         let shared = Arc::clone(&producer.shared);
         let stalled_producer = std::thread::spawn(move || {
             let _guard = lock_head(&shared.head);
             acquired_tx.send(()).expect("receiver dropped");
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            filled_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
         });
         acquired_rx.recv().expect("stalled producer never started");
 
-        let start = std::time::Instant::now();
         let mut out = [9.0; 4];
         consumer.fill(&mut out);
-        let elapsed = start.elapsed();
-        stalled_producer.join().expect("producer thread panicked");
+        let filled_while_stalled = filled_tx.send(()).is_ok();
+        let released_after_fill = stalled_producer.join().expect("producer thread panicked");
 
         assert!(
-            elapsed < std::time::Duration::from_millis(100),
-            "callback fill waited {elapsed:?} on a stalled producer"
+            filled_while_stalled && released_after_fill,
+            "callback fill waited on a stalled producer"
         );
         assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(consumer.underruns(), 0);
