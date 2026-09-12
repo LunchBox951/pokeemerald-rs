@@ -160,3 +160,8 @@ pub use platform::Buttons as AppButtons;
 /// depends on `assets` to decode the pack's typed entries.
 #[cfg(test)]
 mod voicegroup_pack_tests;
+
+/// Synthetic `AssetPack` fixture helpers shared by [`main_menu::tests`] and
+/// [`intro::tests`] (issue #952): see that module's docs.
+#[cfg(test)]
+mod pack_test_support;
