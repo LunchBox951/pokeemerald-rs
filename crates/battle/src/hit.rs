@@ -6,7 +6,7 @@
 //! type immunity still consumes the damage and effect-chance draws. Struggle
 //! skips the trailing effect-chance draw.
 
-use assets::{MoveEffect, MoveId, Type};
+use assets::{AbilityId, MoveEffect, MoveId, Type};
 
 use crate::ability::{huge_power_attack, pinch_boosts_power, suppresses_critical_hits};
 use crate::accuracy::accuracy_check;
@@ -76,6 +76,9 @@ pub enum HitOutcome {
     Miss,
     /// The move connected, but the target was immune.
     NoEffect,
+    /// A Ground move was blocked by the target's Levitate
+    /// (`battle_script_commands.c:1375-1383`).
+    LevitateBlocked,
     /// The move connected and dealt damage.
     Hit {
         /// HP of damage dealt.
@@ -157,6 +160,9 @@ pub struct RawDamage {
     pub damage: u32,
     /// Whether the hit was critical.
     pub is_critical: bool,
+    /// Whether `damage` is zero because a Ground move met a Levitate holder,
+    /// rather than an ordinary type immunity.
+    pub levitate_blocked: bool,
 }
 
 fn roll_critical_hit(
@@ -215,7 +221,9 @@ fn damage_input(
 /// variance.
 ///
 /// The critical-hit draw is skipped when either the caller or defender's
-/// ability suppresses critical hits.
+/// ability suppresses critical hits. A Ground move against a Levitate holder
+/// is zeroed before the type chart is consulted, matching
+/// `Cmd_typecalc`'s dedicated Levitate branch upstream.
 ///
 /// # Errors
 ///
@@ -255,8 +263,13 @@ pub fn damage_before_roll(
     } else {
         damage_after_critical
     };
+    let levitate_blocked = move_id != STRUGGLE
+        && move_type == Type::Ground
+        && defender.ability() == AbilityId::LEVITATE;
     let damage = if move_id == STRUGGLE {
         damage_after_charge
+    } else if levitate_blocked {
+        0
     } else {
         let damage_after_stab = apply_stab(
             damage_after_charge,
@@ -268,6 +281,7 @@ pub fn damage_before_roll(
     Ok(RawDamage {
         damage,
         is_critical,
+        levitate_blocked,
     })
 }
 
@@ -300,7 +314,11 @@ pub fn damage_core(
     let damage = apply_damage_roll(raw_damage.damage, rng);
 
     if damage == 0 {
-        Ok(HitOutcome::NoEffect)
+        if raw_damage.levitate_blocked {
+            Ok(HitOutcome::LevitateBlocked)
+        } else {
+            Ok(HitOutcome::NoEffect)
+        }
     } else {
         Ok(HitOutcome::Hit {
             damage,
