@@ -194,6 +194,28 @@ pub(super) fn run_on_transition_map_script(
 }
 
 impl OverworldPhase {
+    /// Upstream's own `ClearTempFieldEventData`-before-`RunOnTransitionMapScript`
+    /// order, shared by `LoadMapFromWarp` (`src/overworld.c:848,860`) and
+    /// `LoadMapFromCameraTransition` (`:798,807`). Returned uncommitted --
+    /// callers assign it to `self.save1.event_data` only once their own load
+    /// succeeds.
+    fn prepare_map_entry_event_data(
+        &self,
+        map: assets::MapId,
+        player_gender: engine::save::PlayerGender,
+    ) -> engine::event_data::EventData {
+        let mut event_data = self.save1.event_data.clone();
+        event_data.clear_temp_field_event_data();
+        run_on_transition_map_script(map, &mut event_data);
+        super::first_battle_trigger::sync_route_101_state_on_entry(map, &mut event_data);
+        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            map,
+            &mut event_data,
+            player_gender,
+        );
+        event_data
+    }
+
     /// Execute a [`engine::overworld::WarpTrigger::Resolved`] warp: load
     /// `map`'s room ([`overworld::load_room`]) and resolve its `warp_id`-th
     /// warp event's arrival position/elevation ([`warp_destination_position`]),
@@ -238,42 +260,16 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        // `RunOnTransitionMapScript` (`src/overworld.c:860`, in
-        // `LoadMapFromWarp`) -- computed on a scratch clone, before the
-        // scene decodes and before anything reads the destination map's
-        // object events, mirroring upstream's ordering against
-        // `TrySpawnObjectEvents`: `route103_rival_trigger::setup_rival_gfx_id_on_transition`
-        // decides which sprite Route 103's rival object event resolves to
-        // (`crate::overworld::npc`'s own module docs), which the scene
-        // decode below needs to already know. Not committed to
+        // Computed on a scratch clone, before the scene decodes and before
+        // anything reads the destination map's object events, mirroring
+        // upstream's ordering against `TrySpawnObjectEvents` -- see
+        // `Self::prepare_map_entry_event_data`. Not committed to
         // `self.save1.event_data` until the whole warp is known to succeed
         // (module docs' "leaves the player exactly where they stood"
         // failure contract) -- see the assignment near the end of this
         // method.
-        let mut transitioned_event_data = self.save1.event_data.clone();
-        // `ClearTempFieldEventData` (`src/overworld.c:848`, in
-        // `LoadMapFromWarp`, ahead of `RunOnTransitionMapScript` at `:860`):
-        // per-map-load temporary state -- the temp flag/var ranges Route
-        // 103's cuttable-tree object events now make load-bearing
-        // (`FLAG_TEMP_12`/`_13`, `assets::object_event_flags`) -- never
-        // survives into the entered map.
-        transitioned_event_data.clear_temp_field_event_data();
-        run_on_transition_map_script(map, &mut transitioned_event_data);
-        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
-        // `super::first_battle_trigger`'s module docs) -- a no-op unless
-        // `map` is Route 101 itself.
-        super::first_battle_trigger::sync_route_101_state_on_entry(
-            map,
-            &mut transitioned_event_data,
-        );
-        // Route 103's own `VAR_OBJ_GFX_ID_0` rival-sprite setup (issue #248,
-        // `super::route103_rival_trigger`'s module docs) -- a no-op unless
-        // `map` is Route 103 itself.
-        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
-            map,
-            &mut transitioned_event_data,
-            self.save2.player_gender,
-        );
+        let transitioned_event_data =
+            self.prepare_map_entry_event_data(map, self.save2.player_gender);
 
         let Ok(scene) = overworld::load_room_from_source(
             self.pack_source,
@@ -404,18 +400,8 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let mut transitioned_event_data = self.save1.event_data.clone();
-        transitioned_event_data.clear_temp_field_event_data();
-        run_on_transition_map_script(map, &mut transitioned_event_data);
-        super::first_battle_trigger::sync_route_101_state_on_entry(
-            map,
-            &mut transitioned_event_data,
-        );
-        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
-            map,
-            &mut transitioned_event_data,
-            self.save2.player_gender,
-        );
+        let transitioned_event_data =
+            self.prepare_map_entry_event_data(map, self.save2.player_gender);
 
         let Ok(scene) = overworld::load_room_from_source(
             self.pack_source,
@@ -512,18 +498,8 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let mut transitioned_event_data = self.save1.event_data.clone();
-        transitioned_event_data.clear_temp_field_event_data();
-        run_on_transition_map_script(map, &mut transitioned_event_data);
-        super::first_battle_trigger::sync_route_101_state_on_entry(
-            map,
-            &mut transitioned_event_data,
-        );
-        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
-            map,
-            &mut transitioned_event_data,
-            self.save2.player_gender,
-        );
+        let transitioned_event_data =
+            self.prepare_map_entry_event_data(map, self.save2.player_gender);
 
         let Ok(scene) = overworld::load_room_from_source(
             self.pack_source,
@@ -628,38 +604,12 @@ impl OverworldPhase {
             return false;
         };
         // Same "compute on a scratch clone, commit only on success" shape
-        // as `Self::warp_to` (that method's own doc comment): the scene
-        // decode below needs to see the entered map's on-transition effects
-        // -- Route 103's rival-sprite setup among them -- before it ever
-        // runs.
-        let mut transitioned_event_data = self.save1.event_data.clone();
-        // `ClearTempFieldEventData` (`src/overworld.c:798`, in
-        // `LoadMapFromCameraTransition` -- upstream's connection-crossing
-        // load path clears per-map-load temporary state exactly like the
-        // warp path does, ahead of `RunOnTransitionMapScript` at `:807`):
-        // Route 103's cuttable-tree object events make the temp flag range
-        // load-bearing (`FLAG_TEMP_12`/`_13`,
-        // `assets::object_event_flags`), so a stale temp flag must not keep
-        // a tree hidden across a re-entry.
-        transitioned_event_data.clear_temp_field_event_data();
-        run_on_transition_map_script(to_map, &mut transitioned_event_data);
-        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
-        // `super::first_battle_trigger`'s module docs) -- a no-op unless
-        // `to_map` is Route 101 itself.
-        super::first_battle_trigger::sync_route_101_state_on_entry(
-            to_map,
-            &mut transitioned_event_data,
-        );
-        // Route 103's own `VAR_OBJ_GFX_ID_0` rival-sprite setup (issue #248,
-        // `super::route103_rival_trigger`'s module docs) -- a no-op unless
-        // `to_map` is Route 103 itself. This is in fact the one entry point
-        // this port's own connection chain (Littleroot<->Route101<->Oldale<->Route103)
-        // ever reaches Route 103 through.
-        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
-            to_map,
-            &mut transitioned_event_data,
-            self.save2.player_gender,
-        );
+        // as `Self::warp_to` -- see `Self::prepare_map_entry_event_data`.
+        // This is in fact the one entry point this port's own connection
+        // chain (Littleroot<->Route101<->Oldale<->Route103) ever reaches
+        // Route 103's rival-sprite setup through.
+        let transitioned_event_data =
+            self.prepare_map_entry_event_data(to_map, self.save2.player_gender);
 
         let Ok(scene) = overworld::load_room_from_source(
             self.pack_source,
