@@ -150,13 +150,13 @@ impl Drop for TempPack {
     }
 }
 
-/// Issue #795: the I-6 round trip above proves the *save*, but a
-/// continuable save with a chosen window-frame option must also *render*
-/// with it -- `MainMenu_FormatSavegameText`'s own box, and every other
+/// Issue #795: the I-6 round trip in `save_continue_tests` proves the
+/// *save*, but a continuable save with a chosen window-frame option must
+/// also *render* with it -- `MainMenu_FormatSavegameText`'s own box, and every other
 /// main-menu box, borders with `GetWindowFrameTilesPal(gSaveBlock2Ptr->
 /// optionsWindowFrameType)` (`main_menu.c:2191-2193`), not always
 /// `WINDOW_FRAME_TYPE_0`. Drives the real write/reload
-/// [`a_saved_game_reloads_into_an_overworld_phase_that_matches_it`] does,
+/// [`super::save_continue_tests::a_saved_game_reloads_into_an_overworld_phase_that_matches_it`] does,
 /// then feeds the recovered save through [`menu_type_for`]/
 /// [`window_frame_for`] into [`MainMenuScene::from_pack_with_window_frame`]
 /// -- the exact same two pure decisions, called the exact same way, as
