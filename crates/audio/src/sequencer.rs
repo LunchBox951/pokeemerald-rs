@@ -1937,6 +1937,54 @@ mod tests {
     }
 
     #[test]
+    fn decoded_pattern_notes_inherit_each_callers_key() {
+        let bytes = [
+            0xBD, 0, 0xCF, 60, 127, 0xB3, 19, 0, 0, 0, 0xCF, 72, 127, 0xB3, 19, 0, 0, 0, 0xB0,
+            0xCF, 0xB4,
+        ];
+        let events = decode_track(&bytes).unwrap();
+        let wave = Arc::new(WaveData::looping(0, 0, vec![100]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let mut sequencer = Sequencer::new(Song::new(voices, vec![events], 150));
+        let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+        sequencer.render_frame(&mut output);
+
+        let mut keys: Vec<_> = sequencer
+            .mixer
+            .voices()
+            .iter()
+            .map(|voice| voice.midi_key())
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec![60, 60, 72, 72]);
+    }
+
+    #[test]
+    fn decoded_memory_branch_preserves_each_runtime_paths_note() {
+        let bytes = [
+            0xBD, 0, 0xCF, 60, 127, 0xB9, 6, 0, 1, 16, 0, 0, 0, 0xCF, 72, 127, 0xCF, 0xB0, 0xB1,
+        ];
+        let events = decode_track(&bytes).unwrap();
+        for (memory, expected) in [(0, vec![60, 72, 72]), (1, vec![60, 60])] {
+            let wave = Arc::new(WaveData::looping(0, 0, vec![100]));
+            let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+            let mut sequencer = Sequencer::new(Song::new(voices, vec![events.clone()], 150));
+            sequencer.mem_acc.write(0, memory);
+            let mut output = vec![0.0; Sequencer::FRAME_SAMPLES];
+            sequencer.render_frame(&mut output);
+
+            let mut keys: Vec<_> = sequencer
+                .mixer
+                .voices()
+                .iter()
+                .map(|voice| voice.midi_key())
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(keys, expected, "memory cell = {memory}");
+        }
+    }
+
+    #[test]
     fn mix_into_renders_multiple_frames() {
         let track = vec![
             Event::Voice(0),
