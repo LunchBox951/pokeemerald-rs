@@ -7,8 +7,6 @@ use assets::pack::{AssetPack, ImageRef, PackError};
 use rendering::{Bgr555, Framebuffer, Rgb888};
 
 const DARKEN_WEIGHT: u8 = 7;
-const IMAGE_KIND_TAG: u8 = 0;
-const PALETTE_KIND_TAG: u8 = 1;
 const FONT_BIT_DEPTH: u8 = 2;
 const FRAME_BIT_DEPTH: u8 = 4;
 const FRAME_SIDE: u32 = 24;
@@ -244,123 +242,50 @@ fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
         Bgr555::from_channels(31, 31, 31).to_rgb888()
     );
 }
-struct SyntheticPackEntry {
-    asset_id: &'static str,
-    kind_tag: u8,
-    metadata: Vec<u8>,
-    payload: Vec<u8>,
-}
-
-fn write_synthetic_pack(mut entries: Vec<SyntheticPackEntry>) -> Vec<u8> {
-    entries.sort_by(|left, right| left.asset_id.cmp(right.asset_id));
-
-    let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
-    let mut directory_size = 0usize;
-    for entry in &entries {
-        directory_size += size_of::<u16>()
-            + entry.asset_id.len()
-            + size_of::<u8>()
-            + size_of::<u64>()
-            + size_of::<u64>()
-            + entry.metadata.len();
-    }
-    let mut offset = header_size + directory_size;
-    let mut payload_offsets = Vec::new();
-    for entry in &entries {
-        payload_offsets.push(offset);
-        offset += entry.payload.len();
-    }
-
-    let mut pack_bytes = Vec::new();
-    pack_bytes.extend_from_slice(&assets::pack::MAGIC);
-    pack_bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    pack_bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
-    for (entry, &payload_offset) in entries.iter().zip(&payload_offsets) {
-        pack_bytes.extend_from_slice(&u16::try_from(entry.asset_id.len()).unwrap().to_le_bytes());
-        pack_bytes.extend_from_slice(entry.asset_id.as_bytes());
-        pack_bytes.push(entry.kind_tag);
-        pack_bytes.extend_from_slice(&u64::try_from(payload_offset).unwrap().to_le_bytes());
-        pack_bytes.extend_from_slice(&u64::try_from(entry.payload.len()).unwrap().to_le_bytes());
-        pack_bytes.extend_from_slice(&entry.metadata);
-    }
-    for entry in &entries {
-        pack_bytes.extend_from_slice(&entry.payload);
-    }
-    pack_bytes
-}
-
-fn image_metadata(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
-    let mut metadata = Vec::new();
-    metadata.extend_from_slice(&width.to_le_bytes());
-    metadata.extend_from_slice(&height.to_le_bytes());
-    metadata.push(bit_depth);
-    metadata
-}
-
-fn palette_metadata(color_count: u16) -> Vec<u8> {
-    color_count.to_le_bytes().to_vec()
-}
-
-fn palette_with_color(index: u8, color: Bgr555) -> Vec<u8> {
-    let mut palette = vec![0u8; usize::from(PALETTE_COLOUR_COUNT) * size_of::<u16>()];
-    let offset = usize::from(index) * size_of::<u16>();
-    palette[offset..offset + size_of::<u16>()].copy_from_slice(&color.raw().to_le_bytes());
-    palette
-}
 
 fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
-    let frame_pixel_count = usize::try_from(FRAME_SIDE * FRAME_SIDE).unwrap();
-    let frame0_pixels = vec![FRAME_BORDER_PALETTE_INDEX; frame_pixel_count];
-    let frame0_palette =
-        palette_with_color(FRAME_BORDER_PALETTE_INDEX, Bgr555::from_channels(0, 31, 0));
-    let frame5_pixels = vec![FRAME_BORDER_PALETTE_INDEX; frame_pixel_count];
-    let frame5_palette =
-        palette_with_color(FRAME_BORDER_PALETTE_INDEX, Bgr555::from_channels(31, 0, 0));
-    let font_pixels =
-        vec![font_index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
-    let bg_palette = palette_with_color(0, Bgr555::from_channels(4, 4, 16));
+    use crate::pack_test_support::{image_entry, palette_entry_with_color};
 
-    write_synthetic_pack(vec![
-        SyntheticPackEntry {
-            asset_id: "text-window/image/1",
-            kind_tag: IMAGE_KIND_TAG,
-            metadata: image_metadata(FRAME_SIDE, FRAME_SIDE, FRAME_BIT_DEPTH),
-            payload: frame0_pixels,
-        },
-        SyntheticPackEntry {
-            asset_id: "text-window/palette/1",
-            kind_tag: PALETTE_KIND_TAG,
-            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
-            payload: frame0_palette,
-        },
-        SyntheticPackEntry {
-            asset_id: "text-window/image/6",
-            kind_tag: IMAGE_KIND_TAG,
-            metadata: image_metadata(FRAME_SIDE, FRAME_SIDE, FRAME_BIT_DEPTH),
-            payload: frame5_pixels,
-        },
-        SyntheticPackEntry {
-            asset_id: "text-window/palette/6",
-            kind_tag: PALETTE_KIND_TAG,
-            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
-            payload: frame5_palette,
-        },
-        SyntheticPackEntry {
-            asset_id: "font/normal/glyphs",
-            kind_tag: IMAGE_KIND_TAG,
-            metadata: image_metadata(
-                assets::fonts::SHEET_WIDTH,
-                assets::fonts::SHEET_HEIGHT,
-                FONT_BIT_DEPTH,
-            ),
-            payload: font_pixels,
-        },
-        SyntheticPackEntry {
-            asset_id: "interface/palette/main_menu_bg",
-            kind_tag: PALETTE_KIND_TAG,
-            metadata: palette_metadata(PALETTE_COLOUR_COUNT),
-            payload: bg_palette,
-        },
+    crate::pack_test_support::pack_bytes(vec![
+        image_entry(
+            "text-window/image/1",
+            FRAME_SIDE,
+            FRAME_SIDE,
+            FRAME_BIT_DEPTH,
+            FRAME_BORDER_PALETTE_INDEX,
+        ),
+        palette_entry_with_color(
+            "text-window/palette/1",
+            PALETTE_COLOUR_COUNT,
+            FRAME_BORDER_PALETTE_INDEX,
+            Bgr555::from_channels(0, 31, 0),
+        ),
+        image_entry(
+            "text-window/image/6",
+            FRAME_SIDE,
+            FRAME_SIDE,
+            FRAME_BIT_DEPTH,
+            FRAME_BORDER_PALETTE_INDEX,
+        ),
+        palette_entry_with_color(
+            "text-window/palette/6",
+            PALETTE_COLOUR_COUNT,
+            FRAME_BORDER_PALETTE_INDEX,
+            Bgr555::from_channels(31, 0, 0),
+        ),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            FONT_BIT_DEPTH,
+            font_index,
+        ),
+        palette_entry_with_color(
+            "interface/palette/main_menu_bg",
+            PALETTE_COLOUR_COUNT,
+            0,
+            Bgr555::from_channels(4, 4, 16),
+        ),
     ])
 }
 
