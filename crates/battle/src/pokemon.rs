@@ -877,6 +877,21 @@ impl BattlePokemon {
     /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty, or
     /// [`BattleError::NoPpRemaining`] when the slot is exhausted.
     pub fn deduct_pp(&mut self, index: usize) -> Result<(), BattleError> {
+        self.deduct_pp_by(index, 1)
+    }
+
+    /// Deducts `amount` PP from a move slot, saturating at zero rather than
+    /// underflowing (`battle_script_commands.c:1234`-`:1237`).
+    ///
+    /// The caller computes `amount`, incrementing it when the move's target
+    /// has Pressure (`battle_script_commands.c:1205`-`:1228`); this method
+    /// only applies the reduction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty, or
+    /// [`BattleError::NoPpRemaining`] when the slot is already exhausted.
+    pub(crate) fn deduct_pp_by(&mut self, index: usize, amount: u8) -> Result<(), BattleError> {
         let slot = self
             .moves
             .get_mut(index)
@@ -884,7 +899,7 @@ impl BattlePokemon {
         if slot.pp == 0 {
             return Err(BattleError::NoPpRemaining(index));
         }
-        slot.pp -= 1;
+        slot.pp = slot.pp.saturating_sub(amount);
         Ok(())
     }
 
