@@ -37,11 +37,13 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
-    /// Whether `BLDCNT` color effects are enabled for the hardware-window
-    /// span that wrote [`color`](Self::color) — which, for an affine mosaic
-    /// trailing spill, can be an earlier span than the one containing the
-    /// queried column `(behavioral-fidelity)`.
-    pub(crate) effects_enabled: bool,
+    /// The writing span's own `BLDCNT` color-effects enable, when an affine
+    /// mosaic trailing spill wrote [`color`](Self::color) from an earlier
+    /// span than the one containing the queried column. `None` for every
+    /// other pixel, so the caller keeps using the queried column's own
+    /// window (which, unlike a span's own control, also reflects a per-pixel
+    /// `OBJWIN` mask) `(behavioral-fidelity)`.
+    pub(crate) effects_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -281,8 +283,10 @@ impl<'a> SpriteLayer<'a> {
                     continue;
                 }
 
+                // See `sample_affine_local`'s docs for what this changes.
+                let slot_contested = resolved.is_some();
                 let (texel, writer_span) =
-                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans);
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -293,11 +297,13 @@ impl<'a> SpriteLayer<'a> {
                 match (entry.mode(), texel) {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
+                        let spilled = writer_span != window_spans.index_at(x);
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
-                            effects_enabled: window_spans.span_effects_enabled(writer_span),
+                            effects_override: spilled
+                                .then(|| window_spans.span_effects_enabled(writer_span)),
                         });
                     }
                     (mode, Texel::Transparent) => {
@@ -342,8 +348,15 @@ impl<'a> SpriteLayer<'a> {
                 // it never restarts an affine mosaic hold
                 // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(entry, x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
-                        .0,
+                    self.sample_entry_mosaic(
+                        entry,
+                        x,
+                        y,
+                        mosaic,
+                        WindowSpans::WHOLE_SCANLINE,
+                        false
+                    )
+                    .0,
                     Texel::Opaque(_)
                 )
             })
@@ -355,7 +368,7 @@ impl<'a> SpriteLayer<'a> {
     ///
     /// That span matches `x`'s own for every path but an affine mosaic
     /// trailing spill, which can be written by an earlier span; see
-    /// [`Self::sample_affine_local`].
+    /// [`Self::sample_affine_local`] for what `slot_contested` changes there.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
@@ -363,6 +376,7 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
         window_spans: WindowSpans<'_>,
+        slot_contested: bool,
     ) -> (Texel, usize) {
         let own_span = window_spans.index_at(x);
         let mosaic = if entry.mosaic() {
@@ -380,13 +394,22 @@ impl<'a> SpriteLayer<'a> {
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
                 (self.sample_local(entry, dx, ly), own_span)
             } else {
-                self.sample_affine_local(entry, dx, dy, x, y, vertical_only, window_spans)
+                self.sample_affine_local(
+                    entry,
+                    dx,
+                    dy,
+                    x,
+                    y,
+                    vertical_only,
+                    window_spans,
+                    slot_contested,
+                )
             }
         } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
             (self.sample_local(entry, lx, ly), own_span)
         } else {
-            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans)
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans, slot_contested)
         }
     }
 
@@ -470,11 +493,13 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Samples an affine entry from one footprint-local coordinate for each
-    /// horizontal mosaic block, seeding each hardware-window span's mosaic
-    /// hold from `inX - 1` at that span's own start
-    /// (`software-obj.c:227-242`). Returns the sampled texel alongside the
-    /// index of the span that produced it.
+    /// Samples an affine entry from one footprint-local coordinate per
+    /// mosaic block, seeding each window span's hold from `inX - 1` at its
+    /// own start, and returns the texel with the span that wrote it
+    /// (`software-obj.c:227-242`). `slot_contested` mirrors mGBA's
+    /// same-entry write lock: a contested pixel stops the spill search at
+    /// the first candidate span, an unclaimed one prefers the first opaque
+    /// one (`software-obj.c:79-85`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -483,7 +508,7 @@ impl<'a> SpriteLayer<'a> {
     )]
     #[expect(
         clippy::too_many_arguments,
-        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, window spans)"
+        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, window spans, slot contention)"
     )]
     fn sample_affine_local(
         &self,
@@ -494,6 +519,7 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
         window_spans: WindowSpans<'_>,
+        slot_contested: bool,
     ) -> (Texel, usize) {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
@@ -526,21 +552,27 @@ impl<'a> SpriteLayer<'a> {
             );
         }
 
-        // `dx` past the sprite's own width exists only because
-        // `Self::footprint` rounds the trailing edge out to a screen-aligned
-        // block; every OBJ-drawing span from the raw edge through `x` reran
-        // that rounding and could have written it. A transparent source
-        // leaves an unwritten sprite-buffer slot alone rather than
-        // overwriting it, so a later span's opaque write still lands there
-        // (`software-obj.c:227-239`, `video-software.c:1052-1062`) — search
-        // every candidate span for the first opaque result, and fall back to
-        // the first transparent one only when none is opaque.
         let raw_edge = (entry_x + width as i32).max(0) as usize;
         let last_span = window_spans.index_at(x);
+        let candidate_spans = (window_spans.index_at(raw_edge)..=last_span)
+            .filter(|&span| window_spans.span_draws_obj(span));
+
+        if slot_contested {
+            // A contested slot blocks every span but this entry's first
+            // candidate one, so take that first result, whatever it is.
+            return candidate_spans
+                .map(|span| {
+                    (
+                        sample_from_span_start(window_spans.span_start(span) as i32),
+                        span,
+                    )
+                })
+                .find(|(texel, _)| !matches!(texel, Texel::Outside))
+                .unwrap_or((Texel::Outside, last_span));
+        }
+
         let mut transparent_fallback = None;
-        for span in (window_spans.index_at(raw_edge)..=last_span)
-            .filter(|&span| window_spans.span_draws_obj(span))
-        {
+        for span in candidate_spans {
             let texel = sample_from_span_start(window_spans.span_start(span) as i32);
             if matches!(texel, Texel::Opaque(_)) {
                 return (texel, span);
