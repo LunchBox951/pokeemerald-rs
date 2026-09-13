@@ -425,7 +425,12 @@ fn levitate_refuses(defender: &BattlePokemon, move_type: Type) -> bool {
 }
 
 /// Whether `candidate` knows a damaging move super effective against
-/// `player`.
+/// `player`. An immunity row is terminal for this flag, unlike for
+/// [`most_suitable_type_effectiveness`]'s running damage: it leaves
+/// `MOVE_RESULT_DOESNT_AFFECT_FOE` set, so a later super-effective row fails
+/// its `MOVE_RESULT_NO_EFFECT` guard and never sets the bit the selector
+/// tests (`pokeemerald/src/battle_script_commands.c:1525`;
+/// `pokeemerald/include/constants/battle.h:228`).
 fn has_super_effective_move(
     dex: &Dex,
     candidate: &BattlePokemon,
@@ -768,6 +773,50 @@ mod tests {
             context.most_suitable_by_type(&dex, &player),
             Ok(Some(1)),
             "Levitate disqualifies Earthquake, so the best typing is invalidated"
+        );
+    }
+
+    /// The super-effective check reads `TypeCalc`'s flags, where an immunity
+    /// row is terminal: against Gligar (Ground/Flying) the table's
+    /// Electric->Ground no-effect row (`pokeemerald/src/battle_main.c:356`)
+    /// sets `MOVE_RESULT_DOESNT_AFFECT_FOE`, so the Electric->Flying
+    /// super-effective row that follows (`:357`) refloors the damage to one
+    /// but fails its `MOVE_RESULT_NO_EFFECT` guard
+    /// (`battle_script_commands.c:1525`;
+    /// `pokeemerald/include/constants/battle.h:228`) and leaves
+    /// `MOVE_RESULT_SUPER_EFFECTIVE` clear. Thunder Shock therefore cannot
+    /// qualify the Torchic that wins the typing score, and the pass
+    /// invalidates it for the Mudkip whose Water Gun doubles against Ground.
+    #[test]
+    fn the_typing_pass_rejects_a_super_effective_row_behind_an_immunity_row() {
+        const GLIGAR: SpeciesId = SpeciesId(207);
+        const TORCHIC: SpeciesId = SpeciesId(280);
+        const MUDKIP: SpeciesId = SpeciesId(283);
+        const THUNDER_SHOCK: MoveId = MoveId(84);
+        const WATER_GUN: MoveId = MoveId(55);
+        const TACKLE: MoveId = MoveId(33);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let player = mon(GLIGAR, 50, vec![TACKLE]);
+        let bench = vec![
+            mon(TORCHIC, 5, vec![THUNDER_SHOCK]),
+            mon(MUDKIP, 5, vec![WATER_GUN]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_type(&dex, &player),
+            Ok(Some(1)),
+            "Ground's immunity keeps Thunder Shock from ever reading as super \
+             effective"
         );
     }
 
