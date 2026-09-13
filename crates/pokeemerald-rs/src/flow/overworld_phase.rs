@@ -52,6 +52,7 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
+mod animated_door;
 mod connections;
 mod first_battle_conclusion;
 mod first_battle_trigger;
