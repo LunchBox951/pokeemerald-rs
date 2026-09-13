@@ -554,6 +554,96 @@ fn attacking_and_defending_stat_select_by_category() {
     );
 }
 
+/// `SPECIES_MACHOP`: Guts in its primary ability slot.
+const MACHOP: SpeciesId = SpeciesId(66);
+/// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
+const MILOTIC: SpeciesId = SpeciesId(329);
+
+#[test]
+fn attacking_stat_raises_only_a_statused_guts_holders_physical_attack() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, MACHOP, 5, MAX_IVS, 0, vec![TACKLE]).unwrap();
+    assert_eq!(mon.ability(), AbilityId::GUTS);
+    let raw_attack = mon.stats().attack;
+    let boosted_attack = 150 * raw_attack / 100;
+
+    assert_eq!(
+        mon.attacking_stat(MoveCategory::Physical),
+        (raw_attack, StatStage::NEUTRAL),
+        "a healthy Guts holder's physical Attack is unmodified"
+    );
+    assert_eq!(
+        mon.attacking_stat(MoveCategory::Special),
+        (mon.stats().sp_attack, StatStage::NEUTRAL),
+        "Guts never touches Special Attack, healthy or not"
+    );
+
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        mon.set_status1(status);
+        assert_eq!(
+            mon.attacking_stat(MoveCategory::Physical),
+            (boosted_attack, StatStage::NEUTRAL),
+            "{status:?}"
+        );
+        assert_eq!(
+            mon.attacking_stat(MoveCategory::Special),
+            (mon.stats().sp_attack, StatStage::NEUTRAL),
+            "{status:?}: Special Attack still never changes"
+        );
+    }
+}
+
+#[test]
+fn defending_stat_raises_only_a_statused_marvel_scale_holders_physical_defense() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, MILOTIC, 5, MAX_IVS, 0, vec![TACKLE]).unwrap();
+    assert_eq!(mon.ability(), AbilityId::MARVEL_SCALE);
+    let raw_defense = mon.stats().defense;
+    let boosted_defense = 150 * raw_defense / 100;
+
+    assert_eq!(
+        mon.defending_stat(MoveCategory::Physical),
+        (raw_defense, StatStage::NEUTRAL),
+        "a healthy Marvel Scale holder's physical Defense is unmodified"
+    );
+    assert_eq!(
+        mon.defending_stat(MoveCategory::Special),
+        (mon.stats().sp_defense, StatStage::NEUTRAL),
+        "Marvel Scale never touches Special Defense, healthy or not"
+    );
+
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        mon.set_status1(status);
+        assert_eq!(
+            mon.defending_stat(MoveCategory::Physical),
+            (boosted_defense, StatStage::NEUTRAL),
+            "{status:?}"
+        );
+        assert_eq!(
+            mon.defending_stat(MoveCategory::Special),
+            (mon.stats().sp_defense, StatStage::NEUTRAL),
+            "{status:?}: Special Defense still never changes"
+        );
+    }
+}
+
+#[test]
+fn a_statused_but_unrelated_ability_leaves_both_accessors_unmodified() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, BULBASAUR, 5, MAX_IVS, 0, vec![TACKLE]).unwrap();
+    assert_ne!(mon.ability(), AbilityId::GUTS);
+    assert_ne!(mon.ability(), AbilityId::MARVEL_SCALE);
+    mon.set_status1(Status1::Paralysed);
+    assert_eq!(
+        mon.attacking_stat(MoveCategory::Physical),
+        (mon.stats().attack, StatStage::NEUTRAL)
+    );
+    assert_eq!(
+        mon.defending_stat(MoveCategory::Physical),
+        (mon.stats().defense, StatStage::NEUTRAL)
+    );
+}
+
 #[test]
 fn effective_speed_applies_the_speed_stage() {
     let dex = Dex::new();

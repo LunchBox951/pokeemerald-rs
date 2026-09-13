@@ -160,6 +160,19 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
+    /// Return whether `ply_endtie` may select this envelope's channel: not
+    /// merely non-stopping, since an automatic pseudo-echo tail also fails
+    /// upstream's `START | ENV` match test (`m4a_1.s:1835`..`:1848`,
+    /// `m4a.c:1090`..`:1129`).
+    #[must_use]
+    pub(crate) fn is_end_tie_eligible(&self) -> bool {
+        !self.note_off_requested
+            && matches!(
+                self.phase,
+                Phase::Starting | Phase::Attack | Phase::Decay | Phase::Sustain
+            )
+    }
+
     /// The pacing this phase's NRx2 store programs, decoded by
     /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
     /// direction bit and no step time, leaving hardware dead at its last

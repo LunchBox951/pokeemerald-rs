@@ -4,7 +4,7 @@
 //!
 //! The *integration* half -- the same menu writing a real save through an
 //! `crate::flow::overworld_phase::OverworldPhase` and reloading it -- lives
-//! in `crate::flow::save_continue_tests`.
+//! in `crate::flow::save_continue_tests` and its `save_continue_*` siblings.
 
 use super::{
     menu_height, synthetic_start_menu, SaveMode, SaveTarget, StartMenu, StartMenuItem,
@@ -59,8 +59,8 @@ impl SaveTarget for FakeTarget {
     }
 
     /// Fixed at MID: this fake exists to drive the menu mechanics, not the
-    /// text-speed plumbing (`crate::flow::save_continue_tests` owns that
-    /// coverage against the real `PhaseSaveTarget`), and every frame
+    /// text-speed plumbing (`crate::flow::save_continue_text_speed_tests`
+    /// owns that coverage against the real `PhaseSaveTarget`), and every frame
     /// budget in this file already assumes MID's cadence.
     fn player_text_speed(&self) -> TextSpeed {
         TextSpeed::Mid

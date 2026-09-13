@@ -1,12 +1,13 @@
-use super::{ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
-use crate::ability::{suppresses_critical_hits, HUGE_POWER, PURE_POWER};
+use super::{damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
+use crate::ability::{suppresses_critical_hits, GUTS, HUGE_POWER, MARVEL_SCALE, PURE_POWER};
 use crate::accuracy::always_hits;
-use crate::damage::STRUGGLE;
+use crate::damage::{MoveCategory, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
 
@@ -19,10 +20,23 @@ const GASTLY: SpeciesId = SpeciesId(92);
 const MARILL: SpeciesId = SpeciesId(183);
 const MEDITITE: SpeciesId = SpeciesId(356);
 const ANORITH: SpeciesId = SpeciesId(390);
+/// `SPECIES_MAKUHITA`: Guts in ability slot 1 (Thick Fat is slot 0).
+const MAKUHITA: SpeciesId = SpeciesId(335);
+/// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
+const MILOTIC: SpeciesId = SpeciesId(329);
+/// `SPECIES_BUTTERFREE`: Compound Eyes in its primary (and only) ability slot.
+const BUTTERFREE: SpeciesId = SpeciesId(12);
+/// `SPECIES_REMORAID`: Hustle in its primary (and only) ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
 
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const HORN_DRILL: MoveId = MoveId(32);
 const TACKLE: MoveId = MoveId(33);
+/// `MOVE_BONE_RUSH` -- `EFFECT_MULTI_HIT`, Ground. Used below only for its
+/// typing: no admitted `is_ordinary_hit_effect` move is Ground-type, so
+/// [`damage_core`] is exercised directly instead of through [`resolve_hit`],
+/// which would reject Bone Rush's effect at [`ensure_resolvable`].
+const BONE_RUSH: MoveId = MoveId(198);
 const GROWL: MoveId = MoveId(45);
 const SONIC_BOOM: MoveId = MoveId(49);
 const WATER_GUN: MoveId = MoveId(55);
@@ -36,6 +50,8 @@ const CURSE: MoveId = MoveId(174);
 const FALSE_SWIPE: MoveId = MoveId(206);
 const PURSUIT: MoveId = MoveId(228);
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
+/// Normal-type (physical), 75 accuracy.
+const SLAM: MoveId = MoveId(21);
 
 const THICK_FAT: AbilityId = AbilityId(47);
 
@@ -50,6 +66,14 @@ const MAX_IVS: Ivs = Ivs {
 
 const ACCURACY_HIT_DRAW: u16 = 0;
 const TACKLE_MISS_DRAW: u16 = 95;
+/// Slam's plain 75 threshold misses roll 91, but Compound Eyes raises the
+/// threshold to `75 * 130 / 100 = 97`, which the same roll clears
+/// (`battle_script_commands.c:1152-1153`).
+const COMPOUND_EYES_ONLY_HIT_DRAW: u16 = 90;
+/// Slam's plain 75 threshold hits roll 66, but Hustle lowers a physical
+/// move's threshold to `75 * 80 / 100 = 60`, which the same roll exceeds
+/// (`battle_script_commands.c:1156-1157`).
+const HUSTLE_ONLY_MISS_DRAW: u16 = 65;
 const ORDINARY_CRIT_DRAW: u16 = 0;
 const ORDINARY_NO_CRIT_DRAW: u16 = 1;
 const HIGH_CRIT_ONLY_DRAW: u16 = 8;
@@ -86,6 +110,16 @@ const THICK_FAT_MARILL_TACKLE_DAMAGE: u32 = 3;
 const HUGE_POWER_MARILL_TACKLE_DAMAGE: u32 = 5;
 const PURE_POWER_MEDITITE_TACKLE_DAMAGE: u32 = 6;
 const HUGE_POWER_BEFORE_STAGE_DAMAGE: u32 = 8;
+/// L5 Makuhita (12 raw Attack) versus L5 Milotic (14 raw Defense), Tackle,
+/// best roll, no boost active on either side.
+const HEALTHY_MAKUHITA_TACKLE_DAMAGE: u32 = 4;
+/// The same matchup with the Makuhita attacker paralysed or poisoned, so
+/// Guts raises its raw Attack from 12 to 18 before the stage multiply.
+const GUTS_MAKUHITA_TACKLE_DAMAGE: u32 = 5;
+/// The same base matchup with the Milotic defender paralysed or poisoned, so
+/// Marvel Scale raises its raw Defense from 14 to 21 before the stage
+/// multiply.
+const MARVEL_SCALE_MILOTIC_TACKLE_DAMAGE: u32 = 3;
 
 fn mon(dex: &Dex, species: SpeciesId, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
     BattlePokemon::new(dex, species, level, MAX_IVS, 0, moves).unwrap()
@@ -260,6 +294,38 @@ fn type_immunity_still_draws_critical_damage_and_effect_chance() {
 
     assert_eq!(resolution.outcome, HitOutcome::NoEffect);
     assert_eq!(rng.draws(), ORDINARY_NON_CRITICAL_DRAWS.len());
+}
+
+/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375-1383`).
+/// Pins the ordinary-pipeline half of `damage_before_roll`'s shared boundary
+/// directly via `damage_core`, since no admitted ordinary-hit move is
+/// Ground-type to exercise it through `resolve_hit` end to end (see the
+/// multi-hit turn-level regression for that half via Bone Rush in
+/// `crates/battle/tests/turn_engine/move_resolution.rs`).
+#[test]
+fn levitate_blocks_a_ground_move_before_stab_and_type_effectiveness() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![BONE_RUSH]);
+    let levitate_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome = damage_core(
+        &dex,
+        BONE_RUSH,
+        &attacker,
+        &levitate_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, HitOutcome::LevitateBlocked);
+    assert_eq!(
+        rng.draws(),
+        2,
+        "a Levitate block still spends the critical and damage-variance \
+         draws, exactly like an ordinary type immunity"
+    );
 }
 
 #[test]
@@ -686,4 +752,163 @@ fn huge_power_doubles_raw_attack_before_stat_stage_scaling() {
             is_critical: false,
         }
     );
+}
+
+#[test]
+fn a_statused_guts_attacker_raises_physical_damage() {
+    let dex = Dex::new();
+    let healthy = BattlePokemon::new(&dex, MAKUHITA, 5, MAX_IVS, 0, vec![TACKLE])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_eq!(healthy.ability(), GUTS);
+    let mut statused = healthy.clone();
+    statused.set_status1(Status1::Paralysed);
+    let defender = mon(&dex, MILOTIC, 5, vec![TACKLE]);
+
+    let mut healthy_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let healthy_outcome =
+        resolve_hit(&dex, TACKLE, &healthy, &defender, false, &mut healthy_rng).unwrap();
+    assert_eq!(
+        healthy_outcome.outcome,
+        HitOutcome::Hit {
+            damage: HEALTHY_MAKUHITA_TACKLE_DAMAGE,
+            is_critical: false,
+        }
+    );
+
+    let mut statused_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let statused_outcome =
+        resolve_hit(&dex, TACKLE, &statused, &defender, false, &mut statused_rng).unwrap();
+    assert_eq!(
+        statused_outcome.outcome,
+        HitOutcome::Hit {
+            damage: GUTS_MAKUHITA_TACKLE_DAMAGE,
+            is_critical: false,
+        }
+    );
+}
+
+#[test]
+fn a_statused_marvel_scale_defender_lowers_physical_damage() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, MAKUHITA, 5, vec![TACKLE]);
+    let healthy_defender = mon(&dex, MILOTIC, 5, vec![TACKLE]);
+    assert_eq!(healthy_defender.ability(), MARVEL_SCALE);
+    let mut statused_defender = healthy_defender.clone();
+    statused_defender.set_status1(Status1::Poisoned);
+
+    let mut healthy_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let healthy_outcome = resolve_hit(
+        &dex,
+        TACKLE,
+        &attacker,
+        &healthy_defender,
+        false,
+        &mut healthy_rng,
+    )
+    .unwrap();
+    assert_eq!(
+        healthy_outcome.outcome,
+        HitOutcome::Hit {
+            damage: HEALTHY_MAKUHITA_TACKLE_DAMAGE,
+            is_critical: false,
+        }
+    );
+
+    let mut statused_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let statused_outcome = resolve_hit(
+        &dex,
+        TACKLE,
+        &attacker,
+        &statused_defender,
+        false,
+        &mut statused_rng,
+    )
+    .unwrap();
+    assert_eq!(
+        statused_outcome.outcome,
+        HitOutcome::Hit {
+            damage: MARVEL_SCALE_MILOTIC_TACKLE_DAMAGE,
+            is_critical: false,
+        }
+    );
+}
+
+#[test]
+fn guts_never_touches_special_attack() {
+    let dex = Dex::new();
+    let mut attacker = BattlePokemon::new(&dex, MAKUHITA, 5, MAX_IVS, 0, vec![WATER_GUN])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_eq!(attacker.ability(), GUTS);
+    let healthy_special_attack = attacker.attacking_stat(MoveCategory::Special);
+
+    attacker.set_status1(Status1::Paralysed);
+
+    assert_eq!(
+        attacker.attacking_stat(MoveCategory::Special),
+        healthy_special_attack,
+        "Guts must not touch Special Attack even once its holder is statused"
+    );
+}
+
+#[test]
+fn marvel_scale_never_touches_special_defense() {
+    let dex = Dex::new();
+    let mut defender = mon(&dex, MILOTIC, 5, vec![WATER_GUN]);
+    assert_eq!(defender.ability(), MARVEL_SCALE);
+    let healthy_special_defense = defender.defending_stat(MoveCategory::Special);
+
+    defender.set_status1(Status1::Poisoned);
+
+    assert_eq!(
+        defender.defending_stat(MoveCategory::Special),
+        healthy_special_defense,
+        "Marvel Scale must not touch Special Defense even once its holder is statused"
+    );
+}
+
+#[test]
+fn compound_eyes_raises_the_accuracy_threshold_of_an_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BUTTERFREE, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::COMPOUND_EYES);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([
+        COMPOUND_EYES_ONLY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        DISCARDED_EFFECT_DRAW,
+    ]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert!(
+        matches!(resolution.outcome, HitOutcome::Hit { .. }),
+        "roll 91 is within Compound Eyes' 97 threshold: {:?}",
+        resolution.outcome
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "a Compound Eyes hit continues through the remaining move draws"
+    );
+}
+
+#[test]
+fn hustle_lowers_the_accuracy_threshold_of_a_physical_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::HUSTLE);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([HUSTLE_ONLY_MISS_DRAW]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::Miss,
+        "roll 66 exceeds Hustle's 60 threshold"
+    );
+    assert_eq!(rng.draws(), 1, "a miss stops immediately");
 }

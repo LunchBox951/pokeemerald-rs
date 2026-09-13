@@ -30,7 +30,9 @@ use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
 use crate::extract::voicegroups::{index_voicegroup_sources, parser};
 
 use super::error::GenRomProfileError;
-use super::locate::{exactly_one, only_one_matching, slice_at_addr, to_offset, u32_at_addr};
+use super::locate::{
+    exactly_one, only_one_matching, slice_at_addr, to_offset, u16_at_addr, u32_at_addr,
+};
 use super::plan::{
     AudioPlan, KeysplitPlan, ReportLine, Resolution, SamplePlan, SongPlan, SymbolExpectation,
     VoicegroupPlan,
@@ -39,6 +41,8 @@ use super::Context;
 
 /// A `WaveData` header is a type, a status, and three `u32` fields.
 const WAVE_HEADER_BYTES: u32 = 16;
+/// `WaveData.status`'s loop-in-progress bit, mirroring `rom-import`'s reader.
+const WAVE_STATUS_LOOP: u16 = 0x4000;
 /// One `ToneData` slot is 12 bytes.
 const SLOT_BYTES: u32 = 12;
 /// Offset of a slot's data pointer.
@@ -242,20 +246,30 @@ fn check_wave_header(
     let payload = &ctx.pack.get(id)?.payload;
     let word = |at: usize| u32::from_le_bytes(payload[at..at + 4].try_into().expect("four bytes"));
     let expected_frequency = word(1);
-    let expected_loop = if payload[5] == 1 { word(6) } else { 0 };
+    let expected_looping = payload[5] == 1;
+    let expected_loop = if expected_looping { word(6) } else { 0 };
     let expected_size = u32::try_from(pcm.len()).expect("a sample fits in u32");
 
     let mismatch = |reason: String| GenRomProfileError::StructMismatch {
         id: id.to_owned(),
         reason,
     };
+    let wave_type = u16_at_addr(ctx.rom, addr).ok_or_else(|| mismatch("truncated".into()))?;
+    let status = u16_at_addr(ctx.rom, addr + 2).ok_or_else(|| mismatch("truncated".into()))?;
+    let looping = status & WAVE_STATUS_LOOP != 0;
     let frequency = u32_at_addr(ctx.rom, addr + 4).ok_or_else(|| mismatch("truncated".into()))?;
     let loop_start = u32_at_addr(ctx.rom, addr + 8).ok_or_else(|| mismatch("truncated".into()))?;
     let size = u32_at_addr(ctx.rom, addr + 12).ok_or_else(|| mismatch("truncated".into()))?;
-    if frequency != expected_frequency || loop_start != expected_loop || size != expected_size {
+    if wave_type != 0
+        || looping != expected_looping
+        || frequency != expected_frequency
+        || loop_start != expected_loop
+        || size != expected_size
+    {
         return Err(mismatch(format!(
-            "WaveData at {addr:08X} reads freq {frequency}, loop {loop_start}, size {size}; \
-             the pack says {expected_frequency}, {expected_loop}, {expected_size}"
+            "WaveData at {addr:08X} reads type {wave_type}, looping {looping}, freq \
+             {frequency}, loop {loop_start}, size {size}; the pack says type 0, looping \
+             {expected_looping}, {expected_frequency}, {expected_loop}, {expected_size}"
         )));
     }
     Ok(())
@@ -616,8 +630,105 @@ fn parse_song_constant(text: &str, symbol: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{keysplit_symbol, parse_song_constant, voicegroup_symbol};
+    use super::{
+        keysplit_symbol, locate_direct_sound, parse_song_constant, voicegroup_symbol,
+        WAVE_STATUS_LOOP,
+    };
     use crate::gen_rom_profile::plan::SymbolExpectation;
+    use crate::gen_rom_profile::tests::with_context;
+    use rom_import::fixture::RomFixture;
+
+    /// PCM distinctive enough to occur exactly once in a fixture image.
+    fn pcm() -> Vec<u8> {
+        (0..64u32)
+            .map(|index| u8::try_from((index * 37 + 11) % 251).expect("modulo 251 fits in u8"))
+            .collect()
+    }
+
+    /// A `DirectSound` pack payload: kind, freq, loop flag, loop start, count, PCM.
+    fn direct_sound_payload(freq: u32, loop_start: Option<u32>, data: &[u8]) -> Vec<u8> {
+        let mut payload = vec![0u8];
+        payload.extend_from_slice(&freq.to_le_bytes());
+        payload.push(u8::from(loop_start.is_some()));
+        payload.extend_from_slice(&loop_start.unwrap_or_default().to_le_bytes());
+        payload.extend_from_slice(
+            &u32::try_from(data.len())
+                .expect("a sample fits in u32")
+                .to_le_bytes(),
+        );
+        payload.extend_from_slice(data);
+        payload
+    }
+
+    /// A ROM `WaveData` header: type, status, freq, loop start, size.
+    fn wave_header(wave_type: u16, status: u16, freq: u32, loop_start: u32, size: u32) -> Vec<u8> {
+        let mut header = Vec::with_capacity(16);
+        header.extend_from_slice(&wave_type.to_le_bytes());
+        header.extend_from_slice(&status.to_le_bytes());
+        header.extend_from_slice(&freq.to_le_bytes());
+        header.extend_from_slice(&loop_start.to_le_bytes());
+        header.extend_from_slice(&size.to_le_bytes());
+        header
+    }
+
+    /// Plant one sample at `0x10_0000` and locate it against a one-entry pack.
+    fn locate_one(
+        name: &str,
+        header: &[u8],
+        payload: Vec<u8>,
+        data: &[u8],
+    ) -> Result<(), crate::gen_rom_profile::GenRomProfileError> {
+        let rom = RomFixture::new()
+            .emerald_header()
+            .write(0x10_0000, header)
+            .write(0x10_0010, data)
+            .finish();
+        let entry = pack_format::raw_entry("audio/sample/direct-sound/test".to_owned(), payload);
+        with_context(name, &rom, vec![entry], |ctx| {
+            let mut report = Vec::new();
+            locate_direct_sound(ctx, &mut report).map(|_| ())
+        })
+    }
+
+    #[test]
+    fn a_wave_header_whose_loop_status_disagrees_with_the_pack_is_rejected() {
+        let data = pcm();
+        let freq = 1 << 20;
+        let size = u32::try_from(data.len()).expect("a sample fits in u32");
+        // All currently checked fields agree: both numeric loop starts are
+        // zero. Only the ROM status says the sample loops.
+        let header = wave_header(0, WAVE_STATUS_LOOP, freq, 0, size);
+        let payload = direct_sound_payload(freq, None, &data);
+
+        let err = locate_one("loop-status-mismatch", &header, payload, &data).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::gen_rom_profile::GenRomProfileError::StructMismatch { id, .. }
+                    if id == "audio/sample/direct-sound/test"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_wave_header_with_a_nonzero_type_is_rejected() {
+        let data = pcm();
+        let freq = 1 << 20;
+        let size = u32::try_from(data.len()).expect("a sample fits in u32");
+        let header = wave_header(1, 0, freq, 0, size);
+        let payload = direct_sound_payload(freq, None, &data);
+
+        let err = locate_one("nonzero-wave-type", &header, payload, &data).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                crate::gen_rom_profile::GenRomProfileError::StructMismatch { id, .. }
+                    if id == "audio/sample/direct-sound/test"
+            ),
+            "{err}"
+        );
+    }
 
     #[test]
     fn a_biased_audio_root_asks_a_map_for_nothing() {

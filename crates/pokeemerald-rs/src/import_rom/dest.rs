@@ -284,6 +284,14 @@ impl Dest {
     }
 }
 
+/// The failure [`Dest::open`]'s non-Unix arm reports when `dir` is not a
+/// directory. Carries no path: [`super::ImportRomError::OpenDirFailed`]
+/// renders that once, through `rom_import::OneLinePath`.
+#[cfg(any(not(unix), test))]
+pub(super) fn not_a_directory_error() -> io::Error {
+    io::Error::other("not a directory")
+}
+
 /// The destination directory, addressed by path.
 ///
 /// Off Unix there is no descriptor to pin: `std` exposes no `openat` on
@@ -304,14 +312,12 @@ impl Dest {
     ///
     /// # Errors
     ///
-    /// If `dir` is not a directory. Nothing is pinned, so this is a
-    /// question about the path now, not a guarantee about it later.
+    /// [`not_a_directory_error`] if `dir` is not a directory. Nothing is
+    /// pinned, so this is a question about the path now, not a guarantee
+    /// about it later.
     pub(super) fn open(dir: &Path) -> io::Result<Self> {
         if !dir.is_dir() {
-            return Err(io::Error::other(format!(
-                "`{}` is not a directory",
-                dir.display()
-            )));
+            return Err(not_a_directory_error());
         }
         Ok(Self {
             dir: dir.to_path_buf(),

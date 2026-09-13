@@ -63,6 +63,17 @@ pub enum EntryShapeError {
     /// other packed tile format, and 1bpp/2bpp sources reach the pack
     /// already expanded to one byte per pixel. Carries the requested depth.
     UnsupportedBitDepth(u8),
+    /// An image's declared dimensions need a raster that cannot be counted
+    /// in tiles, sized in bytes, or allocated on this target: the tile
+    /// count, tile byte length, or `width * height` raster length overflows
+    /// `usize`, or the raster is too large to allocate even where the
+    /// arithmetic fits. Carries the declared dimensions.
+    RasterTooLarge {
+        /// The declared width in pixels.
+        width: u32,
+        /// The declared height in pixels.
+        height: u32,
+    },
     /// An image bit depth outside the set the format publishes (2, 4, or 8)
     /// was requested for a one-byte-per-pixel raster; the reader rejects
     /// such a pack, so the writer refuses to produce it. Carries the depth.
@@ -102,6 +113,10 @@ impl fmt::Display for EntryShapeError {
             Self::UnsupportedBitDepth(depth) => {
                 write!(f, "unsupported tile bit depth {depth} (expected 4 or 8)")
             }
+            Self::RasterTooLarge { width, height } => write!(
+                f,
+                "image {width}x{height} needs a raster too large to count in tiles or allocate"
+            ),
             Self::UnpublishedImageBitDepth(depth) => {
                 write!(
                     f,
@@ -215,7 +230,9 @@ pub fn image_entry(
 /// multiple of 8; [`EntryShapeError::MetatileMisaligned`] if a metatile
 /// shape does not divide the tile grid; [`EntryShapeError::TileDataLength`]
 /// if `tiles` is not a whole number of tiles or holds more than the raster
-/// needs.
+/// needs; [`EntryShapeError::RasterTooLarge`] if the declared dimensions
+/// need a tile count, tile byte length, or raster length that overflows
+/// `usize`, or a raster too large to allocate.
 pub fn image_entry_from_tiles(
     id: String,
     tiles: &[u8],
@@ -247,8 +264,16 @@ pub fn image_entry_from_tiles(
         });
     }
 
-    let needed_tiles = (tiles_wide as usize) * (tiles_high as usize);
-    let expected = needed_tiles * bytes_per_tile;
+    let too_large = || EntryShapeError::RasterTooLarge {
+        width: width_px,
+        height: height_px,
+    };
+    let needed_tiles = (tiles_wide as usize)
+        .checked_mul(tiles_high as usize)
+        .ok_or_else(too_large)?;
+    let expected = needed_tiles
+        .checked_mul(bytes_per_tile)
+        .ok_or_else(too_large)?;
     if tiles.len() > expected || !tiles.len().is_multiple_of(bytes_per_tile) {
         return Err(EntryShapeError::TileDataLength {
             expected,
@@ -257,7 +282,19 @@ pub fn image_entry_from_tiles(
     }
 
     let width = width_px as usize;
-    let mut pixels = vec![0u8; width * (height_px as usize)];
+    let raster_len = width
+        .checked_mul(height_px as usize)
+        .ok_or_else(too_large)?;
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(raster_len)
+        .map_err(|_| too_large())?;
+    pixels.resize(raster_len, 0u8);
+    if needed_tiles == 0 {
+        // Skip `per_metatile`: an oversized metatile shape need not divide a grid
+        // that does not exist, and could overflow the product.
+        return image_entry(id, width_px, height_px, bit_depth, pixels);
+    }
     let metatiles_wide = (tiles_wide / mw) as usize;
     let (mw, mh) = (mw as usize, mh as usize);
     let per_metatile = mw * mh;
@@ -351,6 +388,11 @@ pub fn tiles_from_image(
     }
 
     let tile_count = (tiles_wide as usize) * (tiles_high as usize);
+    if tile_count == 0 {
+        // Skip `per_metatile`: an oversized metatile shape need not divide a grid
+        // that does not exist, and could overflow the product.
+        return Ok(Vec::new());
+    }
     let metatiles_wide = (tiles_wide / mw) as usize;
     let (mw, mh) = (mw as usize, mh as usize);
     let per_metatile = mw * mh;

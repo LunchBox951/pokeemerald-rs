@@ -63,6 +63,8 @@
 //! [`OverworldPhase::copy_party_and_objects_from_save`], called by
 //! [`OverworldPhase::from_saved`].
 
+use std::cell::RefCell;
+
 use engine::save::SavedObjectEvent;
 use engine::text::render::TextSpeed;
 use engine::text::Token;
@@ -117,7 +119,7 @@ impl OverworldPhase {
             return true;
         };
         let mut target = PhaseSaveTarget {
-            phase: self,
+            phase: RefCell::new(self),
             save_slot,
         };
         let outcome = menu.tick(buttons, &mut target);
@@ -414,13 +416,28 @@ impl OverworldPhase {
     }
 }
 
+/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid; upstream
+/// treats them exactly like [`OPTIONS_TEXT_SPEED_MID`]
+/// (`pokeemerald/include/constants/global.h:127-129`).
+const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+/// The saved value `GetPlayerTextSpeedDelay` repairs an out-of-range
+/// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
+/// (`pokeemerald/src/menu.c:483-484`).
+const OPTIONS_TEXT_SPEED_MID: u8 = 1;
+
 /// [`OverworldPhase`] + [`SaveSlot`] as the [`SaveTarget`] the start menu's
 /// SAVE flow writes through -- upstream's `gSaveFileStatus`,
 /// `gDifferentSaveFile`, `gSaveBlock2Ptr->playerName`, and `TrySavingData`,
 /// each resolved from an owned value rather than a global
 /// `(oop-boundaries)`.
+///
+/// `phase` is a [`RefCell`] rather than a bare `&mut` because
+/// [`SaveTarget::player_text_speed`] must repair an out-of-range
+/// `optionsTextSpeed` in place (see its own docs) from behind the trait's
+/// `&self` receiver; every other accessor still only reads through it.
 struct PhaseSaveTarget<'a> {
-    phase: &'a mut OverworldPhase,
+    phase: RefCell<&'a mut OverworldPhase>,
     save_slot: &'a mut SaveSlot,
 }
 
@@ -430,7 +447,7 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     }
 
     fn different_save_file(&self) -> bool {
-        self.phase.different_save_file
+        self.phase.borrow().different_save_file
     }
 
     /// `gSaveBlock2Ptr->playerName`, decoded back into printable tokens.
@@ -440,7 +457,8 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// "never silently mis-render" contract [`engine::text::decode`] itself
     /// keeps.
     fn player_name(&self) -> Vec<Token> {
-        let mut tokens = engine::text::decode(&self.phase.save2.player_name).unwrap_or_default();
+        let mut tokens =
+            engine::text::decode(&self.phase.borrow().save2.player_name).unwrap_or_default();
         // `decode` stops at the terminator but keeps it; a name is spliced
         // into a longer message, so its `End` must not truncate that.
         tokens.retain(|token| *token != Token::End);
@@ -452,10 +470,15 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// (`src/menu.c:481-487`, mirrored by [`TextSpeed::from_raw_option`]).
     /// Upstream's own write-back -- repairing an out-of-range value to
     /// `OPTIONS_TEXT_SPEED_MID` in `gSaveBlock2Ptr` itself (`:483-484`) --
-    /// is not mirrored: this only selects the speed to print at, and never
-    /// mutates the phase's stored `save2`.
+    /// is mirrored here, at the same call: every message the save-flow
+    /// prints reaches this before the player answers a prompt, so a
+    /// cancelled flow is repaired exactly as a completed one is.
     fn player_text_speed(&self) -> TextSpeed {
-        TextSpeed::from_raw_option(self.phase.save2.options_text_speed)
+        let mut phase = self.phase.borrow_mut();
+        if phase.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
+            phase.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
+        }
+        TextSpeed::from_raw_option(phase.save2.options_text_speed)
     }
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`), preceded by
@@ -487,12 +510,13 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// leaked the replaced trainer's deferred bytes on a `SAVE_NORMAL`
     /// retry (#232 review round two).
     fn try_saving_data(&mut self, mode: SaveMode) -> bool {
-        self.phase.copy_party_and_objects_to_save();
+        let phase: &mut OverworldPhase = self.phase.get_mut();
+        phase.copy_party_and_objects_to_save();
         // Fixed at NEW GAME/CONTINUE time and never re-derived from the
         // flow's state: the WARNING below is retired by the first dispatch,
         // this is not.
-        let lineage = self.phase.save_lineage();
-        let (block1, block2) = (&self.phase.save1, &self.phase.save2);
+        let lineage = phase.save_lineage();
+        let (block1, block2) = (&phase.save1, &phase.save2);
         let outcome = match mode {
             SaveMode::Normal | SaveMode::OverwriteDifferentFile { prompted: true } => {
                 self.save_slot.store(block1, block2, lineage)
@@ -526,7 +550,7 @@ impl SaveTarget for PhaseSaveTarget<'_> {
         // move with this flag, so the replaced adventure's deferred bytes
         // are dropped either way (#232 review round two).
         if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
-            self.phase.different_save_file = false;
+            self.phase.get_mut().different_save_file = false;
         }
         match outcome {
             Ok(StoreOutcome::Written) => true,
