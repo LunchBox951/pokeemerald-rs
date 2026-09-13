@@ -301,6 +301,117 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     );
 }
 
+/// Issue #976 adjudication: upstream's field lock forces a one-frame
+/// face-direction action over an in-flight turn the moment it engages
+/// (`PlayerFreeze`, `pokeemerald/src/field_player_avatar.c:1039-1046`;
+/// `Task_FreezePlayer`, `event_object_lock.c:11-46`), so a dialog opened
+/// mid-turn must not freeze that turn's busy window along with movement.
+#[test]
+fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    use engine::text::Token;
+
+    // One tile east of Mom (module docs' `ONE_F` fixture notes), facing
+    // South so a held Left is a turn, not a step.
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+    assert_eq!(phase.player.position(), (3, 6), "a turn must not move");
+
+    // Reachability: the next frame's A press really does find Mom while
+    // that window is still draining.
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "an A press one frame into the turn's busy window must still interact with Mom"
+        );
+    }
+
+    // The box that A press opens, in the headless stand-in form this suite
+    // uses (`AssetPack::load_default` is unavailable here --
+    // `a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player`'s
+    // own note).
+    phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]));
+
+    // It owns far more frames than the eight-frame window is long.
+    for _ in 0..20 {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert!(phase.dialog.is_some(), "the box must still be open");
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // Control returns: the first field frame after the box closes must act
+    // on the held direction, not sit inside a window frozen since before
+    // the box opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the message box that opened inside it"
+    );
+}
+
+/// The start-menu counterpart to the dialog case above: `START` also holds
+/// upstream's field lock (`ShowStartMenu`'s `LockPlayerFieldControls`,
+/// `pokeemerald/src/start_menu.c:581-591`), so it must clear a pending
+/// turn's busy window the same way.
+#[test]
+fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    let temp = crate::flow::tests::TempSave::new("start-menu-turn-lock-976");
+    let mut save_slot = temp.slot();
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+
+    phase.start_menu = Some(crate::start_menu::synthetic_start_menu());
+    for _ in 0..20 {
+        assert!(phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot));
+    }
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::B), &mut save_slot),
+        "B still owns the closing frame"
+    );
+    assert!(
+        phase.start_menu().is_none(),
+        "B must have closed the synthetic menu"
+    );
+
+    // Control returns: the first field frame after the menu closes must act
+    // on the held direction, not sit inside a window frozen since before
+    // the menu opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the start menu that opened inside it"
+    );
+}
+
 /// Mutation guard for [`OverworldPhase::step`]'s tileset-animation tick
 /// (issue #160): `self.tick` must advance by exactly one per `step` call,
 /// and must keep advancing while a dialog box is open -- an explicit

@@ -12,6 +12,12 @@ use crate::event_data::EventData;
 /// Frames required for a normal on-foot step to cross one tile.
 pub const WALK_FRAMES_PER_TILE: u8 = 16;
 
+/// Frames a standstill turn busies ordinary movement input for: upstream's
+/// non-interruptible `WALK_IN_PLACE_FAST` held movement
+/// (`pokeemerald/src/field_player_avatar.c:1027-1030`,
+/// `event_object_movement.c:5704-5721`).
+pub const TURN_IN_PLACE_FRAMES: u8 = 8;
+
 /// A tile position in the active map's coordinate space.
 pub type TilePos = (i32, i32);
 
@@ -24,6 +30,7 @@ pub struct PlayerState {
     facing: Direction,
     movement_streak_active: bool,
     transit_frames: Option<u8>,
+    turn_frames_remaining: u8,
 }
 
 /// The result of one directional-input poll.
@@ -102,6 +109,7 @@ impl PlayerState {
             facing,
             movement_streak_active: false,
             transit_frames: None,
+            turn_frames_remaining: 0,
         }
     }
 
@@ -134,6 +142,14 @@ impl PlayerState {
         self.facing = direction;
     }
 
+    /// Ends a standstill turn's busy window early: upstream's field lock
+    /// forces a one-frame face-direction action over an in-flight turn the
+    /// instant it engages (`PlayerFreeze`,
+    /// `pokeemerald/src/field_player_avatar.c:1039-1046`).
+    pub const fn clear_turn_lock(&mut self) {
+        self.turn_frames_remaining = 0;
+    }
+
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
@@ -150,6 +166,8 @@ impl PlayerState {
     }
 
     /// Advances an active tile crossing by one frame; a stationary player remains stationary.
+    ///
+    /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
     pub fn tick(&mut self) {
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
@@ -157,6 +175,7 @@ impl PlayerState {
                 self.transit_frames = None;
             }
         }
+        self.turn_frames_remaining = self.turn_frames_remaining.saturating_sub(1);
     }
 
     fn adopt_elevation(&mut self, origin_elevation: u8, destination_elevation: u8) {
@@ -180,6 +199,8 @@ impl PlayerState {
     /// A direction change turns in place unless a movement streak is active.
     /// Every attempted step starts or continues that streak, including a blocked
     /// attempt. An accepted poll without directional input ends the streak.
+    /// A turn also busies every poll, including the new direction's own, for
+    /// [`TURN_IN_PLACE_FRAMES`].
     ///
     /// # Collision
     ///
@@ -200,7 +221,7 @@ impl PlayerState {
         maps: &impl ConnectedMapData,
         event_data: &EventData,
     ) -> StepOutcome {
-        if self.in_transit() {
+        if self.in_transit() || self.turn_frames_remaining > 0 {
             return StepOutcome::Idle;
         }
 
@@ -211,6 +232,7 @@ impl PlayerState {
 
         if direction != self.facing && !self.movement_streak_active {
             self.facing = direction;
+            self.turn_frames_remaining = TURN_IN_PLACE_FRAMES;
             return StepOutcome::Turned(direction);
         }
 
@@ -529,6 +551,22 @@ mod tests {
         );
         assert_eq!(player.facing(), Direction::East);
         assert!(!player.in_transit());
+        player.tick();
+
+        // Upstream's WALK_IN_PLACE_FAST turn action busies ordinary input
+        // for TURN_IN_PLACE_FRAMES (8) frames total, one of which the turn
+        // frame itself already spent (`TURN_IN_PLACE_FRAMES` doc comment) --
+        // so the held direction stays swallowed through frames 2..=8.
+        for frame in 2..=8 {
+            let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+            assert_eq!(
+                outcome,
+                StepOutcome::Idle,
+                "frame {frame} is still inside the turn's busy window"
+            );
+            assert_eq!(player.position(), (2, 2), "frame {frame} must not move");
+            player.tick();
+        }
 
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
@@ -536,7 +574,8 @@ mod tests {
             StepOutcome::Advanced {
                 from: (2, 2),
                 to: (3, 2),
-            }
+            },
+            "the step begins only once the turn's busy window has drained"
         );
     }
 
@@ -1467,6 +1506,18 @@ mod tests {
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Turned(Direction::South)
         );
+        player.tick();
+
+        // Drain the turn's busy window (`TURN_IN_PLACE_FRAMES` doc comment)
+        // before the held direction can be attempted as a step at all.
+        for _ in 2..=8 {
+            assert_eq!(
+                player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Idle,
+                "still inside the turn's busy window"
+            );
+            player.tick();
+        }
 
         assert_eq!(
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),

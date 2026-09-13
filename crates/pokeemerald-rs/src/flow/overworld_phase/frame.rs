@@ -35,6 +35,12 @@ impl OverworldPhase {
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
+        // Upstream's field lock (issue #976): the freeze task fires the
+        // moment the player is between steps, which a standstill turn
+        // always is, so an open box must not let that turn's busy window
+        // keep draining frozen underneath it
+        // (`PlayerState::clear_turn_lock`'s own doc comment).
+        self.player.clear_turn_lock();
         if dialog.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed {
             self.dialog = None;
         }

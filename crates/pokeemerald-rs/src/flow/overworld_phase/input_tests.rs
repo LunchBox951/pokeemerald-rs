@@ -2,7 +2,7 @@
 //! [`super::input::held_direction`].
 
 use super::test_support::*;
-use engine::overworld::{Direction, PlayerState};
+use engine::overworld::{Direction, PlayerState, StepOutcome};
 use platform::{ButtonState, Buttons};
 
 /// Senior review round 3 regression, correcting the prior (empirically
@@ -89,6 +89,57 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     assert_eq!(player.position(), (2, 2), "a turn must not move the tile");
     assert!(!player.in_transit());
     assert_eq!(player.step_progress(), 0);
+}
+
+/// Issue #976 regression: a held direction must stay swallowed through
+/// [`engine::overworld::player::TURN_IN_PLACE_FRAMES`]'s busy window after a
+/// turn, landing its first step on the 9th [`advance_player_one_frame`]
+/// call, not the 2nd.
+#[test]
+fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_stepping() {
+    let runtime = flat_runtime(5, 5);
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::East),
+        &runtime,
+        &no_connections,
+        &NO_FLAGS,
+    );
+    assert_eq!(outcome, StepOutcome::Turned(Direction::East));
+
+    for frame in 2..=8 {
+        let outcome = advance_player_one_frame(
+            &mut player,
+            Some(Direction::East),
+            &runtime,
+            &no_connections,
+            &NO_FLAGS,
+        );
+        assert_eq!(
+            outcome,
+            StepOutcome::Idle,
+            "frame {frame} is still inside the turn's 8-frame busy window"
+        );
+        assert_eq!(player.position(), (2, 2), "frame {frame} must not move");
+    }
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::East),
+        &runtime,
+        &no_connections,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Advanced {
+            from: (2, 2),
+            to: (3, 2),
+        },
+        "the step begins only once the turn's busy window has drained"
+    );
 }
 
 #[test]

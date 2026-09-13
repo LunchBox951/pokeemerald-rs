@@ -149,10 +149,10 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     assert!(closed, "confirming waitbuttonpress must close the dialog");
 
     // Control returns cleanly: ordinary movement input works again.
-    // `phase.player` is still facing North (from facing Mom above), so
-    // the first held-Down press only turns it to face South (a turn
-    // never moves the tile -- `advance_player_one_frame`'s own doc
-    // comment); the second commits the step immediately.
+    // `phase.player` is still facing North (from facing Mom above), so the
+    // first held-Down press only turns it to South; the 8-frame
+    // WALK_IN_PLACE_FAST busy window that turn starts (issue #976) then
+    // swallows Down through frame 8, and the step commits on the 9th.
     assert_eq!(phase.player.facing(), Direction::North);
     phase.step(held(Buttons::DOWN));
     assert_eq!(phase.player.facing(), Direction::South, "must turn first");
@@ -161,11 +161,15 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         (2, 7),
         "a turn must not move the tile"
     );
+    for _ in 2..=8 {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(phase.player.position(), (2, 7), "still busy from the turn");
+    }
     phase.step(held(Buttons::DOWN));
     assert_eq!(
         phase.player.position(),
         (2, 8),
-        "movement must resume normally once the dialog has closed"
+        "resumes once the turn drains"
     );
 }
 
