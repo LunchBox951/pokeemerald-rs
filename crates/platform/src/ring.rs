@@ -5,40 +5,62 @@
 //! callback.
 //!
 //! [`ring_buffer`] splits into a cloneable [`Producer`] (write side) and a
-//! single [`Consumer`] (read side) sharing one `Mutex`-guarded queue —
-//! simple over lock-free, because a few hundred samples per callback under
-//! a short-held lock is not a contention risk here.
+//! single [`Consumer`] (read side) sharing one fixed-capacity array of
+//! atomic slots. The consumer side — the real-time device callback — never
+//! takes a lock at all: it only loads and stores plain atomics, so a
+//! producer stalled or descheduled mid-push can never block it.
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
 //! the null backend used in tests all drive it, each in one bulk call per
-//! callback. It takes the queue lock exactly once per call,
-//! bulk-drains whatever is queued into the requested slice, and pads any
-//! shortfall with silence, adding that shortfall to the underrun counter in a
-//! single consolidated update. That keeps the promised "short-held single
-//! lock per callback" true: no per-sample lock churn. [`Consumer::pop_or_silence`]
-//! is the same "fill silence and count one underrun when the buffer runs dry"
-//! rule for a single sample, retained for callers that genuinely want one
-//! sample at a time.
+//! callback. It bulk-drains whatever is published into the requested slice
+//! without ever blocking, and pads any shortfall with silence, adding that
+//! shortfall to the underrun counter in a single consolidated update.
+//! [`Consumer::pop_or_silence`] is the same "fill silence and count one
+//! underrun when the buffer runs dry" rule for a single sample, retained for
+//! callers that genuinely want one sample at a time.
+//!
+//! ## Invariants
+//!
+//! The only state both sides share is `Shared::occupied`, an `AtomicUsize`
+//! in `[0, capacity]`: the producer publishes with `fetch_add(Release)`
+//! after its slot stores, the consumer frees with `fetch_sub(Release)` after
+//! its slot loads, and each side reads it with `Acquire`, which orders every
+//! slot access against the other side's. The consumer never takes
+//! `Shared::head`'s mutex, which only serialises cloned producers, so a
+//! producer stalled mid-push cannot block the callback. Each index is
+//! reduced `% capacity` on every advance rather than left as an unbounded
+//! counter: a capacity that does not divide `usize::MAX + 1` would alias
+//! two sequence positions onto one slot the instant such a counter wrapped.
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Shared state behind a [`Producer`]/[`Consumer`] pair.
 struct Shared {
-    queue: Mutex<VecDeque<f32>>,
+    /// Fixed-capacity backing storage; slot `i % capacity` holds the bit
+    /// pattern of the sample at sequence position `i`.
+    buffer: Box<[AtomicU32]>,
     capacity: usize,
+    /// The producer-side write index (`< capacity`), guarded by the mutex
+    /// that also serializes concurrent [`Producer`] clones. Never locked by
+    /// [`Consumer`] — see the module docs' "Invariants" section.
+    head: Mutex<usize>,
+    /// Samples published and not yet consumed; the only state the producer
+    /// and consumer sides share. Always in `[0, capacity]`.
+    occupied: AtomicUsize,
     underruns: AtomicU64,
 }
 
-/// Lock `queue`, recovering from poisoning rather than propagating a panic.
+/// Lock `head`, recovering from poisoning rather than propagating a panic.
 ///
-/// A panic on the producer side (e.g. a bug in the mixer feeding it)
-/// should not also take down the audio device callback thread; the worst a
-/// poisoned lock should cost here is a torn-looking read, not a crash.
-fn lock(queue: &Mutex<VecDeque<f32>>) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
-    queue.lock().unwrap_or_else(PoisonError::into_inner)
+/// A panic on the producer side (e.g. a bug in the mixer feeding it) should
+/// not also take down the audio device callback thread. The callback never
+/// takes this lock at all, so poisoning it can only ever affect other
+/// producer clones — the worst it should cost is a torn-looking push, not a
+/// crash.
+fn lock_head(head: &Mutex<usize>) -> std::sync::MutexGuard<'_, usize> {
+    head.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Create a bounded sample ring buffer, split into a producer half and a
@@ -48,16 +70,19 @@ fn lock(queue: &Mutex<VecDeque<f32>>) -> std::sync::MutexGuard<'_, VecDeque<f32>
 /// `capacity` of `2 * frames` holds `frames` frames of audio.
 #[must_use]
 pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
+    let buffer: Box<[AtomicU32]> = (0..capacity).map(|_| AtomicU32::new(0)).collect();
     let shared = Arc::new(Shared {
-        queue: Mutex::new(VecDeque::with_capacity(capacity)),
+        buffer,
         capacity,
+        head: Mutex::new(0),
+        occupied: AtomicUsize::new(0),
         underruns: AtomicU64::new(0),
     });
     (
         Producer {
             shared: Arc::clone(&shared),
         },
-        Consumer { shared },
+        Consumer { shared, tail: 0 },
     )
 }
 
@@ -81,10 +106,25 @@ impl Producer {
     /// buffer already means playback has fallen behind generation.
     #[must_use = "a return value less than `samples.len()` means some samples were dropped"]
     pub fn push(&self, samples: &[f32]) -> usize {
-        let mut queue = lock(&self.shared.queue);
-        let space = self.shared.capacity.saturating_sub(queue.len());
+        let mut head = lock_head(&self.shared.head);
+        // Acquire: synchronizes-with the consumer's `Release` `fetch_sub`,
+        // so the slots it already read are visible as free before this call
+        // overwrites them. May already be stale-high (the consumer can free
+        // more concurrently) — that only makes `space` an underestimate,
+        // never wrong in a way that corrupts the buffer.
+        let occupied = self.shared.occupied.load(Ordering::Acquire);
+        let space = self.shared.capacity - occupied;
         let n = samples.len().min(space);
-        queue.extend(&samples[..n]);
+        for (i, &sample) in samples[..n].iter().enumerate() {
+            let idx = (*head + i) % self.shared.capacity;
+            self.shared.buffer[idx].store(sample.to_bits(), Ordering::Relaxed);
+        }
+        if n > 0 {
+            *head = (*head + n) % self.shared.capacity;
+            // Release: publishes the slot stores above to the consumer's
+            // `Acquire` load of `occupied`.
+            self.shared.occupied.fetch_add(n, Ordering::Release);
+        }
         n
     }
 
@@ -105,7 +145,7 @@ impl Producer {
     pub fn available_space(&self) -> usize {
         self.shared
             .capacity
-            .saturating_sub(lock(&self.shared.queue).len())
+            .saturating_sub(self.shared.occupied.load(Ordering::Acquire))
     }
 
     /// Total samples emitted as silence so far because a consumer wanted
@@ -118,8 +158,16 @@ impl Producer {
 
 /// The read half of a sample ring buffer, driven once per audio device
 /// callback (or, for the null backend, once per manual test/harness call).
+///
+/// Not `Clone`, and its draining methods take `&mut self`: there is exactly
+/// one `Consumer`, and the borrow checker — not a runtime lock, which is the
+/// whole point of this type — is what rules out two threads racing on the
+/// same drain.
 pub struct Consumer {
     shared: Arc<Shared>,
+    /// This consumer's own read index (`< capacity`). Touched by no one
+    /// else, ever — see the module docs' "Invariants" section.
+    tail: usize,
 }
 
 impl Consumer {
@@ -127,9 +175,19 @@ impl Consumer {
     ///
     /// A pure query: does not touch the underrun counter. Most callers want
     /// [`Consumer::pop_or_silence`] or [`Consumer::fill`] instead.
-    #[must_use]
-    pub fn try_pop(&self) -> Option<f32> {
-        lock(&self.shared.queue).pop_front()
+    pub fn try_pop(&mut self) -> Option<f32> {
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
+        // so a published slot's value is visible before this reads it.
+        if self.shared.occupied.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+        let idx = self.tail % self.shared.capacity;
+        let sample = f32::from_bits(self.shared.buffer[idx].load(Ordering::Relaxed));
+        self.tail = (self.tail + 1) % self.shared.capacity;
+        // Release: publishes the freed slot to the producer's `Acquire`
+        // load of `occupied`.
+        self.shared.occupied.fetch_sub(1, Ordering::Release);
+        Some(sample)
     }
 
     /// Pop the next queued sample; if none is queued, count one underrun
@@ -139,34 +197,43 @@ impl Consumer {
     /// path uses the bulk [`Consumer::fill`] instead, but the accounting is
     /// identical.
     #[must_use]
-    pub fn pop_or_silence(&self) -> f32 {
+    pub fn pop_or_silence(&mut self) -> f32 {
         self.try_pop().unwrap_or_else(|| {
             self.shared.underruns.fetch_add(1, Ordering::Relaxed);
             0.0
         })
     }
 
-    /// Fill `out` completely under a single lock acquisition — bulk-draining
-    /// whatever is queued into the front of `out` and padding any shortfall
-    /// with silence.
+    /// Fill `out` completely without ever blocking — bulk-draining whatever
+    /// is published into the front of `out` and padding any shortfall with
+    /// silence.
     ///
-    /// The queue lock is taken exactly once, regardless of `out.len()`: this
-    /// is the callback hot path, so it must not lock per sample. Any
-    /// shortfall (`out` longer than the queue) counts as that many underrun
-    /// samples, added to the counter in one update — identical accounting to
-    /// calling [`Consumer::pop_or_silence`] once per missing sample.
-    pub fn fill(&self, out: &mut [f32]) {
-        let shortfall = {
-            let mut queue = lock(&self.shared.queue);
-            let drained = out.len().min(queue.len());
-            for (slot, sample) in out.iter_mut().zip(queue.drain(..drained)) {
-                *slot = sample;
-            }
-            for slot in &mut out[drained..] {
-                *slot = 0.0;
-            }
-            out.len() - drained
-        };
+    /// This never takes a lock, regardless of `out.len()`: it is the
+    /// callback hot path, and a producer stalled mid-push must never be able
+    /// to delay it (see the module docs). Any shortfall (`out` longer than
+    /// what is published) counts as that many underrun samples, added to the
+    /// counter in one update — identical accounting to calling
+    /// [`Consumer::pop_or_silence`] once per missing sample.
+    pub fn fill(&mut self, out: &mut [f32]) {
+        // Acquire: synchronizes-with the producer's `Release` `fetch_add`,
+        // so every published slot this observes is visible before the reads
+        // below.
+        let occupied = self.shared.occupied.load(Ordering::Acquire);
+        let drained = out.len().min(occupied);
+        for (i, slot) in out.iter_mut().take(drained).enumerate() {
+            let idx = (self.tail + i) % self.shared.capacity;
+            *slot = f32::from_bits(self.shared.buffer[idx].load(Ordering::Relaxed));
+        }
+        for slot in &mut out[drained..] {
+            *slot = 0.0;
+        }
+        if drained > 0 {
+            self.tail = (self.tail + drained) % self.shared.capacity;
+            // Release: publishes the freed slots to the producer's `Acquire`
+            // load of `occupied`.
+            self.shared.occupied.fetch_sub(drained, Ordering::Release);
+        }
+        let shortfall = out.len() - drained;
         if shortfall > 0 {
             self.shared.underruns.fetch_add(
                 u64::try_from(shortfall).unwrap_or(u64::MAX),
@@ -178,7 +245,7 @@ impl Consumer {
     /// Samples currently queued and ready to read.
     #[must_use]
     pub fn available(&self) -> usize {
-        lock(&self.shared.queue).len()
+        self.shared.occupied.load(Ordering::Acquire)
     }
 
     /// Total samples filled with silence due to underrun so far (see
@@ -199,7 +266,7 @@ mod tests {
 
     #[test]
     fn fill_drains_queued_samples_in_order() {
-        let (producer, consumer) = ring_buffer(8);
+        let (producer, mut consumer) = ring_buffer(8);
         assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0]), 4);
         assert_eq!(consumer.available(), 4);
 
@@ -212,7 +279,7 @@ mod tests {
 
     #[test]
     fn underrun_pads_shortfall_with_silence_and_counts_it() {
-        let (producer, consumer) = ring_buffer(8);
+        let (producer, mut consumer) = ring_buffer(8);
         assert_eq!(producer.push(&[1.0, 2.0]), 2);
 
         let mut out = [9.0; 5];
@@ -229,7 +296,7 @@ mod tests {
         // A single `fill` that outruns the queue must add exactly the missing
         // sample count to the counter — the bulk drain's consolidated update
         // must match per-sample accounting exactly.
-        let (producer, consumer) = ring_buffer(64);
+        let (producer, mut consumer) = ring_buffer(64);
         assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
 
         let mut out = [9.0; 10];
@@ -267,7 +334,7 @@ mod tests {
 
     #[test]
     fn push_beyond_capacity_drops_the_overflow() {
-        let (producer, consumer) = ring_buffer(4);
+        let (producer, mut consumer) = ring_buffer(4);
         assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), 4);
         assert_eq!(producer.available_space(), 0);
         assert_eq!(consumer.available(), 4);
@@ -279,11 +346,11 @@ mod tests {
 
     #[test]
     fn sustained_push_and_drain_cycles_never_grow_past_capacity() {
-        // The queue is not a fixed-size array with manual index wraparound,
-        // but it must still *behave* like a bounded ring under sustained
-        // use: capacity never grows, and values survive many drain/refill
-        // cycles that each cross the initial capacity boundary.
-        let (producer, consumer) = ring_buffer(4);
+        // The backing array is fixed-size and each side's index wraps by
+        // `% capacity` (see the module docs) — this exercises that wrap
+        // under sustained use: capacity never grows, and values survive many
+        // drain/refill cycles that each cross the initial capacity boundary.
+        let (producer, mut consumer) = ring_buffer(4);
         for cycle in 0..1000_u32 {
             // `cycle` never exceeds 1000, well within `f32`'s 24-bit exact
             // integer range, so this loses no precision.
@@ -303,7 +370,7 @@ mod tests {
 
     #[test]
     fn producer_pushes_from_another_thread() {
-        let (producer, consumer) = ring_buffer(1024);
+        let (producer, mut consumer) = ring_buffer(1024);
         // `i` never exceeds 512, well within `f32`'s 24-bit exact integer
         // range, so this loses no precision.
         #[allow(clippy::cast_precision_loss)]
@@ -323,5 +390,101 @@ mod tests {
         consumer.fill(&mut out);
         assert_eq!(out, expected);
         assert_eq!(consumer.underruns(), 0);
+    }
+
+    /// The device callback drains through [`Consumer::fill`] under a hard
+    /// deadline, while the producer pushes from an ordinary (preemptible)
+    /// game thread. A producer descheduled mid-push — holding `Shared::head`
+    /// — must therefore not be able to stall the callback: the callback has
+    /// to keep making progress on what is already published, since it never
+    /// touches that lock.
+    #[test]
+    fn fill_does_not_block_on_a_producer_stalled_mid_push() {
+        let (producer, mut consumer) = ring_buffer(8);
+        assert_eq!(producer.push(&[1.0, 2.0, 3.0, 4.0]), 4);
+
+        // Stand in for the producer being preempted while it holds
+        // `Shared::head`'s lock: a real scheduler can stall it for an
+        // arbitrary slice, far past one callback period.
+        // The stall lasts until `fill` reports back, so a `fill` that waits
+        // on the lock can only report after the hold gives up on it: the
+        // verdict is which side let go first, not how long the host
+        // scheduler happened to take. The hold's timeout is a ceiling for a
+        // regressed `fill`, never a bound this test measures against.
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let (filled_tx, filled_rx) = std::sync::mpsc::channel();
+        let shared = Arc::clone(&producer.shared);
+        let stalled_producer = std::thread::spawn(move || {
+            let _guard = lock_head(&shared.head);
+            acquired_tx.send(()).expect("receiver dropped");
+            filled_rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .is_ok()
+        });
+        acquired_rx.recv().expect("stalled producer never started");
+
+        let mut out = [9.0; 4];
+        consumer.fill(&mut out);
+        let filled_while_stalled = filled_tx.send(()).is_ok();
+        let released_after_fill = stalled_producer.join().expect("producer thread panicked");
+
+        assert!(
+            filled_while_stalled && released_after_fill,
+            "callback fill waited on a stalled producer"
+        );
+        assert_eq!(out, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(consumer.underruns(), 0);
+    }
+
+    /// Each side's index wraps by `% capacity` on every advance (see the
+    /// module docs), never via an unbounded counter reduced `% capacity`
+    /// only at the point of indexing — that alternative aliases two
+    /// different sequence positions onto the same slot for any capacity
+    /// that does not evenly divide the width such a counter wraps at, i.e.
+    /// any non-power-of-two capacity, the instant it wrapped. Seed both
+    /// indices to the last valid slot and push across the capacity boundary
+    /// to prove the wrap itself lands correctly, for a non-power-of-two
+    /// capacity (3) and a power-of-two one (4) alike.
+    #[test]
+    fn cursor_wraparound_is_correct_for_a_non_power_of_two_capacity() {
+        for capacity in [3, 4] {
+            let (producer, mut consumer) = ring_buffer(capacity);
+            *producer.shared.head.lock().unwrap() = capacity - 1;
+            consumer.tail = capacity - 1;
+
+            assert_eq!(producer.push(&[1.0, 2.0]), 2);
+            assert_eq!(consumer.available(), 2);
+
+            let mut out = [0.0; 2];
+            consumer.fill(&mut out);
+            assert_eq!(out, [1.0, 2.0], "capacity {capacity}");
+            assert_eq!(consumer.underruns(), 0);
+        }
+    }
+
+    /// The rollover this ring has no exposure to is the counter's own, at
+    /// `usize::MAX + 1`; it is unreachable because each cursor is reduced
+    /// `% capacity` on every advance. An unbounded-counter implementation
+    /// fails this on the second iteration for either capacity.
+    #[test]
+    fn cursors_stay_bounded_by_capacity_so_no_usize_rollover_exists() {
+        for capacity in [3usize, 4] {
+            let (producer, mut consumer) = ring_buffer(capacity);
+            for _ in 0..=(2 * capacity) {
+                assert_eq!(producer.push(&[1.0, 2.0]), 2);
+                let mut out = [0.0; 2];
+                consumer.fill(&mut out);
+                assert_eq!(out, [1.0, 2.0], "capacity {capacity}");
+                assert!(
+                    *lock_head(&producer.shared.head) < capacity,
+                    "head left unbounded at capacity {capacity}"
+                );
+                assert!(
+                    consumer.tail < capacity,
+                    "tail left unbounded at capacity {capacity}"
+                );
+            }
+            assert_eq!(consumer.underruns(), 0);
+        }
     }
 }

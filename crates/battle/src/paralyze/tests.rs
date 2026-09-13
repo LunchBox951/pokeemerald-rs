@@ -1,6 +1,6 @@
 use super::{
     ensure_admissible, ensure_resolvable, is_paralyze_effect, resolve_paralyze_move,
-    ParalyzeOutcome, EFFECT_PARALYZE,
+    resolve_synchronize_reflection, ParalyzeOutcome, SynchronizeReflectionOutcome, EFFECT_PARALYZE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -216,20 +216,25 @@ fn a_limber_defender_reports_the_limber_protected_outcome() {
 const RALTS: SpeciesId = SpeciesId(392);
 
 #[test]
-fn a_synchronize_defender_is_refused_before_the_accuracy_draw() {
+fn a_healthy_synchronize_defender_is_admitted_and_paralysed() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, RALTS, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::SYNCHRONIZE);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE),
-        "the unmodelled MOVEEND_SYNCHRONIZE_TARGET reflection fails closed"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "ensure_admissible no longer refuses Synchronize; the caller in \
+         crate::battle::execute reflects the status at move end"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(
+        rng.draws(),
+        1,
+        "reflection is not resolved here and draws nothing itself"
+    );
 }
 
 #[test]
@@ -301,8 +306,8 @@ fn a_paralysed_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "the reflection's SetMoveEffect pass writes nothing to an already-statused \
-         attacker (src/battle_script_commands.c:2422-2423), so nothing is unmodelled"
+        "ensure_admissible no longer reads the attacker's status at all; the \
+         reflection itself is resolved separately by resolve_synchronize_reflection"
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
@@ -319,14 +324,54 @@ fn a_poisoned_attacker_is_admitted_against_a_synchronize_defender() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::Applied,
-        "an attacker carrying any primary status, not just Paralysed, leaves the \
-         reflection's SetMoveEffect re-entry nothing to write"
+        "an attacker carrying any primary status does not change whether the \
+         defender is paralysed; only resolve_synchronize_reflection reads it"
     );
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
     assert_eq!(
         attacker.status1(),
         Status1::Poisoned,
-        "the attacker's own status is never rewritten by the reflection"
+        "resolve_paralyze_move never mutates the attacker"
+    );
+}
+
+#[test]
+fn resolve_synchronize_reflection_applies_to_a_healthy_attacker() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+    assert_eq!(
+        resolve_synchronize_reflection(&attacker),
+        SynchronizeReflectionOutcome::Applied
+    );
+}
+
+#[test]
+fn resolve_synchronize_reflection_reports_an_existing_status_without_changing_it() {
+    let dex = Dex::new();
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        let mut attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
+        attacker.set_status1(status);
+        assert_eq!(
+            resolve_synchronize_reflection(&attacker),
+            SynchronizeReflectionOutcome::AlreadyStatused,
+            "{status:?}"
+        );
+        assert_eq!(
+            attacker.status1(),
+            status,
+            "resolve_synchronize_reflection never mutates its argument"
+        );
+    }
+}
+
+#[test]
+fn resolve_synchronize_reflection_is_blocked_by_the_attackers_own_limber() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, PERSIAN, 10, vec![THUNDER_WAVE]);
+    assert_eq!(attacker.ability(), assets::species::AbilityId::LIMBER);
+    assert_eq!(
+        resolve_synchronize_reflection(&attacker),
+        SynchronizeReflectionOutcome::LimberProtected
     );
 }
 
@@ -388,57 +433,51 @@ const MACHOP: SpeciesId = SpeciesId(66);
 const MILOTIC: SpeciesId = SpeciesId(329);
 
 #[test]
-fn a_guts_defender_is_refused_before_the_accuracy_draw() {
+fn a_guts_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, MACHOP, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::GUTS);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::GUTS),
-        "CalculateBaseDamage raises a statused Guts holder's physical Attack, which \
-         BattlePokemon::attacking_stat does not model"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "Guts is modelled by BattlePokemon::attacking_stat, so admission never refuses it"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
 #[test]
-fn a_marvel_scale_defender_is_refused_before_the_accuracy_draw() {
+fn a_marvel_scale_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, MILOTIC, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::MARVEL_SCALE);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::MARVEL_SCALE),
-        "CalculateBaseDamage raises a statused Marvel Scale holder's Defense, which \
-         BattlePokemon::defending_stat does not model"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "Marvel Scale is modelled by BattlePokemon::defending_stat, so admission never refuses it"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
-/// The stat-reading pair is refused for the damage every later turn would
-/// miscompute, not for a draw, so the refusal must not depend on which
-/// paralyzing move carries it.
+/// The stat-reading pair is admitted for every paralyzing move, not just one,
+/// since the interaction is modelled generically at the accessor boundary.
 #[test]
-fn every_paralyze_move_refuses_the_stat_reading_abilities() {
+fn every_paralyze_move_admits_the_stat_reading_abilities() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE, STUN_SPORE, GLARE]);
-    for (species, ability) in [
-        (MACHOP, assets::AbilityId::GUTS),
-        (MILOTIC, assets::AbilityId::MARVEL_SCALE),
-    ] {
+    for species in [MACHOP, MILOTIC] {
         let defender = mon(&dex, species, 10, vec![TACKLE]);
         for move_id in [THUNDER_WAVE, STUN_SPORE, GLARE] {
             assert_eq!(
                 ensure_admissible(&dex, move_id, &attacker, &defender),
-                Err(BattleError::UnportedAbilityInteraction(ability)),
+                Ok(()),
                 "{move_id:?} against {species:?}"
             );
         }
