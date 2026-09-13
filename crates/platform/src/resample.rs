@@ -290,7 +290,10 @@ mod tests {
         // boundary exactly as it carries across a callback boundary), and
         // must never grow `scratch` doing it — the oversized-callback path
         // regressed by this fix.
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..30, exactly representable in f32"
+        )]
         let source: Vec<f32> = (0..30_i32).map(|i| i as f32).collect();
 
         let (producer_a, consumer_a) = ring_buffer(64);

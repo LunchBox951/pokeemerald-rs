@@ -791,7 +791,10 @@ mod tests {
         // must still be converted, processed in `scratch.len()`-sized
         // chunks, without ever resizing `scratch`.
         let (producer, consumer) = ring_buffer(64);
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..20, exactly representable in f32"
+        )]
         let pcm: Vec<f32> = (0..20_i32).map(|i| (i as f32 - 10.0) / 10.0).collect();
         assert_eq!(producer.push(&pcm), 20);
 
