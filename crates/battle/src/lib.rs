@@ -149,7 +149,10 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them; [`paralyze::ensure_admissible`] admits both holders.
+//! them; [`paralyze::ensure_admissible`] admits both holders. Compound
+//! Eyes and Hustle scale the stage-adjusted accuracy threshold inside
+//! [`accuracy::accuracy_check`], as `Cmd_accuracycheck` does, for every
+//! path that rolls to hit.
 //! [`pokemon::BattlePokemon::ability`] derives the ability from the
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.
@@ -188,22 +191,24 @@
 //! them past `ensure_executable` and into
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
-//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, and Marvel
-//! Scale (all eight above),
+//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
+//! Scale, Compound Eyes, and Hustle (all ten above),
 //! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Levitate's
 //! Ground-move damage immunity ([`hit::damage_before_roll`] — grounding
 //! effects like Gravity and Smack Down are not modelled, so Levitate is
-//! otherwise unconditional) and the four stat-drop guards — Clear Body,
-//! White Smoke, Keen Eye,
+//! otherwise unconditional), Synchronize's paralysis reflection
+//! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
+//! stays refused, see [`secondary::ensure_admissible`]), and the four
+//! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
 //! held items, every primary status but
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
 //! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! three abilities that still read a holder's primary status or the draw
-//! that inflicts it — Synchronize, Shed Skin, and (poison only) Serene Grace
-//! (see [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`];
+//! two abilities that still read a holder's primary status or the draw
+//! that inflicts it — Shed Skin and (poison only) Serene Grace (see
+//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`];
 //! Guts and Marvel Scale are modelled above, though `secondary`'s poison path
 //! still refuses newly poisoning either holder) — and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines

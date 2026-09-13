@@ -469,7 +469,7 @@ fn a_surviving_paralysed_winner_keeps_its_status_after_the_opponent_faints() {
 const RALTS: u16 = 392;
 
 #[test]
-fn thunder_wave_against_a_synchronize_target_does_not_leave_the_attacker_unaffected() {
+fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
     let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
@@ -478,51 +478,140 @@ fn thunder_wave_against_a_synchronize_target_does_not_leave_the_attacker_unaffec
         assets::AbilityId::SYNCHRONIZE,
         "fixture sanity: the primary slot fields Synchronize"
     );
-    let mut rng = SequenceRng::new([0; 16]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the
+    // reflection itself draws nothing), the enemy's own full-paralysis draw
+    // against its own Tackle, now that the reflection paralysed it too
+    // (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let Ok(events) = battle.take_turn(PlayerAction::UseMove(0), &mut rng) else {
-        // Refusing the interaction outright also satisfies this contract.
-        return;
-    };
-    assert!(
-        !(battle.enemy().status1() == Status1::Paralysed
-            && battle.player().status1() == Status1::Healthy),
-        "Synchronize passes the paralysis back to the battler that inflicted it, so a landed \
-         Thunder Wave cannot leave the attacker healthy: {events:?}"
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Synchronize is admitted: the reflection is modelled");
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "the initial status and its message precede MOVEEND_SYNCHRONIZE_TARGET's \
+         reflection, which precedes the rest of move-end processing: {events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "Synchronize passes the paralysis back to the battler that inflicted it"
+    );
+    assert_eq!(rng.draws(), 5, "the reflection consumes no RNG of its own");
+}
+
+/// `SPECIES_PERSIAN`: Normal, Limber in its only ability slot, faster than
+/// Ralts even unquartered.
+const PERSIAN: u16 = 53;
+
+#[test]
+fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, PERSIAN, 5, vec![THUNDER_WAVE]);
+    assert_eq!(player.ability(), assets::AbilityId::LIMBER);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+
+    // Same shape as the reflection test above: Persian's own Limber blocks
+    // the reflection rather than the accuracy draw or typecalc, so the draw
+    // count and positions are unchanged.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::SynchronizeLimberProtected {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Healthy,
+        "Limber protects the original attacker from the reflection"
     );
 }
 
-/// The boundary #783 draws around Synchronize: the reflection at
-/// `MOVEEND_SYNCHRONIZE_TARGET` is unmodelled, so the pick is refused where
-/// every other unplayable pick is — before the turn's first draw.
-#[test]
-fn a_synchronize_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
-    let dex = Dex::new();
-    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
-    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
-    let mut rng = SequenceRng::new([0; 16]);
-    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let pp_before = battle.player().moves()[0].pp;
-    let draws_before = rng.draws();
+/// `SPECIES_ONIX`: Rock/Ground, immune to Thunder Wave's Electric type, and
+/// faster than Ralts.
+const ONIX: u16 = 95;
 
-    let rejected = battle
+#[test]
+fn synchronize_reflects_paralysis_onto_a_type_immune_original_attacker() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, ONIX, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+
+    // Same shape again: Ralts is not itself type-immune to Thunder Wave, so
+    // the initial hit lands and reflects. The reflection re-enters
+    // `SetMoveEffect` without `typecalc`, so Onix's own Ground typing --
+    // immune to the Electric move it just used -- does not block it.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(
-        rejected.error(),
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SYNCHRONIZE)
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "type effectiveness never gates the reflection: {events:?}"
     );
-    assert!(rejected.events().is_empty());
-    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
-    assert_eq!(battle.player().moves()[0].pp, pp_before, "no PP is spent");
-    assert_eq!(battle.enemy().status1(), Status1::Healthy);
-    assert_eq!(battle.player().status1(), Status1::Healthy);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "a type-immune original attacker is still paralysed by the reflection"
+    );
 }
 
 /// `ppreduce` (`data/battle_scripts_1.s:1010`) runs ahead of every guard, so
 /// the already-paralysed exit still costs PP — and, reaching that exit before
-/// `seteffectprimary`, never arms Synchronize for the refusal to catch.
+/// `seteffectprimary`, never triggers a reflection.
 #[test]
 fn an_already_paralysed_synchronize_defender_spends_pp_and_reports_the_status() {
     let dex = Dex::new();
@@ -635,6 +724,32 @@ fn a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
     assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
     assert_eq!(battle.player().moves()[0].pp, pp_before, "no PP is spent");
     assert_eq!(battle.enemy().status1(), Status1::Healthy);
+}
+
+/// `src/battle_util.c:2620`-`:2621`: Shed Skin's end-turn cure roll is a draw
+/// this engine's residual pass does not make, so an attacker the reflection
+/// would newly paralyse is refused just like a direct-hit Shed Skin defender.
+#[test]
+fn a_shed_skin_attacker_refuses_a_synchronize_target_before_any_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, SEVIPER, 5, vec![THUNDER_WAVE]);
+    assert_eq!(player.ability(), assets::AbilityId::SHED_SKIN);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), assets::AbilityId::SYNCHRONIZE);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let draws_before = rng.draws();
+
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect_err("the reflection would paralyse a Shed Skin holder");
+
+    assert_eq!(
+        rejected.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+    );
+    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
+    assert_eq!(battle.player().status1(), Status1::Healthy);
 }
 
 /// A spent slot never reaches `seteffectprimary` — `Cmd_attackcanceler` aborts
