@@ -60,6 +60,8 @@ const MAKUHITA: SpeciesId = SpeciesId(335);
 const ROSELIA: SpeciesId = SpeciesId(363);
 const TORKOAL: SpeciesId = SpeciesId(321);
 const CORPHISH: SpeciesId = SpeciesId(326);
+/// `SPECIES_REMORAID`: Water, and Hustle in its primary ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
 
 const EFFECT_HIT: MoveEffect = MoveEffect(0);
 const EFFECT_SPEED_UP_AS_HIT: MoveEffect = MoveEffect(12);
@@ -240,6 +242,21 @@ fn sand_attack_lowers_the_targets_accuracy_stage() {
     };
     assert_eq!(change.stat, ChangedStat::Accuracy);
     assert_eq!(new_stage, StatStage::new(-1).unwrap());
+}
+
+#[test]
+fn a_hustle_attackers_lowering_move_uses_the_lowered_physical_threshold() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 15, vec![SCREECH]);
+    assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
+    let defender = mon(&dex, WURMPLE, 15, vec![TACKLE]);
+    // Screech's 85 accuracy hits an ordinary attacker on roll 71, but
+    // Hustle's physical-move guard lowers the threshold to 85 * 80 / 100 =
+    // 68, which that roll exceeds (`battle_script_commands.c:1156-1157`).
+    let mut rng = SequenceRng::new([70]);
+    let outcome = resolve_stat_change_move(&dex, SCREECH, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, StatChangeOutcome::Miss);
+    assert_eq!(rng.draws(), 1);
 }
 
 #[test]
