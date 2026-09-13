@@ -24,6 +24,10 @@ const ANORITH: SpeciesId = SpeciesId(390);
 const MAKUHITA: SpeciesId = SpeciesId(335);
 /// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
 const MILOTIC: SpeciesId = SpeciesId(329);
+/// `SPECIES_BUTTERFREE`: Compound Eyes in its primary (and only) ability slot.
+const BUTTERFREE: SpeciesId = SpeciesId(12);
+/// `SPECIES_REMORAID`: Hustle in its primary (and only) ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
 
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const HORN_DRILL: MoveId = MoveId(32);
@@ -46,6 +50,8 @@ const CURSE: MoveId = MoveId(174);
 const FALSE_SWIPE: MoveId = MoveId(206);
 const PURSUIT: MoveId = MoveId(228);
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
+/// Normal-type (physical), 75 accuracy.
+const SLAM: MoveId = MoveId(21);
 
 const THICK_FAT: AbilityId = AbilityId(47);
 
@@ -60,6 +66,14 @@ const MAX_IVS: Ivs = Ivs {
 
 const ACCURACY_HIT_DRAW: u16 = 0;
 const TACKLE_MISS_DRAW: u16 = 95;
+/// Slam's plain 75 threshold misses roll 91, but Compound Eyes raises the
+/// threshold to `75 * 130 / 100 = 97`, which the same roll clears
+/// (`battle_script_commands.c:1152-1153`).
+const COMPOUND_EYES_ONLY_HIT_DRAW: u16 = 90;
+/// Slam's plain 75 threshold hits roll 66, but Hustle lowers a physical
+/// move's threshold to `75 * 80 / 100 = 60`, which the same roll exceeds
+/// (`battle_script_commands.c:1156-1157`).
+const HUSTLE_ONLY_MISS_DRAW: u16 = 65;
 const ORDINARY_CRIT_DRAW: u16 = 0;
 const ORDINARY_NO_CRIT_DRAW: u16 = 1;
 const HIGH_CRIT_ONLY_DRAW: u16 = 8;
@@ -852,4 +866,49 @@ fn marvel_scale_never_touches_special_defense() {
         healthy_special_defense,
         "Marvel Scale must not touch Special Defense even once its holder is statused"
     );
+}
+
+#[test]
+fn compound_eyes_raises_the_accuracy_threshold_of_an_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BUTTERFREE, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::COMPOUND_EYES);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([
+        COMPOUND_EYES_ONLY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        DISCARDED_EFFECT_DRAW,
+    ]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert!(
+        matches!(resolution.outcome, HitOutcome::Hit { .. }),
+        "roll 91 is within Compound Eyes' 97 threshold: {:?}",
+        resolution.outcome
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "a Compound Eyes hit continues through the remaining move draws"
+    );
+}
+
+#[test]
+fn hustle_lowers_the_accuracy_threshold_of_a_physical_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::HUSTLE);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([HUSTLE_ONLY_MISS_DRAW]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::Miss,
+        "roll 66 exceeds Hustle's 60 threshold"
+    );
+    assert_eq!(rng.draws(), 1, "a miss stops immediately");
 }
