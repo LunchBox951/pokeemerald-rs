@@ -14,6 +14,7 @@ pub struct MosaicSize {
 
 impl MosaicSize {
     const MIN_DIMENSION: u8 = 1;
+    const MAX_DIMENSION: u8 = 16;
     const REGISTER_FIELD_MASK: u8 = 0x0F;
 
     /// One-pixel blocks, which leave sampling unchanged.
@@ -22,13 +23,24 @@ impl MosaicSize {
         v: Self::MIN_DIMENSION,
     };
 
-    /// Creates dimensions from decoded hardware sizes (`1..=16`), clamping
-    /// zero dimensions to one.
+    /// Creates dimensions, clamping each to the hardware range `1..=16`.
     #[must_use]
     pub const fn new(h: u8, v: u8) -> Self {
         Self {
-            h: if h == 0 { Self::MIN_DIMENSION } else { h },
-            v: if v == 0 { Self::MIN_DIMENSION } else { v },
+            h: if h == 0 {
+                Self::MIN_DIMENSION
+            } else if h > Self::MAX_DIMENSION {
+                Self::MAX_DIMENSION
+            } else {
+                h
+            },
+            v: if v == 0 {
+                Self::MIN_DIMENSION
+            } else if v > Self::MAX_DIMENSION {
+                Self::MAX_DIMENSION
+            } else {
+                v
+            },
         }
     }
 
@@ -200,6 +212,11 @@ mod tests {
     fn new_clamps_a_zero_size_up_to_one() {
         let size = MosaicSize::new(0, 0);
         assert_eq!(size.snap(5, 9), (5, 9));
+    }
+
+    #[test]
+    fn new_clamps_a_size_above_the_hardware_maximum_down_to_sixteen() {
+        assert_eq!(MosaicSize::new(17, 17), MosaicSize::from_raw(0x0F, 0x0F));
     }
 
     #[test]
