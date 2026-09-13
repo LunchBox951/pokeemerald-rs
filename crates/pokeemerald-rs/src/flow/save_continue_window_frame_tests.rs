@@ -9,7 +9,7 @@ use crate::main_menu::{MainMenuScene, MainMenuType};
 /// One directory entry for [`synthetic_two_frame_pack_bytes`] -- a small
 /// independent copy of `main_menu::tests`' own fixture-building style, not a
 /// shared one (that module's helper is private to `main_menu::tests`, and
-/// this test lives in a different module tree, module docs above).
+/// this test lives in a different module tree).
 struct PackEntry {
     id: &'static str,
     kind_tag: u8,

@@ -642,7 +642,8 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
 
     // The second session *continues* the first save, which is the flow a
     // player actually takes; a second new-game session would meet the
-    // WARNING prompt instead (see the consent test below).
+    // WARNING prompt instead (`save_continue_overwrite_tests::
+    // a_new_game_session_must_answer_the_overwrite_warning_before_it_can_clobber_a_save`).
     let loaded = slot.load();
     let map = saved_map_id(loaded.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(

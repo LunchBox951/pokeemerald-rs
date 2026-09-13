@@ -11,7 +11,9 @@ use super::tests::TempSave;
 use crate::new_game;
 
 /// The save-data defect issue #353 fixes, driven through the production
-/// path end to end exactly like #344's own regression test above: continue
+/// path end to end exactly like #344's own regression test,
+/// `save_continue_tests::a_re_saved_continued_lead_keeps_the_bytes_no_battle_model_carries`:
+/// continue
 /// a file whose slot 0 has intact header bytes but a secure region that
 /// fails its own checksum, save it again from the field start menu, and
 /// read the party slot back off disk.
