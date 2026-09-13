@@ -764,9 +764,8 @@ impl Sequencer {
         let (key_m, pit_m) = track_pitch(track);
         let (pan_right, pan_left) = pan_terms(rhythm_pan);
 
-        // Floored at 0 (`m4a_1.s:1760`..`:1766`), then passed as
-        // `MidiKeyToFreq`/`MidiKeyToCgbFreq`'s `u8 key` parameter
-        // (`m4a.c:23`, `:810`), so it wraps modulo 256 rather than saturating.
+        // Floored at 0 (`m4a_1.s:1760`..`:1766`), then wrapped modulo 256 by
+        // `MidiKeyToFreq`/`MidiKeyToCgbFreq`'s `u8 key` (`m4a.c:23`, `:810`).
         let note_key = u8::try_from((i32::from(pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         let gate = u16::from(gate);
         let echo_volume = track.pseudo_echo_volume;
