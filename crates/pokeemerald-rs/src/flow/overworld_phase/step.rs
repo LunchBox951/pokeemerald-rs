@@ -50,7 +50,7 @@ struct PreMovementFieldInput {
     elevation: u8,
     arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
-    /// The pre-movement animated-door check (issue #851): [`trigger_animated_door_warp`]
+    /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
     /// against the tile the player *faces*, not one they stand on -- see [`Self::step`]'s
     /// "Warp timing" section.
     animated_door_trigger: Option<WarpTrigger>,
