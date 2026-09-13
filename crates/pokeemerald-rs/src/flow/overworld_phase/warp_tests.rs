@@ -946,15 +946,14 @@ fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {
     );
 }
 
-/// The release the drain-frame re-poll used to swallow (issue #851 review):
-/// a player who holds Up through the walked approach's last movement frame
+/// A player who holds Up through the walked approach's last movement frame
 /// but lets go before the next one must stay outside. Upstream cannot read
 /// that frame's held direction for `TryDoorWarp` at all -- `heldDirection2`
 /// is only set at `T_TILE_CENTER`/`T_NOT_MOVING`
 /// (`pokeemerald/src/field_control_avatar.c:95-112`), which the crossing's
-/// drain frame is not -- so the release lands in time.
+/// drain frame is not -- so the release lands in time. Pack-free: the door
+/// never opens, so no destination room is loaded.
 #[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn releasing_up_after_the_walked_approach_drains_leaves_the_lab_door_shut() {
     let mut phase = approaching_littleroot_lab_door_phase();
 

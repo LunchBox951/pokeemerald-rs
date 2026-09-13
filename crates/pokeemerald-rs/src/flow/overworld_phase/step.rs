@@ -223,11 +223,7 @@ impl OverworldPhase {
     /// all. So the drain call has no `TryDoorWarp` of its own to mirror, and
     /// polling the door there would accept a held direction one frame before
     /// upstream could read it -- entering on a release the player made in
-    /// time. The arrow path's own post-movement poll (above) does exactly
-    /// that, one call early; it is pinned by
-    /// `walking_onto_the_doormat_holding_south_exits_through_the_front_door`
-    /// and its siblings and is left alone here rather than retimed in a
-    /// door-scoped change (issue #851 review).
+    /// time.
     ///
     /// # Field input before movement (issue #194)
     ///
