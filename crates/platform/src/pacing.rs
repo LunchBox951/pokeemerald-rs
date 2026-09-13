@@ -217,8 +217,6 @@ mod tests {
 
     #[test]
     fn catch_up_beyond_u32_periods_reaches_next_boundary_in_one_tick() {
-        // More than `u32::MAX` periods missed still lands on the next
-        // boundary at or after `now` in a single tick.
         let period = Duration::from_nanos(2);
         let mut pacer = FramePacer::with_period(period);
         let t0 = Instant::now();
