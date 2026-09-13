@@ -309,9 +309,7 @@ fn a_failed_run_still_ticks_the_poison_residual() {
 
     let mut rng = SequenceRng::new(FAILED_RUN_THEN_ENEMY_ATTACK);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let events = battle
-        .take_turn(PlayerAction::Run, &mut rng)
-        .unwrap_or_else(battle::TurnError::into_events);
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
     let expected_damage = poison_residual_damage(enemy_max_hp);
     assert!(
