@@ -1025,3 +1025,45 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
 // `overworld` module tree, and `flow::overworld_phase` sees only the
 // yes/no `OverworldScene::binds_sprite` probe the crossing walk above
 // uses.
+
+// -- Issue #976 adjudication: the turn lock must not survive the battle ----
+
+/// The battle counterpart to the dialog/start-menu turn-lock cases
+/// (`step_tests::a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes`,
+/// issue #976): a Route 103 rival battle must clear a pending turn's busy
+/// window too, or the first post-battle press gets swallowed.
+#[test]
+fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards() {
+    let (rx, ry) = RIVAL_TILE;
+    // Facing North, so the held East below is a standstill turn, not a step.
+    let mut phase = route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::North));
+    phase.party_lead = Some(overwhelming_treecko_lead());
+
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "setup: the held East turns in place toward the rival"
+    );
+
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_rival_battle_active(),
+        "setup: A during the turn's busy window still starts the battle"
+    );
+
+    assert_eq!(
+        play_out_rival_battle(&mut phase, 32),
+        Some(BattleOutcome::PlayerWon),
+        "setup: the battle concludes"
+    );
+    assert!(!phase.is_rival_battle_active(), "setup: the slot emptied");
+
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "the first post-battle frame must accept input: a turn lock the battle froze \
+         mid-drain has no business swallowing it"
+    );
+}

@@ -411,6 +411,13 @@ impl OverworldPhase {
         if self.rival_battle.is_none() {
             return false;
         }
+        // The same field lock a dialog or the start menu holds (issue #976,
+        // `OverworldPhase::advance_dialog_frame`'s own comment): every battle
+        // frame returns before the player is ever ticked
+        // (`OverworldPhase::step`'s own "owns the frame outright" comment),
+        // so an in-flight turn's busy window must not survive one either
+        // (this artifact's ledger entry has the upstream `lockall` trace).
+        self.player.clear_turn_lock();
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.rival_battle,
             &mut self.party_lead,
