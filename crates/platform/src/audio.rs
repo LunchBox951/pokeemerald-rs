@@ -473,6 +473,20 @@ fn f32_to_i16(sample: f32) -> i16 {
 /// so pre-sizing still spares the real-time thread an allocation.
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
 
+/// Fill `data` (interleaved `i16`) from `source`, converting through the
+/// fixed `scratch` buffer in `scratch.len()`-bounded chunks rather than
+/// resizing it — so a `data` larger than `scratch` still never allocates.
+/// `scratch` is never resized here, regardless of how `data` compares to it.
+fn fill_i16_output(source: &mut Source, scratch: &mut [f32], data: &mut [i16]) {
+    for dst_chunk in data.chunks_mut(scratch.len()) {
+        let buf = &mut scratch[..dst_chunk.len()];
+        source.fill(buf);
+        for (dst, &sample) in dst_chunk.iter_mut().zip(buf.iter()) {
+            *dst = f32_to_i16(sample);
+        }
+    }
+}
+
 /// The two `cpal` calls [`AudioOutput::open`] makes against a device,
 /// behind a seam.
 ///
@@ -554,31 +568,23 @@ fn build_stream<D: OutputDevice>(
             None,
         )?,
         cpal::SampleFormat::I16 => {
-            // Pre-size the `f32` scratch buffer here, off the real-time
-            // callback thread, so steady-state callbacks never allocate. The
-            // device's largest supported buffer (in frames) bounds any
-            // `data.len()` cpal will hand us; multiply by the channel count
-            // for interleaved samples. A device that reports no buffer-size
-            // range gets a generous fallback. The in-callback `resize` below
-            // then only reallocates in the last-resort case where cpal hands
-            // us a buffer larger than anything advertised.
+            // Fix the `f32` scratch buffer's length here, off the real-time
+            // callback thread, so the callback never resizes it. The
+            // device's largest supported buffer (in frames) bounds the
+            // scratch size; multiply by the channel count for interleaved
+            // samples. A device that reports no buffer-size range gets a
+            // generous fallback. The callback below processes `data` in
+            // `scratch`-sized chunks instead, so a `data` cpal hands us
+            // larger than anything advertised still never grows `scratch`.
             let max_frames = max_buffer_frames(config);
             let channels = usize::from(config.channels());
             let scratch_capacity = max_frames
                 .saturating_mul(channels)
                 .max(DEFAULT_SCRATCH_SAMPLES);
-            let mut scratch: Vec<f32> = Vec::with_capacity(scratch_capacity);
+            let mut scratch: Vec<f32> = vec![0.0; scratch_capacity];
             device.build_output_stream(
                 stream_config,
-                move |data: &mut [i16], _| {
-                    if scratch.len() != data.len() {
-                        scratch.resize(data.len(), 0.0);
-                    }
-                    source.fill(&mut scratch);
-                    for (dst, &sample) in data.iter_mut().zip(scratch.iter()) {
-                        *dst = f32_to_i16(sample);
-                    }
-                },
+                move |data: &mut [i16], _| fill_i16_output(&mut source, &mut scratch, data),
                 err_fn,
                 None,
             )?
@@ -776,6 +782,33 @@ mod tests {
         assert_eq!(f32_to_i16(1.0), i16::MAX);
         assert_eq!(f32_to_i16(2.0), i16::MAX);
         assert_eq!(f32_to_i16(-2.0), -i16::MAX);
+    }
+
+    #[test]
+    fn fill_i16_output_processes_data_larger_than_scratch_in_bounded_chunks() {
+        // `scratch` here is deliberately smaller than `data`, standing in
+        // for a callback larger than the device advertised: every sample
+        // must still be converted, processed in `scratch.len()`-sized
+        // chunks, without ever resizing `scratch`.
+        let (producer, consumer) = ring_buffer(64);
+        #[allow(clippy::cast_precision_loss)]
+        let pcm: Vec<f32> = (0..20_i32).map(|i| (i as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), 20);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; 6];
+        let scratch_capacity = scratch.len();
+        let mut data = vec![0_i16; 20];
+
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        assert_eq!(
+            scratch.len(),
+            scratch_capacity,
+            "fill_i16_output must never grow scratch"
+        );
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
     }
 
     #[test]
