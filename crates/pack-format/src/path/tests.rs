@@ -454,18 +454,8 @@ fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
     );
 }
 
-/// The end-to-end regression: a regular file standing where rung 2's user
-/// data directory should be must not block rung 3's valid executable-
-/// directory pack from being chosen.
-///
-/// Drives [`super::HOST_RULE`] and its matching environment variable
-/// (rather than hard-coding [`DataDirRule::Xdg`]) so the obstruction lands
-/// on the rung `resolve` actually probes on whichever OS runs the suite: a
-/// non-Unix path never satisfies the XDG rule's leading-`/` check, so a
-/// fixed `DataDirRule::Xdg` would let `data_dir` return `None` on Windows
-/// and skip rung 2 — and the obstruction — without exercising the fix at
-/// all. The path is carried as an [`OsString`] end to end, never through
-/// `&str`, so a valid non-UTF-8 host temporary directory cannot panic here.
+/// A regular file at rung 2's user-data directory proves no pack can be
+/// there, so resolution must still find rung 3's valid pack.
 #[test]
 fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_rung() {
     use super::{probe, HOST_RULE};
