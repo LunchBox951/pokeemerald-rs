@@ -142,6 +142,14 @@ impl PlayerState {
         self.facing = direction;
     }
 
+    /// Ends a standstill turn's busy window early: upstream's field lock
+    /// forces a one-frame face-direction action over an in-flight turn the
+    /// instant it engages (`PlayerFreeze`,
+    /// `pokeemerald/src/field_player_avatar.c:1039-1046`).
+    pub const fn clear_turn_lock(&mut self) {
+        self.turn_frames_remaining = 0;
+    }
+
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
     #[must_use]
     pub const fn step_progress(&self) -> u8 {
