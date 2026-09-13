@@ -91,9 +91,34 @@ pub(crate) use overworld_phase::OverworldPhase;
 /// I-6 (issue #214) save/exit/reload round-trip tests -- their own file
 /// rather than more cases in `tests` below, because they exercise the whole
 /// `overworld -> file -> main menu -> overworld` loop rather than one scene
-/// transition (`one module = one concept` `(oop-boundaries)`).
+/// transition (`one module = one concept` `(oop-boundaries)`). Holds the
+/// shared save/continue fixtures the sibling `save_continue_*_tests` modules
+/// below also use, plus the round-trip/party-preservation tests themselves.
 #[cfg(test)]
 mod save_continue_tests;
+
+/// Legacy/malformed-save migrations on continue: facing, elevation, heal
+/// location, and fainted-lead fallbacks.
+#[cfg(test)]
+mod save_continue_migration_tests;
+
+/// Overwrite confirmation, corruption fallback, and the foreign-save
+/// consent gate (issue #232).
+#[cfg(test)]
+mod save_continue_overwrite_tests;
+
+/// Issue #353's undecodable-slot retention: a party slot whose secure
+/// region fails its own checksum.
+#[cfg(test)]
+mod save_continue_retention_tests;
+
+/// The saved `optionsTextSpeed`'s start-menu message pacing.
+#[cfg(test)]
+mod save_continue_text_speed_tests;
+
+/// Issue #795's main-menu window-frame chrome for a continuable save.
+#[cfg(test)]
+mod save_continue_window_frame_tests;
 
 /// The field start menu's own behaviour (I-6, issue #232) -- the `START`
 /// gate, frame ownership, and the close paths that write nothing. Split
