@@ -552,3 +552,68 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     drop(guard);
 }
+
+/// Publication must never write through a symlink planted at the temporary
+/// pointer name. `Path::exists()` reports a dangling link as absent, so the
+/// name-choosing loop accepts it and a plain `std::fs::write` would follow
+/// it, creating or truncating a bystander file outside `output_dir`. Skipping
+/// the name or failing the capture are both fine; escaping the directory is
+/// not.
+#[cfg(unix)]
+#[test]
+fn a_planted_pointer_symlink_is_never_written_through() {
+    /// Covers every temporary pointer name this process could pick next.
+    const CANDIDATES: u64 = 256;
+
+    let (pack_path, _pack_guard) = write_pack("pointer-symlink-commit");
+    let pack = AssetPack::load(&pack_path).unwrap();
+    let output_dir = scratch_path("pointer-symlink-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-symlink-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    for index in 0..CANDIDATES {
+        let generation = format!("{}.generation-{}-{index}", scene.name(), std::process::id());
+        std::os::unix::fs::symlink(
+            bystander_dir.join(format!("bystander-{index}")),
+            output_dir.join(format!(".{generation}.pointer")),
+        )
+        .unwrap();
+    }
+
+    let outcome = capture_loaded(scene, &pack, &output_dir, || Ok(()));
+
+    let escaped: Vec<_> = std::fs::read_dir(&bystander_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        escaped.is_empty(),
+        "publishing followed a planted symlink and wrote {escaped:?} outside {}",
+        output_dir.display()
+    );
+
+    if let Ok(report) = outcome {
+        assert_eq!(
+            std::fs::read(&report.rgb_path).unwrap().len(),
+            report.payload_len,
+            "a capture that reports success must publish its payload"
+        );
+        assert!(
+            !output_dir
+                .join(format!("{}.generation", scene.name()))
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the published pointer must be a regular file, not a planted symlink"
+        );
+    }
+
+    drop(bystander_guard);
+    drop(out_guard);
+}

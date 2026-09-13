@@ -18,6 +18,8 @@ use pokeemerald_rs::title::{TitleScene, TitleSceneError};
 
 use crate::Scene;
 
+mod staging;
+
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
 
@@ -188,6 +190,10 @@ where
         let staged_dir = output_dir.join(format!(".{generation}.staged"));
         let generation_dir = output_dir.join(&generation);
         let pointer_tmp = output_dir.join(format!(".{generation}.pointer"));
+        // A cheap early skip only -- `Path::exists()` follows symlinks and
+        // reports a dangling one as absent, so `staging::stage`'s exclusive
+        // create is what actually guards `pointer_tmp` against reuse or a
+        // planted symlink.
         if generation_dir.exists() || pointer_tmp.exists() {
             continue;
         }
@@ -211,9 +217,15 @@ where
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
-        std::fs::write(&pointer_tmp, format!("{generation}\n"))
+        // `Path::exists()` follows symlinks and reports a dangling one as
+        // absent, so the temporary is created and filled through an
+        // exclusively held file (refuses any existing entry, symlink
+        // included) and its ownership is re-checked immediately before the
+        // publishing rename; see `staging`.
+        let staged_pointer = staging::stage(&pointer_tmp, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_tmp.clone(), e.to_string()))?;
-        std::fs::rename(&pointer_tmp, &pointer_path)
+        staged_pointer
+            .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
         Ok((
             generation_dir.join(format!("{}.rgb", scene.name())),
@@ -222,7 +234,10 @@ where
     })();
 
     if result.is_err() {
-        let _ = std::fs::remove_file(&pointer_tmp);
+        // `staging::stage`/`StagedFile::publish` already clean up
+        // `pointer_tmp` themselves, respecting ownership -- an unconditional
+        // `remove_file` here could otherwise delete an entry a planted
+        // symlink attempt left behind rather than one this call staged.
         let _ = std::fs::remove_dir_all(&staged_dir);
         let _ = std::fs::remove_dir_all(&generation_dir);
     }
