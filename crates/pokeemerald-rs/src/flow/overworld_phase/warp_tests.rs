@@ -827,14 +827,11 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
 /// *walked* approach (two full tile crossings, not a stationary press) must
 /// preempt the final step onto the door.
 ///
-/// The walked approach's second crossing drains on its own 32nd held frame
-/// ([`WALK_FRAMES_PER_TILE`] `* 2`); position is committed at crossing
-/// start, so the player is already at rest on `(7, 17)` by then. The 33rd
-/// held frame is the first at which [`OverworldPhase::step`]'s pre-movement
-/// stage sees them at rest there -- upstream's own first `T_TILE_CENTER`
-/// CB1 for that crossing ([`OverworldPhase::step`]'s "Warp timing" section)
-/// -- so that is the frame the door must claim, and a still-held Up must
-/// never instead walk onto the (synthetic, walkable) door tile `(7, 16)`.
+/// The second crossing drains on the 32nd held frame ([`WALK_FRAMES_PER_TILE`]
+/// `* 2`) and the 33rd is the first pre-movement poll that sees the player
+/// at rest on `(7, 17)` ([`super::animated_door`] owns why), so that is the
+/// frame the door must claim, and a still-held Up must never instead walk
+/// onto the (synthetic, walkable) door tile `(7, 16)`.
 ///
 /// Runs pack-free the same way
 /// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
@@ -903,17 +900,8 @@ fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
 /// south of the door, already facing North, so reaching the tile in front
 /// of it takes two full tile crossings ([`WALK_FRAMES_PER_TILE`] frames
 /// each) and the 33rd held frame is the first one
-/// [`OverworldPhase::step`]'s pre-movement stage sees them at rest there.
-///
-/// That is upstream's timing, not an off-by-one against it: the CB2 that
-/// applies a walk's last pixel is also the one that raises
-/// `heldMovementFinished`, so `UpdatePlayerAvatarTransitionState` first
-/// reports `T_TILE_CENTER` -- and `FieldGetPlayerInput` first sets the
-/// `heldDirection2` `TryDoorWarp` is gated on -- only on the *next* frame's
-/// CB1 (`pokeemerald/src/event_object_movement.c:8300-8313`,
-/// `pokeemerald/src/field_player_avatar.c:901-917`,
-/// `pokeemerald/src/field_control_avatar.c:95-112`, `:170-178`). See
-/// [`OverworldPhase::step`]'s "Warp timing" section.
+/// [`OverworldPhase::step`]'s pre-movement stage sees them at rest there
+/// ([`super::animated_door`] owns why that is upstream's own timing).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {

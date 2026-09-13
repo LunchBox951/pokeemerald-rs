@@ -2,20 +2,10 @@
 //!
 //! Door and arrow triggers are separate because callers poll doors after a
 //! completed step and arrows while the player holds their facing direction.
-//! Animated doors are also polled a second way, pre-movement and against the
-//! tile the player *faces* rather than one they have landed on (issue #851):
-//! upstream's `ProcessPlayerFieldInput` computes the tile in front of the
-//! player and calls `TryDoorWarp` there, gated on `heldDirection2 &&
-//! dpadDirection == playerDirection`
-//! (`pokeemerald/src/field_control_avatar.c:170-178`), which only ever fires
-//! facing `DIR_NORTH` (`:833-856`) -- see [`trigger_animated_door_warp`].
-//! That is the *only* reachable door path for an animated door in bundled
-//! data: every animated-door tile is solid, so
-//! [`super::player::PlayerState::try_start_resolved_step`]'s collision check
-//! rejects it before a landing can ever exist, and [`trigger_door_warp`]'s
-//! completed-step poll can only ever see a tile the player stood on.
-//! Non-animated doors have no such restriction and stay on the
-//! completed-step path alone.
+//! Animated doors are polled pre-movement against the tile the player
+//! *faces* ([`trigger_animated_door_warp`], `TryDoorWarp` at
+//! `pokeemerald/src/field_control_avatar.c:170-178`, `:833-856`): every
+//! animated-door tile is solid, so no completed step can land on one.
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
