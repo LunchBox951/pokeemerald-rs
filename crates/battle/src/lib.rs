@@ -80,7 +80,8 @@
 //! battle-type delta on which shape it was built for. The five deltas —
 //! running refused outright ([`BattleError::NoRunningFromTrainer`], a
 //! *different* upstream gate from `first_battle`'s), a party opponent, a
-//! forced post-faint send-out in party order, `x1.5` experience
+//! forced post-faint send-out chosen by `GetMostSuitableMonToSwitchInto`'s
+//! suitability passes (issue #1040), `x1.5` experience
 //! ([`exp::trainer_faint_exp`]), and prize money on a win
 //! ([`battle::BattleEvent::MoneyGained`]) — each carry their upstream
 //! citation beside the code that owns them. The opponent's
