@@ -1,19 +1,9 @@
-//! Hardened staging for the generation pointer file `publish_generation`
-//! writes and republishes.
-//!
-//! `Path::exists()` follows symlinks and reports a dangling one as absent, so
-//! checking a candidate pointer name that way and then writing to it with a
-//! plain `std::fs::write` lets a symlink *planted ahead of that check*
-//! redirect the write and get promoted by the `rename` that follows. This
-//! module closes that: [`stage`] creates and fills the temporary through a
-//! handle opened with `create_new` -- which refuses an existing entry of any
-//! kind, symlink included -- and [`StagedFile::publish`] re-checks that the
-//! path still names the held file immediately before the promoting rename.
-//! See [`StagedFile::publish`] for the narrower check-to-rename window that
-//! bound, rather than closed, shares with every other staging user in this
-//! workspace. Mirrors the same fix in `crate::extract::write_pack_atomically`
-//! (`../extract/mod.rs`) and
-//! [`engine::save::file::staging`](../../../engine/src/save/file/staging.rs).
+//! [`stage`] fills a `create_new`-held file and [`StagedFile::publish`]
+//! re-verifies that handle's identity before the promoting rename, so a
+//! symlink planted at the name is refused rather than followed or published.
+//! That check is not fused to the rename: a replacement landing in the gap
+//! is still promoted, and off Windows nothing confirms identity past a plain
+//! regular-file test.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -161,23 +151,8 @@ impl StagedFile {
         )
     }
 
-    /// Verifies this staging path still names the file this handle holds,
-    /// then publishes it at `dest` by rename. A staging path that was
-    /// replaced, or whose ownership could not be confirmed, is refused rather
-    /// than published -- so a symlink planted before this call ever reserved
-    /// the name is never followed or promoted, which is the attack
-    /// [`stage`]'s `create_new` and this check close.
-    ///
-    /// Nothing in `std` fuses that check to the rename below, so a
-    /// replacement landing in the gap between them is still promoted; the
-    /// exclusive create and the hold kept open across the check bound that
-    /// window rather than close it, exactly as in
-    /// `engine::save::file::SaveFile::write_with`
-    /// (`../../../engine/src/save/file.rs`) and
-    /// `crate::extract::write_pack_atomically`. On Windows the hold admits
-    /// nobody at all, so there the window is only as wide as its release:
-    /// from [`Self::release_hold`] to the rename, and on to the cleanup
-    /// unlink if that rename fails.
+    /// Verifies ownership, then publishes this staging path to `dest` by
+    /// rename; refuses to publish a replaced or unverifiable staging path.
     pub(super) fn publish(mut self, dest: &Path) -> std::io::Result<()> {
         match self.still_ours() {
             Ok(true) => {}

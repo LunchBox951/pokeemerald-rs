@@ -190,10 +190,7 @@ where
         let staged_dir = output_dir.join(format!(".{generation}.staged"));
         let generation_dir = output_dir.join(&generation);
         let pointer_tmp = output_dir.join(format!(".{generation}.pointer"));
-        // A cheap early skip only -- `Path::exists()` follows symlinks and
-        // reports a dangling one as absent, so `staging::stage`'s exclusive
-        // create is what actually guards `pointer_tmp` against reuse or a
-        // planted symlink.
+        // Cheap early skip only; `staging::stage` is the actual guard.
         if generation_dir.exists() || pointer_tmp.exists() {
             continue;
         }
@@ -217,11 +214,7 @@ where
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
-        // `Path::exists()` follows symlinks and reports a dangling one as
-        // absent, so the temporary is created and filled through an
-        // exclusively held file (refuses any existing entry, symlink
-        // included) and its ownership is re-checked immediately before the
-        // publishing rename; see `staging`.
+        // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = staging::stage(&pointer_tmp, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_tmp.clone(), e.to_string()))?;
         staged_pointer
@@ -234,10 +227,7 @@ where
     })();
 
     if result.is_err() {
-        // `staging::stage`/`StagedFile::publish` already clean up
-        // `pointer_tmp` themselves, respecting ownership -- an unconditional
-        // `remove_file` here could otherwise delete an entry a planted
-        // symlink attempt left behind rather than one this call staged.
+        // `staging` already cleans up `pointer_tmp`, respecting ownership.
         let _ = std::fs::remove_dir_all(&staged_dir);
         let _ = std::fs::remove_dir_all(&generation_dir);
     }
