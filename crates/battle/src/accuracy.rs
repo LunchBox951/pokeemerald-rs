@@ -3,9 +3,9 @@
 //! Always-hit effects bypass the roll. Other moves combine the two stages and
 //! consume one random draw before comparing it with the adjusted accuracy.
 
-use assets::MoveEffect;
+use assets::{AbilityId, MoveEffect, MoveType};
 
-use crate::damage::BattleRng;
+use crate::damage::{BattleRng, MoveCategory};
 use crate::stat_stage::StatStage;
 
 /// The move effect for attacks that bypass accuracy rolls.
@@ -96,16 +96,39 @@ pub fn combined_stage(accuracy_stage: StatStage, evasion_stage: StatStage) -> St
 
 const ACCURACY_ROLL_RANGE: u32 = 100;
 
+/// Whether `ability` raises the stage-adjusted threshold by 30%, matching
+/// `Cmd_accuracycheck`'s Compound Eyes guard
+/// (`pokeemerald/src/battle_script_commands.c:1152-1153`).
+fn compound_eyes_raises_threshold(ability: AbilityId) -> bool {
+    ability == AbilityId::COMPOUND_EYES
+}
+
+/// Whether `ability` lowers the stage-adjusted threshold of a physical move by
+/// 20%, matching `Cmd_accuracycheck`'s Hustle guard
+/// (`pokeemerald/src/battle_script_commands.c:1156-1157`).
+fn hustle_lowers_threshold(ability: AbilityId, move_type: MoveType) -> bool {
+    ability == AbilityId::HUSTLE
+        && move_type
+            .battle_type()
+            .is_some_and(|t| MoveCategory::for_type(t) == MoveCategory::Physical)
+}
+
 /// Return whether a move hits and consume any required accuracy RNG draw.
 ///
 /// Always-hit effects consume no draw. Every other effect consumes exactly one,
 /// even when its adjusted accuracy guarantees a hit, matching
 /// `Cmd_accuracycheck` (`pokeemerald/src/battle_script_commands.c:1176`). Zero
 /// accuracy therefore misses unless the effect is always-hit.
+///
+/// Compound Eyes and a physical-move Hustle scale the stage-adjusted threshold
+/// after the accuracy/evasion ratio, before the roll
+/// (`pokeemerald/src/battle_script_commands.c:1149-1157`).
 #[must_use]
 pub fn accuracy_check(
     move_accuracy: u8,
     move_effect: MoveEffect,
+    move_type: MoveType,
+    attacker_ability: AbilityId,
     accuracy_stage: StatStage,
     evasion_stage: StatStage,
     rng: &mut impl BattleRng,
@@ -115,7 +138,13 @@ pub fn accuracy_check(
     }
     let effective_stage = combined_stage(accuracy_stage, evasion_stage);
     let ratio = RATIOS[effective_stage.raw_index() as usize];
-    let hit_threshold = ratio.apply_to(move_accuracy);
+    let mut hit_threshold = ratio.apply_to(move_accuracy);
+    if compound_eyes_raises_threshold(attacker_ability) {
+        hit_threshold = hit_threshold * 130 / 100;
+    }
+    if hustle_lowers_threshold(attacker_ability, move_type) {
+        hit_threshold = hit_threshold * 80 / 100;
+    }
     let accuracy_roll = u32::from(rng.next_u16()) % ACCURACY_ROLL_RANGE + 1;
     accuracy_roll <= hit_threshold
 }
@@ -127,9 +156,11 @@ mod tests {
     };
     use crate::damage::BattleRng;
     use crate::stat_stage::StatStage;
-    use assets::MoveEffect;
+    use assets::{AbilityId, MoveEffect, MoveType, Type};
 
     const ORDINARY_HIT_EFFECT: MoveEffect = MoveEffect(0);
+    const ORDINARY_MOVE_TYPE: MoveType = MoveType::Battle(Type::Normal);
+    const NO_ABILITY: AbilityId = AbilityId::NONE;
 
     struct FixedRng(u16);
     impl BattleRng for FixedRng {
@@ -193,6 +224,8 @@ mod tests {
         let hit = accuracy_check(
             0,
             EFFECT_ALWAYS_HIT,
+            ORDINARY_MOVE_TYPE,
+            NO_ABILITY,
             StatStage::NEUTRAL,
             StatStage::NEUTRAL,
             &mut rng,
@@ -207,6 +240,8 @@ mod tests {
         let _ = accuracy_check(
             95,
             ORDINARY_HIT_EFFECT,
+            ORDINARY_MOVE_TYPE,
+            NO_ABILITY,
             StatStage::NEUTRAL,
             StatStage::NEUTRAL,
             &mut rng,
@@ -221,6 +256,8 @@ mod tests {
             assert!(accuracy_check(
                 100,
                 ORDINARY_HIT_EFFECT,
+                ORDINARY_MOVE_TYPE,
+                NO_ABILITY,
                 StatStage::NEUTRAL,
                 StatStage::NEUTRAL,
                 &mut rng,
@@ -235,6 +272,8 @@ mod tests {
         assert!(!accuracy_check(
             50,
             ORDINARY_HIT_EFFECT,
+            ORDINARY_MOVE_TYPE,
+            NO_ABILITY,
             StatStage::NEUTRAL,
             StatStage::NEUTRAL,
             &mut rng,
@@ -244,6 +283,8 @@ mod tests {
         assert!(accuracy_check(
             50,
             ORDINARY_HIT_EFFECT,
+            ORDINARY_MOVE_TYPE,
+            NO_ABILITY,
             StatStage::NEUTRAL,
             StatStage::NEUTRAL,
             &mut rng,
@@ -258,6 +299,8 @@ mod tests {
             assert!(accuracy_check(
                 50,
                 ORDINARY_HIT_EFFECT,
+                ORDINARY_MOVE_TYPE,
+                NO_ABILITY,
                 plus_six,
                 StatStage::NEUTRAL,
                 &mut rng,
@@ -289,6 +332,8 @@ mod tests {
                 accuracy_check(
                     base_accuracy,
                     ORDINARY_HIT_EFFECT,
+                    ORDINARY_MOVE_TYPE,
+                    NO_ABILITY,
                     stage,
                     StatStage::NEUTRAL,
                     &mut rng,
@@ -300,6 +345,8 @@ mod tests {
                 !accuracy_check(
                     base_accuracy,
                     ORDINARY_HIT_EFFECT,
+                    ORDINARY_MOVE_TYPE,
+                    NO_ABILITY,
                     stage,
                     StatStage::NEUTRAL,
                     &mut rng,
@@ -308,5 +355,88 @@ mod tests {
                 last_hit_roll + 1
             );
         }
+    }
+
+    #[test]
+    fn compound_eyes_raises_the_threshold_by_thirty_percent() {
+        // 75 * 130 / 100 = 97: rolls 91-97 hit only with Compound Eyes.
+        for draw in [90u16, 96] {
+            let mut rng = FixedRng(draw);
+            assert!(accuracy_check(
+                75,
+                ORDINARY_HIT_EFFECT,
+                ORDINARY_MOVE_TYPE,
+                AbilityId::COMPOUND_EYES,
+                StatStage::NEUTRAL,
+                StatStage::NEUTRAL,
+                &mut rng,
+            ));
+        }
+        let mut rng = FixedRng(97);
+        assert!(!accuracy_check(
+            75,
+            ORDINARY_HIT_EFFECT,
+            ORDINARY_MOVE_TYPE,
+            AbilityId::COMPOUND_EYES,
+            StatStage::NEUTRAL,
+            StatStage::NEUTRAL,
+            &mut rng,
+        ));
+    }
+
+    #[test]
+    fn hustle_lowers_the_threshold_of_a_physical_move_by_twenty_percent() {
+        // 75 * 80 / 100 = 60: rolls 61-75 hit without Hustle but miss with it.
+        for draw in [65u16, 74] {
+            let mut rng = FixedRng(draw);
+            assert!(!accuracy_check(
+                75,
+                ORDINARY_HIT_EFFECT,
+                ORDINARY_MOVE_TYPE,
+                AbilityId::HUSTLE,
+                StatStage::NEUTRAL,
+                StatStage::NEUTRAL,
+                &mut rng,
+            ));
+        }
+        let mut rng = FixedRng(59);
+        assert!(accuracy_check(
+            75,
+            ORDINARY_HIT_EFFECT,
+            ORDINARY_MOVE_TYPE,
+            AbilityId::HUSTLE,
+            StatStage::NEUTRAL,
+            StatStage::NEUTRAL,
+            &mut rng,
+        ));
+    }
+
+    #[test]
+    fn hustle_does_not_affect_a_special_move() {
+        let special_move_type = MoveType::Battle(Type::Water);
+        let mut rng = FixedRng(65);
+        assert!(accuracy_check(
+            75,
+            ORDINARY_HIT_EFFECT,
+            special_move_type,
+            AbilityId::HUSTLE,
+            StatStage::NEUTRAL,
+            StatStage::NEUTRAL,
+            &mut rng,
+        ));
+    }
+
+    #[test]
+    fn hustle_does_not_affect_the_non_combat_mystery_type() {
+        let mut rng = FixedRng(65);
+        assert!(accuracy_check(
+            75,
+            ORDINARY_HIT_EFFECT,
+            MoveType::Mystery,
+            AbilityId::HUSTLE,
+            StatStage::NEUTRAL,
+            StatStage::NEUTRAL,
+            &mut rng,
+        ));
     }
 }

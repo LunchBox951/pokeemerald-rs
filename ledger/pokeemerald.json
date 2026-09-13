@@ -24594,7 +24594,7 @@
           "status": "stubbed"
         },
         "Cmd_accuracycheck": {
-          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Compound Eyes/Sand Veil/Hustle/evasion-up-item modifiers, and Foresight's ignore-evasion branch (abilities/items/status2 out of scope).",
+          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check), now scaled by attacker Compound Eyes (:1152-1153) and a physical-move Hustle (:1156-1157). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Sand Veil/evasion-up-item modifiers, and Foresight's ignore-evasion branch (items/status2 out of scope).",
           "rust_target": "crates/battle/src/accuracy.rs",
           "spec": "S-6",
           "status": "stubbed"

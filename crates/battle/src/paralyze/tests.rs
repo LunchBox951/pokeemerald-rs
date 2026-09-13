@@ -427,6 +427,37 @@ fn an_already_poisoned_shed_skin_defender_is_admitted_not_refused() {
     );
 }
 
+/// `SPECIES_REMORAID`: Water, and Hustle in its primary ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
+
+#[test]
+fn a_hustle_attacker_lowers_the_threshold_of_a_physical_paralyze_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 10, vec![GLARE]);
+    assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
+    let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
+    // Glare's 75 accuracy hits an ordinary attacker on roll 65, but Hustle's
+    // physical-move guard lowers the threshold to 75 * 80 / 100 = 60, which
+    // that roll exceeds (`battle_script_commands.c:1156-1157`).
+    let mut rng = SequenceRng::new([64]);
+    let outcome = resolve_paralyze_move(&dex, GLARE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, ParalyzeOutcome::Miss);
+    assert_eq!(rng.draws(), 1);
+}
+
+#[test]
+fn hustle_does_not_lower_the_threshold_of_a_special_paralyze_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 10, vec![STUN_SPORE]);
+    assert_eq!(attacker.ability(), assets::AbilityId::HUSTLE);
+    let defender = mon(&dex, ZIGZAGOON, 10, vec![TACKLE]);
+    // Stun Spore is Grass, so Hustle's physical-only guard leaves its 75
+    // threshold untouched and roll 65 still hits.
+    let mut rng = SequenceRng::new([64]);
+    let outcome = resolve_paralyze_move(&dex, STUN_SPORE, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, ParalyzeOutcome::Applied);
+}
+
 /// `SPECIES_MACHOP`: Fighting, and Guts in its primary ability slot.
 const MACHOP: SpeciesId = SpeciesId(66);
 /// `SPECIES_MILOTIC`: Water, and Marvel Scale in its primary ability slot.
