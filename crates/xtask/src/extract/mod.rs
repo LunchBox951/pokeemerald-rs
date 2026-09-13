@@ -141,23 +141,55 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     })
 }
 
+/// Publishes `bytes` at `output_path` by staging under an exclusively
+/// created, unpredictable sibling name and renaming that sibling over the
+/// destination, so a symlink planted at a guessable staging name is refused
+/// rather than followed or promoted. Mirrors
+/// [`engine::save::file::staging`](../../../engine/src/save/file/staging.rs)'s
+/// fix for the identical risk in save files.
 fn write_pack_atomically(output_path: &Path, bytes: &[u8]) -> Result<(), ExtractError> {
-    let staging_path = staging_path_for_current_process(output_path);
+    write_pack_atomically_with_names(output_path, bytes, staging_candidates(output_path))
+}
+
+/// As [`write_pack_atomically`], staging at the first of `candidates` that
+/// [`create_new_exclusive`] finds free, so a test can hand over one
+/// deterministic name instead of the production walk.
+fn write_pack_atomically_with_names(
+    output_path: &Path,
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> Result<(), ExtractError> {
     let write_failed = |error: std::io::Error| {
         ExtractError::WriteFailed(output_path.to_path_buf(), error.to_string())
     };
 
-    if let Err(error) = write_and_sync(&staging_path, bytes) {
-        return Err(write_failed(remove_abandoned_staging_file(
-            &staging_path,
-            error,
-        )));
+    let mut staged = match stage_at_first_free_name(candidates, bytes) {
+        Ok(staged) => staged,
+        Err(error) => return Err(write_failed(error)),
+    };
+
+    match staged.still_ours() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(write_failed(std::io::Error::other(format!(
+                "staging file {} was replaced before it could be published",
+                staged.path.display()
+            ))));
+        }
+        Err(error) => {
+            return Err(write_failed(std::io::Error::new(
+                error.kind(),
+                format!(
+                    "ownership of the staging file {} could not be confirmed before publishing, so it was left in place: {error}",
+                    staged.path.display()
+                ),
+            )));
+        }
     }
-    if let Err(error) = std::fs::rename(&staging_path, output_path) {
-        return Err(write_failed(remove_abandoned_staging_file(
-            &staging_path,
-            error,
-        )));
+
+    staged.release_hold();
+    if let Err(error) = std::fs::rename(&staged.path, output_path) {
+        return Err(write_failed(staged.remove_after(error)));
     }
     Ok(())
 }
@@ -179,20 +211,222 @@ fn remove_abandoned_staging_file(
     }
 }
 
-fn staging_path_for_current_process(output_path: &Path) -> PathBuf {
+/// Width of the staging suffix's hex digits: wide enough that guessing a
+/// value ahead of a run is impractical, matching the unpredictable-name
+/// approach [`engine::save::file::staging`](../../../engine/src/save/file/staging.rs)
+/// takes for the identical problem.
+const STAGING_HEX_DIGITS: usize = 10;
+
+/// How many candidate names one publish tries before giving up.
+/// [`create_new_exclusive`] makes each attempt exclusive, so this only bounds
+/// retries against a genuine collision -- another run racing to stage at the
+/// same moment -- not against a planted symlink, which `create_new_exclusive`
+/// refuses outright regardless of how many names are offered.
+const STAGING_WALK_ATTEMPTS: usize = 256;
+
+/// The unpredictable sibling names one publish walks, in the order tried.
+fn staging_candidates(output_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    let mask = unique_value_mask(STAGING_HEX_DIGITS);
+    let mut value = unique_value();
+    std::iter::repeat_with(move || {
+        let candidate = staging_path_with_value(output_path, value);
+        value = value.wrapping_add(1) & mask;
+        candidate
+    })
+    .take(STAGING_WALK_ATTEMPTS)
+}
+
+/// Renders the sibling name for one candidate `value`, `.tmp.<hex>` wide
+/// suffixed onto `output_path`'s own name.
+fn staging_path_with_value(output_path: &Path, value: u64) -> PathBuf {
     let mut name = output_path.as_os_str().to_os_string();
-    name.push(format!(".tmp.{}", std::process::id()));
+    name.push(format!(".tmp.{value:0STAGING_HEX_DIGITS$x}"));
     PathBuf::from(name)
 }
 
-fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// `std`-only entropy folded into one value that fits [`STAGING_HEX_DIGITS`]:
+/// process id, clock nanoseconds, and a fresh `RandomState` key, which alone
+/// already differs between two calls at the same nanosecond.
+/// [`create_new_exclusive`] is what keeps two stagings from colliding; this
+/// value only makes the name unguessable ahead of time.
+fn unique_value() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    hasher.write_u128(nanos);
+    hasher.finish() & unique_value_mask(STAGING_HEX_DIGITS)
+}
+
+/// Every value `width` hex digits can render, and no other.
+fn unique_value_mask(width: usize) -> u64 {
+    (1_u64 << (4 * width)) - 1
+}
+
+/// Opens `path` for writing and fails if anything already holds that name,
+/// refusing an existing file, directory, or symlink instead of following or
+/// truncating it.
+///
+/// On Windows the returned handle shares nothing, so until it is dropped no
+/// other opener -- in this process or any other -- can open, delete, or
+/// rename that entry.
+fn create_new_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        options.share_mode(0);
+    }
+    options.open(path)
+}
+
+/// Stages `bytes` at the first of `candidates` that `create_new_exclusive`
+/// finds free, reporting the last collision once they have all turned out to
+/// be taken.
+fn stage_at_first_free_name(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    bytes: &[u8],
+) -> std::io::Result<StagedPack> {
+    let mut last_collision = None;
+    for path in candidates {
+        match fill_new_file(&path, bytes) {
+            Ok(staged) => return Ok(staged),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last_collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "exhausted staging attempts",
+        )
+    }))
+}
+
+/// Writes and syncs `bytes` into a `path` `create_new_exclusive` has just
+/// claimed, removing `path` again on any failure past that open so this call
+/// never deletes an entry a different caller put there.
+fn fill_new_file(path: &Path, bytes: &[u8]) -> std::io::Result<StagedPack> {
     use std::io::Write as _;
 
-    let file = std::fs::File::create(path)?;
-    let mut staged = std::io::BufWriter::new(file);
-    staged.write_all(bytes)?;
-    staged.flush()?;
-    staged.get_ref().sync_all()
+    let file = create_new_exclusive(path)?;
+    let result = (|| {
+        let mut writer = std::io::BufWriter::new(&file);
+        writer.write_all(bytes)?;
+        writer.flush()?;
+        file.sync_all()
+    })();
+    #[cfg(not(windows))]
+    let hold = file;
+    #[cfg(windows)]
+    let hold = Some(file);
+    let mut staged = StagedPack {
+        path: path.to_path_buf(),
+        hold,
+    };
+    match result {
+        Ok(()) => Ok(staged),
+        Err(source) => Err(staged.remove_after(source)),
+    }
+}
+
+/// The handle that wrote the staged pack, kept open until the pack is
+/// promoted or abandoned: while it lives the file cannot be freed, so nothing
+/// that takes its name can inherit its identity and pass for it.
+#[cfg(not(windows))]
+type Hold = std::fs::File;
+
+/// The handle that wrote the staged pack, kept open until the pack is
+/// promoted or abandoned. It shares nothing ([`create_new_exclusive`]), so
+/// while it lives the entry cannot be opened, deleted, or renamed at all --
+/// by this process either, which is why it is an `Option`:
+/// [`StagedPack::release_hold`] empties it when the name has to be given up.
+#[cfg(windows)]
+type Hold = Option<std::fs::File>;
+
+/// Ends `hold` where the platform needs it ended.
+#[cfg(not(windows))]
+fn release(_hold: &mut Hold) {}
+
+/// Ends `hold` where the platform needs it ended: Windows refuses to rename
+/// or delete an entry whose open handle shares nothing, and refuses it to the
+/// holder too, so the hold cannot outlive the last operation that needs the
+/// staging name.
+#[cfg(windows)]
+fn release(hold: &mut Hold) {
+    drop(hold.take());
+}
+
+/// Whether `found` describes the very file `hold` holds open: same device and
+/// inode.
+#[cfg(unix)]
+fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let staged = hold.metadata()?;
+    Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
+}
+
+/// Whether `found` describes the very file `hold` holds open. Off unix there
+/// is no identity to read back, so the answer rests on what the hold forbids:
+/// on Windows it forbids everything, so the name cannot have come to mean
+/// another file while it lives.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+)]
+fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok(true)
+}
+
+/// A staged pack and the hold that keeps the staging name its own.
+struct StagedPack {
+    path: PathBuf,
+    hold: Hold,
+}
+
+impl StagedPack {
+    /// Whether the staging path still names this staged file, rather than a
+    /// symlink, directory, or other entry that took its name.
+    fn still_ours(&self) -> std::io::Result<bool> {
+        let found = std::fs::symlink_metadata(&self.path)?;
+        Ok(found.file_type().is_file() && is_the_held_file(&self.hold, &found)?)
+    }
+
+    /// Gives up the hold, so that the rename which promotes the staged pack
+    /// -- or the unlink which abandons it -- can take its name.
+    fn release_hold(&mut self) {
+        release(&mut self.hold);
+    }
+
+    /// Removes this staged file after `source`, folding a cleanup failure
+    /// into the returned error. An entry that replaced it belongs to whoever
+    /// put it there and is left where it is; ownership that could not be read
+    /// at all leaves the same file behind, and is reported as such.
+    fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
+        match self.still_ours() {
+            Ok(false) => source,
+            Ok(true) => {
+                self.release_hold();
+                remove_abandoned_staging_file(&self.path, source)
+            }
+            Err(unreadable) => std::io::Error::new(
+                source.kind(),
+                format!(
+                    "{source}; additionally, ownership of the abandoned staging file {} could not be confirmed: {unreadable}",
+                    self.path.display()
+                ),
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -591,9 +825,14 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_pngs_sorted, extract_to, staging_path_for_current_process, upstream_present,
-        write_pack_atomically, ExtractError, LAYOUTS,
+        collect_pngs_sorted, extract_to, staging_path_with_value, upstream_present,
+        write_pack_atomically_with_names, ExtractError, LAYOUTS,
     };
+
+    /// A fixed staging candidate value the deterministic tests hand to
+    /// [`write_pack_atomically_with_names`] in place of the production
+    /// unpredictable walk.
+    const TEST_STAGING_VALUE: u64 = 0x00AB_CDEF_0123;
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -710,10 +949,15 @@ mod tests {
         let original = b"an existing, usable pack";
         std::fs::write(&output_path, original).unwrap();
 
-        let staging_path = staging_path_for_current_process(&output_path);
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
         std::fs::create_dir(&staging_path).unwrap();
 
-        let err = write_pack_atomically(&output_path, b"a truncated replacement").unwrap_err();
+        let err = write_pack_atomically_with_names(
+            &output_path,
+            b"a truncated replacement",
+            std::iter::once(staging_path.clone()),
+        )
+        .unwrap_err();
         assert!(
             matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
             "{err:?}"
@@ -735,8 +979,13 @@ mod tests {
         let marker_path = output_path.join("marker");
         std::fs::write(&marker_path, b"unchanged").unwrap();
 
-        let staging_path = staging_path_for_current_process(&output_path);
-        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        let err = write_pack_atomically_with_names(
+            &output_path,
+            b"replacement",
+            std::iter::once(staging_path.clone()),
+        )
+        .unwrap_err();
         assert!(
             matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
             "{err:?}"
@@ -754,9 +1003,14 @@ mod tests {
     fn a_staging_file_that_was_never_created_is_not_reported_as_abandoned() {
         let dir = scratch_dir("never-created");
         let output_path = dir.join("absent").join("pokeemerald.pack");
-        let staging_path = staging_path_for_current_process(&output_path);
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
 
-        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+        let err = write_pack_atomically_with_names(
+            &output_path,
+            b"replacement",
+            std::iter::once(staging_path.clone()),
+        )
+        .unwrap_err();
 
         assert!(
             !staging_path.exists(),
@@ -773,12 +1027,17 @@ mod tests {
     #[test]
     fn a_failed_staging_cleanup_names_the_artifact_it_left_behind() {
         let dir = scratch_dir("cleanup");
-        let output_path = dir.join("pokeemerald.pack");
-        let staging_path = staging_path_for_current_process(&output_path);
+        let staging_path = dir.join("pokeemerald.pack.tmp.occupant");
         std::fs::create_dir(&staging_path).unwrap();
         std::fs::write(staging_path.join("occupant"), b"occupant").unwrap();
 
-        let err = write_pack_atomically(&output_path, b"replacement").unwrap_err();
+        // Exercised directly, rather than through `write_pack_atomically_with_names`:
+        // a name `create_new_exclusive` finds already taken is someone else's, so the
+        // production path must never try to remove it. This tests
+        // `remove_abandoned_staging_file`'s own contract -- naming what it left behind
+        // when it is asked to clean up a path this call *did* stage and own.
+        let original_error = std::io::Error::other("synthetic publish failure");
+        let err = super::remove_abandoned_staging_file(&staging_path, original_error);
 
         assert!(
             staging_path.is_dir(),
@@ -788,6 +1047,86 @@ mod tests {
             err.to_string()
                 .contains(&staging_path.display().to_string()),
             "a failed cleanup must name the artifact it left behind: {err}"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_colliding_first_candidate_is_left_untouched_in_favor_of_the_next_free_name() {
+        let dir = scratch_dir("collision-retry");
+        let output_path = dir.join("pokeemerald.pack");
+        let occupied = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        let free = staging_path_with_value(&output_path, TEST_STAGING_VALUE + 1);
+        std::fs::write(&occupied, b"someone else's staging file").unwrap();
+
+        write_pack_atomically_with_names(
+            &output_path,
+            b"a freshly built pack",
+            [occupied.clone(), free.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(&occupied).unwrap(),
+            b"someone else's staging file",
+            "a name already taken must be left to its owner, not overwritten"
+        );
+        assert!(
+            !free.exists(),
+            "the free candidate is consumed and renamed onto the output, not left behind"
+        );
+        assert_eq!(
+            std::fs::read(&output_path).unwrap(),
+            b"a freshly built pack"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_planted_at_the_staging_name_is_never_followed_or_published() {
+        let dir = scratch_dir("staging-symlink");
+        let output_path = dir.join("pokeemerald.pack");
+        let original = b"an existing, usable pack";
+        std::fs::write(&output_path, original).unwrap();
+        let bystander = dir.join("bystander");
+        std::fs::write(&bystander, b"not a pack").unwrap();
+
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+        std::os::unix::fs::symlink(&bystander, &staging_path).unwrap();
+
+        let err = write_pack_atomically_with_names(
+            &output_path,
+            b"a freshly built pack",
+            std::iter::once(staging_path.clone()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
+            "{err:?}"
+        );
+
+        assert_eq!(
+            std::fs::read(&bystander).unwrap(),
+            b"not a pack",
+            "a symlink planted at the staging name redirected the pack bytes"
+        );
+        assert!(
+            std::fs::symlink_metadata(&staging_path)
+                .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "a refused planted symlink must be left alone, not consumed as staging"
+        );
+        assert_eq!(
+            std::fs::read(&output_path).unwrap(),
+            original,
+            "a refused staging symlink must not touch the published pack"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&output_path)
+                .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "the published pack path must not become a planted symlink"
         );
 
         let _ = std::fs::remove_dir_all(dir);

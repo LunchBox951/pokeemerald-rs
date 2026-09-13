@@ -21,6 +21,7 @@ enum MultiHitConclusion {
     AttackerFaintedSkipHitCount,
     TargetFaintedReportHitCount,
     TargetImmune,
+    TargetLevitateBlocked,
 }
 
 impl MultiHitConclusion {
@@ -32,7 +33,7 @@ impl MultiHitConclusion {
     }
 
     const fn permits_secondary_effect(self) -> bool {
-        !matches!(self, Self::TargetImmune)
+        !matches!(self, Self::TargetImmune | Self::TargetLevitateBlocked)
     }
 }
 
@@ -210,6 +211,11 @@ impl Battle {
                 by_player: attacker_is_player,
                 move_id,
             });
+        } else if result.conclusion == MultiHitConclusion::TargetLevitateBlocked {
+            events.push(BattleEvent::LevitateBlocked {
+                by_player: attacker_is_player,
+                move_id,
+            });
         } else if result.conclusion.reports_hit_count() && result.hits_landed > 0 {
             events.push(BattleEvent::MultiHit {
                 by_player: attacker_is_player,
@@ -263,9 +269,14 @@ impl Battle {
             )?;
             let target_is_immune = raw_damage.damage == 0;
             if target_is_immune {
+                let conclusion = if raw_damage.levitate_blocked {
+                    MultiHitConclusion::TargetLevitateBlocked
+                } else {
+                    MultiHitConclusion::TargetImmune
+                };
                 return Ok(MultiHitResult {
                     hits_landed,
-                    conclusion: MultiHitConclusion::TargetImmune,
+                    conclusion,
                 });
             }
             let damage = apply_damage_roll(raw_damage.damage, rng);
@@ -364,6 +375,7 @@ fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> B
     match outcome {
         HitOutcome::Miss => BattleEvent::Missed { by_player, move_id },
         HitOutcome::NoEffect => BattleEvent::NoEffect { by_player, move_id },
+        HitOutcome::LevitateBlocked => BattleEvent::LevitateBlocked { by_player, move_id },
         HitOutcome::Hit { .. } => {
             unreachable!("a landed hit cannot produce a failure event")
         }
