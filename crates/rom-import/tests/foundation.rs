@@ -65,13 +65,46 @@ fn a_profile_built_from_the_fixture_selects_it() {
     assert_eq!(selected.sha1, rom.digest());
 }
 
+/// A fresh directory under the OS temporary directory, unique to this
+/// process and this call, removed on drop.
+///
+/// A shared path lets one `cargo test` process's cleanup unlink another's
+/// fixture mid-import; `create_dir`'s exclusivity settles the name.
+struct TempDir {
+    path: std::path::PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        let pid = std::process::id();
+        for attempt in 0..1_000u32 {
+            let path =
+                std::env::temp_dir().join(format!("rom-import-foundation-{label}-{pid}-{attempt}"));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(err) => panic!("a writable temp dir: {err}"),
+            }
+        }
+        panic!("no unused temp directory name for {label} under pid {pid}");
+    }
+
+    fn join(&self, name: &str) -> std::path::PathBuf {
+        self.path.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 #[test]
 fn import_fails_closed_on_an_unsupported_rom() {
-    let dir = std::env::temp_dir().join("rom-import-foundation-test");
-    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    let dir = TempDir::new("test");
     let rom_path = dir.join("fixture.gba");
     let out_path = dir.join("assets.pack");
-    let _ = std::fs::remove_file(&out_path);
     std::fs::write(&rom_path, rom_with_a_compressed_blob().bytes()).expect("a writable temp file");
 
     // The fixture is not the supported revision, so the import stops at
@@ -79,6 +112,29 @@ fn import_fails_closed_on_an_unsupported_rom() {
     let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
     assert!(matches!(err, ImportError::UnsupportedRevision { .. }));
     assert!(!out_path.exists(), "import must never write a pack");
+}
 
-    std::fs::remove_file(&rom_path).expect("cleanup");
+#[test]
+fn one_scratch_directory_cleanup_leaves_a_concurrent_import_alone() {
+    // Two importers running at once, the way two `cargo test` processes do.
+    let mine = TempDir::new("concurrent");
+    let theirs = TempDir::new("concurrent");
+    assert_ne!(
+        mine.path, theirs.path,
+        "two concurrent scratch directories must not be the same path"
+    );
+
+    let rom_path = mine.join("fixture.gba");
+    let out_path = mine.join("assets.pack");
+    std::fs::write(&rom_path, rom_with_a_compressed_blob().bytes()).expect("a writable temp file");
+
+    // The other importer finishes and cleans up mid-import.
+    drop(theirs);
+
+    let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
+    assert!(
+        matches!(err, ImportError::UnsupportedRevision { .. }),
+        "a neighbour's cleanup must not turn the revision check into {err}"
+    );
+    assert!(!out_path.exists(), "import must never write a pack");
 }

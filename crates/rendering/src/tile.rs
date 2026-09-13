@@ -143,6 +143,45 @@ impl Tileset {
     pub fn tile(&self, index: u16) -> Option<&Tile> {
         self.tiles.get(index as usize)
     }
+
+    /// The palette index for one 1D-mapped OBJ pixel at `tile_index`,
+    /// honoring an 8bpp sprite's 32-byte half-tile base offset.
+    ///
+    /// `tile_index` must already be wrapped within the OBJ character window
+    /// (see [`BitDepth::obj_tile_index_mask`]). When `half_tile_offset` is
+    /// set on an 8bpp tileset, hardware starts the logical 8x8 tile four
+    /// rows into the decoded tile at `tile_index`; the remaining rows come
+    /// from the next tile, wrapped the same way. This models mGBA's
+    /// one-dimensional OBJ addressing for a packed OAM tile number whose low
+    /// bit is set (`mgba/src/gba/renderers/software-obj.c:168-171`)
+    /// `(behavioral-fidelity)`. Ignored for 4bpp tilesets, whose tiles are
+    /// already 32-byte aligned.
+    ///
+    /// Returns `None` if either decoded tile this pixel needs is missing
+    /// from this tileset.
+    #[must_use]
+    pub(crate) fn obj_pixel_index(
+        &self,
+        tile_index: u16,
+        half_tile_offset: bool,
+        x: usize,
+        y: usize,
+    ) -> Option<u8> {
+        const HALF_TILE_ROWS: usize = BitDepth::TILE_DIM / 2;
+
+        if !half_tile_offset || !matches!(self.bit_depth, BitDepth::Bpp8) {
+            return Some(self.tile(tile_index)?.index(x, y));
+        }
+
+        let combined_row = HALF_TILE_ROWS + y;
+        let (index, row) = if combined_row < BitDepth::TILE_DIM {
+            (tile_index, combined_row)
+        } else {
+            let next_tile = tile_index.wrapping_add(1) & self.bit_depth.obj_tile_index_mask();
+            (next_tile, combined_row - BitDepth::TILE_DIM)
+        };
+        Some(self.tile(index)?.index(x, row))
+    }
 }
 
 #[cfg(test)]
@@ -203,6 +242,65 @@ mod tests {
         assert_eq!(tileset.tile(0).unwrap().index(0, 0), 1);
         assert_eq!(tileset.tile(1).unwrap().index(0, 0), 3);
         assert!(tileset.tile(2).is_none());
+    }
+
+    #[test]
+    fn obj_pixel_index_without_the_offset_reads_the_tile_directly() {
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len()];
+        bytes[0] = 9;
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+        assert_eq!(tileset.obj_pixel_index(0, false, 0, 0), Some(9));
+    }
+
+    #[test]
+    fn obj_pixel_index_with_the_offset_reads_four_rows_into_the_tile_then_the_next_one() {
+        const HALF_TILE_ROW_BYTES: usize = 8 * 4;
+        const FIRST_TILE_UPPER_HALF: u8 = 11;
+        const SECOND_TILE_LOWER_HALF: u8 = 22;
+
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len() * 2];
+        bytes[HALF_TILE_ROW_BYTES] = FIRST_TILE_UPPER_HALF;
+        bytes[BitDepth::Bpp8.tile_byte_len()] = SECOND_TILE_LOWER_HALF;
+        let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
+
+        assert_eq!(
+            tileset.obj_pixel_index(0, true, 0, 0),
+            Some(FIRST_TILE_UPPER_HALF),
+            "row 0 of the offset tile is row 4 of decoded tile 0"
+        );
+        assert_eq!(
+            tileset.obj_pixel_index(0, true, 0, 4),
+            Some(SECOND_TILE_LOWER_HALF),
+            "row 4 of the offset tile is row 0 of decoded tile 1"
+        );
+    }
+
+    #[test]
+    fn obj_pixel_index_with_the_offset_wraps_past_the_tileset_using_the_obj_tile_index_mask() {
+        const WRAPPED_TO_FIRST_TILE: u8 = 42;
+
+        let bit_depth = BitDepth::Bpp8;
+        let last_tile = bit_depth.obj_tile_index_mask();
+        let tile_count = usize::from(last_tile) + 1;
+        let mut bytes = vec![0u8; bit_depth.tile_byte_len() * tile_count];
+        bytes[0] = WRAPPED_TO_FIRST_TILE;
+        let tileset = Tileset::decode(bit_depth, &bytes).unwrap();
+
+        assert_eq!(
+            tileset.obj_pixel_index(last_tile, true, 0, 4),
+            Some(WRAPPED_TO_FIRST_TILE),
+            "the offset tile's row 4 wraps from the last tile to tile 0"
+        );
+    }
+
+    #[test]
+    fn obj_pixel_index_ignores_the_offset_for_4bpp() {
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len() * 2];
+        bytes[BitDepth::TILE_DIM / 2] = 0x0F;
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+
+        assert_eq!(tileset.obj_pixel_index(0, true, 0, 1), Some(15));
+        assert_eq!(tileset.obj_pixel_index(0, false, 0, 1), Some(15));
     }
 
     #[test]
