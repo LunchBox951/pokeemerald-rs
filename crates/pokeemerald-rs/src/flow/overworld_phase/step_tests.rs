@@ -956,19 +956,9 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     );
 }
 
-/// Issue #1127: `TryArrowWarp`/`TryStartWarpEventScript` both resolve the
-/// warp event at `GetPlayerPosition`'s `position.elevation`
-/// (`pokeemerald/src/field_control_avatar.c:194-197, 690, 704`), which is
-/// `PlayerGetElevation()` -- the *retained* `previousElevation`
-/// (`pokeemerald/src/field_player_avatar.c:1192-1195`), not the landed
-/// tile's own (possibly transition) collision elevation. `previousElevation`
-/// deliberately keeps the last *non*-transition value
-/// (`engine::overworld::PlayerState::previous_elevation`'s own doc comment).
-/// A warp event stored at an ordinary elevation is a wildcard match only for
-/// a query at its own elevation or for a stored transition
-/// (`engine::overworld::MapRuntime::warp_event_at`, mirroring
-/// `GetWarpEventAtPosition`), so a query at the landed transition tile's `0`
-/// misses an elevation-`3` event that a query at the retained `3` finds.
+/// Issue #1127: pins the `previous_elevation()` contract
+/// [`super::OverworldPhase::step`]'s `door_warp` lookup documents
+/// (`step.rs:482-486`).
 ///
 /// Transplanted onto Granite Cave B1F for the same reason
 /// `crate::flow::wild_encounter::tests`'
