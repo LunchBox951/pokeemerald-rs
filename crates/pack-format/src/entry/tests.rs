@@ -230,6 +230,55 @@ fn a_zero_sided_metatile_is_an_error_rather_than_a_division_by_zero() {
 }
 
 #[test]
+fn image_entry_from_tiles_rejects_a_raster_larger_than_memory_can_address() {
+    // Tile-aligned, so alignment and metatile validation pass; the raster
+    // it declares is larger than any allocation, even though the tile-count
+    // and byte-length arithmetic above it all fits a 64-bit `usize`.
+    let side = u32::MAX - 7;
+    assert_eq!(
+        image_entry_from_tiles("i".into(), &[], 8, side, side, None).unwrap_err(),
+        EntryShapeError::RasterTooLarge {
+            width: side,
+            height: side,
+        }
+    );
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn image_entry_from_tiles_rejects_a_raster_whose_size_overflows_a_32_bit_usize() {
+    // 65,536 x 65,536 is tile- and metatile-aligned, but on a 32-bit target
+    // `needed_tiles * bytes_per_tile` (and `width * height`) is exactly
+    // 2^32, one past what a 32-bit `usize` can hold.
+    let side = 65_536;
+    assert_eq!(
+        image_entry_from_tiles("i".into(), &[], 8, side, side, None).unwrap_err(),
+        EntryShapeError::RasterTooLarge {
+            width: side,
+            height: side,
+        }
+    );
+}
+
+#[cfg(target_pointer_width = "32")]
+#[test]
+fn a_zero_tile_grid_with_a_huge_metatile_width_does_not_overflow_a_32_bit_usize() {
+    // `tiles_wide` is 0, and 0 is a multiple of every nonzero metatile
+    // side, so `Some((u32::MAX, 2))` is a valid shape here; it must produce
+    // the (empty) zero raster rather than walk a metatile grid that does
+    // not exist. `metatile_width * metatile_height` alone overflows a
+    // 32-bit `usize` (8,589,934,590 > u32::MAX; on 64-bit targets no
+    // `u32` pair can overflow this product, so this case only exists at
+    // 32 bits). Computing that product eagerly, before noticing the tile
+    // grid is empty, would panic on a 32-bit target even though the
+    // metatile shape is valid.
+    let entry = image_entry_from_tiles("i".into(), &[], 8, 0, 16, Some((u32::MAX, 2))).unwrap();
+    assert_eq!(entry.payload, Vec::<u8>::new());
+    let packed = tiles_from_image(&[], 8, 0, 16, Some((u32::MAX, 2))).unwrap();
+    assert_eq!(packed, Vec::<u8>::new());
+}
+
+#[test]
 fn errors_render_a_message_naming_the_offending_shape() {
     let rendered = EntryShapeError::ImageSizeMismatch {
         width: 4,
