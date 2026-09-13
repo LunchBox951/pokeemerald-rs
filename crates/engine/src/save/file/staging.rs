@@ -278,10 +278,10 @@ fn unique_value_mask(width: usize) -> u64 {
 type Hold = std::fs::File;
 
 /// The handle that wrote the staged image, kept open until the image is
-/// promoted or abandoned. [`create_new_exclusive`]'s share mode forbids
-/// renaming or deleting it while any handle stays open, including this
-/// process's own, which is why it is an `Option`:
-/// [`StagedSave::release_hold`] empties it when the name has to be given up.
+/// promoted or abandoned. What its open handle forbids is documented at
+/// [`create_new_exclusive`]; that includes this process, which is why it is
+/// an `Option`: [`StagedSave::release_hold`] empties it when the name has to
+/// be given up.
 #[cfg(windows)]
 type Hold = Option<std::fs::File>;
 
