@@ -764,14 +764,9 @@ impl Sequencer {
         let (key_m, pit_m) = track_pitch(track);
         let (pan_right, pan_left) = pan_terms(rhythm_pan);
 
-        // pitch_key + keyM, floored at 0 (`bpl _081DDCA0; movs r3, 0`), then
-        // the sum is passed to `MidiKeyToFreq`'s `u8 key` param, truncating
-        // the register to its low byte — so a sum above 255 wraps modulo
-        // 256, it does not saturate (`ldrb r1, [key]; adds r3, r1, r0; ...
-        // bl MidiKeyToFreq`). The same clamp-then-truncate feeds
-        // `MidiKeyToCgbFreq` for CGB instruments (`m4a_1.s:1760`..`:1766`).
-        // `pitch_key` is the played key for a plain/key-split note, or a
-        // rhythm child's own base key (`m4a_1.s:1594`..`:1598`).
+        // Floored at 0 (`m4a_1.s:1760`..`:1766`), then passed as
+        // `MidiKeyToFreq`/`MidiKeyToCgbFreq`'s `u8 key` parameter
+        // (`m4a.c:23`, `:810`), so it wraps modulo 256 rather than saturating.
         let note_key = u8::try_from((i32::from(pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         let gate = u16::from(gate);
         let echo_volume = track.pseudo_echo_volume;
@@ -889,11 +884,7 @@ impl Sequencer {
                 .with_pitch_key(pitch_key)
                 .with_priority(priority),
             ),
-            // `resolve_instrument` never returns an indirection as the leaf:
-            // a KeySplit/Rhythm slot whose own resolved child is itself an
-            // indirection is treated as "no note", exactly as upstream's
-            // `ply_note` aborts on nested indirection (`m4a_1.s:1604`..
-            // `:1609`) rather than recursing.
+            // `resolve_instrument` never returns an indirection as the leaf.
             Instrument::KeySplit(_) | Instrument::Rhythm(_) => false,
         }
     }
@@ -2777,11 +2768,11 @@ mod tests {
     }
 
     /// `SquareTone::fixed_rate` must actually reach [`CgbVoice`]'s DAC
-    /// correction through the sequencer, not merely not crash (PR #276
-    /// review): [`cgb_test_track`]'s key 60 lands on the odd register
-    /// `0x60B`, which `cgb_dac_correct` rounds to a different playback
-    /// rate, so the two renders must diverge. A threading bug that pins the
-    /// flag to either constant makes them identical.
+    /// correction through the sequencer, not merely avoid a crash:
+    /// [`cgb_test_track`]'s key 60 lands on the odd register `0x60B`, which
+    /// `cgb_dac_correct` rounds to a different playback rate, so the two
+    /// renders must diverge. A threading bug that pins the flag to either
+    /// constant would make them identical.
     #[test]
     fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
         let tone = |fixed_rate| {
