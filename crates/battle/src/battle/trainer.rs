@@ -7,7 +7,7 @@
 //! draws OT IDs before `Battle::new_trainer` can refuse an unexecutable move.
 
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
-use assets::{Effectiveness, MoveId, SpeciesId, Type, TypeChart};
+use assets::{AbilityId, Effectiveness, MoveId, SpeciesId, Type, TypeChart};
 
 use crate::ability::{huge_power_attack, pinch_boosts_power};
 use crate::damage::{
@@ -293,7 +293,11 @@ impl TrainerContext {
 
     /// The healthy bench member whose typing takes the most damage from
     /// `player` and knows a super-effective move back, retrying the
-    /// next-worst typing otherwise.
+    /// next-worst typing otherwise. The typing score itself runs
+    /// `ModulateByTypeEffectiveness`, which reads no ability
+    /// (`pokeemerald/src/battle_ai_switch_items.c:709`-`:710`); only the
+    /// super-effective check runs `TypeCalc` and so honours `player`'s
+    /// Levitate (`:733`, see [`levitate_refuses`]).
     fn most_suitable_by_type(
         &self,
         dex: &Dex,
@@ -331,7 +335,8 @@ impl TrainerContext {
     /// attacker (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
     /// `battle_script_commands.c:1306`-`:1311`); each candidate's own move
     /// then contributes only STAB and type effectiveness through `TypeCalc`
-    /// (`battle_script_commands.c:1536`-`:1552`). The running winner is
+    /// (`battle_script_commands.c:1536`-`:1552`), less the type-chart rows
+    /// `player`'s Levitate skips (see [`levitate_refuses`]). The running winner is
     /// narrowed to a byte before every comparison, reproducing the stock
     /// (non-`BUGFIX`) `u8 bestDmg` that silently wraps a winning score above
     /// 255 (`pokeemerald/include/config.h:48`;
@@ -405,6 +410,20 @@ fn raw_multiply(score: u32, effectiveness: Effectiveness) -> u32 {
     score * u32::from(effectiveness.multiplier_x10()) / 10
 }
 
+/// Whether `defender`'s Levitate refuses `move_type`, `TypeCalc`'s one
+/// ability short-circuit: a Ground move against a Levitate holder skips the
+/// whole type-chart loop and sets only `MOVE_RESULT_MISSED |
+/// MOVE_RESULT_DOESNT_AFFECT_FOE`
+/// (`pokeemerald/src/battle_script_commands.c:1554`-`:1556`). The branch
+/// sits after the STAB multiply (`:1547`-`:1551`) and touches
+/// `gBattleMoveDamage` not at all, so the most-damage pass keeps the
+/// STAB-multiplied base rather than zeroing it; only the super-effective
+/// pass's flags are decided, and `MOVE_RESULT_SUPER_EFFECTIVE` is never
+/// among them.
+fn levitate_refuses(defender: &BattlePokemon, move_type: Type) -> bool {
+    move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE
+}
+
 /// Whether `candidate` knows a damaging move super effective against
 /// `player`.
 fn has_super_effective_move(
@@ -420,6 +439,9 @@ fn has_super_effective_move(
         let Some(move_type) = move_data.move_type.battle_type() else {
             continue;
         };
+        if levitate_refuses(player, move_type) {
+            continue;
+        }
         let effectiveness =
             apply_dual_type_effectiveness(NEUTRAL_TYPE_SCORE, move_type, player.types());
         if effectiveness > NEUTRAL_TYPE_SCORE {
@@ -477,7 +499,8 @@ fn stale_base_damage(
 /// use of the fainted battler for `TypeCalc`'s STAB check) and type
 /// effectiveness (against `defender`'s types) on top of the shared `base`
 /// from [`stale_base_damage`], or `None` for the [`OHKO_POWER_SENTINEL`] or
-/// a `???`-typed move.
+/// a `???`-typed move. A move [`levitate_refuses`] keeps its STAB-multiplied
+/// `base` and takes no type-chart row at all.
 fn candidate_move_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -493,6 +516,9 @@ fn candidate_move_damage(
         return Ok(None);
     };
     let damage = apply_stab(base, has_stab(fainted.types(), move_id, move_type));
+    if levitate_refuses(defender, move_type) {
+        return Ok(Some(damage));
+    }
     Ok(Some(most_suitable_type_effectiveness(
         damage,
         move_type,
@@ -595,7 +621,7 @@ mod tests {
     use crate::pokemon::BattlePokemon;
     use crate::script_rng::SequenceRng;
     use assets::trainers::{TrainerClass, TrainerId};
-    use assets::{MoveId, SpeciesId};
+    use assets::{AbilityId, MoveId, SpeciesId};
 
     const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
     const UNKNOWN_TRAINER: TrainerId = TrainerId(60_000);
@@ -700,6 +726,91 @@ mod tests {
             context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
             Ok(Some(1)),
             "Ground's immunity is floored back to one by Flying's super effectiveness"
+        );
+    }
+
+    /// The super-effective pass runs `TypeCalc`, whose Levitate branch
+    /// short-circuits the whole type chart for a Ground move
+    /// (`pokeemerald/src/battle_script_commands.c:1554`-`:1556`), so such a
+    /// move never carries `MOVE_RESULT_SUPER_EFFECTIVE` back to the check at
+    /// `battle_ai_switch_items.c:733`. Against a Levitate Koffing the Grass
+    /// candidate still wins the ability-blind typing score
+    /// (`ModulateByTypeEffectiveness`, `:709`-`:710`, doubles Poison against
+    /// Grass twice), but its Earthquake cannot qualify it, so the pass
+    /// invalidates it and takes the Pichu whose Confusion is genuinely super
+    /// effective against Poison.
+    #[test]
+    fn the_typing_pass_rejects_a_ground_move_the_players_levitate_refuses() {
+        const KOFFING: SpeciesId = SpeciesId(109);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const EARTHQUAKE: MoveId = MoveId(89);
+        const CONFUSION: MoveId = MoveId(93);
+        const TACKLE: MoveId = MoveId(33);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let player = mon(KOFFING, 50, vec![TACKLE]);
+        assert_eq!(player.ability(), AbilityId::LEVITATE, "the fixture holds");
+        let bench = vec![
+            mon(TREECKO, 5, vec![EARTHQUAKE]),
+            mon(PICHU, 5, vec![CONFUSION]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_type(&dex, &player),
+            Ok(Some(1)),
+            "Levitate disqualifies Earthquake, so the best typing is invalidated"
+        );
+    }
+
+    /// `TypeCalc`'s Levitate branch sits after the STAB multiply and leaves
+    /// `gBattleMoveDamage` untouched (`:1547`-`:1556`), so a Ground move
+    /// against a Levitate holder scores the shared base as-is rather than
+    /// taking Poison's doubling row. Neither move gets STAB off the fainted
+    /// Metagross's Steel/Psychic typing, so Earthquake would otherwise
+    /// double the base and overtake the earlier Tackle under the pass's
+    /// strict `bestDmg < gBattleMoveDamage` comparison
+    /// (`battle_ai_switch_items.c:781`); honouring Levitate leaves the two
+    /// tied on the plain base, and the tie keeps the earlier member.
+    #[test]
+    fn the_most_damage_pass_scores_a_levitate_refused_ground_move_without_the_chart() {
+        const METAGROSS: SpeciesId = SpeciesId(400);
+        const KOFFING: SpeciesId = SpeciesId(109);
+        const PICHU: SpeciesId = SpeciesId(172);
+        const MEGA_KICK: MoveId = MoveId(25);
+        const EARTHQUAKE: MoveId = MoveId(89);
+        const TACKLE: MoveId = MoveId(33);
+
+        let dex = Dex::new();
+        let mon = |species, level, moves: Vec<MoveId>| {
+            BattlePokemon::new(&dex, species, level, fixed_ivs(255), 0, moves)
+                .expect("dex-resident")
+        };
+        let fainted = mon(METAGROSS, 5, vec![MEGA_KICK]);
+        let player = mon(KOFFING, 50, vec![TACKLE]);
+        let bench = vec![
+            mon(PICHU, 5, vec![TACKLE]),
+            mon(TREECKO, 5, vec![EARTHQUAKE]),
+        ];
+        let context = TrainerContext::new(
+            MAY_ROUTE_103_MUDKIP,
+            trainer_data(MAY_ROUTE_103_MUDKIP).expect("a real trainer"),
+            bench,
+        );
+
+        assert_eq!(
+            context.most_suitable_by_damage(&dex, &fainted, MEGA_KICK, &player),
+            Ok(Some(0)),
+            "Earthquake takes no chart row against Levitate, so it cannot \
+             overtake Tackle"
         );
     }
 
