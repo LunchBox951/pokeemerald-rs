@@ -9017,24 +9017,24 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::East,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTH"),
-            }, // right
+            },
             MapConnection {
                 direction: Direction::South,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTHWEST"),
-            }, // down
+            },
         ],
     },
     MapHeader {
@@ -9046,29 +9046,29 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::West,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTHWEST"),
-            }, // left
+            },
             MapConnection {
                 direction: Direction::South,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTH"),
-            }, // down
+            },
             MapConnection {
                 direction: Direction::East,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTHEAST"),
-            }, // right
+            },
         ],
     },
     MapHeader {
@@ -9080,24 +9080,24 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::North,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTHWEST"),
-            }, // up
+            },
             MapConnection {
                 direction: Direction::East,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTH"),
-            }, // right
+            },
         ],
     },
     MapHeader {
@@ -9109,29 +9109,29 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::North,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTH"),
-            }, // up
+            },
             MapConnection {
                 direction: Direction::West,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTHWEST"),
-            }, // left
+            },
             MapConnection {
                 direction: Direction::East,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTHEAST"),
-            }, // right
+            },
         ],
     },
     MapHeader {
@@ -9143,20 +9143,18 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(457), // MUS_B_FRONTIER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
-        connections: &[
-            MapConnection {
-                direction: Direction::East,
-                offset: 0,
-                target: MapId("MAP_BATTLE_FRONTIER_OUTSIDE_EAST"),
-            }, // right
-        ],
+        battle_scene: BattleScene::Normal,
+        connections: &[MapConnection {
+            direction: Direction::East,
+            offset: 0,
+            target: MapId("MAP_BATTLE_FRONTIER_OUTSIDE_EAST"),
+        }],
     },
     MapHeader {
         id: MapId("MAP_BATTLE_FRONTIER_BATTLE_TOWER_LOBBY"),
@@ -9167,13 +9165,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9185,13 +9183,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9203,13 +9201,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9221,13 +9219,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Frontier, // MAP_BATTLE_SCENE_FRONTIER
+        battle_scene: BattleScene::Frontier,
         connections: &[],
     },
     MapHeader {
@@ -9239,13 +9237,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(381), // MUS_ABANDONED_SHIP
         region_map_section: RegionMapSectionId("MAPSEC_SOUTHERN_ISLAND"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9257,13 +9255,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(381), // MUS_ABANDONED_SHIP
         region_map_section: RegionMapSectionId("MAPSEC_SOUTHERN_ISLAND"),
         requires_flash: false,
-        weather: Weather::Shade,  // WEATHER_SHADE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::Shade,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9275,13 +9273,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9293,24 +9291,24 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::West,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTH"),
-            }, // left
+            },
             MapConnection {
                 direction: Direction::South,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTHEAST"),
-            }, // down
+            },
         ],
     },
     MapHeader {
@@ -9322,24 +9320,24 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(428), // MUS_SAFARI_ZONE
         region_map_section: RegionMapSectionId("MAPSEC_SAFARI_ZONE"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[
             MapConnection {
                 direction: Direction::West,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_SOUTH"),
-            }, // left
+            },
             MapConnection {
                 direction: Direction::North,
                 offset: 0,
                 target: MapId("MAP_SAFARI_ZONE_NORTHEAST"),
-            }, // up
+            },
         ],
     },
     MapHeader {
@@ -9351,20 +9349,18 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(457), // MUS_B_FRONTIER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,   // WEATHER_NONE
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::None,
+        map_type: MapType::Route,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
-        connections: &[
-            MapConnection {
-                direction: Direction::West,
-                offset: 0,
-                target: MapId("MAP_BATTLE_FRONTIER_OUTSIDE_WEST"),
-            }, // left
-        ],
+        battle_scene: BattleScene::Normal,
+        connections: &[MapConnection {
+            direction: Direction::West,
+            offset: 0,
+            target: MapId("MAP_BATTLE_FRONTIER_OUTSIDE_WEST"),
+        }],
     },
     MapHeader {
         id: MapId("MAP_BATTLE_FRONTIER_BATTLE_TOWER_MULTI_PARTNER_ROOM"),
@@ -9375,13 +9371,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9393,13 +9389,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9411,13 +9407,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(465), // MUS_B_TOWER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Frontier, // MAP_BATTLE_SCENE_FRONTIER
+        battle_scene: BattleScene::Frontier,
         connections: &[],
     },
     MapHeader {
@@ -9429,13 +9425,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(473), // MUS_B_DOME_LOBBY
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9447,13 +9443,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(473), // MUS_B_DOME_LOBBY
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9465,13 +9461,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(467), // MUS_B_DOME
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9483,13 +9479,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(467), // MUS_B_DOME
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9501,13 +9497,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(463), // MUS_B_PALACE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9519,13 +9515,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(463), // MUS_B_PALACE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9537,13 +9533,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(463), // MUS_B_PALACE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9555,13 +9551,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(461), // MUS_B_PYRAMID
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9573,13 +9569,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(65535), // MUS_NONE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9591,13 +9587,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(65535), // MUS_NONE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9609,13 +9605,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(458), // MUS_B_ARENA
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9627,13 +9623,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(458), // MUS_B_ARENA
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9645,13 +9641,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(458), // MUS_B_ARENA
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9663,13 +9659,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(469), // MUS_B_FACTORY
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9681,13 +9677,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(469), // MUS_B_FACTORY
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9699,13 +9695,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(469), // MUS_B_FACTORY
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9717,13 +9713,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9735,13 +9731,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9753,13 +9749,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9771,13 +9767,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9789,13 +9785,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9807,13 +9803,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(468), // MUS_B_PIKE
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9825,13 +9821,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(373), // MUS_LILYCOVE_MUSEUM
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9843,13 +9839,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9861,13 +9857,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9879,13 +9875,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9897,13 +9893,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9915,13 +9911,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9933,13 +9929,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9951,13 +9947,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9969,13 +9965,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -9987,13 +9983,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10005,13 +10001,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10023,13 +10019,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10041,13 +10037,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10059,13 +10055,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(400), // MUS_POKE_CENTER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10077,13 +10073,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(400), // MUS_POKE_CENTER
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10095,13 +10091,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(404), // MUS_POKE_MART
         region_map_section: RegionMapSectionId("MAPSEC_BATTLE_FRONTIER"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10113,13 +10109,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(381), // MUS_ABANDONED_SHIP
         region_map_section: RegionMapSectionId("MAPSEC_FARAWAY_ISLAND"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10131,13 +10127,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(381), // MUS_ABANDONED_SHIP
         region_map_section: RegionMapSectionId("MAPSEC_FARAWAY_ISLAND"),
         requires_flash: false,
-        weather: Weather::Shade,   // WEATHER_SHADE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::Shade,
+        map_type: MapType::Indoor,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10149,13 +10145,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(65535), // MUS_NONE
         region_map_section: RegionMapSectionId("MAPSEC_BIRTH_ISLAND"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10167,13 +10163,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(65535), // MUS_NONE
         region_map_section: RegionMapSectionId("MAPSEC_BIRTH_ISLAND"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10185,13 +10181,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10203,13 +10199,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10221,13 +10217,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10239,13 +10235,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10257,13 +10253,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10275,13 +10271,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10293,13 +10289,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(545), // MUS_RG_SEVII_ROUTE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: true,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10311,13 +10307,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(545), // MUS_RG_SEVII_ROUTE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10329,13 +10325,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10347,13 +10343,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10365,13 +10361,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10383,13 +10379,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10401,13 +10397,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10419,13 +10415,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10437,13 +10433,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10455,13 +10451,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::Shade,        // WEATHER_SHADE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::Shade,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10473,13 +10469,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10491,13 +10487,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10509,13 +10505,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10527,13 +10523,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10545,13 +10541,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10563,13 +10559,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10581,13 +10577,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10599,13 +10595,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10617,13 +10613,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10635,13 +10631,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10653,13 +10649,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10671,13 +10667,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(543), // MUS_RG_SEVII_CAVE
         region_map_section: RegionMapSectionId("MAPSEC_NAVEL_ROCK"),
         requires_flash: false,
-        weather: Weather::None,         // WEATHER_NONE
-        map_type: MapType::Underground, // MAP_TYPE_UNDERGROUND
+        weather: Weather::None,
+        map_type: MapType::Underground,
         allow_bike: false,
         allow_escape: false,
         allow_run: true,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10689,13 +10685,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(384), // MUS_B_TOWER_RS
         region_map_section: RegionMapSectionId("MAPSEC_TRAINER_HILL"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10707,13 +10703,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(401), // MUS_ROUTE104
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_104"),
         requires_flash: false,
-        weather: Weather::Sunny,  // WEATHER_SUNNY
-        map_type: MapType::Route, // MAP_TYPE_ROUTE
+        weather: Weather::Sunny,
+        map_type: MapType::Route,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10725,13 +10721,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(401), // MUS_ROUTE104
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_104"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: true,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10743,13 +10739,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(427), // MUS_DEWFORD
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_109"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10761,13 +10757,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10779,13 +10775,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10797,13 +10793,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10815,13 +10811,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10833,13 +10829,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10851,13 +10847,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10869,13 +10865,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10887,13 +10883,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10905,13 +10901,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10923,13 +10919,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10941,13 +10937,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(448), // MUS_TRICK_HOUSE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10959,13 +10955,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(433), // MUS_SLATEPORT
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: true,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10977,13 +10973,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(433), // MUS_SLATEPORT
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_110"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: true,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -10995,13 +10991,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(399), // MUS_RUSTBORO
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_113"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -11013,13 +11009,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(399), // MUS_RUSTBORO
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_123"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -11031,13 +11027,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(399), // MUS_RUSTBORO
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_119"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -11049,13 +11045,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(399), // MUS_RUSTBORO
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_119"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -11067,13 +11063,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(399), // MUS_RUSTBORO
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_119"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
     MapHeader {
@@ -11085,13 +11081,13 @@ static HEADERS: [MapHeader; MAP_COUNT] = [
         music: MusicId(408), // MUS_LILYCOVE
         region_map_section: RegionMapSectionId("MAPSEC_ROUTE_124"),
         requires_flash: false,
-        weather: Weather::None,    // WEATHER_NONE
-        map_type: MapType::Indoor, // MAP_TYPE_INDOOR
+        weather: Weather::None,
+        map_type: MapType::Indoor,
         allow_bike: false,
         allow_escape: false,
         allow_run: false,
         show_name: false,
-        battle_scene: BattleScene::Normal, // MAP_BATTLE_SCENE_NORMAL
+        battle_scene: BattleScene::Normal,
         connections: &[],
     },
 ];

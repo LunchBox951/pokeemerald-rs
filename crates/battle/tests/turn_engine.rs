@@ -20,6 +20,8 @@ mod paralysis;
 mod pipelines;
 #[path = "turn_engine/poison.rs"]
 mod poison;
+#[path = "turn_engine/pressure.rs"]
+mod pressure;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
 #[path = "turn_engine/trainer_battle.rs"]
