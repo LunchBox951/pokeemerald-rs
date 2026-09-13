@@ -80,11 +80,10 @@ fn pressure_doubles_pp_cost_against_a_distinct_target_but_not_for_a_self_target(
     );
 }
 
-/// Two turns against a Pressure holder drain a three-PP slot to zero, not
-/// one: unfixed code (a flat one-PP `deduct_pp` per turn) would leave one PP
-/// after two turns, while this diff's two-PP-then-saturate cost empties it.
-/// The second turn is the one that actually exercises the saturating
-/// subtraction, since by then only one PP remains against a two-PP cost.
+/// A Pressure cost larger than the PP left saturates the slot at zero
+/// instead of underflowing (`battle_script_commands.c:1234`-`:1237`). The
+/// second turn is the one that exercises it: one PP left against a two-PP
+/// cost.
 #[test]
 fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
     let dex = Dex::new();
@@ -128,9 +127,7 @@ fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
     assert_eq!(
         battle.player().moves()[0].pp,
         0,
-        "a two-PP cost against a one-PP slot saturates at zero, matching \
-         upstream's `else gBattleMons[...].pp[...] = 0` arm \
-         (`battle_script_commands.c:1234`-`:1237`); unfixed code's flat \
-         one-PP deduction would instead leave one PP after this second turn"
+        "a two-PP cost against a one-PP slot saturates at zero \
+         (`battle_script_commands.c:1234`-`:1237`)"
     );
 }
