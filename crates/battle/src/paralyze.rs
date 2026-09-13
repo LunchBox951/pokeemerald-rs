@@ -184,6 +184,8 @@ pub fn resolve_paralyze_move(
     if !accuracy_check(
         move_data.accuracy,
         move_data.effect,
+        move_data.move_type,
+        attacker.ability(),
         attacker.stages().accuracy,
         defender.stages().evasion,
         rng,
