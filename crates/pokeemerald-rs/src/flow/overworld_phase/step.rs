@@ -50,9 +50,8 @@ const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 /// [`facing_object_event`] applies for object-event interaction lookups):
 /// the *standing* tile's own elevation decides whether the facing tile is
 /// queried at `elevation` or as an [`ELEVATION_TRANSITION`] wildcard.
-/// Shared by both animated-door polls below (issue #851) -- the pre-movement
-/// check and the post-movement drain-frame re-check -- so the two can never
-/// compute the facing tile differently.
+/// Used by the pre-movement animated-door poll below (issue #851), the one
+/// place this port asks "what is the player facing?" for a door.
 fn facing_tile(
     runtime: &MapRuntime<'_>,
     position: (i32, i32),
@@ -203,14 +202,32 @@ impl OverworldPhase {
     /// trigger preempts this frame's movement the same way a preempting
     /// arrow warp does, below.
     ///
-    /// A walked approach's own drain frame -- read by
-    /// [`resolve_pre_movement_field_input`] before this frame's own
-    /// [`PlayerState::tick`] runs ([`advance_or_skip_for_preempt`] below) --
-    /// is one call too early to see the door from the tile the player is,
-    /// by that call's end, already standing on. [`Self::resolve_warp_trigger`]
-    /// re-polls the same facing tile once movement has resolved to cover
-    /// exactly that frame, the same way the arrow path's own second poll
-    /// does (above).
+    /// A walked approach therefore enters the door on the call *after* the
+    /// approach's own walk animation drains, not on the drain call itself,
+    /// and that is upstream's own timing rather than a rounding of it.
+    /// Upstream advances a walk in CB2 (`AnimateSprites`) and reads
+    /// `tileTransitionState` in CB1, *before* that frame's CB2
+    /// (`pokeemerald/src/main.c:188-195` calls `callback1` then `callback2`;
+    /// `pokeemerald/src/overworld.c:1438-1454`). `NpcTakeStep` returns TRUE
+    /// on the very call that applies a walk's last pixel
+    /// (`pokeemerald/src/event_object_movement.c:8300-8313`, over the
+    /// 16-entry `sStep1Funcs` at `:8233-8249`), and that return is what sets
+    /// `heldMovementFinished` (`:5024-5028`), so
+    /// `UpdatePlayerAvatarTransitionState` can only
+    /// observe `T_TILE_CENTER` on the *next* frame's CB1
+    /// (`pokeemerald/src/field_player_avatar.c:901-917`), and only there does
+    /// `FieldGetPlayerInput` set the `heldDirection2` that `TryDoorWarp` is
+    /// gated on (`field_control_avatar.c:95-112`, `:170-178`). This method's
+    /// pre-movement stage is that CB1; the post-movement remainder of a call
+    /// is that same frame's CB2, where upstream processes no field input at
+    /// all. So the drain call has no `TryDoorWarp` of its own to mirror, and
+    /// polling the door there would accept a held direction one frame before
+    /// upstream could read it -- entering on a release the player made in
+    /// time. The arrow path's own post-movement poll (above) does exactly
+    /// that, one call early; it is pinned by
+    /// `walking_onto_the_doormat_holding_south_exits_through_the_front_door`
+    /// and its siblings and is left alone here rather than retimed in a
+    /// door-scoped change (issue #851 review).
     ///
     /// # Field input before movement (issue #194)
     ///
@@ -615,25 +632,24 @@ impl OverworldPhase {
 
     /// [`Self::step`]'s one-warp-per-frame decision: `pre`'s two pre-movement
     /// preempts, then the completed-step door check, then -- only once all
-    /// three have fallen through -- the post-movement re-poll for whichever
-    /// of the arrow or animated-door path is still open
+    /// three have fallen through -- the post-movement arrow re-poll
     /// ([`wild_encounter::arrow_poll_open`]). Pulled out of `step` itself
     /// purely to stay under clippy's `too_many_lines` limit; every parameter
     /// here is an owned or borrowed value already decided by that point, not
     /// a fresh read of `self.player` beyond its current position/elevation
-    /// (unaffected by this frame's movement -- see the "Warp timing" doc
-    /// section on why the drain-frame poll's own tile never changes underneath
-    /// it).
+    /// (unaffected by this frame's movement).
     ///
     /// Upstream `TryStartStepBasedScript` (the door-shaped warp, under
     /// `tookStep`) precedes `TryArrowWarp`, which precedes `TryDoorWarp`
     /// (`field_control_avatar.c:155-178`) -- `door_warp` first, then the
     /// pre-movement preempts (mutually exclusive with it -- `step`'s "Door
-    /// before arrow" doc section), then the post-movement re-poll in that
-    /// same arrow-then-door order. The re-poll's own door half additionally
-    /// yields to `pre.interaction`, matching `TryDoorWarp`'s own position
-    /// after `TryStartInteractionScript` (`:170-178`) -- see the gate below
-    /// and [`Self::resolve_pre_movement_field_input`]'s matching one.
+    /// before arrow" doc section), then the post-movement arrow re-poll.
+    /// The animated-door path has no post-movement poll: its only upstream
+    /// counterpart is the CB1 that first reports `T_TILE_CENTER`, which is
+    /// this port's *next* call's pre-movement stage, not this call's tail
+    /// (`step`'s "Warp timing" section). That also keeps `TryDoorWarp`'s
+    /// position after `TryStartInteractionScript` (`:170-178`) enforced in
+    /// exactly one place, [`Self::resolve_pre_movement_field_input`].
     fn resolve_warp_trigger(
         &self,
         pre: &PreMovementFieldInput,
@@ -650,24 +666,7 @@ impl OverworldPhase {
                 }
                 let direction = pre.arrow_direction?;
                 let (x, y) = pre.position;
-                trigger_arrow_warp(runtime, x, y, self.player.elevation(), direction).or_else(
-                    || {
-                        // The drain-frame animated-door re-check (issue #851): see
-                        // `step`'s "Warp timing" section for why this poll exists.
-                        //
-                        // Gated on `pre.interaction.is_none()`, mirroring `TryDoorWarp`'s
-                        // position after `TryStartInteractionScript`
-                        // (`field_control_avatar.c:170-178`); `TryArrowWarp` above needs
-                        // no such gate -- it precedes the interaction check entirely
-                        // upstream (`:164-172`).
-                        if pre.interaction.is_some() {
-                            return None;
-                        }
-                        let ((fx, fy), facing_elevation) =
-                            facing_tile(runtime, pre.position, self.player.elevation(), direction);
-                        trigger_animated_door_warp(runtime, fx, fy, facing_elevation, direction)
-                    },
-                )
+                trigger_arrow_warp(runtime, x, y, self.player.elevation(), direction)
             })
     }
 
@@ -983,12 +982,17 @@ mod interaction_door_precedence_tests {
     /// only *after* `TryStartInteractionScript` (`:172`) has already
     /// returned FALSE: an A press on an NPC standing in a doorway talks to
     /// them, it never enters the door. The pre-movement animated-door check
-    /// honours that (`resolve_pre_movement_field_input`), but the frame's
-    /// final decision must too -- otherwise A+Up at a doorway NPC warps and
-    /// silently discards the interaction (`resolve_step_events`'s
+    /// honours that (`resolve_pre_movement_field_input`), and the frame's
+    /// final decision must agree -- otherwise A+Up at a doorway NPC warps
+    /// and silently discards the interaction (`resolve_step_events`'s
     /// `input_consumed` branch).
+    ///
+    /// The second assertion is the ratchet: `resolve_warp_trigger` has no
+    /// animated-door poll of its own (that is what makes the precedence
+    /// hold in one place), so re-adding a post-movement one that reads a
+    /// stale or absent interaction would reintroduce the inversion here.
     #[test]
-    fn an_interaction_outranks_the_animated_door_repoll() {
+    fn an_interaction_outranks_the_animated_door_check() {
         let phase = mom_standing_in_the_house_door_phase();
         let runtime = runtime_for(&phase);
 
@@ -1014,10 +1018,9 @@ mod interaction_door_precedence_tests {
         assert_eq!(
             phase.resolve_warp_trigger(&pre, &runtime, None, false),
             None,
-            "the drain-frame animated-door re-poll must yield to the same-frame \
-             interaction it already yielded to pre-movement -- upstream reaches \
-             TryDoorWarp only after TryStartInteractionScript falls through \
-             (field_control_avatar.c:172-178)"
+            "no post-movement animated-door poll may resurrect a door the same-frame \
+             interaction already outranked -- upstream reaches TryDoorWarp only after \
+             TryStartInteractionScript falls through (field_control_avatar.c:172-178)"
         );
     }
 }

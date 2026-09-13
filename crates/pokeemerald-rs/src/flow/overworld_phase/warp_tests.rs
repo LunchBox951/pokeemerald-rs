@@ -823,17 +823,18 @@ fn turning_to_face_the_lab_door_does_not_warp_on_the_turning_frame() {
 }
 
 /// The pack-free half of
-/// [`walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it`]:
-/// a *walked* approach (two full tile crossings, not a stationary press)
-/// must preempt the final step onto the door on the very frame that
-/// approach's own walk animation drains, not one frame later.
+/// [`walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`]: a
+/// *walked* approach (two full tile crossings, not a stationary press) must
+/// preempt the final step onto the door.
 ///
 /// The walked approach's second crossing drains on its own 32nd held frame
 /// ([`WALK_FRAMES_PER_TILE`] `* 2`); position is committed at crossing
-/// start, so the player is already at rest on `(7, 17)` by then regardless
-/// of the pre-movement check. The distinguishing frame is the **next**
-/// one, the 33rd: without the drain-frame re-poll, a still-held Up would
-/// legally step onto the (synthetic, walkable) door tile `(7, 16)` there.
+/// start, so the player is already at rest on `(7, 17)` by then. The 33rd
+/// held frame is the first at which [`OverworldPhase::step`]'s pre-movement
+/// stage sees them at rest there -- upstream's own first `T_TILE_CENTER`
+/// CB1 for that crossing ([`OverworldPhase::step`]'s "Warp timing" section)
+/// -- so that is the frame the door must claim, and a still-held Up must
+/// never instead walk onto the (synthetic, walkable) door tile `(7, 16)`.
 ///
 /// Runs pack-free the same way
 /// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`] does:
@@ -851,9 +852,9 @@ fn walking_up_to_the_lab_door_preempts_the_final_step_onto_it() {
     assert_ne!(
         phase.player.position(),
         (7, 16),
-        "the animated-door check must preempt the walked approach's final step onto the \
-         (synthetic, walkable) door tile, on the frame after the approach's own walk \
-         animation drains -- unfixed code steps onto it here instead"
+        "the pre-movement animated-door check must preempt the walked approach's final \
+         step onto the (synthetic, walkable) door tile on the first frame it sees the \
+         player at rest in front of it -- pre-#851 code steps onto it here instead"
     );
     assert!(
         !phase.player.in_transit(),
@@ -896,16 +897,26 @@ fn facing_the_lab_door_and_holding_north_enters_birchs_lab() {
 
 /// The pack-gated half of
 /// [`walking_up_to_the_lab_door_preempts_the_final_step_onto_it`]: a
-/// *walked* approach to the door must enter on the very frame the
-/// approach's own walk animation drains, with no extra held frame
-/// required, matching `TryDoorWarp`'s fresh-every-frame read of
-/// `tileTransitionState`/`dpadDirection`. [`approaching_littleroot_lab_door_phase`]
-/// starts the player two tiles south of the door, still facing North, so
-/// reaching it takes two full tile crossings
-/// ([`WALK_FRAMES_PER_TILE`] frames each).
+/// *walked* approach to the door enters it on the held frame *after* the
+/// approach's own walk animation drains, and not on the drain frame itself.
+/// [`approaching_littleroot_lab_door_phase`] starts the player three tiles
+/// south of the door, already facing North, so reaching the tile in front
+/// of it takes two full tile crossings ([`WALK_FRAMES_PER_TILE`] frames
+/// each) and the 33rd held frame is the first one
+/// [`OverworldPhase::step`]'s pre-movement stage sees them at rest there.
+///
+/// That is upstream's timing, not an off-by-one against it: the CB2 that
+/// applies a walk's last pixel is also the one that raises
+/// `heldMovementFinished`, so `UpdatePlayerAvatarTransitionState` first
+/// reports `T_TILE_CENTER` -- and `FieldGetPlayerInput` first sets the
+/// `heldDirection2` `TryDoorWarp` is gated on -- only on the *next* frame's
+/// CB1 (`pokeemerald/src/event_object_movement.c:8300-8313`,
+/// `pokeemerald/src/field_player_avatar.c:901-917`,
+/// `pokeemerald/src/field_control_avatar.c:95-112`, `:170-178`). See
+/// [`OverworldPhase::step`]'s "Warp timing" section.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it() {
+fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {
     let mut phase = approaching_littleroot_lab_door_phase();
 
     for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
@@ -913,16 +924,56 @@ fn walking_up_to_the_lab_door_and_releasing_at_arrival_still_enters_it() {
     }
     assert_eq!(
         phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "the drain frame is this port's counterpart to the CB2 that finishes the walk, \
+         where upstream processes no field input at all -- the door must not fire on the \
+         {}th held frame",
+        2 * u32::from(WALK_FRAMES_PER_TILE)
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.map_id,
         MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
-        "the door must fire on the walked approach's own drain frame -- the \
-         {}th held frame, not a {}st -- matching upstream's tile-center timing",
-        2 * u32::from(WALK_FRAMES_PER_TILE),
+        "the {}st held frame is upstream's first T_TILE_CENTER CB1 for that crossing, and \
+         TryDoorWarp fires there",
         2 * u32::from(WALK_FRAMES_PER_TILE) + 1
     );
     assert_eq!(
         phase.player.position(),
         (6, 12),
         "arriving at the lab's own warp #0"
+    );
+}
+
+/// The release the drain-frame re-poll used to swallow (issue #851 review):
+/// a player who holds Up through the walked approach's last movement frame
+/// but lets go before the next one must stay outside. Upstream cannot read
+/// that frame's held direction for `TryDoorWarp` at all -- `heldDirection2`
+/// is only set at `T_TILE_CENTER`/`T_NOT_MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:95-112`), which the crossing's
+/// drain frame is not -- so the release lands in time.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn releasing_up_after_the_walked_approach_drains_leaves_the_lab_door_shut() {
+    let mut phase = approaching_littleroot_lab_door_phase();
+
+    for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+
+    phase.step(ButtonState::new());
+
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN"),
+        "Up was released on the only frame upstream would have read it for TryDoorWarp, \
+         so the door must not open"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 17),
+        "and the player must still be standing in front of it"
     );
 }
 

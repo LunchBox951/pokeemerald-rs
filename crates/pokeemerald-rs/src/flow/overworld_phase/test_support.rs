@@ -365,10 +365,12 @@ pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPh
 }
 
 /// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
-/// two tiles south of the door, already facing North, so a caller can drive
-/// a genuine *walked* approach (holding Up the whole way) instead of a
-/// stationary press -- exercising the drain-frame re-poll described in
-/// [`OverworldPhase::step`]'s "Warp timing" section.
+/// three tiles south of the door, already facing North, so a caller can
+/// drive a genuine *walked* approach (holding Up the whole way, two full
+/// tile crossings) instead of a stationary press -- exercising the frame on
+/// which a completed crossing first becomes visible to the pre-movement
+/// door check, described in [`OverworldPhase::step`]'s "Warp timing"
+/// section.
 pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
