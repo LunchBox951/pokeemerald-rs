@@ -21,8 +21,8 @@
 
 use assets::MapHeaderTable;
 use engine::overworld::{
-    facing_object_event, trigger_animated_door_warp, trigger_arrow_warp, trigger_door_warp,
-    Direction, MapRuntime, PlayerState, WarpTrigger, ELEVATION_TRANSITION,
+    facing_object_event, trigger_arrow_warp, trigger_door_warp, Direction, MapRuntime, PlayerState,
+    WarpTrigger,
 };
 use engine::save::Coords16;
 use platform::{ButtonState, Buttons};
@@ -42,30 +42,6 @@ use super::OverworldPhase;
 /// `:621`/`:628`), so this tick already reads as latched to every region,
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
-
-/// The tile one step from `position` in `direction`, and the elevation to query it at.
-///
-/// Mirrors `GetInFrontOfPlayerPosition`'s own elevation rule
-/// (`pokeemerald/src/field_control_avatar.c:200-210`, the same rule
-/// [`facing_object_event`] applies for object-event interaction lookups):
-/// the *standing* tile's own elevation decides whether the facing tile is
-/// queried at `elevation` or as an [`ELEVATION_TRANSITION`] wildcard.
-/// Used by the pre-movement animated-door poll below (issue #851), the one
-/// place this port asks "what is the player facing?" for a door.
-fn facing_tile(
-    runtime: &MapRuntime<'_>,
-    position: (i32, i32),
-    elevation: u8,
-    direction: Direction,
-) -> ((i32, i32), u8) {
-    let (dx, dy) = direction.delta();
-    let facing = (position.0 + dx, position.1 + dy);
-    let facing_elevation = match runtime.metatile_cell(position.0, position.1) {
-        Some(cell) if cell.elevation != ELEVATION_TRANSITION => elevation,
-        _ => ELEVATION_TRANSITION,
-    };
-    (facing, facing_elevation)
-}
 
 /// This frame's pre-movement field-input decisions.
 struct PreMovementFieldInput {
@@ -191,39 +167,11 @@ impl OverworldPhase {
     /// [`crate::new_game::SPAWN_MAP_ID`] against a real extraction).
     ///
     /// **Animated doors (issue #851): polled pre-movement, at rest, against
-    /// the tile the player faces.** Real animated-door tiles are solid, so
-    /// [`PlayerState::try_start_resolved_step`]'s collision check rejects
-    /// them before a landing can ever exist -- the completed-step door path
-    /// above can never reach one. Mirrors `TryDoorWarp`, called *before*
-    /// `PlayerStep` and gated on `heldDirection2 && dpadDirection ==
-    /// playerDirection` (`pokeemerald/src/field_control_avatar.c:170-178`,
-    /// `DIR_NORTH` branch at `:833-841`), reusing `arrow_direction` above,
-    /// which upstream sets from the same condition (`:109-113`). A resolved
-    /// trigger preempts this frame's movement the same way a preempting
-    /// arrow warp does, below.
-    ///
-    /// A walked approach therefore enters the door on the call *after* the
-    /// approach's own walk animation drains, not on the drain call itself,
-    /// and that is upstream's own timing rather than a rounding of it.
-    /// Upstream advances a walk in CB2 (`AnimateSprites`) and reads
-    /// `tileTransitionState` in CB1, *before* that frame's CB2
-    /// (`pokeemerald/src/main.c:188-195` calls `callback1` then `callback2`;
-    /// `pokeemerald/src/overworld.c:1438-1454`). `NpcTakeStep` returns TRUE
-    /// on the very call that applies a walk's last pixel
-    /// (`pokeemerald/src/event_object_movement.c:8300-8313`, over the
-    /// 16-entry `sStep1Funcs` at `:8233-8249`), and that return is what sets
-    /// `heldMovementFinished` (`:5024-5028`), so
-    /// `UpdatePlayerAvatarTransitionState` can only
-    /// observe `T_TILE_CENTER` on the *next* frame's CB1
-    /// (`pokeemerald/src/field_player_avatar.c:901-917`), and only there does
-    /// `FieldGetPlayerInput` set the `heldDirection2` that `TryDoorWarp` is
-    /// gated on (`field_control_avatar.c:95-112`, `:170-178`). This method's
-    /// pre-movement stage is that CB1; the post-movement remainder of a call
-    /// is that same frame's CB2, where upstream processes no field input at
-    /// all. So the drain call has no `TryDoorWarp` of its own to mirror, and
-    /// polling the door there would accept a held direction one frame before
-    /// upstream could read it -- entering on a release the player made in
-    /// time.
+    /// the tile the player faces, and never after movement.**
+    /// [`super::animated_door`] owns that decision and the upstream frame
+    /// identity behind it; this method only sequences the outcome. A
+    /// resolved trigger preempts this frame's movement the same way a
+    /// preempting arrow warp does, below.
     ///
     /// # Field input before movement (issue #194)
     ///
@@ -702,23 +650,14 @@ impl OverworldPhase {
             .then(|| self.interaction_tokens_this_frame(buttons, runtime))
             .flatten();
 
-        // The pre-movement animated-door check (issue #851, `step`'s "Warp
-        // timing" section): upstream reaches `TryDoorWarp` only after the
-        // arrow check and the A-button interaction lookup have both already
-        // fallen through (`field_control_avatar.c:164-178`), so this is
-        // gated on both having found nothing this frame, same as upstream's
-        // early `return TRUE`s ahead of it. `arrow_direction` already *is*
-        // `heldDirection2`'s value -- upstream sets `heldDirection` and
-        // `heldDirection2` from the same condition (`:109-113`) -- so no
-        // second "held direction matches pre-movement facing" value is
-        // computed here.
+        // Upstream reaches `TryDoorWarp` only after the arrow check and the
+        // A-button interaction lookup have both fallen through
+        // (`field_control_avatar.c:164-178`), same as its early `return
+        // TRUE`s ahead of it.
         let animated_door_trigger = (at_rest && arrow_trigger.is_none() && interaction.is_none())
             .then_some(arrow_direction)
             .flatten()
-            .and_then(|d| {
-                let ((fx, fy), facing_elevation) = facing_tile(runtime, position, elevation, d);
-                trigger_animated_door_warp(runtime, fx, fy, facing_elevation, d)
-            });
+            .and_then(|d| super::animated_door::trigger(runtime, position, elevation, d));
 
         let start_menu = self
             .start_menu_may_open(
@@ -909,88 +848,27 @@ pub(super) enum InteractionOutcome {
 }
 
 #[cfg(test)]
-mod interaction_door_precedence_tests {
-    use super::{OverworldPhase, PreMovementFieldInput};
-    use engine::overworld::metatile_behavior::MB_ANIMATED_DOOR;
-    use engine::overworld::{Direction, MapRuntime, PlayerState};
+mod door_sequencing_tests {
+    use super::super::test_support::{
+        approaching_littleroot_lab_door_phase, held, littleroot_runtime,
+        mom_standing_in_the_house_door_phase,
+    };
+    use super::PreMovementFieldInput;
+    use engine::overworld::{Direction, WALK_FRAMES_PER_TILE};
     use platform::{ButtonState, Buttons};
-
-    /// Littleroot Town's Brendan's-house door warp at `(5, 8)` -- the one
-    /// tile in bundled data where a scripted object event (Mom outside,
-    /// `LittlerootTown_EventScript_Mom`) stands on a house door -- pinned
-    /// to `MB_ANIMATED_DOOR` on a synthetic scene the same way
-    /// `test_support::facing_littleroot_lab_door_phase` pins the lab door.
-    /// Mom outside is hidden on a fresh save, so her hide flag is cleared
-    /// here: this fixture is exactly upstream's "an NPC is standing in the
-    /// doorway" frame.
-    fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
-        let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
-        let events = assets::MapEventsTable::new()
-            .resolve(littleroot)
-            .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
-        let door = events.warp_events[1];
-        assert_eq!(
-            (door.x, door.y),
-            (5, 8),
-            "fixture precondition: Littleroot's warp #1 is Brendan's house door"
-        );
-        let mom = events.object_events[3];
-        assert_eq!(
-            (mom.x, mom.y),
-            (5, 8),
-            "fixture precondition: Mom outside stands on that same door tile"
-        );
-        assert_ne!(
-            mom.script, "0x0",
-            "fixture precondition: Mom's script is a real one, so A interacts"
-        );
-
-        let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
-            20,
-            20,
-            (5, 8),
-            MB_ANIMATED_DOOR,
-        );
-        let mut phase = OverworldPhase::for_test(
-            scene,
-            littleroot,
-            PlayerState::new((5, 9), 3, Direction::North),
-            None,
-        );
-        let hide_mom = assets::object_event_flags::resolve(mom.flag)
-            .expect("Mom outside's hide flag must resolve");
-        phase
-            .save1
-            .event_data
-            .flag_clear(hide_mom)
-            .expect("clearing Mom outside's hide flag must succeed");
-        phase
-    }
-
-    fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
-        let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
-        let header = assets::MapHeaderTable::new().header(littleroot).unwrap();
-        let events = assets::MapEventsTable::new().resolve(littleroot).unwrap();
-        phase.scene.runtime(littleroot, header, events)
-    }
 
     /// Upstream reaches `TryDoorWarp` (`field_control_avatar.c:170-178`)
     /// only *after* `TryStartInteractionScript` (`:172`) has already
     /// returned FALSE: an A press on an NPC standing in a doorway talks to
-    /// them, it never enters the door. The pre-movement animated-door check
-    /// honours that (`resolve_pre_movement_field_input`), and the frame's
-    /// final decision must agree -- otherwise A+Up at a doorway NPC warps
-    /// and silently discards the interaction (`resolve_step_events`'s
-    /// `input_consumed` branch).
+    /// them, it never enters the door.
     ///
     /// The second assertion is the ratchet: `resolve_warp_trigger` has no
-    /// animated-door poll of its own (that is what makes the precedence
-    /// hold in one place), so re-adding a post-movement one that reads a
-    /// stale or absent interaction would reintroduce the inversion here.
+    /// animated-door poll of its own, so re-adding a post-movement one that
+    /// reads a stale or absent interaction would reintroduce the inversion.
     #[test]
     fn an_interaction_outranks_the_animated_door_check() {
         let phase = mom_standing_in_the_house_door_phase();
-        let runtime = runtime_for(&phase);
+        let runtime = littleroot_runtime(&phase.scene);
 
         // A fresh A press with Up held, standing at rest already facing the
         // door -- exactly what `step` feeds the two methods below.
@@ -1008,15 +886,73 @@ mod interaction_door_precedence_tests {
             "the pre-movement door check already yields to the interaction"
         );
 
-        // `door_warp` is None (the interaction preempted movement, so no
-        // step completed) and no field event fired -- the exact arguments
-        // `step` passes on this frame.
         assert_eq!(
             phase.resolve_warp_trigger(&pre, &runtime, None, false),
             None,
             "no post-movement animated-door poll may resurrect a door the same-frame \
              interaction already outranked -- upstream reaches TryDoorWarp only after \
              TryStartInteractionScript falls through (field_control_avatar.c:172-178)"
+        );
+    }
+
+    /// The drain call of a walked approach is this port's counterpart to
+    /// the CB2 that finishes the walk, where upstream processes no field
+    /// input at all (`super::super::animated_door`'s module docs), so the
+    /// frame's warp decision must come back empty even though the player is
+    /// now at rest one tile below the door with Up still held.
+    ///
+    /// Asserted on the decision rather than through
+    /// [`super::OverworldPhase::step`], because a whole-frame test cannot
+    /// see this: a restored drain-call poll would resolve the lab warp, but
+    /// pack-free `warp_to` fails to load the destination and returns
+    /// leaving both `map_id` and player position untouched
+    /// (`connections.rs:274-281`), making the erroneous attempt
+    /// observationally identical to no attempt (issue #851 review).
+    #[test]
+    fn the_drain_call_of_a_walked_approach_resolves_no_door_warp() {
+        let mut phase = approaching_littleroot_lab_door_phase();
+
+        // One call short of the second crossing's drain.
+        for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) - 1 {
+            phase.step(held(Buttons::UP));
+        }
+        assert!(
+            phase.player.in_transit(),
+            "fixture precondition: the second crossing must still be draining here"
+        );
+        assert_eq!(
+            phase.player.position(),
+            (7, 17),
+            "fixture precondition: position commits at crossing start, one tile below the door"
+        );
+
+        // Replay the drain call itself in `step`'s own order: pre-movement
+        // field input, then this frame's movement, then the warp decision.
+        let pre = {
+            let runtime = littleroot_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::UP),
+                Some(Direction::North),
+                &runtime,
+            )
+        };
+        assert!(
+            pre.animated_door_trigger.is_none(),
+            "the pre-movement check correctly sees a player still in transit"
+        );
+        phase.player.tick();
+        assert!(
+            !phase.player.in_transit(),
+            "fixture precondition: this call drains the crossing"
+        );
+
+        let runtime = littleroot_runtime(&phase.scene);
+        assert_eq!(
+            phase.resolve_warp_trigger(&pre, &runtime, None, false),
+            None,
+            "upstream cannot read this frame's held direction for TryDoorWarp -- \
+             heldDirection2 is only set at T_TILE_CENTER/T_NOT_MOVING \
+             (field_control_avatar.c:95-112), which the drain call is not"
         );
     }
 }

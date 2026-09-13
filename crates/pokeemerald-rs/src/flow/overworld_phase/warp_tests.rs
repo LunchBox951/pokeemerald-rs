@@ -947,12 +947,17 @@ fn walking_up_to_the_lab_door_enters_it_on_the_next_input_frame() {
 }
 
 /// A player who holds Up through the walked approach's last movement frame
-/// but lets go before the next one must stay outside. Upstream cannot read
-/// that frame's held direction for `TryDoorWarp` at all -- `heldDirection2`
-/// is only set at `T_TILE_CENTER`/`T_NOT_MOVING`
-/// (`pokeemerald/src/field_control_avatar.c:95-112`), which the crossing's
-/// drain frame is not -- so the release lands in time. Pack-free: the door
-/// never opens, so no destination room is loaded.
+/// but lets go before the next one must stay outside, and must still be
+/// standing in front of the door rather than have walked onto it.
+///
+/// This is the player-visible end of that contract only. It cannot also
+/// stand in for the timing regression: pack-free, a drain-call door poll
+/// would resolve the lab warp but `warp_to` fails to load the destination
+/// and returns leaving both asserted values untouched
+/// (`super::connections`'s own failure contract), so an erroneous warp
+/// attempt reads exactly like no attempt. `step`'s
+/// `the_drain_call_of_a_walked_approach_resolves_no_door_warp` is the
+/// ratchet that observes the decision itself.
 #[test]
 fn releasing_up_after_the_walked_approach_drains_leaves_the_lab_door_shut() {
     let mut phase = approaching_littleroot_lab_door_phase();
