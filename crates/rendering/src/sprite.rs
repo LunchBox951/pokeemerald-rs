@@ -1295,11 +1295,9 @@ mod tests {
         );
     }
 
-    /// A packed 8bpp OAM tile number with its low bit set starts sampling
-    /// four rows (32 bytes) into the decoded tile at `tile_index` and
-    /// continues into the next wrapped tile, matching mGBA's one-dimensional
-    /// OBJ addressing (`mgba/src/gba/renderers/software-obj.c:168-171`)
-    /// `(behavioral-fidelity)`.
+    /// Regular sampling applies the half-tile offset that
+    /// [`Tileset::obj_pixel_index`] defines, across the decoded tile
+    /// boundary.
     #[test]
     fn composite_8bpp_sprite_honours_a_half_tile_offset_across_the_decoded_tile_boundary() {
         const IGNORED_4BPP_PALETTE_BANK: u8 = 3;

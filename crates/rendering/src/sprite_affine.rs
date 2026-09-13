@@ -214,13 +214,9 @@ mod tests {
         }
     }
 
-    /// A packed 8bpp OAM tile number with its low bit set starts sampling
-    /// four rows (32 bytes) into the decoded tile at `tile_index` and
-    /// continues into the next wrapped tile, matching mGBA's
-    /// one-dimensional OBJ addressing
-    /// (`mgba/src/gba/renderers/software-obj.c:168-171`)
-    /// `(behavioral-fidelity)`. Affine sampling must apply the same offset
-    /// as regular sampling.
+    /// Affine sampling applies the same half-tile offset as regular
+    /// sampling, as [`Tileset::obj_pixel_index`] defines it, across the
+    /// decoded tile boundary.
     #[test]
     fn affine_8bpp_sprite_honours_a_half_tile_offset_across_the_decoded_tile_boundary() {
         const HALF_TILE_ROW_BYTES: usize = BitDepth::TILE_DIM * (BitDepth::TILE_DIM / 2);

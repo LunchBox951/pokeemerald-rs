@@ -196,15 +196,10 @@ impl OamEntry {
     ///
     /// A packed 8bpp OAM tile number counts 32-byte units, but
     /// [`tile_index`](Self::tile_index) counts whole (64-byte) tiles, so
-    /// constructing this entry from a packed number requires dividing it by
-    /// two first, discarding that low bit. Passing `true` here restores the
-    /// 32-byte (four-row) offset the discarded bit represented: sampling
-    /// starts four rows into the decoded tile at `tile_index` and continues
-    /// into the next wrapped tile, matching mGBA's one-dimensional OBJ
-    /// addressing for an odd packed tile number
-    /// (`mgba/src/gba/renderers/software-obj.c:168-171`)
-    /// `(behavioral-fidelity)`. Has no effect on 4bpp sprites, whose tiles
-    /// are already 32-byte aligned.
+    /// constructing this entry from a packed number divides it by two and
+    /// discards that low bit. Passing `true` here keeps the 32-byte offset
+    /// the bit represented; `Tileset::obj_pixel_index` owns what that
+    /// offset means when sampling. Has no effect on 4bpp sprites.
     #[must_use]
     pub const fn with_half_tile_offset(mut self, half_tile_offset: bool) -> Self {
         self.half_tile_offset = half_tile_offset;
