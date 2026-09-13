@@ -2,8 +2,8 @@
 //!
 //! This module resolves save paths, performs exact-length reads, and provides
 //! locking and atomic writes. Save contents and slot validation remain owned by
-//! [`SaveStore`]; the sibling entry a write is staged into is owned by
-//! [`staging`].
+//! [`SaveStore`]; the sibling entry a write is staged into is owned by the
+//! private `staging` submodule.
 
 mod staging;
 
@@ -299,7 +299,8 @@ impl SaveFile {
     /// Atomically replaces the save file with `store`'s synchronised image.
     ///
     /// The directory holding the save entry -- `.` for a bare relative path --
-    /// is best-effort synchronised after the rename; see [`SaveFile::ensure_parent_directory`].
+    /// is best-effort synchronised after the rename; see the private
+    /// `SaveFile::ensure_parent_directory`.
     ///
     /// # Errors
     ///
