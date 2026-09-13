@@ -110,8 +110,7 @@ fn two_turns_against_a_pressure_holder_drain_a_three_pp_slot_to_zero_not_one() {
     assert_eq!(
         battle.player().moves()[0].pp,
         1,
-        "three PP minus a two-PP Pressure cost leaves one, matching both \
-         fixed and unfixed code so far"
+        "three PP minus a two-PP Pressure cost leaves one"
     );
 
     let second_turn = battle
