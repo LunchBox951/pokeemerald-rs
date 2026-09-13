@@ -196,7 +196,12 @@
 //! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Levitate's
 //! Ground-move damage immunity ([`hit::damage_before_roll`] — grounding
 //! effects like Gravity and Smack Down are not modelled, so Levitate is
-//! otherwise unconditional), Synchronize's paralysis reflection
+//! otherwise unconditional), Wonder Guard's block of any powered hit that is
+//! not strictly super effective ([`hit::damage_before_roll`], propagated
+//! through drain, multi-hit, and fixed damage — Foresight and the
+//! two-turn-move distinction upstream's `AttacksThisTurn` check makes are not
+//! modelled, so the block is unconditional wherever it applies),
+//! Synchronize's paralysis reflection
 //! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
 //! stays refused, see [`secondary::ensure_admissible`]), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,

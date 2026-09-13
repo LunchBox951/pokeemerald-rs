@@ -292,3 +292,203 @@ fn a_levitate_block_is_reported_distinctly_from_a_typing_immunity() {
         "the Levitate block must be reported distinctly: {events:?}"
     );
 }
+
+/// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`)
+/// blocks any powered move that is not strictly super effective, so a
+/// neutral Water Gun must leave Shedinja's HP untouched.
+#[test]
+fn wonder_guard_blocks_a_neutral_ordinary_hit() {
+    let dex = Dex::new();
+    // Water Gun (Water, `EFFECT_HIT`, power 40) into Shedinja, whose only
+    // ability slot is Wonder Guard (its second slot is `NONE`). Water is
+    // neutral on both Bug and Ghost, so the type chart alone would let the
+    // hit through. Rattata L10 (speed 22) outspeeds Shedinja L5, the same
+    // pairing `an_immune_first_hit_reports_no_effect_and_the_turn_continues`
+    // uses against Gastly.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(55)]);
+    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+
+    // battle start, turn number, enemy pick, the player's blocked hit
+    // (accuracy, crit, damage-variance, and effect-chance draws, exactly
+    // like an ordinary hit -- see crate::hit), the enemy's ordinary Tackle
+    // (4 draws).
+    let script = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            }
+        )),
+        "no player hit may be reported against a Wonder Guard holder: {events:?}"
+    );
+    assert_eq!(
+        events[0],
+        BattleEvent::WonderGuardBlocked {
+            by_player: true,
+            move_id: MoveId(55),
+        },
+        "the Wonder Guard block must be reported distinctly: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "Wonder Guard takes no damage from a hit that is not strictly super \
+         effective: {events:?}"
+    );
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// The same Wonder Guard branch reaches fixed damage, which upstream also
+/// gates on `gBattleMoves[gCurrentMove].power` -- always nonzero for Dragon
+/// Rage (`crates/battle/src/fixed_damage.rs`).
+#[test]
+fn wonder_guard_blocks_a_neutral_fixed_damage_move() {
+    let dex = Dex::new();
+    // Dragon Rage (Dragon, `EFFECT_DRAGON_RAGE`, literal 40) into Shedinja:
+    // the chart has no Dragon-versus-Bug or Dragon-versus-Ghost row, so the
+    // matchup is neutral and only Wonder Guard can block it.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(82)]);
+    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+
+    // battle start, turn number, enemy pick, Dragon Rage's accuracy and
+    // (discarded) effect-chance draws, the enemy's ordinary Tackle (4).
+    let script = [0, 0, 0, 0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            }
+        )),
+        "no player hit may be reported against a Wonder Guard holder: {events:?}"
+    );
+    assert_eq!(
+        events[0],
+        BattleEvent::WonderGuardBlocked {
+            by_player: true,
+            move_id: MoveId(82),
+        },
+        "the Wonder Guard block must be reported distinctly: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "Wonder Guard takes no fixed damage from a neutral matchup: {events:?}"
+    );
+    assert_eq!(rng.draws(), script.len());
+}
+
+/// Wonder Guard permits a strictly super-effective hit through unblocked, so
+/// the block above is a targeted admission check, not a general immunity.
+#[test]
+fn wonder_guard_permits_a_super_effective_hit() {
+    let dex = Dex::new();
+    // Faint Attack (Dark, `EFFECT_ALWAYS_HIT`, power 60) is super effective
+    // against Shedinja's Ghost type and neutral against its Bug type, so the
+    // aggregate bucket is `SuperEffective` and Wonder Guard must let it
+    // through. Shedinja's HP is always 1, so any landed hit faints it.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(185)]);
+    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+
+    // battle start, turn number, enemy pick, Faint Attack's always-hit crit,
+    // damage-variance, and effect-chance draws -- no accuracy draw, and no
+    // enemy turn once Shedinja faints.
+    let script = [0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            }
+        )),
+        "a strictly super-effective hit must land: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::WonderGuardBlocked { .. })),
+        "Wonder Guard must not block a strictly super-effective hit: {events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), 0);
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// The multi-hit pipeline reaches the same Wonder Guard check through
+/// [`crate::hit::damage_before_roll`]'s shared boundary, mirroring
+/// `a_ground_multi_hit_move_does_not_affect_a_levitate_holder`.
+#[test]
+fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
+    let dex = Dex::new();
+    // Pin Missile (Bug, `EFFECT_MULTI_HIT`) into Shedinja: Bug has no chart
+    // row against Bug and is not-very-effective against Ghost, so the
+    // aggregate bucket is `NotVeryEffective`, not `SuperEffective`.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(42)]);
+    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+
+    // battle start, turn number, enemy pick, then the multi-hit pipeline's
+    // four draws for the player's first (and only attempted) hit --
+    // accuracy, hit-count offset, the first attempt's crit roll, and the
+    // trailing effect chance -- then the enemy's ordinary Tackle (4).
+    let script = [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            } | BattleEvent::MultiHit {
+                by_player: true,
+                ..
+            }
+        )),
+        "Wonder Guard blocks every attempted hit, so no hit or hit-count \
+         event may report from the player's side: {events:?}"
+    );
+    assert_eq!(
+        events[0],
+        BattleEvent::WonderGuardBlocked {
+            by_player: true,
+            move_id: MoveId(42),
+        },
+        "the multi-hit loop must stop at the Wonder Guard branch on its \
+         first attempt: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "a Wonder Guard holder takes no damage from a not-very-effective \
+         multi-hit move"
+    );
+    assert_eq!(rng.draws(), script.len());
+}
