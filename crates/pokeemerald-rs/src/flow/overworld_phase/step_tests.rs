@@ -955,3 +955,98 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
          (field_control_avatar.c:182), even when the menu would have built"
     );
 }
+
+/// Issue #1127: `TryArrowWarp`/`TryStartWarpEventScript` both resolve the
+/// warp event at `GetPlayerPosition`'s `position.elevation`
+/// (`pokeemerald/src/field_control_avatar.c:194-197, 690, 704`), which is
+/// `PlayerGetElevation()` -- the *retained* `previousElevation`
+/// (`pokeemerald/src/field_player_avatar.c:1192-1195`), not the landed
+/// tile's own (possibly transition) collision elevation. `previousElevation`
+/// deliberately keeps the last *non*-transition value
+/// (`engine::overworld::PlayerState::previous_elevation`'s own doc comment).
+/// A warp event stored at an ordinary elevation is a wildcard match only for
+/// a query at its own elevation or for a stored transition
+/// (`engine::overworld::MapRuntime::warp_event_at`, mirroring
+/// `GetWarpEventAtPosition`), so a query at the landed transition tile's `0`
+/// misses an elevation-`3` event that a query at the retained `3` finds.
+///
+/// Transplanted onto Granite Cave B1F for the same reason
+/// `crate::flow::wild_encounter::tests`'
+/// `a_door_warp_frame_never_reaches_the_encounter_roll` picks that map: a
+/// fired door warp is observable pack-free only through the encounter
+/// bookkeeping it suppresses (`super::step`'s `roll_eligible_landing` call),
+/// and Granite Cave B1F has both a real warp event at elevation 3 and a
+/// real land table.
+#[test]
+fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE};
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const FLOOR: (u16, u16) = (7, 5);
+    const DOOR: (u16, u16) = (8, 5);
+
+    // Fixture precondition, read off the generated table rather than
+    // restated: the map really declares a warp event on the door tile, at
+    // an ordinary (non-transition) elevation.
+    let events = assets::MapEventsTable::new()
+        .resolve(CAVE)
+        .expect("Granite Cave B1F resolves in the generated map-events table");
+    assert!(
+        events
+            .warp_events
+            .iter()
+            .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+        "fixture precondition: the door tile carries a warp event stored at elevation 3"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(FLOOR, MB_CAVE, 3), (DOOR, MB_ANIMATED_DOOR, 0)],
+        ),
+        CAVE,
+        PlayerState::new((6, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+    // Granite Cave's table fails today's executability screen, which would
+    // freeze the very bookkeeping this test reads the warp through; the
+    // screen has its own tests (same override, same reason, as
+    // `a_door_warp_frame_never_reaches_the_encounter_roll`).
+    phase.wild_table_screen = Some((CAVE, true));
+
+    // One step east onto the elevation-3 cave floor: inside the
+    // post-transition immunity window, so it draws nothing, but it does
+    // record its tile's behavior.
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (7, 5));
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "fixture precondition: an unsuppressed roll really does overwrite this"
+    );
+
+    // One more step east, onto the door tile's transition elevation.
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (8, 5));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "the landed transition cell is the collision elevation; the retained \
+         previousElevation upstream looks warps up at is still 3"
+    );
+
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "the door warp must fire on the drain frame -- upstream resolves it at \
+         PlayerGetElevation()'s retained 3 (field_player_avatar.c:1192-1195) -- so \
+         ProcessPlayerFieldInput returns before CheckStandardWildEncounter and the \
+         door tile's own behavior is never recorded"
+    );
+}

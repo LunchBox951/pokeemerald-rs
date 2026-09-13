@@ -47,6 +47,10 @@ const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 struct PreMovementFieldInput {
     facing: Direction,
     position: (i32, i32),
+    /// The pre-movement *collision* elevation, for [`Self::step`]'s crossing-
+    /// refusal restore only -- not a warp-lookup elevation (those are
+    /// [`PlayerState::previous_elevation`], resolved locally where each
+    /// lookup happens).
     elevation: u8,
     arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
@@ -475,8 +479,14 @@ impl OverworldPhase {
             // the precedence on its own.
             let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
             let landed = stepped_onto.filter(|_| !first_battle_triggered);
-            let door_warp = landed
-                .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
+            // `previous_elevation()`, not `elevation()`: `TryStartStepBasedScript`
+            // queries `GetPlayerPosition`'s `position.elevation`, which is
+            // `PlayerGetElevation()` -- the retained `previousElevation`, not the
+            // landed tile's own (possibly transition) collision elevation
+            // (`field_control_avatar.c:194-197`, `field_player_avatar.c:1192-1195`).
+            let door_warp = landed.and_then(|(x, y)| {
+                trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
+            });
             // The roll happens only on a completed step no warp path has
             // claimed (`roll_eligible_landing`) and only on a fightable map
             // (`wild_table_fightable`). A fainted-lead filter used to sit
@@ -610,7 +620,11 @@ impl OverworldPhase {
                 }
                 let direction = pre.arrow_direction?;
                 let (x, y) = pre.position;
-                trigger_arrow_warp(runtime, x, y, self.player.elevation(), direction)
+                // `previous_elevation()`: `TryArrowWarp` reads the same
+                // `GetPlayerPosition`-derived `position.elevation` (retained
+                // `previousElevation`) `TryStartStepBasedScript` does above
+                // (`field_control_avatar.c:164-168, 194-197`).
+                trigger_arrow_warp(runtime, x, y, self.player.previous_elevation(), direction)
             })
     }
 
@@ -628,6 +642,11 @@ impl OverworldPhase {
         let facing = self.player.facing();
         let position = self.player.position();
         let elevation = self.player.elevation();
+        // `GetPlayerPosition`'s `position.elevation` is `PlayerGetElevation()`,
+        // the retained `previousElevation`, not the collision value above --
+        // every warp lookup below queries this, not `elevation`
+        // (`field_control_avatar.c:194-197`, `field_player_avatar.c:1192-1195`).
+        let previous_elevation = self.player.previous_elevation();
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
 
@@ -636,7 +655,7 @@ impl OverworldPhase {
         // movement.
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
-            trigger_arrow_warp(runtime, x, y, elevation, d)
+            trigger_arrow_warp(runtime, x, y, previous_elevation, d)
         });
 
         // NPC interaction, resolved before `advance_or_skip_for_preempt`
@@ -657,7 +676,7 @@ impl OverworldPhase {
         let animated_door_trigger = (at_rest && arrow_trigger.is_none() && interaction.is_none())
             .then_some(arrow_direction)
             .flatten()
-            .and_then(|d| super::animated_door::trigger(runtime, position, elevation, d));
+            .and_then(|d| super::animated_door::trigger(runtime, position, previous_elevation, d));
 
         let start_menu = self
             .start_menu_may_open(

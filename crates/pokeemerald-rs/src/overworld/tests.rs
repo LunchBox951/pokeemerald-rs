@@ -629,6 +629,49 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     .expect("synthetic pack with an elevated cell should decode cleanly")
 }
 
+/// [`synthetic_scene_with_special_tiles`], but each entry also names the
+/// elevation its cell carries instead of the fixture's uniform 3 -- the one
+/// shape a transition-elevation warp tile needs (a door-shaped behavior on
+/// an elevation-0 cell, as `MAP_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F`'s
+/// own warp #2 really is), which neither [`synthetic_scene_with_special_tiles`]
+/// (behavior only, elevation always 3) nor [`synthetic_scene_with_cell_elevation`]
+/// (elevation only, behavior always `MB_NORMAL`) can express on its own.
+pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+) -> super::OverworldScene {
+    let behaviors: Vec<((u16, u16), u8)> = specials
+        .iter()
+        .map(|&(pos, behavior, _)| (pos, behavior))
+        .collect();
+    let mut entries =
+        synthetic_overworld_pack_entries_with_special_tiles(width, height, &behaviors);
+    for (index, &((sx, sy), _, elevation)) in specials.iter().enumerate() {
+        let metatile_id =
+            u16::try_from(index + 1).expect("a fixture never needs 65k special tiles");
+        let cell = assets::MetatileCell {
+            metatile_id,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let grid = entries
+            .iter_mut()
+            .find(|e| e.id == "layout/map_test/map")
+            .expect("the general fixture always fabricates its own layout entry");
+        let idx = (usize::from(sy) * usize::from(width) + usize::from(sx)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
+    synthetic_scene_result(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack with elevated special tiles should decode cleanly")
+}
+
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
 /// the layout's tileset symbol: writes the scratch pack, runs
 /// [`super::OverworldScene::from_pack`], and returns its result -- so
