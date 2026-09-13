@@ -301,7 +301,7 @@ fn title_to_main_menu_failure_emits_its_subsystem_prefix_once_at_the_eprintln_bo
 /// (`gSaveBlock2Ptr->optionsWindowFrameType`, read by
 /// `GetWindowFrameTilesPal` for every main-menu box,
 /// `main_menu.c:2191-2193`), not a hardcoded default. Closes the loop
-/// [`crate::flow::save_continue_tests::a_saved_games_own_window_frame_choice_borders_its_main_menu`]
+/// [`crate::flow::save_continue_window_frame_tests::a_saved_games_own_window_frame_choice_borders_its_main_menu`]
 /// cannot without a real pack: that test proves the construction API and
 /// the real save round trip separately, against a synthetic pack; this one
 /// drives the actual production call site end to end, against a real pack

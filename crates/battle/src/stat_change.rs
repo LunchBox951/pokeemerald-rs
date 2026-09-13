@@ -377,6 +377,8 @@ pub fn resolve_stat_change_move(
         if !accuracy_check(
             mv.accuracy,
             mv.effect,
+            mv.move_type,
+            attacker.ability(),
             attacker.stages().accuracy,
             defender.stages().evasion,
             rng,
