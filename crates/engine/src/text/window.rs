@@ -1099,8 +1099,10 @@ mod tests {
         );
     }
 
+    // Retained behaviour, not a regression: upstream fills `width + 1` columns
+    // and `height + 1` rows, so zero on either axis still paints one cell.
     #[test]
-    fn frame_tiles_with_zero_width_keeps_upstreams_one_interior_column() {
+    fn frame_tiles_retains_upstreams_one_interior_column_at_zero_width() {
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -1122,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_tiles_with_zero_height_keeps_upstreams_one_fill_row() {
+    fn frame_tiles_retains_upstreams_one_fill_row_at_zero_height() {
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
