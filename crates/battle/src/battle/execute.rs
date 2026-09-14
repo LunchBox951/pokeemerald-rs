@@ -132,6 +132,12 @@ impl Battle {
                     move_id,
                 });
             }
+            HitOutcome::WonderGuardBlocked => {
+                events.push(BattleEvent::WonderGuardBlocked {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
             HitOutcome::Hit {
                 damage,
                 is_critical,
