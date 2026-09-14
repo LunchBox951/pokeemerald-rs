@@ -585,14 +585,8 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
     assert_eq!(fb.pixel(0, 0), Some(STD_BORDER));
 }
 
-/// A continued save's own `optionsWindowFrameType` must border the *field
-/// start menu* too, not just the main menu (issue #898, #795's sibling) --
-/// see [`StartMenuChrome::from_pack`] for the upstream contract. Goes
-/// through that production constructor against a synthetic pack with two
-/// distinguishable frames (frame 0 green, frame 5 red), covering both the
-/// item window and the Yes/No prompt, so a regression back to a fixed
-/// frame id shows up as the wrong colour rather than silently matching by
-/// coincidence.
+/// The save's `optionsWindowFrameType` borders the item window and the
+/// Yes/No prompt ([`StartMenuChrome::from_pack`] owns the contract).
 #[test]
 fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
     use super::StartMenuChrome;

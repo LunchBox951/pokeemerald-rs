@@ -70,16 +70,10 @@ pub(crate) struct StartMenuChrome {
 impl StartMenuChrome {
     /// Loads owned font and window assets from an asset pack.
     ///
-    /// `window_frame` is the standard-frame border every window this
-    /// chrome draws: upstream's `InitStartMenuStep` case 2 resolves it via
-    /// `LoadMessageBoxAndBorderGfx` -> `LoadUserWindowBorderGfx`
-    /// (`pokeemerald/src/start_menu.c:493-495`, `pokeemerald/src/menu.c:210-213`)
-    /// from `gSaveBlock2Ptr->optionsWindowFrameType` -- callers pass the
-    /// live save's own value (issue #898, mirroring #795's identical fix
-    /// for [`crate::main_menu`]). The message box is not affected:
-    /// `LoadMessageBoxGfx` reads no such option, so [`Self::message_frame`]
-    /// always comes from [`AssetPack::message_box`] regardless of
-    /// `window_frame`.
+    /// `window_frame` is the save's `optionsWindowFrameType`, the border
+    /// `LoadUserWindowBorderGfx` gives every start-menu window
+    /// (`pokeemerald/src/start_menu.c:493-495`, `pokeemerald/src/menu.c:210-213`);
+    /// the message box keeps [`AssetPack::message_box`] regardless.
     ///
     /// # Errors
     ///
