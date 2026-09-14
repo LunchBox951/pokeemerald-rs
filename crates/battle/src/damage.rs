@@ -289,6 +289,52 @@ pub fn apply_dual_type_effectiveness(
     }
 }
 
+/// Classifies dual-type effectiveness into the three-way bucket
+/// `ModulateDmgByType` tracks via `MOVE_RESULT_SUPER_EFFECTIVE` and
+/// `MOVE_RESULT_NOT_VERY_EFFECTIVE` (`pokeemerald/src/battle_script_commands.c:1321-1351`).
+///
+/// Each non-neutral row toggles the running bucket rather than multiplying a
+/// scaled value: a super-effective row cancels an existing not-very-effective
+/// bucket back to [`Effectiveness::Normal`] instead of compounding past it,
+/// and the reverse cancellation holds too. A [`Effectiveness::NoEffect`] row
+/// is terminal regardless of order, matching [`apply_dual_type_effectiveness`]'s
+/// immunity handling. This is what Wonder Guard's admission check
+/// (`battle_script_commands.c:1409-1411`) reads instead of
+/// [`apply_dual_type_effectiveness`]'s floored running damage, since integer
+/// flooring can hide whether the bucket is truly [`Effectiveness::SuperEffective`].
+#[must_use]
+pub fn aggregate_type_effectiveness(move_type: Type, defender_types: [Type; 2]) -> Effectiveness {
+    let second_type_is_distinct = defender_types[1] != defender_types[0];
+    let mut bucket = Effectiveness::Normal;
+    for &(attacking_type, defending_type, rule) in TypeChart::rows() {
+        if attacking_type != move_type {
+            continue;
+        }
+        let matches_first_type = defending_type == defender_types[0];
+        let matches_second_type = second_type_is_distinct && defending_type == defender_types[1];
+        if !matches_first_type && !matches_second_type {
+            continue;
+        }
+        bucket = match (bucket, rule) {
+            (Effectiveness::NoEffect, _) | (_, Effectiveness::NoEffect) => Effectiveness::NoEffect,
+            (_, Effectiveness::Normal) => bucket,
+            (Effectiveness::SuperEffective, Effectiveness::NotVeryEffective)
+            | (Effectiveness::NotVeryEffective, Effectiveness::SuperEffective) => {
+                Effectiveness::Normal
+            }
+            (
+                Effectiveness::Normal | Effectiveness::NotVeryEffective,
+                Effectiveness::NotVeryEffective,
+            ) => Effectiveness::NotVeryEffective,
+            (
+                Effectiveness::Normal | Effectiveness::SuperEffective,
+                Effectiveness::SuperEffective,
+            ) => Effectiveness::SuperEffective,
+        };
+    }
+    bucket
+}
+
 /// Calculates one hit in base, STAB, single-effectiveness, and roll order.
 ///
 /// Use [`apply_dual_type_effectiveness`] instead of the single-effectiveness
@@ -309,9 +355,9 @@ pub fn calculate_damage(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
-        base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
-        STRUGGLE,
+        aggregate_type_effectiveness, apply_damage_roll, apply_dual_type_effectiveness, apply_stab,
+        apply_type_effectiveness, base_damage, calculate_damage, has_stab, BattleRng, DamageInput,
+        MoveCategory, Weather, STRUGGLE,
     };
     use crate::script_rng::SequenceRng;
     use crate::stat_stage::StatStage;
@@ -740,5 +786,132 @@ mod tests {
         let input = neutral_input(Type::Electric, 50, 50, 40, 50);
         let got = calculate_damage(&input, false, Effectiveness::NoEffect, &mut FixedRng(0));
         assert_eq!(got, 0);
+    }
+
+    #[test]
+    fn aggregate_effectiveness_matches_a_single_applicable_row() {
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Water, [Type::Fire, Type::Fire]),
+            Effectiveness::SuperEffective
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Normal, [Type::Rock, Type::Rock]),
+            Effectiveness::NotVeryEffective
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Normal, [Type::Grass, Type::Grass]),
+            Effectiveness::Normal
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_is_terminal_on_immunity_regardless_of_order() {
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Electric, [Type::Ground, Type::Flying]),
+            Effectiveness::NoEffect
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Electric, [Type::Flying, Type::Ground]),
+            Effectiveness::NoEffect
+        );
+        // Ghost is super effective against Psychic but has no effect on
+        // Normal; the immunity must win regardless of which type slot is
+        // checked first.
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Ghost, [Type::Normal, Type::Psychic]),
+            Effectiveness::NoEffect
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Ghost, [Type::Psychic, Type::Normal]),
+            Effectiveness::NoEffect
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_cancels_a_resist_and_a_boost_to_normal() {
+        // Fire is not very effective against Rock but super effective
+        // against Grass; upstream's flag toggling cancels the pair back to
+        // neutral rather than compounding to a true 1x multiplier.
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Fire, [Type::Rock, Type::Grass]),
+            Effectiveness::Normal
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Fire, [Type::Grass, Type::Rock]),
+            Effectiveness::Normal
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_diverges_from_comparing_floored_damage() {
+        // Water is not-very-effective against Water and super effective
+        // against Ground, applied in that table order
+        // (`TypeChart::rows`). At a starting damage of one,
+        // `apply_dual_type_effectiveness`'s one-hp floor rescue
+        // (`apply_type_effectiveness`'s `scaled_damage == 0` branch) turns
+        // the not-very-effective step into a no-op, so the super-effective
+        // step afterward leaves the floored damage *higher* than where it
+        // started -- a naive "did the floored damage rise" comparison would
+        // misclassify this matchup as super effective. The flag-toggle
+        // bucket does not: a not-very-effective row followed by a
+        // super-effective row cancels back to `Normal`, exactly like
+        // upstream's `ModulateDmgByType` (`battle_script_commands.c:1334-1351`),
+        // so Wonder Guard still blocks it.
+        let floored = apply_dual_type_effectiveness(1, Type::Water, [Type::Water, Type::Ground]);
+        assert_eq!(
+            floored, 2,
+            "fixture sanity: the floor rescue must inflate the floored \
+             damage above its one-hp start"
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Water, [Type::Water, Type::Ground]),
+            Effectiveness::Normal,
+            "the true bucket cancels back to neutral despite the floored \
+             damage rising, so this matchup must still block Wonder Guard"
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_two_supers_stay_a_single_super_bucket() {
+        // Fighting is super effective against both Rock and Steel; the
+        // bucket stays `SuperEffective` rather than compounding further,
+        // matching upstream's single flag bit.
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Fighting, [Type::Rock, Type::Steel]),
+            Effectiveness::SuperEffective
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_two_resists_stay_a_single_weak_bucket() {
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Electric, [Type::Grass, Type::Dragon]),
+            Effectiveness::NotVeryEffective
+        );
+    }
+
+    #[test]
+    fn aggregate_effectiveness_matches_shedinjas_matchups() {
+        // Shedinja (Bug/Ghost): Water Gun is neutral, Dragon Rage's Dragon
+        // typing has no chart row against either type (also neutral), Sonic
+        // Boom's Normal typing is immune to Ghost, and Faint Attack's Dark
+        // typing is super effective against Ghost and neutral against Bug.
+        let shedinja = [Type::Bug, Type::Ghost];
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Water, shedinja),
+            Effectiveness::Normal
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Dragon, shedinja),
+            Effectiveness::Normal
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Normal, shedinja),
+            Effectiveness::NoEffect
+        );
+        assert_eq!(
+            aggregate_type_effectiveness(Type::Dark, shedinja),
+            Effectiveness::SuperEffective
+        );
     }
 }
