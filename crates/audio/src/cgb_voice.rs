@@ -205,14 +205,22 @@ impl StereoRouting {
             right_enabled: false,
             left_enabled: false,
         };
-        routing.update_from_track(track_right, track_left);
+        routing.update_volumes(track_right, track_left);
+        routing.commit_pan();
         routing
     }
 
-    fn update_from_track(&mut self, track_right: u8, track_left: u8) {
+    /// Recompute the base side volumes only, matching `ChnVolSetAsm`, which
+    /// leaves `chan->pan` untouched (`m4a_1.s:1508-1536`).
+    fn update_volumes(&mut self, track_right: u8, track_left: u8) {
         let (pan_right, pan_left) = pan_terms(self.rhythm_pan);
         self.right = channel_volume(track_right, pan_right, self.velocity);
         self.left = channel_volume(track_left, pan_left, self.velocity);
+    }
+
+    /// Recompute panning from the latest side volumes and commit it to the
+    /// rendered route, matching `CgbModVol`'s call to `CgbPan` (`m4a.c:878-923`).
+    fn commit_pan(&mut self) {
         let panning = cgb_pan(self.right, self.left);
         self.right_enabled = matches!(panning, Panning::Right | Panning::Both);
         self.left_enabled = matches!(panning, Panning::Left | Panning::Both);
@@ -575,10 +583,11 @@ impl CgbVoice {
         self.hardware_muted = !self.oscillator.retrigger();
     }
 
-    /// Update base volume, panning, and envelope goal; itself a retrigger,
-    /// matching upstream's live volume/pan write (`m4a_1.s:1391-1400`).
+    /// Update base volume and envelope goal; itself a retrigger, matching
+    /// upstream's live volume/pan write (`m4a_1.s:1391-1400`). The stereo
+    /// route itself stays latched until [`Self::begin_frame`] commits it.
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
-        self.routing.update_from_track(vol_mr, vol_ml);
+        self.routing.update_volumes(vol_mr, vol_ml);
         self.envelope
             .set_goal(self.adsr, self.routing.envelope_goal());
         self.pending_retrigger = true;
@@ -595,7 +604,15 @@ impl CgbVoice {
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
+        let volume_before_step = self.envelope.volume();
         let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
+        // `CgbModVol` runs on every `envelopeCounter == 0` iteration, not
+        // only a retrigger-worthy one, e.g. a bare sustain refresh
+        // (`m4a.c:1077-1085`); a paced step changes `volume` only there, so
+        // reusing it catches that boundary too (a bare live write does not).
+        if retriggered_by_transition || volume_before_step != self.envelope.volume() {
+            self.routing.commit_pan();
+        }
         let hardware_write = retriggered_by_note_off || retriggered_by_transition;
         if hardware_write {
             self.apply_retrigger();
@@ -1501,6 +1518,113 @@ mod tests {
             voice.routing.right > voice.routing.left,
             "the rhythm-pan override must survive a mid-note VOL rerun"
         );
+    }
+
+    /// Sum of absolute per-side render output across one `begin_frame`/`render` pass.
+    fn frame_side_energy(voice: &mut CgbVoice) -> (i32, i32) {
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        let mut acc = vec![(0i32, 0i32); 64];
+        voice.render(&mut acc, &[]);
+        acc.iter()
+            .fold((0, 0), |(left_sum, right_sum), &(left, right)| {
+                (left_sum + left.abs(), right_sum + right.abs())
+            })
+    }
+
+    #[test]
+    fn a_live_volume_write_keeps_the_latched_pan_for_that_frame() {
+        // `chan->pan` is written only by `CgbPan`/`CgbModVol`, which run at
+        // note-on and at an envelope transition whose counter reached zero
+        // (`m4a.c:878-923`, `:994`, `:1077-1085`). A live `MPT_FLG_VOLCHG`
+        // rewrites only `rightVolume`/`leftVolume` and raises
+        // `CGB_CHANNEL_MO_VOL` (`m4a_1.s:1391-1400`, `:1508-1536`), so the
+        // NR51 write it triggers still carries the previously latched pan
+        // (`m4a.c:1205-1208`): a hard-pan flip cannot reroute a sustained
+        // note on the frame of the write.
+        let mut voice = square_voice(CgbChannelNumber::Square1, None, TestNote::default());
+        let (centred_left, centred_right) = frame_side_energy(&mut voice);
+        assert!(
+            centred_left > 0 && centred_right > 0,
+            "sanity: a centred note must latch a both-sides pan at note-on"
+        );
+
+        voice.set_track_volume(FULL_TRACK_VOLUME, 0);
+        let (left, right) = frame_side_energy(&mut voice);
+
+        assert!(
+            left > 0 && right > 0,
+            "the volume write must reuse the latched both-sides pan, leaving both sides audible"
+        );
+    }
+
+    #[test]
+    fn commit_pan_reroutes_from_the_latest_volumes_once_called() {
+        // Companion to `a_live_volume_write_keeps_the_latched_pan_for_that_frame`:
+        // the deferred route is not stuck forever. `update_volumes` alone
+        // (the live-write path) must not move it, but `commit_pan` (the
+        // `CgbModVol`/`CgbPan` boundary, `m4a.c:878-923`) must reroute it
+        // from whatever side volumes are current at that point, not just the
+        // ones in effect when it was last called.
+        let mut routing =
+            StereoRouting::new(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME, FULL_VELOCITY, 0);
+        assert!(
+            routing.right_enabled && routing.left_enabled,
+            "sanity: a centred note latches both sides at construction"
+        );
+
+        routing.update_volumes(FULL_TRACK_VOLUME, 0);
+        assert!(
+            routing.right_enabled && routing.left_enabled,
+            "update_volumes alone, matching ChnVolSetAsm, must not move the committed route"
+        );
+
+        routing.commit_pan();
+        assert!(
+            routing.right_enabled && !routing.left_enabled,
+            "commit_pan must reroute to the hard-right pan the latest volumes now resolve to"
+        );
+    }
+
+    /// `frame_side_energy` on a fresh voice until its stereo route reroutes
+    /// hard right, or `None` past `max_frames` (a stuck route).
+    fn frames_until_hard_right(voice: &mut CgbVoice, max_frames: usize) -> Option<usize> {
+        (0..max_frames).find(|_| {
+            let (left, right) = frame_side_energy(voice);
+            left == 0 && right > 0
+        })
+    }
+
+    #[test]
+    fn a_pending_pan_change_commits_by_the_next_sustain_refresh() {
+        // Upstream recalculates `chan->pan` at every `envelopeCounter == 0`
+        // boundary, not only a retrigger-worthy one -- a bare sustain
+        // refresh does this too (`m4a.c:1077-1085`), and Wave alone also
+        // writes it to NR51 there (`:1081-1082`). `begin_frame` must commit
+        // a pending route by the next such refresh, driven only through the
+        // public `CgbVoice` API, not `StereoRouting::commit_pan` directly.
+        for mut voice in [
+            square_voice(CgbChannelNumber::Square1, None, TestNote::default()),
+            wave_voice(false, TestNote::default()),
+        ] {
+            let (centred_left, centred_right) = frame_side_energy(&mut voice); // enters sustain
+            assert!(
+                centred_left > 0 && centred_right > 0,
+                "sanity: a centred note must latch a both-sides pan at note-on"
+            );
+
+            voice.set_track_volume(FULL_TRACK_VOLUME, 0);
+            let (still_left, still_right) = frame_side_energy(&mut voice);
+            assert!(
+                still_left > 0 && still_right > 0,
+                "sanity: the write's own frame still holds the latched pan"
+            );
+
+            assert!(
+                frames_until_hard_right(&mut voice, 8).is_some(),
+                "the pending hard-right pan must commit by the next sustain refresh, not stay \
+                 latched forever"
+            );
+        }
     }
 
     #[test]
