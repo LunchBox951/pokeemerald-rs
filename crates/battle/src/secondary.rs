@@ -15,9 +15,9 @@
 //! [`EFFECT_POISON_HIT`] is the one ported trampoline
 //! (`battle_script_commands.c:2299-2340`).
 
-use assets::{AbilityId, MoveEffect, MoveId, Type};
+use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
-use crate::damage::{BattleRng, STRUGGLE};
+use crate::damage::{aggregate_type_effectiveness, BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
@@ -165,13 +165,19 @@ pub fn is_poison_hit_effect(effect: MoveEffect) -> bool {
 
 /// `SetMoveEffect`'s silent `STATUS1_POISON` guards
 /// (`battle_script_commands.c:2330-2337`), plus Shield Dust's silent block
-/// of a plain move's chance-based effect (`:2253-2255`).
+/// of a plain move's chance-based effect (`:2253-2255`), and Wonder Guard's
+/// `MOVE_RESULT_MISSED` foreclosing the hit -- and so the secondary it would
+/// have carried -- before `SetMoveEffect` ever runs
+/// (`battle_script_commands.c:1409-1418`).
 #[must_use]
-fn poison_can_land(defender: &BattlePokemon) -> bool {
+fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
     let types = defender.types();
     let is_poison_or_steel_type = types.contains(&Type::Poison) || types.contains(&Type::Steel);
+    let wonder_guard_blocks = defender.ability() == AbilityId::WONDER_GUARD
+        && aggregate_type_effectiveness(move_type, types) != Effectiveness::SuperEffective;
     defender.status1().is_healthy()
         && !is_poison_or_steel_type
+        && !wonder_guard_blocks
         && defender.ability() != AbilityId::IMMUNITY
         && defender.ability() != AbilityId::SHIELD_DUST
 }
@@ -190,10 +196,11 @@ fn poison_can_land(defender: &BattlePokemon) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`, or
-/// [`BattleError::UnportedAbilityInteraction`] for the attacker's Serene
-/// Grace, or the defender's Synchronize or Shed Skin, when the move would
-/// newly poison the defender.
+/// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
+/// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
+/// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
+/// the attacker's Serene Grace, or the defender's Synchronize or Shed Skin,
+/// when the move would newly poison the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -204,12 +211,16 @@ pub fn ensure_admissible(
     if !is_poison_hit_effect(mv.effect) {
         return Ok(());
     }
-    if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(defender) {
+    let move_type = mv
+        .move_type
+        .battle_type()
+        .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+    if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(move_type, defender) {
         return Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE,
         ));
     }
-    if !poison_can_land(defender) {
+    if !poison_can_land(move_type, defender) {
         return Ok(());
     }
     match defender.ability() {
@@ -239,7 +250,9 @@ pub fn ensure_admissible(
 /// Returns [`BattleError::UnknownMove`] before drawing when `move_id` is not
 /// in `dex`. Returns [`BattleError::UnportedSecondaryEffect`] when a modeled
 /// trampoline effect other than [`EFFECT_POISON_HIT`], or Struggle's certain
-/// recoil effect, would apply; any required chance draw has already been
+/// recoil effect, would apply, or [`BattleError::UnsupportedMoveType`] for an
+/// [`EFFECT_POISON_HIT`] move whose type cannot participate in battle
+/// calculations; either way, any required chance draw has already been
 /// consumed.
 pub fn spend_effect_chance_draw(
     dex: &Dex,
@@ -269,7 +282,11 @@ pub fn spend_effect_chance_draw(
         return Err(BattleError::UnportedSecondaryEffect(move_id));
     }
 
-    Ok(poison_can_land(defender))
+    let move_type = mv
+        .move_type
+        .battle_type()
+        .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+    Ok(poison_can_land(move_type, defender))
 }
 
 #[cfg(test)]

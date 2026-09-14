@@ -14,6 +14,8 @@ const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
 const RATTATA: SpeciesId = SpeciesId(19);
 const GASTLY: SpeciesId = SpeciesId(92);
+/// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
+const SHEDINJA: SpeciesId = SpeciesId(303);
 
 const TACKLE: MoveId = MoveId(33);
 const SONIC_BOOM: MoveId = MoveId(49);
@@ -257,6 +259,66 @@ fn type_effectiveness_only_decides_immunity() {
     assert_eq!(
         super_effective_night_shade_rng.draws(),
         LANDED_FIXED_DAMAGE_DRAWS.len()
+    );
+}
+
+/// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`)
+/// also gates fixed damage: Dragon Rage's Dragon typing has no chart row
+/// against either of Shedinja's types, so only Wonder Guard can block it.
+#[test]
+fn wonder_guard_blocks_dragon_rages_neutral_matchup() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 23, vec![DRAGON_RAGE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(LANDED_FIXED_DAMAGE_DRAWS);
+
+    let outcome =
+        resolve_fixed_damage_move(&dex, DRAGON_RAGE, &attacker, &shedinja_defender, &mut rng)
+            .unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+    assert_eq!(rng.draws(), LANDED_FIXED_DAMAGE_DRAWS.len());
+}
+
+/// Wonder Guard's own message outranks the ordinary typing-immunity message
+/// (`Cmd_resultmessage`, `battle_script_commands.c:2048-2059`), so Sonic
+/// Boom's independent Normal-versus-Ghost immunity must still report the
+/// Wonder Guard outcome, not [`HitOutcome::NoEffect`].
+#[test]
+fn wonder_guard_outranks_sonic_booms_independent_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 23, vec![SONIC_BOOM]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(LANDED_FIXED_DAMAGE_DRAWS);
+
+    let outcome =
+        resolve_fixed_damage_move(&dex, SONIC_BOOM, &attacker, &shedinja_defender, &mut rng)
+            .unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+}
+
+/// Night Shade's Ghost typing is super effective against Shedinja's own
+/// Ghost type and neutral against its Bug type, so Wonder Guard must let it
+/// through.
+#[test]
+fn wonder_guard_permits_night_shades_super_effective_matchup() {
+    let dex = Dex::new();
+    let attacker_level = 30;
+    let attacker = mon(&dex, BULBASAUR, attacker_level, vec![NIGHT_SHADE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(LANDED_FIXED_DAMAGE_DRAWS);
+
+    let outcome =
+        resolve_fixed_damage_move(&dex, NIGHT_SHADE, &attacker, &shedinja_defender, &mut rng)
+            .unwrap();
+
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: u32::from(attacker_level),
+            is_critical: false,
+        }
     );
 }
 

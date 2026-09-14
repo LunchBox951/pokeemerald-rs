@@ -22,6 +22,7 @@ enum MultiHitConclusion {
     TargetFaintedReportHitCount,
     TargetImmune,
     TargetLevitateBlocked,
+    TargetWonderGuardBlocked,
 }
 
 impl MultiHitConclusion {
@@ -33,7 +34,10 @@ impl MultiHitConclusion {
     }
 
     const fn permits_secondary_effect(self) -> bool {
-        !matches!(self, Self::TargetImmune | Self::TargetLevitateBlocked)
+        !matches!(
+            self,
+            Self::TargetImmune | Self::TargetLevitateBlocked | Self::TargetWonderGuardBlocked
+        )
     }
 }
 
@@ -216,6 +220,11 @@ impl Battle {
                 by_player: attacker_is_player,
                 move_id,
             });
+        } else if result.conclusion == MultiHitConclusion::TargetWonderGuardBlocked {
+            events.push(BattleEvent::WonderGuardBlocked {
+                by_player: attacker_is_player,
+                move_id,
+            });
         } else if result.conclusion.reports_hit_count() && result.hits_landed > 0 {
             events.push(BattleEvent::MultiHit {
                 by_player: attacker_is_player,
@@ -269,7 +278,9 @@ impl Battle {
             )?;
             let target_is_immune = raw_damage.damage == 0;
             if target_is_immune {
-                let conclusion = if raw_damage.levitate_blocked {
+                let conclusion = if raw_damage.wonder_guard_blocked {
+                    MultiHitConclusion::TargetWonderGuardBlocked
+                } else if raw_damage.levitate_blocked {
                     MultiHitConclusion::TargetLevitateBlocked
                 } else {
                     MultiHitConclusion::TargetImmune
@@ -376,6 +387,7 @@ fn hit_failure_event(outcome: HitOutcome, by_player: bool, move_id: MoveId) -> B
         HitOutcome::Miss => BattleEvent::Missed { by_player, move_id },
         HitOutcome::NoEffect => BattleEvent::NoEffect { by_player, move_id },
         HitOutcome::LevitateBlocked => BattleEvent::LevitateBlocked { by_player, move_id },
+        HitOutcome::WonderGuardBlocked => BattleEvent::WonderGuardBlocked { by_player, move_id },
         HitOutcome::Hit { .. } => {
             unreachable!("a landed hit cannot produce a failure event")
         }

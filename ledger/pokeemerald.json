@@ -24714,7 +24714,7 @@
           "status": "stubbed"
         },
         "Cmd_typecalc": {
-          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Since issue #1081, the Levitate branch (:1375-:1383) is modelled too: hit::damage_before_roll zeroes a Ground move's damage ahead of this call when the defender's ability is Levitate, and reports it through the distinct HitOutcome::LevitateBlocked/BattleEvent::LevitateBlocked, matching B_MSG_GROUND_MISS's own string id rather than the ordinary type-immunity message. Still pending: Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
+          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. The Levitate branch (:1375-:1383) is modelled too: hit::damage_before_roll zeroes a Ground moves damage ahead of this call when the defender ability is Levitate, reported through HitOutcome::LevitateBlocked/BattleEvent::LevitateBlocked. The Wonder Guard branch (:1409-:1418) is modelled as well: damage::aggregate_type_effectiveness tracks ModulateDmgByTypes SUPER_EFFECTIVE/NOT_VERY_EFFECTIVE flag toggling (:1321-1351) rather than floored running damage, and hit::damage_before_roll blocks any powered, not-strictly-super-effective hit other than Struggle (which skips typecalc, as upstream's MOVE_STRUGGLE early return does) against a Wonder Guard holder, reported through HitOutcome::WonderGuardBlocked/BattleEvent::WonderGuardBlocked and propagated through drain, multi-hit, and fixed damage. Still pending: Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -28395,6 +28395,12 @@
         },
         "cloud_scroll": {
           "reason": "Task_TitleScreenPhase3's cloud vertical scroll (tCounter/tBg1Y/gBattle_BG1_Y -> BG1VOFS) transcribed as the pure fn cloud_scroll_y(frame) (issue #116); confirmed vertical, not horizontal, by reading the actual code (BG1HOFS is only ever set once, statically, by ScanlineEffect_InitWave during boot). The legendary-marking palette pulse (UpdateLegendaryMarkingColor) in the same function is out of scope and stays pending.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "press_start_copyright_anim_frames": {
+          "reason": "sAnim_PressStart_0..4 and sAnim_Copyright_0..4's ANIMCMD_FRAME tile selection (1,5,9,13,17 and 21,25,29,33,37, applied unscaled by BeginAnim, sprite.c:936) is reproduced by PRESS_START_BASE_TILE/COPYRIGHT_BASE_TILE and sprite_entries' per-frame arithmetic; press_start_tileset packs press_start.png in the upstream sheet's own 41-tile raster order (0x520 bytes, title_screen.c:299) so those indices resolve to the same tiles (issue #1156).",
           "rust_target": "crates/pokeemerald-rs/src/title.rs",
           "spec": "I-2",
           "status": "rewritten"
