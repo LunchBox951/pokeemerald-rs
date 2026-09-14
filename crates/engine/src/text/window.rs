@@ -128,8 +128,9 @@ pub struct FrameTile {
     pub v_flip: bool,
 }
 
-// Loop endpoints saturate at `i32::MIN`/`i32::MAX` instead of overflowing; a
-// nonpositive `width` or `height` yields an empty range rather than panicking.
+// The last row and column saturate at `i32::MAX` instead of overflowing, so a
+// rectangle ending on `i32::MAX` still covers that cell; a nonpositive `width`
+// or `height` covers nothing.
 fn fill_rect(
     tiles: &mut Vec<FrameTile>,
     source_tile: u8,
@@ -139,8 +140,14 @@ fn fill_rect(
     width: i32,
     height: i32,
 ) {
-    for row in first_row..first_row.saturating_add(height) {
-        for col in first_column..first_column.saturating_add(width) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let last_row = first_row.saturating_add(height - 1);
+    let last_column = first_column.saturating_add(width - 1);
+
+    for row in first_row..=last_row {
+        for col in first_column..=last_column {
             tiles.push(FrameTile {
                 col,
                 row,
@@ -538,15 +545,20 @@ mod tests {
 
     #[test]
     fn border_tiles_at_the_right_coordinate_extreme_saturates_without_panicking() {
-        // `tilemap_left: i32::MAX` must not panic: saturation empties the
-        // right-anchored rectangles, leaving only the left-anchored ones.
+        // `tilemap_left: i32::MAX` must not panic: the right-anchored
+        // rectangles collapse onto the saturated column rather than vanishing.
         let tiles = border_tiles(i32::MAX, 0, 1, 1);
         assert_eq!(
             tiles,
             vec![
                 normal_tile(i32::MAX - 1, -1, border_frame::TOP_LEFT),
+                normal_tile(i32::MAX, -1, border_frame::TOP_EDGE),
+                normal_tile(i32::MAX, -1, border_frame::TOP_RIGHT),
                 normal_tile(i32::MAX - 1, 0, border_frame::LEFT_EDGE),
+                normal_tile(i32::MAX, 0, border_frame::RIGHT_EDGE),
                 normal_tile(i32::MAX - 1, 1, border_frame::BOTTOM_LEFT),
+                normal_tile(i32::MAX, 1, border_frame::BOTTOM_EDGE),
+                normal_tile(i32::MAX, 1, border_frame::BOTTOM_RIGHT),
             ]
         );
     }
@@ -573,8 +585,8 @@ mod tests {
 
     #[test]
     fn border_tiles_at_the_bottom_coordinate_extreme_saturates_without_panicking() {
-        // `tilemap_top: i32::MAX` must not panic: saturation empties the
-        // bottom-anchored rectangles, leaving only the top-anchored ones.
+        // `tilemap_top: i32::MAX` must not panic: the bottom-anchored
+        // rectangles collapse onto the saturated row rather than vanishing.
         let tiles = border_tiles(0, i32::MAX, 1, 1);
         assert_eq!(
             tiles,
@@ -582,6 +594,11 @@ mod tests {
                 normal_tile(-1, i32::MAX - 1, border_frame::TOP_LEFT),
                 normal_tile(0, i32::MAX - 1, border_frame::TOP_EDGE),
                 normal_tile(1, i32::MAX - 1, border_frame::TOP_RIGHT),
+                normal_tile(-1, i32::MAX, border_frame::LEFT_EDGE),
+                normal_tile(1, i32::MAX, border_frame::RIGHT_EDGE),
+                normal_tile(-1, i32::MAX, border_frame::BOTTOM_LEFT),
+                normal_tile(0, i32::MAX, border_frame::BOTTOM_EDGE),
+                normal_tile(1, i32::MAX, border_frame::BOTTOM_RIGHT),
             ]
         );
     }
@@ -617,6 +634,25 @@ mod tests {
             assert!(!tiles.iter().any(|t| t.tile == border_frame::BOTTOM_EDGE));
             assert_eq!(tiles.len(), 4);
         }
+    }
+
+    #[test]
+    fn border_tiles_keeps_a_multi_cell_edge_ending_on_the_positive_limit() {
+        // The two-column top edge ends on `i32::MAX`, a representable column,
+        // so both of its cells belong in the result.
+        let tiles = border_tiles(i32::MAX - 1, 0, 2, 1);
+        assert!(tiles.contains(&normal_tile(i32::MAX - 1, -1, border_frame::TOP_EDGE)));
+        assert!(tiles.contains(&normal_tile(i32::MAX, -1, border_frame::TOP_EDGE)));
+    }
+
+    #[test]
+    fn border_tiles_keeps_a_one_cell_rectangle_at_the_positive_limit() {
+        // `content_right` lands exactly on `i32::MAX`, so the right-hand
+        // corners and edge occupy that column instead of being empty.
+        let tiles = border_tiles(i32::MAX - 1, 0, 1, 1);
+        assert!(tiles.contains(&normal_tile(i32::MAX, -1, border_frame::TOP_RIGHT)));
+        assert!(tiles.contains(&normal_tile(i32::MAX, 0, border_frame::RIGHT_EDGE)));
+        assert!(tiles.contains(&normal_tile(i32::MAX, 1, border_frame::BOTTOM_RIGHT)));
     }
 
     #[test]
@@ -785,8 +821,8 @@ mod tests {
 
     #[test]
     fn frame_tiles_at_the_bottom_coordinate_extreme_saturates_without_panicking() {
-        // `tilemap_top: i32::MAX` must not panic: `bottom` saturates,
-        // emptying every bottom-border rectangle.
+        // `tilemap_top: i32::MAX` must not panic: the fill and the saturated
+        // bottom border share the limit row instead of vanishing from it.
         let layout = MessageBoxLayout {
             tilemap_left: 0,
             tilemap_top: i32::MAX,
@@ -801,8 +837,31 @@ mod tests {
                 normal_tile(-1, i32::MAX - 1, dialogue_frame::LEFT_CORNER),
                 normal_tile(0, i32::MAX - 1, dialogue_frame::RIGHT_CORNER),
                 normal_tile(1, i32::MAX - 1, dialogue_frame::RIGHT_CAP),
+                normal_tile(-DIALOGUE_WING_WIDTH, i32::MAX, dialogue_frame::WING_COLUMN),
+                normal_tile(-1, i32::MAX, dialogue_frame::INTERIOR),
+                normal_tile(0, i32::MAX, dialogue_frame::INTERIOR),
+                normal_tile(1, i32::MAX, dialogue_frame::RIGHT_COLUMN),
+                vertically_flipped_tile(-DIALOGUE_WING_WIDTH, i32::MAX, dialogue_frame::WING_CAP),
+                vertically_flipped_tile(-1, i32::MAX, dialogue_frame::LEFT_CORNER),
+                vertically_flipped_tile(0, i32::MAX, dialogue_frame::RIGHT_CORNER),
+                vertically_flipped_tile(1, i32::MAX, dialogue_frame::RIGHT_CAP),
             ]
         );
+    }
+
+    #[test]
+    fn frame_tiles_keeps_the_fill_row_at_the_positive_limit() {
+        // The interior's last row lands on `i32::MAX`, a representable row, so
+        // the fill must reach it rather than stop one row short.
+        let layout = MessageBoxLayout {
+            tilemap_left: 0,
+            tilemap_top: i32::MAX - 1,
+            content_width: 1,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert!(tiles.contains(&normal_tile(0, i32::MAX, dialogue_frame::INTERIOR)));
+        assert!(tiles.contains(&normal_tile(1, i32::MAX, dialogue_frame::RIGHT_COLUMN)));
     }
 
     #[test]
