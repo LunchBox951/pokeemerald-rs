@@ -50,7 +50,6 @@ pub(super) const YES_NO_CURSOR_ORIGIN: (i32, i32) = (0, 1);
 /// Glyph drawn beside the selected menu option.
 pub(super) const SELECTOR_ARROW: char = '▶';
 
-const DEFAULT_WINDOW_FRAME_ID: u8 = 0;
 const CONTENT_FILL_PALETTE_INDEX: usize = 1;
 const GLYPH_COLOR_COUNT: usize = 4;
 const GLYPH_FOREGROUND_INDEX: usize = 1;
@@ -71,14 +70,19 @@ pub(crate) struct StartMenuChrome {
 impl StartMenuChrome {
     /// Loads owned font and window assets from an asset pack.
     ///
+    /// `window_frame` is the save's `optionsWindowFrameType`, the border
+    /// `LoadUserWindowBorderGfx` gives every start-menu window
+    /// (`pokeemerald/src/start_menu.c:493-495`, `pokeemerald/src/menu.c:210-213`);
+    /// the message box keeps [`AssetPack::message_box`] regardless.
+    ///
     /// # Errors
     ///
     /// Returns [`StartMenuError::Pack`] when an entry is missing or malformed,
     /// or [`StartMenuError::Font`] when the font sheet does not decode.
-    pub(super) fn from_pack(pack: &AssetPack) -> Result<Self, StartMenuError> {
+    pub(super) fn from_pack(pack: &AssetPack, window_frame: u8) -> Result<Self, StartMenuError> {
         Ok(Self {
             font_sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
-            std_frame: FrameAssets::from_handle(pack.text_window_frame(DEFAULT_WINDOW_FRAME_ID)?),
+            std_frame: FrameAssets::from_handle(pack.text_window_frame(window_frame)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
     }

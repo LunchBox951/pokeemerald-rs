@@ -12,10 +12,12 @@
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
-//! the null backend used in tests all drive it, each in one bulk call per
-//! callback. It bulk-drains whatever is published into the requested slice
-//! without ever blocking, and pads any shortfall with silence, adding that
-//! shortfall to the underrun counter in a single consolidated update.
+//! the null backend used in tests all drive it, in one bulk call per
+//! callback (or, for an oversized callback the resampler bounds into several
+//! fixed-size chunks, one call per chunk — see `crate::resample`). It
+//! bulk-drains whatever is published into the requested slice without ever
+//! blocking, and pads any shortfall with silence, adding that shortfall to
+//! the underrun counter in a single consolidated update.
 //! [`Consumer::pop_or_silence`] is the same "fill silence and count one
 //! underrun when the buffer runs dry" rule for a single sample, retained for
 //! callers that genuinely want one sample at a time.

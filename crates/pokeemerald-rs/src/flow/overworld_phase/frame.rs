@@ -38,7 +38,14 @@ impl OverworldPhase {
         if dialog.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed {
             self.dialog = None;
         }
+        self.take_field_lock();
         true
+    }
+
+    /// Takes the field lock on the frame an owner commits: `PlayerFreeze`
+    /// runs before that frame is drawn (`overworld.c:1465-1476`).
+    pub(super) const fn take_field_lock(&mut self) {
+        self.player.clear_turn_lock();
     }
 
     /// [`crate::overworld::OverworldScene::compose`] against this phase's
