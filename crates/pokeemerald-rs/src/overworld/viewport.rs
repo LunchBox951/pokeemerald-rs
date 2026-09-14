@@ -9,7 +9,7 @@ use assets::{
     BorderGrid, Direction as ConnectionDirection, ImageRef, LayoutGrid, MetatileAttributeTable,
     MetatileCell, MetatileLayerType, PaletteRef,
 };
-use engine::overworld::{PlayerState, NUM_METATILES_IN_PRIMARY, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState, NUM_METATILES_IN_PRIMARY, WALK_FRAMES_PER_TILE};
 use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
@@ -271,12 +271,18 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
 
 /// Returns the remaining signed step displacement shared by backgrounds and
 /// NPC sprites.
+///
+/// Reads the step's committed direction rather than facing: upstream derives
+/// camera speed from the tracked sprite's measured per-frame displacement, not
+/// a separately mutable facing (`pokeemerald/src/event_object_movement.c:2253-2261`,
+/// `pokeemerald/src/field_camera.c:332-337`), and `PlayerState::face` can
+/// change facing mid-step without touching the active crossing.
 #[must_use]
 pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
-    if !player.in_transit() {
+    let Some(direction) = player.step_direction() else {
         return (0, 0);
-    }
-    let (dx, dy) = player.facing().delta();
+    };
+    let (dx, dy) = direction.delta();
     let lag = i32::from(WALK_FRAMES_PER_TILE) - i32::from(player.step_progress());
     (dx * lag, dy * lag)
 }
@@ -311,11 +317,9 @@ pub(super) fn build_tilemaps(
 ) -> FrameViewport {
     let (base_x, base_y) = player.position();
 
-    let movement_delta = if player.in_transit() {
-        player.facing().delta()
-    } else {
-        (0, 0)
-    };
+    // Padding follows the committed step direction, not mutable facing; see
+    // `camera_lag_px`'s doc comment for the upstream citation.
+    let movement_delta = player.step_direction().map_or((0, 0), Direction::delta);
     let horizontal_step = movement_delta.0;
     let vertical_step = movement_delta.1;
 
@@ -594,6 +598,25 @@ mod tests {
         assert_eq!(camera_lag_px(&south), (0, expected_remaining));
         let east = player_after_step_frames(EngineDirection::East, ELAPSED);
         assert_eq!(camera_lag_px(&east), (expected_remaining, 0));
+    }
+
+    #[test]
+    fn camera_lag_px_follows_the_committed_step_after_a_scripted_face_turn() {
+        const ELAPSED: u8 = 6;
+        let expected_remaining = i32::from(WALK_FRAMES_PER_TILE - ELAPSED);
+
+        let mut player = player_after_step_frames(EngineDirection::South, ELAPSED);
+        assert!(player.in_transit(), "the fixture must remain mid-step");
+        assert_eq!(camera_lag_px(&player), (0, expected_remaining));
+
+        player.face(EngineDirection::West);
+        assert_eq!(player.facing(), EngineDirection::West);
+        assert!(player.in_transit(), "facing does not interrupt the step");
+        assert_eq!(
+            camera_lag_px(&player),
+            (0, expected_remaining),
+            "the committed south step still owes its vertical pixels"
+        );
     }
 
     #[test]
@@ -1423,6 +1446,66 @@ mod tests {
             viewport.bottom.height_tiles(),
             resting_rows,
             "at rest, only the permanent resting row remains"
+        );
+    }
+
+    #[test]
+    fn build_tilemaps_padding_and_scroll_follow_the_committed_step_after_a_scripted_face_turn() {
+        const MAP_SIZE: u16 = 10;
+        const HALF_STEP: u8 = WALK_FRAMES_PER_TILE / 2;
+
+        let grid_bytes = uniform_grid_bytes(MAP_SIZE, MAP_SIZE, INTERIOR_METATILE_ID);
+        let layout = test_layout(MAP_SIZE, MAP_SIZE);
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+        let (metatiles, attrs) = synthetic_metatiles_and_attrs();
+        let attrs = MetatileAttributeTable::new(&attrs);
+        let no_secondary = MetatileAttributeTable::new(&[]);
+
+        let compose = |player: &PlayerState| {
+            build_tilemaps(
+                player,
+                &grid,
+                &border,
+                &[],
+                &metatiles,
+                &[],
+                &attrs,
+                &no_secondary,
+                0,
+            )
+        };
+
+        let resting_cols = (VIEW_COLS * 2) as usize;
+        let padded_rows = ((VIEW_ROWS + PAD + RESTING_SCROLL_ROW) * 2) as usize;
+
+        let mut player = player_after_step_frames(EngineDirection::South, HALF_STEP);
+        assert!(player.in_transit(), "the half-step remains in transit");
+
+        player.face(EngineDirection::West);
+        assert_eq!(player.facing(), EngineDirection::West);
+        assert!(player.in_transit(), "facing does not interrupt the step");
+
+        let viewport = compose(&player);
+        assert_eq!(
+            viewport.scroll_x, 0,
+            "a southbound step must not acquire horizontal scroll after a scripted west turn"
+        );
+        assert_eq!(
+            viewport.scroll_y,
+            8 + u16::from(HALF_STEP),
+            "southward scroll keeps following the committed step, not the new facing"
+        );
+        assert_eq!(
+            viewport.bottom.width_tiles(),
+            resting_cols,
+            "a southbound step needs no horizontal direction padding"
+        );
+        assert_eq!(
+            viewport.bottom.height_tiles(),
+            padded_rows,
+            "southward padding survives the scripted face turn"
         );
     }
 }
