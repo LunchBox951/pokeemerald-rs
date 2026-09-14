@@ -128,26 +128,21 @@ pub struct FrameTile {
     pub v_flip: bool,
 }
 
-// The last row and column saturate at `i32::MAX` instead of overflowing, so a
-// rectangle ending on `i32::MAX` still covers that cell; a nonpositive `width`
-// or `height` covers nothing.
+// Rectangles are requested in exact `i64` cell coordinates and clamped onto
+// the `i32` tilemap once, so a clipped span collapses onto the limit and an
+// empty request (last before first) paints nothing.
 fn fill_rect(
     tiles: &mut Vec<FrameTile>,
     source_tile: u8,
     orientation: TileOrientation,
-    first_column: i32,
-    first_row: i32,
-    width: i32,
-    height: i32,
+    rect: Cells,
 ) {
-    if width <= 0 || height <= 0 {
+    let (first_column, first_row, last_column, last_row) = rect;
+    if last_column < first_column || last_row < first_row {
         return;
     }
-    let last_row = first_row.saturating_add(height - 1);
-    let last_column = first_column.saturating_add(width - 1);
-
-    for row in first_row..=last_row {
-        for col in first_column..=last_column {
+    for row in clamp_cell(first_row)..=clamp_cell(last_row) {
+        for col in clamp_cell(first_column)..=clamp_cell(last_column) {
             tiles.push(FrameTile {
                 col,
                 row,
@@ -156,6 +151,13 @@ fn fill_rect(
             });
         }
     }
+}
+
+/// An inclusive cell rectangle: first column, first row, last column, last row.
+type Cells = (i64, i64, i64, i64);
+
+fn clamp_cell(exact: i64) -> i32 {
+    i32::try_from(exact.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(i32::MAX)
 }
 
 /// Places a one-tile-thick frame outside a window's content rectangle.
@@ -176,31 +178,31 @@ pub fn border_tiles(
     use TileOrientation::Normal;
 
     let mut tiles = Vec::new();
-    let content_right = tilemap_left.saturating_add(width);
-    let content_bottom = tilemap_top.saturating_add(height);
-    let border_left = tilemap_left.saturating_sub(1);
-    let border_top = tilemap_top.saturating_sub(1);
+    let left = i64::from(tilemap_left);
+    let top = i64::from(tilemap_top);
+    let right = left + i64::from(width);
+    let bottom = top + i64::from(height);
+    let border_left = left - 1;
+    let border_top = top - 1;
 
     let rectangles = [
-        (tile::TOP_LEFT, border_left, border_top, 1, 1),
-        (tile::TOP_EDGE, tilemap_left, border_top, width, 1),
-        (tile::TOP_RIGHT, content_right, border_top, 1, 1),
-        (tile::LEFT_EDGE, border_left, tilemap_top, 1, height),
-        (tile::RIGHT_EDGE, content_right, tilemap_top, 1, height),
-        (tile::BOTTOM_LEFT, border_left, content_bottom, 1, 1),
-        (tile::BOTTOM_EDGE, tilemap_left, content_bottom, width, 1),
-        (tile::BOTTOM_RIGHT, content_right, content_bottom, 1, 1),
+        (
+            tile::TOP_LEFT,
+            (border_left, border_top, border_left, border_top),
+        ),
+        (tile::TOP_EDGE, (left, border_top, right - 1, border_top)),
+        (tile::TOP_RIGHT, (right, border_top, right, border_top)),
+        (tile::LEFT_EDGE, (border_left, top, border_left, bottom - 1)),
+        (tile::RIGHT_EDGE, (right, top, right, bottom - 1)),
+        (
+            tile::BOTTOM_LEFT,
+            (border_left, bottom, border_left, bottom),
+        ),
+        (tile::BOTTOM_EDGE, (left, bottom, right - 1, bottom)),
+        (tile::BOTTOM_RIGHT, (right, bottom, right, bottom)),
     ];
-    for (source_tile, column, row, rect_width, rect_height) in rectangles {
-        fill_rect(
-            &mut tiles,
-            source_tile,
-            Normal,
-            column,
-            row,
-            rect_width,
-            rect_height,
-        );
+    for (source_tile, rect) in rectangles {
+        fill_rect(&mut tiles, source_tile, Normal, rect);
     }
 
     tiles
@@ -216,7 +218,7 @@ pub const STANDARD_CONTENT_WIDTH: i32 = 27;
 pub const STANDARD_CONTENT_HEIGHT: i32 = 4;
 
 const DIALOGUE_WING_WIDTH: i32 = 2;
-type TileRect = (u8, TileOrientation, i32, i32, i32, i32);
+type TileRect = (u8, TileOrientation, Cells);
 
 /// Tilemap geometry for a dialogue box's content rectangle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,8 +249,9 @@ impl MessageBoxLayout {
     /// last-write-wins compositor matches `WindowFunc_DrawDialogueFrame` in
     /// `pokeemerald/src/menu.c`.
     ///
-    /// Never panics: fields saturate at `i32`'s bounds instead of
-    /// overflowing, and nonpositive `content_width`/`content_height` omit that edge's fill.
+    /// Never panics: cells clamp onto `i32`'s bounds instead of overflowing.
+    /// A negative `content_width`/`content_height` omits that axis's fill; zero
+    /// keeps upstream's one extra fill cell past the content.
     #[must_use]
     pub fn frame_tiles(&self) -> Vec<FrameTile> {
         let rectangles = self
@@ -256,61 +259,48 @@ impl MessageBoxLayout {
             .into_iter()
             .chain(self.bottom_border_rectangles());
         let mut tiles = Vec::new();
-        for (source_tile, orientation, column, row, width, height) in rectangles {
-            fill_rect(
-                &mut tiles,
-                source_tile,
-                orientation,
-                column,
-                row,
-                width,
-                height,
-            );
+        for (source_tile, orientation, rect) in rectangles {
+            fill_rect(&mut tiles, source_tile, orientation, rect);
         }
         tiles
-    }
-
-    // The far column is the clamp of the exact requested column, never a
-    // chain of saturating steps, so no intermediate clip shifts it inward.
-    fn last_content_column(&self) -> i32 {
-        let exact = i64::from(self.tilemap_left) + i64::from(self.content_width) - 1;
-        i32::try_from(exact.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(i32::MAX)
-    }
-
-    // The interior spans the outside column plus the content; an empty
-    // logical span stays empty even when the clip collapses its endpoints.
-    fn interior_fill_width(&self, inside: i32, corner: i32) -> i32 {
-        if self.content_width < 0 {
-            0
-        } else {
-            corner.saturating_sub(inside).saturating_add(1)
-        }
     }
 
     fn top_and_fill_rectangles(&self) -> [TileRect; 8] {
         use dialogue_frame as tile;
         use TileOrientation::Normal;
 
-        let left = self.tilemap_left;
-        let top = self.tilemap_top;
-        let right = left.saturating_add(self.content_width);
-        let wing = left.saturating_sub(DIALOGUE_WING_WIDTH);
-        let inside = left.saturating_sub(1);
-        let corner = self.last_content_column();
-        let top_row = top.saturating_sub(1);
-        let edge_width = self.content_width.saturating_sub(1);
-        let fill_width = self.interior_fill_width(inside, corner);
-        let fill_height = self.content_height.saturating_add(1);
+        let left = i64::from(self.tilemap_left);
+        let top = i64::from(self.tilemap_top);
+        let right = left + i64::from(self.content_width);
+        let wing = left - i64::from(DIALOGUE_WING_WIDTH);
+        let inside = left - 1;
+        let corner = right - 1;
+        let top_row = top - 1;
+        // Upstream fills `height + 1` rows and `width + 1` columns, one past
+        // the content on each axis (`WindowFunc_DrawDialogueFrame`).
+        let fill_bottom = top + i64::from(self.content_height);
 
         [
-            (tile::WING_CAP, Normal, wing, top_row, 1, 1),
-            (tile::LEFT_CORNER, Normal, inside, top_row, 1, 1),
-            (tile::HORIZONTAL_EDGE, Normal, left, top_row, edge_width, 1),
-            (tile::RIGHT_CORNER, Normal, corner, top_row, 1, 1),
-            (tile::RIGHT_CAP, Normal, right, top_row, 1, 1),
-            (tile::WING_COLUMN, Normal, wing, top, 1, fill_height),
-            (tile::INTERIOR, Normal, inside, top, fill_width, fill_height),
-            (tile::RIGHT_COLUMN, Normal, right, top, 1, fill_height),
+            (tile::WING_CAP, Normal, (wing, top_row, wing, top_row)),
+            (
+                tile::LEFT_CORNER,
+                Normal,
+                (inside, top_row, inside, top_row),
+            ),
+            (
+                tile::HORIZONTAL_EDGE,
+                Normal,
+                (left, top_row, corner - 1, top_row),
+            ),
+            (
+                tile::RIGHT_CORNER,
+                Normal,
+                (corner, top_row, corner, top_row),
+            ),
+            (tile::RIGHT_CAP, Normal, (right, top_row, right, top_row)),
+            (tile::WING_COLUMN, Normal, (wing, top, wing, fill_bottom)),
+            (tile::INTERIOR, Normal, (inside, top, corner, fill_bottom)),
+            (tile::RIGHT_COLUMN, Normal, (right, top, right, fill_bottom)),
         ]
     }
 
@@ -318,20 +308,27 @@ impl MessageBoxLayout {
         use dialogue_frame as tile;
         use TileOrientation::VerticallyFlipped as Flipped;
 
-        let left = self.tilemap_left;
-        let right = left.saturating_add(self.content_width);
-        let bottom = self.tilemap_top.saturating_add(self.content_height);
-        let wing = left.saturating_sub(DIALOGUE_WING_WIDTH);
-        let inside = left.saturating_sub(1);
-        let corner = self.last_content_column();
-        let edge_width = self.content_width.saturating_sub(1);
+        let left = i64::from(self.tilemap_left);
+        let right = left + i64::from(self.content_width);
+        let bottom = i64::from(self.tilemap_top) + i64::from(self.content_height);
+        let wing = left - i64::from(DIALOGUE_WING_WIDTH);
+        let inside = left - 1;
+        let corner = right - 1;
 
         [
-            (tile::WING_CAP, Flipped, wing, bottom, 1, 1),
-            (tile::LEFT_CORNER, Flipped, inside, bottom, 1, 1),
-            (tile::HORIZONTAL_EDGE, Flipped, left, bottom, edge_width, 1),
-            (tile::RIGHT_CORNER, Flipped, corner, bottom, 1, 1),
-            (tile::RIGHT_CAP, Flipped, right, bottom, 1, 1),
+            (tile::WING_CAP, Flipped, (wing, bottom, wing, bottom)),
+            (tile::LEFT_CORNER, Flipped, (inside, bottom, inside, bottom)),
+            (
+                tile::HORIZONTAL_EDGE,
+                Flipped,
+                (left, bottom, corner - 1, bottom),
+            ),
+            (
+                tile::RIGHT_CORNER,
+                Flipped,
+                (corner, bottom, corner, bottom),
+            ),
+            (tile::RIGHT_CAP, Flipped, (right, bottom, right, bottom)),
         ]
     }
 }
@@ -1049,6 +1046,65 @@ mod tests {
                 vertically_flipped_tile(i32::MIN, 1, dialogue_frame::LEFT_CORNER),
                 vertically_flipped_tile(i32::MIN, 1, dialogue_frame::RIGHT_CORNER),
                 vertically_flipped_tile(i32::MIN + 1, 1, dialogue_frame::RIGHT_CAP),
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_tiles_fills_through_the_last_content_column_at_the_widest_geometry() {
+        // The interior spans `width + 1` columns, one more than `i32` holds,
+        // so its far cell must be clamped from the exact request, not cut off.
+        let layout = MessageBoxLayout {
+            tilemap_left: 0,
+            tilemap_top: 0,
+            content_width: i32::MAX,
+            content_height: 1,
+        };
+        let (source_tile, _, (first_col, _, last_col, _)) = layout.top_and_fill_rectangles()[6];
+        assert_eq!(source_tile, dialogue_frame::INTERIOR);
+        assert_eq!((first_col, last_col), (-1, i64::from(i32::MAX) - 1));
+    }
+
+    #[test]
+    fn frame_tiles_with_zero_width_keeps_upstreams_one_interior_column() {
+        let layout = MessageBoxLayout {
+            tilemap_left: 5,
+            tilemap_top: 5,
+            content_width: 0,
+            content_height: 1,
+        };
+        let interior: Vec<_> = layout
+            .frame_tiles()
+            .into_iter()
+            .filter(|tile| tile.tile == dialogue_frame::INTERIOR)
+            .collect();
+        assert_eq!(
+            interior,
+            vec![
+                normal_tile(4, 5, dialogue_frame::INTERIOR),
+                normal_tile(4, 6, dialogue_frame::INTERIOR),
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_tiles_with_zero_height_keeps_upstreams_one_fill_row() {
+        let layout = MessageBoxLayout {
+            tilemap_left: 5,
+            tilemap_top: 5,
+            content_width: 1,
+            content_height: 0,
+        };
+        let interior: Vec<_> = layout
+            .frame_tiles()
+            .into_iter()
+            .filter(|tile| tile.tile == dialogue_frame::INTERIOR)
+            .collect();
+        assert_eq!(
+            interior,
+            vec![
+                normal_tile(4, 5, dialogue_frame::INTERIOR),
+                normal_tile(5, 5, dialogue_frame::INTERIOR),
             ]
         );
     }
