@@ -156,6 +156,14 @@ fn fill_rect(
 /// An inclusive cell rectangle: first column, first row, last column, last row.
 type Cells = (i64, i64, i64, i64);
 
+/// The widest content extent a frame will lay out, in tiles: upstream's
+/// window geometry is `u8`, so nothing wider is ever requested.
+pub const MAX_EXTENT_TILES: i32 = 255;
+
+fn clamp_extent(extent: i32) -> i64 {
+    i64::from(extent.min(MAX_EXTENT_TILES))
+}
+
 fn clamp_cell(exact: i64) -> i32 {
     i32::try_from(exact.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(i32::MAX)
 }
@@ -165,8 +173,8 @@ fn clamp_cell(exact: i64) -> i32 {
 /// The source sheet is a 3-by-3 grid whose center tile is unused. `width` and
 /// `height` describe the content rectangle in tiles.
 ///
-/// Never panics: edge arithmetic saturates at `i32::MIN`/`i32::MAX`, and a
-/// nonpositive `width` or `height` simply omits that edge's fill.
+/// Never panics: cells clamp onto `i32`'s bounds, `width` and `height` clamp
+/// to [`MAX_EXTENT_TILES`], and a nonpositive extent omits that edge's fill.
 #[must_use]
 pub fn border_tiles(
     tilemap_left: i32,
@@ -180,8 +188,8 @@ pub fn border_tiles(
     let mut tiles = Vec::new();
     let left = i64::from(tilemap_left);
     let top = i64::from(tilemap_top);
-    let right = left + i64::from(width);
-    let bottom = top + i64::from(height);
+    let right = left + clamp_extent(width);
+    let bottom = top + clamp_extent(height);
     let border_left = left - 1;
     let border_top = top - 1;
 
@@ -249,9 +257,9 @@ impl MessageBoxLayout {
     /// last-write-wins compositor matches `WindowFunc_DrawDialogueFrame` in
     /// `pokeemerald/src/menu.c`.
     ///
-    /// Never panics: cells clamp onto `i32`'s bounds instead of overflowing.
-    /// A negative `content_width`/`content_height` omits that axis's fill; zero
-    /// keeps upstream's one extra fill cell past the content.
+    /// Never panics: cells clamp onto `i32`'s bounds and extents clamp to
+    /// [`MAX_EXTENT_TILES`]. A negative `content_width`/`content_height` omits
+    /// that axis's fill; zero keeps upstream's one extra fill cell.
     #[must_use]
     pub fn frame_tiles(&self) -> Vec<FrameTile> {
         let rectangles = self
@@ -271,14 +279,14 @@ impl MessageBoxLayout {
 
         let left = i64::from(self.tilemap_left);
         let top = i64::from(self.tilemap_top);
-        let right = left + i64::from(self.content_width);
+        let right = left + clamp_extent(self.content_width);
         let wing = left - i64::from(DIALOGUE_WING_WIDTH);
         let inside = left - 1;
         let corner = right - 1;
         let top_row = top - 1;
         // Upstream fills `height + 1` rows and `width + 1` columns, one past
         // the content on each axis (`WindowFunc_DrawDialogueFrame`).
-        let fill_bottom = top + i64::from(self.content_height);
+        let fill_bottom = top + clamp_extent(self.content_height);
 
         [
             (tile::WING_CAP, Normal, (wing, top_row, wing, top_row)),
@@ -309,8 +317,8 @@ impl MessageBoxLayout {
         use TileOrientation::VerticallyFlipped as Flipped;
 
         let left = i64::from(self.tilemap_left);
-        let right = left + i64::from(self.content_width);
-        let bottom = i64::from(self.tilemap_top) + i64::from(self.content_height);
+        let right = left + clamp_extent(self.content_width);
+        let bottom = i64::from(self.tilemap_top) + clamp_extent(self.content_height);
         let wing = left - i64::from(DIALOGUE_WING_WIDTH);
         let inside = left - 1;
         let corner = right - 1;
@@ -1051,9 +1059,9 @@ mod tests {
     }
 
     #[test]
-    fn frame_tiles_fills_through_the_last_content_column_at_the_widest_geometry() {
-        // The interior spans `width + 1` columns, one more than `i32` holds,
-        // so its far cell must be clamped from the exact request, not cut off.
+    fn frame_tiles_clamps_the_widest_geometry_to_the_upstream_extent() {
+        // A `u8`-wide upstream window never exceeds 255 tiles, so an `i32::MAX`
+        // request lays out 255 and the fill still reaches its last column.
         let layout = MessageBoxLayout {
             tilemap_left: 0,
             tilemap_top: 0,
@@ -1062,7 +1070,33 @@ mod tests {
         };
         let (source_tile, _, (first_col, _, last_col, _)) = layout.top_and_fill_rectangles()[6];
         assert_eq!(source_tile, dialogue_frame::INTERIOR);
-        assert_eq!((first_col, last_col), (-1, i64::from(i32::MAX) - 1));
+        assert_eq!((first_col, last_col), (-1, i64::from(MAX_EXTENT_TILES) - 1));
+        assert!(layout.frame_tiles().contains(&normal_tile(
+            MAX_EXTENT_TILES - 1,
+            0,
+            dialogue_frame::INTERIOR
+        )));
+    }
+
+    #[test]
+    fn extreme_dimensions_return_cleanly() {
+        let layout = MessageBoxLayout {
+            tilemap_left: 0,
+            tilemap_top: 0,
+            content_width: i32::MAX,
+            content_height: i32::MAX,
+        };
+        let expected_fill = (i64::from(MAX_EXTENT_TILES) + 1) * (i64::from(MAX_EXTENT_TILES) + 1);
+        let interior = layout
+            .frame_tiles()
+            .iter()
+            .filter(|tile| tile.tile == dialogue_frame::INTERIOR)
+            .count();
+        assert_eq!(i64::try_from(interior).unwrap(), expected_fill);
+        assert_eq!(
+            border_tiles(0, 0, i32::MAX, i32::MAX).len(),
+            4 + 4 * usize::try_from(MAX_EXTENT_TILES).unwrap()
+        );
     }
 
     #[test]
