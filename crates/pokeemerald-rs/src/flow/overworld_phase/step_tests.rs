@@ -412,6 +412,77 @@ fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_i
     );
 }
 
+/// PR #1150 review, the *acquisition* frame itself: upstream takes the
+/// field lock inside `ProcessPlayerFieldInput`, and the lock reaches
+/// `PlayerFreeze` before that same frame is drawn -- `ShowStartMenu` calls
+/// it inline (`pokeemerald/src/start_menu.c:581-591`), from a
+/// `DoCB1_Overworld` that runs ahead of `OverworldBasic`'s `AnimateSprites`
+/// and `BuildOamBuffer` (`pokeemerald/src/overworld.c:1438-1476`). So the
+/// frame `START` lands on already shows the standing pose, and this port's
+/// own composition of it must not still have a turn in flight.
+#[test]
+fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::UP));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns in place and starts the busy window"
+    );
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_some(),
+        "setup: the injected build must really have opened a menu"
+    );
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the menu's own opening frame is composed after this step returns, so the \
+         turn must already be over by then -- not one frame later"
+    );
+}
+
+/// The A-press counterpart to the case above: `ProcessPlayerFieldInput`
+/// returning `TRUE` out of `TryStartInteractionScript`
+/// (`pokeemerald/src/field_control_avatar.c:172`) locks field controls on
+/// that frame (`pokeemerald/src/overworld.c:1444-1450`), and the script it
+/// set up reaches `PlayerFreeze` through `Task_FreezePlayer`, which
+/// `RunTasks` runs ahead of `AnimateSprites` in the same `OverworldBasic`
+/// pass (`:1465-1476`). Mom's box needs a pack this suite has none of
+/// (`a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes`'s
+/// own note), but the interaction that claims the frame resolves pack-free,
+/// and claiming the frame is what ends the turn.
+#[test]
+fn an_a_press_interaction_ends_a_turns_busy_window_on_the_frame_it_claims() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns the player toward Mom, starting the busy window"
+    );
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "setup: the next frame's A press really does claim the frame"
+        );
+    }
+
+    phase.step(pressed(Buttons::A));
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the claimed frame is composed after this step returns, so the turn must \
+         already be over by then -- not one frame later"
+    );
+}
+
 /// Mutation guard for [`OverworldPhase::step`]'s tileset-animation tick
 /// (issue #160): `self.tick` must advance by exactly one per `step` call,
 /// and must keep advancing while a dialog box is open -- an explicit

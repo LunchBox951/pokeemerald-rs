@@ -1067,3 +1067,35 @@ fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards(
          mid-drain has no business swallowing it"
     );
 }
+
+/// PR #1150 review, the *acquisition* frame itself: the rival's script
+/// opens with `lockall`, which reaches `PlayerFreeze` through
+/// `Task_FreezePlayer` (`pokeemerald/src/scrcmd.c:1202-1214`,
+/// `src/event_object_lock.c:11-46`), and `OverworldBasic` runs `RunTasks`
+/// ahead of `AnimateSprites`/`BuildOamBuffer`
+/// (`pokeemerald/src/overworld.c:1465-1476`). So the frame the battle
+/// claims is drawn with the turn already over.
+#[test]
+fn the_rival_battle_ends_a_turns_busy_window_on_the_frame_it_claims() {
+    let (rx, ry) = RIVAL_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx - 1, ry), 3, Direction::North));
+    phase.party_lead = Some(overwhelming_treecko_lead());
+
+    phase.step(held(Buttons::RIGHT));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held East turns in place toward the rival, starting the busy window"
+    );
+
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_rival_battle_active(),
+        "setup: A during the turn's busy window still starts the battle"
+    );
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the claiming frame is composed after this step returns, so the turn must \
+         already be over by then -- not one frame later"
+    );
+}

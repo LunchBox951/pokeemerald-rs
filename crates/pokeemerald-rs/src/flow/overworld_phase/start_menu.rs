@@ -105,11 +105,7 @@ impl OverworldPhase {
             return false;
         }
 
-        // The same field lock a dialog holds (issue #976,
-        // `OverworldPhase::advance_dialog_frame`'s own comment) -- a menu
-        // owning the frame must not let a pending turn's busy window
-        // survive it either.
-        self.player.clear_turn_lock();
+        self.take_field_lock();
 
         // Background tile animation keeps running while a menu owns the
         // frame, exactly as it does while a message box does

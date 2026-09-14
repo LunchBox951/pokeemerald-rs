@@ -35,16 +35,38 @@ impl OverworldPhase {
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
-        // Upstream's field lock (issue #976): the freeze task fires the
-        // moment the player is between steps, which a standstill turn
-        // always is, so an open box must not let that turn's busy window
-        // keep draining frozen underneath it
-        // (`PlayerState::clear_turn_lock`'s own doc comment).
-        self.player.clear_turn_lock();
         if dialog.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed {
             self.dialog = None;
         }
+        self.take_field_lock();
         true
+    }
+
+    /// Take upstream's field lock for whatever owns this frame (issue
+    /// #976): the lock forces a one-frame face-direction action over an
+    /// in-flight standstill turn
+    /// ([`engine::overworld::PlayerState::clear_turn_lock`]), and it
+    /// does so *before* the frame that took it is drawn -- `ShowStartMenu`
+    /// calls `PlayerFreeze` inline
+    /// (`pokeemerald/src/start_menu.c:581-591`), and a script's own
+    /// `lock`/`lockall` reaches it through `Task_FreezePlayer`, which
+    /// `OverworldBasic` runs (`RunTasks`) ahead of `AnimateSprites` and
+    /// `BuildOamBuffer` in the same pass
+    /// (`pokeemerald/src/overworld.c:1465-1476`). The freeze task's own
+    /// wait is for the player to be between steps
+    /// (`src/event_object_lock.c:11-46`), which a standstill turn always is
+    /// (`UpdatePlayerAvatarTransitionState` leaves a multi-frame stationary
+    /// anim at `T_NOT_MOVING`, `src/field_player_avatar.c:901-915`).
+    ///
+    /// So every owner calls this on the frame it *commits*
+    /// ([`OverworldPhase::step`]'s interaction and `START` arms), not on
+    /// its first already-open frame -- [`OverworldPhase::compose_frame`]
+    /// draws the committing frame too. The already-open frames call it
+    /// again rather than assume that: what holds is "no turn drains under a
+    /// frame owner", for an owner set up outside `step` as much as for one
+    /// `step` committed.
+    pub(super) const fn take_field_lock(&mut self) {
+        self.player.clear_turn_lock();
     }
 
     /// [`crate::overworld::OverworldScene::compose`] against this phase's
