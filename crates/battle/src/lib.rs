@@ -196,7 +196,13 @@
 //! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Levitate's
 //! Ground-move damage immunity ([`hit::damage_before_roll`] — grounding
 //! effects like Gravity and Smack Down are not modelled, so Levitate is
-//! otherwise unconditional), Synchronize's paralysis reflection
+//! otherwise unconditional), Wonder Guard's block of any powered hit other
+//! than Struggle that is not strictly super effective
+//! ([`hit::damage_before_roll`], propagated
+//! through drain, multi-hit, and fixed damage — Foresight and the
+//! two-turn-move distinction upstream's `AttacksThisTurn` check makes are not
+//! modelled, so the block is unconditional wherever it applies),
+//! Synchronize's paralysis reflection
 //! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
 //! stays refused, see [`secondary::ensure_admissible`]), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
@@ -208,9 +214,8 @@
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! two abilities that still read a holder's primary status or the draw
 //! that inflicts it — Shed Skin and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`];
-//! Guts and Marvel Scale are modelled above, though `secondary`'s poison path
-//! still refuses newly poisoning either holder) — and the move effects the eight
+//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
+//! and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are
