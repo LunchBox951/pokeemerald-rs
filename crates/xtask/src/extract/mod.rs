@@ -1132,13 +1132,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Stands in for a concurrent writer in the staging file's own
-    /// directory: the candidate walk drops this iterator inside
-    /// `stage_at_first_free_name`, after `create_new_exclusive` has claimed
-    /// the name and `fill_new_file` has filled it, and before
-    /// `write_pack_atomically_with_names` reaches its ownership check. That
-    /// drop is the post-creation boundary -- the window the exclusive create
-    /// cannot cover, because by then the entry exists.
+    /// A concurrent writer stand-in whose `Drop` runs once the staging file
+    /// exists and before the ownership check, the window an exclusive create
+    /// cannot cover.
     #[cfg(unix)]
     struct SwapStagingOnceCreated {
         names: std::vec::IntoIter<std::path::PathBuf>,
