@@ -270,6 +270,13 @@ impl MessageBoxLayout {
         tiles
     }
 
+    // Deriving the far column from the near one keeps a clipped span collapsed
+    // on the limit instead of shifting it in off an already saturated far edge.
+    fn last_content_column(&self) -> i32 {
+        self.tilemap_left
+            .saturating_add(self.content_width.saturating_sub(1))
+    }
+
     fn top_and_fill_rectangles(&self) -> [TileRect; 8] {
         use dialogue_frame as tile;
         use TileOrientation::Normal;
@@ -279,10 +286,10 @@ impl MessageBoxLayout {
         let right = left.saturating_add(self.content_width);
         let wing = left.saturating_sub(DIALOGUE_WING_WIDTH);
         let inside = left.saturating_sub(1);
-        let corner = right.saturating_sub(1);
+        let corner = self.last_content_column();
         let top_row = top.saturating_sub(1);
         let edge_width = self.content_width.saturating_sub(1);
-        let fill_width = self.content_width.saturating_add(1);
+        let fill_width = corner.saturating_sub(inside).saturating_add(1);
         let fill_height = self.content_height.saturating_add(1);
 
         [
@@ -306,7 +313,7 @@ impl MessageBoxLayout {
         let bottom = self.tilemap_top.saturating_add(self.content_height);
         let wing = left.saturating_sub(DIALOGUE_WING_WIDTH);
         let inside = left.saturating_sub(1);
-        let corner = right.saturating_sub(1);
+        let corner = self.last_content_column();
         let edge_width = self.content_width.saturating_sub(1);
 
         [
@@ -904,6 +911,98 @@ mod tests {
                 vertically_flipped_tile(4, 4, dialogue_frame::LEFT_CORNER),
                 vertically_flipped_tile(4, 4, dialogue_frame::RIGHT_CORNER),
                 vertically_flipped_tile(5, 4, dialogue_frame::RIGHT_CAP),
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_tiles_places_the_right_corner_on_the_last_content_column() {
+        // `tilemap_left: i32::MAX` leaves the sole content column representable,
+        // so the right corner must land on it instead of colliding with the left
+        // corner one column short.
+        let layout = MessageBoxLayout {
+            tilemap_left: i32::MAX,
+            tilemap_top: 0,
+            content_width: 1,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert_eq!(
+            tiles,
+            vec![
+                normal_tile(i32::MAX - 2, -1, dialogue_frame::WING_CAP),
+                normal_tile(i32::MAX - 1, -1, dialogue_frame::LEFT_CORNER),
+                normal_tile(i32::MAX, -1, dialogue_frame::RIGHT_CORNER),
+                normal_tile(i32::MAX, -1, dialogue_frame::RIGHT_CAP),
+                normal_tile(i32::MAX - 2, 0, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MAX - 2, 1, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MAX - 1, 0, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 0, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX - 1, 1, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 1, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 0, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MAX, 1, dialogue_frame::RIGHT_COLUMN),
+                vertically_flipped_tile(i32::MAX - 2, 1, dialogue_frame::WING_CAP),
+                vertically_flipped_tile(i32::MAX - 1, 1, dialogue_frame::LEFT_CORNER),
+                vertically_flipped_tile(i32::MAX, 1, dialogue_frame::RIGHT_CORNER),
+                vertically_flipped_tile(i32::MAX, 1, dialogue_frame::RIGHT_CAP),
+            ]
+        );
+    }
+
+    #[test]
+    fn frame_tiles_ends_the_content_edge_on_the_positive_limit() {
+        // The two-column content rectangle ends on `i32::MAX`, a representable
+        // column, so the corner belongs there rather than over the edge cell.
+        let layout = MessageBoxLayout {
+            tilemap_left: i32::MAX - 1,
+            tilemap_top: 0,
+            content_width: 2,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert!(tiles.contains(&normal_tile(
+            i32::MAX - 1,
+            -1,
+            dialogue_frame::HORIZONTAL_EDGE,
+        )));
+        assert!(tiles.contains(&normal_tile(i32::MAX, -1, dialogue_frame::RIGHT_CORNER)));
+        assert!(tiles.contains(&vertically_flipped_tile(
+            i32::MAX,
+            1,
+            dialogue_frame::RIGHT_CORNER,
+        )));
+    }
+
+    #[test]
+    fn frame_tiles_collapses_the_clipped_interior_onto_the_negative_limit() {
+        // `tilemap_left: i32::MIN` clips the interior's outside column onto the
+        // limit, so the fill must collapse there instead of spilling one column
+        // past the sole content column.
+        let layout = MessageBoxLayout {
+            tilemap_left: i32::MIN,
+            tilemap_top: 0,
+            content_width: 1,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert_eq!(
+            tiles,
+            vec![
+                normal_tile(i32::MIN, -1, dialogue_frame::WING_CAP),
+                normal_tile(i32::MIN, -1, dialogue_frame::LEFT_CORNER),
+                normal_tile(i32::MIN, -1, dialogue_frame::RIGHT_CORNER),
+                normal_tile(i32::MIN + 1, -1, dialogue_frame::RIGHT_CAP),
+                normal_tile(i32::MIN, 0, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MIN, 1, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MIN, 0, dialogue_frame::INTERIOR),
+                normal_tile(i32::MIN, 1, dialogue_frame::INTERIOR),
+                normal_tile(i32::MIN + 1, 0, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MIN + 1, 1, dialogue_frame::RIGHT_COLUMN),
+                vertically_flipped_tile(i32::MIN, 1, dialogue_frame::WING_CAP),
+                vertically_flipped_tile(i32::MIN, 1, dialogue_frame::LEFT_CORNER),
+                vertically_flipped_tile(i32::MIN, 1, dialogue_frame::RIGHT_CORNER),
+                vertically_flipped_tile(i32::MIN + 1, 1, dialogue_frame::RIGHT_CAP),
             ]
         );
     }
