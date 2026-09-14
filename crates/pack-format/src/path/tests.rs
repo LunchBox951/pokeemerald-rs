@@ -425,3 +425,80 @@ fn the_real_probe_reports_a_pack_behind_an_unsearchable_directory_as_unreadable(
     let _ = std::fs::remove_dir(&inner);
     let _ = std::fs::remove_dir(&root);
 }
+
+/// A regular file where a candidate's *parent directory* should be proves
+/// the candidate cannot exist, so resolution must walk on to the next rung
+/// rather than stop on a path it has just been told is unreachable.
+#[test]
+fn the_real_probe_reports_a_candidate_under_a_regular_file_as_missing() {
+    use super::{probe, Probe};
+
+    let root = std::env::temp_dir().join(format!("pack-format-notdir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("scratch directory");
+
+    // `$XDG_DATA_HOME/pokeemerald-rs` is a regular file, not this
+    // project's data directory.
+    let intermediate = root.join("pokeemerald-rs");
+    std::fs::write(&intermediate, b"stray file").expect("the stray file writes");
+
+    let observed = probe(&intermediate.join("pokeemerald.pack"));
+
+    let _ = std::fs::remove_file(&intermediate);
+    let _ = std::fs::remove_dir(&root);
+
+    assert_eq!(
+        observed,
+        Probe::Missing,
+        "no pack can live under a regular file, so the next rung is the right place to look"
+    );
+}
+
+/// A regular file at rung 2's user-data directory proves no pack can be
+/// there, so resolution must still find rung 3's valid pack.
+#[test]
+fn a_regular_file_at_the_user_data_rung_advances_resolution_to_a_valid_later_rung() {
+    use super::{probe, HOST_RULE};
+
+    let root =
+        std::env::temp_dir().join(format!("pack-format-resolve-notdir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("scratch directory");
+
+    // Stands in for the user-data directory: a regular file, not a
+    // directory, so no candidate can exist beneath it under any convention.
+    let data_home = root.join("data-home-file");
+    std::fs::write(&data_home, b"not a directory").expect("the obstruction writes");
+
+    let exe_dir = root.join("game");
+    let pack = exe_dir.join(OUTPUT_RELATIVE_PATH);
+    std::fs::create_dir_all(pack.parent().expect("the pack has a parent"))
+        .expect("executable-directory pack directory");
+    std::fs::write(&pack, b"the portable pack").expect("the portable pack writes");
+
+    // The variable `data_dir` reads for this host's own rule.
+    let key = match HOST_RULE {
+        DataDirRule::Xdg => "XDG_DATA_HOME",
+        DataDirRule::MacOs => "HOME",
+        DataDirRule::Windows => "APPDATA",
+    };
+    let data_home_value = data_home.clone().into_os_string();
+    let env = move |k: &str| {
+        if k == key {
+            Some(data_home_value.clone())
+        } else {
+            None
+        }
+    };
+
+    let path = resolve(&env, Some(exe_dir.as_path()), &probe, HOST_RULE);
+
+    let _ = std::fs::remove_file(&data_home);
+    let _ = std::fs::remove_dir_all(&exe_dir);
+    let _ = std::fs::remove_dir(&root);
+
+    assert_eq!(
+        path, pack,
+        "a regular file blocking the user-data rung must not stop resolution before a valid later rung"
+    );
+}
