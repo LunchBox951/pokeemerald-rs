@@ -492,3 +492,47 @@ fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
     );
     assert_eq!(rng.draws(), script.len());
 }
+
+/// Serene Grace's preflight refusal (`secondary::ensure_admissible`) must
+/// not fire when Wonder Guard would foreclose the secondary anyway: the
+/// block carries `MOVE_RESULT_MISSED`, so the poison chance never gets a
+/// chance to apply (`battle_script_commands.c:1409-1418`).
+#[test]
+fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
+    let dex = Dex::new();
+    // Dunsparce (species 206): Serene Grace in its primary ability slot.
+    // Poison Sting (MoveId 40, `EFFECT_POISON_HIT`) is not-very-effective
+    // against Shedinja's Ghost type and has no chart row against Bug, so
+    // only Wonder Guard blocks it.
+    let player = max_iv_mon(&dex, 206, 10, vec![MoveId(40)]);
+    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+
+    // battle start, turn number, enemy pick, the player's blocked hit
+    // (accuracy, crit, damage-variance, and effect-chance draws, exactly
+    // like an ordinary hit -- see crate::hit), the enemy's ordinary Tackle
+    // (4 draws).
+    let script = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::WonderGuardBlocked {
+            by_player: true,
+            move_id: MoveId(40),
+        },
+        "the turn must run and report Wonder Guard's block, not refuse \
+         admission over Serene Grace: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "Wonder Guard takes no damage from a hit that is not strictly \
+         super effective: {events:?}"
+    );
+    assert_eq!(rng.draws(), script.len());
+}
