@@ -8,7 +8,8 @@
 
 use super::{
     menu_height, synthetic_start_menu, SaveMode, SaveTarget, StartMenu, StartMenuItem,
-    StartMenuOutcome, ITEMS, MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH,
+    StartMenuOutcome, ITEMS, MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH, YES_NO_TILEMAP_LEFT,
+    YES_NO_TILEMAP_TOP,
 };
 use crate::game_save::SaveFileStatus;
 use engine::text::render::TextSpeed;
@@ -582,4 +583,172 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
     // Drawing text must not disturb the border already on the standard
     // frame's own palette.
     assert_eq!(fb.pixel(0, 0), Some(STD_BORDER));
+}
+
+/// A continued save's own `optionsWindowFrameType` must border the *field
+/// start menu* too, not just the main menu (issue #898, #795's sibling):
+/// upstream `InitStartMenuStep` case 2 calls `LoadMessageBoxAndBorderGfx`
+/// (`start_menu.c:493-495`) -> `LoadUserWindowBorderGfx` (`menu.c:210-214`)
+/// -> `LoadWindowGfx(..., gSaveBlock2Ptr->optionsWindowFrameType, ...)`
+/// (`text_window.c:110-113`), so every `DrawStdWindowFrame` box the start
+/// menu opens -- the item window *and* the Yes/No prompt -- wears the frame
+/// the player picked, not a hardcoded default. Goes through the production
+/// [`StartMenuChrome::from_pack`] against a synthetic pack with two
+/// distinguishable frames (frame 0 green, frame 5 red), so a regression back
+/// to a fixed frame id shows up as the wrong colour rather than silently
+/// matching by coincidence.
+#[test]
+fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
+    use super::StartMenuChrome;
+    use assets::pack::AssetPack;
+    use rendering::{Bgr555, Framebuffer};
+
+    const CHOSEN_FRAME: u8 = 5;
+
+    let path = synthetic_pack_path("start-menu-window-frame");
+    let _guard = TempPackFile::write(&path, synthetic_start_menu_pack_bytes());
+
+    let pack = AssetPack::load(&path).expect("the fixture pack is well-formed");
+    let chrome =
+        StartMenuChrome::from_pack(&pack, CHOSEN_FRAME).expect("the fixture pack has frame 5");
+    let mut menu = StartMenu::assemble(chrome, 0);
+
+    let frame_5_red = Bgr555::from_channels(31, 0, 0).to_rgb888();
+
+    // The item window's top-left border corner (tilemap
+    // (MENU_TILEMAP_LEFT - 1, MENU_TILEMAP_TOP - 1)).
+    let item_border = menu.compose_over(Framebuffer::new()).pixel(
+        usize::try_from((MENU_TILEMAP_LEFT - 1) * 8).unwrap(),
+        usize::try_from((MENU_TILEMAP_TOP - 1) * 8).unwrap(),
+    );
+    assert_eq!(
+        item_border,
+        Some(frame_5_red),
+        "a save whose optionsWindowFrameType is {CHOSEN_FRAME} must draw that \
+         frame's border around the start menu's item window, not frame 0's"
+    );
+
+    // Into the SAVE flow, forward until the first Yes/No prompt is waiting
+    // (the same idiom as `b_on_a_prompt_answers_no_even_with_the_cursor_on_yes`).
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    menu.tick(pressed(Buttons::A), &mut target);
+    for _ in 0..FRAME_BUDGET {
+        if menu.yes_no_cursor().is_some() {
+            break;
+        }
+        menu.tick(pressed(Buttons::A), &mut target);
+    }
+    assert!(
+        menu.yes_no_cursor().is_some(),
+        "the save flow must reach a Yes/No prompt within the frame budget"
+    );
+
+    // The Yes/No window's top-left border corner (tilemap
+    // (YES_NO_TILEMAP_LEFT - 1, YES_NO_TILEMAP_TOP - 1)).
+    let yes_no_border = menu.compose_over(Framebuffer::new()).pixel(
+        usize::try_from((YES_NO_TILEMAP_LEFT - 1) * 8).unwrap(),
+        usize::try_from((YES_NO_TILEMAP_TOP - 1) * 8).unwrap(),
+    );
+    assert_eq!(
+        yes_no_border,
+        Some(frame_5_red),
+        "a save whose optionsWindowFrameType is {CHOSEN_FRAME} must draw that \
+         frame's border around the start menu's Yes/No prompt too, not frame 0's"
+    );
+}
+
+/// A unique scratch path for a synthetic pack fixture, mirroring
+/// `crate::main_menu::tests::load_synthetic_scene_inner`'s own path
+/// construction.
+fn synthetic_pack_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-{label}-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ))
+}
+
+/// Writes `bytes` to `path` and removes it on drop, so a failed assertion
+/// still cleans up the scratch file.
+struct TempPackFile {
+    path: std::path::PathBuf,
+}
+
+impl TempPackFile {
+    fn write(path: &std::path::Path, bytes: Vec<u8>) -> Self {
+        std::fs::write(path, bytes).expect("the scratch directory is writable");
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for TempPackFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The smallest pack [`StartMenuChrome::from_pack`] accepts, carrying two
+/// distinguishable selectable standard frames -- frame 0 (green, source
+/// `1.png`) and frame 5 (red, source `6.png`) -- plus the fixed message box
+/// and the normal font sheet, so which frame a menu drew is readable from a
+/// single border pixel. Mirrors
+/// `crate::main_menu::tests::synthetic_main_menu_pack_bytes`'s own two-frame
+/// fixture.
+fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
+    use crate::pack_test_support::{image_entry, palette_entry, palette_entry_with_color};
+    use rendering::Bgr555;
+
+    const FRAME_SIDE: u32 = 24;
+    const FRAME_BIT_DEPTH: u8 = 4;
+    const PALETTE_COLOUR_COUNT: u16 = 16;
+    const FRAME_BORDER_PALETTE_INDEX: u8 = 1;
+    const MESSAGE_BOX_WIDTH: u32 = 56;
+    const MESSAGE_BOX_HEIGHT: u32 = 16;
+    const FONT_BIT_DEPTH: u8 = 2;
+
+    crate::pack_test_support::pack_bytes(vec![
+        image_entry(
+            "text-window/image/1",
+            FRAME_SIDE,
+            FRAME_SIDE,
+            FRAME_BIT_DEPTH,
+            FRAME_BORDER_PALETTE_INDEX,
+        ),
+        palette_entry_with_color(
+            "text-window/palette/1",
+            PALETTE_COLOUR_COUNT,
+            FRAME_BORDER_PALETTE_INDEX,
+            Bgr555::from_channels(0, 31, 0),
+        ),
+        image_entry(
+            "text-window/image/6",
+            FRAME_SIDE,
+            FRAME_SIDE,
+            FRAME_BIT_DEPTH,
+            FRAME_BORDER_PALETTE_INDEX,
+        ),
+        palette_entry_with_color(
+            "text-window/palette/6",
+            PALETTE_COLOUR_COUNT,
+            FRAME_BORDER_PALETTE_INDEX,
+            Bgr555::from_channels(31, 0, 0),
+        ),
+        image_entry(
+            "text-window/image/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
+            FRAME_BIT_DEPTH,
+            0,
+        ),
+        palette_entry("text-window/palette/message_box", PALETTE_COLOUR_COUNT),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            FONT_BIT_DEPTH,
+            0,
+        ),
+    ])
 }

@@ -38,7 +38,13 @@
 //!
 //! The window frame is `DrawStdWindowFrame`'s standard frame
 //! (`src/menu.c:225-232`) -- the same `text_window_frame` handle
-//! [`crate::main_menu`] draws its item boxes with -- and the content fill is
+//! [`crate::main_menu`] draws its item boxes with, selected by the live
+//! save's own `gSaveBlock2Ptr->optionsWindowFrameType`
+//! (`LoadUserWindowBorderGfx`, `src/menu.c:210-213`; [`chrome::StartMenuChrome::from_pack`]'s
+//! `window_frame` argument, threaded in from
+//! [`crate::flow::overworld_phase::OverworldPhase`]'s own retained
+//! `save2` -- the same option [`crate::main_menu`] honours for its own
+//! item boxes, issue #795) -- and the content fill is
 //! that call's own `PIXEL_FILL(1)`, i.e. the frame palette's index 1.
 //! Label glyphs use `FONT_NORMAL`'s own default colours
 //! (`gFontInfos[FONT_NORMAL]`, `src/text.c:131-140`: fg 2, bg 1, shadow 3),
@@ -393,7 +399,10 @@ impl StartMenu {
 /// `sStartMenuCursorPos`. `source` is the owning
 /// [`crate::flow::OverworldPhase`]'s own retained source (issue #412), so a
 /// headless-real scenario's field start menu keeps reading the checkout
-/// pack exactly as its title screen already did.
+/// pack exactly as its title screen already did. `window_frame` is the live
+/// save's own `optionsWindowFrameType` -- see
+/// [`chrome::StartMenuChrome::from_pack`] for why the message box is not
+/// threaded the same way.
 ///
 /// # Errors
 ///
@@ -401,10 +410,11 @@ impl StartMenu {
 pub(crate) fn open(
     source: crate::pack_source::PackSource,
     cursor: usize,
+    window_frame: u8,
 ) -> Result<StartMenu, StartMenuError> {
     let pack = source.load()?;
     Ok(StartMenu::assemble(
-        StartMenuChrome::from_pack(&pack)?,
+        StartMenuChrome::from_pack(&pack, window_frame)?,
         cursor,
     ))
 }

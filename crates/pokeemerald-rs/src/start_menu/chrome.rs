@@ -50,7 +50,6 @@ pub(super) const YES_NO_CURSOR_ORIGIN: (i32, i32) = (0, 1);
 /// Glyph drawn beside the selected menu option.
 pub(super) const SELECTOR_ARROW: char = '▶';
 
-const DEFAULT_WINDOW_FRAME_ID: u8 = 0;
 const CONTENT_FILL_PALETTE_INDEX: usize = 1;
 const GLYPH_COLOR_COUNT: usize = 4;
 const GLYPH_FOREGROUND_INDEX: usize = 1;
@@ -71,14 +70,24 @@ pub(crate) struct StartMenuChrome {
 impl StartMenuChrome {
     /// Loads owned font and window assets from an asset pack.
     ///
+    /// `window_frame` is `gSaveBlock2Ptr->optionsWindowFrameType`
+    /// (`LoadUserWindowBorderGfx`, `pokeemerald/src/menu.c:210-213`) -- the
+    /// standard-frame border every window this chrome draws uses. The
+    /// message box is not affected: `LoadMessageBoxGfx` reads no such
+    /// option, so [`Self::message_frame`] always comes from
+    /// [`AssetPack::message_box`] regardless of `window_frame`. Callers pass
+    /// the live save's own value, the same resolution
+    /// [`crate::main_menu::MainMenuScene::from_pack_with_window_frame`]
+    /// makes for its own item boxes (issue #795).
+    ///
     /// # Errors
     ///
     /// Returns [`StartMenuError::Pack`] when an entry is missing or malformed,
     /// or [`StartMenuError::Font`] when the font sheet does not decode.
-    pub(super) fn from_pack(pack: &AssetPack) -> Result<Self, StartMenuError> {
+    pub(super) fn from_pack(pack: &AssetPack, window_frame: u8) -> Result<Self, StartMenuError> {
         Ok(Self {
             font_sheet: OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?,
-            std_frame: FrameAssets::from_handle(pack.text_window_frame(DEFAULT_WINDOW_FRAME_ID)?),
+            std_frame: FrameAssets::from_handle(pack.text_window_frame(window_frame)?),
             message_frame: FrameAssets::from_handle(pack.message_box()?),
         })
     }
