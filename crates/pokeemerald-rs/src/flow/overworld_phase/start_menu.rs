@@ -177,11 +177,9 @@ impl OverworldPhase {
     /// `Self::synthetic_start_menu` lets a test choose a menu that really
     /// builds, or a build that really fails, with no local pack involved.
     ///
-    /// Bordered with `self.save2.options_window_frame_type` (issue #898) --
-    /// the live save's own `gSaveBlock2Ptr->optionsWindowFrameType`, already
-    /// decoded and retained on this phase's `save2`, mirroring how
-    /// `crate::flow::title_to_main_menu` threads the same option into the
-    /// main menu for #795.
+    /// Bordered with `self.save2.options_window_frame_type` -- see
+    /// `crate::start_menu::chrome::StartMenuChrome::from_pack` for which
+    /// frame that is and why.
     pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
         #[cfg(test)]
         match self.synthetic_start_menu {

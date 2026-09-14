@@ -38,14 +38,10 @@
 //!
 //! The window frame is `DrawStdWindowFrame`'s standard frame
 //! (`src/menu.c:225-232`) -- the same `text_window_frame` handle
-//! [`crate::main_menu`] draws its item boxes with, selected by the live
-//! save's own `gSaveBlock2Ptr->optionsWindowFrameType`
-//! (`LoadUserWindowBorderGfx`, `src/menu.c:210-213`; [`chrome::StartMenuChrome::from_pack`]'s
-//! `window_frame` argument, threaded in from
-//! [`crate::flow::overworld_phase::OverworldPhase`]'s own retained
-//! `save2` -- the same option [`crate::main_menu`] honours for its own
-//! item boxes, issue #795) -- and the content fill is
-//! that call's own `PIXEL_FILL(1)`, i.e. the frame palette's index 1.
+//! [`crate::main_menu`] draws its item boxes with; see
+//! [`chrome::StartMenuChrome::from_pack`] for which frame that is and why.
+//! The content fill is that call's own `PIXEL_FILL(1)`, i.e. the frame
+//! palette's index 1.
 //! Label glyphs use `FONT_NORMAL`'s own default colours
 //! (`gFontInfos[FONT_NORMAL]`, `src/text.c:131-140`: fg 2, bg 1, shadow 3),
 //! resolved through that same palette -- unlike [`crate::main_menu`], which

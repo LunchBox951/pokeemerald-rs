@@ -586,17 +586,13 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
 }
 
 /// A continued save's own `optionsWindowFrameType` must border the *field
-/// start menu* too, not just the main menu (issue #898, #795's sibling):
-/// upstream `InitStartMenuStep` case 2 calls `LoadMessageBoxAndBorderGfx`
-/// (`start_menu.c:493-495`) -> `LoadUserWindowBorderGfx` (`menu.c:210-214`)
-/// -> `LoadWindowGfx(..., gSaveBlock2Ptr->optionsWindowFrameType, ...)`
-/// (`text_window.c:110-113`), so every `DrawStdWindowFrame` box the start
-/// menu opens -- the item window *and* the Yes/No prompt -- wears the frame
-/// the player picked, not a hardcoded default. Goes through the production
-/// [`StartMenuChrome::from_pack`] against a synthetic pack with two
-/// distinguishable frames (frame 0 green, frame 5 red), so a regression back
-/// to a fixed frame id shows up as the wrong colour rather than silently
-/// matching by coincidence.
+/// start menu* too, not just the main menu (issue #898, #795's sibling) --
+/// see [`StartMenuChrome::from_pack`] for the upstream contract. Goes
+/// through that production constructor against a synthetic pack with two
+/// distinguishable frames (frame 0 green, frame 5 red), covering both the
+/// item window and the Yes/No prompt, so a regression back to a fixed
+/// frame id shows up as the wrong colour rather than silently matching by
+/// coincidence.
 #[test]
 fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
     use super::StartMenuChrome;
