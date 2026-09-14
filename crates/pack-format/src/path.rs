@@ -132,15 +132,25 @@ pub(crate) enum Probe {
 /// a path they have never heard of, when the honest answer is that their
 /// own installed pack could not be reached.
 ///
-/// Only [`NotFound`](std::io::ErrorKind::NotFound) advances. Anything at
-/// the candidate that is not a regular file counts as missing too: a
+/// [`NotFound`](std::io::ErrorKind::NotFound) and
+/// [`NotADirectory`](std::io::ErrorKind::NotADirectory) advance: both prove
+/// no pack can be at the candidate, the former because nothing is there and
+/// the latter because a parent component is a regular file. Anything else
+/// at the candidate that is not a regular file counts as missing too: a
 /// directory named `pokeemerald.pack` is not a pack, and the next rung is a
 /// better answer than a read error on it.
 fn probe(path: &Path) -> Probe {
     match path.metadata() {
         Ok(meta) if meta.is_file() => Probe::Found,
         Ok(_) => Probe::Missing,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Probe::Missing,
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Probe::Missing
+        }
         Err(_) => Probe::Unreadable,
     }
 }
