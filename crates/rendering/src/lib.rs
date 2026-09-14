@@ -56,7 +56,8 @@ pub use bg::BgLayer;
 pub use bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
 pub use compositor::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
 pub use effects::{
-    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, LayerKind, LayerTargets,
+    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, EffectsEnable, LayerKind,
+    LayerTargets,
 };
 pub use error::RenderError;
 pub use framebuffer::Framebuffer;

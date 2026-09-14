@@ -26,8 +26,8 @@ use std::cell::RefCell;
 
 /// One opaque sprite-layer result for cross-layer composition.
 ///
-/// A better-priority transparent texel can update `priority` and
-/// `semi_transparent` without replacing `color`.
+/// A better-priority transparent texel can update `priority`,
+/// `semi_transparent`, and `target1_override` without replacing `color`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -37,13 +37,21 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
-    /// The writing span's own `BLDCNT` color-effects enable, when an affine
-    /// mosaic trailing spill wrote [`color`](Self::color) from an earlier
-    /// span than the one containing the queried column. `None` for every
-    /// other pixel, so the caller keeps using the queried column's own
-    /// window (which, unlike a span's own control, also reflects a per-pixel
-    /// `OBJWIN` mask) `(behavioral-fidelity)`.
-    pub(crate) effects_override: Option<bool>,
+    /// The `BLDCNT` color-effects enable of the span that wrote
+    /// [`color`](Self::color), when an affine mosaic trailing spill wrote it
+    /// from an earlier span than the one containing the queried column.
+    /// mGBA bakes brighten/darken into the stored color at that moment
+    /// (`software-obj.c:177-208`).
+    ///
+    /// `None` for every other pixel, so the caller keeps using the queried
+    /// column's own window (which, unlike a span's own control, also reflects
+    /// a per-pixel `OBJWIN` mask) `(behavioral-fidelity)`.
+    pub(crate) brightness_override: Option<bool>,
+    /// The same enable for the span that last stamped
+    /// [`priority`](Self::priority), which a better-priority transparent texel
+    /// moves without recoloring: mGBA re-stamps `FLAG_TARGET_1` from every
+    /// such write (`software-obj.c:76-86`).
+    pub(crate) target1_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -120,6 +128,13 @@ impl<'a> WindowSpans<'a> {
     /// Returns whether span `index` enables color effects; an absent span does.
     fn span_effects_enabled(self, index: usize) -> bool {
         self.effects.get(index).copied().unwrap_or(true)
+    }
+
+    /// Returns the color-effects enable a write made in span `writer` carries
+    /// into column `x`, or `None` when `writer` is `x`'s own span and the
+    /// caller should use the queried column's window instead.
+    fn spill_effects(self, x: usize, writer: usize) -> Option<bool> {
+        (writer != self.index_at(x)).then(|| self.span_effects_enabled(writer))
     }
 }
 
@@ -297,19 +312,20 @@ impl<'a> SpriteLayer<'a> {
                 match (entry.mode(), texel) {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
-                        let spilled = writer_span != window_spans.index_at(x);
+                        let override_from_writer = window_spans.spill_effects(x, writer_span);
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
-                            effects_override: spilled
-                                .then(|| window_spans.span_effects_enabled(writer_span)),
+                            brightness_override: override_from_writer,
+                            target1_override: override_from_writer,
                         });
                     }
                     (mode, Texel::Transparent) => {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.target1_override = window_spans.spill_effects(x, writer_span);
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),

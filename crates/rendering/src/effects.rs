@@ -177,6 +177,33 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
     }
 }
 
+/// A window's `BLDCNT` color-effects enable, split into the half that decides
+/// alpha-blend target-1 eligibility and the half that decides brighten/darken.
+///
+/// mGBA stores an OBJ pixel's brightness by picking a variant palette when the
+/// pixel is written, but re-stamps `FLAG_TARGET_1` on every later write that
+/// keeps the stored color, so a promoted sprite pixel can take the two halves
+/// from different windows (`mgba/src/gba/renderers/software-obj.c:76-86,159,177-208`)
+/// `(behavioral-fidelity)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectsEnable {
+    /// Whether alpha blending may treat the front layer as target 1.
+    pub target1: bool,
+    /// Whether the brighten or darken effect may apply to the front layer.
+    pub brightness: bool,
+}
+
+impl EffectsEnable {
+    /// Both halves taken from one window control.
+    #[must_use]
+    pub const fn uniform(enabled: bool) -> Self {
+        Self {
+            target1: enabled,
+            brightness: enabled,
+        }
+    }
+}
+
 /// Resolve the displayed color for a front layer and its immediate neighbor.
 ///
 /// `front` contains its color, layer kind, and whether sprite semi-transparency
@@ -191,7 +218,7 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
-    effects_enabled: bool,
+    enable: EffectsEnable,
     any_target2_enabled: bool,
     front: (Rgb888, LayerKind, bool),
     next: Option<(Rgb888, LayerKind)>,
@@ -201,7 +228,7 @@ pub fn resolve_pixel_color(
     let can_have_second_target = !matches!(front_kind, LayerKind::Backdrop);
     let alpha_target1 = can_have_second_target
         && (forced_alpha
-            || (effects_enabled
+            || (enable.target1
                 && cfg.effect == ColorEffect::AlphaBlend
                 && cfg.target1.contains(front_kind)));
 
@@ -218,7 +245,7 @@ pub fn resolve_pixel_color(
         }
     }
 
-    if effects_enabled && cfg.target1.contains(front_kind) {
+    if enable.brightness && cfg.target1.contains(front_kind) {
         match cfg.effect {
             ColorEffect::Brighten => return brighten(front_color, cfg.evy),
             ColorEffect::Darken => return darken(front_color, cfg.evy),
@@ -232,8 +259,8 @@ pub fn resolve_pixel_color(
 #[cfg(test)]
 mod tests {
     use super::{
-        alpha_blend, brighten, darken, resolve_pixel_color, ColorEffect, EffectsConfig, LayerKind,
-        LayerTargets, FULL_EFFECT_WEIGHT,
+        alpha_blend, brighten, darken, resolve_pixel_color, ColorEffect, EffectsConfig,
+        EffectsEnable, LayerKind, LayerTargets, FULL_EFFECT_WEIGHT,
     };
     use crate::palette::Rgb888;
 
@@ -807,7 +834,14 @@ mod tests {
         let cfg = bg0_blends_with_bg1();
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
         let next = Some((WHITE, LayerKind::Bg(1)));
-        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
         assert_eq!(result.r, u8::MAX / 2);
     }
 
@@ -819,7 +853,7 @@ mod tests {
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
         let result = resolve_pixel_color(
             &cfg,
-            true,
+            EffectsEnable::uniform(true),
             true,
             front,
             non_target_neighbor,
@@ -837,7 +871,8 @@ mod tests {
         let mut cfg = bg0_blends_with_bg1();
         cfg.target2.backdrop = true;
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, true, true, front, None, WHITE);
+        let result =
+            resolve_pixel_color(&cfg, EffectsEnable::uniform(true), true, front, None, WHITE);
         assert_eq!(result.r, u8::MAX / 2);
     }
 
@@ -853,7 +888,14 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let next = Some((WHITE, LayerKind::Bg(0)));
-        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result.r,
             u8::MAX / 2,
@@ -874,7 +916,14 @@ mod tests {
         let front = semi_transparent_obj(Rgb888::BLACK);
         let next = Some((WHITE, LayerKind::Bg(0)));
 
-        let result = resolve_pixel_color(&cfg, false, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(false),
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
 
         assert_eq!(
             result.r,
@@ -888,7 +937,14 @@ mod tests {
         let cfg = EffectsConfig::default();
         let front_color = Rgb888 { r: 7, g: 7, b: 7 };
         let front = semi_transparent_obj(front_color);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(result, front_color);
     }
 
@@ -903,7 +959,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result.r,
             u8::MAX,
@@ -923,8 +986,14 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
-        let result =
-            resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result,
             Rgb888::BLACK,
@@ -944,8 +1013,14 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(0)));
-        let result =
-            resolve_pixel_color(&cfg, true, false, front, non_target_neighbor, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result, WHITE,
             "the brightness variant survives when no target2 exists"
@@ -963,7 +1038,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(result, WHITE, "full brighten of black must reach white");
     }
 
@@ -978,7 +1060,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = opaque_layer(WHITE, LayerKind::Obj);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result,
             Rgb888::BLACK,
@@ -1002,7 +1091,14 @@ mod tests {
             b: 10,
         };
         let front = opaque_layer(front_color, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, false, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(false),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result, front_color,
             "window's effect-enable bit must gate brighten"
@@ -1021,7 +1117,14 @@ mod tests {
         };
         let backdrop = Rgb888::BLACK;
         let front = opaque_layer(backdrop, LayerKind::Backdrop);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, backdrop);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            false,
+            front,
+            None,
+            backdrop,
+        );
         assert_eq!(result, WHITE);
     }
 
@@ -1041,7 +1144,14 @@ mod tests {
             b: 42,
         };
         let front = opaque_layer(backdrop, LayerKind::Backdrop);
-        let result = resolve_pixel_color(&cfg, true, true, front, None, backdrop);
+        let result = resolve_pixel_color(
+            &cfg,
+            EffectsEnable::uniform(true),
+            true,
+            front,
+            None,
+            backdrop,
+        );
         assert_eq!(result, backdrop);
     }
 }
