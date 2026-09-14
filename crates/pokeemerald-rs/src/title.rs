@@ -46,9 +46,8 @@ const VERSION_HALF_TILES: u16 = 32;
 const PRESS_START_FRAME_TILES: u16 = 4;
 const VERSION_LEFT_TILE: u16 = 0;
 const VERSION_RIGHT_TILE: u16 = VERSION_HALF_TILES;
-// Sheet tile 1, not 0: `BeginAnim` applies `sAnim_PressStart_0`'s
-// `ANIMCMD_FRAME` value straight to `oam.tileNum` (title_screen.c:214-262,
-// sprite.c:936).
+// Tile 1, not 0: `BeginAnim` writes `sAnim_PressStart_0`'s frame straight
+// to `oam.tileNum` (`title_screen.c:214-262`, `sprite.c:936`).
 const PRESS_START_BASE_TILE: u16 = 1;
 #[expect(
     clippy::cast_possible_truncation,
@@ -517,9 +516,8 @@ fn build_sprite_tilesets(pack: &AssetPack) -> Result<(Tileset, Tileset), TitleSc
     Ok((sprite_tiles_4bpp, sprite_tiles_8bpp))
 }
 
-/// Packs `press_start.png` as upstream's own 41-tile raster sheet
-/// (`title_screen.c:214-262`, `sprite.c:936`, `title_screen.c:299`), so
-/// [`sprite_entries`]'s tile bases index the same tiles `BeginAnim` would.
+/// Packs `press_start.png` as upstream's 41-tile raster sheet
+/// (`title_screen.c:299`), so [`sprite_entries`]'s tile bases match `BeginAnim`'s.
 fn press_start_tileset(id: &'static str, image: ImageRef<'_>) -> Result<Tileset, TitleSceneError> {
     let press_start_and_copyright_rows_h = 2 * PRESS_START_FRAME_H;
     let mut bytes_4bpp = crop_and_pack_tile_bytes(
