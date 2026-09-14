@@ -1068,13 +1068,8 @@ fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards(
     );
 }
 
-/// PR #1150 review, the *acquisition* frame itself: the rival's script
-/// opens with `lockall`, which reaches `PlayerFreeze` through
-/// `Task_FreezePlayer` (`pokeemerald/src/scrcmd.c:1202-1214`,
-/// `src/event_object_lock.c:11-46`), and `OverworldBasic` runs `RunTasks`
-/// ahead of `AnimateSprites`/`BuildOamBuffer`
-/// (`pokeemerald/src/overworld.c:1465-1476`). So the frame the battle
-/// claims is drawn with the turn already over.
+/// The rival script's `lockall` freezes the player before its frame is drawn
+/// (`scrcmd.c:1202-1214`, `overworld.c:1465-1476`).
 #[test]
 fn the_rival_battle_ends_a_turns_busy_window_on_the_frame_it_claims() {
     let (rx, ry) = RIVAL_TILE;

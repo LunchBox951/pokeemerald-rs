@@ -412,14 +412,8 @@ fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_i
     );
 }
 
-/// PR #1150 review, the *acquisition* frame itself: upstream takes the
-/// field lock inside `ProcessPlayerFieldInput`, and the lock reaches
-/// `PlayerFreeze` before that same frame is drawn -- `ShowStartMenu` calls
-/// it inline (`pokeemerald/src/start_menu.c:581-591`), from a
-/// `DoCB1_Overworld` that runs ahead of `OverworldBasic`'s `AnimateSprites`
-/// and `BuildOamBuffer` (`pokeemerald/src/overworld.c:1438-1476`). So the
-/// frame `START` lands on already shows the standing pose, and this port's
-/// own composition of it must not still have a turn in flight.
+/// `ShowStartMenu` freezes the player before its own frame is drawn
+/// (`start_menu.c:581-591`), so the turn ends on the frame START lands.
 #[test]
 fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
     let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
@@ -444,16 +438,8 @@ fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
     );
 }
 
-/// The A-press counterpart to the case above: `ProcessPlayerFieldInput`
-/// returning `TRUE` out of `TryStartInteractionScript`
-/// (`pokeemerald/src/field_control_avatar.c:172`) locks field controls on
-/// that frame (`pokeemerald/src/overworld.c:1444-1450`), and the script it
-/// set up reaches `PlayerFreeze` through `Task_FreezePlayer`, which
-/// `RunTasks` runs ahead of `AnimateSprites` in the same `OverworldBasic`
-/// pass (`:1465-1476`). Mom's box needs a pack this suite has none of
-/// (`a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes`'s
-/// own note), but the interaction that claims the frame resolves pack-free,
-/// and claiming the frame is what ends the turn.
+/// The interaction claiming the frame is upstream's lock
+/// (`field_control_avatar.c:172`); the box itself needs a pack this suite lacks.
 #[test]
 fn an_a_press_interaction_ends_a_turns_busy_window_on_the_frame_it_claims() {
     let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
