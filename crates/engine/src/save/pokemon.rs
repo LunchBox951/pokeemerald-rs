@@ -14,7 +14,7 @@ const OT_ID_OFFSET: usize = 4;
 /// The unencrypted header's nickname field
 /// (`struct BoxPokemon::nickname`, `pokeemerald/include/pokemon.h:200`).
 const NICKNAME_OFFSET: usize = 8;
-/// Byte width of [`NICKNAME_OFFSET`]
+/// Fixed byte length of `BoxPokemon`'s unencrypted header nickname field
 /// (`POKEMON_NAME_LENGTH`, `pokeemerald/include/constants/global.h:95`).
 pub const BOX_NICKNAME_LEN: usize = 10;
 /// The unencrypted header's language byte
