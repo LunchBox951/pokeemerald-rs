@@ -208,9 +208,8 @@
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! two abilities that still read a holder's primary status or the draw
 //! that inflicts it — Shed Skin and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`];
-//! Guts and Marvel Scale are modelled above, though `secondary`'s poison path
-//! still refuses newly poisoning either holder) — and the move effects the eight
+//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
+//! and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are

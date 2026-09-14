@@ -182,14 +182,18 @@ fn poison_can_land(defender: &BattlePokemon) -> bool {
 /// A no-op whenever the poison guards already refuse the target. Synchronize is
 /// also accepted when the attacker already carries a primary status, whose
 /// reflection then exits silently
-/// (`battle_script_commands.c:2334`-`:2335`).
+/// (`battle_script_commands.c:2334`-`:2335`). Upstream's poison case admits
+/// Guts and Marvel Scale (`battle_script_commands.c:2299-2340`); their
+/// status-dependent damage reads (`pokemon.c:3211-3214`) are modelled by
+/// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
+/// newly poisoning either holder is admitted.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`, or
 /// [`BattleError::UnportedAbilityInteraction`] for the attacker's Serene
-/// Grace, or the defender's Synchronize, Shed Skin, Guts, or Marvel Scale,
-/// when the move would newly poison the defender.
+/// Grace, or the defender's Synchronize or Shed Skin, when the move would
+/// newly poison the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -209,9 +213,9 @@ pub fn ensure_admissible(
         return Ok(());
     }
     match defender.ability() {
-        ability @ (AbilityId::SHED_SKIN | AbilityId::GUTS | AbilityId::MARVEL_SCALE) => {
-            Err(BattleError::UnportedAbilityInteraction(ability))
-        }
+        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SHED_SKIN,
+        )),
         AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
             BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
         ),

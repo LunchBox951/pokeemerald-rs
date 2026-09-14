@@ -6,8 +6,11 @@
 //! turn wiring those cannot reach: event order, residual order, and how a
 //! residual knockout settles.
 
-use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
-use assets::MoveId;
+use crate::common::{
+    max_iv_mon, max_iv_mon_with_personality, slow_runner_rattata, SequenceRng,
+    SECONDARY_ABILITY_PERSONALITY,
+};
+use assets::{AbilityId, MoveId};
 use battle::status1::poison_residual_damage;
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
@@ -27,8 +30,22 @@ const EKANS: u16 = 23;
 /// is never automatic, and too weak to end the battle before its residuals.
 const ABRA: u16 = 63;
 
+/// `SPECIES_MAKUHITA`: Fighting-type, Guts in ability slot 1 (Thick Fat is
+/// slot 0), slower than [`MILOTIC`].
+const MAKUHITA: u16 = 335;
+/// `SPECIES_MILOTIC`: Water-type, Marvel Scale in its only ability slot,
+/// faster than [`MAKUHITA`].
+const MILOTIC: u16 = 329;
+
 /// A draw that clears [`POISON_STING`]'s 30% secondary chance.
 const POISON_CHANCE_HIT_DRAW: u16 = 29;
+/// A damage roll draw producing the maximum 100% roll
+/// (`damage::apply_damage_roll`'s `roll_reduction = draw % 16`).
+const BEST_DAMAGE_DRAW: u16 = 0;
+/// A damage roll draw producing the minimum 85% roll.
+const WORST_DAMAGE_DRAW: u16 = 15;
+/// A crit draw that never crits.
+const NO_CRIT_DRAW: u16 = 1;
 /// An escape roll that fails for [`slow_runner_rattata`] against [`ABRA`]
 /// (`battle::escape`'s own tests pin the threshold).
 const ESCAPE_ROLL_FAILS: u16 = 65000;
@@ -588,4 +605,163 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
     );
     assert_eq!(battle.player().current_hp(), hp_before - expected);
     assert_eq!(battle.outcome(), None, "the battle plays on");
+}
+
+/// Upstream's `STATUS1_POISON` case does not guard Guts
+/// (`battle_script_commands.c:2299-2340`); the ability only reads a
+/// poisoned holder's own status when calculating its physical Attack
+/// (`pokemon.c:3211-3212`), so Poison Sting newly poisoning a Guts holder
+/// is admitted, and that same holder's next physical hit observes the
+/// modelled boost (`battle::ability::guts_attack`).
+#[test]
+fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MILOTIC, 5, vec![POISON_STING]);
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        MAKUHITA,
+        5,
+        vec![TACKLE],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(
+        enemy.ability(),
+        AbilityId::GUTS,
+        "fixture sanity: personality 25 fields the secondary ability slot"
+    );
+
+    // Battle::new's turn number, this turn's own turn number, the enemy's
+    // single-move selection, the faster Milotic's Poison Sting (accuracy,
+    // no crit, best roll, effect-chance draw under 30 -- lands the
+    // poison), then the newly poisoned Makuhita's own Tackle (accuracy, no
+    // crit, best roll, discarded effect-chance draw).
+    let mut rng = SequenceRng::new([
+        0,
+        0,
+        0,
+        0,
+        NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+        0,
+        NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        0,
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Guts is modelled, so the pick is admitted");
+
+    let hit_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: POISON_STING,
+                    ..
+                }
+            )
+        })
+        .expect("Poison Sting must land: {events:?}");
+    assert_eq!(
+        events[hit_index + 1],
+        BattleEvent::Poisoned {
+            by_player: true,
+            move_id: POISON_STING,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Poisoned);
+    assert!(
+        events.contains(&BattleEvent::Hit {
+            by_player: false,
+            move_id: TACKLE,
+            damage: 5,
+            is_critical: false,
+        }),
+        "the now-poisoned Guts holder's own Tackle must observe the 150% \
+         raw Attack boost this same turn: {events:?}"
+    );
+}
+
+/// Upstream's `STATUS1_POISON` case does not guard Marvel Scale
+/// (`battle_script_commands.c:2299-2340`); the ability only reads a
+/// poisoned holder's own status when calculating its physical Defense
+/// (`pokemon.c:3213-3214`), so Poison Sting newly poisoning a Marvel Scale
+/// holder is admitted, and a later physical hit against that holder
+/// observes the modelled reduction (`battle::ability::marvel_scale_defense`).
+#[test]
+fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MAKUHITA, 5, vec![POISON_STING, TACKLE]);
+    let enemy = max_iv_mon(&dex, MILOTIC, 5, vec![TACKLE]);
+    assert_eq!(
+        enemy.ability(),
+        AbilityId::MARVEL_SCALE,
+        "fixture sanity: the only ability slot fields Marvel Scale"
+    );
+
+    // Battle::new's turn number, turn one's own turn number, the enemy's
+    // single-move selection, the faster Milotic's Tackle against the player
+    // (no crit, worst roll, to leave headroom for the second turn's own
+    // Tackle), then the player's Poison Sting (accuracy, no crit, worst
+    // roll, effect-chance draw under 30 -- lands the poison). Turn two:
+    // this turn's own turn number, the enemy's selection, the poisoned
+    // Milotic's own Tackle against the player (no crit, worst roll), then
+    // the player's Tackle against the poisoned Milotic (accuracy, no crit,
+    // best roll, to reproduce the pinned Marvel Scale damage figure).
+    let mut rng = SequenceRng::new([
+        0,
+        0,
+        0,
+        0,
+        NO_CRIT_DRAW,
+        WORST_DAMAGE_DRAW,
+        0,
+        0,
+        NO_CRIT_DRAW,
+        WORST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+        0,
+        0,
+        0,
+        NO_CRIT_DRAW,
+        WORST_DAMAGE_DRAW,
+        0,
+        0,
+        NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        0,
+    ]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let turn_one = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Marvel Scale is modelled, so the pick is admitted");
+    assert!(
+        turn_one.contains(&BattleEvent::Poisoned {
+            by_player: true,
+            move_id: POISON_STING,
+        }),
+        "{turn_one:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Poisoned);
+
+    let turn_two = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap();
+    assert!(
+        turn_two.contains(&BattleEvent::Hit {
+            by_player: true,
+            move_id: TACKLE,
+            damage: 3,
+            is_critical: false,
+        }),
+        "the poisoned Marvel Scale holder's raw Defense must be raised \
+         150% against the player's Tackle: {turn_two:?}"
+    );
 }
