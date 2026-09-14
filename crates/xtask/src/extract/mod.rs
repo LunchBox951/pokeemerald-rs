@@ -1132,6 +1132,140 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A concurrent writer stand-in whose `Drop` runs once the staging file
+    /// exists and before the ownership check, the window an exclusive create
+    /// cannot cover.
+    #[cfg(unix)]
+    struct SwapStagingOnceCreated {
+        names: std::vec::IntoIter<std::path::PathBuf>,
+        staging_path: std::path::PathBuf,
+        replacement: Replacement,
+        bystander: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum Replacement {
+        SymlinkToBystander,
+        UnrelatedRegularFile,
+    }
+
+    #[cfg(unix)]
+    impl Iterator for SwapStagingOnceCreated {
+        type Item = std::path::PathBuf;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.names.next()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for SwapStagingOnceCreated {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.staging_path)
+                .expect("the publish must have staged a file at this name by now");
+            match self.replacement {
+                Replacement::SymlinkToBystander => {
+                    std::os::unix::fs::symlink(&self.bystander, &self.staging_path).unwrap();
+                }
+                Replacement::UnrelatedRegularFile => {
+                    std::fs::write(&self.staging_path, b"an intruder's file").unwrap();
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_post_creation_swap_is_refused(label: &str, replacement: Replacement) {
+        let dir = scratch_dir(label);
+        let output_path = dir.join("pokeemerald.pack");
+        let original = b"an existing, usable pack";
+        std::fs::write(&output_path, original).unwrap();
+        let bystander = dir.join("bystander");
+        std::fs::write(&bystander, b"not a pack").unwrap();
+        let staging_path = staging_path_with_value(&output_path, TEST_STAGING_VALUE);
+
+        let err = write_pack_atomically_with_names(
+            &output_path,
+            b"a freshly built pack",
+            SwapStagingOnceCreated {
+                names: vec![staging_path.clone()].into_iter(),
+                staging_path: staging_path.clone(),
+                replacement,
+                bystander: bystander.clone(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&err, ExtractError::WriteFailed(path, _) if path == &output_path),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("was replaced before it could be published"),
+            "the ownership check, not something else, must be what refused the swap: {err}"
+        );
+        assert_eq!(
+            std::fs::read(&output_path).unwrap(),
+            original,
+            "an entry swapped in after staging was published over the pack"
+        );
+        assert!(
+            !std::fs::symlink_metadata(&output_path)
+                .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "the published pack path must not become a planted symlink"
+        );
+        assert_eq!(
+            std::fs::read(&bystander).unwrap(),
+            b"not a pack",
+            "the swapped-in entry's target must be neither written nor unlinked"
+        );
+        let intruder = std::fs::symlink_metadata(&staging_path)
+            .expect("an entry this publish does not own must be left where its owner put it");
+        match replacement {
+            Replacement::SymlinkToBystander => {
+                assert!(
+                    intruder.file_type().is_symlink(),
+                    "the planted symlink must survive as a symlink, not be replaced or followed"
+                );
+                assert_eq!(
+                    std::fs::read_link(&staging_path).unwrap(),
+                    bystander,
+                    "the surviving symlink must still point at the bystander it was planted with"
+                );
+            }
+            Replacement::UnrelatedRegularFile => {
+                assert!(
+                    intruder.file_type().is_file(),
+                    "the planted regular file must survive as a regular file, not be replaced"
+                );
+                assert_eq!(
+                    std::fs::read(&staging_path).unwrap(),
+                    b"an intruder's file",
+                    "the surviving intruder file must keep the bytes it was planted with"
+                );
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swapped_in_after_the_staging_file_is_created_is_refused_not_published() {
+        assert_post_creation_swap_is_refused("post-stage-symlink", Replacement::SymlinkToBystander);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_file_swapped_in_after_the_staging_file_is_created_is_refused_not_published() {
+        assert_post_creation_swap_is_refused(
+            "post-stage-regular",
+            Replacement::UnrelatedRegularFile,
+        );
+    }
+
     #[test]
     fn oversized_jasc_palette_is_rejected_not_truncated() {
         let count = usize::from(u16::MAX) + 1;
