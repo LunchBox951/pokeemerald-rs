@@ -165,6 +165,13 @@ impl PlayerState {
         self.transit_frames.is_some()
     }
 
+    /// Returns frames left in a standstill turn's busy window, or zero when no
+    /// turn is in flight.
+    #[must_use]
+    pub const fn turn_frames_remaining(&self) -> u8 {
+        self.turn_frames_remaining
+    }
+
     /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     ///
     /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
@@ -557,6 +564,7 @@ mod tests {
         // for TURN_IN_PLACE_FRAMES (8) frames total, one of which the turn
         // frame itself already spent (`TURN_IN_PLACE_FRAMES` doc comment) --
         // so the held direction stays swallowed through frames 2..=8.
+        assert_eq!(player.turn_frames_remaining(), TURN_IN_PLACE_FRAMES - 1);
         for frame in 2..=8 {
             let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
             assert_eq!(
@@ -566,6 +574,11 @@ mod tests {
             );
             assert_eq!(player.position(), (2, 2), "frame {frame} must not move");
             player.tick();
+            assert_eq!(
+                player.turn_frames_remaining(),
+                TURN_IN_PLACE_FRAMES - frame,
+                "frame {frame} of the window leaves the rest of it to run"
+            );
         }
 
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);

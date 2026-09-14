@@ -4,7 +4,7 @@
 //! in `object_event_pic_tables.h`; `FRAME_*` follow `object_event_anims.h`.
 
 use assets::{ImageRef, PaletteRef};
-use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState, TURN_IN_PLACE_FRAMES, WALK_FRAMES_PER_TILE};
 use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
@@ -28,13 +28,16 @@ pub(super) const FRAME_BLOCK_TILES: u16 = NUM_WALK_FRAMES as u16 * FRAME_TILES;
 pub(super) const FRAME_SOUTH_STAND: u16 = 0;
 pub(super) const FRAME_NORTH_STAND: u16 = 1;
 pub(super) const FRAME_WEST_STAND: u16 = 2;
-/// Upstream's `sAnim_Go*` alternate the forward foot across steps
-/// ([`PlayerState`] has no step parity); this port always shows the first.
+/// Upstream's `sAnim_Go*`/`sAnim_GoFast*` alternate the forward foot across
+/// steps ([`PlayerState`] has no step parity); this port always shows the first.
 const FRAME_SOUTH_STEP: u16 = 3;
 const FRAME_NORTH_STEP: u16 = 5;
 const FRAME_WEST_STEP: u16 = 7;
 
 const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
+/// A standstill turn runs `sAnim_GoFast*`, whose cells last half as long as
+/// `sAnim_Go*`'s: the forward foot, then the standing pose.
+const TURN_FRAME_HALF: u8 = TURN_IN_PLACE_FRAMES / 2;
 
 pub(super) const PLAYER_OBJ_SHAPE: ObjShape = ObjShape::Vertical;
 pub(super) const PLAYER_OBJ_SIZE: u8 = 2;
@@ -197,7 +200,9 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
         Direction::North => FRAME_NORTH_STEP,
         Direction::West | Direction::East => FRAME_WEST_STEP,
     };
-    let frame = if player.in_transit() && player.step_progress() < STEP_FRAME_HALF {
+    let walking_foot_forward = player.in_transit() && player.step_progress() < STEP_FRAME_HALF;
+    let turning_foot_forward = player.turn_frames_remaining() >= TURN_FRAME_HALF;
+    let frame = if walking_foot_forward || turning_foot_forward {
         step
     } else {
         stand
@@ -328,13 +333,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn frame_for_shows_the_forward_foot_for_the_first_half_of_a_step() {
-        let (bytes, header, events) = flat_test_map();
-        let runtime = engine::overworld::MapRuntime::new(
+    fn flat_runtime<'a>(
+        bytes: &'a [u8],
+        header: &'a assets::MapHeader,
+        events: &'a assets::MapEvents,
+    ) -> engine::overworld::MapRuntime<'a> {
+        engine::overworld::MapRuntime::new(
             assets::MapId("MAP_TEST"),
-            &header,
-            &events,
+            header,
+            events,
             assets::MapLayout {
                 id: assets::LayoutId("MAP_TEST"),
                 name: "MapTest",
@@ -343,11 +350,17 @@ mod tests {
                 primary_tileset: "gTileset_General",
                 secondary_tileset: "gTileset_General",
             }
-            .grid(&bytes)
+            .grid(bytes)
             .unwrap(),
             assets::MetatileAttributeTable::new(&[]),
             assets::MetatileAttributeTable::new(&[]),
-        );
+        )
+    }
+
+    #[test]
+    fn frame_for_shows_the_forward_foot_for_the_first_half_of_a_step() {
+        let (bytes, header, events) = flat_test_map();
+        let runtime = flat_runtime(&bytes, &header, &events);
         let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
 
         let mut player = player_at((2, 2), Direction::South);
@@ -364,6 +377,48 @@ mod tests {
             frame_for(&player),
             (FRAME_SOUTH_STAND, false),
             "the second half of a step shows the standing frame"
+        );
+    }
+
+    /// Upstream's turn-in-place action starts `sAnim_GoFast*` on one of its two
+    /// forward-foot cells and runs it for eight frames
+    /// (`pokeemerald/src/event_object_movement.c:5704-5712,5780-5784`,
+    /// `:4582-4599` against `sStepAnimTables`' `animPos` `{1, 3, 0, 2}`); those
+    /// cells last four frames each
+    /// (`pokeemerald/src/data/object_events/object_event_anims.h:238-245`).
+    #[test]
+    fn frame_for_animates_the_forward_foot_across_the_first_half_of_a_turn() {
+        let (bytes, header, events) = flat_test_map();
+        let runtime = flat_runtime(&bytes, &header, &events);
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = player_at((2, 2), Direction::South);
+        let mut rendered = Vec::new();
+        for _ in 0..TURN_IN_PLACE_FRAMES {
+            player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+            rendered.push(frame_for(&player));
+        }
+
+        assert_eq!(
+            rendered,
+            vec![
+                (FRAME_NORTH_STEP, false),
+                (FRAME_NORTH_STEP, false),
+                (FRAME_NORTH_STEP, false),
+                (FRAME_NORTH_STEP, false),
+                (FRAME_NORTH_STAND, false),
+                (FRAME_NORTH_STAND, false),
+                (FRAME_NORTH_STAND, false),
+                (FRAME_NORTH_STAND, false),
+            ]
+        );
+        assert!(
+            matches!(
+                player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "the turn's animation drains exactly with its busy window"
         );
     }
 

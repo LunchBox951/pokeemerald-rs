@@ -25481,7 +25481,7 @@
     "src/data/object_events/object_event_anims.h": {
       "artifacts": {
         "sAnimTable_BrendanMayNormal": {
-          "reason": "Facing/step frame selection (sAnim_Face{South,North,West,East}/sAnim_Go{South,North,West,East}) ported into avatar::frame_for; documented fidelity delta: no left/right foot alternation across steps (PlayerState tracks only the current step's progress, not a cross-step parity counter -- see avatar.rs's module docs).",
+          "reason": "Facing/step frame selection (sAnim_Face{South,North,West,East}/sAnim_Go{South,North,West,East}) ported into avatar::frame_for, which also drives the standstill turn's own window from sAnim_GoFast{South,North,West,East}: those cells last four frames each, so a turn renders the forward foot for four frames and the standing pose for four rather than one held pose (issue #976). Documented fidelity delta: no left/right foot alternation across steps or turns, since PlayerState tracks only the current step's progress and the turn's remaining frames, not a cross-step parity counter -- see avatar.rs's FRAME_*_STEP comment.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
