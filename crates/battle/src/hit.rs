@@ -79,8 +79,9 @@ pub enum HitOutcome {
     /// A Ground move was blocked by the target's Levitate
     /// (`battle_script_commands.c:1375-1383`).
     LevitateBlocked,
-    /// A powered move that was not strictly super effective was blocked by
-    /// the target's Wonder Guard (`battle_script_commands.c:1409-1418`).
+    /// A powered move other than Struggle that was not strictly super
+    /// effective was blocked by the target's Wonder Guard
+    /// (`battle_script_commands.c:1409-1418`; Struggle bypasses `typecalc`).
     WonderGuardBlocked,
     /// The move connected and dealt damage.
     Hit {
