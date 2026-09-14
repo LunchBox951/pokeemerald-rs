@@ -544,11 +544,8 @@ fn press_start_and_copyright_entries_use_upstream_anim_frame_tiles() {
 
 #[test]
 fn press_start_tileset_packs_the_upstream_41_tile_raster_sheet() {
-    // Every tile's raster index (0..=47, 20x3 tiles) is encoded across its
-    // first two pixels as 4bpp nibbles (each pixel is one nibble, so neither
-    // alone can hold every index), so a transposed crop, a dropped tile, or
-    // a duplicated tile lands on a mismatch instead of an equal value. Only
-    // the first 41 (0..=40) are packed (issue #1156).
+    // Each tile carries its raster index in its first two 4bpp nibbles, so a
+    // transposed, dropped, or duplicated tile mismatches; only 0..=40 pack.
     const SHEET_TILE_COLS: usize = 20;
     let mut pixels = vec![0u8; 160 * 24];
     for tile_row in 0..3usize {
