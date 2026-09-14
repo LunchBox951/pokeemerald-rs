@@ -63,6 +63,14 @@ pub enum BattleEvent {
         /// The Ground move Levitate blocked.
         move_id: MoveId,
     },
+    /// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`):
+    /// a powered move that was not strictly super effective was blocked.
+    WonderGuardBlocked {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move Wonder Guard blocked.
+        move_id: MoveId,
+    },
     /// A move dealt damage.
     Hit {
         /// Whether the player used the move.
