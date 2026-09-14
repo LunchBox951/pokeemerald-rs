@@ -46,15 +46,32 @@ const VERSION_HALF_TILES: u16 = 32;
 const PRESS_START_FRAME_TILES: u16 = 4;
 const VERSION_LEFT_TILE: u16 = 0;
 const VERSION_RIGHT_TILE: u16 = VERSION_HALF_TILES;
-const PRESS_START_BASE_TILE: u16 = 0;
+// `sOamAnimCmds`'s Press Start frames select sheet tiles 1,5,9,13,17
+// (title_screen.c:214-231), and `BeginAnim` assigns that value straight to
+// `oam.tileNum` with no scaling (sprite.c:919-937). Tile 0 -- the sheet's
+// blank leading tile -- is skipped, not reused as the first frame.
+const PRESS_START_BASE_TILE: u16 = 1;
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the five sprite frames fit in u16"
 )]
 const COPYRIGHT_BASE_TILE: u16 =
     PRESS_START_BASE_TILE + NUM_PRESS_START_FRAMES as u16 * PRESS_START_FRAME_TILES;
+// The loaded sheet is exactly 41 4bpp tiles (`0x520` bytes / 32 bytes per
+// tile, title_screen.c:294-302): the 20-tile Press Start row, the 20-tile
+// copyright row, and the one blank row-2 tile the copyright banner's last
+// frame (base 37 + 4 tiles) reaches into.
+const PRESS_START_SHEET_TILES: u16 = 41;
 const _: () = assert!(VERSION_RIGHT_TILE > VERSION_LEFT_TILE);
 const _: () = assert!(COPYRIGHT_BASE_TILE > PRESS_START_BASE_TILE);
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the five sprite frames fit in u16"
+)]
+const _: () = assert!(
+    COPYRIGHT_BASE_TILE + NUM_COPYRIGHT_FRAMES as u16 * PRESS_START_FRAME_TILES
+        == PRESS_START_SHEET_TILES
+);
 // The 8bpp banner reads palette indices directly, leaving bank 1 as the first
 // non-overlapping bank for the 4bpp sprites.
 const SPRITE_4BPP_BANK: u8 = 1;
@@ -498,33 +515,45 @@ fn build_sprite_tilesets(pack: &AssetPack) -> Result<(Tileset, Tileset), TitleSc
         BitDepth::Bpp8,
     )?);
     let sprite_tiles_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes_8bpp)?;
-
-    let mut bytes_4bpp = Vec::new();
-    for i in 0..NUM_PRESS_START_FRAMES {
-        bytes_4bpp.extend(crop_and_pack_tile_bytes(
-            PRESS_START_ID,
-            press_start_image,
-            i * PRESS_START_FRAME_W,
-            0,
-            PRESS_START_FRAME_W,
-            PRESS_START_FRAME_H,
-            BitDepth::Bpp4,
-        )?);
-    }
-    for i in 0..NUM_COPYRIGHT_FRAMES {
-        bytes_4bpp.extend(crop_and_pack_tile_bytes(
-            PRESS_START_ID,
-            press_start_image,
-            i * PRESS_START_FRAME_W,
-            PRESS_START_FRAME_H,
-            PRESS_START_FRAME_W,
-            PRESS_START_FRAME_H,
-            BitDepth::Bpp4,
-        )?);
-    }
-    let sprite_tiles_4bpp = Tileset::decode(BitDepth::Bpp4, &bytes_4bpp)?;
+    let sprite_tiles_4bpp = press_start_tileset(PRESS_START_ID, press_start_image)?;
 
     Ok((sprite_tiles_4bpp, sprite_tiles_8bpp))
+}
+
+/// Packs `press_start.png` into the upstream sheet's own 41-tile raster
+/// order, so the tile bases [`sprite_entries`] emits (`PRESS_START_BASE_TILE`,
+/// `COPYRIGHT_BASE_TILE`) index the same tiles `BeginAnim` would select.
+///
+/// `gbagfx` packs the sheet as a plain 20x3-tile raster
+/// (`-mwidth 4 -mheight 1`, graphics.c:1513-1515; `AdvanceMetatilePosition`
+/// at gfx.c:22-37 confirms raster order when metatileHeight == 1): row 0
+/// (Press Start) is sheet tiles 0-19, row 1 (copyright) is 20-39. Crop both
+/// rows in one sweep so the packed order matches that raster sheet, then
+/// append row 2's leading tile (40), which the copyright banner's last frame
+/// reaches.
+fn press_start_tileset(id: &'static str, image: ImageRef<'_>) -> Result<Tileset, TitleSceneError> {
+    let press_start_and_copyright_rows_h = 2 * PRESS_START_FRAME_H;
+    let mut bytes_4bpp = crop_and_pack_tile_bytes(
+        id,
+        image,
+        0,
+        0,
+        PRESS_START_SHEET_W as usize,
+        press_start_and_copyright_rows_h,
+        BitDepth::Bpp4,
+    )?;
+    bytes_4bpp.extend(crop_and_pack_tile_bytes(
+        id,
+        image,
+        0,
+        press_start_and_copyright_rows_h,
+        BitDepth::TILE_DIM,
+        PRESS_START_FRAME_H,
+        BitDepth::Bpp4,
+    )?);
+    let tileset = Tileset::decode(BitDepth::Bpp4, &bytes_4bpp)?;
+    debug_assert_eq!(tileset.len(), usize::from(PRESS_START_SHEET_TILES));
+    Ok(tileset)
 }
 
 fn sprite_palette_from_refs(
