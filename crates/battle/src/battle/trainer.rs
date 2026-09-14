@@ -233,7 +233,10 @@ impl TrainerContext {
         self.bench.len()
     }
 
-    /// Returns the remaining party members in send-out order.
+    /// Returns the remaining party members in party order. A forced
+    /// replacement does not take them front to back: `send_out_next`
+    /// picks by matchup first and falls back to this order only when both
+    /// suitability passes decline.
     #[must_use]
     pub fn bench(&self) -> &[BattlePokemon] {
         &self.bench
