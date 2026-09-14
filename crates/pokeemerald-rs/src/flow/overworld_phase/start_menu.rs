@@ -105,6 +105,8 @@ impl OverworldPhase {
             return false;
         }
 
+        self.take_field_lock();
+
         // Background tile animation keeps running while a menu owns the
         // frame, exactly as it does while a message box does
         // ([`OverworldPhase::tick`]'s own docs: upstream's
