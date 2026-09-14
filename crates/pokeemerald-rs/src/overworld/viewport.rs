@@ -317,8 +317,6 @@ pub(super) fn build_tilemaps(
 ) -> FrameViewport {
     let (base_x, base_y) = player.position();
 
-    // Padding follows the committed step direction, not mutable facing; see
-    // `camera_lag_px`'s doc comment for the upstream citation.
     let movement_delta = player.step_direction().map_or((0, 0), Direction::delta);
     let horizontal_step = movement_delta.0;
     let vertical_step = movement_delta.1;
