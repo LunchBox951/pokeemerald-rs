@@ -608,11 +608,7 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
 }
 
 /// Upstream's `STATUS1_POISON` case does not guard Guts
-/// (`battle_script_commands.c:2299-2340`); the ability only reads a
-/// poisoned holder's own status when calculating its physical Attack
-/// (`pokemon.c:3211-3212`), so Poison Sting newly poisoning a Guts holder
-/// is admitted, and that same holder's next physical hit observes the
-/// modelled boost (`battle::ability::guts_attack`).
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
 fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
     let dex = Dex::new();
@@ -630,11 +626,8 @@ fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
         "fixture sanity: personality 25 fields the secondary ability slot"
     );
 
-    // Battle::new's turn number, this turn's own turn number, the enemy's
-    // single-move selection, the faster Milotic's Poison Sting (accuracy,
-    // no crit, best roll, effect-chance draw under 30 -- lands the
-    // poison), then the newly poisoned Makuhita's own Tackle (accuracy, no
-    // crit, best roll, discarded effect-chance draw).
+    // Battle::new, turn start, and enemy selection, then each mover's
+    // accuracy/crit/damage/effect-chance draws (`secondary::spend_effect_chance_draw`).
     let mut rng = SequenceRng::new([
         0,
         0,
@@ -689,11 +682,7 @@ fn poison_sting_newly_poisons_a_guts_defender_who_then_hits_harder() {
 }
 
 /// Upstream's `STATUS1_POISON` case does not guard Marvel Scale
-/// (`battle_script_commands.c:2299-2340`); the ability only reads a
-/// poisoned holder's own status when calculating its physical Defense
-/// (`pokemon.c:3213-3214`), so Poison Sting newly poisoning a Marvel Scale
-/// holder is admitted, and a later physical hit against that holder
-/// observes the modelled reduction (`battle::ability::marvel_scale_defense`).
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
 fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage() {
     let dex = Dex::new();
@@ -705,15 +694,9 @@ fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage
         "fixture sanity: the only ability slot fields Marvel Scale"
     );
 
-    // Battle::new's turn number, turn one's own turn number, the enemy's
-    // single-move selection, the faster Milotic's Tackle against the player
-    // (no crit, worst roll, to leave headroom for the second turn's own
-    // Tackle), then the player's Poison Sting (accuracy, no crit, worst
-    // roll, effect-chance draw under 30 -- lands the poison). Turn two:
-    // this turn's own turn number, the enemy's selection, the poisoned
-    // Milotic's own Tackle against the player (no crit, worst roll), then
-    // the player's Tackle against the poisoned Milotic (accuracy, no crit,
-    // best roll, to reproduce the pinned Marvel Scale damage figure).
+    // Battle::new, then two turns' worth of turn start, enemy selection,
+    // and each mover's accuracy/crit/damage/effect-chance draws
+    // (`secondary::spend_effect_chance_draw`).
     let mut rng = SequenceRng::new([
         0,
         0,

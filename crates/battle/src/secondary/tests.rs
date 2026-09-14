@@ -584,11 +584,7 @@ fn a_shed_skin_defender_is_refused() {
 }
 
 /// Upstream's `STATUS1_POISON` case does not guard Guts
-/// (`battle_script_commands.c:2299-2340`), and the ability's only effect —
-/// reading a poisoned attacker's Attack in damage calculation
-/// (`pokemon.c:3211-3212`) — is modelled by
-/// [`crate::pokemon::BattlePokemon::attacking_stat`], so newly poisoning a
-/// Guts holder is admitted.
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
 fn a_guts_defender_is_admitted() {
     let dex = Dex::new();
@@ -602,11 +598,7 @@ fn a_guts_defender_is_admitted() {
 }
 
 /// Upstream's `STATUS1_POISON` case does not guard Marvel Scale
-/// (`battle_script_commands.c:2299-2340`), and the ability's only effect —
-/// reading a poisoned defender's Defense in damage calculation
-/// (`pokemon.c:3213-3214`) — is modelled by
-/// [`crate::pokemon::BattlePokemon::defending_stat`], so newly poisoning a
-/// Marvel Scale holder is admitted.
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
 fn a_marvel_scale_defender_is_admitted() {
     let dex = Dex::new();
