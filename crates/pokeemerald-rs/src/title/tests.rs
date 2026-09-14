@@ -525,12 +525,8 @@ fn sprite_entries_convert_upstream_centers_to_oam_origins() {
 
 #[test]
 fn press_start_and_copyright_entries_use_upstream_anim_frame_tiles() {
-    // `sOamAnimCmds` selects sheet tiles 1,5,9,13,17 for the Press Start
-    // segments and 21,25,29,33,37 for the copyright segments
-    // (title_screen.c:214-262), and `BeginAnim` assigns that value straight
-    // to `oam.tileNum` with no scaling (sprite.c:919-937). Bases 0 and 20
-    // reuse the sheet's blank leading tile as the first frame instead,
-    // shifting both banners' artwork 8px right (issue #1156).
+    // `sOamAnimCmds`'s frames select these exact tiles (title_screen.c:214-262,
+    // sprite.c:936); bases 0 and 20 shifted both banners 8px right (#1156).
     let entries = sprite_entries(0);
     let press_start: Vec<_> = entries[2..2 + NUM_PRESS_START_FRAMES]
         .iter()
