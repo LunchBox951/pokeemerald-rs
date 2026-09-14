@@ -583,29 +583,31 @@ fn a_shed_skin_defender_is_refused() {
     );
 }
 
+/// Upstream's `STATUS1_POISON` case does not guard Guts
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
-fn a_guts_defender_is_refused() {
+fn a_guts_defender_is_admitted() {
     let dex = Dex::new();
     let attacker = mon(&dex, ZIGZAGOON);
     let defender = mon(&dex, MACHOP);
     assert_eq!(defender.ability(), AbilityId::GUTS);
     assert_eq!(
         ensure_admissible(&dex, POISON_STING, &attacker, &defender),
-        Err(BattleError::UnportedAbilityInteraction(AbilityId::GUTS))
+        Ok(())
     );
 }
 
+/// Upstream's `STATUS1_POISON` case does not guard Marvel Scale
+/// (`battle_script_commands.c:2299-2340`).
 #[test]
-fn a_marvel_scale_defender_is_refused() {
+fn a_marvel_scale_defender_is_admitted() {
     let dex = Dex::new();
     let attacker = mon(&dex, ZIGZAGOON);
     let defender = mon(&dex, MILOTIC);
     assert_eq!(defender.ability(), AbilityId::MARVEL_SCALE);
     assert_eq!(
         ensure_admissible(&dex, POISON_STING, &attacker, &defender),
-        Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::MARVEL_SCALE
-        ))
+        Ok(())
     );
 }
 
