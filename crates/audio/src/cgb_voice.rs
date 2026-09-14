@@ -191,6 +191,9 @@ struct StereoRouting {
     left: u8,
     velocity: u8,
     rhythm_pan: i8,
+    /// `chan->pan`: recomputed at every envelope boundary (`recompute_pan`'s
+    /// doc), independent of whether it has reached the rendered route yet.
+    calculated_pan: Panning,
     right_enabled: bool,
     left_enabled: bool,
 }
@@ -202,10 +205,12 @@ impl StereoRouting {
             left: 0,
             velocity,
             rhythm_pan,
+            calculated_pan: Panning::Right,
             right_enabled: false,
             left_enabled: false,
         };
         routing.update_volumes(track_right, track_left);
+        routing.recompute_pan();
         routing.commit_pan();
         routing
     }
@@ -218,12 +223,17 @@ impl StereoRouting {
         self.left = channel_volume(track_left, pan_left, self.velocity);
     }
 
-    /// Recompute panning from the latest side volumes and commit it to the
-    /// rendered route, matching `CgbModVol`'s call to `CgbPan` (`m4a.c:878-923`).
+    /// Recompute `chan->pan` from the latest side volumes, matching `CgbPan`
+    /// (`m4a.c:878-901`); by itself this moves nothing audible (`commit_pan`'s doc).
+    fn recompute_pan(&mut self) {
+        self.calculated_pan = cgb_pan(self.right, self.left);
+    }
+
+    /// Commit the last-recomputed pan to the rendered route, matching the
+    /// `CGB_CHANNEL_MO_VOL` NR51 write (`m4a.c:1205-1208`).
     fn commit_pan(&mut self) {
-        let panning = cgb_pan(self.right, self.left);
-        self.right_enabled = matches!(panning, Panning::Right | Panning::Both);
-        self.left_enabled = matches!(panning, Panning::Left | Panning::Both);
+        self.right_enabled = matches!(self.calculated_pan, Panning::Right | Panning::Both);
+        self.left_enabled = matches!(self.calculated_pan, Panning::Left | Panning::Both);
     }
 
     fn envelope_goal(self) -> u8 {
@@ -604,13 +614,18 @@ impl CgbVoice {
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
-        let volume_before_step = self.envelope.volume();
-        let retriggered_by_transition = self.envelope.step_frame(extra_envelope_iteration);
-        // `CgbModVol` runs on every `envelopeCounter == 0` iteration, not
-        // only a retrigger-worthy one, e.g. a bare sustain refresh
-        // (`m4a.c:1077-1085`); a paced step changes `volume` only there, so
-        // reusing it catches that boundary too (a bare live write does not).
-        if retriggered_by_transition || volume_before_step != self.envelope.volume() {
+        let (retriggered_by_transition, envelope_boundary) =
+            self.envelope.step_frame(extra_envelope_iteration);
+        // `CgbModVol` recomputes `chan->pan` at every boundary, transition or
+        // not (`m4a.c:1077-1085`); by itself this writes nothing audible.
+        if envelope_boundary {
+            self.routing.recompute_pan();
+        }
+        // NR51 moves only under `CGB_CHANNEL_MO_VOL`: a transition, a live
+        // write (using whatever pan was last recomputed), or, Wave only,
+        // any bare boundary (`m4a.c:1081-1082`, `:1205-1208`).
+        let is_wave = matches!(self.channel, CgbChannelNumber::Wave);
+        if retriggered_by_transition || retriggered_by_note_off || (is_wave && envelope_boundary) {
             self.routing.commit_pan();
         }
         let hardware_write = retriggered_by_note_off || retriggered_by_transition;
@@ -1578,10 +1593,17 @@ mod tests {
             "update_volumes alone, matching ChnVolSetAsm, must not move the committed route"
         );
 
+        routing.recompute_pan();
+        assert!(
+            routing.right_enabled && routing.left_enabled,
+            "recompute_pan alone, matching CgbPan's write to chan->pan, must not move the \
+             rendered route either"
+        );
+
         routing.commit_pan();
         assert!(
             routing.right_enabled && !routing.left_enabled,
-            "commit_pan must reroute to the hard-right pan the latest volumes now resolve to"
+            "commit_pan must reroute to the hard-right pan the latest recompute resolved to"
         );
     }
 
@@ -1595,36 +1617,112 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_pan_change_commits_by_the_next_sustain_refresh() {
-        // Upstream recalculates `chan->pan` at every `envelopeCounter == 0`
-        // boundary, not only a retrigger-worthy one -- a bare sustain
-        // refresh does this too (`m4a.c:1077-1085`), and Wave alone also
-        // writes it to NR51 there (`:1081-1082`). `begin_frame` must commit
-        // a pending route by the next such refresh, driven only through the
-        // public `CgbVoice` API, not `StereoRouting::commit_pan` directly.
-        for mut voice in [
-            square_voice(CgbChannelNumber::Square1, None, TestNote::default()),
-            wave_voice(false, TestNote::default()),
-        ] {
-            let (centred_left, centred_right) = frame_side_energy(&mut voice); // enters sustain
-            assert!(
-                centred_left > 0 && centred_right > 0,
-                "sanity: a centred note must latch a both-sides pan at note-on"
-            );
+    fn a_pending_pan_change_commits_by_the_next_sustain_refresh_on_wave() {
+        // Wave alone raises `CGB_CHANNEL_MO_VOL` at every bare
+        // `envelopeCounter == 0` boundary, not only a retrigger-worthy one
+        // (`m4a.c:1081-1082`), so its rendered route must catch up with no
+        // second live write -- unlike square/noise
+        // (`a_sustained_square_holds_its_route_until_the_next_modify_volume_write`).
+        let mut voice = wave_voice(false, TestNote::default());
+        let (centred_left, centred_right) = frame_side_energy(&mut voice); // enters sustain
+        assert!(
+            centred_left > 0 && centred_right > 0,
+            "sanity: a centred note must latch a both-sides pan at note-on"
+        );
 
-            voice.set_track_volume(FULL_TRACK_VOLUME, 0);
-            let (still_left, still_right) = frame_side_energy(&mut voice);
-            assert!(
-                still_left > 0 && still_right > 0,
-                "sanity: the write's own frame still holds the latched pan"
-            );
+        voice.set_track_volume(FULL_TRACK_VOLUME, 0);
+        let (still_left, still_right) = frame_side_energy(&mut voice);
+        assert!(
+            still_left > 0 && still_right > 0,
+            "sanity: the write's own frame still holds the latched pan"
+        );
 
+        assert!(
+            frames_until_hard_right(&mut voice, 8).is_some(),
+            "the pending hard-right pan must commit by the next sustain refresh, not stay \
+             latched forever"
+        );
+    }
+
+    #[test]
+    fn an_equal_goal_hard_pan_reroute_still_commits_on_wave_at_a_sustain_refresh() {
+        // A hard-right and a hard-left route resolve to the *same* envelope
+        // goal of 15 (`cgb_envelope_goal`, `cgb_envelope.rs`), so a flat
+        // sustain refresh reassigns the volume it already holds and reports
+        // no transition. Upstream still recomputes `chan->pan` on that
+        // boundary regardless of whether the volume moved (`m4a.c:1077-1085`),
+        // and Wave commits that recompute to NR51 every such boundary
+        // (`:1081-1082`), so the pending hard-left route must not stay
+        // latched forever even though the goal never changes.
+        let mut voice = wave_voice(
+            false,
+            TestNote {
+                track_right: FULL_TRACK_VOLUME,
+                track_left: 0,
+                ..TestNote::default()
+            },
+        );
+        let (left, right) = frame_side_energy(&mut voice); // enters sustain
+        assert!(
+            left == 0 && right > 0,
+            "sanity: a hard-right note must latch a right-only pan at note-on"
+        );
+        let sustain_volume = voice.envelope_volume();
+
+        voice.set_track_volume(0, FULL_TRACK_VOLUME);
+        assert_eq!(
+            voice.envelope_volume(),
+            sustain_volume,
+            "sanity: the reroute must leave the envelope numerically still"
+        );
+
+        assert!(
+            (0..16).any(|_| {
+                let (left, right) = frame_side_energy(&mut voice);
+                left > 0 && right == 0
+            }),
+            "the pending hard-left pan must commit at a sustain refresh even though the \
+             envelope goal is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_sustained_square_holds_its_route_until_the_next_modify_volume_write() {
+        // A bare sustain refresh recomputes `chan->pan` through `CgbModVol`
+        // but, for square and noise, raises no `CGB_CHANNEL_MO_VOL`
+        // (`m4a.c:1077-1085`), and NR51 -- the audible stereo route -- is
+        // rewritten only under that bit (`:1205-1208`). A sustained square
+        // whose track pan flipped hard right therefore keeps playing both
+        // sides until an actual volume write carries the recomputed pan to
+        // NR51.
+        let mut voice = square_voice(CgbChannelNumber::Square1, None, TestNote::default());
+        let (left, right) = frame_side_energy(&mut voice);
+        assert!(
+            left > 0 && right > 0,
+            "sanity: a centred note latches a both-sides pan at note-on"
+        );
+
+        // `ChnVolSetAsm`: new side volumes and a raised MO_VOL, with
+        // `chan->pan` untouched (`m4a_1.s:1508-1536`).
+        voice.set_track_volume(FULL_TRACK_VOLUME, 0);
+        // Two sustain refresh periods (7 frames each, `m4a.c:1128`).
+        for frame in 0..14 {
+            let (left, right) = frame_side_energy(&mut voice);
             assert!(
-                frames_until_hard_right(&mut voice, 8).is_some(),
-                "the pending hard-right pan must commit by the next sustain refresh, not stay \
-                 latched forever"
+                left > 0 && right > 0,
+                "frame {frame} after the write: a square's route must not move at a bare \
+                 sustain refresh, which writes no NR51"
             );
         }
+
+        // The next live volume write raises MO_VOL, which finally carries
+        // the pan `CgbModVol` already recomputed to NR51.
+        voice.set_track_volume(FULL_TRACK_VOLUME, 0);
+        let (left, right) = frame_side_energy(&mut voice);
+        assert!(
+            left == 0 && right > 0,
+            "the recomputed hard-right pan must reach the route at the next volume write"
+        );
     }
 
     #[test]
