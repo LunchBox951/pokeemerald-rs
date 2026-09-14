@@ -2,8 +2,10 @@
 //! re-verifies that handle's identity before the promoting rename, so a
 //! symlink planted at the name is refused rather than followed or published.
 //! That check is not fused to the rename: a replacement landing in the gap
-//! is still promoted, and off Windows nothing confirms identity past a plain
-//! regular-file test.
+//! is still promoted. On Windows the hold has to be released before the
+//! rename, and past that point nothing can confirm identity, so a rename that
+//! then fails leaves the staging file in place rather than unlinking a name
+//! something else may have taken.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -89,14 +91,29 @@ fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<b
     Ok((staged.dev(), staged.ino()) == (found.dev(), found.ino()))
 }
 
-/// Whether `found` describes the very file `hold` holds open. Off unix there
-/// is no identity to read back, so the answer rests on what the hold forbids
-/// (see [`create_new_exclusive`]): on Windows it forbids everything, so the
-/// name cannot have come to mean another file while it lives.
-#[cfg(not(unix))]
+/// Whether `found` describes the very file `hold` holds open. Windows reads
+/// back no identity, so the answer rests on what the hold forbids (see
+/// [`create_new_exclusive`]): while it lives it forbids everything, so the
+/// name cannot have come to mean another file. Once released, no answer is
+/// available, and that is reported rather than guessed.
+#[cfg(windows)]
+fn is_the_held_file(hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
+    if hold.is_some() {
+        Ok(true)
+    } else {
+        Err(std::io::Error::other(
+            "the staging hold was released, so the file's identity can no longer be confirmed",
+        ))
+    }
+}
+
+/// Whether `found` describes the very file `hold` holds open. With neither
+/// an inode nor a sharing hold to go on, a plain regular-file test is all
+/// there is.
+#[cfg(not(any(unix, windows)))]
 #[expect(
     clippy::unnecessary_wraps,
-    reason = "one signature for both platforms; only the unix arm can fail to read an identity"
+    reason = "one signature for every platform; only the unix and windows arms can fail to read an identity"
 )]
 fn is_the_held_file(_hold: &Hold, _found: &std::fs::Metadata) -> std::io::Result<bool> {
     Ok(true)

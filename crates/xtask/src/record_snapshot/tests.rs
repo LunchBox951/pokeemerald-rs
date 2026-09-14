@@ -617,3 +617,38 @@ fn a_planted_pointer_symlink_is_never_written_through() {
     drop(bystander_guard);
     drop(out_guard);
 }
+
+/// A promoting rename that fails must not turn into an unlink of whatever
+/// now holds the staging name. On unix the held handle's inode confirms the
+/// file is still the staged one, so it is removed; on Windows the hold had
+/// to be released for the rename, nothing can confirm identity afterwards,
+/// and the file is left in place and reported.
+#[test]
+fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() {
+    let dir = scratch_path("failed-publish");
+    let _guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let unreachable_dest = dir.join("missing-parent").join("pointer");
+
+    let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+    let error = staged.publish(&unreachable_dest).unwrap_err();
+
+    if cfg!(windows) {
+        assert!(
+            staging_path.symlink_metadata().is_ok(),
+            "Windows cannot re-confirm ownership once the hold is released, so the staging file must stay"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&staging_path.display().to_string()),
+            "the error must name the staging file left behind: {error}"
+        );
+    } else {
+        assert!(
+            staging_path.symlink_metadata().is_err(),
+            "the held handle proves the staging file is still ours, so it must be removed: {error}"
+        );
+    }
+}
