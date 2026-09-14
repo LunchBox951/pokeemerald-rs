@@ -182,6 +182,10 @@ impl OverworldPhase {
     ///
     /// `Self::synthetic_start_menu` lets a test choose a menu that really
     /// builds, or a build that really fails, with no local pack involved.
+    ///
+    /// Bordered with `self.save2.options_window_frame_type` -- see
+    /// `crate::start_menu::chrome::StartMenuChrome::from_pack` for which
+    /// frame that is and why.
     pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
         #[cfg(test)]
         match self.synthetic_start_menu {
@@ -193,7 +197,11 @@ impl OverworldPhase {
             super::SyntheticStartMenu::Fails => return None,
             super::SyntheticStartMenu::RealPack => {}
         }
-        match start_menu::open(self.pack_source, self.start_menu_cursor) {
+        match start_menu::open(
+            self.pack_source,
+            self.start_menu_cursor,
+            self.save2.options_window_frame_type,
+        ) {
             Ok(opened) => Some(opened),
             // The same "log-or-ignore is fine" policy [`crate::flow`]
             // applies to every other pack load: a missing pack must not

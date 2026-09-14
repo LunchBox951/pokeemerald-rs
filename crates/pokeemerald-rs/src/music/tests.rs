@@ -302,7 +302,27 @@ mod synthetic_pack {
 
     use crate::music::load_song_from_pack;
 
-    fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
+    struct TempPackGuard {
+        path: std::path::PathBuf,
+    }
+
+    impl TempPackGuard {
+        fn new(path: std::path::PathBuf) -> Self {
+            Self { path }
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempPackGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+
+    fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> TempPackGuard {
         const PACK_MAGIC: &[u8; 8] = b"PKMRPACK";
         // Bound to the live format version rather than a hardcoded number so
         // this synthetic pack keeps matching what `pack_format`'s reader
@@ -341,8 +361,10 @@ mod synthetic_pack {
             "pokeemerald-rs-music-test-{}-{test_name}.pack",
             std::process::id()
         ));
-        std::fs::write(&path, bytes).expect("scratch pack must be writable");
-        path
+        // Own the path before writing so a write panic still cleans up.
+        let temp_pack = TempPackGuard::new(path);
+        std::fs::write(temp_pack.path(), bytes).expect("scratch pack must be writable");
+        temp_pack
     }
 
     fn flat_envelope() -> Envelope {
@@ -390,13 +412,15 @@ mod synthetic_pack {
         .expect("four slots is well under VOICE_SLOT_COUNT")
     }
 
-    fn pack_with_song(test_name: &str, reverb: Option<u8>) -> AssetPack {
+    // The returned guard outlives the pack in the caller's scope so the
+    // scratch file is removed on every exit path, panics included.
+    fn pack_with_song(test_name: &str, reverb: Option<u8>) -> (AssetPack, TempPackGuard) {
         let vg_id = "audio/voicegroup/fixtest";
         let wave_id = "audio/sample/fixtest_wave";
         let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), 0, reverb, vec![vec![]])
             .expect("a one-empty-track song is well-formed");
         let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
-        let path = write_pack(
+        let temp_pack = write_pack(
             test_name,
             &[
                 ("audio/song/fixtest", song.encode()),
@@ -404,12 +428,13 @@ mod synthetic_pack {
                 (wave_id, sample.encode()),
             ],
         );
-        AssetPack::load(&path).expect("the synthetic pack must parse")
+        let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+        (pack, temp_pack)
     }
 
     #[test]
     fn cgb_fixed_rate_tags_survive_loading() {
-        let pack = pack_with_song("fixed-rate", None);
+        let (pack, _pack_guard) = pack_with_song("fixed-rate", None);
         let song = load_song_from_pack(&pack, "fixtest").expect("the synthetic song loads");
 
         match song.voice(0) {
@@ -444,13 +469,15 @@ mod synthetic_pack {
         }
     }
 
-    fn pack_with_priority(test_name: &str, priority: u8) -> AssetPack {
+    // The returned guard outlives the pack in the caller's scope so the
+    // scratch file is removed on every exit path, panics included.
+    fn pack_with_priority(test_name: &str, priority: u8) -> (AssetPack, TempPackGuard) {
         let vg_id = "audio/voicegroup/fixtest";
         let wave_id = "audio/sample/fixtest_wave";
         let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), priority, None, vec![vec![]])
             .expect("a one-empty-track song is well-formed");
         let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
-        let path = write_pack(
+        let temp_pack = write_pack(
             test_name,
             &[
                 ("audio/song/fixtest", song.encode()),
@@ -458,37 +485,62 @@ mod synthetic_pack {
                 (wave_id, sample.encode()),
             ],
         );
-        AssetPack::load(&path).expect("the synthetic pack must parse")
+        let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+        (pack, temp_pack)
     }
 
     #[test]
     fn loading_carries_the_header_priority_into_the_runtime_song() {
-        let plain = load_song_from_pack(&pack_with_priority("prio-zero", 0), "fixtest")
-            .expect("the synthetic song loads");
+        let (plain_pack, _plain_guard) = pack_with_priority("prio-zero", 0);
+        let plain = load_song_from_pack(&plain_pack, "fixtest").expect("the synthetic song loads");
         assert_eq!(plain.priority(), 0);
 
-        let raised = load_song_from_pack(&pack_with_priority("prio-200", 200), "fixtest")
-            .expect("the synthetic song loads");
+        let (raised_pack, _raised_guard) = pack_with_priority("prio-200", 200);
+        let raised =
+            load_song_from_pack(&raised_pack, "fixtest").expect("the synthetic song loads");
         assert_eq!(raised.priority(), 200);
     }
 
     #[test]
     fn loading_preserves_the_inherit_vs_explicit_zero_reverb_distinction() {
-        let unset = load_song_from_pack(&pack_with_song("reverb-unset", None), "fixtest")
-            .expect("the synthetic song loads");
+        let (unset_pack, _unset_guard) = pack_with_song("reverb-unset", None);
+        let unset = load_song_from_pack(&unset_pack, "fixtest").expect("the synthetic song loads");
         assert_eq!(
             unset.reverb_override(),
             None,
             "a header with reverb unset must load as no-override, not as an explicit 0"
         );
 
-        let zero = load_song_from_pack(&pack_with_song("reverb-zero", Some(0)), "fixtest")
-            .expect("the synthetic song loads");
+        let (zero_pack, _zero_guard) = pack_with_song("reverb-zero", Some(0));
+        let zero = load_song_from_pack(&zero_pack, "fixtest").expect("the synthetic song loads");
         assert_eq!(zero.reverb_override(), Some(0));
 
-        let level = load_song_from_pack(&pack_with_song("reverb-77", Some(77)), "fixtest")
-            .expect("the synthetic song loads");
+        let (level_pack, _level_guard) = pack_with_song("reverb-77", Some(77));
+        let level = load_song_from_pack(&level_pack, "fixtest").expect("the synthetic song loads");
         assert_eq!(level.reverb_override(), Some(77));
+    }
+
+    #[test]
+    fn synthetic_pack_helpers_leave_no_scratch_file_behind_on_panic() {
+        // Every synthetic pack these helpers write must be gone once the test
+        // body exits, unwinding included, so the shared temp dir never
+        // accumulates leftover fixtures across runs.
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-music-test-{}-unwind-cleanup.pack",
+            std::process::id()
+        ));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (_pack, _guard) = pack_with_song("unwind-cleanup", None);
+            assert!(path.exists(), "the scratch pack must exist while in scope");
+            panic!("deliberate panic to exercise unwind cleanup");
+        }));
+
+        assert!(result.is_err(), "the inner closure must have panicked");
+        assert!(
+            !path.exists(),
+            "the guard must remove the scratch pack even when the test panics"
+        );
     }
 }
 

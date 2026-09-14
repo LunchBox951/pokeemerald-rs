@@ -242,7 +242,15 @@ fn settling_a_prompt_does_not_advance_the_shared_rng() {
     assert!(battle.pending_move_learn().is_some());
 
     let before = rng.state();
-    let _ = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle);
+    assert!(
+        events.contains(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
+        "the RNG-state check below only means anything once the prompt is answered"
+    );
+    assert!(
+        battle.pending_move_learn().is_none(),
+        "settling must clear the prompt, not leave it pending"
+    );
     assert_eq!(
         rng.state(),
         before,

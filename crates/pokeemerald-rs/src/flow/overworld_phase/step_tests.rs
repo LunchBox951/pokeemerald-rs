@@ -1066,3 +1066,30 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
          (field_control_avatar.c:182), even when the menu would have built"
     );
 }
+
+/// The same ordering as
+/// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`],
+/// driven through [`crate::flow::advance_scene`]'s dispatch rather than
+/// [`OverworldPhase::step`] directly.
+#[test]
+fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    let mut slot = crate::game_save::SaveSlot::disabled();
+
+    let (next, _frame) = crate::flow::advance_scene(
+        crate::flow::AppScene::Overworld(Box::new(phase)),
+        pressed(Buttons::A | Buttons::START),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+
+    let crate::flow::AppScene::Overworld(phase) = next else {
+        panic!("a START press must leave the overworld in place");
+    };
+    assert!(
+        phase.start_menu().is_none(),
+        "the dispatch must weigh a fresh START inside step, behind the \
+         same-frame interaction -- not open the menu ahead of it"
+    );
+}
