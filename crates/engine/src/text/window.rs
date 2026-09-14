@@ -270,11 +270,21 @@ impl MessageBoxLayout {
         tiles
     }
 
-    // Deriving the far column from the near one keeps a clipped span collapsed
-    // on the limit instead of shifting it in off an already saturated far edge.
+    // The far column is the clamp of the exact requested column, never a
+    // chain of saturating steps, so no intermediate clip shifts it inward.
     fn last_content_column(&self) -> i32 {
-        self.tilemap_left
-            .saturating_add(self.content_width.saturating_sub(1))
+        let exact = i64::from(self.tilemap_left) + i64::from(self.content_width) - 1;
+        i32::try_from(exact.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(i32::MAX)
+    }
+
+    // The interior spans the outside column plus the content; an empty
+    // logical span stays empty even when the clip collapses its endpoints.
+    fn interior_fill_width(&self, inside: i32, corner: i32) -> i32 {
+        if self.content_width < 0 {
+            0
+        } else {
+            corner.saturating_sub(inside).saturating_add(1)
+        }
     }
 
     fn top_and_fill_rectangles(&self) -> [TileRect; 8] {
@@ -289,7 +299,7 @@ impl MessageBoxLayout {
         let corner = self.last_content_column();
         let top_row = top.saturating_sub(1);
         let edge_width = self.content_width.saturating_sub(1);
-        let fill_width = corner.saturating_sub(inside).saturating_add(1);
+        let fill_width = self.interior_fill_width(inside, corner);
         let fill_height = self.content_height.saturating_add(1);
 
         [
@@ -972,6 +982,42 @@ mod tests {
             1,
             dialogue_frame::RIGHT_CORNER,
         )));
+    }
+
+    #[test]
+    fn frame_tiles_places_the_corner_at_the_exact_column_past_a_width_underflow() {
+        // `i32::MAX + i32::MIN - 1` is `-2`, representable; a saturating
+        // chain would keep the width at `i32::MIN` and land the corner at `-1`.
+        let layout = MessageBoxLayout {
+            tilemap_left: i32::MAX,
+            tilemap_top: 0,
+            content_width: i32::MIN,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert!(tiles.contains(&normal_tile(-2, -1, dialogue_frame::RIGHT_CORNER)));
+        assert!(tiles.contains(&normal_tile(-1, -1, dialogue_frame::RIGHT_CAP)));
+        assert!(!tiles.contains(&normal_tile(-1, -1, dialogue_frame::RIGHT_CORNER)));
+        assert!(!tiles
+            .iter()
+            .any(|tile| tile.tile == dialogue_frame::INTERIOR));
+    }
+
+    #[test]
+    fn frame_tiles_keeps_a_negative_width_interior_empty_at_the_negative_limit() {
+        // A width of `-1` has no interior anywhere; the clip collapsing both
+        // fill endpoints onto `i32::MIN` must not manufacture one cell.
+        let layout = MessageBoxLayout {
+            tilemap_left: i32::MIN,
+            tilemap_top: 0,
+            content_width: -1,
+            content_height: 1,
+        };
+        let tiles = layout.frame_tiles();
+        assert!(!tiles
+            .iter()
+            .any(|tile| tile.tile == dialogue_frame::INTERIOR));
+        assert!(tiles.contains(&normal_tile(i32::MIN, 0, dialogue_frame::WING_COLUMN)));
     }
 
     #[test]
