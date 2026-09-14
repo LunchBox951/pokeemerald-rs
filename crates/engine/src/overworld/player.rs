@@ -24,6 +24,7 @@ pub struct PlayerState {
     facing: Direction,
     movement_streak_active: bool,
     transit_frames: Option<u8>,
+    transit_direction: Option<Direction>,
 }
 
 /// The result of one directional-input poll.
@@ -102,6 +103,7 @@ impl PlayerState {
             facing,
             movement_streak_active: false,
             transit_frames: None,
+            transit_direction: None,
         }
     }
 
@@ -149,12 +151,22 @@ impl PlayerState {
         self.transit_frames.is_some()
     }
 
+    /// Returns the direction committed for the active tile crossing, or `None` at rest.
+    ///
+    /// Unlike [`facing`](Self::facing), this is fixed for the crossing's whole
+    /// duration: [`face`](Self::face) may change facing mid-step, but never this.
+    #[must_use]
+    pub const fn step_direction(&self) -> Option<Direction> {
+        self.transit_direction
+    }
+
     /// Advances an active tile crossing by one frame; a stationary player remains stationary.
     pub fn tick(&mut self) {
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
             if *frames >= WALK_FRAMES_PER_TILE {
                 self.transit_frames = None;
+                self.transit_direction = None;
             }
         }
     }
@@ -315,6 +327,7 @@ impl PlayerState {
             });
         self.position = landing.position;
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
+        self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
         Ok(())
     }
@@ -435,6 +448,7 @@ mod tests {
         assert_eq!(player.facing(), Direction::North);
         assert_eq!(player.position(), (2, 2));
         assert!(!player.in_transit());
+        assert_eq!(player.step_direction(), None);
 
         let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
         let layout = assets::MapLayout {
@@ -457,11 +471,17 @@ mod tests {
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         let progress = player.step_progress();
+        assert_eq!(player.step_direction(), Some(Direction::South));
         player.face(Direction::West);
         assert_eq!(player.facing(), Direction::West);
         assert_eq!(player.position(), (2, 3), "the committed step is untouched");
         assert!(player.in_transit());
         assert_eq!(player.step_progress(), progress);
+        assert_eq!(
+            player.step_direction(),
+            Some(Direction::South),
+            "facing does not replace the committed step direction"
+        );
     }
 
     #[test]
