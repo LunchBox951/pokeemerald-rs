@@ -29,9 +29,10 @@
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
+use battle::status1::poison_residual_damage;
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
-    MoveLearnDecision, PlayerAction, PpBonuses,
+    MoveLearnDecision, PlayerAction, PpBonuses, Status1,
 };
 
 /// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
@@ -46,6 +47,11 @@ const TORCHIC: u16 = 280;
 const MUDKIP: u16 = 283;
 const ZIGZAGOON: u16 = 288;
 const PICHU: u16 = 172;
+/// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
+const CHANSEY: u16 = 113;
+/// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
+/// [`CHANSEY`].
+const KANGASKHAN: u16 = 115;
 
 const POUND: MoveId = MoveId(1);
 const SCRATCH: MoveId = MoveId(10);
@@ -1243,4 +1249,69 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
         .unwrap_err(),
         BattleError::UnknownTrainer(TrainerId(60_000))
     );
+}
+
+/// The replacement selector only runs once `HandleAction_ActionFinished` has
+/// cleared `gCurrentMove` (`pokeemerald/src/battle_util.c:657`-`:670`), ahead
+/// of `BattleTurnPassed`'s own residual pass
+/// (`pokeemerald/src/battle_main.c:3956`-`:3969`) -- see the ledger's
+/// `GetMostSuitableMonToSwitchInto` entry for what a cleared versus stale
+/// base damage does to the most-damage pass's outcome.
+#[test]
+fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
+    let dex = Dex::new();
+    // Chansey: pure Normal, so nothing on the bench is super effective and
+    // the selector always reaches the most-damage pass; slower than
+    // Kangaskhan, so the turn's last action -- and so the stale move -- is
+    // the player's own Mega Kick. Level 100 keeps the knockout's award from
+    // deferring the send-out behind a level-up prompt.
+    let player = max_iv_mon(&dex, CHANSEY, 100, vec![MEGA_KICK]);
+    let mut lead = max_iv_mon(&dex, KANGASKHAN, 100, vec![GROWL]);
+    lead.set_status1(Status1::Poisoned);
+    let residual = poison_residual_damage(lead.stats().max_hp);
+    lead.apply_damage(lead.stats().max_hp - residual);
+    let party = vec![
+        lead,
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let tick_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("the lead must fall to the residual, not the hit: {events:?}"));
+    let sent_out_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .unwrap_or_else(|| panic!("the bench replaces the fallen lead: {events:?}"));
+    assert!(
+        tick_index < sent_out_index,
+        "the send-out is the residual pass's, not the action phase's: {events:?}"
+    );
+    assert_eq!(
+        events[sent_out_index],
+        BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        },
+        "a cleared gCurrentMove scores every candidate off the floor base, \
+         so Tackle's STAB keeps party-order-first Pichu: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
 }

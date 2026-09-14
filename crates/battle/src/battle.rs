@@ -350,6 +350,11 @@ impl Battle {
             // which every path to the residual pass crosses first
             // (`src/battle_util.c:1912`-`:1923`).
             if let Some(order) = self.pending_residual_order.take() {
+                // Upstream zeroes `gCurrentMove` as each action closes, before
+                // the residual pass runs, regardless of a move-learn prompt
+                // deferring that pass to this later call
+                // (`pokeemerald/src/battle_util.c:658`-`:671`).
+                self.last_move_used = MOVE_NONE;
                 self.residual_effects(order, &mut events);
                 self.handle_fainted_mons(&mut events)?;
             }
@@ -579,6 +584,9 @@ impl Battle {
             self.pending_residual_order = Some(order);
             return Ok(());
         }
+        // Upstream zeroes `gCurrentMove` as each action closes, before the
+        // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
+        self.last_move_used = MOVE_NONE;
         self.residual_effects(order, events);
         self.handle_fainted_mons(events)
     }
