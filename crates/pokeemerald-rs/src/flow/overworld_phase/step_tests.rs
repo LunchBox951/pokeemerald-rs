@@ -1115,3 +1115,108 @@ fn an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
         "no walk animation was ever started -- the arrow warp claimed the frame"
     );
 }
+
+/// Issue #1127's remaining arrow half: the same `previous_elevation()`
+/// contract for the *post-movement* arrow re-poll (`step.rs:620-627`), the
+/// lookup a crossing reaches on its own drain frame.
+/// [`an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation`]
+/// cannot reach it: a player already standing on the tile takes the
+/// pre-movement preempt instead, and that preempt short-circuits this poll.
+///
+/// Pack-gated, unlike its two siblings, because the movement has already
+/// happened by the time this poll runs: there is no preempted step left to
+/// observe, and no suppressed encounter roll either -- upstream runs
+/// `CheckStandardWildEncounter` (`field_control_avatar.c:162`) *ahead* of
+/// `TryArrowWarp` (`:164-168`), and this port with it. The one observation
+/// a fired post-movement arrow warp leaves is the warp landing, and
+/// [`OverworldPhase::warp_to`] finishes through
+/// [`crate::overworld::load_room`] -- the same reason `super::warp_tests`'
+/// `a_legal_step_in_the_arrow_direction_lands_the_warp` is pack-gated.
+///
+/// `super::warp_tests`' own post-movement walk
+/// (`walking_onto_the_doormat_holding_south_exits_through_the_front_door`)
+/// crosses onto Brendan's-house doormat, whose warp event is stored at the
+/// `0` transition elevation -- the wildcard every query matches
+/// (`engine::overworld::MapRuntime::warp_event_at`), so a lookup at either
+/// elevation finds it. Oldale Town's Pokémon Center exits through the same
+/// held-direction doormat but stores both its warp events at an ordinary
+/// elevation `3`, so transplanting the transition *cell* under it (the
+/// shape `MAP_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F`'s own warp #2 really
+/// has, and the one the sibling tests above build) makes the two lookups
+/// disagree.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
+
+    const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
+    const DOORMAT: (u16, u16) = (7, 8);
+
+    // Fixture preconditions, read off the generated table rather than
+    // restated: the doormat carries a real warp event stored at an ordinary
+    // (non-transition) elevation, and it leads to the map this test watches
+    // for.
+    let events = assets::MapEventsTable::new()
+        .resolve(CENTER)
+        .expect("Oldale Town's Pokémon Center resolves in the generated map-events table");
+    let doormat = events.warp_events[0];
+    assert_eq!((doormat.x, doormat.y), (7, 8));
+    assert_eq!(
+        doormat.elevation, 3,
+        "fixture precondition: the doormat's warp event is stored at elevation 3, \
+         not the transition wildcard every query already matches"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
+        ),
+        CENTER,
+        PlayerState::new((7, 7), 3, Direction::South),
+        None,
+    );
+
+    // Down held for the whole crossing, as upstream's `heldDirection` gate
+    // requires (`field_control_avatar.c:164-168`). The step onto the
+    // doormat commits on the first frame, but the poll stays shut for every
+    // frame the walk animation is still draining
+    // (`crate::flow::wild_encounter::arrow_poll_open`).
+    for frame in 1..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, CENTER,
+            "the arrow warp must not fire mid-animation (frame {frame} of \
+             {WALK_FRAMES_PER_TILE})"
+        );
+    }
+    assert_eq!(phase.player.position(), (7, 8));
+    assert!(phase.player.in_transit());
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "fixture precondition: the landed transition cell is the collision \
+         elevation, while the retained previousElevation upstream looks warps \
+         up at is still 3"
+    );
+
+    // The drain frame: at rest on the transition cell, Down still held and
+    // still equal to the facing the frame started with, with the door check
+    // and the encounter roll both fallen through -- `TryArrowWarp`'s gate,
+    // resolved at `PlayerGetElevation()`'s retained 3
+    // (`field_player_avatar.c:1192-1195`).
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_OLDALE_TOWN"),
+        "the completed crossing's arrow warp must land -- a lookup at the \
+         collision elevation 0 misses the warp event stored at 3 and leaves \
+         the player standing on the doormat"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the warp lands the player at rest, not mid-step"
+    );
+}
