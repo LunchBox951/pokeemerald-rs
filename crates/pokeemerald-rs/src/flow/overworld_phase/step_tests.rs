@@ -301,11 +301,8 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     );
 }
 
-/// Issue #976 adjudication: upstream's field lock forces a one-frame
-/// face-direction action over an in-flight turn the moment it engages
-/// (`PlayerFreeze`, `pokeemerald/src/field_player_avatar.c:1039-1046`;
-/// `Task_FreezePlayer`, `event_object_lock.c:11-46`), so a dialog opened
-/// mid-turn must not freeze that turn's busy window along with movement.
+/// The field lock ends an in-flight turn the moment it engages
+/// (`PlayerFreeze`, `field_player_avatar.c:1039-1046`), so a dialog must not freeze it.
 #[test]
 fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
     use engine::text::Token;
@@ -335,10 +332,8 @@ fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_cl
         );
     }
 
-    // The box that A press opens, in the headless stand-in form this suite
-    // uses (`AssetPack::load_default` is unavailable here --
-    // `a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player`'s
-    // own note).
+    // The box the A press opens, in this pack-less suite's headless stand-in
+    // form.
     phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
         Token::Char('A'),
         Token::PromptClear,
@@ -360,9 +355,8 @@ fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_cl
     }
     assert!(closed, "confirming must close the synthetic dialog");
 
-    // Control returns: the first field frame after the box closes must act
-    // on the held direction, not sit inside a window frozen since before
-    // the box opened.
+    // The first field frame after the box closes must act on the held
+    // direction, not sit in a window frozen before the box opened.
     phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.player.facing(),
@@ -371,10 +365,8 @@ fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_cl
     );
 }
 
-/// The start-menu counterpart to the dialog case above: `START` also holds
-/// upstream's field lock (`ShowStartMenu`'s `LockPlayerFieldControls`,
-/// `pokeemerald/src/start_menu.c:581-591`), so it must clear a pending
-/// turn's busy window the same way.
+/// `START` holds the field lock too (`start_menu.c:581-591`), so it clears
+/// a pending turn's busy window like a dialog does.
 #[test]
 fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
     let temp = crate::flow::tests::TempSave::new("start-menu-turn-lock-976");
@@ -401,9 +393,8 @@ fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_i
         "B must have closed the synthetic menu"
     );
 
-    // Control returns: the first field frame after the menu closes must act
-    // on the held direction, not sit inside a window frozen since before
-    // the menu opened.
+    // The first field frame after the menu closes must act on the held
+    // direction, not sit in a window frozen before the menu opened.
     phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.player.facing(),

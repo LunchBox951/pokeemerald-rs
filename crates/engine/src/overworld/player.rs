@@ -12,10 +12,8 @@ use crate::event_data::EventData;
 /// Frames required for a normal on-foot step to cross one tile.
 pub const WALK_FRAMES_PER_TILE: u8 = 16;
 
-/// Frames a standstill turn busies ordinary movement input for: upstream's
-/// non-interruptible `WALK_IN_PLACE_FAST` held movement
-/// (`pokeemerald/src/field_player_avatar.c:1027-1030`,
-/// `event_object_movement.c:5704-5721`).
+/// Frames a standstill turn busies movement input for: upstream's
+/// `WALK_IN_PLACE_FAST` action (`event_object_movement.c:5704-5721`).
 pub const TURN_IN_PLACE_FRAMES: u8 = 8;
 
 /// A tile position in the active map's coordinate space.
@@ -144,10 +142,8 @@ impl PlayerState {
         self.facing = direction;
     }
 
-    /// Ends a standstill turn's busy window early: upstream's field lock
-    /// forces a one-frame face-direction action over an in-flight turn the
-    /// instant it engages (`PlayerFreeze`,
-    /// `pokeemerald/src/field_player_avatar.c:1039-1046`).
+    /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
+    /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
     pub const fn clear_turn_lock(&mut self) {
         self.turn_frames_remaining = 0;
     }
@@ -580,10 +576,8 @@ mod tests {
         assert!(!player.in_transit());
         player.tick();
 
-        // Upstream's WALK_IN_PLACE_FAST turn action busies ordinary input
-        // for TURN_IN_PLACE_FRAMES (8) frames total, one of which the turn
-        // frame itself already spent (`TURN_IN_PLACE_FRAMES` doc comment) --
-        // so the held direction stays swallowed through frames 2..=8.
+        // The turn frame itself spends one of TURN_IN_PLACE_FRAMES, so the
+        // held direction stays swallowed through frames 2..=8.
         assert_eq!(player.turn_frames_remaining(), TURN_IN_PLACE_FRAMES - 1);
         for frame in 2..=8 {
             let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);

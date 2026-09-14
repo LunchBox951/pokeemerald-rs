@@ -91,10 +91,8 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     assert_eq!(player.step_progress(), 0);
 }
 
-/// Issue #976 regression: a held direction must stay swallowed through
-/// [`engine::overworld::player::TURN_IN_PLACE_FRAMES`]'s busy window after a
-/// turn, landing its first step on the 9th [`advance_player_one_frame`]
-/// call, not the 2nd.
+/// A held direction stays swallowed through the turn's busy window and
+/// lands its first step on the 9th frame, not the 2nd.
 #[test]
 fn advance_player_one_frame_swallows_input_through_the_turns_busy_window_before_stepping() {
     let runtime = flat_runtime(5, 5);

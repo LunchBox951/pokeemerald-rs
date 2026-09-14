@@ -1028,10 +1028,8 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
 
 // -- Issue #976 adjudication: the turn lock must not survive the battle ----
 
-/// The battle counterpart to the dialog/start-menu turn-lock cases
-/// (`step_tests::a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes`,
-/// issue #976): a Route 103 rival battle must clear a pending turn's busy
-/// window too, or the first post-battle press gets swallowed.
+/// A rival battle clears a pending turn's busy window like a dialog does,
+/// or the first post-battle press is swallowed.
 #[test]
 fn a_turn_interrupted_by_the_rival_battle_does_not_freeze_the_player_afterwards() {
     let (rx, ry) = RIVAL_TILE;

@@ -42,9 +42,8 @@ impl OverworldPhase {
         true
     }
 
-    /// Takes the field lock on the frame an owner commits: upstream's
-    /// `PlayerFreeze` runs before that frame is drawn (`start_menu.c:581-591`,
-    /// `overworld.c:1465-1476`), so the turn ends before composition.
+    /// Takes the field lock on the frame an owner commits: `PlayerFreeze`
+    /// runs before that frame is drawn (`overworld.c:1465-1476`).
     pub(super) const fn take_field_lock(&mut self) {
         self.player.clear_turn_lock();
     }

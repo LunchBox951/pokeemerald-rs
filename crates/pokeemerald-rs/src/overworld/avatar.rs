@@ -380,12 +380,8 @@ mod tests {
         );
     }
 
-    /// Upstream's turn-in-place action starts `sAnim_GoFast*` on one of its two
-    /// forward-foot cells and runs it for eight frames
-    /// (`pokeemerald/src/event_object_movement.c:5704-5712,5780-5784`,
-    /// `:4582-4599` against `sStepAnimTables`' `animPos` `{1, 3, 0, 2}`); those
-    /// cells last four frames each
-    /// (`pokeemerald/src/data/object_events/object_event_anims.h:238-245`).
+    /// A turn runs `sAnim_GoFast*` from a forward-foot cell for eight frames,
+    /// four per cell (`event_object_movement.c:5780-5784`, `object_event_anims.h:238-245`).
     #[test]
     fn frame_for_animates_the_forward_foot_across_the_first_half_of_a_turn() {
         let (bytes, header, events) = flat_test_map();
