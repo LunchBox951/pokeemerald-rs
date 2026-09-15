@@ -24,17 +24,15 @@
 //!
 //! `PATT` calls a block ending in `PEND` and is expanded inline; the pack
 //! has no pattern primitive (`assets::audio`'s "Deferred commands").
-//! `GOTO` and a branching `MEMACC` carry absolute pointers, which become
-//! event indices into the same track once it is fully decoded; a target
-//! that is not a command boundary of this track is refused. `TEMPO` stores
-//! BPM halved; `PAN`, `BEND`, and `TUNE` store `64 + value`. A track ends
-//! at `FINE`.
+//! `GOTO` and branching `MEMACC` targets become event indices specialized
+//! for the incoming running status, note operands, and pattern return stack.
+//! Both conditional paths remain available to the runtime. `TEMPO` stores
+//! BPM halved; `PAN`, `BEND`, and `TUNE` store `64 + value`. Decoding ends
+//! at `FINE` or reconnects to an already decoded execution context.
 //!
 //! Rests come out of the ROM in `tools/mid2agb`'s chunking and go into the
 //! pack in [`assets::Song::new`]'s canonical shape; nothing here has to
 //! know the difference.
-
-use std::collections::BTreeMap;
 
 use assets::audio::{MemAccCondition, MemAccOp};
 use assets::{Song, SongEvent, VoiceGroupId};
@@ -42,9 +40,12 @@ use pack_format::{raw_entry, PackEntry, PackWriter};
 
 use super::check_pointer;
 use crate::error::{ImportError, SongFault};
-use crate::reader::{GbaPtr, RomReader};
+use crate::reader::RomReader;
 use crate::rom::Rom;
 use crate::roots::{AudioRoots, Roots, SongRoot};
+
+mod decode;
+use decode::{decode_track, Context};
 
 /// `gClockTable` (`pokeemerald/src/m4a_tables.c`): the tick count each
 /// rest and note opcode stands for.
@@ -96,10 +97,6 @@ const HEADER_PARTS: usize = 8;
 const REVERB_SET: u8 = 0x80;
 /// One `gSongTable` entry: header pointer, `ms`, `me`.
 const SONG_TABLE_STRIDE: usize = 8;
-/// The longest track the decoder will read, in events. A real track is a
-/// few thousand; the bound only stops a track with no `FINE` from walking
-/// the whole ROM.
-const MAX_EVENTS: usize = 1 << 20;
 
 /// Write every song.
 ///
@@ -187,16 +184,7 @@ struct Track<'r, 'a> {
     id: &'static str,
     index: usize,
     events: Vec<SongEvent>,
-    /// Where each top-level command started, by ROM offset, so a jump's
-    /// absolute pointer can become an event index.
-    boundaries: BTreeMap<usize, usize>,
-    /// Jumps waiting for their target: `(event, target offset)`.
-    jumps: Vec<(usize, usize)>,
-    /// The return offsets of the `PATT` calls in progress.
-    patterns: Vec<usize>,
-    running_status: Option<u8>,
-    key: u8,
-    velocity: u8,
+    state: Context,
 }
 
 impl Track<'_, '_> {
@@ -220,13 +208,12 @@ impl Track<'_, '_> {
         Ok((byte < CMD_WAIT).then_some(byte))
     }
 
-    /// A jump's absolute pointer, queued for resolution against the event
-    /// just pushed.
-    fn jump(&mut self, at: usize) -> Result<usize, ImportError> {
-        let target = self.reader.ptr(at)?;
-        let event = self.events.len() - 1;
-        self.jumps.push((event, target.offset()));
-        Ok(at + 4)
+    fn destination(&self, at: usize) -> Result<usize, ImportError> {
+        let target = self.reader.ptr(at)?.offset();
+        if target >= self.reader.len() {
+            return Err(self.fail(at, SongFault::JumpOutsideRom));
+        }
+        Ok(target)
     }
 
     fn push(&mut self, event: SongEvent) {
@@ -234,57 +221,10 @@ impl Track<'_, '_> {
     }
 }
 
-/// Decode one track from `start` to its `FINE`.
-fn decode_track(
-    reader: &RomReader<'_>,
-    id: &'static str,
-    index: usize,
-    start: GbaPtr,
-) -> Result<Vec<SongEvent>, ImportError> {
-    let mut track = Track {
-        reader,
-        id,
-        index,
-        events: Vec::new(),
-        boundaries: BTreeMap::new(),
-        jumps: Vec::new(),
-        patterns: Vec::new(),
-        running_status: None,
-        key: 0,
-        velocity: 0,
-    };
-    let mut at = start.offset();
-    loop {
-        if track.events.len() > MAX_EVENTS {
-            return Err(track.fail(at, SongFault::NoFine));
-        }
-        if track.patterns.is_empty() {
-            track.boundaries.entry(at).or_insert(track.events.len());
-        }
-        let byte = reader.u8(at)?;
-        let (cmd, operands) = if byte < CMD_WAIT {
-            let status = track
-                .running_status
-                .ok_or_else(|| track.fail(at, SongFault::NoRunningStatus))?;
-            (status, at)
-        } else {
-            if byte >= CMD_VOICE {
-                track.running_status = Some(byte);
-            }
-            (byte, at + 1)
-        };
-        match step(&mut track, cmd, operands)? {
-            Step::Next(next) => at = next,
-            Step::Fine => break,
-        }
-    }
-    resolve_jumps(&mut track)?;
-    Ok(track.events)
-}
-
 /// Where the decoder goes after one command.
 enum Step {
     Next(usize),
+    Branch { next: usize, target: usize },
     Fine,
 }
 
@@ -300,20 +240,17 @@ fn step(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<Step, ImportErr
             track.push(SongEvent::Fine);
             return Ok(Step::Fine);
         }
-        CMD_GOTO => {
-            track.push(SongEvent::Goto(0));
-            track.jump(at)?
-        }
+        CMD_GOTO => track.destination(at)?,
         CMD_PATT => {
-            if track.patterns.len() >= MAX_PATTERN_DEPTH {
+            if track.state.patterns.len() >= MAX_PATTERN_DEPTH {
                 return Err(track.fail(at, SongFault::PatternTooDeep));
             }
-            track.patterns.push(at + 4);
-            track.reader.ptr(at)?.offset()
+            track.state.patterns.push(at + 4);
+            track.destination(at)?
         }
-        CMD_PEND => track.patterns.pop().unwrap_or(at),
+        CMD_PEND => track.state.patterns.pop().unwrap_or(at),
         CMD_REPT => return Err(track.fail(at, SongFault::Repeat)),
-        CMD_MEMACC => memacc(track, at)?,
+        CMD_MEMACC => return memacc(track, at),
         CMD_PRIO => unary(track, at, SongEvent::Priority)?,
         CMD_TEMPO => unary(track, at, |half| SongEvent::Tempo(u16::from(half) * 2))?,
         CMD_KEYSH => unary(track, at, |b| SongEvent::KeyShift(i8::from_le_bytes([b])))?,
@@ -343,10 +280,10 @@ fn step(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<Step, ImportErr
             // compiler never elides, and the two have to agree.
             let key = track.optional(at)?;
             if let Some(key) = key {
-                track.key = key;
+                track.state.key = key;
             }
             track.push(SongEvent::EndOfTie {
-                key: Some(track.key),
+                key: Some(track.state.key),
             });
             at + usize::from(key.is_some())
         }
@@ -377,10 +314,10 @@ fn note(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<usize, ImportEr
     let mut gate = CLOCK_TABLE[usize::from(cmd - CMD_TIE)];
     let mut at = at;
     if let Some(key) = track.optional(at)? {
-        track.key = key;
+        track.state.key = key;
         at += 1;
         if let Some(velocity) = track.optional(at)? {
-            track.velocity = velocity;
+            track.state.velocity = velocity;
             at += 1;
             if let Some(extension) = track.optional(at)? {
                 gate = gate.wrapping_add(extension);
@@ -389,15 +326,15 @@ fn note(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<usize, ImportEr
         }
     }
     track.push(SongEvent::Note {
-        key: track.key,
-        velocity: track.velocity,
+        key: track.state.key,
+        velocity: track.state.velocity,
         gate,
     });
     Ok(at)
 }
 
 /// `MEMACC op addr data`, plus a pointer for the branching ops.
-fn memacc(track: &mut Track<'_, '_>, at: usize) -> Result<usize, ImportError> {
+fn memacc(track: &mut Track<'_, '_>, at: usize) -> Result<Step, ImportError> {
     let op = track.operand(at)?;
     let address = track.operand(at + 1)?;
     let data = track.operand(at + 2)?;
@@ -430,7 +367,10 @@ fn memacc(track: &mut Track<'_, '_>, at: usize) -> Result<usize, ImportError> {
                 data,
                 target: 0,
             });
-            return track.jump(after);
+            return Ok(Step::Branch {
+                next: after + 4,
+                target: track.destination(after)?,
+            });
         }
         other => return Err(track.fail(at, SongFault::UnknownMemAccOp(other))),
     };
@@ -439,24 +379,7 @@ fn memacc(track: &mut Track<'_, '_>, at: usize) -> Result<usize, ImportError> {
         address,
         data,
     });
-    Ok(after)
-}
-
-/// Turn every queued jump's pointer into the index of the command it
-/// names.
-fn resolve_jumps(track: &mut Track<'_, '_>) -> Result<(), ImportError> {
-    for (event, offset) in std::mem::take(&mut track.jumps) {
-        let target = *track
-            .boundaries
-            .get(&offset)
-            .ok_or_else(|| track.fail(offset, SongFault::JumpOutsideTrack))?;
-        let target = u32::try_from(target).expect("a track has fewer than u32::MAX events");
-        match &mut track.events[event] {
-            SongEvent::Goto(slot) | SongEvent::MemAccBranch { target: slot, .. } => *slot = target,
-            _ => unreachable!("only jumps are queued"),
-        }
-    }
-    Ok(())
+    Ok(Step::Next(after))
 }
 
 #[cfg(test)]
