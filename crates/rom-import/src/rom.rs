@@ -274,8 +274,8 @@ fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
 
 /// [`read_whole`] for Windows.
 ///
-/// `seek_read` is equally offset-safe, but it moves the shared cursor, so
-/// the restore below still runs — and can still race a peer's own seek.
+/// `seek_read` is equally offset-safe but leaves the shared cursor at the end
+/// of the read, so the cursor is restored only while it still sits there.
 #[cfg(windows)]
 fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
     use std::io::{Seek as _, SeekFrom};
@@ -304,9 +304,12 @@ fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
             Err(error) => break Err(error),
         }
     };
-    let restored = handle.seek(SeekFrom::Start(resume)).map(drop);
-    // The read's own failure is the one worth reporting; a restore that
-    // fails on top of a good read still has to be told.
+    // A cursor a peer has moved since the last `seek_read` is the peer's;
+    // only the position this read left behind is ours to put back.
+    let restored = match handle.stream_position() {
+        Ok(position) if position == offset => handle.seek(SeekFrom::Start(resume)).map(drop),
+        other => other.map(drop),
+    };
     read.and(restored)
 }
 
