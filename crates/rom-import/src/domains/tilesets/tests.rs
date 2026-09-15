@@ -51,6 +51,10 @@ const PAST_THE_ROM: GbaPtr = GbaPtr::at(ROM_BASE + 0x00FF_FFF0);
 const AT_ROM_END: GbaPtr = GbaPtr::at(ROM_BASE + 0x00FF_FFFC);
 /// The `callback` the fixture's struct carries.
 const CALLBACK: u32 = 0x080A_0B21;
+/// Where a bank outside the palette block sits.
+const STRAY_BANK: usize = 0x7000;
+/// The address of that stray bank.
+const STRAY_BANK_AT: GbaPtr = GbaPtr::at(ROM_BASE + 0x7000);
 
 /// The palette banks, at consecutive 32-byte addresses.
 static BANKS: [PaletteRoot; 3] = [
@@ -129,6 +133,31 @@ static TILESET: TilesetRoot = TilesetRoot {
 };
 
 static TILESETS: [TilesetRoot; 1] = [TILESET];
+
+/// The same banks with bank 1 addressed outside the palette block.
+static STRAY_BANKS: [PaletteRoot; 3] = [
+    PaletteRoot {
+        id: "tileset/t/palette/00",
+        addr: PALETTES_AT,
+        color_count: 16,
+    },
+    PaletteRoot {
+        id: "tileset/t/palette/01",
+        addr: STRAY_BANK_AT,
+        color_count: 16,
+    },
+    PaletteRoot {
+        id: "tileset/t/palette/02",
+        addr: GbaPtr::at(ROM_BASE + 0x2040),
+        color_count: 16,
+    },
+];
+
+/// The same tileset carrying that stray bank.
+static STRAY_BANK_TILESET: [TilesetRoot; 1] = [TilesetRoot {
+    palettes: &STRAY_BANKS,
+    ..TILESET
+}];
 
 /// The same tileset with its metatile table addressed past the image's end.
 static FAR_METATILES: [TilesetRoot; 1] = [TilesetRoot {
@@ -324,6 +353,21 @@ fn every_struct_pointer_is_corroborated() {
             other => panic!("{field} accepted a wrong pointer: {other}"),
         }
     }
+}
+
+#[test]
+fn a_palette_bank_outside_the_block_is_refused() {
+    // `palettes` is one contiguous block, so a profile that names an
+    // address outside it is wrong, not a colour the reader should trust.
+    let fixture = fixture().write(STRAY_BANK, &[0xEE; 32]);
+    let err = run_with(fixture, &STRAY_BANK_TILESET).unwrap_err();
+    assert!(matches!(
+        err,
+        ImportError::StructMismatch {
+            root: "t",
+            field: "Tileset.palettes"
+        }
+    ));
 }
 
 #[test]
