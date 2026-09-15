@@ -366,6 +366,30 @@ fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
         || (ability == HYPER_CUTTER && stat == ChangedStat::Attack)
 }
 
+/// Whether `defender`'s Soundproof blocks `move_id` outright, before PP and
+/// accuracy (`ABILITYEFFECT_MOVES_BLOCK`, `battle_util.c:2659-2675`).
+fn soundproof_blocks(move_id: MoveId, change: StatChangeEffect, defender: &BattlePokemon) -> bool {
+    change.direction == StatChangeDirection::Lower
+        && defender.ability() == SOUNDPROOF
+        && SOUND_STAT_DROP_MOVES.contains(&move_id)
+}
+
+/// The stat drop Soundproof blocks for `move_id`, if any; `None` for every
+/// other move, including ones with no stat change at all.
+///
+/// # Errors
+///
+/// Propagates a missing move entry from `dex`.
+pub fn soundproof_block(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<Option<StatChangeEffect>, BattleError> {
+    let effect = dex.move_data(move_id)?.effect;
+    Ok(stat_change_for_effect(effect)
+        .filter(|change| soundproof_blocks(move_id, *change, defender)))
+}
+
 /// Resolves a stat-changing move without mutating either battler.
 ///
 /// Raising effects consume no RNG. Lowering effects consume one accuracy draw
@@ -388,7 +412,7 @@ pub fn resolve_stat_change_move(
         stat_change_for_effect(mv.effect).ok_or(BattleError::UnsupportedMoveEffect(move_id))?;
 
     if change.direction == StatChangeDirection::Lower {
-        if defender.ability() == SOUNDPROOF && SOUND_STAT_DROP_MOVES.contains(&move_id) {
+        if soundproof_blocks(move_id, change, defender) {
             return Ok(StatChangeOutcome::AbilityProtected {
                 change,
                 ability: SOUNDPROOF,
