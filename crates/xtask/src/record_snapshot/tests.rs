@@ -526,7 +526,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let first = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .expect("run `cargo xtask extract` first");
@@ -538,7 +538,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let second = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .unwrap();
@@ -551,4 +551,104 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
     assert_eq!(first.pack_hash, second.pack_hash);
 
     drop(guard);
+}
+
+/// Publication must never write through a symlink planted at the temporary
+/// pointer name. `Path::exists()` reports a dangling link as absent, so the
+/// name-choosing loop accepts it and a plain `std::fs::write` would follow
+/// it, creating or truncating a bystander file outside `output_dir`. Skipping
+/// the name or failing the capture are both fine; escaping the directory is
+/// not.
+#[cfg(unix)]
+#[test]
+fn a_planted_pointer_symlink_is_never_written_through() {
+    /// Covers every temporary pointer name this process could pick next.
+    const CANDIDATES: u64 = 256;
+
+    let (pack_path, _pack_guard) = write_pack("pointer-symlink-commit");
+    let pack = AssetPack::load(&pack_path).unwrap();
+    let output_dir = scratch_path("pointer-symlink-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-symlink-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    for index in 0..CANDIDATES {
+        let generation = format!("{}.generation-{}-{index}", scene.name(), std::process::id());
+        std::os::unix::fs::symlink(
+            bystander_dir.join(format!("bystander-{index}")),
+            output_dir.join(format!(".{generation}.pointer")),
+        )
+        .unwrap();
+    }
+
+    let outcome = capture_loaded(scene, &pack, &output_dir, || Ok(()));
+
+    let escaped: Vec<_> = std::fs::read_dir(&bystander_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        escaped.is_empty(),
+        "publishing followed a planted symlink and wrote {escaped:?} outside {}",
+        output_dir.display()
+    );
+
+    if let Ok(report) = outcome {
+        assert_eq!(
+            std::fs::read(&report.rgb_path).unwrap().len(),
+            report.payload_len,
+            "a capture that reports success must publish its payload"
+        );
+        assert!(
+            !output_dir
+                .join(format!("{}.generation", scene.name()))
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the published pointer must be a regular file, not a planted symlink"
+        );
+    }
+
+    drop(bystander_guard);
+    drop(out_guard);
+}
+
+/// A promoting rename that fails must not turn into an unlink of whatever
+/// now holds the staging name. On unix the held handle's inode confirms the
+/// file is still the staged one, so it is removed; on Windows the hold had
+/// to be released for the rename, nothing can confirm identity afterwards,
+/// and the file is left in place and reported.
+#[test]
+fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() {
+    let dir = scratch_path("failed-publish");
+    let _guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let unreachable_dest = dir.join("missing-parent").join("pointer");
+
+    let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+    let error = staged.publish(&unreachable_dest).unwrap_err();
+
+    if cfg!(windows) {
+        assert!(
+            staging_path.symlink_metadata().is_ok(),
+            "Windows cannot re-confirm ownership once the hold is released, so the staging file must stay"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&staging_path.display().to_string()),
+            "the error must name the staging file left behind: {error}"
+        );
+    } else {
+        assert!(
+            staging_path.symlink_metadata().is_err(),
+            "the held handle proves the staging file is still ours, so it must be removed: {error}"
+        );
+    }
 }

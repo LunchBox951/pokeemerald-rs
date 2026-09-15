@@ -24,6 +24,10 @@ const ANORITH: SpeciesId = SpeciesId(390);
 const MAKUHITA: SpeciesId = SpeciesId(335);
 /// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
 const MILOTIC: SpeciesId = SpeciesId(329);
+/// `SPECIES_BUTTERFREE`: Compound Eyes in its primary (and only) ability slot.
+const BUTTERFREE: SpeciesId = SpeciesId(12);
+/// `SPECIES_REMORAID`: Hustle in its primary (and only) ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
 
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const HORN_DRILL: MoveId = MoveId(32);
@@ -46,8 +50,13 @@ const CURSE: MoveId = MoveId(174);
 const FALSE_SWIPE: MoveId = MoveId(206);
 const PURSUIT: MoveId = MoveId(228);
 const UNKNOWN_MOVE: MoveId = MoveId(60_000);
+/// Normal-type (physical), 75 accuracy.
+const SLAM: MoveId = MoveId(21);
 
 const THICK_FAT: AbilityId = AbilityId(47);
+/// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
+const SHEDINJA: SpeciesId = SpeciesId(303);
+const FAINT_ATTACK: MoveId = MoveId(185);
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -60,6 +69,14 @@ const MAX_IVS: Ivs = Ivs {
 
 const ACCURACY_HIT_DRAW: u16 = 0;
 const TACKLE_MISS_DRAW: u16 = 95;
+/// Slam's plain 75 threshold misses roll 91, but Compound Eyes raises the
+/// threshold to `75 * 130 / 100 = 97`, which the same roll clears
+/// (`battle_script_commands.c:1152-1153`).
+const COMPOUND_EYES_ONLY_HIT_DRAW: u16 = 90;
+/// Slam's plain 75 threshold hits roll 66, but Hustle lowers a physical
+/// move's threshold to `75 * 80 / 100 = 60`, which the same roll exceeds
+/// (`battle_script_commands.c:1156-1157`).
+const HUSTLE_ONLY_MISS_DRAW: u16 = 65;
 const ORDINARY_CRIT_DRAW: u16 = 0;
 const ORDINARY_NO_CRIT_DRAW: u16 = 1;
 const HIGH_CRIT_ONLY_DRAW: u16 = 8;
@@ -312,6 +329,100 @@ fn levitate_blocks_a_ground_move_before_stab_and_type_effectiveness() {
         "a Levitate block still spends the critical and damage-variance \
          draws, exactly like an ordinary type immunity"
     );
+}
+
+/// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`)
+/// blocks any powered, not-strictly-super-effective hit, distinctly from a
+/// [`HitOutcome::NoEffect`] typing immunity.
+#[test]
+fn wonder_guard_blocks_a_neutral_hit_and_still_draws_normally() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, RATTATA, 10, vec![WATER_GUN]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        WATER_GUN,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(resolution.outcome, HitOutcome::WonderGuardBlocked);
+    assert!(
+        !resolution.poisons_defender,
+        "a Wonder Guard block must not permit a secondary effect"
+    );
+    assert_eq!(
+        rng.draws(),
+        ORDINARY_NON_CRITICAL_DRAWS.len(),
+        "a Wonder Guard block still spends the same draws as an ordinary hit"
+    );
+}
+
+/// Wonder Guard's own message (`B_MSG_AVOIDED_DMG`, index 3) outranks the
+/// ordinary typing-immunity message (`B_MSG_AVOIDED_ATK`, index 2) in
+/// `Cmd_resultmessage` (`battle_script_commands.c:2048-2059`), so a move that
+/// is independently type-immune must still report the Wonder Guard outcome.
+#[test]
+fn wonder_guard_outranks_an_independent_typing_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![TACKLE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 20, vec![WATER_GUN]);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome =
+        damage_core(&dex, TACKLE, &attacker, &shedinja_defender, false, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+}
+
+/// Wonder Guard permits a strictly super-effective hit, so the block above
+/// is a targeted admission check rather than a general immunity.
+#[test]
+fn wonder_guard_permits_a_super_effective_hit() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, RATTATA, 10, vec![FAINT_ATTACK]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(ALWAYS_HIT_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        FAINT_ATTACK,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
+}
+
+/// Struggle bypasses `Cmd_typecalc` entirely (`battle_script_commands.c:1360-1364`),
+/// so it must reach a Wonder Guard holder exactly like any other defender.
+#[test]
+fn wonder_guard_never_blocks_struggle() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 5, vec![STRUGGLE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(STRUGGLE_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        STRUGGLE,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
 }
 
 #[test]
@@ -573,6 +684,47 @@ fn a_poison_type_or_steel_type_defender_never_reports_poisons_defender() {
          so the hit must land for this to test the status guard rather than a coincidental miss"
     );
     assert!(!resolution.poisons_defender);
+}
+
+/// Poison Sting's secondary is modelled (unlike Water Gun's, which has no
+/// trampoline at all and so cannot distinguish this suppression from a
+/// coincidental `false`). Wonder Guard must suppress it even on a roll that
+/// would otherwise succeed, matching `MOVE_RESULT_MISSED`'s membership in
+/// `MOVE_RESULT_NO_EFFECT` (`include/constants/battle.h:220-228`).
+#[test]
+fn wonder_guard_suppresses_poison_stings_secondary_on_a_successful_chance_roll() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![POISON_STING]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 10, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+    ]);
+
+    let resolution = resolve_hit(
+        &dex,
+        POISON_STING,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::WonderGuardBlocked,
+        "Poison is not-very-effective against Ghost and has no row against \
+         Bug, so only Wonder Guard blocks this hit"
+    );
+    assert!(
+        !resolution.poisons_defender,
+        "Wonder Guard must suppress the secondary effect even when the \
+         chance roll would otherwise succeed"
+    );
 }
 
 #[test]
@@ -852,4 +1004,49 @@ fn marvel_scale_never_touches_special_defense() {
         healthy_special_defense,
         "Marvel Scale must not touch Special Defense even once its holder is statused"
     );
+}
+
+#[test]
+fn compound_eyes_raises_the_accuracy_threshold_of_an_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BUTTERFREE, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::COMPOUND_EYES);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([
+        COMPOUND_EYES_ONLY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        DISCARDED_EFFECT_DRAW,
+    ]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert!(
+        matches!(resolution.outcome, HitOutcome::Hit { .. }),
+        "roll 91 is within Compound Eyes' 97 threshold: {:?}",
+        resolution.outcome
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "a Compound Eyes hit continues through the remaining move draws"
+    );
+}
+
+#[test]
+fn hustle_lowers_the_accuracy_threshold_of_a_physical_executable_move() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, REMORAID, 10, vec![SLAM]);
+    assert_eq!(attacker.ability(), AbilityId::HUSTLE);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let mut rng = SequenceRng::new([HUSTLE_ONLY_MISS_DRAW]);
+
+    let resolution = resolve_hit(&dex, SLAM, &attacker, &defender, false, &mut rng).unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::Miss,
+        "roll 66 exceeds Hustle's 60 threshold"
+    );
+    assert_eq!(rng.draws(), 1, "a miss stops immediately");
 }
