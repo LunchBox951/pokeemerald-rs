@@ -612,6 +612,7 @@ mod tests {
     const SECOND_TURN: u8 = 1;
     const HUGE_POWER_ABILITY_SLOT: u8 = 1;
     const GUTS_ABILITY_SLOT: u8 = 1;
+    const HUSTLE_ABILITY_SLOT: u8 = 1;
     const MAXIMUM_SIMULATED_DAMAGE_DRAW: u16 = 0;
     const SELECT_FIRST_TIED_MOVE: u16 = 0;
     const SELECT_SECOND_TIED_MOVE: u16 = 1;
@@ -626,6 +627,10 @@ mod tests {
     const MAKUHITA: SpeciesId = SpeciesId(335);
     /// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
     const MILOTIC: SpeciesId = SpeciesId(329);
+    /// `SPECIES_DELIBIRD`: Vital Spirit in slot 0, Hustle in slot 1 -- unlike
+    /// a single-ability species, a same-species non-Hustle control is
+    /// reachable through `with_ability_slot`.
+    const DELIBIRD: SpeciesId = SpeciesId(225);
 
     const POUND: MoveId = MoveId(1);
     const SCRATCH: MoveId = MoveId(10);
@@ -906,6 +911,60 @@ mod tests {
             estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
 
         assert_eq!(estimated_damage, real_damage);
+    }
+
+    #[test]
+    fn hustle_estimated_damage_matches_the_real_damage_step() {
+        let dex = Dex::new();
+        let attacker = BattlePokemon::new(
+            &dex,
+            DELIBIRD,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap()
+        .with_ability_slot(HUSTLE_ABILITY_SLOT);
+        assert_eq!(attacker.ability(), crate::ability::HUSTLE);
+        let defender = pokemon(SQUIRTLE, vec![TACKLE]);
+
+        let control = BattlePokemon::new(
+            &dex,
+            DELIBIRD,
+            ROUTE_103_LEVEL,
+            Ivs::default(),
+            DEFAULT_PERSONALITY,
+            vec![TACKLE],
+        )
+        .unwrap()
+        .with_ability_slot(0);
+        assert_ne!(control.ability(), crate::ability::HUSTLE);
+        let control_estimate =
+            estimated_damage(&dex, TACKLE, &control, &defender, PERCENT_SCALE).unwrap();
+
+        let critical_hits_suppressed = true;
+        let mut no_draws = SequenceRng::new([]);
+        let damage_before_roll = crate::hit::damage_before_roll(
+            &dex,
+            TACKLE,
+            &attacker,
+            &defender,
+            critical_hits_suppressed,
+            &mut no_draws,
+        )
+        .unwrap();
+        let mut best_damage_roll = SequenceRng::new([MAXIMUM_DAMAGE_ROLL]);
+        let real_damage =
+            crate::damage::apply_damage_roll(damage_before_roll.damage, &mut best_damage_roll);
+        let estimated_damage =
+            estimated_damage(&dex, TACKLE, &attacker, &defender, PERCENT_SCALE).unwrap();
+
+        assert_eq!(estimated_damage, real_damage);
+        assert!(
+            estimated_damage > control_estimate,
+            "the Hustle attacker's estimate must exceed the unboosted control's"
+        );
     }
 
     #[test]

@@ -145,6 +145,8 @@ fn track_b() -> Vec<u8> {
     bytes
 }
 
+// The loop first arrives with an initialized note state, unlike its entry
+// after VOICE. The contexts converge after the explicit note; FINE is unreachable.
 fn track_b_events() -> Vec<SongEvent> {
     let note = SongEvent::Note {
         key: 60,
@@ -156,17 +158,18 @@ fn track_b_events() -> Vec<SongEvent> {
         SongEvent::Volume(127),
         note.clone(),
         SongEvent::Wait(1),
-        note,
+        note.clone(),
         SongEvent::Wait(1),
         SongEvent::Wait(2),
         SongEvent::MemAccBranch {
             condition: MemAccCondition::Eq,
             address: 0,
             data: 1,
-            target: 1,
+            target: 8,
         },
-        SongEvent::Goto(1),
-        SongEvent::Fine,
+        SongEvent::Volume(127),
+        note,
+        SongEvent::Goto(3),
     ]
 }
 
@@ -177,7 +180,7 @@ const FAULT_STREAMS: [&[u8]; 6] = [
     &[0xCD, 0x0D, 0x00, 0xB1],             // an unmodelled XCMD
     &[0xB9, 0x12, 0, 0, 0xB1],             // MEMACC op 18
     &[0xB5, 0x00, 0, 0, 0, 0],             // REPT
-    &[0xB2, 0x00, 0x00, 0x00, 0x09, 0xB1], // GOTO to another track
+    &[0xB2, 0x00, 0x00, 0x00, 0x09, 0xB1], // GOTO past the ROM image
 ];
 
 fn rom() -> Rom {
@@ -327,7 +330,7 @@ fn each_fault_is_named() {
         SongFault::UnknownExtendedCommand(0x0D),
         SongFault::UnknownMemAccOp(18),
         SongFault::Repeat,
-        SongFault::JumpOutsideTrack,
+        SongFault::JumpOutsideRom,
     ];
     for (n, fault) in expected.into_iter().enumerate() {
         let start = at(FAULTS + 0x10 * u32::try_from(n).unwrap());
@@ -356,19 +359,21 @@ fn a_pattern_nested_past_the_engines_stack_is_refused() {
 }
 
 #[test]
-fn a_track_with_no_fine_is_refused() {
+fn an_unterminated_fallthrough_reaches_the_decode_limit() {
     // The fixture's unwritten space reads as rests, so a track started
-    // there walks to the event limit without ever meeting `FINE`.
+    // there walks to the decoder limit without ever meeting `FINE`.
     let rom = rom();
     let err = decode_track(&rom.reader(), "audio/song/s", 0, at(0x8000)).unwrap_err();
     assert!(
         matches!(
             err,
             ImportError::Song {
-                fault: SongFault::NoFine,
+                fault: SongFault::DecodeLimit,
                 ..
             }
         ),
         "{err}"
     );
 }
+
+mod path_state;

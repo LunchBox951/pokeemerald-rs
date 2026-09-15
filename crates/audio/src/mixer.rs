@@ -150,7 +150,7 @@ impl Mixer {
         true
     }
 
-    fn select_direct_sound_slot(&self, priority: u8, track: usize) -> Option<usize> {
+    fn select_direct_sound_slot(&self, priority: u8, track: Option<usize>) -> Option<usize> {
         let mut candidate_priority = priority;
         let mut candidate_track = track;
         let mut candidate_slot = None;
@@ -223,7 +223,7 @@ impl Mixer {
             .enumerate()
             .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
             .filter(|(_, voice)| {
-                voice.track() == track && !voice.is_stopping() && voice.midi_key() == key
+                voice.track() == Some(track) && !voice.is_stopping() && voice.midi_key() == key
             })
             .map(|(index, voice)| (voice.seq(), VoiceSlot::DirectSound(index)));
         let cgb_matches = self
@@ -256,11 +256,14 @@ impl Mixer {
         }
     }
 
-    /// Release every voice on `track`.
+    /// Release every voice on `track` and give up its allocation ownership.
     pub fn release_track(&mut self, track: usize) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
-            if voice.track() == track && !voice.is_stopping() {
-                voice.note_off();
+            if voice.track() == Some(track) {
+                if !voice.is_stopping() {
+                    voice.note_off();
+                }
+                voice.detach_track();
             }
         }
         for voice in self.cgb_slots.iter_mut().flatten() {
@@ -273,7 +276,7 @@ impl Mixer {
     /// Apply updated track volume and panning to every live voice on `track`.
     pub fn set_track_volume(&mut self, track: usize, vol_mr: u8, vol_ml: u8) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
@@ -287,7 +290,7 @@ impl Mixer {
     /// Apply updated track pitch to every live voice on `track`.
     pub fn set_track_pitch(&mut self, track: usize, key_m: i32, pit_m: u8) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
-            if voice.track() == track {
+            if voice.track() == Some(track) {
                 voice.set_track_pitch(key_m, pit_m);
             }
         }
