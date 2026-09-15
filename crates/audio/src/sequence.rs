@@ -83,9 +83,10 @@ pub enum DecodeError {
     RunningStatusWithoutCommand { offset: usize },
     /// A status byte has no defined command.
     UnknownCommand { offset: usize, byte: u8 },
-    /// A `GOTO`/`PATT`/`REPT` target byte offset did not land on a decoded
-    /// event boundary.
+    /// A jump target byte offset is outside the supplied track program.
     UnresolvedJump { offset: usize, target: u32 },
+    /// Compiling the track would exceed the bounded number of decoding contexts.
+    ExpansionLimit { limit: usize },
 }
 
 impl fmt::Display for DecodeError {
@@ -98,8 +99,9 @@ impl fmt::Display for DecodeError {
             Self::UnknownCommand { offset, byte } => {
                 write!(f, "unknown command {byte:#04x} at {offset}")
             }
+            Self::ExpansionLimit { limit } => write!(f, "track exceeds {limit} decoding contexts"),
             Self::UnresolvedJump { offset, target } => {
-                write!(f, "jump at {offset} to unaligned target {target:#x}")
+                write!(f, "jump at {offset} to out-of-range target {target:#x}")
             }
         }
     }
@@ -155,325 +157,22 @@ const CLOCK_TABLE: [u8; 49] = [
     72, 76, 78, 80, 84, 88, 90, 92, 96,
 ];
 
-struct JumpFixup {
-    event_index: usize,
-    target_byte_offset: u32,
-    command_byte_offset: usize,
-}
+mod decode;
+mod reader;
 
-/// Decode one track's byte program into typed [`Event`]s.
+/// Decode the commands reachable from the start of a track into typed [`Event`]s.
 ///
-/// Jump operands are little-endian byte offsets within `bytes`; the decoder
-/// resolves them to event indices. It decodes the entire slice because pattern
-/// and repeat bodies may follow the main track's first end event.
+/// Jump operands are little-endian byte offsets within `bytes`. Calls, returns,
+/// and repeats are lowered with the executed running status and note state;
+/// conditional memory jumps remain runtime decisions. Repeated contexts reuse
+/// event blocks, so looping tracks have finite output.
 ///
 /// # Errors
 ///
-/// Returns [`DecodeError`] on a truncated command, an orphan argument byte, an
-/// unknown status byte, or a jump target that misses every event boundary.
+/// Returns [`DecodeError`] for truncated or unknown reachable commands, orphan
+/// operands, out-of-range jumps, or excessive execution-context expansion.
 pub fn decode_track(bytes: &[u8]) -> Result<Vec<Event>, DecodeError> {
-    let mut decoder = Decoder {
-        bytes,
-        cursor: 0,
-        running_status: None,
-        // Upstream clears the track's key/velocity to zero and never seeds
-        // them (`m4a.c:243-248`, `m4a_1.s:1556-1573`).
-        last_key: 0,
-        last_velocity: 0,
-        events: Vec::new(),
-        event_byte_offsets: Vec::new(),
-        jump_fixups: Vec::new(),
-    };
-    decoder.run()?;
-    decoder.resolve_fixups()?;
-    Ok(decoder.events)
-}
-
-struct Decoder<'a> {
-    bytes: &'a [u8],
-    cursor: usize,
-    running_status: Option<u8>,
-    last_key: u8,
-    last_velocity: u8,
-    events: Vec<Event>,
-    event_byte_offsets: Vec<usize>,
-    jump_fixups: Vec<JumpFixup>,
-}
-
-impl Decoder<'_> {
-    fn run(&mut self) -> Result<(), DecodeError> {
-        while self.cursor < self.bytes.len() {
-            let command_byte_offset = self.cursor;
-            let command = self.next_command(command_byte_offset)?;
-            self.dispatch(command, command_byte_offset)?;
-        }
-        Ok(())
-    }
-
-    fn next_command(&mut self, offset: usize) -> Result<u8, DecodeError> {
-        let byte = self.bytes[self.cursor];
-        if byte < STATUS_BYTE_MIN {
-            return self
-                .running_status
-                .ok_or(DecodeError::RunningStatusWithoutCommand { offset });
-        }
-
-        self.cursor += 1;
-        if byte >= RUNNING_STATUS_MIN {
-            self.running_status = Some(byte);
-        }
-        Ok(byte)
-    }
-
-    #[expect(
-        clippy::too_many_lines,
-        reason = "MP2K command decoding remains clearest as one byte-dispatch match"
-    )]
-    fn dispatch(&mut self, command: u8, command_byte_offset: usize) -> Result<(), DecodeError> {
-        match command {
-            WAIT_LO..=WAIT_HI => {
-                let ticks = CLOCK_TABLE[(command - WAIT_LO) as usize];
-                self.push(command_byte_offset, Event::Wait(ticks));
-            }
-            FINE => {
-                self.push(command_byte_offset, Event::Fine);
-            }
-            GOTO => self.jump(command_byte_offset, Event::Goto)?,
-            PATT => self.jump(command_byte_offset, Event::Pattern)?,
-            PEND => self.push(command_byte_offset, Event::PatternEnd),
-            REPT => {
-                let count = self.next_byte()?;
-                let target = self.u32_le()?;
-                let event_index = self.events.len();
-                self.push(command_byte_offset, Event::Repeat { count, target: 0 });
-                self.jump_fixups.push(JumpFixup {
-                    event_index,
-                    target_byte_offset: target,
-                    command_byte_offset,
-                });
-            }
-            MEMACC => self.memacc(command_byte_offset)?,
-            PRIO => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Priority(value));
-            }
-            TEMPO => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Tempo(u16::from(value) * 2));
-            }
-            KEYSH => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::KeyShift(as_signed(value)));
-            }
-            VOICE => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Voice(value));
-            }
-            VOL => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Volume(value));
-            }
-            PAN => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Pan(centered(value)));
-            }
-            BEND => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Bend(centered(value)));
-            }
-            BENDR => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::BendRange(value));
-            }
-            LFOS => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::LfoSpeed(value));
-            }
-            LFODL => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::LfoDelay(value));
-            }
-            MOD => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Modulation(value));
-            }
-            MODT => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::ModType(value));
-            }
-            TUNE => {
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Tune(centered(value)));
-            }
-            XCMD => {
-                let kind = self.next_byte()?;
-                let width = xcmd_payload_width(kind);
-                let mut value = 0u32;
-                for i in 0..width {
-                    value |= u32::from(self.next_byte()?) << (8 * i);
-                }
-                self.push(command_byte_offset, Event::Xcmd { kind, value });
-            }
-            PORT => {
-                let control = self.next_byte()?;
-                let value = self.next_byte()?;
-                self.push(command_byte_offset, Event::Port { control, value });
-            }
-            EOT => {
-                let key = if self.peek_argument().is_some() {
-                    let k = self.next_byte()?;
-                    self.last_key = k;
-                    Some(k)
-                } else {
-                    None
-                };
-                self.push(command_byte_offset, Event::EndOfTie { key });
-            }
-            TIE..=u8::MAX => self.note(command, command_byte_offset)?,
-            _ => {
-                return Err(DecodeError::UnknownCommand {
-                    offset: command_byte_offset,
-                    byte: command,
-                });
-            }
-        }
-        Ok(())
-    }
-
-    fn memacc(&mut self, command_byte_offset: usize) -> Result<(), DecodeError> {
-        let op = self.next_byte()?;
-        let addr = self.next_byte()?;
-        let value = self.next_byte()?;
-        let target_byte_offset = if MEMACC_CONDITIONS.contains(&op) {
-            Some(self.u32_le()?)
-        } else {
-            None
-        };
-        let event_index = self.events.len();
-        let unresolved_target = target_byte_offset.map(|_| 0);
-        self.push(
-            command_byte_offset,
-            Event::MemAcc {
-                op,
-                addr,
-                value,
-                target: unresolved_target,
-            },
-        );
-        if let Some(target_byte_offset) = target_byte_offset {
-            self.jump_fixups.push(JumpFixup {
-                event_index,
-                target_byte_offset,
-                command_byte_offset,
-            });
-        }
-        Ok(())
-    }
-
-    fn note(&mut self, command: u8, command_byte_offset: usize) -> Result<(), DecodeError> {
-        let mut gate = CLOCK_TABLE[(command - TIE) as usize];
-
-        let key = if self.peek_argument().is_some() {
-            let k = self.next_byte()?;
-            self.last_key = k;
-            k
-        } else {
-            self.last_key
-        };
-
-        let velocity = if self.peek_argument().is_some() {
-            let v = self.next_byte()?;
-            self.last_velocity = v;
-            v
-        } else {
-            self.last_velocity
-        };
-
-        if let Some(ext) = self.peek_argument() {
-            self.cursor += 1;
-            gate = gate.saturating_add(ext);
-        }
-
-        self.push(
-            command_byte_offset,
-            Event::Note {
-                key,
-                velocity,
-                gate,
-            },
-        );
-        Ok(())
-    }
-
-    fn jump(
-        &mut self,
-        command_byte_offset: usize,
-        make_event: fn(usize) -> Event,
-    ) -> Result<(), DecodeError> {
-        let target_byte_offset = self.u32_le()?;
-        let event_index = self.events.len();
-        self.push(command_byte_offset, make_event(0));
-        self.jump_fixups.push(JumpFixup {
-            event_index,
-            target_byte_offset,
-            command_byte_offset,
-        });
-        Ok(())
-    }
-
-    fn push(&mut self, offset: usize, event: Event) {
-        self.event_byte_offsets.push(offset);
-        self.events.push(event);
-    }
-
-    fn peek_argument(&self) -> Option<u8> {
-        self.bytes
-            .get(self.cursor)
-            .copied()
-            .filter(|&byte| byte < STATUS_BYTE_MIN)
-    }
-
-    fn next_byte(&mut self) -> Result<u8, DecodeError> {
-        let byte = *self
-            .bytes
-            .get(self.cursor)
-            .ok_or(DecodeError::UnexpectedEnd)?;
-        self.cursor += 1;
-        Ok(byte)
-    }
-
-    fn u32_le(&mut self) -> Result<u32, DecodeError> {
-        let mut value = 0u32;
-        for i in 0..4 {
-            value |= u32::from(self.next_byte()?) << (8 * i);
-        }
-        Ok(value)
-    }
-
-    fn resolve_fixups(&mut self) -> Result<(), DecodeError> {
-        for fixup in &self.jump_fixups {
-            let index = self
-                .event_byte_offsets
-                .iter()
-                .position(|&offset| offset == fixup.target_byte_offset as usize)
-                .ok_or(DecodeError::UnresolvedJump {
-                    offset: fixup.command_byte_offset,
-                    target: fixup.target_byte_offset,
-                })?;
-            match &mut self.events[fixup.event_index] {
-                Event::Goto(t)
-                | Event::Pattern(t)
-                | Event::Repeat { target: t, .. }
-                | Event::MemAcc {
-                    target: Some(t), ..
-                } => {
-                    *t = index;
-                }
-                _ => unreachable!("jump fixups only reference jump events"),
-            }
-        }
-        Ok(())
-    }
+    decode::decode(bytes)
 }
 
 /// Returns the payload width read by each `gXcmdTable` handler (`m4a.c:1523`,
@@ -678,17 +377,17 @@ mod tests {
         bytes.extend_from_slice(&pattern_body_byte_offset.to_le_bytes());
         bytes.extend_from_slice(&[FINE, NOTE_4, 60, 127, PEND]);
         let events = decode_track(&bytes).unwrap();
-        assert_eq!(events[1], Event::Pattern(3));
-        assert_eq!(events[2], Event::Fine);
+        assert_eq!(events[0], Event::Voice(0));
         assert_eq!(
-            events[3],
+            events[1],
             Event::Note {
                 key: 60,
                 velocity: 127,
                 gate: 4
             }
         );
-        assert_eq!(events[4], Event::PatternEnd);
+        assert_eq!(events[2], Event::Fine);
+        assert_eq!(events.len(), 3);
     }
 
     #[test]
@@ -704,14 +403,16 @@ mod tests {
     }
 
     #[test]
-    fn unaligned_goto_target_errors() {
+    fn goto_can_enter_an_operand_with_running_status() {
         let middle_of_voice_command = 1_u32;
         let mut bytes = vec![VOICE, 0, GOTO];
         bytes.extend_from_slice(&middle_of_voice_command.to_le_bytes());
-        assert!(matches!(
-            decode_track(&bytes),
-            Err(DecodeError::UnresolvedJump { .. })
-        ));
+        // Upstream interprets the target under the executed running status;
+        // a byte used as an operand on one path can start a command on another.
+        assert_eq!(
+            decode_track(&bytes).unwrap(),
+            [Event::Voice(0), Event::Voice(0), Event::Goto(1)]
+        );
     }
 
     #[test]
@@ -822,3 +523,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod path_tests;
