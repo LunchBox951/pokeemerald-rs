@@ -643,16 +643,9 @@ impl OverworldPhase {
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
 
-        // Upstream consumes an arrow-warp press in `ProcessPlayerFieldInput`
-        // before `PlayerStep` runs, so a satisfied gate skips this frame's
-        // movement. Tile transit is the whole gate: a standstill turn's
-        // `WALK_IN_PLACE_FAST` is multi-frame *stationary*, so
-        // `UpdatePlayerAvatarTransitionState` leaves `tileTransitionState` at
-        // `T_NOT_MOVING` and `heldDirection` stays set for all eight frames
-        // (`field_player_avatar.c:901-929`). `TURN_IN_PLACE_FRAMES` must not
-        // narrow this: it models `TryInterruptObjectEventSpecialAnim`, which
-        // sits *inside* `PlayerStep`, below this poll
-        // (`field_player_avatar.c:332-350`, `overworld.c:1442-1454`).
+        // Tile transit is the whole gate: a standstill turn stays
+        // `T_NOT_MOVING`, so the warp fires inside the turn lock, which
+        // only `PlayerStep` honours (`field_player_avatar.c:901-929`, `:332-350`).
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
             trigger_arrow_warp(runtime, x, y, previous_elevation, d)
@@ -1004,14 +997,8 @@ mod post_movement_arrow_elevation_tests {
         scene.runtime(CENTER, header, events)
     }
 
-    /// Issue #1127's post-movement half, asserted on the frame's warp
-    /// decision rather than through a whole `step` call, exactly as the
-    /// sibling `door_sequencing_tests` already must: pack-free `warp_to`
-    /// fails to load the destination and leaves `map_id` and the player
-    /// untouched (`connections.rs:274-281`), so a missed post-movement
-    /// arrow warp is observationally identical to a fired one at the phase
-    /// level. `resolve_warp_trigger` is the seam where the two elevations
-    /// differ.
+    /// The post-movement arrow poll resolves at the retained previous
+    /// elevation, asserted on `resolve_warp_trigger` since pack-free `warp_to` is a no-op.
     #[test]
     fn the_drain_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
         let events = assets::MapEventsTable::new()
@@ -1110,21 +1097,8 @@ mod pre_movement_arrow_elevation_tests {
         scene.runtime(CAVE, header, events)
     }
 
-    /// Issue #1127's at-rest half, asserted on the pre-movement decision
-    /// rather than through `step`'s observables, for the same reason its
-    /// `post_movement_arrow_elevation_tests` sibling must: pack-free
-    /// `warp_to` leaves the player untouched, and the turn lock returns
-    /// `Idle` from `PlayerState::step` besides, so a missed lookup and a
-    /// fired one look identical at the phase level.
-    ///
-    /// The frame under test is deliberately one *inside* the eight-frame
-    /// standstill-turn lock. Upstream gates `heldDirection` on
-    /// `tileTransitionState` alone, and `WALK_IN_PLACE_FAST` is multi-frame
-    /// stationary, so `UpdatePlayerAvatarTransitionState` leaves that
-    /// `T_NOT_MOVING` and `ProcessPlayerFieldInput` reaches `TryArrowWarp`
-    /// on the first frame after the turn starts
-    /// (`field_player_avatar.c:901-929`, `field_control_avatar.c:95-167`,
-    /// `overworld.c:1442-1454`).
+    /// The at-rest arrow preempt resolves at the retained previous elevation
+    /// on a frame inside the turn lock, where upstream already reaches `TryArrowWarp`.
     #[test]
     fn a_turning_frame_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
         let events = assets::MapEventsTable::new()
