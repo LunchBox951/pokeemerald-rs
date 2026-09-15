@@ -16,9 +16,11 @@
 //! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
 //! delegates to it with [`compositor::FrameEffects::default`]. It also
 //! reruns affine OBJ mosaic sampling once per hardware-window span rather
-//! than once per scanline, and a trailing spill's target-1 and brightness
-//! enables come from the span that wrote it rather than the queried
-//! column's own window (`sprite::SpriteLayer::sample_affine_local`).
+//! than once per scanline, and a trailing spill's target-1 enable, and
+//! normally its brightness enable too, come from the span that wrote it
+//! rather than the queried column's own window -- unless that write's
+//! `OBJWIN` slow path defers brightness to the queried column instead
+//! (`sprite::SpriteLayer::sample_affine_local`).
 //!
 //! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
 //! a shared per-scanline OAM admission stage (`oam_budget`, private but see
