@@ -27,7 +27,8 @@ use std::cell::RefCell;
 /// One opaque sprite-layer result for cross-layer composition.
 ///
 /// A better-priority transparent texel can update `priority`,
-/// `semi_transparent`, and `target1_override` without replacing `color`.
+/// `semi_transparent`, `brightness_override`, and `target1_override` without
+/// replacing `color`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -43,15 +44,11 @@ pub struct SpritePixel {
     /// this, so a forced blend still sees the writer's baked brightness
     /// (`software-obj.c:76-86,177-208`) `(behavioral-fidelity)`.
     pub(crate) writer_semi_transparent: bool,
-    /// The `BLDCNT` color-effects enable of the span that wrote
-    /// [`color`](Self::color), when an affine mosaic trailing spill wrote it
-    /// from an earlier span than the one containing the queried column.
-    /// mGBA bakes brighten/darken into the stored color at that moment
-    /// (`software-obj.c:177-208`).
-    ///
-    /// `None` for every other pixel, so the caller keeps using the queried
-    /// column's own window (which, unlike a span's own control, also reflects
-    /// a per-pixel `OBJWIN` mask) `(behavioral-fidelity)`.
+    /// The color-effects enable [`color`](Self::color)'s writing span baked
+    /// in, when a spill crossed a span boundary (`software-obj.c:177-208`).
+    /// `None` defers to the queried column's own window instead -- always,
+    /// for a write that took mGBA's `FLAG_REBLEND` OBJWIN slow path
+    /// (`software-obj.c:180-192`) `(behavioral-fidelity)`.
     pub(crate) brightness_override: Option<bool>,
     /// The same enable for the span that last stamped
     /// [`priority`](Self::priority), which a better-priority transparent texel
@@ -83,6 +80,10 @@ pub(crate) struct WindowSpans<'a> {
     /// Positionally paired with `starts`: whether that span's own window
     /// control enables `BLDCNT` color effects.
     effects: &'a [bool],
+    /// Positionally paired with `starts`: whether a write in that span
+    /// engaged mGBA's `FLAG_REBLEND` OBJWIN slow path
+    /// (`software-obj.c:180-192`) `(behavioral-fidelity)`.
+    objwin_reblends: &'a [bool],
 }
 
 impl<'a> WindowSpans<'a> {
@@ -92,11 +93,17 @@ impl<'a> WindowSpans<'a> {
         starts: &[0],
         draws_obj: &[true],
         effects: &[true],
+        objwin_reblends: &[false],
     };
 
-    /// Pairs span starts with each span's OBJ participation and color-effects
-    /// enable, positionally.
-    pub(crate) fn new(starts: &'a [usize], draws_obj: &'a [bool], effects: &'a [bool]) -> Self {
+    /// Pairs span starts with each span's OBJ participation, color-effects
+    /// enable, and OBJWIN-reblend status, positionally.
+    pub(crate) fn new(
+        starts: &'a [usize],
+        draws_obj: &'a [bool],
+        effects: &'a [bool],
+        objwin_reblends: &'a [bool],
+    ) -> Self {
         debug_assert_eq!(
             starts.len(),
             draws_obj.len(),
@@ -107,10 +114,16 @@ impl<'a> WindowSpans<'a> {
             effects.len(),
             "each span start needs its own color-effects enable"
         );
+        debug_assert_eq!(
+            starts.len(),
+            objwin_reblends.len(),
+            "each span start needs its own OBJWIN-reblend status"
+        );
         Self {
             starts,
             draws_obj,
             effects,
+            objwin_reblends,
         }
     }
 
@@ -141,6 +154,22 @@ impl<'a> WindowSpans<'a> {
     /// caller should use the queried column's window instead.
     fn spill_effects(self, x: usize, writer: usize) -> Option<bool> {
         (writer != self.index_at(x)).then(|| self.span_effects_enabled(writer))
+    }
+
+    /// Returns whether span `index` engaged mGBA's `FLAG_REBLEND` OBJWIN slow
+    /// path `(behavioral-fidelity)`.
+    fn span_objwin_reblends(self, index: usize) -> bool {
+        self.objwin_reblends.get(index).copied().unwrap_or(false)
+    }
+
+    /// [`spill_effects`](Self::spill_effects)'s brightness half: always
+    /// `None` when `writer`'s span reblended, spill or not.
+    fn spill_brightness(self, x: usize, writer: usize) -> Option<bool> {
+        if self.span_objwin_reblends(writer) {
+            None
+        } else {
+            self.spill_effects(x, writer)
+        }
     }
 }
 
@@ -318,20 +347,21 @@ impl<'a> SpriteLayer<'a> {
                 match (entry.mode(), texel) {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
-                        let override_from_writer = window_spans.spill_effects(x, writer_span);
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
                             writer_semi_transparent: mode == ObjMode::SemiTransparent,
-                            brightness_override: override_from_writer,
-                            target1_override: override_from_writer,
+                            brightness_override: window_spans.spill_brightness(x, writer_span),
+                            target1_override: window_spans.spill_effects(x, writer_span),
                         });
                     }
                     (mode, Texel::Transparent) => {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.brightness_override =
+                                window_spans.spill_brightness(x, writer_span);
                             pixel.target1_override = window_spans.spill_effects(x, writer_span);
                         }
                     }
