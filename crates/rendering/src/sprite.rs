@@ -37,6 +37,12 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
+    /// Whether the entry that wrote [`color`](Self::color) was itself
+    /// [`ObjMode::SemiTransparent`]; unlike
+    /// [`semi_transparent`](Self::semi_transparent), a promotion never moves
+    /// this, so a forced blend still sees the writer's baked brightness
+    /// (`software-obj.c:76-86,177-208`) `(behavioral-fidelity)`.
+    pub(crate) writer_semi_transparent: bool,
     /// The `BLDCNT` color-effects enable of the span that wrote
     /// [`color`](Self::color), when an affine mosaic trailing spill wrote it
     /// from an earlier span than the one containing the queried column.
@@ -317,6 +323,7 @@ impl<'a> SpriteLayer<'a> {
                             color,
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
+                            writer_semi_transparent: mode == ObjMode::SemiTransparent,
                             brightness_override: override_from_writer,
                             target1_override: override_from_writer,
                         });

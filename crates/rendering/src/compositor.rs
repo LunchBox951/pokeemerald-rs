@@ -266,8 +266,11 @@ impl<'a> BgSlot<'a> {
 type OrderKey = (u8, u8);
 /// The [`EffectsEnable`] differs from the queried column's own window only
 /// for an affine mosaic trailing spill, which carries the enables of the spans
-/// that wrote it (`compose_pixel`'s docs).
-type Candidate = (OrderKey, Rgb888, LayerKind, bool, EffectsEnable);
+/// that wrote it (`compose_pixel`'s docs). The two `bool`s are the winning
+/// candidate's forced-alpha bit and its color writer's own semi-transparency
+/// (`sprite::SpritePixel::writer_semi_transparent`); a BG candidate supplies
+/// `false` for both.
+type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool, EffectsEnable);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
@@ -543,6 +546,7 @@ fn compose_pixel(
                     pixel.color,
                     LayerKind::Obj,
                     pixel.semi_transparent,
+                    pixel.writer_semi_transparent,
                     enable,
                 ),
             );
@@ -573,12 +577,21 @@ fn compose_pixel(
                 color,
                 LayerKind::Bg(slot.bg_index),
                 false,
+                false,
                 EffectsEnable::uniform(window.effects),
             ),
         );
     }
 
-    let Some((_, front_color, front_kind, front_semi_transparent, front_enable)) = front else {
+    let Some((
+        _,
+        front_color,
+        front_kind,
+        front_semi_transparent,
+        front_writer_semi_transparent,
+        front_enable,
+    )) = front
+    else {
         // Nothing drawn: the backdrop itself is shown, subject only to
         // brighten/darken (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
@@ -586,17 +599,22 @@ fn compose_pixel(
             &effects.color,
             EffectsEnable::uniform(window.effects),
             any_target2,
-            (effects.backdrop, LayerKind::Backdrop, false),
+            (effects.backdrop, LayerKind::Backdrop, false, false),
             None,
             effects.backdrop,
         );
     };
-    let next = next.map(|(_, color, kind, _, _)| (color, kind));
+    let next = next.map(|(_, color, kind, _, _, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
         front_enable,
         any_target2,
-        (front_color, front_kind, front_semi_transparent),
+        (
+            front_color,
+            front_kind,
+            front_semi_transparent,
+            front_writer_semi_transparent,
+        ),
         next,
         effects.backdrop,
     )
@@ -2439,18 +2457,8 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_keeps_its_writing_spans_brightness() {
-        // mGBA bakes brighten/darken into the OBJ pixel from the *writing*
-        // span's variant palette and stores FLAG_TARGET_1 from that same span
-        // (`software-obj.c:157,177-208`); the once-per-scanline sprite buffer
-        // then carries both into a later span's composite pass
-        // (`software-obj.c:423-431`). The WINOUT pass that owns the trailing
-        // spill has color effects enabled, so its spill columns stay
-        // brightened under WIN0, which disables effects.
-        //
-        // Same geometry as
-        // `affine_obj_mosaic_trailing_spill_survives_a_later_window_span`:
-        // identity 8x8 affine OBJ at x = 1, OBJ mosaic H = 4, WIN0 opening at
-        // x = 10, spill columns x = 10..=11 written by the WINOUT pass.
+        // A trailing spill keeps the writing span's stored brightness, not the
+        // queried span's own control (`software-obj.c:157,177-208,423-431`).
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
@@ -2541,14 +2549,8 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_keeps_a_worse_sprites_color_underneath() {
-        // Same mirrored geometry and windows as
-        // `affine_obj_mosaic_trailing_spill_prefers_an_opaque_span`, but a
-        // worse-priority, lower-OAM-index sprite B already occupies columns
-        // 10-11 with opaque green. mGBA's shared sprite buffer lets the
-        // affine entry's own first candidate span (WINOUT, transparent)
-        // claim that slot via promotion even though it draws no color, which
-        // blocks its own later span (WIN0, opaque red) from ever running
-        // (`software-obj.c:79-85`); B's green must still show through.
+        // Transparent promotion blocks this entry's own later opaque span
+        // without drawing color (`software-obj.c:79-85`).
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 64];
@@ -3543,6 +3545,80 @@ mod tests {
             Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
             "WIN0 outranks OBJWIN, so the OBJWIN sprite is skipped there and the \
              OBJ stays at priority 3, behind BG0's priority 1"
+        );
+    }
+
+    #[test]
+    fn a_promoted_obj_pixel_alpha_blends_the_brightness_its_writer_baked_in() {
+        // A forced blend uses the writer's baked brightness, not its raw
+        // palette entry (`software-obj.c:76-86,177-208`).
+        let mut bytes = [0u8; 64];
+        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (black)
+                                // tile 1 stays zeroed: the promoter is wholly transparent.
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let colors = [Bgr555::default(); Palette::LEN]; // index 1 is black
+        let palette = Palette::new(colors);
+
+        let writer = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque black)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            1, // worse priority than the promoter
+            true,
+        );
+        let promoter = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (all palette index zero)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent);
+        let entries = [writer, promoter];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(0); // black BG
+        let bg_layer = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
+        let slots = [BgSlot::new(bg_layer, 0, 2, 0, 0, true)];
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    obj: true,
+                    ..LayerTargets::default()
+                },
+                target2: LayerTargets {
+                    bg: [true, false, false, false],
+                    ..LayerTargets::default()
+                },
+                eva: 8,
+                evb: 8,
+                evy: 16,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+
+        let stored = crate::effects::brighten(Rgb888::BLACK, 16);
+        let expected = crate::effects::alpha_blend(stored, Rgb888::BLACK, 8, 8);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(expected),
+            "the promoter re-stamps target 1 without recoloring, so the blend \
+             takes the writing sprite's brightened color"
         );
     }
 }

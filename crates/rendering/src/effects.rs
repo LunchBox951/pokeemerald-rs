@@ -206,31 +206,49 @@ impl EffectsEnable {
 
 /// Resolve the displayed color for a front layer and its immediate neighbor.
 ///
-/// `front` contains its color, layer kind, and whether sprite semi-transparency
-/// forces alpha blending. Only `next` can be a second target when present; the
-/// backdrop is considered only when no layer is behind `front`.
+/// `front` contains its color, layer kind, whether sprite semi-transparency
+/// forces alpha blending, and whether its color's writer was itself
+/// semi-transparent (`sprite::SpritePixel::writer_semi_transparent`; a
+/// transparent promotion is the only way the two differ). Only `next` can be
+/// a second target when present; the backdrop counts only when nothing is
+/// behind `front`.
 ///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
-/// window enable bit. If it has no immediate second target, mGBA suppresses its
-/// configured brightness variant when any second target exists elsewhere in
-/// the frame (`mgba/src/gba/renderers/software-obj.c:159,177-192`)
-/// `(behavioral-fidelity)`.
+/// window enable bit. mGBA bakes brighten/darken into an OBJ pixel at write
+/// time, so a forced blend uses that baked color -- unless the *writer* was
+/// itself semi-transparent and any second target exists anywhere in the
+/// frame, which suppresses that write's own brightness variant
+/// (`mgba/src/gba/renderers/software-obj.c:159,177-192`) `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
     enable: EffectsEnable,
     any_target2_enabled: bool,
-    front: (Rgb888, LayerKind, bool),
+    front: (Rgb888, LayerKind, bool, bool),
     next: Option<(Rgb888, LayerKind)>,
     backdrop: Rgb888,
 ) -> Rgb888 {
-    let (front_color, front_kind, forced_alpha) = front;
+    let (raw_front_color, front_kind, forced_alpha, writer_semi_transparent) = front;
     let can_have_second_target = !matches!(front_kind, LayerKind::Backdrop);
     let alpha_target1 = can_have_second_target
         && (forced_alpha
             || (enable.target1
                 && cfg.effect == ColorEffect::AlphaBlend
                 && cfg.target1.contains(front_kind)));
+
+    let bake_brightness = enable.brightness
+        && cfg.target1.contains(front_kind)
+        && !(writer_semi_transparent && any_target2_enabled)
+        && matches!(cfg.effect, ColorEffect::Brighten | ColorEffect::Darken);
+    let front_color = if bake_brightness {
+        match cfg.effect {
+            ColorEffect::Brighten => brighten(raw_front_color, cfg.evy),
+            ColorEffect::Darken => darken(raw_front_color, cfg.evy),
+            ColorEffect::None | ColorEffect::AlphaBlend => raw_front_color,
+        }
+    } else {
+        raw_front_color
+    };
 
     if alpha_target1 {
         match next {
@@ -242,14 +260,6 @@ pub fn resolve_pixel_color(
             }
             _ if any_target2_enabled => return front_color,
             _ => {}
-        }
-    }
-
-    if enable.brightness && cfg.target1.contains(front_kind) {
-        match cfg.effect {
-            ColorEffect::Brighten => return brighten(front_color, cfg.evy),
-            ColorEffect::Darken => return darken(front_color, cfg.evy),
-            ColorEffect::None | ColorEffect::AlphaBlend => {}
         }
     }
 
@@ -810,12 +820,12 @@ mod tests {
         }
     }
 
-    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool) {
-        (color, kind, false)
+    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool, bool) {
+        (color, kind, false, false)
     }
 
-    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool) {
-        (color, LayerKind::Obj, true)
+    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool, bool) {
+        (color, LayerKind::Obj, true, true)
     }
 
     fn bg0_blends_with_bg1() -> EffectsConfig {
