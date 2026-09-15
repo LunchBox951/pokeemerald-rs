@@ -18,7 +18,7 @@ use pack_format::PackWriter;
 
 use super::{blob, check_pointer, image, palette};
 use crate::error::ImportError;
-use crate::reader::RomReader;
+use crate::reader::{GbaPtr, RomReader};
 use crate::rom::Rom;
 use crate::roots::{Roots, TilesetRoot};
 
@@ -36,6 +36,12 @@ const FIELD_METATILES: usize = 0x0C;
 const FIELD_METATILE_ATTRIBUTES: usize = 0x10;
 /// Offset of the `callback` pointer.
 const FIELD_CALLBACK: usize = 0x14;
+/// The banks `palettes` points at: `const u16 (*palettes)[16]`.
+const BANK_COUNT: usize = 16;
+/// The colours in one bank.
+const BANK_COLORS: u16 = 16;
+/// One bank, in bytes.
+const BANK_BYTES: usize = 32;
 
 /// Read every tileset the profile records and push its pack entries.
 ///
@@ -99,22 +105,37 @@ fn corroborate(reader: &RomReader<'_>, tileset: &TilesetRoot) -> Result<(), Impo
         "Tileset.tiles",
     )?;
     // The struct points at the palette block, which is bank 0's address.
-    let bank0 = tileset
-        .palettes
-        .first()
-        .ok_or(ImportError::StructMismatch {
+    let [bank0, ..] = tileset.palettes else {
+        return Err(ImportError::StructMismatch {
             root: name,
             field: "Tileset.palettes",
-        })?
-        .addr;
+        });
+    };
     check_pointer(
         reader,
         base,
         FIELD_PALETTES,
-        bank0,
+        bank0.addr,
         name,
         "Tileset.palettes",
     )?;
+    // The block is exactly sixteen 16-colour banks, bank `n` at
+    // `bank0 + n * 32`: fewer, narrower, or displaced banks are the
+    // profile's error, and `Pack::tileset` needs all sixteen.
+    if tileset.palettes.len() != BANK_COUNT {
+        return Err(ImportError::StructMismatch {
+            root: name,
+            field: "Tileset.palettes",
+        });
+    }
+    for (index, root) in tileset.palettes.iter().enumerate() {
+        if root.color_count != BANK_COLORS || root.addr != bank(bank0.addr, index)? {
+            return Err(ImportError::StructMismatch {
+                root: name,
+                field: "Tileset.palettes",
+            });
+        }
+    }
     check_pointer(
         reader,
         base,
@@ -143,6 +164,22 @@ fn corroborate(reader: &RomReader<'_>, tileset: &TilesetRoot) -> Result<(), Impo
         });
     }
     Ok(())
+}
+
+/// The address of palette bank `index`, `index * 32` bytes after bank 0.
+///
+/// A bank past the cartridge window is reported as a truncated read at the
+/// offset it would have started from.
+fn bank(bank0: GbaPtr, index: usize) -> Result<GbaPtr, ImportError> {
+    let delta = u32::try_from(index * BANK_BYTES).unwrap_or(u32::MAX);
+    bank0
+        .raw()
+        .checked_add(delta)
+        .and_then(GbaPtr::new)
+        .ok_or(ImportError::Truncated {
+            at: bank0.offset().saturating_add(index * BANK_BYTES),
+            len: BANK_BYTES,
+        })
 }
 
 /// Check one `bool8` struct field.
