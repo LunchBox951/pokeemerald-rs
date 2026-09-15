@@ -904,12 +904,10 @@ fn two_over_limit_saves_sharing_a_prefix_do_not_share_one_lock() {
     drop(guard);
 }
 
-/// Opens a real, host-safe stand-in file for `candidate` inside `dir`, keyed
-/// by `candidate`'s raw bytes: two distinct candidates -- even byte strings
-/// no host need accept as a dirent, such as lone non-UTF-8 bytes on APFS --
-/// always resolve to two distinct, genuinely lockable files. Models the
-/// host through the [`SaveFile::lock_with_open`] seam so this exercises
-/// path derivation on every host, not just ones that accept the raw name.
+/// A real, host-safe stand-in file for `candidate`, keyed by a hash of its
+/// raw bytes so two distinct candidates -- even non-UTF-8 ones no host need
+/// accept as a dirent -- get two distinct backing files without touching
+/// the raw name itself.
 fn non_utf8_safe_backing(dir: &Path) -> impl Fn(&Path) -> std::io::Result<std::fs::File> {
     use std::hash::Hasher;
 
