@@ -629,13 +629,8 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     .expect("synthetic pack with an elevated cell should decode cleanly")
 }
 
-/// [`synthetic_scene_with_special_tiles`], but each entry also names the
-/// elevation its cell carries instead of the fixture's uniform 3 -- the one
-/// shape a transition-elevation warp tile needs (a door-shaped behavior on
-/// an elevation-0 cell, as `MAP_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F`'s
-/// own warp #2 really is), which neither [`synthetic_scene_with_special_tiles`]
-/// (behavior only, elevation always 3) nor [`synthetic_scene_with_cell_elevation`]
-/// (elevation only, behavior always `MB_NORMAL`) can express on its own.
+/// [`synthetic_scene_with_special_tiles`], with each entry also naming its
+/// cell's elevation, as a warp tile on a transition-elevation cell needs.
 pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
     width: u16,
     height: u16,

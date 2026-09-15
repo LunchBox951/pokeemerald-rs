@@ -1115,17 +1115,9 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     );
 }
 
-/// Issue #1127: pins the `previous_elevation()` contract
-/// [`super::OverworldPhase::step`]'s `door_warp` lookup documents
-/// (`step.rs:482-486`).
-///
-/// Transplanted onto Granite Cave B1F for the same reason
-/// `crate::flow::wild_encounter::tests`'
-/// `a_door_warp_frame_never_reaches_the_encounter_roll` picks that map: a
-/// fired door warp is observable pack-free only through the encounter
-/// bookkeeping it suppresses (`super::step`'s `roll_eligible_landing` call),
-/// and Granite Cave B1F has both a real warp event at elevation 3 and a
-/// real land table.
+/// A completed step's door warp resolves at the retained previous elevation
+/// (issue #1127); a fired warp is observable pack-free only through the
+/// encounter roll it suppresses, as `a_door_warp_frame_never_reaches_the_encounter_roll` does.
 #[test]
 fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE};
