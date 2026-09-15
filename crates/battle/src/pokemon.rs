@@ -809,15 +809,17 @@ impl BattlePokemon {
 
     /// Attacking stat and stage for the move category.
     ///
-    /// A statused Guts holder's raw physical Attack is raised 150% before the
-    /// stage is applied, matching upstream's `CalculateBaseDamage`
-    /// (`pokeemerald/src/pokemon.c:3211-3212`); special Attack never changes.
+    /// A Hustle holder's, then a statused Guts holder's, raw physical Attack
+    /// is each raised 150% before the stage is applied, matching upstream's
+    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
+    /// special Attack never changes.
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
             crate::damage::MoveCategory::Physical => {
+                let raw_attack = crate::ability::hustle_attack(self.ability(), self.stats.attack);
                 let raw_attack =
-                    crate::ability::guts_attack(self.ability(), self.status1, self.stats.attack);
+                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
                 (raw_attack, self.stages.attack)
             }
             crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),

@@ -301,6 +301,165 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     );
 }
 
+/// The field lock ends an in-flight turn the moment it engages
+/// (`PlayerFreeze`, `field_player_avatar.c:1039-1046`), so a dialog must not freeze it.
+#[test]
+fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    use engine::text::Token;
+
+    // One tile east of Mom (module docs' `ONE_F` fixture notes), facing
+    // South so a held Left is a turn, not a step.
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+    assert_eq!(phase.player.position(), (3, 6), "a turn must not move");
+
+    // Reachability: the next frame's A press really does find Mom while
+    // that window is still draining.
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "an A press one frame into the turn's busy window must still interact with Mom"
+        );
+    }
+
+    // The box the A press opens, in this pack-less suite's headless stand-in
+    // form.
+    phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]));
+
+    // It owns far more frames than the eight-frame window is long.
+    for _ in 0..20 {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert!(phase.dialog.is_some(), "the box must still be open");
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // The first field frame after the box closes must act on the held
+    // direction, not sit in a window frozen before the box opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the message box that opened inside it"
+    );
+}
+
+/// `START` holds the field lock too (`start_menu.c:581-591`), so it clears
+/// a pending turn's busy window like a dialog does.
+#[test]
+fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    let temp = crate::flow::tests::TempSave::new("start-menu-turn-lock-976");
+    let mut save_slot = temp.slot();
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+
+    phase.start_menu = Some(crate::start_menu::synthetic_start_menu());
+    for _ in 0..20 {
+        assert!(phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot));
+    }
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::B), &mut save_slot),
+        "B still owns the closing frame"
+    );
+    assert!(
+        phase.start_menu().is_none(),
+        "B must have closed the synthetic menu"
+    );
+
+    // The first field frame after the menu closes must act on the held
+    // direction, not sit in a window frozen before the menu opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the start menu that opened inside it"
+    );
+}
+
+/// `ShowStartMenu` freezes the player before its own frame is drawn
+/// (`start_menu.c:581-591`), so the turn ends on the frame START lands.
+#[test]
+fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::UP));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns in place and starts the busy window"
+    );
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_some(),
+        "setup: the injected build must really have opened a menu"
+    );
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the menu's own opening frame is composed after this step returns, so the \
+         turn must already be over by then -- not one frame later"
+    );
+}
+
+/// The interaction claiming the frame is upstream's lock
+/// (`field_control_avatar.c:172`); the box itself needs a pack this suite lacks.
+#[test]
+fn an_a_press_interaction_ends_a_turns_busy_window_on_the_frame_it_claims() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns the player toward Mom, starting the busy window"
+    );
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "setup: the next frame's A press really does claim the frame"
+        );
+    }
+
+    phase.step(pressed(Buttons::A));
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the claimed frame is composed after this step returns, so the turn must \
+         already be over by then -- not one frame later"
+    );
+}
+
 /// Mutation guard for [`OverworldPhase::step`]'s tileset-animation tick
 /// (issue #160): `self.tick` must advance by exactly one per `step` call,
 /// and must keep advancing while a dialog box is open -- an explicit
@@ -1195,5 +1354,32 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
     assert!(
         !phase.player.in_transit(),
         "the warp lands the player at rest, not mid-step"
+    );
+}
+
+/// The same ordering as
+/// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`],
+/// driven through [`crate::flow::advance_scene`]'s dispatch rather than
+/// [`OverworldPhase::step`] directly.
+#[test]
+fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    let mut slot = crate::game_save::SaveSlot::disabled();
+
+    let (next, _frame) = crate::flow::advance_scene(
+        crate::flow::AppScene::Overworld(Box::new(phase)),
+        pressed(Buttons::A | Buttons::START),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+
+    let crate::flow::AppScene::Overworld(phase) = next else {
+        panic!("a START press must leave the overworld in place");
+    };
+    assert!(
+        phase.start_menu().is_none(),
+        "the dispatch must weigh a fresh START inside step, behind the \
+         same-frame interaction -- not open the menu ahead of it"
     );
 }

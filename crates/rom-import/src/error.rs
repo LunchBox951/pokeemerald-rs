@@ -66,11 +66,10 @@ pub enum SongFault {
     Repeat,
     /// `PATT` nested past the engine's three-deep stack.
     PatternTooDeep,
-    /// A `GOTO` or branch whose pointer is not a command boundary of this
-    /// track.
-    JumpOutsideTrack,
-    /// The track never reached `FINE`.
-    NoFine,
+    /// A control-flow pointer addresses bytes outside the ROM image.
+    JumpOutsideRom,
+    /// The track exceeds the decoder's execution-context or output-event limit.
+    DecodeLimit,
 }
 
 impl fmt::Display for SongFault {
@@ -84,8 +83,8 @@ impl fmt::Display for SongFault {
             Self::UnknownMemAccOp(op) => write!(f, "unknown MEMACC operation {op}"),
             Self::Repeat => f.write_str("REPT is not supported"),
             Self::PatternTooDeep => f.write_str("PATT nested more than three deep"),
-            Self::JumpOutsideTrack => f.write_str("a jump to somewhere that is not this track"),
-            Self::NoFine => f.write_str("no FINE within the event limit"),
+            Self::JumpOutsideRom => f.write_str("a jump outside the ROM image"),
+            Self::DecodeLimit => f.write_str("track exceeds the decoder state or event limit"),
         }
     }
 }
@@ -657,7 +656,7 @@ mod tests {
                 id: "audio/song/mus_title",
                 track: 2,
                 at: 0x10,
-                fault: SongFault::JumpOutsideTrack,
+                fault: SongFault::JumpOutsideRom,
             },
             ImportError::EmptyPack,
             ImportError::SameFile {

@@ -411,6 +411,7 @@ impl OverworldPhase {
         if self.rival_battle.is_none() {
             return false;
         }
+        self.take_field_lock();
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.rival_battle,
             &mut self.party_lead,

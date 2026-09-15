@@ -691,9 +691,11 @@ impl OverworldPhase {
         }
     }
 
-    /// Commit a menu [`Self::resolve_pre_movement_field_input`] built.
+    /// Commits a built menu and takes the field lock on this frame, as
+    /// `ShowStartMenu` reaches `PlayerFreeze` inline (`start_menu.c:581-591`).
     fn commit_start_menu(&mut self, ready: Option<StartMenu>) {
         if let Some(menu) = ready {
+            self.take_field_lock();
             self.start_menu = Some(menu);
         }
     }
@@ -715,8 +717,8 @@ impl OverworldPhase {
     /// `super::route103_rival_trigger`) starts the Route 103 rival battle
     /// instead -- exactly the same gate, one extra branch. The battle this
     /// frame earned -- if any -- starts next ([`Self::begin_step_battle`]).
-    /// Last, a fresh `START` menu already built is committed: upstream's
-    /// `pressedStartButton` position, behind every branch above.
+    /// Commits the frame's owner in `ProcessPlayerFieldInput` order; an
+    /// interaction claiming the frame takes the field lock on that frame.
     fn resolve_step_events(
         &mut self,
         warp_trigger: Option<WarpTrigger>,
@@ -744,6 +746,9 @@ impl OverworldPhase {
                 );
             }
         } else {
+            if interaction.is_some() {
+                self.take_field_lock();
+            }
             match interaction {
                 Some(InteractionOutcome::Dialog(tokens)) => {
                     match NpcDialog::open(self.pack_source, tokens) {

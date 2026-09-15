@@ -1,7 +1,7 @@
 use super::{damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
 use crate::ability::{suppresses_critical_hits, GUTS, HUGE_POWER, MARVEL_SCALE, PURE_POWER};
 use crate::accuracy::always_hits;
-use crate::damage::{MoveCategory, STRUGGLE};
+use crate::damage::{base_damage, DamageInput, MoveCategory, Weather, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
@@ -9,7 +9,7 @@ use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
 use crate::status1::Status1;
 use assets::species::AbilityId;
-use assets::{MoveId, SpeciesId};
+use assets::{MoveId, SpeciesId, Type};
 
 const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
@@ -28,6 +28,10 @@ const MILOTIC: SpeciesId = SpeciesId(329);
 const BUTTERFREE: SpeciesId = SpeciesId(12);
 /// `SPECIES_REMORAID`: Hustle in its primary (and only) ability slot.
 const REMORAID: SpeciesId = SpeciesId(223);
+/// `SPECIES_DELIBIRD`: Vital Spirit in slot 0, Hustle in slot 1 -- unlike
+/// Remoraid, a same-species non-Hustle control is reachable through
+/// [`BattlePokemon::with_ability_slot`].
+const DELIBIRD: SpeciesId = SpeciesId(225);
 
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const HORN_DRILL: MoveId = MoveId(32);
@@ -54,6 +58,9 @@ const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 const SLAM: MoveId = MoveId(21);
 
 const THICK_FAT: AbilityId = AbilityId(47);
+/// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
+const SHEDINJA: SpeciesId = SpeciesId(303);
+const FAINT_ATTACK: MoveId = MoveId(185);
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
@@ -328,6 +335,100 @@ fn levitate_blocks_a_ground_move_before_stab_and_type_effectiveness() {
     );
 }
 
+/// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`)
+/// blocks any powered, not-strictly-super-effective hit, distinctly from a
+/// [`HitOutcome::NoEffect`] typing immunity.
+#[test]
+fn wonder_guard_blocks_a_neutral_hit_and_still_draws_normally() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, RATTATA, 10, vec![WATER_GUN]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        WATER_GUN,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(resolution.outcome, HitOutcome::WonderGuardBlocked);
+    assert!(
+        !resolution.poisons_defender,
+        "a Wonder Guard block must not permit a secondary effect"
+    );
+    assert_eq!(
+        rng.draws(),
+        ORDINARY_NON_CRITICAL_DRAWS.len(),
+        "a Wonder Guard block still spends the same draws as an ordinary hit"
+    );
+}
+
+/// Wonder Guard's own message (`B_MSG_AVOIDED_DMG`, index 3) outranks the
+/// ordinary typing-immunity message (`B_MSG_AVOIDED_ATK`, index 2) in
+/// `Cmd_resultmessage` (`battle_script_commands.c:2048-2059`), so a move that
+/// is independently type-immune must still report the Wonder Guard outcome.
+#[test]
+fn wonder_guard_outranks_an_independent_typing_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![TACKLE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 20, vec![WATER_GUN]);
+    let mut rng = SequenceRng::new([ORDINARY_NO_CRIT_DRAW, BEST_DAMAGE_DRAW]);
+
+    let outcome =
+        damage_core(&dex, TACKLE, &attacker, &shedinja_defender, false, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+}
+
+/// Wonder Guard permits a strictly super-effective hit, so the block above
+/// is a targeted admission check rather than a general immunity.
+#[test]
+fn wonder_guard_permits_a_super_effective_hit() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, RATTATA, 10, vec![FAINT_ATTACK]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(ALWAYS_HIT_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        FAINT_ATTACK,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
+}
+
+/// Struggle bypasses `Cmd_typecalc` entirely (`battle_script_commands.c:1360-1364`),
+/// so it must reach a Wonder Guard holder exactly like any other defender.
+#[test]
+fn wonder_guard_never_blocks_struggle() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 5, vec![STRUGGLE]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(STRUGGLE_NON_CRITICAL_DRAWS);
+
+    let resolution = resolve_hit(
+        &dex,
+        STRUGGLE,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert!(matches!(resolution.outcome, HitOutcome::Hit { .. }));
+}
+
 #[test]
 fn an_accuracy_bypassing_hit_starts_with_the_critical_draw() {
     let dex = Dex::new();
@@ -587,6 +688,47 @@ fn a_poison_type_or_steel_type_defender_never_reports_poisons_defender() {
          so the hit must land for this to test the status guard rather than a coincidental miss"
     );
     assert!(!resolution.poisons_defender);
+}
+
+/// Poison Sting's secondary is modelled (unlike Water Gun's, which has no
+/// trampoline at all and so cannot distinguish this suppression from a
+/// coincidental `false`). Wonder Guard must suppress it even on a roll that
+/// would otherwise succeed, matching `MOVE_RESULT_MISSED`'s membership in
+/// `MOVE_RESULT_NO_EFFECT` (`include/constants/battle.h:220-228`).
+#[test]
+fn wonder_guard_suppresses_poison_stings_secondary_on_a_successful_chance_roll() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 10, vec![POISON_STING]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 10, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new([
+        ACCURACY_HIT_DRAW,
+        ORDINARY_NO_CRIT_DRAW,
+        BEST_DAMAGE_DRAW,
+        POISON_CHANCE_HIT_DRAW,
+    ]);
+
+    let resolution = resolve_hit(
+        &dex,
+        POISON_STING,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::WonderGuardBlocked,
+        "Poison is not-very-effective against Ghost and has no row against \
+         Bug, so only Wonder Guard blocks this hit"
+    );
+    assert!(
+        !resolution.poisons_defender,
+        "Wonder Guard must suppress the secondary effect even when the \
+         chance roll would otherwise succeed"
+    );
 }
 
 #[test]
@@ -911,4 +1053,113 @@ fn hustle_lowers_the_accuracy_threshold_of_a_physical_executable_move() {
         "roll 66 exceeds Hustle's 60 threshold"
     );
     assert_eq!(rng.draws(), 1, "a miss stops immediately");
+}
+
+#[test]
+fn hustle_raises_a_physical_attackers_landed_damage() {
+    let dex = Dex::new();
+    let hustle_attacker = BattlePokemon::new(&dex, DELIBIRD, 10, MAX_IVS, 0, vec![TACKLE])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_eq!(hustle_attacker.ability(), AbilityId::HUSTLE);
+    let control = BattlePokemon::new(&dex, DELIBIRD, 10, MAX_IVS, 0, vec![TACKLE])
+        .unwrap()
+        .with_ability_slot(0);
+    assert_ne!(control.ability(), AbilityId::HUSTLE);
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+
+    let mut control_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let HitOutcome::Hit {
+        damage: control_damage,
+        ..
+    } = resolve_hit(&dex, TACKLE, &control, &defender, false, &mut control_rng)
+        .unwrap()
+        .outcome
+    else {
+        panic!("Tackle must land on a Water/Water matchup");
+    };
+
+    // Pinned independently through `base_damage` with the control's raw
+    // Attack scaled 150%, rather than derived from `control_damage`, since
+    // `pokemon.c:3205-3206`'s truncation happens before the stage multiply
+    // and would not generally commute with scaling the already-rounded
+    // control figure.
+    let (raw_attack, attack_stage) = control.attacking_stat(MoveCategory::Physical);
+    let (defense_stat, defense_stage) = defender.defending_stat(MoveCategory::Physical);
+    let expected_hustle_damage = base_damage(&DamageInput {
+        attacker_level: control.level(),
+        power: u32::from(dex.move_data(TACKLE).unwrap().power),
+        move_type: Type::Normal,
+        attack_stat: 150 * raw_attack / 100,
+        attack_stage,
+        defense_stat,
+        defense_stage,
+        attacker_burned: false,
+        reflect: false,
+        light_screen: false,
+        weather: Weather::None,
+        is_solar_beam: false,
+        attacker_pinch_boost: false,
+    });
+    assert!(
+        expected_hustle_damage > control_damage,
+        "fixture must be sensitive to the boost: {expected_hustle_damage} vs {control_damage}"
+    );
+
+    let mut hustle_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let resolution = resolve_hit(
+        &dex,
+        TACKLE,
+        &hustle_attacker,
+        &defender,
+        false,
+        &mut hustle_rng,
+    )
+    .unwrap();
+
+    assert_eq!(
+        resolution.outcome,
+        HitOutcome::Hit {
+            damage: expected_hustle_damage,
+            is_critical: false,
+        },
+        "a Hustle attacker's physical damage must carry the 150% raw-Attack boost"
+    );
+}
+
+#[test]
+fn hustle_never_touches_a_special_move() {
+    let dex = Dex::new();
+    let defender = mon(&dex, SQUIRTLE, 10, vec![TACKLE]);
+    let hustle_attacker = BattlePokemon::new(&dex, DELIBIRD, 10, MAX_IVS, 0, vec![WATER_GUN])
+        .unwrap()
+        .with_ability_slot(1);
+    let control = BattlePokemon::new(&dex, DELIBIRD, 10, MAX_IVS, 0, vec![WATER_GUN])
+        .unwrap()
+        .with_ability_slot(0);
+    assert_eq!(hustle_attacker.ability(), AbilityId::HUSTLE);
+    assert_ne!(control.ability(), AbilityId::HUSTLE);
+
+    let mut hustle_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let hustle_outcome = resolve_hit(
+        &dex,
+        WATER_GUN,
+        &hustle_attacker,
+        &defender,
+        false,
+        &mut hustle_rng,
+    )
+    .unwrap();
+    let mut control_rng = SequenceRng::new(ORDINARY_NON_CRITICAL_DRAWS);
+    let control_outcome = resolve_hit(
+        &dex,
+        WATER_GUN,
+        &control,
+        &defender,
+        false,
+        &mut control_rng,
+    )
+    .unwrap();
+
+    assert_eq!(hustle_outcome.outcome, control_outcome.outcome);
 }

@@ -25,8 +25,9 @@ use crate::event_data::EventData;
 /// cone, out to its own sight range, reaches `player`'s tile along a clear,
 /// elevation-compatible line.
 ///
-/// Returns `false` for any other [`TrainerType`], a sight range of `0`, or
-/// an [`ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
+/// Returns `false` when `trainer`'s hide flag is set, for any other
+/// [`TrainerType`], a sight range of `0`, or an
+/// [`ObjectEvent::trainer_sight_or_berry_tree_id`] that fails to parse as
 /// a `u8` -- the berry-tree half of that overloaded field reaching this
 /// function is a caller error, not a panic.
 #[must_use]
@@ -37,6 +38,9 @@ pub fn trainer_can_see_player(
     event_data: &EventData,
 ) -> bool {
     if trainer.trainer_type != TrainerType::Normal {
+        return false;
+    }
+    if !object_event_is_visible(trainer, event_data) {
         return false;
     }
     let Some(sight_range) = trainer.trainer_sight_or_berry_tree_id.parse::<u8>().ok() else {
@@ -580,6 +584,22 @@ mod tests {
                 "{facing:?} must reach {player_pos:?}"
             );
         }
+    }
+
+    /// A trainer hidden by its own set hide flag has no cone at all,
+    /// matching upstream's scan guard (`trainer_see.c:202-203`).
+    #[test]
+    fn a_hidden_trainer_does_not_see_the_player() {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let runtime = runtime_over(&hdr, &events, 10, 10, cell(0, 0, 3));
+        let mut t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        t.flag = "FLAG_HIDE_LITTLEROOT_TOWN_BIRCH";
+        let player = player_at(5, 8, 3);
+        let mut event_data = EventData::new();
+        let hide_flag = assets::object_event_flags::resolve(t.flag).unwrap();
+        event_data.flag_set(hide_flag).unwrap();
+        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
     }
 
     /// A non-numeric sight-range string (the berry-tree half of the

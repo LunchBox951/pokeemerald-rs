@@ -80,7 +80,8 @@
 //! battle-type delta on which shape it was built for. The five deltas —
 //! running refused outright ([`BattleError::NoRunningFromTrainer`], a
 //! *different* upstream gate from `first_battle`'s), a party opponent, a
-//! forced post-faint send-out in party order, `x1.5` experience
+//! forced post-faint send-out chosen by `GetMostSuitableMonToSwitchInto`'s
+//! suitability passes (issue #1040), `x1.5` experience
 //! ([`exp::trainer_faint_exp`]), and prize money on a win
 //! ([`battle::BattleEvent::MoneyGained`]) — each carry their upstream
 //! citation beside the code that owns them. The opponent's
@@ -149,10 +150,14 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them; [`paralyze::ensure_admissible`] admits both holders. Compound
-//! Eyes and Hustle scale the stage-adjusted accuracy threshold inside
-//! [`accuracy::accuracy_check`], as `Cmd_accuracycheck` does, for every
-//! path that rolls to hit.
+//! them; [`paralyze::ensure_admissible`] admits both holders.
+//! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
+//! 150% the same way, before the same stage multiply
+//! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
+//! trainer AI's estimate, and forced-replacement suitability all agree.
+//! Compound Eyes and Hustle scale the stage-adjusted accuracy threshold
+//! inside [`accuracy::accuracy_check`], as `Cmd_accuracycheck` does, for
+//! every path that rolls to hit.
 //! [`pokemon::BattlePokemon::ability`] derives the ability from the
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.
@@ -196,7 +201,13 @@
 //! Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]), Levitate's
 //! Ground-move damage immunity ([`hit::damage_before_roll`] — grounding
 //! effects like Gravity and Smack Down are not modelled, so Levitate is
-//! otherwise unconditional), Synchronize's paralysis reflection
+//! otherwise unconditional), Wonder Guard's block of any powered hit other
+//! than Struggle that is not strictly super effective
+//! ([`hit::damage_before_roll`], propagated
+//! through drain, multi-hit, and fixed damage — Foresight and the
+//! two-turn-move distinction upstream's `AttacksThisTurn` check makes are not
+//! modelled, so the block is unconditional wherever it applies),
+//! Synchronize's paralysis reflection
 //! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
 //! stays refused, see [`secondary::ensure_admissible`]), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
@@ -208,9 +219,8 @@
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
 //! two abilities that still read a holder's primary status or the draw
 //! that inflicts it — Shed Skin and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`];
-//! Guts and Marvel Scale are modelled above, though `secondary`'s poison path
-//! still refuses newly poisoning either holder) — and the move effects the eight
+//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
+//! and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are
