@@ -904,6 +904,23 @@ fn two_over_limit_saves_sharing_a_prefix_do_not_share_one_lock() {
     drop(guard);
 }
 
+/// Opens a real, host-safe stand-in file for `candidate` inside `dir`, keyed
+/// by `candidate`'s raw bytes: two distinct candidates -- even byte strings
+/// no host need accept as a dirent, such as lone non-UTF-8 bytes on APFS --
+/// always resolve to two distinct, genuinely lockable files. Models the
+/// host through the [`SaveFile::lock_with_open`] seam so this exercises
+/// path derivation on every host, not just ones that accept the raw name.
+fn non_utf8_safe_backing(dir: &Path) -> impl Fn(&Path) -> std::io::Result<std::fs::File> {
+    use std::hash::Hasher;
+
+    let dir = dir.to_path_buf();
+    move |candidate: &Path| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(candidate.as_os_str().as_encoded_bytes());
+        SaveFile::open_lock_file(&dir.join(format!("{:016x}", hasher.finish())))
+    }
+}
+
 /// Two saves whose basenames are distinct non-UTF-8 byte strings are two
 /// distinct saves, so each must lock its own sidecar.
 #[cfg(unix)]
@@ -916,11 +933,16 @@ fn distinct_non_utf8_save_basenames_do_not_share_one_lock() {
     let second = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x81")));
     assert_ne!(first.path(), second.path(), "the two saves must differ");
 
-    let held = first.lock().expect("the first save must be lockable");
+    let held = first
+        .lock_with_open(|_| {}, non_utf8_safe_backing(&dir.path))
+        .expect("the first save must be lockable");
     let (locked, waited) = std::sync::mpsc::channel();
     let other = second.clone();
+    let backing_dir = dir.path.clone();
     std::thread::spawn(move || {
-        let guard = other.lock().expect("the second save must be lockable");
+        let guard = other
+            .lock_with_open(|_| {}, non_utf8_safe_backing(&backing_dir))
+            .expect("the second save must be lockable");
         let _sent = locked.send(());
         drop(guard);
     });
@@ -935,6 +957,58 @@ fn distinct_non_utf8_save_basenames_do_not_share_one_lock() {
          one sidecar",
         second.path(),
         first.path()
+    );
+}
+
+/// The entry a case-folding host -- macOS and Windows by default -- resolves
+/// `candidate` to: one directory entry serves every ASCII case variant.
+fn case_folded_entry(candidate: &Path) -> PathBuf {
+    let name = candidate.file_name().unwrap_or_default().to_string_lossy();
+    candidate.with_file_name(name.to_lowercase())
+}
+
+/// The sidecar `file` ends up locking on a host that both refuses an
+/// over-limit component and folds the case of its directory entries.
+fn sidecar_locked_on_a_case_folding_host(file: &SaveFile) -> PathBuf {
+    const HOST_NAME_MAX: usize = 143;
+
+    let locked = std::cell::RefCell::new(PathBuf::new());
+    let guard = file
+        .lock_with_open(
+            |_| {},
+            |candidate: &Path| {
+                let component_len = candidate
+                    .file_name()
+                    .map_or(0, |name| name.as_encoded_bytes().len());
+                if component_len > HOST_NAME_MAX {
+                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+                }
+                let entry = case_folded_entry(candidate);
+                let opened = SaveFile::open_lock_file(&entry)?;
+                *locked.borrow_mut() = entry;
+                Ok(opened)
+            },
+        )
+        .expect("an over-limit save must be lockable");
+    drop(guard);
+    locked.into_inner()
+}
+
+/// Two case variants of one over-limit save name one file on a case-folding
+/// host, so their locks must land on one sidecar and exclude one another.
+#[test]
+fn case_variants_of_one_over_limit_save_lock_one_sidecar_on_a_case_folding_host() {
+    let dir = TempDir::new("case-folding-lock");
+    let upper = SaveFile::at(dir.join(&"S".repeat(140)));
+    let lower = SaveFile::at(dir.join(&"s".repeat(140)));
+
+    assert_eq!(
+        sidecar_locked_on_a_case_folding_host(&upper),
+        sidecar_locked_on_a_case_folding_host(&lower),
+        "a case-folding host resolves {:?} and {:?} to one save, so a second locker \
+         must not walk away with a sidecar of its own",
+        upper.path().file_name().unwrap_or_default(),
+        lower.path().file_name().unwrap_or_default(),
     );
 }
 
@@ -1023,4 +1097,92 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
         "a bare relative save path's directory entry lives in the working directory, and \
          the rename must best-effort sync it exactly once"
     );
+}
+
+/// An ordinary lock path is always some basename with the literal `.lock`
+/// suffix appended, so it always ends in that suffix; a fallback name that
+/// also ended in `.lock` (its first, reported shape was `.<hash>.lock`)
+/// could always be some short save's own lock name. The fallback must use
+/// a namespace no ordinary lock path can reach.
+#[test]
+fn an_over_limit_saves_hashed_lock_namespace_cannot_be_an_ordinary_locks_name() {
+    let dir = TempDir::new("hashed-lock-namespace-shape");
+    let long = SaveFile::at(dir.join(&"s".repeat(140)));
+
+    let fallback_name = long
+        .hashed_lock_path()
+        .file_name()
+        .expect("the hashed lock path names a file")
+        .as_encoded_bytes()
+        .to_vec();
+
+    assert!(
+        !fallback_name.ends_with(b".lock"),
+        "a fallback name ending in `.lock` could always be produced by some short save's \
+         own basename plus the ordinary `.lock` suffix, got {:?}",
+        String::from_utf8_lossy(&fallback_name)
+    );
+}
+
+/// The over-limit save's fallback is named `.lock.<hash>`; reproduces the
+/// exact adversarial short save reported against the fallback's first
+/// shape, `.<hash>.lock` (a short save literally named `.<hash>`), keyed to
+/// this run's own hash so the guard tracks whatever the digits are. Those
+/// are two distinct saves, so holding the over-limit save's lock must leave
+/// the short save free.
+#[test]
+fn an_over_limit_saves_hashed_lock_does_not_collide_with_a_short_saves_own_lock() {
+    const HOST_NAME_MAX: usize = 143;
+    let dir = TempDir::new("hashed-lock-namespace");
+    let long = SaveFile::at(dir.join(&"s".repeat(140)));
+
+    let fallback = long.hashed_lock_path();
+    let hash = fallback
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(".lock."))
+        .expect("the fallback name carries the hash after the `.lock.` namespace");
+
+    // The short save whose ordinary `<save>.lock` would have been the long
+    // save's fallback, had the fallback kept its first reported shape.
+    let short = SaveFile::at(dir.join(&format!(".{hash}")));
+    assert_ne!(
+        short.lock_path(),
+        fallback,
+        "the fallback namespace must never equal an ordinary lock name"
+    );
+    assert!(
+        short
+            .lock_path()
+            .file_name()
+            .is_some_and(|name| name.as_encoded_bytes().len() <= HOST_NAME_MAX),
+        "the colliding short save must be one this host accepts outright"
+    );
+
+    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        let component_len = candidate
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        if component_len > HOST_NAME_MAX {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::open_lock_file(candidate)
+    };
+
+    let guard = long
+        .lock_with_open(|_| {}, refuse_long_components)
+        .expect("the over-limit save must be lockable");
+
+    let probe = SaveFile::open_lock_file(&short.lock_path())
+        .expect("the short save's own lock file must be openable");
+    match probe.try_lock() {
+        Ok(()) => {}
+        other => panic!(
+            "locking {} must not block the unrelated save {}, got {other:?}",
+            long.path().display(),
+            short.path().display()
+        ),
+    }
+    drop(probe);
+    drop(guard);
 }

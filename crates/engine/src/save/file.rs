@@ -532,16 +532,32 @@ impl SaveFile {
     }
 
     /// A fixed-width sidecar hashing this save's whole basename, used when
-    /// `<save>.lock` overflows the filesystem's component limit.
+    /// `<save>.lock` overflows the filesystem's component limit. Named
+    /// `.lock.<hash>` rather than `<hash>.lock`: an ordinary lock path is
+    /// always some basename with the literal suffix `.lock` appended, so it
+    /// always ends in `k`; this name ends in a hex digit and never does, so
+    /// no ordinary `<save>.lock` path can ever equal a fallback path.
+    ///
+    /// Hashes the ASCII-lowercased basename bytes, because a case-folding
+    /// host (macOS, Windows by default) resolves every ASCII case variant
+    /// of an over-limit name to one directory entry and their locks must
+    /// land on one sidecar. This folds unconditionally rather than probing
+    /// the actual host, so it has two known limits: a basename pair
+    /// differing solely in non-ASCII case (for example precomposed
+    /// Latin-1 letters, which those hosts' default folding also merges)
+    /// still hashes to distinct sidecars and is not covered; and on a
+    /// case-sensitive host two genuinely distinct over-limit saves that
+    /// differ only in ASCII case share one fallback sidecar and needlessly
+    /// contend for it, though neither ever loses a write to the other.
     fn hashed_lock_path(&self) -> PathBuf {
         use std::hash::Hasher;
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         if let Some(name) = self.path.file_name() {
-            hasher.write(name.as_encoded_bytes());
+            hasher.write(&name.as_encoded_bytes().to_ascii_lowercase());
         }
         self.path
-            .with_file_name(format!(".{:016x}.lock", hasher.finish()))
+            .with_file_name(format!(".lock.{:016x}", hasher.finish()))
     }
 }
 
