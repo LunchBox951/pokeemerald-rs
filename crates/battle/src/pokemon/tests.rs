@@ -558,6 +558,28 @@ fn attacking_and_defending_stat_select_by_category() {
 const MACHOP: SpeciesId = SpeciesId(66);
 /// `SPECIES_MILOTIC`: Marvel Scale in its primary (and only) ability slot.
 const MILOTIC: SpeciesId = SpeciesId(329);
+/// `SPECIES_REMORAID`: Hustle in its primary (and only) ability slot.
+const REMORAID: SpeciesId = SpeciesId(223);
+
+#[test]
+fn attacking_stat_raises_a_hustle_holders_physical_attack() {
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(&dex, REMORAID, 5, MAX_IVS, 0, vec![TACKLE]).unwrap();
+    assert_eq!(mon.ability(), AbilityId::HUSTLE);
+    let raw_attack = mon.stats().attack;
+    let boosted_attack = 150 * raw_attack / 100;
+
+    assert_eq!(
+        mon.attacking_stat(MoveCategory::Physical),
+        (boosted_attack, StatStage::NEUTRAL),
+        "a Hustle holder's physical Attack is raised 150%, unconditional on status"
+    );
+    assert_eq!(
+        mon.attacking_stat(MoveCategory::Special),
+        (mon.stats().sp_attack, StatStage::NEUTRAL),
+        "Hustle never touches Special Attack"
+    );
+}
 
 #[test]
 fn attacking_stat_raises_only_a_statused_guts_holders_physical_attack() {
