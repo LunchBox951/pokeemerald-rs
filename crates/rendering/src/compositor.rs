@@ -470,6 +470,33 @@ fn affine_mosaic_hold_participates(
             .is_some_and(|enable| enable.bg_enabled(bg_index))
 }
 
+/// The effects enable an OBJ pixel composites under in `region`, whose
+/// control enables effects iff `window_effects`.
+///
+/// `OBJWIN`'s own effects enable is a per-pixel mask a span-level override
+/// cannot see, so it wins over a spill's writing span on the columns it
+/// governs; `WIN0` and `WIN1` outrank `OBJWIN`, which never flags a pixel they
+/// cover (`software-obj.c:161`). Brightness is baked at write time from the
+/// writing span's own enable (`software-obj.c:176-208`), so `OBJWIN` cannot
+/// brighten a colour its writer stored unbrightened `(behavioral-fidelity)`.
+fn obj_effects_enable(
+    region: WindowRegion,
+    window_effects: bool,
+    pixel: crate::sprite::SpritePixel,
+) -> EffectsEnable {
+    if region == WindowRegion::ObjWindow {
+        EffectsEnable {
+            target1: window_effects,
+            brightness: window_effects && pixel.brightness_override.unwrap_or(true),
+        }
+    } else {
+        EffectsEnable {
+            target1: pixel.target1_override.unwrap_or(window_effects),
+            brightness: pixel.brightness_override.unwrap_or(window_effects),
+        }
+    }
+}
+
 /// Resolve one pixel's final color for [`compose_frame_with_effects`].
 ///
 /// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
@@ -524,20 +551,7 @@ fn compose_pixel(
             window_spans,
             region.suppresses_objwin_hole(),
         ) {
-            // `OBJWIN`'s own effects enable is a per-pixel mask a span-level
-            // override cannot see, so it wins over a spill's writing span on
-            // the columns it actually governs. `WIN0` and `WIN1` outrank
-            // `OBJWIN`, which never flags a pixel they cover
-            // (`software-obj.c:161`), so the raw mask alone must not drop the
-            // override `(behavioral-fidelity)`.
-            let enable = if region == WindowRegion::ObjWindow {
-                EffectsEnable::uniform(window.effects)
-            } else {
-                EffectsEnable {
-                    target1: pixel.target1_override.unwrap_or(window.effects),
-                    brightness: pixel.brightness_override.unwrap_or(window.effects),
-                }
-            };
+            let enable = obj_effects_enable(region, window.effects, pixel);
             insert_candidate(
                 &mut front,
                 &mut next,
@@ -2728,6 +2742,103 @@ mod tests {
             Some(red),
             "OBJWIN's own effects-disabled control wins over WIN0's \
              effects-enabled writing span, so x=10 stays unbrightened"
+        );
+    }
+
+    #[test]
+    fn affine_obj_mosaic_trailing_spill_keeps_an_effects_disabled_writer_under_objwin() {
+        // An OBJWIN column takes the palette its writing span chose, brightened
+        // only if that span enabled effects (`software-obj.c:176-208`).
+        use crate::oam::AffineMode;
+
+        let mut bytes = [0u8; 64];
+        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
+        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        let palette = Palette::new(colors);
+
+        let affine_entry = OamEntry::new(
+            1,
+            0,
+            0, // tile 0 (uniform red)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)
+        .with_affine(AffineMode::Affine { matrix_num: 0 });
+        let objwin_marker = OamEntry::new(
+            10,
+            0,
+            1, // tile 1 (opaque), marks OBJWIN across x=10..=17
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window);
+        let entries = [affine_entry, objwin_marker];
+        let matrices = [AffineMatrix::IDENTITY];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+        let mut obj_on_effects_on = obj_on;
+        obj_on_effects_on.effects = true;
+
+        let obj_target1 = LayerTargets {
+            obj: true,
+            ..LayerTargets::default()
+        };
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
+                    obj_on, // the writing span: effects off
+                )),
+                win1: None,
+                obj_window: Some(obj_on_effects_on),
+                winout: obj_on_effects_on,
+            },
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: obj_target1,
+                evy: 16,
+                ..EffectsConfig::default()
+            },
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(4, 1),
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(9, 0),
+            Some(red),
+            "x=9 is inside WIN0, whose control disables effects"
+        );
+        assert_eq!(
+            fb.pixel(10, 0),
+            Some(red),
+            "x=10 was written by WIN0's effects-disabled pass, so OBJWIN's \
+             effects-enabled control cannot brighten a colour that was never \
+             stored brightened"
         );
     }
 
