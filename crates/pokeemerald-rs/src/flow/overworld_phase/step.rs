@@ -479,11 +479,8 @@ impl OverworldPhase {
             // the precedence on its own.
             let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
             let landed = stepped_onto.filter(|_| !first_battle_triggered);
-            // `previous_elevation()`, not `elevation()`: `TryStartStepBasedScript`
-            // queries `GetPlayerPosition`'s `position.elevation`, which is
-            // `PlayerGetElevation()` -- the retained `previousElevation`, not the
-            // landed tile's own (possibly transition) collision elevation
-            // (`field_control_avatar.c:194-197`, `field_player_avatar.c:1192-1195`).
+            // Retained previous elevation, not collision -- contract noted at
+            // `resolve_pre_movement_field_input`'s `previous_elevation` local.
             let door_warp = landed.and_then(|(x, y)| {
                 trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
             });
@@ -620,10 +617,8 @@ impl OverworldPhase {
                 }
                 let direction = pre.arrow_direction?;
                 let (x, y) = pre.position;
-                // `previous_elevation()`: `TryArrowWarp` reads the same
-                // `GetPlayerPosition`-derived `position.elevation` (retained
-                // `previousElevation`) `TryStartStepBasedScript` does above
-                // (`field_control_avatar.c:164-168, 194-197`).
+                // Same retained-elevation contract as
+                // `resolve_pre_movement_field_input`.
                 trigger_arrow_warp(runtime, x, y, self.player.previous_elevation(), direction)
             })
     }
@@ -642,10 +637,8 @@ impl OverworldPhase {
         let facing = self.player.facing();
         let position = self.player.position();
         let elevation = self.player.elevation();
-        // `GetPlayerPosition`'s `position.elevation` is `PlayerGetElevation()`,
-        // the retained `previousElevation`, not the collision value above --
-        // every warp lookup below queries this, not `elevation`
-        // (`field_control_avatar.c:194-197`, `field_player_avatar.c:1192-1195`).
+        // `PlayerGetElevation()`'s retained `previousElevation`, not the
+        // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
         let previous_elevation = self.player.previous_elevation();
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
@@ -972,6 +965,112 @@ mod door_sequencing_tests {
             "upstream cannot read this frame's held direction for TryDoorWarp -- \
              heldDirection2 is only set at T_TILE_CENTER/T_NOT_MOVING \
              (field_control_avatar.c:95-112), which the drain call is not"
+        );
+    }
+}
+
+#[cfg(test)]
+mod post_movement_arrow_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::Buttons;
+
+    const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
+    const DOORMAT: (u16, u16) = (7, 8);
+
+    fn center_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
+        scene.runtime(CENTER, header, events)
+    }
+
+    /// Issue #1127's post-movement half, asserted on the frame's warp
+    /// decision rather than through a whole `step` call, exactly as the
+    /// sibling `door_sequencing_tests` already must: pack-free `warp_to`
+    /// fails to load the destination and leaves `map_id` and the player
+    /// untouched (`connections.rs:274-281`), so a missed post-movement
+    /// arrow warp is observationally identical to a fired one at the phase
+    /// level. `resolve_warp_trigger` is the seam where the two elevations
+    /// differ.
+    #[test]
+    fn the_drain_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
+        let doormat = events.warp_events[0];
+        assert_eq!((doormat.x, doormat.y), (7, 8));
+        assert_eq!(
+            doormat.elevation, 3,
+            "fixture precondition: the doormat's warp event is stored at an ordinary \
+             elevation, not the transition wildcard every query already matches"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
+            ),
+            CENTER,
+            PlayerState::new((7, 7), 3, Direction::South),
+            None,
+        );
+
+        // One call short of the crossing's drain: Down held throughout, as
+        // upstream's `heldDirection` gate requires (`field_control_avatar.c:164-168`).
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) - 1 {
+            phase.step(held(Buttons::DOWN));
+        }
+        assert_eq!(phase.player.position(), (7, 8));
+        assert!(
+            phase.player.in_transit(),
+            "fixture precondition: the crossing must still be draining here"
+        );
+
+        // Replay the drain call in `step`'s own order: pre-movement field
+        // input, then this frame's movement, then the warp decision.
+        let pre: PreMovementFieldInput = {
+            let runtime = center_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::DOWN),
+                Some(Direction::South),
+                &runtime,
+            )
+        };
+        assert!(
+            pre.arrow_trigger.is_none(),
+            "fixture precondition: the pre-movement preempt sees a player still in \
+             transit, so only the post-movement poll can fire this frame"
+        );
+        phase.player.tick();
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3),
+            "fixture precondition: the landed transition cell is the collision \
+             elevation, while the retained previousElevation upstream looks warps up \
+             at is still 3"
+        );
+
+        let runtime = center_runtime(&phase.scene);
+        let trigger = phase.resolve_warp_trigger(&pre, &runtime, None, false);
+        assert!(
+            matches!(
+                trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_OLDALE_TOWN")
+            ),
+            "the post-movement arrow poll must resolve at PlayerGetElevation()'s \
+             retained 3 (field_player_avatar.c:1192-1195) -- a lookup at the collision \
+             elevation 0 misses the warp event stored at 3; got {trigger:?}"
         );
     }
 }

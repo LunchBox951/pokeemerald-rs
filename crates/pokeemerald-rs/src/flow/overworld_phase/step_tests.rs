@@ -1117,33 +1117,10 @@ fn an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
 }
 
 /// Issue #1127's remaining arrow half: the same `previous_elevation()`
-/// contract for the *post-movement* arrow re-poll (`step.rs:620-627`), the
-/// lookup a crossing reaches on its own drain frame.
-/// [`an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation`]
-/// cannot reach it: a player already standing on the tile takes the
-/// pre-movement preempt instead, and that preempt short-circuits this poll.
-///
-/// Pack-gated, unlike its two siblings, because the movement has already
-/// happened by the time this poll runs: there is no preempted step left to
-/// observe, and no suppressed encounter roll either -- upstream runs
-/// `CheckStandardWildEncounter` (`field_control_avatar.c:162`) *ahead* of
-/// `TryArrowWarp` (`:164-168`), and this port with it. The one observation
-/// a fired post-movement arrow warp leaves is the warp landing, and
-/// [`OverworldPhase::warp_to`] finishes through
-/// [`crate::overworld::load_room`] -- the same reason `super::warp_tests`'
-/// `a_legal_step_in_the_arrow_direction_lands_the_warp` is pack-gated.
-///
-/// `super::warp_tests`' own post-movement walk
-/// (`walking_onto_the_doormat_holding_south_exits_through_the_front_door`)
-/// crosses onto Brendan's-house doormat, whose warp event is stored at the
-/// `0` transition elevation -- the wildcard every query matches
-/// (`engine::overworld::MapRuntime::warp_event_at`), so a lookup at either
-/// elevation finds it. Oldale Town's Pokémon Center exits through the same
-/// held-direction doormat but stores both its warp events at an ordinary
-/// elevation `3`, so transplanting the transition *cell* under it (the
-/// shape `MAP_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F`'s own warp #2 really
-/// has, and the one the sibling tests above build) makes the two lookups
-/// disagree.
+/// contract for the *post-movement* arrow re-poll (`step.rs:620-627`).
+/// Pack-gated, unlike its two siblings, because only the warp landing is
+/// observable here; see `post_movement_arrow_elevation_tests` for a
+/// pack-free assertion on the lookup itself.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
