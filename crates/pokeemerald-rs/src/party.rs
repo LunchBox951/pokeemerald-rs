@@ -281,6 +281,9 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     // (module docs).
     box_data.set_nickname(create_mon_nickname(mon.species()));
     box_data.set_language(LANGUAGE_ENGLISH);
+    // `SetBoxMonData(MON_DATA_SPECIES)` raises `hasSpecies` for a nonzero
+    // species (`pokeemerald/src/pokemon.c:4220-4227`).
+    box_data.set_has_species(mon.species().0 != SPECIES_NONE);
 
     let mut record = Pokemon {
         box_data,
@@ -469,6 +472,11 @@ pub(crate) fn merge_into_save_pokemon(
 
     let mut merged = *base;
     merged.box_data.set_substructures(&substructures);
+    // Re-derives `hasSpecies` alongside the growth species this branch
+    // re-files every save (`pokeemerald/src/pokemon.c:4220-4227`).
+    merged
+        .box_data
+        .set_has_species(mon.species().0 != SPECIES_NONE);
 
     if retained_stat_block_is_current {
         normalize_retained_shedinja_max_hp(&mut merged, mon, hp_hidden_by_load);
