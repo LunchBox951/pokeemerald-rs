@@ -26900,6 +26900,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "RealClearChain": {
+          "reason": "RealClearChain (m4a_1.s:726-748), called only from ply_fine, unlinks a channel from its track's chain and stores 0 into chan->track (m4a_1.s:744-745), an early no-op if already untracked. Voice::detach_track (voice.rs) reimplements the track-nulling half via Mixer::release_track (issue #1192); the linked-list unlink itself is not modeled, since Mixer owns voices in its own slot array rather than a track-owned chain.",
+          "rust_target": "crates/audio/src/mixer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        },
         "SoundMainRAM_Exhaustion": {
           "reason": "SoundMainRAM's shared post-advance exhaustion test, reached by both the TONEDATA_TYPE_FIX path and the pitch-scaled path: the remaining-sample-count subtraction sits after the phase advance inside the per-output DMA loop (m4a_1.s:406-420, subs r2, r2, lr; ble _081DD134) and the non-looping arm stores statusFlags = 0 immediately rather than deferring to the next SoundMainRAM pass (m4a_1.s:376-386, _081DD158.._081DD174). Voice::render re-checks termination immediately after advance_wrapping and retires a non-looping voice in that same render call instead of waiting for a later output slot's pre-render normalize() to catch it, or missing it entirely when the crossing lands in the accumulator's last slot (issue #1078). Still not modelled: SoundMainRAM_ChanLoop's own envelope attack/decay/sustain/release stepping (m4a_1.s ~_081DCF6A-_081DD03A, no separate ledger artifact yet), the PCM DMA ring-buffer's cross-lane carry via ror 8 (voice.rs's module doc notes this crate accumulates each output independently in an i32 instead), and the raw currentPointer/count pointer bookkeeping beyond the exhaustion test itself.",
           "rust_target": "crates/audio/src/voice.rs",
@@ -26920,6 +26926,12 @@
         },
         "ply_endtie": {
           "reason": "ply_endtie (m4a_1.s:1819-1857) walks a track's channel list picking the first channel matching the played key with SOUND_CHANNEL_SF_START|SF_ENV set and SF_STOP clear, then sets SF_STOP on it alone (issue #901). Reimplemented as Mixer::note_off_track, which instead scans every DirectSound and CGB slot on the track for the requested key and releases the one with the greatest note-on ordinal (mixer.rs note_off_track), a newest-wins equivalent rather than upstream's list-order walk. The CGB side of that eligibility test is now phase-accurate: CgbVoice::is_end_tie_eligible (delegating to CgbEnvelope::is_end_tie_eligible) excludes an automatic pseudo-echo tail and a retired channel, matching ply_endtie's START|ENV/~STOP test, since an automatic zero-sustain tail clears SOUND_CHANNEL_SF_ENV before setting only SF_IEC and never SF_STOP (m4a.c:1090-1098, 1125-1129) and so upstream skips it. DirectSound has no such divergence (m4a_1.s:228-250 keeps SF_ENV set through its own automatic tail) and keeps the plain non-stopping test. Deferred: the list-order-walk mechanism itself and its single-match-then-stop short-circuit are not modeled; note_off_track's newest-ordinal selection is a standing simplification predating this fix.",
+          "rust_target": "crates/audio/src/mixer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        },
+        "ply_fine": {
+          "reason": "ply_fine (m4a_1.s:750-777) sets SOUND_CHANNEL_SF_STOP on every still-on channel of the finished track, then unconditionally clears each channel via RealClearChain before resetting the track's flags. It walks track->chan, the single chain ply_note's insertion code (m4a_1.s:1719-1731) shares between SoundChannel and CgbChannel entries (identical track/prev/next offsets, m4a_constants.inc:132-134,251-253), so it also nulls a finished track's CGB channel. Mixer::release_track reimplements the SoundChannel half via Voice::detach_track (issue #1192): select_direct_sound_slot's released-slot tie-break sorts a null owner below every live-owned voice, matching chan->track's null-pointer ordering in ply_note's DirectSound victim loop (m4a_1.s:1694-1711). The CGB half is left attached: not presently player-visible, since add_cgb_voice's reusable test short-circuits on occupant.is_stopping() before ever comparing track (mixer.rs:192-198), and release_track already note-offs a matching CGB voice before returning. Deferred: giving CgbVoice the same nullable ownership, and the doubly-linked chain removal mechanism itself, since Mixer scans its own slot array rather than a linked list.",
           "rust_target": "crates/audio/src/mixer.rs",
           "spec": "S-3",
           "status": "stubbed"
