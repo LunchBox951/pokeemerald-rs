@@ -36,7 +36,11 @@ const FIELD_METATILES: usize = 0x0C;
 const FIELD_METATILE_ATTRIBUTES: usize = 0x10;
 /// Offset of the `callback` pointer.
 const FIELD_CALLBACK: usize = 0x14;
-/// One 16-colour palette bank, in bytes.
+/// The banks `palettes` points at: `const u16 (*palettes)[16]`.
+const BANK_COUNT: usize = 16;
+/// The colours in one bank.
+const BANK_COLORS: u16 = 16;
+/// One bank, in bytes.
 const BANK_BYTES: usize = 32;
 
 /// Read every tileset the profile records and push its pack entries.
@@ -101,26 +105,31 @@ fn corroborate(reader: &RomReader<'_>, tileset: &TilesetRoot) -> Result<(), Impo
         "Tileset.tiles",
     )?;
     // The struct points at the palette block, which is bank 0's address.
-    let bank0 = tileset
-        .palettes
-        .first()
-        .ok_or(ImportError::StructMismatch {
+    let [bank0, ..] = tileset.palettes else {
+        return Err(ImportError::StructMismatch {
             root: name,
             field: "Tileset.palettes",
-        })?
-        .addr;
+        });
+    };
     check_pointer(
         reader,
         base,
         FIELD_PALETTES,
-        bank0,
+        bank0.addr,
         name,
         "Tileset.palettes",
     )?;
-    // `palettes` is `const u16 (*palettes)[16]`: one contiguous block, so
-    // bank `n` sits at `bank0 + n * 32`, not wherever the profile names.
-    for (index, root) in tileset.palettes.iter().enumerate().skip(1) {
-        if root.addr != bank(bank0, index)? {
+    // The block is exactly sixteen 16-colour banks, bank `n` at
+    // `bank0 + n * 32`: fewer, narrower, or displaced banks are the
+    // profile's error, and `Pack::tileset` needs all sixteen.
+    if tileset.palettes.len() != BANK_COUNT {
+        return Err(ImportError::StructMismatch {
+            root: name,
+            field: "Tileset.palettes",
+        });
+    }
+    for (index, root) in tileset.palettes.iter().enumerate() {
+        if root.color_count != BANK_COLORS || root.addr != bank(bank0.addr, index)? {
             return Err(ImportError::StructMismatch {
                 root: name,
                 field: "Tileset.palettes",

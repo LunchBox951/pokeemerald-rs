@@ -5,10 +5,8 @@
 //! way `global.fieldmap.h` declares it, and each fault case proves one wrong
 //! byte is a refusal rather than a wrong asset.
 //!
-//! The fixture carries three palette banks where a real tileset carries
-//! sixteen. The reader loops over whatever banks its roots list, so three
-//! exercise the same path and keep the table readable; all sixteen of all
-//! five real tilesets are covered by the real-ROM comparison.
+//! The fixture carries the sixteen 16-colour banks `struct Tileset`
+//! declares, since the reader refuses any other shape.
 
 use pack_format::{EntryKind, PackWriter};
 
@@ -56,24 +54,47 @@ const STRAY_BANK: usize = 0x7000;
 /// The address of that stray bank.
 const STRAY_BANK_AT: GbaPtr = GbaPtr::at(ROM_BASE + 0x7000);
 
-/// The palette banks, at consecutive 32-byte addresses.
-static BANKS: [PaletteRoot; 3] = [
-    PaletteRoot {
-        id: "tileset/t/palette/00",
+/// The pack ids of the sixteen banks, in bank order.
+const BANK_IDS: [&str; 16] = [
+    "tileset/t/palette/00",
+    "tileset/t/palette/01",
+    "tileset/t/palette/02",
+    "tileset/t/palette/03",
+    "tileset/t/palette/04",
+    "tileset/t/palette/05",
+    "tileset/t/palette/06",
+    "tileset/t/palette/07",
+    "tileset/t/palette/08",
+    "tileset/t/palette/09",
+    "tileset/t/palette/10",
+    "tileset/t/palette/11",
+    "tileset/t/palette/12",
+    "tileset/t/palette/13",
+    "tileset/t/palette/14",
+    "tileset/t/palette/15",
+];
+
+/// The sixteen banks at consecutive 32-byte addresses from `PALETTES_AT`.
+const fn contiguous_banks() -> [PaletteRoot; 16] {
+    let mut banks = [PaletteRoot {
+        id: "",
         addr: PALETTES_AT,
         color_count: 16,
-    },
-    PaletteRoot {
-        id: "tileset/t/palette/01",
-        addr: GbaPtr::at(ROM_BASE + 0x2020),
-        color_count: 16,
-    },
-    PaletteRoot {
-        id: "tileset/t/palette/02",
-        addr: GbaPtr::at(ROM_BASE + 0x2040),
-        color_count: 16,
-    },
-];
+    }; 16];
+    let mut index: u32 = 0;
+    while (index as usize) < banks.len() {
+        banks[index as usize] = PaletteRoot {
+            id: BANK_IDS[index as usize],
+            addr: GbaPtr::at(ROM_BASE + 0x2000 + 32 * index),
+            color_count: 16,
+        };
+        index += 1;
+    }
+    banks
+}
+
+/// The palette banks, at consecutive 32-byte addresses.
+static BANKS: [PaletteRoot; 16] = contiguous_banks();
 
 /// The one animation frame: a raw 2x2-tile 4bpp array.
 static FRAME: ImageRoot = ImageRoot {
@@ -135,27 +156,36 @@ static TILESET: TilesetRoot = TilesetRoot {
 static TILESETS: [TilesetRoot; 1] = [TILESET];
 
 /// The same banks with bank 1 addressed outside the palette block.
-static STRAY_BANKS: [PaletteRoot; 3] = [
-    PaletteRoot {
-        id: "tileset/t/palette/00",
-        addr: PALETTES_AT,
-        color_count: 16,
-    },
-    PaletteRoot {
-        id: "tileset/t/palette/01",
-        addr: STRAY_BANK_AT,
-        color_count: 16,
-    },
-    PaletteRoot {
-        id: "tileset/t/palette/02",
-        addr: GbaPtr::at(ROM_BASE + 0x2040),
-        color_count: 16,
-    },
-];
+static STRAY_BANKS: [PaletteRoot; 16] = {
+    let mut banks = contiguous_banks();
+    banks[1].addr = STRAY_BANK_AT;
+    banks
+};
 
 /// The same tileset carrying that stray bank.
 static STRAY_BANK_TILESET: [TilesetRoot; 1] = [TilesetRoot {
     palettes: &STRAY_BANKS,
+    ..TILESET
+}];
+
+/// The same banks with bank 1 one colour short of a full bank.
+static SHORT_BANKS: [PaletteRoot; 16] = {
+    let mut banks = contiguous_banks();
+    banks[1].color_count = 15;
+    banks
+};
+
+/// The same tileset carrying that short bank.
+static SHORT_BANK_TILESET: [TilesetRoot; 1] = [TilesetRoot {
+    palettes: &SHORT_BANKS,
+    ..TILESET
+}];
+
+/// The same tileset naming fifteen banks.
+static FIFTEEN_BANK_TILESET: [TilesetRoot; 1] = [TilesetRoot {
+    palettes: BANKS
+        .first_chunk::<15>()
+        .expect("sixteen banks hold fifteen"),
     ..TILESET
 }];
 
@@ -222,7 +252,7 @@ fn tile_bytes() -> Vec<u8> {
 /// A fixture holding a complete, self-consistent tileset.
 fn fixture() -> RomFixture {
     let mut palette_block = Vec::new();
-    for bank in 0..3u16 {
+    for bank in 0..16u16 {
         for color in 0..16u16 {
             palette_block.extend_from_slice(&(bank * 16 + color).to_le_bytes());
         }
@@ -264,8 +294,8 @@ fn run_with(fixture: RomFixture, tilesets: &'static [TilesetRoot]) -> Result<Vec
 fn a_whole_tileset_reads_into_entries() {
     let bytes = run(fixture()).expect("the fixture is self-consistent");
     let entries = pack_format::parse_directory(&bytes).expect("the pack parses");
-    // Tiles, three palette banks, two tables, one animation frame.
-    assert_eq!(entries.len(), 7);
+    // Tiles, sixteen palette banks, two tables, one animation frame.
+    assert_eq!(entries.len(), 20);
 
     let by_id = |id: &str| {
         entries
@@ -361,6 +391,34 @@ fn a_palette_bank_outside_the_block_is_refused() {
     // address outside it is wrong, not a colour the reader should trust.
     let fixture = fixture().write(STRAY_BANK, &[0xEE; 32]);
     let err = run_with(fixture, &STRAY_BANK_TILESET).unwrap_err();
+    assert!(matches!(
+        err,
+        ImportError::StructMismatch {
+            root: "t",
+            field: "Tileset.palettes"
+        }
+    ));
+}
+
+#[test]
+fn a_palette_bank_short_of_sixteen_colours_is_refused() {
+    // A bank is `u16 [16]`, so a narrower root would leave the pack's copy
+    // of that bank short and the missing colour black at runtime.
+    let err = run_with(fixture(), &SHORT_BANK_TILESET).unwrap_err();
+    assert!(matches!(
+        err,
+        ImportError::StructMismatch {
+            root: "t",
+            field: "Tileset.palettes"
+        }
+    ));
+}
+
+#[test]
+fn a_profile_short_of_the_sixteen_banks_is_refused() {
+    // `Pack::tileset` reads all sixteen banks, so fewer is a tileset the
+    // pack cannot load, refused at import rather than written incomplete.
+    let err = run_with(fixture(), &FIFTEEN_BANK_TILESET).unwrap_err();
     assert!(matches!(
         err,
         ImportError::StructMismatch {
