@@ -273,21 +273,40 @@ fn resumed_phase_saved_with_frame(
 }
 
 /// How many pixels of each fixture frame colour a real `START` press's menu
-/// shows, driven through production `advance_start_menu_frame`/`build_start_menu`/`start_menu::open`.
-fn border_colour_counts(
-    phase: &mut crate::flow::overworld_phase::OverworldPhase,
-) -> (usize, usize) {
+/// shows, driven through production `advance_scene`/`OverworldPhase::step`/
+/// `build_start_menu`/`start_menu::open`.
+///
+/// The press goes through [`crate::flow::advance_scene`] rather than
+/// [`OverworldPhase::advance_start_menu_frame`], for the same reason
+/// `save_continue_tests::real_pack_start_opens_the_menu_and_saves` does
+/// (issue #908): that dispatch hands an *already-open* menu to
+/// `advance_start_menu_frame` and a fresh press to `OverworldPhase::step`
+/// (`crate::flow`'s `AppScene::Overworld` arm), and the opener's own
+/// contract says it "runs only while a menu is already open". Calling it
+/// directly on a closed menu would leave that routing untested -- the same
+/// shape of gap #1179's constructor-level regression left behind.
+///
+/// Counts the composed *menu* over a blank framebuffer rather than
+/// `advance_scene`'s returned frame, so only the chrome's own pixels are
+/// weighed and the synthetic map underneath cannot contribute either
+/// fixture colour.
+fn border_colour_counts(phase: crate::flow::overworld_phase::OverworldPhase) -> (usize, usize) {
     use rendering::{Bgr555, Framebuffer};
 
     let temp = TempSave::new("field-start-menu-frame-unused-slot");
     let mut slot = temp.slot();
-    assert!(
-        phase.advance_start_menu_frame(super::tests::pressed(platform::Buttons::START), &mut slot),
-        "a START press must open the field start menu against the fixture pack"
+    let (scene, _frame) = super::advance_scene(
+        super::AppScene::Overworld(Box::new(phase)),
+        super::tests::pressed(platform::Buttons::START),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
     );
+    let super::AppScene::Overworld(phase) = scene else {
+        panic!("a START press must leave the overworld in place");
+    };
     let menu = phase
         .start_menu()
-        .expect("the START press must leave a menu open");
+        .expect("a START press must open the field start menu against the fixture pack");
     let fb = menu.compose_over(Framebuffer::new());
     let green = Bgr555::from_channels(0, 31, 0).to_rgb888();
     let red = Bgr555::from_channels(31, 0, 0).to_rgb888();
@@ -310,13 +329,13 @@ fn border_colour_counts(
 #[test]
 fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
     if std::env::var_os(FIELD_START_MENU_FRAME_BOUNDARY_CHILD).is_some() {
-        let mut five = resumed_phase_saved_with_frame("field-frame-5-child", 5);
-        let mut zero = resumed_phase_saved_with_frame("field-frame-0-child", 0);
+        let five = resumed_phase_saved_with_frame("field-frame-5-child", 5);
+        let zero = resumed_phase_saved_with_frame("field-frame-0-child", 0);
         assert_eq!(five.save2.options_window_frame_type, 5);
         assert_eq!(zero.save2.options_window_frame_type, 0);
 
-        let (five_greens, five_reds) = border_colour_counts(&mut five);
-        let (zero_greens, zero_reds) = border_colour_counts(&mut zero);
+        let (five_greens, five_reds) = border_colour_counts(five);
+        let (zero_greens, zero_reds) = border_colour_counts(zero);
 
         assert!(
             five_reds > 0 && five_greens == 0,
@@ -352,10 +371,21 @@ fn a_continued_saves_own_frame_reaches_the_field_start_menu_it_opens() {
         .expect("re-running this test binary must succeed");
     drop(std::fs::remove_file(&pack_path));
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "the child test must pass: status {:?}\nstderr:\n{stderr}",
+        "the child test must pass: status {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status
+    );
+    // libtest exits 0 for an `--exact` filter that matches nothing ("ok. 0
+    // passed"), so renaming this test or its module without updating the
+    // hard-coded filter above would silently turn the child into a no-op.
+    // Assert the child really executed one test, as
+    // `engine::save::file::staging::tests`' own subprocess regression does.
+    assert!(
+        stdout.contains("1 passed"),
+        "the filtered child must report one executed test -- an unmatched \
+         filter exits 0 having run nothing\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
