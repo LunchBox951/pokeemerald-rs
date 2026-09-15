@@ -197,8 +197,15 @@ class PromotionWorkflowContractTest(unittest.TestCase):
             PROMOTE_WORKFLOW.count('"${creator}" != "${REPOSITORY_OWNER}"'),
             2,
         )
-        self.assertIn("sort_by(.created_at) | last", PROMOTE_WORKFLOW)
+        self.assertIn("sort_by(.created_at, .id) | last", PROMOTE_WORKFLOW)
         self.assertNotIn('"github-actions[bot]"', PROMOTE_WORKFLOW)
+
+    def test_readiness_creator_comes_from_the_per_status_list(self):
+        # The combined-status endpoint omits each status's creator, so the
+        # owner check must read the list, newest first by time then id.
+        self.assertIn('"repos/${REPOSITORY}/commits/${sha}/statuses?per_page=100"', PROMOTE_WORKFLOW)
+        self.assertNotIn('"repos/${REPOSITORY}/commits/${sha}/status"', PROMOTE_WORKFLOW)
+        self.assertIn(".creator.login // empty", PROMOTE_WORKFLOW)
 
 
 class CiVersionWorkflowContractTest(unittest.TestCase):

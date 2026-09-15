@@ -81,10 +81,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          # The per-status list carries each status's creator; the combined
+          # status endpoint omits it, so the owner check would never match.
           status_creator() {
             local sha="$1" context="$2"
-            gh api "repos/${REPOSITORY}/commits/${sha}/status" \
-              --jq '[.statuses[] | select(.context == "'"${context}"'")] | sort_by(.created_at) | last | select(.state == "success") | .creator.login // empty'
+            gh api "repos/${REPOSITORY}/commits/${sha}/statuses?per_page=100" \
+              --jq '[.[] | select(.context == "'"${context}"'")] | sort_by(.created_at, .id) | last | select(.state == "success") | .creator.login // empty'
           }
 
           branch_sha() {
