@@ -379,7 +379,8 @@ impl SaveFile {
     /// The lock lives on a sibling `.lock` file, not the save file itself:
     /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
     /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards.
+    /// the path afterwards. An over-limit name falls back to a basename
+    /// hash; a save configured at that exact name is outside this contract.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -398,26 +399,57 @@ impl SaveFile {
     /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
     /// rather than always [`SaveFile::sync_directory_best_effort`].
     fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
+        self.lock_with_open(sync_directory, Self::open_lock_file)
+    }
+
+    /// As [`SaveFile::lock_with`], opening each candidate through the given
+    /// `open` rather than always [`Self::open_lock_file`].
+    fn lock_with_open(
+        &self,
+        sync_directory: impl FnMut(&Path),
+        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+    ) -> Result<SaveFileGuard, SaveFileError> {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
-        let path = self.lock_path();
-        let lock_error = |source: std::io::Error| SaveFileError::Lock {
+
+        let primary = self.lock_path();
+        let (path, file) = match open(&primary) {
+            Ok(file) => (primary, file),
+            // The save basename itself was accepted, so only the `.lock`
+            // suffix can have pushed this component over the limit.
+            Err(source) if source.kind() == std::io::ErrorKind::InvalidFilename => {
+                let fallback = self.hashed_lock_path();
+                let file = open(&fallback).map_err(|source| SaveFileError::Lock {
+                    path: fallback.clone(),
+                    source,
+                })?;
+                (fallback, file)
+            }
+            Err(source) => {
+                return Err(SaveFileError::Lock {
+                    path: primary,
+                    source,
+                })
+            }
+        };
+        file.lock().map_err(|source| SaveFileError::Lock {
             path: path.clone(),
             source,
-        };
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(lock_error)?;
-        file.lock().map_err(lock_error)?;
+        })?;
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
             }
         }
         Ok(SaveFileGuard { _lock_file: file })
+    }
+
+    fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
     }
 
     /// Creates the save file's parent directory and any missing ancestors;
@@ -497,6 +529,23 @@ impl SaveFile {
         let mut name = self.path.as_os_str().to_os_string();
         name.push(".lock");
         PathBuf::from(name)
+    }
+
+    /// A fixed-width sidecar hashing this save's whole basename, used when
+    /// `<save>.lock` overflows the filesystem's component limit. Named
+    /// `.lock.<hash>` so it never ends in `.lock` and no ordinary lock path
+    /// can equal it. Hashes the ASCII-lowercased basename so a case-folding
+    /// host's variants of one save share one sidecar; non-ASCII case is not
+    /// folded, and a case-sensitive host serialises ASCII case variants.
+    fn hashed_lock_path(&self) -> PathBuf {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if let Some(name) = self.path.file_name() {
+            hasher.write(&name.as_encoded_bytes().to_ascii_lowercase());
+        }
+        self.path
+            .with_file_name(format!(".lock.{:016x}", hasher.finish()))
     }
 }
 
