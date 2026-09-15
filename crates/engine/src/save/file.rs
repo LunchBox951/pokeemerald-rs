@@ -379,7 +379,8 @@ impl SaveFile {
     /// The lock lives on a sibling `.lock` file, not the save file itself:
     /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
     /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards.
+    /// the path afterwards. A sibling name too long for the filesystem has
+    /// its basename shortened until one is accepted.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -398,26 +399,58 @@ impl SaveFile {
     /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
     /// rather than always [`SaveFile::sync_directory_best_effort`].
     fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
+        self.lock_with_open(sync_directory, Self::open_lock_file)
+    }
+
+    /// As [`SaveFile::lock_with`], opening each candidate through the given
+    /// `open` rather than always [`Self::open_lock_file`].
+    fn lock_with_open(
+        &self,
+        sync_directory: impl FnMut(&Path),
+        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
+    ) -> Result<SaveFileGuard, SaveFileError> {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
-        let path = self.lock_path();
-        let lock_error = |source: std::io::Error| SaveFileError::Lock {
+
+        let mut stem_cap = self.lock_stem().len();
+        let (path, file) = loop {
+            let candidate = self.lock_candidate(stem_cap);
+            match open(&candidate) {
+                Ok(file) => break (candidate, file),
+                // The save basename itself was accepted, so only the
+                // `.lock` suffix can have pushed this over the limit;
+                // shorten the basename this lock is derived from and retry.
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::InvalidFilename && stem_cap > 0 =>
+                {
+                    stem_cap /= 2;
+                }
+                Err(source) => {
+                    return Err(SaveFileError::Lock {
+                        path: candidate,
+                        source,
+                    })
+                }
+            }
+        };
+        file.lock().map_err(|source| SaveFileError::Lock {
             path: path.clone(),
             source,
-        };
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(lock_error)?;
-        file.lock().map_err(lock_error)?;
+        })?;
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
             }
         }
         Ok(SaveFileGuard { _lock_file: file })
+    }
+
+    fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
     }
 
     /// Creates the save file's parent directory and any missing ancestors;
@@ -493,10 +526,28 @@ impl SaveFile {
         }
     }
 
-    fn lock_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".lock");
-        PathBuf::from(name)
+    /// This save's basename, lossily converted so it can be measured and cut
+    /// in bytes the way [`Self::lock_candidate`] needs.
+    fn lock_stem(&self) -> String {
+        self.path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+    }
+
+    /// The lock sidecar for this save, its basename cut to at most
+    /// `max_stem_len` bytes on a char boundary so a too-long component
+    /// shortens instead of being refused outright.
+    fn lock_candidate(&self, max_stem_len: usize) -> PathBuf {
+        let mut stem = self.lock_stem();
+        if stem.len() > max_stem_len {
+            let mut cut = max_stem_len;
+            while !stem.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            stem.truncate(cut);
+        }
+        stem.push_str(".lock");
+        self.path.with_file_name(stem)
     }
 }
 

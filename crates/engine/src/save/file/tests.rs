@@ -758,6 +758,166 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
+/// The longest basename `parent` accepts as a save file, found by growing
+/// one byte at a time until the host refuses it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn longest_valid_save_basename(parent: &Path) -> usize {
+    (1..=staging::MAX_COMPONENT_LEN)
+        .take_while(|&len| {
+            let candidate = parent.join("n".repeat(len));
+            match std::fs::File::create(&candidate) {
+                Ok(_) => {
+                    std::fs::remove_file(&candidate).unwrap();
+                    true
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidFilename => false,
+                Err(err) => {
+                    panic!("unexpected error probing the host's real path limit: {err:?}")
+                }
+            }
+        })
+        .last()
+        .unwrap_or(0)
+}
+
+/// A save at the host's longest valid basename, which overflows the
+/// component limit once `.lock` is appended, must still be lockable.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
+    let dir = TempDir::new("long-basename-lock");
+    let basename_len = longest_valid_save_basename(&dir.path);
+    let path = dir.join(&"n".repeat(basename_len));
+    let file = SaveFile::at(&path);
+    std::fs::File::create(&path).expect("the longest valid basename must itself be writable");
+    std::fs::remove_file(&path).unwrap();
+
+    assert!(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(sibling_path(&path, ".lock"))
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
+        "test setup must actually push the naive lock sibling over the host's component \
+         limit, or this does not exercise the fallback"
+    );
+
+    let guard = file
+        .lock()
+        .expect("a save this host accepts must be lockable");
+    let (store, _, _) = saved_store();
+    file.write(&store).unwrap();
+    drop(guard);
+
+    let reloaded = file.read().unwrap().expect("the save must be readable");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+/// A host limit under the naive `<save>.lock` name must shorten the
+/// basename the lock is derived from, and that shortened lock must
+/// actually be locked.
+#[test]
+fn a_host_component_limit_below_the_naive_lock_name_shortens_the_lock_basename() {
+    const HOST_NAME_MAX: usize = 143;
+    let dir = TempDir::new("lock-host-limit");
+    let path = dir.join(&"s".repeat(140));
+    let file = SaveFile::at(&path);
+
+    let attempted = std::cell::RefCell::new(Vec::new());
+    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        attempted.borrow_mut().push(candidate.to_path_buf());
+        let component_len = candidate
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        if component_len > HOST_NAME_MAX {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::open_lock_file(candidate)
+    };
+
+    let guard = file
+        .lock_with_open(|_| {}, refuse_long_components)
+        .expect("a host limit under the naive lock name must still be lockable");
+
+    assert_eq!(
+        attempted.into_inner(),
+        vec![
+            sibling_path(&path, ".lock"),
+            dir.path.join(format!("{}.lock", "s".repeat(70))),
+        ],
+        "the shortened attempt must be tried only after the full-basename name is \
+         refused, and land exactly on half the basename"
+    );
+
+    let probe = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.path.join(format!("{}.lock", "s".repeat(70))))
+        .expect("the shortened lock file exists while the guard is held");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("the shortened lock must actually exclude a second locker, got {other:?}"),
+    }
+    drop(probe);
+    drop(guard);
+}
+
+/// A save literally named `.lock` must not collide with the shortened lock
+/// another over-limit save derives in the same directory: the shortened
+/// name still carries part of that save's own basename.
+#[test]
+fn the_shortened_lock_name_does_not_collide_with_a_save_literally_named_dot_lock() {
+    const HOST_NAME_MAX: usize = 143;
+    let dir = TempDir::new("dot-lock-collision");
+    let path = dir.join(&"s".repeat(140));
+    let file = SaveFile::at(&path);
+
+    let attempted = std::cell::RefCell::new(Vec::new());
+    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
+        attempted.borrow_mut().push(candidate.to_path_buf());
+        let component_len = candidate
+            .file_name()
+            .map_or(0, |name| name.as_encoded_bytes().len());
+        if component_len > HOST_NAME_MAX {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
+        }
+        SaveFile::open_lock_file(candidate)
+    };
+
+    let guard = file
+        .lock_with_open(|_| {}, refuse_long_components)
+        .expect("an over-limit basename must still be lockable");
+    let lock_path = attempted
+        .into_inner()
+        .pop()
+        .expect("at least one candidate must have been attempted");
+    assert_ne!(
+        lock_path,
+        dir.path.join(".lock"),
+        "the shortened lock name must still carry part of the save's own basename, not \
+         collapse to a name a literal `.lock` save could itself occupy"
+    );
+
+    let dot_lock_save = SaveFile::at(dir.path.join(".lock"));
+    let (store, _, _) = saved_store();
+    dot_lock_save.write(&store).expect(
+        "a save literally named `.lock` must be writable without disturbing an unrelated lock",
+    );
+
+    let probe = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_path)
+        .expect("the held lock file must be untouched by the unrelated write");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!(
+            "an unrelated save literally named `.lock` must not defeat this lock, got {other:?}"
+        ),
+    }
+    drop(probe);
+    drop(guard);
+}
+
 #[test]
 fn the_save_lock_excludes_a_second_locker_until_dropped() {
     use std::sync::atomic::{AtomicBool, Ordering};
