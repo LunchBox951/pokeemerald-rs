@@ -26,8 +26,11 @@ use std::cell::RefCell;
 
 /// One opaque sprite-layer result for cross-layer composition.
 ///
-/// A better-priority transparent texel can update `priority` and
-/// `semi_transparent` without replacing `color`.
+/// A better-priority transparent texel can update `priority`,
+/// `semi_transparent`, `reblends`, and `target1_override` without replacing
+/// `color` or `brightness_override`: mGBA re-stamps order/`FLAG_TARGET_1`/
+/// `FLAG_REBLEND` from every such write but never the stored color itself
+/// (`software-obj.c:76-86`) `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -37,12 +40,154 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
+    /// Whether the entry that wrote [`color`](Self::color) was itself
+    /// [`ObjMode::SemiTransparent`]; unlike
+    /// [`semi_transparent`](Self::semi_transparent), a promotion never moves
+    /// this, so a forced blend still sees the writer's baked brightness
+    /// (`software-obj.c:76-86,177-208`) `(behavioral-fidelity)`.
+    pub(crate) writer_semi_transparent: bool,
+    /// The color-effects enable [`color`](Self::color)'s writing span baked
+    /// in, when a spill crossed a span boundary (`software-obj.c:177-208`).
+    /// `None` when the writer is the queried column's own span, using that
+    /// window instead. Set only by the write that stored `color`, and never
+    /// moved by a later promotion; see [`reblends`](Self::reblends) for the
+    /// part that does move `(behavioral-fidelity)`.
+    pub(crate) brightness_override: Option<bool>,
+    /// Whether the entry that last stamped [`priority`](Self::priority)
+    /// engaged mGBA's `FLAG_REBLEND` OBJWIN slow path, live for
+    /// [`brightness_override`](Self::brightness_override)'s enable versus the
+    /// queried column's window (`software-obj.c:180-192`,
+    /// `video-software.c:983-1000`) `(behavioral-fidelity)`.
+    pub(crate) reblends: bool,
+    /// The same enable for the span that last stamped
+    /// [`priority`](Self::priority), which a better-priority transparent texel
+    /// moves without recoloring: mGBA re-stamps `FLAG_TARGET_1` from every
+    /// such write (`software-obj.c:76-86`).
+    pub(crate) target1_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CachedScanlineAdmission {
     scanline: usize,
     admission: OamAdmission,
+}
+
+/// One scanline's hardware-window spans, as sprite sampling reruns them.
+///
+/// mGBA reruns sprite preprocessing once per span (`software-obj.c:227-242`,
+/// `video-software.c:1052-1062`); see
+/// [`SpriteLayer::sample_affine_local`](SpriteLayer::sample_affine_local) for
+/// why that matters past a span's own columns.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowSpans<'a> {
+    /// The ascending, `0`-led screen columns where each span begins
+    /// ([`crate::window::WindowConfig::scanline_span_starts`]).
+    starts: &'a [usize],
+    /// Positionally paired with `starts`: whether that span runs the OBJ pass
+    /// at all.
+    draws_obj: &'a [bool],
+    /// Positionally paired with `starts`: whether that span's own window
+    /// control enables `BLDCNT` color effects.
+    effects: &'a [bool],
+    /// Positionally paired with `starts`: whether a write in that span
+    /// engaged mGBA's `FLAG_REBLEND` OBJWIN slow path
+    /// (`software-obj.c:180-192`) `(behavioral-fidelity)`.
+    objwin_reblends: &'a [bool],
+    /// Positionally paired with `starts`: whether that span's own rank
+    /// outranks `OBJWIN`, dropping an `OBJWIN` entry's whole pass
+    /// (`software-obj.c:161`) `(behavioral-fidelity)`.
+    suppresses_objwin: &'a [bool],
+}
+
+impl<'a> WindowSpans<'a> {
+    /// The single OBJ-drawing, effects-enabled, non-suppressing span a caller
+    /// without window state sees.
+    pub(crate) const WHOLE_SCANLINE: Self = Self {
+        starts: &[0],
+        draws_obj: &[true],
+        effects: &[true],
+        objwin_reblends: &[false],
+        suppresses_objwin: &[false],
+    };
+
+    /// Pairs span starts with each span's OBJ participation, color-effects
+    /// enable, OBJWIN-reblend status, and OBJWIN-suppression rank, positionally.
+    pub(crate) fn new(
+        starts: &'a [usize],
+        draws_obj: &'a [bool],
+        effects: &'a [bool],
+        objwin_reblends: &'a [bool],
+        suppresses_objwin: &'a [bool],
+    ) -> Self {
+        debug_assert_eq!(
+            starts.len(),
+            draws_obj.len(),
+            "each span start needs its own OBJ participation flag"
+        );
+        debug_assert_eq!(
+            starts.len(),
+            effects.len(),
+            "each span start needs its own color-effects enable"
+        );
+        debug_assert_eq!(
+            starts.len(),
+            objwin_reblends.len(),
+            "each span start needs its own OBJWIN-reblend status"
+        );
+        debug_assert_eq!(
+            starts.len(),
+            suppresses_objwin.len(),
+            "each span start needs its own OBJWIN-suppression rank"
+        );
+        Self {
+            starts,
+            draws_obj,
+            effects,
+            objwin_reblends,
+            suppresses_objwin,
+        }
+    }
+
+    /// Returns the index of the span containing `x`.
+    fn index_at(self, x: usize) -> usize {
+        self.starts
+            .partition_point(|&start| start <= x)
+            .saturating_sub(1)
+    }
+
+    /// Returns where span `index` begins, or `0` for an absent span.
+    fn span_start(self, index: usize) -> usize {
+        self.starts.get(index).copied().unwrap_or(0)
+    }
+
+    /// Returns whether span `index` runs the OBJ pass; an absent span draws.
+    fn span_draws_obj(self, index: usize) -> bool {
+        self.draws_obj.get(index).copied().unwrap_or(true)
+    }
+
+    /// Returns whether span `index` enables color effects; an absent span does.
+    fn span_effects_enabled(self, index: usize) -> bool {
+        self.effects.get(index).copied().unwrap_or(true)
+    }
+
+    /// Returns the color-effects enable a write made in span `writer` carries
+    /// into column `x`, or `None` when `writer` is `x`'s own span and the
+    /// caller should use the queried column's window instead.
+    fn spill_effects(self, x: usize, writer: usize) -> Option<bool> {
+        (writer != self.index_at(x)).then(|| self.span_effects_enabled(writer))
+    }
+
+    /// Returns whether span `index` engaged mGBA's `FLAG_REBLEND` OBJWIN slow
+    /// path `(behavioral-fidelity)`.
+    fn span_objwin_reblends(self, index: usize) -> bool {
+        self.objwin_reblends.get(index).copied().unwrap_or(false)
+    }
+
+    /// Returns whether span `index`'s own rank drops a whole `OBJWIN` pass
+    /// `(behavioral-fidelity)`.
+    fn span_suppresses_objwin(self, index: usize) -> bool {
+        self.suppresses_objwin.get(index).copied().unwrap_or(false)
+    }
 }
 
 /// Resolves borrowed sprite data into display pixels and an object-window mask.
@@ -146,7 +291,7 @@ impl<'a> SpriteLayer<'a> {
     /// when no opaque sprite covers the coordinate.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, MosaicSize::NONE, false)
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
     }
 
     /// Resolves a sprite pixel after applying `mosaic` to enabled entries.
@@ -158,23 +303,30 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, false)
+        self.resolve_pixel_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
     }
 
-    /// Resolves a mosaic sprite pixel, optionally skipping OBJ-window entries.
+    /// Resolves a mosaic sprite pixel, honoring hardware-window state.
     ///
-    /// WIN0 and WIN1 outrank OBJWIN, so mGBA skips OBJ-window entries while
+    /// WIN0 and WIN1 outrank OBJWIN, so mGBA drops a whole OBJWIN pass while
     /// drawing those regions (`software-obj.c:161`,
-    /// `video-software.c:131-134`).
+    /// `video-software.c:131-134`) -- per the *writing* span, which
+    /// [`WindowSpans::span_suppresses_objwin`] carries in, not the queried
+    /// column's own.
+    ///
+    /// `window_spans` carries this scanline's hardware-window spans
+    /// ([`WindowSpans::WHOLE_SCANLINE`] when the caller has no span state);
+    /// see [`Self::sample_affine_local`] for what it seeds and why an affine
+    /// mosaic sample may need a span other than the one containing `x`.
     #[must_use]
     pub(crate) fn resolve_pixel_with_mosaic_windowed(
         &self,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        skip_objwin_entries: bool,
+        window_spans: WindowSpans<'_>,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, skip_objwin_entries)
+        self.resolve_pixel_inner(x, y, mosaic, window_spans)
     }
 
     fn resolve_pixel_inner(
@@ -182,7 +334,7 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        skip_objwin_entries: bool,
+        window_spans: WindowSpans<'_>,
     ) -> Option<SpritePixel> {
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return None;
@@ -194,11 +346,13 @@ impl<'a> SpriteLayer<'a> {
                 if !admission.is_admitted(index) {
                     continue;
                 }
-                if skip_objwin_entries && entry.mode() == ObjMode::Window {
-                    continue;
-                }
 
-                let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
+                // See `sample_affine_local`'s docs for what this changes.
+                // An `OBJWIN` entry's own suppression is decided per writing
+                // span inside sampling, not here from the queried column.
+                let slot_contested = resolved.is_some();
+                let (texel, writer_span) =
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -213,12 +367,18 @@ impl<'a> SpriteLayer<'a> {
                             color,
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
+                            writer_semi_transparent: mode == ObjMode::SemiTransparent,
+                            brightness_override: window_spans.spill_effects(x, writer_span),
+                            reblends: window_spans.span_objwin_reblends(writer_span),
+                            target1_override: window_spans.spill_effects(x, writer_span),
                         });
                     }
                     (mode, Texel::Transparent) => {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.reblends = window_spans.span_objwin_reblends(writer_span);
+                            pixel.target1_override = window_spans.spill_effects(x, writer_span);
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),
@@ -253,43 +413,75 @@ impl<'a> SpriteLayer<'a> {
                 if !admission.is_admitted(index) || entry.mode() != ObjMode::Window {
                     return false;
                 }
+                // OBJWIN is a per-pixel mask, not a hardware-window span, so
+                // it never restarts an affine mosaic hold
+                // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(entry, x, y, mosaic),
+                    self.sample_entry_mosaic(
+                        entry,
+                        x,
+                        y,
+                        mosaic,
+                        WindowSpans::WHOLE_SCANLINE,
+                        false
+                    )
+                    .0,
                     Texel::Opaque(_)
                 )
             })
         })
     }
 
+    /// Samples one entry, returning its texel alongside the index of the
+    /// window span that produced it.
+    ///
+    /// That span matches `x`'s own for every path but an affine mosaic
+    /// trailing spill, which can be written by an earlier span; see
+    /// [`Self::sample_affine_local`] for what `slot_contested` changes there.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-    ) -> Texel {
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
+        let own_span = window_spans.index_at(x);
         let mosaic = if entry.mosaic() {
             mosaic
         } else {
             MosaicSize::NONE
         };
         let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
-            return Texel::Outside;
+            return (Texel::Outside, own_span);
         };
         if entry.mode() == ObjMode::Window {
             // mGBA applies only vertical mosaic to OBJ-window sampling (`video-software.c:1027,1042-1050`; `software-obj.c:287-304,344-361`).
             let vertical_only = mosaic.vertical_only();
             if matches!(entry.affine(), AffineMode::Regular) {
+                if window_spans.span_suppresses_objwin(own_span) {
+                    return (Texel::Outside, own_span);
+                }
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
-                self.sample_local(entry, dx, ly)
+                (self.sample_local(entry, dx, ly), own_span)
             } else {
-                self.sample_affine_local(entry, dx, dy, x, y, vertical_only)
+                self.sample_affine_local(
+                    entry,
+                    dx,
+                    dy,
+                    x,
+                    y,
+                    vertical_only,
+                    window_spans,
+                    slot_contested,
+                )
             }
         } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-            self.sample_local(entry, lx, ly)
+            (self.sample_local(entry, lx, ly), own_span)
         } else {
-            self.sample_affine_local(entry, dx, dy, x, y, mosaic)
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans, slot_contested)
         }
     }
 
@@ -376,12 +568,22 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Samples an affine entry from one footprint-local coordinate for each
-    /// horizontal mosaic block.
+    /// Samples an affine entry from one footprint-local coordinate per
+    /// mosaic block, seeding each window span's hold from `inX - 1` at its
+    /// own start, and returns the texel with the span that wrote it
+    /// (`software-obj.c:227-242`). `slot_contested` mirrors mGBA's
+    /// same-entry write lock: a contested pixel stops the spill search at
+    /// the first candidate span, an unclaimed one prefers the first opaque
+    /// one (`software-obj.c:79-85`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        reason = "x < Framebuffer::WIDTH, so the mosaic block origin fits in i32"
+        clippy::cast_sign_loss,
+        reason = "x < Framebuffer::WIDTH, so the mosaic block origin, window span start, and sprite trailing edge fit in i32 and, once clamped non-negative, in usize"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, window spans, slot contention)"
     )]
     fn sample_affine_local(
         &self,
@@ -391,28 +593,80 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-    ) -> Texel {
-        const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
-
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
+        let (width, _) = entry.bounding_box();
         let block_origin_x = mosaic.snap(x, y).0 as i32;
-        let local_x = if block_origin_x >= entry_x {
-            block_origin_x - entry_x
-        } else {
-            // mGBA seeds a leading partial block from `inX - 1` (`software-obj.c:241`).
-            LOCAL_COLUMN_BEFORE_FOOTPRINT
+
+        let sample_from_span_start = |window_span_start: i32| {
+            let pass_start_x = entry_x.max(window_span_start);
+            let held_screen_x = if block_origin_x >= pass_start_x {
+                block_origin_x
+            } else {
+                pass_start_x - 1
+            };
+            sprite_affine::sample_texel(
+                entry,
+                self.matrices,
+                self.tileset_4bpp,
+                self.tileset_8bpp,
+                self.palette,
+                held_screen_x - entry_x,
+                local_y,
+            )
         };
 
-        sprite_affine::sample_texel(
-            entry,
-            self.matrices,
-            self.tileset_4bpp,
-            self.tileset_8bpp,
-            self.palette,
-            local_x,
-            local_y,
-        )
+        // mGBA drops an OBJWIN entry's whole pass per writing span
+        // (`software-obj.c:161`), so every candidate span below is filtered
+        // by its own rank, never the queried column's `(behavioral-fidelity)`.
+        let objwin_entry = entry.mode() == ObjMode::Window;
+        let span_admits_entry =
+            |span: usize| !(objwin_entry && window_spans.span_suppresses_objwin(span));
+
+        if dx < width {
+            let span = window_spans.index_at(x);
+            if !span_admits_entry(span) {
+                return (Texel::Outside, span);
+            }
+            return (
+                sample_from_span_start(window_spans.span_start(span) as i32),
+                span,
+            );
+        }
+
+        let raw_edge = (entry_x + width as i32).max(0) as usize;
+        let last_span = window_spans.index_at(x);
+        let candidate_spans = (window_spans.index_at(raw_edge)..=last_span)
+            .filter(|&span| window_spans.span_draws_obj(span) && span_admits_entry(span));
+
+        if slot_contested {
+            // A contested slot blocks every span but this entry's first
+            // candidate one, so take that first result, whatever it is.
+            return candidate_spans
+                .map(|span| {
+                    (
+                        sample_from_span_start(window_spans.span_start(span) as i32),
+                        span,
+                    )
+                })
+                .find(|(texel, _)| !matches!(texel, Texel::Outside))
+                .unwrap_or((Texel::Outside, last_span));
+        }
+
+        let mut transparent_fallback = None;
+        for span in candidate_spans {
+            let texel = sample_from_span_start(window_spans.span_start(span) as i32);
+            if matches!(texel, Texel::Opaque(_)) {
+                return (texel, span);
+            }
+            if transparent_fallback.is_none() && matches!(texel, Texel::Transparent) {
+                transparent_fallback = Some((texel, span));
+            }
+        }
+        transparent_fallback.unwrap_or((Texel::Outside, last_span))
     }
 }
 
@@ -429,7 +683,7 @@ pub(crate) enum Texel {
 
 #[cfg(test)]
 mod tests {
-    use super::SpriteLayer;
+    use super::{SpriteLayer, WindowSpans};
     use crate::affine::AffineMatrix;
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
@@ -817,13 +1071,14 @@ mod tests {
         let entries = [opaque_priority_two, objwin_hole_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
+        let suppressing_span = WindowSpans::new(&[0], &[true], &[true], &[false], &[true]);
         let suppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, true)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, suppressing_span)
             .unwrap();
         assert_eq!(suppressed.priority, 2);
 
         let unsuppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, false)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
             .unwrap();
         assert_eq!(unsuppressed.priority, 0);
     }
