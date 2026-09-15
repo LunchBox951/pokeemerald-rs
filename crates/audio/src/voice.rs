@@ -180,7 +180,7 @@ impl StereoGain {
 
 #[derive(Clone, Copy, Debug)]
 struct VoiceIdentity {
-    track: usize,
+    track: Option<usize>,
     played_key: u8,
     pitch_key: u8,
     note_on_ordinal: u64,
@@ -190,7 +190,7 @@ struct VoiceIdentity {
 impl VoiceIdentity {
     fn new(track: usize, played_key: u8) -> Self {
         Self {
-            track,
+            track: Some(track),
             played_key,
             pitch_key: played_key,
             note_on_ordinal: 0,
@@ -296,10 +296,16 @@ impl Voice {
         self.envelope.is_active()
     }
 
-    /// Return the owning track index.
+    /// Return the owning track index, or `None` once `detach_track` has run.
     #[must_use]
-    pub fn track(&self) -> usize {
+    pub fn track(&self) -> Option<usize> {
         self.identity.track
+    }
+
+    /// Clear allocation ownership so a released-slot tie never favours this
+    /// voice over one a track still owns (`RealClearChain`, `m4a_1.s:744-745`).
+    pub(crate) fn detach_track(&mut self) {
+        self.identity.track = None;
     }
 
     /// Return the played MIDI key used for tie matching.
