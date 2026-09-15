@@ -2446,7 +2446,7 @@ mod tests {
             .mixer
             .voices()
             .into_iter()
-            .find(|voice| voice.track() == 1)
+            .find(|voice| voice.track() == Some(1))
             .expect("track 1 must own its original voice")
             .frequency();
         let occupants: Vec<_> = seq
@@ -2470,7 +2470,7 @@ mod tests {
         assert_eq!(
             voices
                 .iter()
-                .find(|voice| voice.track() == 1)
+                .find(|voice| voice.track() == Some(1))
                 .expect("the original track-1 voice must remain")
                 .frequency(),
             modulated_frequency
@@ -2493,7 +2493,7 @@ mod tests {
             .mixer
             .voices()
             .iter()
-            .any(|voice| voice.track() == 1 && voice.midi_key() == 70));
+            .any(|voice| voice.track() == Some(1) && voice.midi_key() == 70));
     }
 
     #[test]
@@ -3600,7 +3600,10 @@ mod tests {
 
         assert_eq!(seq.voice_count(), DEFAULT_MAX_VOICES);
         assert!(
-            seq.mixer.voices().iter().all(|voice| voice.track() < 5),
+            seq.mixer
+                .voices()
+                .iter()
+                .all(|voice| voice.track().is_some_and(|track| track < 5)),
             "the sixth track's weaker note must never have started"
         );
     }
