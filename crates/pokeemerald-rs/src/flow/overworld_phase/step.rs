@@ -645,7 +645,14 @@ impl OverworldPhase {
 
         // Upstream consumes an arrow-warp press in `ProcessPlayerFieldInput`
         // before `PlayerStep` runs, so a satisfied gate skips this frame's
-        // movement.
+        // movement. Tile transit is the whole gate: a standstill turn's
+        // `WALK_IN_PLACE_FAST` is multi-frame *stationary*, so
+        // `UpdatePlayerAvatarTransitionState` leaves `tileTransitionState` at
+        // `T_NOT_MOVING` and `heldDirection` stays set for all eight frames
+        // (`field_player_avatar.c:901-929`). `TURN_IN_PLACE_FRAMES` must not
+        // narrow this: it models `TryInterruptObjectEventSpecialAnim`, which
+        // sits *inside* `PlayerStep`, below this poll
+        // (`field_player_avatar.c:332-350`, `overworld.c:1442-1454`).
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
             trigger_arrow_warp(runtime, x, y, previous_elevation, d)
@@ -1076,6 +1083,118 @@ mod post_movement_arrow_elevation_tests {
             "the post-movement arrow poll must resolve at PlayerGetElevation()'s \
              retained 3 (field_player_avatar.c:1192-1195) -- a lookup at the collision \
              elevation 0 misses the warp event stored at 3; got {trigger:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pre_movement_arrow_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::MB_NORTH_ARROW_WARP;
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::{ButtonState, Buttons};
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const ARROW: (u16, u16) = (8, 5);
+
+    fn cave_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        scene.runtime(CAVE, header, events)
+    }
+
+    /// Issue #1127's at-rest half, asserted on the pre-movement decision
+    /// rather than through `step`'s observables, for the same reason its
+    /// `post_movement_arrow_elevation_tests` sibling must: pack-free
+    /// `warp_to` leaves the player untouched, and the turn lock returns
+    /// `Idle` from `PlayerState::step` besides, so a missed lookup and a
+    /// fired one look identical at the phase level.
+    ///
+    /// The frame under test is deliberately one *inside* the eight-frame
+    /// standstill-turn lock. Upstream gates `heldDirection` on
+    /// `tileTransitionState` alone, and `WALK_IN_PLACE_FAST` is multi-frame
+    /// stationary, so `UpdatePlayerAvatarTransitionState` leaves that
+    /// `T_NOT_MOVING` and `ProcessPlayerFieldInput` reaches `TryArrowWarp`
+    /// on the first frame after the turn starts
+    /// (`field_player_avatar.c:901-929`, `field_control_avatar.c:95-167`,
+    /// `overworld.c:1442-1454`).
+    #[test]
+    fn a_turning_frame_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        assert!(
+            events
+                .warp_events
+                .iter()
+                .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+            "fixture precondition: the arrow tile carries a warp event stored at \
+             elevation 3, not the transition wildcard every query already matches"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[(ARROW, MB_NORTH_ARROW_WARP, 0)],
+            ),
+            CAVE,
+            PlayerState::new((7, 5), 3, Direction::East),
+            None,
+        );
+
+        // One step east onto the arrow tile. East never matches a north
+        // arrow, so this walk only puts the player on a transition cell
+        // whose retained elevation is still 3.
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            phase.step(held(Buttons::RIGHT));
+        }
+        assert_eq!(phase.player.position(), (8, 5));
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3),
+            "fixture precondition: the transition cell is the collision elevation, \
+             while the retained previousElevation upstream looks warps up at is 3"
+        );
+
+        // A neutral frame ends the movement streak, so the next Up frame
+        // turns in place instead of stepping.
+        phase.step(ButtonState::new());
+        phase.step(held(Buttons::UP));
+        assert_eq!(phase.player.facing(), Direction::North);
+        assert_eq!(phase.player.position(), (8, 5), "the Up frame only turned");
+        assert!(
+            phase.player.turn_frames_remaining() > 0,
+            "fixture precondition: the standstill turn's lock is still draining, so \
+             this is exactly the frame upstream still runs TryArrowWarp on"
+        );
+
+        let pre: PreMovementFieldInput = {
+            let runtime = cave_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::UP),
+                Some(Direction::North),
+                &runtime,
+            )
+        };
+        assert!(
+            matches!(
+                pre.arrow_trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_GRANITE_CAVE_B2F")
+            ),
+            "the at-rest arrow preempt must resolve at PlayerGetElevation()'s retained \
+             3 (field_player_avatar.c:1192-1195) -- a lookup at the collision elevation \
+             0 misses the warp event stored at 3; got {:?}",
+            pre.arrow_trigger
         );
     }
 }

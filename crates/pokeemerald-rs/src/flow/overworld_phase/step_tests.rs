@@ -1192,97 +1192,12 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     );
 }
 
-/// Issue #1127's arrow half: pins the same `previous_elevation()` contract
-/// for the at-rest pre-movement arrow lookup (`step.rs:656-659`).
-#[test]
-fn an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
-    use engine::overworld::metatile_behavior::MB_NORTH_ARROW_WARP;
-
-    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
-    const ARROW: (u16, u16) = (8, 5);
-
-    // Fixture precondition, read off the generated table: the arrow tile
-    // really carries a warp event stored at an ordinary elevation.
-    let events = assets::MapEventsTable::new()
-        .resolve(CAVE)
-        .expect("Granite Cave B1F resolves in the generated map-events table");
-    assert!(
-        events
-            .warp_events
-            .iter()
-            .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
-        "fixture precondition: the arrow tile carries a warp event stored at elevation 3"
-    );
-
-    let mut phase = OverworldPhase::for_test(
-        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
-            10,
-            10,
-            &[(ARROW, MB_NORTH_ARROW_WARP, 0)],
-        ),
-        CAVE,
-        PlayerState::new((7, 5), 3, Direction::East),
-        None,
-    );
-
-    // One step east onto the arrow tile. East never matches a north arrow,
-    // so no warp may fire on the drain frame -- this walk exists only to
-    // put the player on a transition cell with a retained elevation of 3.
-    for _ in 0..WALK_FRAMES_PER_TILE {
-        phase.step(held(Buttons::RIGHT));
-    }
-    assert_eq!(phase.player.position(), (8, 5));
-    assert!(!phase.player.in_transit());
-    assert_eq!(
-        (phase.player.elevation(), phase.player.previous_elevation()),
-        (0, 3),
-        "fixture precondition: the transition cell is the collision elevation, \
-         while the retained previousElevation upstream looks warps up at is 3"
-    );
-
-    // A neutral frame ends the movement streak, so the next Up frame turns
-    // in place instead of stepping (`PlayerState::step`'s turn-vs-step rule).
-    phase.step(ButtonState::new());
-    phase.step(held(Buttons::UP));
-    assert_eq!(phase.player.facing(), Direction::North);
-    assert_eq!(phase.player.position(), (8, 5), "the Up frame only turned");
-    assert!(!phase.player.in_transit());
-    // The turn holds the player busy for its remaining frames, during which
-    // neither a warp nor a step can run; drain them so the next frame decides.
-    for _ in 1..engine::overworld::player::TURN_IN_PLACE_FRAMES {
-        phase.step(held(Buttons::UP));
-        assert_eq!(
-            phase.player.position(),
-            (8, 5),
-            "the turn lock holds the player"
-        );
-        assert!(!phase.player.in_transit());
-    }
-
-    // At rest, facing North, Up still held: `TryArrowWarp`'s gate is open
-    // and the tile's own MB_NORTH_ARROW_WARP matches. The warp is resolved
-    // at the retained 3 (`field_player_avatar.c:1192-1195`), so it consumes
-    // the frame's input and the step onto (8, 4) never runs. (The warp
-    // itself needs a local pack to land, so only the preempt is asserted --
-    // that is the half a lookup at `elevation()` breaks.)
-    phase.step(held(Buttons::UP));
-    assert_ne!(
-        phase.player.position(),
-        (8, 4),
-        "the arrow warp must preempt the step north -- a lookup at the collision \
-         elevation 0 misses the warp event stored at 3 and lets the step run"
-    );
-    assert!(
-        !phase.player.in_transit(),
-        "no walk animation was ever started -- the arrow warp claimed the frame"
-    );
-}
-
 /// Issue #1127's remaining arrow half: the same `previous_elevation()`
 /// contract for the *post-movement* arrow re-poll (`step.rs:620-627`).
-/// Pack-gated, unlike its two siblings, because only the warp landing is
-/// observable here; see `post_movement_arrow_elevation_tests` for a
-/// pack-free assertion on the lookup itself.
+/// Pack-gated, unlike its door sibling above, because only the warp landing
+/// is observable here; `step`'s own `pre_movement_arrow_elevation_tests` and
+/// `post_movement_arrow_elevation_tests` assert the two arrow lookups
+/// pack-free instead.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
