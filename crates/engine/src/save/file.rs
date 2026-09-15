@@ -379,8 +379,8 @@ impl SaveFile {
     /// The lock lives on a sibling `.lock` file, not the save file itself:
     /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
     /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards. A sibling name too long for the filesystem has
-    /// its basename shortened until one is accepted.
+    /// the path afterwards. An over-limit name falls back to a basename
+    /// hash; a save configured at that exact name is outside this contract.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -412,25 +412,24 @@ impl SaveFile {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
 
-        let mut stem_cap = self.lock_stem().len();
-        let (path, file) = loop {
-            let candidate = self.lock_candidate(stem_cap);
-            match open(&candidate) {
-                Ok(file) => break (candidate, file),
-                // The save basename itself was accepted, so only the
-                // `.lock` suffix can have pushed this over the limit;
-                // shorten the basename this lock is derived from and retry.
-                Err(source)
-                    if source.kind() == std::io::ErrorKind::InvalidFilename && stem_cap > 0 =>
-                {
-                    stem_cap /= 2;
-                }
-                Err(source) => {
-                    return Err(SaveFileError::Lock {
-                        path: candidate,
-                        source,
-                    })
-                }
+        let primary = self.lock_path();
+        let (path, file) = match open(&primary) {
+            Ok(file) => (primary, file),
+            // The save basename itself was accepted, so only the `.lock`
+            // suffix can have pushed this component over the limit.
+            Err(source) if source.kind() == std::io::ErrorKind::InvalidFilename => {
+                let fallback = self.hashed_lock_path();
+                let file = open(&fallback).map_err(|source| SaveFileError::Lock {
+                    path: fallback.clone(),
+                    source,
+                })?;
+                (fallback, file)
+            }
+            Err(source) => {
+                return Err(SaveFileError::Lock {
+                    path: primary,
+                    source,
+                })
             }
         };
         file.lock().map_err(|source| SaveFileError::Lock {
@@ -526,28 +525,23 @@ impl SaveFile {
         }
     }
 
-    /// This save's basename, lossily converted so it can be measured and cut
-    /// in bytes the way [`Self::lock_candidate`] needs.
-    fn lock_stem(&self) -> String {
-        self.path
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+    fn lock_path(&self) -> PathBuf {
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(".lock");
+        PathBuf::from(name)
     }
 
-    /// The lock sidecar for this save, its basename cut to at most
-    /// `max_stem_len` bytes on a char boundary so a too-long component
-    /// shortens instead of being refused outright.
-    fn lock_candidate(&self, max_stem_len: usize) -> PathBuf {
-        let mut stem = self.lock_stem();
-        if stem.len() > max_stem_len {
-            let mut cut = max_stem_len;
-            while !stem.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            stem.truncate(cut);
+    /// A fixed-width sidecar hashing this save's whole basename, used when
+    /// `<save>.lock` overflows the filesystem's component limit.
+    fn hashed_lock_path(&self) -> PathBuf {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        if let Some(name) = self.path.file_name() {
+            hasher.write(name.as_encoded_bytes());
         }
-        stem.push_str(".lock");
-        self.path.with_file_name(stem)
+        self.path
+            .with_file_name(format!(".{:016x}.lock", hasher.finish()))
     }
 }
 

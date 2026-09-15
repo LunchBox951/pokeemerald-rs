@@ -814,11 +814,10 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// A host limit under the naive `<save>.lock` name must shorten the
-/// basename the lock is derived from, and that shortened lock must
-/// actually be locked.
+/// A host limit under the naive `<save>.lock` name must fall back to the
+/// hashed sidecar, and that fallback must actually be locked.
 #[test]
-fn a_host_component_limit_below_the_naive_lock_name_shortens_the_lock_basename() {
+fn a_host_component_limit_below_the_naive_lock_name_falls_back_to_a_hashed_lock_name() {
     const HOST_NAME_MAX: usize = 143;
     let dir = TempDir::new("lock-host-limit");
     let path = dir.join(&"s".repeat(140));
@@ -842,39 +841,32 @@ fn a_host_component_limit_below_the_naive_lock_name_shortens_the_lock_basename()
 
     assert_eq!(
         attempted.into_inner(),
-        vec![
-            sibling_path(&path, ".lock"),
-            dir.path.join(format!("{}.lock", "s".repeat(70))),
-        ],
-        "the shortened attempt must be tried only after the full-basename name is \
-         refused, and land exactly on half the basename"
+        vec![sibling_path(&path, ".lock"), file.hashed_lock_path()],
+        "the hashed fallback must be tried only after the naive name is refused"
     );
 
     let probe = std::fs::OpenOptions::new()
         .write(true)
-        .open(dir.path.join(format!("{}.lock", "s".repeat(70))))
-        .expect("the shortened lock file exists while the guard is held");
+        .open(file.hashed_lock_path())
+        .expect("the hashed lock file exists while the guard is held");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
-        other => panic!("the shortened lock must actually exclude a second locker, got {other:?}"),
+        other => panic!("the hashed lock must actually exclude a second locker, got {other:?}"),
     }
     drop(probe);
     drop(guard);
 }
 
-/// A save literally named `.lock` must not collide with the shortened lock
-/// another over-limit save derives in the same directory: the shortened
-/// name still carries part of that save's own basename.
+/// Two over-limit saves that share every byte but their last must still
+/// derive distinct locks: holding one must leave the other free.
 #[test]
-fn the_shortened_lock_name_does_not_collide_with_a_save_literally_named_dot_lock() {
+fn two_over_limit_saves_sharing_a_prefix_do_not_share_one_lock() {
     const HOST_NAME_MAX: usize = 143;
-    let dir = TempDir::new("dot-lock-collision");
-    let path = dir.join(&"s".repeat(140));
-    let file = SaveFile::at(&path);
+    let dir = TempDir::new("prefix-sharing-locks");
+    let first = SaveFile::at(dir.join(&format!("{}a", "s".repeat(139))));
+    let second = SaveFile::at(dir.join(&format!("{}b", "s".repeat(139))));
 
-    let attempted = std::cell::RefCell::new(Vec::new());
     let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
-        attempted.borrow_mut().push(candidate.to_path_buf());
         let component_len = candidate
             .file_name()
             .map_or(0, |name| name.as_encoded_bytes().len());
@@ -884,38 +876,66 @@ fn the_shortened_lock_name_does_not_collide_with_a_save_literally_named_dot_lock
         SaveFile::open_lock_file(candidate)
     };
 
-    let guard = file
-        .lock_with_open(|_| {}, refuse_long_components)
-        .expect("an over-limit basename must still be lockable");
-    let lock_path = attempted
-        .into_inner()
-        .pop()
-        .expect("at least one candidate must have been attempted");
     assert_ne!(
-        lock_path,
-        dir.path.join(".lock"),
-        "the shortened lock name must still carry part of the save's own basename, not \
-         collapse to a name a literal `.lock` save could itself occupy"
+        first.hashed_lock_path(),
+        second.hashed_lock_path(),
+        "distinct saves must not derive the same lock path"
     );
 
-    let dot_lock_save = SaveFile::at(dir.path.join(".lock"));
-    let (store, _, _) = saved_store();
-    dot_lock_save.write(&store).expect(
-        "a save literally named `.lock` must be writable without disturbing an unrelated lock",
-    );
+    let guard = first
+        .lock_with_open(|_| {}, refuse_long_components)
+        .expect("the first over-limit save must be lockable");
 
     let probe = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
         .write(true)
-        .open(&lock_path)
-        .expect("the held lock file must be untouched by the unrelated write");
+        .open(second.hashed_lock_path())
+        .expect("the second save's lock file must be openable");
     match probe.try_lock() {
-        Err(std::fs::TryLockError::WouldBlock) => {}
+        Ok(()) => {}
         other => panic!(
-            "an unrelated save literally named `.lock` must not defeat this lock, got {other:?}"
+            "locking {} must not block the unrelated save {}, got {other:?}",
+            first.path().display(),
+            second.path().display()
         ),
     }
     drop(probe);
     drop(guard);
+}
+
+/// Two saves whose basenames are distinct non-UTF-8 byte strings are two
+/// distinct saves, so each must lock its own sidecar.
+#[cfg(unix)]
+#[test]
+fn distinct_non_utf8_save_basenames_do_not_share_one_lock() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = TempDir::new("non-utf8-lock");
+    let first = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x80")));
+    let second = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x81")));
+    assert_ne!(first.path(), second.path(), "the two saves must differ");
+
+    let held = first.lock().expect("the first save must be lockable");
+    let (locked, waited) = std::sync::mpsc::channel();
+    let other = second.clone();
+    std::thread::spawn(move || {
+        let guard = other.lock().expect("the second save must be lockable");
+        let _sent = locked.send(());
+        drop(guard);
+    });
+    let unrelated_save_locks_independently = waited
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .is_ok();
+    drop(held);
+
+    assert!(
+        unrelated_save_locks_independently,
+        "{:?} waited on the lock held for the unrelated save {:?}: both saves resolve to \
+         one sidecar",
+        second.path(),
+        first.path()
+    );
 }
 
 #[test]
