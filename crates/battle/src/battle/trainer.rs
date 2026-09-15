@@ -14,6 +14,8 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
 
+mod suitability;
+
 /// The maximum IV assigned to one stat.
 pub const MAX_PER_STAT_IVS: u16 = 31;
 
@@ -231,17 +233,48 @@ impl TrainerContext {
         self.bench.len()
     }
 
-    /// Returns the remaining party members in send-out order.
+    /// Returns the remaining party members in party order. A forced
+    /// replacement does not take them front to back: `send_out_next`
+    /// picks by matchup first and falls back to this order only when both
+    /// suitability passes decline.
     #[must_use]
     pub fn bench(&self) -> &[BattlePokemon] {
         &self.bench
     }
 
-    /// Removes and returns the next non-fainted member in party order.
+    /// Removes and returns the most suitable non-fainted member for a forced
+    /// post-faint send-out: `GetMostSuitableMonToSwitchInto`'s type and
+    /// most-damage passes, then party order. `fainted` is the battler being
+    /// replaced and `resolving_move` is the move whose resolution fainted it
+    /// (the turn engine's own last-executed move; upstream's `gCurrentMove`
+    /// is exactly this stale value at the point a forced replacement runs).
+    /// See the ledger's `GetMostSuitableMonToSwitchInto` and
+    /// `OpponentHandleChoosePokemon` entries for the full upstream mapping
+    /// and its one remaining documented divergence (issue #1040).
     ///
-    /// This models `OpponentHandleChoosePokemon`'s fallback scan, not its type-match
-    /// preference.
-    pub(crate) fn send_out_next(&mut self) -> Option<BattlePokemon> {
+    /// # Errors
+    ///
+    /// Returns an error if a bench member's move is missing from `dex` --
+    /// never in practice, since trainer-party validation already screens
+    /// every move (see [`ensure_trainer_party_startable`]).
+    pub(crate) fn send_out_next(
+        &mut self,
+        dex: &Dex,
+        fainted: &BattlePokemon,
+        resolving_move: MoveId,
+        player: &BattlePokemon,
+    ) -> Result<Option<BattlePokemon>, BattleError> {
+        if let Some(index) = self.most_suitable_by_type(dex, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        if let Some(index) = self.most_suitable_by_damage(dex, fainted, resolving_move, player)? {
+            return Ok(Some(self.bench.remove(index)));
+        }
+        Ok(self.send_out_first_healthy())
+    }
+
+    /// Removes and returns the next non-fainted member in party order.
+    fn send_out_first_healthy(&mut self) -> Option<BattlePokemon> {
         while !self.bench.is_empty() {
             let mon = self.bench.remove(0);
             if !mon.is_fainted() {
