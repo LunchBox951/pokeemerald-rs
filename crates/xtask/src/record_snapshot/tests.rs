@@ -553,30 +553,116 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
     drop(guard);
 }
 
-/// Publication must never write through a symlink planted at the temporary
-/// pointer name. `Path::exists()` reports a dangling link as absent, so the
-/// name-choosing loop accepts it and a plain `std::fs::write` would follow
-/// it, creating or truncating a bystander file outside `output_dir`. Skipping
-/// the name or failing the capture are both fine; escaping the directory is
-/// not.
+/// The staging suffix value used to deterministically pin one pointer
+/// candidate, matching `extract::mod`'s `TEST_STAGING_VALUE` convention.
+const TEST_POINTER_STAGING_VALUE: u64 = 0x00AB_CDEF_0123;
+
+/// A symlink planted at the first pointer-staging candidate is refused, not
+/// followed; publication proceeds at the next unpredictable candidate.
 #[cfg(unix)]
 #[test]
 fn a_planted_pointer_symlink_is_never_written_through() {
-    /// Covers every temporary pointer name this process could pick next.
-    const CANDIDATES: u64 = 256;
-
-    let (pack_path, _pack_guard) = write_pack("pointer-symlink-commit");
-    let pack = AssetPack::load(&pack_path).unwrap();
     let output_dir = scratch_path("pointer-symlink-out");
     let out_guard = ScratchGuard(output_dir.clone());
     let bystander_dir = scratch_path("pointer-symlink-bystander");
     let bystander_guard = ScratchGuard(bystander_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
 
+    let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
+    let occupied =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    let bystander = bystander_dir.join("bystander");
+    std::os::unix::fs::symlink(&bystander, &occupied).unwrap();
+
+    let staged =
+        super::stage_pointer_with_candidates(b"a-generation\n", [occupied.clone(), free.clone()])
+            .unwrap();
+    staged.publish(&pointer_path).unwrap();
+
+    assert!(
+        !bystander.exists(),
+        "publishing followed the planted symlink and wrote outside {}",
+        output_dir.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&occupied)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a refused planted symlink must be left alone, not consumed as staging"
+    );
+    assert!(
+        !free.exists(),
+        "the free candidate is consumed and renamed onto the pointer, not left behind"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&pointer_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the published pointer must be a regular file, not a planted symlink"
+    );
+    assert_eq!(std::fs::read(&pointer_path).unwrap(), b"a-generation\n");
+
+    drop(bystander_guard);
+    drop(out_guard);
+}
+
+/// A name a different owner already holds is left untouched; the bounded
+/// walk retries the next unpredictable candidate instead of failing outright.
+#[test]
+fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_free_name() {
+    let output_dir = scratch_path("pointer-collision-retry-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
+    let occupied =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    std::fs::write(&occupied, b"someone else's staging file").unwrap();
+
+    let staged =
+        super::stage_pointer_with_candidates(b"a-generation\n", [occupied.clone(), free.clone()])
+            .unwrap();
+    staged.publish(&pointer_path).unwrap();
+
+    assert_eq!(
+        std::fs::read(&occupied).unwrap(),
+        b"someone else's staging file",
+        "a name already taken must be left to its owner, not overwritten"
+    );
+    assert!(
+        !free.exists(),
+        "the free candidate is consumed and renamed onto the pointer, not left behind"
+    );
+    assert_eq!(std::fs::read(&pointer_path).unwrap(), b"a-generation\n");
+
+    drop(out_guard);
+}
+
+/// Publication must stage the pointer outside every name the generation makes
+/// guessable: links planted at all of them neither starve the capture nor take
+/// a write.
+#[cfg(unix)]
+#[test]
+fn publication_stages_the_pointer_outside_every_generation_derived_name() {
+    /// Covers every generation-derived pointer name this process could reach.
+    const PREDICTABLE_INDICES: u64 = 256;
+
+    let output_dir = scratch_path("pointer-predictable-name-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-predictable-name-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
     std::fs::create_dir_all(&output_dir).unwrap();
     std::fs::create_dir_all(&bystander_dir).unwrap();
 
     let scene = Scene::MainMenuNewGame;
-    for index in 0..CANDIDATES {
+    for index in 0..PREDICTABLE_INDICES {
         let generation = format!("{}.generation-{}-{index}", scene.name(), std::process::id());
         std::os::unix::fs::symlink(
             bystander_dir.join(format!("bystander-{index}")),
@@ -585,8 +671,19 @@ fn a_planted_pointer_symlink_is_never_written_through() {
         .unwrap();
     }
 
-    let outcome = capture_loaded(scene, &pack, &output_dir, || Ok(()));
+    let (rgb_path, meta_path) =
+        super::publish_generation(scene, &output_dir, b"rgb-bytes", b"meta-bytes", || Ok(()))
+            .unwrap();
 
+    assert_eq!(std::fs::read(&rgb_path).unwrap(), b"rgb-bytes");
+    assert_eq!(std::fs::read(&meta_path).unwrap(), b"meta-bytes");
+    let published = rgb_path.parent().unwrap().file_name().unwrap();
+    let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
+    assert_eq!(
+        std::fs::read(&pointer_path).unwrap(),
+        format!("{}\n", published.to_str().unwrap()).as_bytes(),
+        "the pointer must name the generation that was just published"
+    );
     let escaped: Vec<_> = std::fs::read_dir(&bystander_dir)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -596,23 +693,6 @@ fn a_planted_pointer_symlink_is_never_written_through() {
         "publishing followed a planted symlink and wrote {escaped:?} outside {}",
         output_dir.display()
     );
-
-    if let Ok(report) = outcome {
-        assert_eq!(
-            std::fs::read(&report.rgb_path).unwrap().len(),
-            report.payload_len,
-            "a capture that reports success must publish its payload"
-        );
-        assert!(
-            !output_dir
-                .join(format!("{}.generation", scene.name()))
-                .symlink_metadata()
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the published pointer must be a regular file, not a planted symlink"
-        );
-    }
 
     drop(bystander_guard);
     drop(out_guard);

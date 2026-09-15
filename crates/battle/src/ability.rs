@@ -39,6 +39,9 @@ pub const GUTS: AbilityId = AbilityId(62);
 /// Marvel Scale's ability ID.
 pub const MARVEL_SCALE: AbilityId = AbilityId(63);
 
+/// Hustle's ability ID.
+pub const HUSTLE: AbilityId = AbilityId(55);
+
 /// Low-HP power-boosting abilities paired with their boosted move type.
 pub const PINCH_BOOSTS: [(AbilityId, Type); 4] = [
     (OVERGROW, Type::Grass),
@@ -102,6 +105,21 @@ pub fn huge_power_attack(
     }
 }
 
+/// Applies Hustle to a raw physical Attack stat.
+///
+/// This must run before stat-stage scaling, matching Huge Power's ordering.
+/// A Hustle holder's raw Attack is raised 150%, truncated, exactly as
+/// upstream's `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206`).
+/// Accuracy pays for this separately (`crate::accuracy::hustle_lowers_threshold`).
+#[must_use]
+pub fn hustle_attack(attacker_ability: AbilityId, raw_attack: u32) -> u32 {
+    if attacker_ability == HUSTLE {
+        150 * raw_attack / 100
+    } else {
+        raw_attack
+    }
+}
+
 /// Applies Guts to a raw physical Attack stat.
 ///
 /// This must run before stat-stage scaling, matching Huge Power's ordering.
@@ -137,9 +155,10 @@ pub fn marvel_scale_defense(
 #[cfg(test)]
 mod tests {
     use super::{
-        guts_attack, huge_power_attack, inverts_drain, marvel_scale_defense, pinch_boosts_power,
-        suppresses_critical_hits, BATTLE_ARMOR, BLAZE, GUTS, HUGE_POWER, LIQUID_OOZE, MARVEL_SCALE,
-        OVERGROW, PINCH_BOOSTS, PURE_POWER, SHELL_ARMOR, SWARM, TORRENT,
+        guts_attack, huge_power_attack, hustle_attack, inverts_drain, marvel_scale_defense,
+        pinch_boosts_power, suppresses_critical_hits, BATTLE_ARMOR, BLAZE, GUTS, HUGE_POWER,
+        HUSTLE, LIQUID_OOZE, MARVEL_SCALE, OVERGROW, PINCH_BOOSTS, PURE_POWER, SHELL_ARMOR, SWARM,
+        TORRENT,
     };
     use crate::damage::MoveCategory;
     use crate::dex::Dex;
@@ -155,6 +174,7 @@ mod tests {
     const ANORITH: SpeciesId = SpeciesId(390);
     const MACHOP: SpeciesId = SpeciesId(66);
     const MILOTIC: SpeciesId = SpeciesId(329);
+    const REMORAID: SpeciesId = SpeciesId(223);
 
     #[test]
     fn the_pinch_gate_is_an_inclusive_integer_third_of_max_hp() {
@@ -209,6 +229,25 @@ mod tests {
         assert_eq!(dex.species(MEDITITE).unwrap().abilities[0], PURE_POWER);
         assert_eq!(dex.species(MACHOP).unwrap().abilities[0], GUTS);
         assert_eq!(dex.species(MILOTIC).unwrap().abilities[0], MARVEL_SCALE);
+        assert_eq!(dex.species(REMORAID).unwrap().abilities[0], HUSTLE);
+    }
+
+    #[test]
+    fn hustle_raises_only_a_holders_raw_physical_attack() {
+        assert_eq!(hustle_attack(HUSTLE, 14), 21, "150% of 14, truncated");
+        for other in [GUTS, HUGE_POWER, PURE_POWER, MARVEL_SCALE, NO_ABILITY] {
+            assert_eq!(
+                hustle_attack(other, 14),
+                14,
+                "{other:?} must not trigger Hustle"
+            );
+        }
+    }
+
+    #[test]
+    fn hustle_truncates_rather_than_rounds() {
+        // 150 * 15 / 100 = 22.5, truncated to 22.
+        assert_eq!(hustle_attack(HUSTLE, 15), 22);
     }
 
     #[test]
