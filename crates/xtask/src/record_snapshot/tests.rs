@@ -645,6 +645,59 @@ fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_fr
     drop(out_guard);
 }
 
+/// Publication must stage the pointer outside every name the generation makes
+/// guessable: links planted at all of them neither starve the capture nor take
+/// a write.
+#[cfg(unix)]
+#[test]
+fn publication_stages_the_pointer_outside_every_generation_derived_name() {
+    /// Covers every generation-derived pointer name this process could reach.
+    const PREDICTABLE_INDICES: u64 = 256;
+
+    let output_dir = scratch_path("pointer-predictable-name-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-predictable-name-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    for index in 0..PREDICTABLE_INDICES {
+        let generation = format!("{}.generation-{}-{index}", scene.name(), std::process::id());
+        std::os::unix::fs::symlink(
+            bystander_dir.join(format!("bystander-{index}")),
+            output_dir.join(format!(".{generation}.pointer")),
+        )
+        .unwrap();
+    }
+
+    let (rgb_path, meta_path) =
+        super::publish_generation(scene, &output_dir, b"rgb-bytes", b"meta-bytes", || Ok(()))
+            .unwrap();
+
+    assert_eq!(std::fs::read(&rgb_path).unwrap(), b"rgb-bytes");
+    assert_eq!(std::fs::read(&meta_path).unwrap(), b"meta-bytes");
+    let published = rgb_path.parent().unwrap().file_name().unwrap();
+    let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
+    assert_eq!(
+        std::fs::read(&pointer_path).unwrap(),
+        format!("{}\n", published.to_str().unwrap()).as_bytes(),
+        "the pointer must name the generation that was just published"
+    );
+    let escaped: Vec<_> = std::fs::read_dir(&bystander_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        escaped.is_empty(),
+        "publishing followed a planted symlink and wrote {escaped:?} outside {}",
+        output_dir.display()
+    );
+
+    drop(bystander_guard);
+    drop(out_guard);
+}
+
 /// A promoting rename that fails must not turn into an unlink of whatever
 /// now holds the staging name. On unix the held handle's inode confirms the
 /// file is still the staged one, so it is removed; on Windows the hold had
