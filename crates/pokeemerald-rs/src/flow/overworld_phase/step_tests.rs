@@ -1255,6 +1255,17 @@ fn an_at_rest_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
     assert_eq!(phase.player.facing(), Direction::North);
     assert_eq!(phase.player.position(), (8, 5), "the Up frame only turned");
     assert!(!phase.player.in_transit());
+    // The turn holds the player busy for its remaining frames, during which
+    // neither a warp nor a step can run; drain them so the next frame decides.
+    for _ in 1..engine::overworld::player::TURN_IN_PLACE_FRAMES {
+        phase.step(held(Buttons::UP));
+        assert_eq!(
+            phase.player.position(),
+            (8, 5),
+            "the turn lock holds the player"
+        );
+        assert!(!phase.player.in_transit());
+    }
 
     // At rest, facing North, Up still held: `TryArrowWarp`'s gate is open
     // and the tile's own MB_NORTH_ARROW_WARP matches. The warp is resolved
