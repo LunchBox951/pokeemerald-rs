@@ -273,23 +273,9 @@ fn resumed_phase_saved_with_frame(
 }
 
 /// How many pixels of each fixture frame colour a real `START` press's menu
-/// shows, driven through production `advance_scene`/`OverworldPhase::step`/
-/// `build_start_menu`/`start_menu::open`.
-///
-/// The press goes through [`crate::flow::advance_scene`] rather than
-/// [`OverworldPhase::advance_start_menu_frame`], for the same reason
-/// `save_continue_tests::real_pack_start_opens_the_menu_and_saves` does
-/// (issue #908): that dispatch hands an *already-open* menu to
-/// `advance_start_menu_frame` and a fresh press to `OverworldPhase::step`
-/// (`crate::flow`'s `AppScene::Overworld` arm), and the opener's own
-/// contract says it "runs only while a menu is already open". Calling it
-/// directly on a closed menu would leave that routing untested -- the same
-/// shape of gap #1179's constructor-level regression left behind.
-///
-/// Counts the composed *menu* over a blank framebuffer rather than
-/// `advance_scene`'s returned frame, so only the chrome's own pixels are
-/// weighed and the synthetic map underneath cannot contribute either
-/// fixture colour.
+/// shows. The press goes through [`crate::flow::advance_scene`], the only
+/// production route for a fresh press (issue #908); the menu is composed
+/// over a blank framebuffer so the synthetic map contributes no fixture colour.
 fn border_colour_counts(phase: crate::flow::overworld_phase::OverworldPhase) -> (usize, usize) {
     use rendering::{Bgr555, Framebuffer};
 
