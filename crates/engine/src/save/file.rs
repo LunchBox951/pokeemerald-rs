@@ -447,7 +447,10 @@ impl SaveFile {
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Lock`] if the lock file could not be
     /// created, locked, or resolved; [`SaveFileError::LockPathIsSave`] if
-    /// this save path resolves to the lock file.
+    /// this save path resolves to the lock file;
+    /// [`SaveFileError::LockPathIsAlias`] if the lock slot is a symlink or
+    /// does not name the file it opens; [`SaveFileError::LockPathNotAPlainFile`]
+    /// if something other than a plain file already occupies the slot.
     pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
         self.lock_with(Self::sync_directory_best_effort)
     }
@@ -681,6 +684,10 @@ impl SaveFile {
         options.read(true).write(true).create(true).truncate(false);
         Self::deny_delete_sharing(&mut options);
         match options.open(path) {
+            Ok(file) => {
+                Self::open_to_every_owner(&file);
+                Ok(file)
+            }
             Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => {
                 let mut options = std::fs::OpenOptions::new();
                 options.read(true);
@@ -705,6 +712,19 @@ impl SaveFile {
     ///
     /// Read and write sharing stay permitted, so a second process still
     /// opens this same file to contend for the lock; only delete is denied.
+    /// A lock created under `umask 077` is `0600`, which the read-only
+    /// fallback cannot open either; the creator widens it to `0666` so every
+    /// later owner can lock it. Best effort: a non-owner has no say here.
+    #[cfg(unix)]
+    fn open_to_every_owner(file: &std::fs::File) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+    }
+
+    /// Windows has no umask; ACLs inherit from the directory.
+    #[cfg(not(unix))]
+    fn open_to_every_owner(_file: &std::fs::File) {}
+
     #[cfg(windows)]
     fn deny_delete_sharing(options: &mut std::fs::OpenOptions) {
         use std::os::windows::fs::OpenOptionsExt;

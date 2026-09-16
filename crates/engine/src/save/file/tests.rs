@@ -1298,3 +1298,23 @@ fn the_lock_file_name_fits_the_posix_minimum_component_limit() {
         "{LOCK_FILE_NAME:?} exceeds 14 bytes"
     );
 }
+
+/// A `umask 077` creator leaves `0600`, which no later owner can even read.
+#[cfg(unix)]
+#[test]
+fn a_freshly_created_lock_file_is_lockable_by_every_owner() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("lock-mode");
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file.lock().expect("a guard");
+    let mode = std::fs::metadata(dir.path.join(LOCK_FILE_NAME))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o666,
+        0o666,
+        "lock mode {mode:o} shuts later owners out"
+    );
+    drop(guard);
+}
