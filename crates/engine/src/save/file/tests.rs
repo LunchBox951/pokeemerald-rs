@@ -1363,12 +1363,39 @@ fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
     let pid = std::process::id();
     std::fs::write(dir.path.join(LOCK_FILE_NAME), b"").unwrap();
     std::fs::write(dir.path.join(format!(".lk{pid}")), b"").unwrap();
-    for n in 1..16u8 {
-        std::fs::write(dir.path.join(format!(".lk{pid}{n:x}")), b"").unwrap();
+    for n in 1..=u8::MAX {
+        std::fs::write(dir.path.join(format!(".lk{pid}{n:02x}")), b"").unwrap();
     }
     let file = SaveFile::at(dir.path.join("a.sav"));
     let guard = file
         .lock()
         .expect("the existing lock is opened without staging");
     drop(guard);
+}
+
+/// Leftover staging names beside an absent slot are skipped, never unlinked.
+#[cfg(unix)]
+#[test]
+fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
+    let dir = TempDir::new("lock-staging-names-taken");
+    let pid = std::process::id();
+    let leftovers: Vec<PathBuf> = (0..16u8)
+        .map(|attempt| match attempt {
+            0 => dir.path.join(format!(".lk{pid}")),
+            n => dir.path.join(format!(".lk{pid}{n:02x}")),
+        })
+        .collect();
+    for leftover in &leftovers {
+        std::fs::write(leftover, b"leftover").unwrap();
+    }
+    let file = SaveFile::at(dir.path.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("a first save finds a free staging name");
+    drop(guard);
+    for leftover in &leftovers {
+        assert_eq!(
+            std::fs::read(leftover).unwrap(),
+            b"leftover",
+            "{leftover:?} was disturbed"
+        );
+    }
 }

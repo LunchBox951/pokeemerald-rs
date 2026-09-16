@@ -420,22 +420,10 @@ impl SaveFile {
 
     /// Acquires an advisory inter-process lock for this save path.
     ///
-    /// The lock lives on [`LOCK_FILE_NAME`], one fixed file per directory,
-    /// never on the save file itself: [`SaveFile::write`] replaces the save's
-    /// inode by rename, and a lock on a replaced inode would silently stop
-    /// excluding anyone who opened the path afterwards.
-    ///
-    /// The name is fixed rather than derived from the save's, so no spelling
-    /// can split it. A case-folding or normalising volume resolves several
-    /// byte-different names to one save, and `std` cannot enumerate those
-    /// aliases; deriving the lock from the basename therefore handed one save
-    /// two locks. Every save in a directory now serialises on one lock, which
-    /// only delays unrelated saves, where two locks for one save lose data. A
-    /// short fixed name also always fits the component limit, so no save this
-    /// host accepts is unlockable.
-    ///
-    /// A save that resolves to the lock file itself is refused, not locked:
-    /// its rename would replace the very inode every locker holds.
+    /// The lock is [`LOCK_FILE_NAME`], one fixed file per directory: a name
+    /// derived from the save's basename cannot be made alias-safe, and
+    /// [`SaveFile::write`] replaces the save's own inode by rename. A save
+    /// that resolves to the lock file is refused.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -483,20 +471,8 @@ impl SaveFile {
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// Refuses a lock slot that is not this directory's own plain file,
-    /// before anything opens it.
-    ///
-    /// Opening follows a symlink, so [`SaveFile::names_its_own_entry`] is
-    /// too late to prevent its side effects: a dangling symlink would have
-    /// the open create its target outside this directory, and one pointing
-    /// at a FIFO would have the open block until some reader appeared,
-    /// neither of which any later check can undo. Anything that is not a
-    /// plain file is refused for the same reason -- it cannot carry a lock,
-    /// and opening it can block or disturb it.
-    ///
-    /// An alias planted between this check and the open is still caught
-    /// afterwards, by identity. What this forestalls is one already sitting
-    /// in a directory the user controls, not a race.
+    /// Refuses a symlinked or non-plain-file lock slot before anything opens
+    /// it, since the open would follow the link or block on a FIFO.
     ///
     /// # Errors
     ///
@@ -529,22 +505,8 @@ impl SaveFile {
         }
     }
 
-    /// Whether the entry at `lock` is the very file `file` was opened on.
-    ///
-    /// Opening follows a symlink, so a symlink planted in the fixed lock
-    /// slot silently redirects every locker to whatever it points at *at
-    /// that moment*. Two lockers that open it either side of the target's
-    /// own rename then hold two different inodes and exclude nobody, so the
-    /// slot must name the inode it opens rather than merely lead to one.
-    /// Comparing the unfollowed entry against the open handle says exactly
-    /// that, and catches an entry swapped since the open besides.
-    ///
-    /// A hard link is deliberately *not* refused. It is a name of its own,
-    /// so the slot keeps naming the inode this guard holds however the
-    /// link's other names are renamed, and a later locker opening the slot
-    /// still lands on that same inode. Refusing it would break the
-    /// hard-linking backup tools that snapshot a save directory, for a
-    /// hazard it does not carry.
+    /// Whether the unfollowed entry at `lock` is the inode `file` holds. A
+    /// hard link passes: it is a name of its own, and backup tools make them.
     ///
     /// # Errors
     ///
@@ -721,28 +683,10 @@ impl SaveFile {
         }
     }
 
-    /// Opens the lock file denying `FILE_SHARE_DELETE`, so that while any
-    /// process holds it no rename can replace that entry and no unlink can
-    /// remove it.
-    ///
-    /// This, not [`SaveFile::resolves_to`], is what makes the Windows
-    /// refusal complete: with no stable by-handle identity to compare,
-    /// canonical paths cannot recognise a hard link to the lock file, whose
-    /// own name canonicalises to itself. Denying delete sharing closes the
-    /// hazard instead of detecting it -- an aliasing save's publishing
-    /// rename fails with a sharing violation, a reported error, rather than
-    /// silently replacing the inode every locker holds.
-    ///
-    /// Read and write sharing stay permitted, so a second process still
-    /// opens this same file to contend for the lock; only delete is denied.
-    /// Creates the lock slot, or returns `None` when it already exists.
-    ///
-    /// A lock created under `umask 077` is `0600`, which no later owner can
-    /// open; the file is staged beside the slot at `0666` and published with
-    /// `link(2)`, which is atomic and never follows a symlink, so no process
-    /// can observe a fresh lock before its mode is final. A pre-existing slot
-    /// keeps whatever mode its owner chose. A filesystem without hard links
-    /// falls back to creating the slot in place and widening it afterwards.
+    /// Creates the lock slot, or returns `None` when it already exists. The
+    /// file is staged at `0666` and published by `link(2)`, so a `umask 077`
+    /// creator never exposes a `0600` lock; without hard links it is created
+    /// in place and widened after.
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         use std::os::unix::fs::PermissionsExt;
@@ -752,10 +696,10 @@ impl SaveFile {
         // name, even by another thread of this process, just means the next.
         let pid = std::process::id();
         let (staged, file) = 'stage: {
-            for attempt in 0..16u8 {
+            for attempt in 0..=u8::MAX {
                 let name = match attempt {
                     0 => format!(".lk{pid}"),
-                    n => format!(".lk{pid}{n:x}"),
+                    n => format!(".lk{pid}{n:02x}"),
                 };
                 let candidate = path.with_file_name(name);
                 match options.open(&candidate) {
@@ -803,6 +747,8 @@ impl SaveFile {
         }
     }
 
+    /// Denies `FILE_SHARE_DELETE` on the lock handle, so no rename or unlink
+    /// can replace the held entry; Windows has no stable by-handle identity.
     #[cfg(windows)]
     fn deny_delete_sharing(options: &mut std::fs::OpenOptions) {
         use std::os::windows::fs::OpenOptionsExt;
