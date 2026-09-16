@@ -37,12 +37,16 @@ arguments = sys.argv[1:]
 assert arguments[0] == "api", arguments
 with open(os.environ["GH_STUB_FIXTURE"], encoding="utf-8") as handle:
     pages = json.load(handle)
-jq_filter = arguments[arguments.index("--jq") + 1]
+jq_filter = arguments[arguments.index("--jq") + 1] if "--jq" in arguments else None
 paginate = "--paginate" in arguments
 slurp = "--slurp" in arguments
+if slurp and jq_filter is not None:
+    sys.exit("the `--slurp` option is not supported with `--jq` or `--template`")
 
 
 def apply_filter(document):
+    if jq_filter is None:
+        return json.dumps(document) + "\n"
     result = subprocess.run(
         ["jq", "-r", jq_filter],
         input=json.dumps(document),
