@@ -201,6 +201,8 @@ where
             }
         }
     };
+    let staged_dir_claim = claim_staged_dir(&staged_dir)
+        .map_err(|e| RecordSnapshotError::Write(staged_dir.clone(), e.to_string()))?;
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
@@ -228,11 +230,71 @@ where
     })();
 
     // Neither staging name is removed once it may no longer be exclusively
-    // ours: the rename frees `staged_dir`'s name, and `generation_dir`'s was never claimed.
-    if result.is_err() && !renamed {
+    // ours: `generation_dir`'s was never claimed, and `staged_dir`'s claim
+    // (still checked, since a failure can replace it before any rename) is
+    // only trusted while `!renamed` -- the rename itself frees the name.
+    if result.is_err() && !renamed && staged_dir_is_still_claimed(&staged_dir_claim, &staged_dir) {
         let _ = std::fs::remove_dir_all(&staged_dir);
     }
     result
+}
+
+/// Identity [`claim_staged_dir`] captures for `staged_dir` when this call
+/// creates it, so [`staged_dir_is_still_claimed`] can tell a replacement
+/// apart from the directory this call still owns.
+#[cfg(unix)]
+struct StagedDirClaim {
+    dev: u64,
+    ino: u64,
+}
+
+/// As [`StagedDirClaim`] above, but path-based metadata off unix carries no
+/// inode to re-read, so the directory's creation time stands in instead.
+#[cfg(not(unix))]
+struct StagedDirClaim {
+    created: std::time::SystemTime,
+}
+
+/// Reads back the identity that will prove ownership of `path` (a freshly
+/// created `staged_dir`) at cleanup time.
+#[cfg(unix)]
+fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let meta = std::fs::symlink_metadata(path)?;
+    Ok(StagedDirClaim {
+        dev: meta.dev(),
+        ino: meta.ino(),
+    })
+}
+
+/// As [`claim_staged_dir`] above, for the creation-time fallback (see
+/// [`StagedDirClaim`]).
+#[cfg(not(unix))]
+fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    Ok(StagedDirClaim {
+        created: std::fs::symlink_metadata(path)?.created()?,
+    })
+}
+
+/// Whether `path` still names the very directory `claim` was taken from,
+/// rather than one that took its name back after a failure freed it.
+#[cfg(unix)]
+fn staged_dir_is_still_claimed(claim: &StagedDirClaim, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    std::fs::symlink_metadata(path).is_ok_and(|found| {
+        found.file_type().is_dir() && (claim.dev, claim.ino) == (found.dev(), found.ino())
+    })
+}
+
+/// As [`staged_dir_is_still_claimed`] above, for the creation-time fallback
+/// (see [`StagedDirClaim`]).
+#[cfg(not(unix))]
+fn staged_dir_is_still_claimed(claim: &StagedDirClaim, path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .and_then(|found| found.created())
+        .is_ok_and(|created| created == claim.created)
 }
 
 /// Hex width of the pointer staging suffix, matching [`crate::extract`]'s

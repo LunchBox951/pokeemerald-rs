@@ -784,3 +784,59 @@ fn failed_publication_leaves_a_generation_directory_it_never_created() {
 
     drop(out_guard);
 }
+
+/// Failure cleanup must remove only the staging directory this publish still
+/// owns. `create_dir` proves the name was ours when it was taken, not that it
+/// is ours when cleanup runs: the name is derived from the scene, the process
+/// id, and a counter, so another writer with access to `output_dir` can take
+/// it over during the staged write. The recursive removal that follows a
+/// failure must then leave that writer's directory alone, exactly as
+/// `staging::StagedFile::remove_after` leaves a replaced staging file alone.
+#[test]
+fn failed_publication_leaves_a_staging_directory_another_writer_replaced() {
+    let output_dir = scratch_path("replaced-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged_name = |dir: &PathBuf| {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes")
+    };
+
+    let replaced = std::cell::RefCell::new(PathBuf::new());
+    let take_the_staging_name = || {
+        let staged_dir = output_dir.join(staged_name(&output_dir));
+        // Another writer takes the staging name over and puts its own tree there.
+        std::fs::rename(&staged_dir, output_dir.join("carried-off")).unwrap();
+        std::fs::create_dir(&staged_dir).unwrap();
+        std::fs::write(staged_dir.join("bystander"), b"not ours").unwrap();
+        *replaced.borrow_mut() = staged_dir;
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_staging_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let replaced = replaced.borrow().clone();
+    assert_eq!(
+        std::fs::read(replaced.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish no longer owned",
+        replaced.display()
+    );
+
+    drop(out_guard);
+}
