@@ -640,9 +640,7 @@ impl OverworldPhase {
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
 
-        // Tile transit is the whole gate: a standstill turn stays
-        // `T_NOT_MOVING`, so the warp fires inside the turn lock, which
-        // only `PlayerStep` honours (`field_player_avatar.c:901-929`, `:332-350`).
+        // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
             trigger_arrow_warp(runtime, x, y, previous_elevation, d)
