@@ -680,24 +680,47 @@ impl SaveFile {
     /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
     /// read-only handle, and these contents are never read or written.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+        // An existing slot is opened first, so staging happens only for a
+        // first save and leftover staging names can never block a valid lock.
+        match Self::open_existing_lock(path) {
+            Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
+            result => return result,
+        }
         // Creation is exclusive and never follows a symlink, so a slot
         // swapped in after the vetting cannot make this create a file elsewhere.
-        match Self::create_lock_file(path) {
-            Ok(Some(file)) => return Ok(file),
-            Ok(None) => {}
-            Err(other) => return Err(other),
+        match Self::create_lock_file(path)? {
+            Some(file) => Ok(file),
+            None => Self::open_existing_lock(path),
         }
-        let mut existing = std::fs::OpenOptions::new();
-        existing.read(true).write(true);
-        Self::deny_delete_sharing(&mut existing);
-        match existing.open(path) {
-            Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => {
-                let mut read_only = std::fs::OpenOptions::new();
-                read_only.read(true);
-                Self::deny_delete_sharing(&mut read_only);
-                read_only.open(path)
+    }
+
+    /// Opens the slot read-write, then read-only when this user cannot write
+    /// it. A denial is retried briefly, since a creator on a filesystem
+    /// without hard links publishes the slot before widening it.
+    fn open_existing_lock(path: &Path) -> std::io::Result<std::fs::File> {
+        const RETRIES: u32 = 5;
+        let mut attempt = 0;
+        loop {
+            let mut existing = std::fs::OpenOptions::new();
+            existing.read(true).write(true);
+            Self::deny_delete_sharing(&mut existing);
+            let denied = match existing.open(path) {
+                Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => denied,
+                result => return result,
+            };
+            let mut read_only = std::fs::OpenOptions::new();
+            read_only.read(true);
+            Self::deny_delete_sharing(&mut read_only);
+            match read_only.open(path) {
+                Err(still) if still.kind() == std::io::ErrorKind::PermissionDenied => {
+                    if attempt == RETRIES {
+                        return Err(denied);
+                    }
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                result => return result,
             }
-            result => result,
         }
     }
 

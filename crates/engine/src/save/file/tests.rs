@@ -1361,3 +1361,21 @@ fn a_file_already_bearing_the_lock_staging_name_survives_a_lock() {
     assert!(dir.path.join(LOCK_FILE_NAME).exists());
     drop(guard);
 }
+
+/// Leftover staging names never stand between a saver and an existing lock.
+#[cfg(unix)]
+#[test]
+fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
+    let dir = TempDir::new("lock-stage-exhausted");
+    let pid = std::process::id();
+    std::fs::write(dir.path.join(LOCK_FILE_NAME), b"").unwrap();
+    std::fs::write(dir.path.join(format!(".lk{pid}")), b"").unwrap();
+    for n in 1..16u8 {
+        std::fs::write(dir.path.join(format!(".lk{pid}{n:x}")), b"").unwrap();
+    }
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file
+        .lock()
+        .expect("the existing lock is opened without staging");
+    drop(guard);
+}
