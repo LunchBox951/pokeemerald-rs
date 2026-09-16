@@ -773,15 +773,13 @@ impl Battle {
         } else {
             (&mut self.enemy, &self.player)
         };
-        if let Some(change) = stat_change::soundproof_block(&self.dex, move_id, defender)? {
+        if stat_change::soundproof_block(&self.dex, move_id, defender)? {
             if attacker.moves()[slot].pp > 0 {
                 attacker.deduct_pp_by(slot, pp_cost)?;
             }
-            events.push(BattleEvent::StatLossPrevented {
+            events.push(BattleEvent::SoundproofProtected {
                 by_player: player_is_attacker,
                 move_id,
-                stat: change.stat,
-                ability: stat_change::SOUNDPROOF,
             });
             return Ok(());
         }

@@ -473,13 +473,7 @@ fn soundproof_blocks_growl_before_accuracy() {
 
     let mut rng = SequenceRng::new([]);
     let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
-    assert_eq!(
-        outcome,
-        StatChangeOutcome::AbilityProtected {
-            change: stat_change_for_effect(dex.move_data(GROWL).unwrap().effect).unwrap(),
-            ability: SOUNDPROOF,
-        }
-    );
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
     assert_eq!(
         rng.draws(),
         0,
@@ -496,13 +490,7 @@ fn soundproof_blocks_screech_before_accuracy() {
 
     let mut rng = SequenceRng::new([]);
     let outcome = resolve_stat_change_move(&dex, SCREECH, &attacker, &defender, &mut rng).unwrap();
-    assert_eq!(
-        outcome,
-        StatChangeOutcome::AbilityProtected {
-            change: stat_change_for_effect(dex.move_data(SCREECH).unwrap().effect).unwrap(),
-            ability: SOUNDPROOF,
-        }
-    );
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
     assert_eq!(rng.draws(), 0);
 }
 
@@ -516,13 +504,7 @@ fn soundproof_blocks_metal_sound_before_accuracy() {
     let mut rng = SequenceRng::new([]);
     let outcome =
         resolve_stat_change_move(&dex, METAL_SOUND, &attacker, &defender, &mut rng).unwrap();
-    assert_eq!(
-        outcome,
-        StatChangeOutcome::AbilityProtected {
-            change: stat_change_for_effect(dex.move_data(METAL_SOUND).unwrap().effect).unwrap(),
-            ability: SOUNDPROOF,
-        }
-    );
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
     assert_eq!(rng.draws(), 0);
 }
 
@@ -732,4 +714,24 @@ fn every_table_row_maps_its_canonical_move_to_the_exact_stat_and_magnitude() {
             effect.0
         );
     }
+}
+
+/// The resolution path feeds `crates/battle/src/battle/execute.rs:239-246`,
+/// which turns every [`StatChangeOutcome::AbilityProtected`] into a
+/// `StatLossPrevented` event naming a stat. Soundproof blocks the move instead
+/// (`BattleScript_SoundproofProtected`, `data/battle_scripts_1.s:4158-4164`),
+/// so it needs an outcome that carries no stat.
+#[test]
+fn soundproof_does_not_resolve_to_a_stat_scoped_ability_block() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+    let mut rng = SequenceRng::new([]);
+    let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
+    assert!(
+        !matches!(outcome, StatChangeOutcome::AbilityProtected { .. }),
+        "Soundproof's move-wide block must not resolve to the stat-scoped \
+         ability-protection outcome, got {outcome:?}"
+    );
 }

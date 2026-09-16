@@ -333,6 +333,10 @@ pub enum StatChangeOutcome {
         /// The ability that blocked the change.
         ability: AbilityId,
     },
+    /// The defender's Soundproof blocked the move itself
+    /// (`BattleScript_SoundproofProtected`, `data/battle_scripts_1.s:4158-4164`),
+    /// not a named stat drop, so this outcome carries no stat.
+    SoundproofProtected,
     /// The move connected and produced a stage result.
     Applied {
         /// The resolved stat change.
@@ -374,8 +378,8 @@ fn soundproof_blocks(move_id: MoveId, change: StatChangeEffect, defender: &Battl
         && SOUND_STAT_DROP_MOVES.contains(&move_id)
 }
 
-/// The stat drop Soundproof blocks for `move_id`, if any; `None` for every
-/// other move, including ones with no stat change at all.
+/// Whether `defender`'s Soundproof blocks `move_id` outright; `false` for
+/// every other move, including ones with no stat change at all.
 ///
 /// # Errors
 ///
@@ -384,10 +388,10 @@ pub fn soundproof_block(
     dex: &Dex,
     move_id: MoveId,
     defender: &BattlePokemon,
-) -> Result<Option<StatChangeEffect>, BattleError> {
+) -> Result<bool, BattleError> {
     let effect = dex.move_data(move_id)?.effect;
     Ok(stat_change_for_effect(effect)
-        .filter(|change| soundproof_blocks(move_id, *change, defender)))
+        .is_some_and(|change| soundproof_blocks(move_id, change, defender)))
 }
 
 /// Resolves a stat-changing move without mutating either battler.
@@ -413,10 +417,7 @@ pub fn resolve_stat_change_move(
 
     if change.direction == StatChangeDirection::Lower {
         if soundproof_blocks(move_id, change, defender) {
-            return Ok(StatChangeOutcome::AbilityProtected {
-                change,
-                ability: SOUNDPROOF,
-            });
+            return Ok(StatChangeOutcome::SoundproofProtected);
         }
 
         if !accuracy_check(

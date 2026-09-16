@@ -491,11 +491,9 @@ fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
                 by_player: true,
                 success: false,
             },
-            BattleEvent::StatLossPrevented {
+            BattleEvent::SoundproofProtected {
                 by_player: false,
                 move_id: MoveId(45),
-                stat: ChangedStat::Attack,
-                ability: AbilityId::SOUNDPROOF,
             },
         ]
     );
@@ -505,4 +503,29 @@ fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
         "the blocked Growl changes no stage"
     );
     assert_eq!(rng.draws(), 4);
+}
+
+/// Soundproof leaves through `BattleScript_SoundproofProtected`
+/// (`data/battle_scripts_1.s:4158`-`:4164`, `STRINGID_PKMNSXBLOCKSY`): the
+/// ability blocks the move itself. That is a different observable result from
+/// `BattleScript_AbilityNoStatLoss`'s prevented stat drop
+/// (`:4116`-`:4120`, `STRINGID_PKMNPREVENTSSTATLOSSWITH`), which is what
+/// [`BattleEvent::StatLossPrevented`] reports, the way Limber's move-wide block
+/// has its own statless [`BattleEvent::LimberProtected`].
+#[test]
+fn a_soundproof_block_is_not_reported_as_a_prevented_stat_loss() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(player.ability(), AbilityId::SOUNDPROOF);
+    let enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(45), MoveId(33)]); // Growl, Tackle
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::StatLossPrevented { .. })),
+        "Soundproof blocks Growl outright; replay must not report a named stat \
+         loss as prevented, got {events:?}"
+    );
 }

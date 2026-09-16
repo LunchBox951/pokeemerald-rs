@@ -245,6 +245,12 @@ impl Battle {
                     ability,
                 });
             }
+            StatChangeOutcome::SoundproofProtected => {
+                events.push(BattleEvent::SoundproofProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
             StatChangeOutcome::Applied {
                 change,
                 new_stage,
