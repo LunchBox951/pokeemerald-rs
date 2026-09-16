@@ -244,9 +244,9 @@ type MetatileQuad = [ScreenEntry; 4];
 
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
 ///
-/// `Normal` leaves the bottom background transparent instead of reproducing
-/// upstream's fixed BG3 entry; the module docs' "Fidelity differences"
-/// section states that deviation and its consequence.
+/// `Normal` reproduces `DrawMetatile`'s fixed `0x3014` write to all four BG3
+/// cells (`pokeemerald/src/field_camera.c:287-292`) instead of leaving that
+/// layer transparent.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
@@ -257,7 +257,7 @@ fn route_layers(
     match layer_type {
         MetatileLayerType::Split => (bottom_half, [blank; 4], top_half),
         MetatileLayerType::Covered => (bottom_half, top_half, [blank; 4]),
-        MetatileLayerType::Normal => ([blank; 4], bottom_half, top_half),
+        MetatileLayerType::Normal => ([ScreenEntry::from_raw(0x3014); 4], bottom_half, top_half),
     }
 }
 
@@ -1084,9 +1084,29 @@ mod tests {
         assert_eq!(t, [blank; 4]);
 
         let (b, m, t) = route_layers(entries, MetatileLayerType::Normal, blank);
-        assert_eq!(b, [blank; 4]);
+        assert_eq!(b, [ScreenEntry::from_raw(0x3014); 4]);
         assert_eq!(m, [entries[0], entries[1], entries[2], entries[3]]);
         assert_eq!(t, [entries[4], entries[5], entries[6], entries[7]]);
+    }
+
+    /// Regression for the `route_layers` contract above: `Normal` must not
+    /// fall back to `blank` on BG3.
+    #[test]
+    fn route_layers_fills_bg3_with_draw_metatiles_fixed_entry_for_normal() {
+        let mut entries = [ScreenEntry::new(0, false, false, 0); TILES_PER_METATILE];
+        for (i, entry) in entries.iter_mut().enumerate() {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a metatile contains only eight screen entries"
+            )]
+            let idx = i as u16;
+            *entry = ScreenEntry::new(idx, false, false, 0);
+        }
+        let blank = ScreenEntry::new(99, false, false, 0);
+
+        let (bottom, _, _) = route_layers(entries, MetatileLayerType::Normal, blank);
+
+        assert_eq!(bottom, [ScreenEntry::from_raw(0x3014); 4]);
     }
 
     #[test]
