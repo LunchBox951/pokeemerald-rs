@@ -26913,7 +26913,7 @@
           "status": "rewritten"
         },
         "SoundMainRAM_Reverb": {
-          "reason": "SoundMainRAM's reverb arm (feedback delay line seeding the mix buffer before per-voice mixing) reimplemented as Reverb, wired into Mixer::mix_frame; a song's SongHeader::reverb level enables it via Song::with_reverb/Sequencer::with_config (issue #185).",
+          "reason": "SoundMainRAM's reverb arm (feedback delay line seeding the mix buffer before per-voice mixing) reimplemented as Reverb, wired into Mixer::mix_frame; a song's SongHeader::reverb level enables it via Song::with_reverb/Sequencer::with_config (issue #185). Mixer::mix_frame clips and commits the DirectSound-only frame to Reverb before CGB voices render, matching SoundMainRAM_Reverb's exclusive DirectSound pcmBuffer feed (m4a_1.s:88-119) and CgbSound's separate NRxx hardware-register path (m4a.c:925-1226); CGB output is mixed in only afterward, for the final output buffer, and never reaches the delay ring (issue #1230).",
           "rust_target": "crates/audio/src/reverb.rs",
           "spec": "S-3",
           "status": "rewritten"

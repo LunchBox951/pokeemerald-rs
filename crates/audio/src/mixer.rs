@@ -9,10 +9,10 @@
 //! CGB voices apply the same priority and track test to their one fixed hardware
 //! slot (`m4a_1.s:1647..1668`).
 //!
-//! Reverb seeds an `i32` accumulator before voices render. The finished samples
-//! are clipped to the signed 8-bit range before entering the reverb delay and
-//! being normalised to `f32`. Upstream instead sums packed 8-bit lanes with
-//! wrapping carry between adjacent samples (`m4a_1.s:396..437`).
+//! Reverb seeds an `i32` accumulator before DirectSound voices render and
+//! commits only that clipped frame to the delay before CGB voices add their
+//! own signal (ring contract: `crate::reverb`). Upstream instead sums packed
+//! 8-bit lanes with wrapping carry between adjacent samples (`m4a_1.s:396..437`).
 
 use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::CgbVoice;
@@ -325,6 +325,13 @@ impl Mixer {
             }
         }
 
+        // Clip and commit the DirectSound-only frame before CGB renders, so
+        // CGB output never enters the DirectSound reverb ring (m4a_1.s:88..119).
+        for sample in &mut self.mix_buffer {
+            *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
+        }
+        self.reverb.commit_frame(&self.mix_buffer);
+
         self.sweep_clock
             .advance_into(self.mix_buffer.len(), &mut self.sweep_ticks);
         debug_assert!(
@@ -345,7 +352,6 @@ impl Mixer {
         for sample in &mut self.mix_buffer {
             *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
         }
-        self.reverb.commit_frame(&self.mix_buffer);
 
         for (frame, &(left, right)) in self.mix_buffer.iter().enumerate() {
             out[frame * 2] = normalise_s8(left);
