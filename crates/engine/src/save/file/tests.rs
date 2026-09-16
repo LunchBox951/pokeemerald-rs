@@ -1344,3 +1344,20 @@ fn a_pre_existing_lock_file_keeps_its_mode() {
     );
     drop(guard);
 }
+
+/// Staging must never unlink an entry it did not create.
+#[cfg(unix)]
+#[test]
+fn a_file_already_bearing_the_lock_staging_name_survives_a_lock() {
+    let dir = TempDir::new("lock-stage-collision");
+    let bystander = dir.path.join(format!(".lk{}", std::process::id()));
+    std::fs::write(&bystander, b"a save that happens to bear the staging name").unwrap();
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file.lock().expect("a guard");
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"a save that happens to bear the staging name"
+    );
+    assert!(dir.path.join(LOCK_FILE_NAME).exists());
+    drop(guard);
+}

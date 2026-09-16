@@ -726,16 +726,28 @@ impl SaveFile {
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         use std::os::unix::fs::PermissionsExt;
-        let staged = path.with_file_name(format!(".lk{}", std::process::id()));
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create_new(true);
-        let file = match options.open(&staged) {
-            Ok(file) => file,
-            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {
-                std::fs::remove_file(&staged)?;
-                options.open(&staged)?
+        // Never unlink an entry this call did not create: a taken staging
+        // name, even by another thread of this process, just means the next.
+        let pid = std::process::id();
+        let (staged, file) = 'stage: {
+            for attempt in 0..16u8 {
+                let name = match attempt {
+                    0 => format!(".lk{pid}"),
+                    n => format!(".lk{pid}{n:x}"),
+                };
+                let candidate = path.with_file_name(name);
+                match options.open(&candidate) {
+                    Ok(file) => break 'stage (candidate, file),
+                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(other) => return Err(other),
+                }
             }
-            Err(other) => return Err(other),
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "every staging name beside the lock slot is taken",
+            ));
         };
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
         let linked = std::fs::hard_link(&staged, path);
