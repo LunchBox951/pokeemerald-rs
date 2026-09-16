@@ -264,10 +264,11 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
-/// The [`EffectsEnable`] differs from the queried column's own window only
-/// for an affine mosaic trailing spill, which carries the enables of the spans
-/// that wrote it (`compose_pixel`'s docs). The two `bool`s are the winning
-/// candidate's forced-alpha bit and its color writer's own semi-transparency
+/// The [`EffectsEnable`] differs from the queried column's own window for a
+/// sprite candidate, which always carries its writer's own baked enables
+/// (`compose_pixel`'s docs); a BG candidate's is always the queried column's
+/// window. The two `bool`s are the winning candidate's forced-alpha bit and
+/// its color writer's own semi-transparency
 /// (`sprite::SpritePixel::writer_semi_transparent`); a BG candidate supplies
 /// `false` for both.
 type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool, EffectsEnable);
@@ -523,9 +524,10 @@ fn affine_mosaic_hold_participates(
 /// `OBJWIN`'s own effects enable is a per-pixel mask a span-level override
 /// cannot see, so it wins over a spill's writing span on the columns it
 /// governs; `WIN0` and `WIN1` outrank `OBJWIN`, which never flags a pixel they
-/// cover (`software-obj.c:161`). Brightness is normally baked at write time
-/// from the writing span's own enable (`software-obj.c:176-208`), so `OBJWIN`
-/// cannot brighten a colour its writer stored unbrightened -- unless
+/// cover (`software-obj.c:161`). Brightness is always baked at write time
+/// from the writing span's own enable, even when that span is the queried
+/// column's own (`software-obj.c:76-98,176-208`), so `OBJWIN` cannot brighten
+/// a colour its writer stored unbrightened -- unless
 /// [`pixel.reblends`](crate::sprite::SpritePixel::reblends) is live, which
 /// always defers to the queried column's own window instead, discarding
 /// whatever was baked (`software-obj.c:180-192`, `video-software.c:983-1000`)
@@ -538,14 +540,14 @@ fn obj_effects_enable(
     let brightness = if pixel.reblends {
         window_effects
     } else if region == WindowRegion::ObjWindow {
-        window_effects && pixel.brightness_override.unwrap_or(true)
+        window_effects && pixel.brightness_override
     } else {
-        pixel.brightness_override.unwrap_or(window_effects)
+        pixel.brightness_override
     };
     let target1 = if region == WindowRegion::ObjWindow {
         window_effects
     } else {
-        pixel.target1_override.unwrap_or(window_effects)
+        pixel.target1_override
     };
     EffectsEnable {
         target1,
@@ -561,12 +563,14 @@ fn obj_effects_enable(
 ///
 /// `window_spans` carries this scanline's hardware-window spans and which of
 /// them run the OBJ pass; see `sprite::SpriteLayer::sample_affine_local` for
-/// what it seeds and why. A trailing-spill sprite pixel carries its color
-/// writer's own baked brightness enable (`sprite::SpritePixel::brightness_override`),
-/// which wins over the queried column's window unless the column is an
-/// `OBJWIN` region or [`reblends`](crate::sprite::SpritePixel::reblends) is
-/// live on whichever write last touched priority, which always defers to the
-/// queried column instead `(behavioral-fidelity)`.
+/// what it seeds and why. Every sprite pixel carries its color writer's own
+/// baked brightness enable (`sprite::SpritePixel::brightness_override`),
+/// always the writing span's own state whether or not that span is the
+/// queried column's: it wins outright over the queried column's window, or
+/// is `AND`ed with `OBJWIN`'s own per-pixel enable when the column is an
+/// `OBJWIN` region, unless [`reblends`](crate::sprite::SpritePixel::reblends)
+/// is live on whichever write last touched priority, which always defers to
+/// the queried column instead `(behavioral-fidelity)`.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "framebuffer coordinates are always < 240/160, well within u8"
@@ -2893,6 +2897,84 @@ mod tests {
             "x=10 was written by WIN0's effects-disabled pass, so OBJWIN's \
              effects-enabled control cannot brighten a colour that was never \
              stored brightened"
+        );
+    }
+
+    #[test]
+    fn objwin_cannot_brighten_a_colour_its_own_span_wrote_unbrightened() {
+        // Same hardware span as the read: mGBA still bakes brighten from the
+        // writer's own blend enable at write time (`software-obj.c:76-98,176-208`).
+
+        let mut bytes = [0u8; 64];
+        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
+        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        let palette = Palette::new(colors);
+
+        let visible = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (uniform red)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        );
+        let objwin_marker = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (opaque), marks OBJWIN across x=0..=7
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window);
+        let entries = [visible, objwin_marker];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let mut obj_on = WindowLayerEnable::NONE;
+        obj_on.obj = true;
+        let mut obj_on_effects_on = obj_on;
+        obj_on_effects_on.effects = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(obj_on_effects_on),
+                winout: obj_on, // the sole writing span: effects off
+            },
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    obj: true,
+                    ..LayerTargets::default()
+                },
+                evy: 16,
+                ..EffectsConfig::default()
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(4, 0),
+            Some(red),
+            "the OBJ was written by the effects-disabled WINOUT span it shares \
+             with the queried column, so OBJWIN's effects-enabled control \
+             cannot brighten a colour that was never stored brightened"
         );
     }
 

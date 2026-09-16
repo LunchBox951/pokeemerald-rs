@@ -32,6 +32,11 @@ use std::cell::RefCell;
 /// `FLAG_REBLEND` from every such write but never the stored color itself
 /// (`software-obj.c:76-86`) `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "semi_transparent, writer_semi_transparent, brightness_override, reblends, and \
+              target1_override are independent per-write effects states baked by mGBA's OBJ pass"
+)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
     pub color: Rgb888,
@@ -47,12 +52,14 @@ pub struct SpritePixel {
     /// (`software-obj.c:76-86,177-208`) `(behavioral-fidelity)`.
     pub(crate) writer_semi_transparent: bool,
     /// The color-effects enable [`color`](Self::color)'s writing span baked
-    /// in, when a spill crossed a span boundary (`software-obj.c:177-208`).
-    /// `None` when the writer is the queried column's own span, using that
-    /// window instead. Set only by the write that stored `color`, and never
-    /// moved by a later promotion; see [`reblends`](Self::reblends) for the
-    /// part that does move `(behavioral-fidelity)`.
-    pub(crate) brightness_override: Option<bool>,
+    /// in at write time, always the writer's own span regardless of whether
+    /// it is the queried column's hardware span: `OBJWIN` masks per pixel, so
+    /// a same-span read must still see what the writer baked
+    /// (`software-obj.c:76-98,176-208`). Set only by the write that stored
+    /// `color`, and never moved by a later promotion; see
+    /// [`reblends`](Self::reblends) for the part that does move
+    /// `(behavioral-fidelity)`.
+    pub(crate) brightness_override: bool,
     /// Whether the entry that last stamped [`priority`](Self::priority)
     /// engaged mGBA's `FLAG_REBLEND` OBJWIN slow path, live for
     /// [`brightness_override`](Self::brightness_override)'s enable versus the
@@ -63,7 +70,7 @@ pub struct SpritePixel {
     /// [`priority`](Self::priority), which a better-priority transparent texel
     /// moves without recoloring: mGBA re-stamps `FLAG_TARGET_1` from every
     /// such write (`software-obj.c:76-86`).
-    pub(crate) target1_override: Option<bool>,
+    pub(crate) target1_override: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -170,11 +177,13 @@ impl<'a> WindowSpans<'a> {
         self.effects.get(index).copied().unwrap_or(true)
     }
 
-    /// Returns the color-effects enable a write made in span `writer` carries
-    /// into column `x`, or `None` when `writer` is `x`'s own span and the
-    /// caller should use the queried column's window instead.
-    fn spill_effects(self, x: usize, writer: usize) -> Option<bool> {
-        (writer != self.index_at(x)).then(|| self.span_effects_enabled(writer))
+    /// Returns the color-effects enable a write made in span `writer` bakes
+    /// into its stored color, whether or not `writer` is the queried column's
+    /// own hardware span: mGBA bakes this at write time, so a same-span
+    /// `OBJWIN` read (a per-pixel mask, not a span) must still see it
+    /// (`software-obj.c:76-98,176-208`).
+    fn spill_effects(self, writer: usize) -> bool {
+        self.span_effects_enabled(writer)
     }
 
     /// Returns whether span `index` engaged mGBA's `FLAG_REBLEND` OBJWIN slow
@@ -368,9 +377,9 @@ impl<'a> SpriteLayer<'a> {
                             priority: entry.priority(),
                             semi_transparent: mode == ObjMode::SemiTransparent,
                             writer_semi_transparent: mode == ObjMode::SemiTransparent,
-                            brightness_override: window_spans.spill_effects(x, writer_span),
+                            brightness_override: window_spans.spill_effects(writer_span),
                             reblends: window_spans.span_objwin_reblends(writer_span),
-                            target1_override: window_spans.spill_effects(x, writer_span),
+                            target1_override: window_spans.spill_effects(writer_span),
                         });
                     }
                     (mode, Texel::Transparent) => {
@@ -378,7 +387,7 @@ impl<'a> SpriteLayer<'a> {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
                             pixel.reblends = window_spans.span_objwin_reblends(writer_span);
-                            pixel.target1_override = window_spans.spill_effects(x, writer_span);
+                            pixel.target1_override = window_spans.spill_effects(writer_span);
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),
