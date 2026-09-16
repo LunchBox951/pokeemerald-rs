@@ -691,16 +691,11 @@ impl SaveFile {
         use std::os::unix::fs::PermissionsExt;
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create_new(true);
-        // Never unlink an entry this call did not create: a taken staging
-        // name, even by another thread of this process, just means the next.
-        let pid = std::process::id();
+        // The staging name is unguessable, so nothing can be renamed onto it
+        // on purpose, and a taken name just means the next draw.
         let (staged, file) = 'stage: {
-            for attempt in 0..=u8::MAX {
-                let name = match attempt {
-                    0 => format!(".lk{pid}"),
-                    n => format!(".lk{pid}{n:02x}"),
-                };
-                let candidate = path.with_file_name(name);
+            for _ in 0..=u8::MAX {
+                let candidate = path.with_file_name(Self::staging_name());
                 match options.open(&candidate) {
                     Ok(file) => break 'stage (candidate, file),
                     Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -714,7 +709,7 @@ impl SaveFile {
         };
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
         let linked = std::fs::hard_link(&staged, path);
-        let _ = std::fs::remove_file(&staged);
+        Self::remove_only_own_staging(&staged, &file);
         match linked {
             Ok(()) => Ok(Some(file)),
             Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
@@ -729,6 +724,30 @@ impl SaveFile {
                     Err(other) => Err(other),
                 }
             }
+        }
+    }
+
+    /// An 11-hex-digit name from this process's random hasher keys: within
+    /// the 14-byte minimum component limit, and not guessable by a peer.
+    #[cfg(unix)]
+    fn staging_name() -> String {
+        use std::hash::{BuildHasher, Hasher};
+        let draw = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        format!(".lk{:011x}", draw & 0xFFF_FFFF_FFFF)
+    }
+
+    /// Unlinks the staging entry only while it is still the inode `file` holds.
+    #[cfg(unix)]
+    fn remove_only_own_staging(staged: &Path, file: &std::fs::File) {
+        use std::os::unix::fs::MetadataExt;
+        let same = match (std::fs::symlink_metadata(staged), file.metadata()) {
+            (Ok(entry), Ok(held)) => entry.dev() == held.dev() && entry.ino() == held.ino(),
+            _ => false,
+        };
+        if same {
+            let _ = std::fs::remove_file(staged);
         }
     }
 
