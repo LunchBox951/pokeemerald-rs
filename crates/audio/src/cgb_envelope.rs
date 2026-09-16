@@ -227,32 +227,45 @@ impl CgbEnvelope {
         self.phase = Phase::Retired;
     }
 
-    /// Update a live note's volume and sustain goals without restarting it.
-    pub fn set_goal(&mut self, adsr: CgbAdsr, goal: u8) {
-        self.adsr = adsr;
+    /// Latch a boundary's freshly recomputed goal, matching `CgbModVol`
+    /// setting `chan->envelopeGoal`/`sustainGoal` (`m4a.c:903-923`). Callers
+    /// invoke this only where upstream actually calls `CgbModVol` — see
+    /// [`Self::step_with_goal`].
+    fn latch_goal(&mut self, goal: u8) {
         self.goal = goal;
-        self.sustain_goal = sustain_goal_of(goal, adsr.sustain);
+        self.sustain_goal = sustain_goal_of(goal, self.adsr.sustain);
     }
 
-    /// Advance the envelope by one software iteration. A render frame is one
-    /// or two iterations, so production rendering drives the envelope through
+    /// Advance the envelope by one software iteration, with no live goal to
+    /// fold in (`self.goal` stands in for it). A render frame is one or two
+    /// iterations, so production rendering drives the envelope through
     /// `step_frame` rather than calling this directly (module docs).
+    ///
+    /// Returns `(transitioned, boundary)` ([`Self::step_with_goal`]'s doc).
+    pub fn step(&mut self) -> (bool, bool) {
+        self.step_with_goal(self.goal)
+    }
+
+    /// Advance one software iteration, latching `live_goal` only where
+    /// upstream's `CgbModVol` actually runs -- note-on and every
+    /// `envelopeCounter == 0` boundary except the zero-release shortcut,
+    /// which bypasses it (`m4a.c:903-923`, `:994`, `:1060-1074`, `:1084`).
     ///
     /// Returns `(transitioned, boundary)`: whether this iteration crossed a
     /// retrigger-worthy `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`;
     /// see [`crate::cgb_voice::Oscillator::retrigger`]), and whether it ran
     /// the `envelopeCounter == 0` `CgbModVol` recompute at all -- true even
     /// for a bare refresh that reports no transition (`m4a.c:1077-1085`).
-    pub fn step(&mut self) -> (bool, bool) {
+    fn step_with_goal(&mut self, live_goal: u8) -> (bool, bool) {
         match self.phase {
-            Phase::Starting => (self.start(), true),
-            Phase::Attack => self.attack_step(),
-            Phase::Decay => self.decay_step(),
-            Phase::Sustain => (false, self.sustain_step()),
+            Phase::Starting => (self.start(live_goal), true),
+            Phase::Attack => self.attack_step(live_goal),
+            Phase::Decay => self.decay_step(live_goal),
+            Phase::Sustain => (false, self.sustain_step(live_goal)),
             Phase::Release if self.adsr.release == 0 => {
                 (self.enter_pseudo_echo_or_silence(), false)
             }
-            Phase::Release => self.release_step(),
+            Phase::Release => self.release_step(live_goal),
             Phase::PseudoEcho => {
                 self.pseudo_echo_step();
                 (false, false)
@@ -263,7 +276,10 @@ impl CgbEnvelope {
 
     /// Advance by one render frame, honoring [`CgbEnvelopeCadence`]'s extra
     /// iteration (`envelope_step_complete`'s `prevC15 == 0` re-entry into
-    /// `envelope_step_repeat`, `m4a.c:1176`..`:1180`).
+    /// `envelope_step_repeat`, `m4a.c:1176`..`:1180`). Both iterations of a
+    /// doubled frame share one `live_goal` ([`Self::step_with_goal`]'s doc),
+    /// matching upstream reading the same `chan->rightVolume`/`leftVolume`
+    /// across one `CgbSound` call.
     ///
     /// Skipped whenever the first iteration this call already entered the
     /// pseudo-echo tail or retired the voice: those transitions, and an
@@ -276,11 +292,11 @@ impl CgbEnvelope {
     /// Returns `(transitioned, boundary)` OR'd across both iterations:
     /// upstream applies at most one hardware write per `CgbSound` iteration
     /// (`m4a.c:1206-1226`), but `chan->pan` still recomputes on either
-    /// (`step`'s doc).
-    pub(crate) fn step_frame(&mut self, extra_iteration: bool) -> (bool, bool) {
-        let (transitioned, boundary) = self.step();
+    /// (`step_with_goal`'s doc).
+    pub(crate) fn step_frame(&mut self, extra_iteration: bool, live_goal: u8) -> (bool, bool) {
+        let (transitioned, boundary) = self.step_with_goal(live_goal);
         if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
-            let (transitioned2, boundary2) = self.step();
+            let (transitioned2, boundary2) = self.step_with_goal(live_goal);
             return (transitioned || transitioned2, boundary || boundary2);
         }
         (transitioned, boundary)
@@ -295,32 +311,37 @@ impl CgbEnvelope {
     /// per frame at `envelope_step_complete` (`m4a.c:1176`) and fires the next
     /// frame whose `envelope_step_repeat` sees it at zero (`m4a.c:1080`). Only
     /// ever called with a non-zero armed counter; zero-period phases
-    /// transition instantly and never reach here (see [`Self::step`]).
+    /// transition instantly and never reach here (see [`Self::step_with_goal`]).
     fn paced_step_is_due(&mut self) -> bool {
         self.frames_until_step -= 1;
         self.frames_until_step == 0
     }
 
     /// Apply this note's first `CgbSound` pass: retire at once if it was
-    /// already stopped, else begin its attack (`Self::note_off`'s doc).
-    /// Reports the attack's own volume write; silencing a stopped note is
-    /// not one (see [`Self::enter_pseudo_echo_or_silence`]).
-    fn start(&mut self) -> bool {
+    /// already stopped, else latch `live_goal` and begin its attack
+    /// (`Self::note_off`'s doc). `CgbModVol` runs unconditionally here,
+    /// before upstream even reads the attack period (`m4a.c:988-995`); a
+    /// stopped note never reaches it, so it must not latch either. Reports
+    /// the attack's own volume write; silencing a stopped note is not one
+    /// (see [`Self::enter_pseudo_echo_or_silence`]).
+    fn start(&mut self, live_goal: u8) -> bool {
         if self.note_off_requested {
             self.silence();
             return false;
         }
+        self.latch_goal(live_goal);
         self.phase = Phase::Attack;
-        self.attack_step().0
+        self.attack_step(live_goal).0
     }
 
-    fn attack_step(&mut self) -> (bool, bool) {
+    fn attack_step(&mut self, live_goal: u8) -> (bool, bool) {
         if self.adsr.attack == 0 {
             return (self.enter_decay(), true);
         }
         if !self.paced_step_is_due() {
             return (false, false);
         }
+        self.latch_goal(live_goal);
         if self.volume < self.goal {
             self.volume += 1;
         }
@@ -345,10 +366,11 @@ impl CgbEnvelope {
         true
     }
 
-    fn decay_step(&mut self) -> (bool, bool) {
+    fn decay_step(&mut self, live_goal: u8) -> (bool, bool) {
         if !self.paced_step_is_due() {
             return (false, false);
         }
+        self.latch_goal(live_goal);
         if self.volume > self.sustain_goal {
             self.volume -= 1;
         }
@@ -374,9 +396,11 @@ impl CgbEnvelope {
     }
 
     /// Reports whether the refresh was due, i.e. an `envelopeCounter == 0`
-    /// `CgbModVol` boundary (`step`'s doc), not just whether `volume` moved.
-    fn sustain_step(&mut self) -> bool {
+    /// `CgbModVol` boundary (`step_with_goal`'s doc), not just whether
+    /// `volume` moved.
+    fn sustain_step(&mut self, live_goal: u8) -> bool {
         if self.paced_step_is_due() {
+            self.latch_goal(live_goal);
             self.volume = self.sustain_goal;
             self.frames_until_step = SUSTAIN_REFRESH_FRAMES;
             true
@@ -385,10 +409,11 @@ impl CgbEnvelope {
         }
     }
 
-    fn release_step(&mut self) -> (bool, bool) {
+    fn release_step(&mut self, live_goal: u8) -> (bool, bool) {
         if !self.paced_step_is_due() {
             return (false, false);
         }
+        self.latch_goal(live_goal);
         if self.volume > 0 {
             self.volume -= 1;
         }
@@ -404,7 +429,9 @@ impl CgbEnvelope {
     /// Enter the pseudo-echo tail, or silence outright when its floor is
     /// zero, reporting whether entering the tail is the pseudo-echo-start
     /// volume write (`m4a.c:1090-1103`; see [`crate::cgb_voice::Oscillator::retrigger`]
-    /// for why silence is not).
+    /// for why silence is not). Reads `self.goal` as last latched at a real
+    /// boundary: the zero-release arm reaches here before `step_with_goal`
+    /// could ever fold `live_goal` in (`m4a.c:1060-1074`, `:1084`, `:1090-1092`).
     fn enter_pseudo_echo_or_silence(&mut self) -> bool {
         let floor = cgb_echo_floor(self.goal, self.echo_volume);
         if floor == 0 {
@@ -569,14 +596,19 @@ mod tests {
 
     #[test]
     fn sustain_re_snaps_live_goal_within_seven_frames() {
+        // A live write only changes `live_goal`'s input; it is folded into
+        // `self.goal` only at the next real boundary (`step_with_goal`'s
+        // doc) -- here, the sustain refresh 7 frames later.
         let adsr = adsr(0, 0, 8, 0);
         let mut env = plain_envelope(adsr, 10);
         env.step();
         assert_eq!(env.volume(), 5);
 
-        env.set_goal(adsr, 20);
-
-        assert_eq!(step_volumes::<7>(&mut env), [5, 5, 5, 5, 5, 5, 10]);
+        let volumes: [u8; 7] = std::array::from_fn(|_| {
+            env.step_with_goal(20);
+            env.volume()
+        });
+        assert_eq!(volumes, [5, 5, 5, 5, 5, 5, 10]);
     }
 
     #[test]

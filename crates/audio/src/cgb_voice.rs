@@ -277,7 +277,6 @@ pub struct CgbVoice {
     channel: CgbChannelNumber,
     oscillator: Oscillator,
     envelope: CgbEnvelope,
-    adsr: CgbAdsr,
     routing: StereoRouting,
     frame_gain: i32,
     gate: Gate,
@@ -495,7 +494,6 @@ impl CgbVoice {
             channel,
             oscillator,
             envelope,
-            adsr,
             routing,
             frame_gain: 0,
             gate: Gate::new(gate_time),
@@ -593,13 +591,13 @@ impl CgbVoice {
         self.hardware_muted = !self.oscillator.retrigger();
     }
 
-    /// Update base volume and envelope goal; itself a retrigger, matching
-    /// upstream's live volume/pan write (`m4a_1.s:1391-1400`). The stereo
-    /// route itself stays latched until [`Self::begin_frame`] commits it.
+    /// Update the live base volume; itself a retrigger, matching upstream's
+    /// live volume/pan write (`m4a_1.s:1391-1400`). The envelope goal folds
+    /// in only at the next real boundary ([`CgbEnvelope::step_frame`]'s doc),
+    /// not here; the stereo route similarly stays latched until
+    /// [`Self::begin_frame`] commits it.
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.routing.update_volumes(vol_mr, vol_ml);
-        self.envelope
-            .set_goal(self.adsr, self.routing.envelope_goal());
         self.pending_retrigger = true;
     }
 
@@ -614,8 +612,12 @@ impl CgbVoice {
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
-        let (retriggered_by_transition, envelope_boundary) =
-            self.envelope.step_frame(extra_envelope_iteration);
+        // The goal `CgbModVol` would compute right now from the current side
+        // volumes/pan; folded in only at a real boundary (`step_frame`'s doc).
+        let live_goal = self.routing.envelope_goal();
+        let (retriggered_by_transition, envelope_boundary) = self
+            .envelope
+            .step_frame(extra_envelope_iteration, live_goal);
         // `CgbModVol` recomputes `chan->pan` at every boundary, transition or
         // not (`m4a.c:1077-1085`); by itself this writes nothing audible.
         if envelope_boundary {
@@ -1748,6 +1750,84 @@ mod tests {
         assert!(
             voice.is_active(),
             "a nonzero echo_volume must hold the channel in its pseudo-echo tail"
+        );
+    }
+
+    #[test]
+    fn a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal() {
+        // `ChnVolSetAsm` writes only the side volumes; `chan->envelopeGoal` is
+        // recomputed by `CgbModVol` alone, which runs at note-on and at every
+        // `envelopeCounter == 0` boundary (`m4a.c:903-923`, `:994`, `:1084`).
+        // A zero-release note-off jumps straight to `envelope_pseudoecho_start`,
+        // past that recompute (`m4a.c:1060-1073`), so its floor scales the goal
+        // latched before the live write.
+        let echo_note = TestNote {
+            track_right: 128,
+            track_left: 128,
+            echo_volume: 128,
+            echo_length: 4,
+            ..TestNote::default()
+        };
+        let mut voice =
+            square_voice_with_adsr(CgbChannelNumber::Square1, None, CgbAdsr::flat(), echo_note);
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        assert_eq!(
+            voice.envelope.volume(),
+            15,
+            "sanity: the note sustains at the goal CgbModVol latched at note-on"
+        );
+
+        // One tick's `VOL` then `EOT`, with no envelope boundary between them.
+        voice.set_track_volume(32, 32);
+        voice.note_off();
+        voice.begin_frame(MAX_MASTER_VOLUME, false);
+
+        assert_eq!(
+            voice.envelope.volume(),
+            8,
+            "the pseudo-echo floor must scale the still-latched goal (15 -> 8), not the goal \
+             the live volume write would recompute (3 -> 2)"
+        );
+    }
+
+    #[test]
+    fn a_live_volume_write_before_the_first_pass_still_latches_at_note_on() {
+        // `CgbModVol` runs unconditionally in the `SOUND_CHANNEL_SF_START`
+        // branch, before upstream even reads the attack period
+        // (`m4a.c:988-995`), so a live write that lands before the first
+        // `CgbSound` pass for this channel is already reflected the first
+        // time the goal latches -- unlike a write after that first pass
+        // (`a_live_volume_write_leaves_the_pseudo_echo_floor_on_the_latched_goal`),
+        // which the note-on latch has already passed.
+        let echo_note = TestNote {
+            track_right: 128,
+            track_left: 128,
+            echo_volume: 128,
+            echo_length: 4,
+            ..TestNote::default()
+        };
+        let paced_attack = CgbAdsr {
+            attack: 2,
+            decay: 0,
+            sustain: 15,
+            release: 0,
+        };
+        let mut voice =
+            square_voice_with_adsr(CgbChannelNumber::Square1, None, paced_attack, echo_note);
+
+        // Lands before the note's first `begin_frame`, so the note-on latch
+        // itself must see it.
+        voice.set_track_volume(32, 32);
+
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // note-on's CgbModVol latches goal 3
+        voice.note_off(); // live (mid-attack): a real release transition
+        voice.begin_frame(MAX_MASTER_VOLUME, false); // release == 0: straight to the tail
+
+        assert_eq!(
+            voice.envelope.volume(),
+            2,
+            "the note-on latch must see the live write (goal 15 -> 3), not the goal captured \
+             at construction, so the pseudo-echo floor is 2, not 8"
         );
     }
 
