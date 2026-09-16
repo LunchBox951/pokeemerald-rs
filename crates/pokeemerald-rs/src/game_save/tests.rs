@@ -16,18 +16,27 @@ const OLDER_DEFERRED_BYTE: u8 = 0x11;
 const CURRENT_DEFERRED_BYTE: u8 = 0x5A;
 
 struct TempSave {
+    dir: std::path::PathBuf,
     path: std::path::PathBuf,
 }
 
 impl TempSave {
+    /// A save in a directory of its own.
+    ///
+    /// [`engine::save::SaveFile::lock`] takes one lock per save *directory*,
+    /// so scratch saves sharing one directory would serialise on a single
+    /// lock -- and a test that removed it would strip the exclusion the
+    /// others were relying on.
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-game-save-{label}-{}-{:?}.sav",
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-game-save-{label}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        drop(std::fs::remove_file(&path));
-        Self { path }
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
+        let path = dir.join("pokeemerald.sav");
+        Self { dir, path }
     }
 
     fn slot(&self) -> SaveSlot {
@@ -37,7 +46,7 @@ impl TempSave {
 
 impl Drop for TempSave {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.path));
+        drop(std::fs::remove_dir_all(&self.dir));
     }
 }
 
@@ -452,15 +461,12 @@ fn storing_takes_the_inter_process_lock() {
     )
     .unwrap();
 
-    let mut lock_path = temp.path.clone().into_os_string();
-    lock_path.push(".lock");
-    let lock_path = std::path::PathBuf::from(lock_path);
+    let lock_path = temp.dir.join(".pokeemerald-rs.lock");
     assert!(
         lock_path.exists(),
         "SaveSlot::store must acquire SaveFile::lock, which creates {}",
         lock_path.display()
     );
-    drop(std::fs::remove_file(lock_path));
 }
 
 #[test]

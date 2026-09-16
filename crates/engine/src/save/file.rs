@@ -22,9 +22,9 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
 
-/// The sidecar [`SaveFile::lock`] falls back to when `<save>.lock` overflows
-/// the host's component limit. See [`SaveFile::shared_lock_path`].
-const SHARED_LOCK_NAME: &str = ".lock.shared";
+/// The one lock file [`SaveFile::lock`] uses in any save directory. See
+/// [`SaveFile::lock_path`].
+const LOCK_FILE_NAME: &str = ".pokeemerald-rs.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
 #[derive(Debug)]
@@ -59,6 +59,11 @@ pub enum SaveFileError {
         /// The underlying I/O failure.
         source: std::io::Error,
     },
+    /// The configured save path is the directory's own lock file.
+    LockPathIsSave {
+        /// The lock path the save path resolves to.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -90,6 +95,12 @@ impl std::fmt::Display for SaveFileError {
             Self::Lock { path, source } => {
                 write!(f, "save file: locking {} failed: {source}", path.display())
             }
+            Self::LockPathIsSave { path } => write!(
+                f,
+                "save file: this save resolves to {}, the lock file every save in that \
+                 directory holds -- writing it would replace the inode they lock",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -110,7 +121,7 @@ impl std::error::Error for SaveFileError {
             | Self::Read { source, .. }
             | Self::Write { source, .. }
             | Self::Lock { source, .. } => Some(source),
-            Self::NoDataDirectory | Self::BadLength { .. } => None,
+            Self::NoDataDirectory | Self::LockPathIsSave { .. } | Self::BadLength { .. } => None,
         }
     }
 }
@@ -380,13 +391,22 @@ impl SaveFile {
 
     /// Acquires an advisory inter-process lock for this save path.
     ///
-    /// The lock lives on a sibling `.lock` file, not the save file itself:
-    /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
-    /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards. An over-limit name falls back to one sidecar
-    /// shared by every over-limit save in the directory, so such saves
-    /// serialise against each other; a save configured at that exact name
-    /// is outside this contract.
+    /// The lock lives on [`LOCK_FILE_NAME`], one fixed file per directory,
+    /// never on the save file itself: [`SaveFile::write`] replaces the save's
+    /// inode by rename, and a lock on a replaced inode would silently stop
+    /// excluding anyone who opened the path afterwards.
+    ///
+    /// The name is fixed rather than derived from the save's, so no spelling
+    /// can split it. A case-folding or normalising volume resolves several
+    /// byte-different names to one save, and `std` cannot enumerate those
+    /// aliases; deriving the lock from the basename therefore handed one save
+    /// two locks. Every save in a directory now serialises on one lock, which
+    /// only delays unrelated saves, where two locks for one save lose data. A
+    /// short fixed name also always fits the component limit, so no save this
+    /// host accepts is unlockable.
+    ///
+    /// A save that resolves to the lock file itself is refused, not locked:
+    /// its rename would replace the very inode every locker holds.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -397,7 +417,8 @@ impl SaveFile {
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Lock`] if the lock file could not be
-    /// created or locked.
+    /// created, locked, or resolved; [`SaveFileError::LockPathIsSave`] if
+    /// this save path resolves to the lock file.
     pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
         self.lock_with(Self::sync_directory_best_effort)
     }
@@ -405,49 +426,59 @@ impl SaveFile {
     /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
     /// rather than always [`SaveFile::sync_directory_best_effort`].
     fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
-        self.lock_with_open(sync_directory, Self::open_lock_file)
-    }
-
-    /// As [`SaveFile::lock_with`], opening each candidate through the given
-    /// `open` rather than always [`Self::open_lock_file`].
-    fn lock_with_open(
-        &self,
-        sync_directory: impl FnMut(&Path),
-        open: impl Fn(&Path) -> std::io::Result<std::fs::File>,
-    ) -> Result<SaveFileGuard, SaveFileError> {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
 
-        let primary = self.lock_path();
-        let (path, file) = match open(&primary) {
-            Ok(file) => (primary, file),
-            // The save basename itself was accepted, so only the `.lock`
-            // suffix can have pushed this component over the limit.
-            Err(source) if source.kind() == std::io::ErrorKind::InvalidFilename => {
-                let fallback = self.shared_lock_path();
-                let file = open(&fallback).map_err(|source| SaveFileError::Lock {
-                    path: fallback.clone(),
-                    source,
-                })?;
-                (fallback, file)
-            }
-            Err(source) => {
-                return Err(SaveFileError::Lock {
-                    path: primary,
-                    source,
-                })
-            }
-        };
-        file.lock().map_err(|source| SaveFileError::Lock {
+        let path = self.lock_path();
+        let lock_error = |source| SaveFileError::Lock {
             path: path.clone(),
             source,
-        })?;
+        };
+        let file = Self::open_lock_file(&path).map_err(lock_error)?;
+        file.lock().map_err(lock_error)?;
+        if self.resolves_to(&path)? {
+            return Err(SaveFileError::LockPathIsSave { path });
+        }
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
             }
         }
         Ok(SaveFileGuard { _lock_file: file })
+    }
+
+    /// Whether this save path names the same entry as `lock`.
+    ///
+    /// Compares the host's own canonical spelling of each path, not their
+    /// bytes. A volume's aliases -- ASCII and non-ASCII case folding,
+    /// Unicode normalisation, symlinks -- cannot be enumerated from `std`,
+    /// but `canonicalize` reports the entry a name actually resolves to, so
+    /// one object under two spellings is caught whatever the spellings are.
+    /// Callers open the lock file first, so a save path aliasing it resolves
+    /// to a file that exists by the time this runs.
+    ///
+    /// A save that does not exist is not the lock file. Any other failure to
+    /// resolve it is reported rather than assumed distinct.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if either path could not be resolved.
+    fn resolves_to(&self, lock: &Path) -> Result<bool, SaveFileError> {
+        let save = match std::fs::canonicalize(&self.path) {
+            Ok(save) => save,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(source) => {
+                return Err(SaveFileError::Lock {
+                    path: self.path.clone(),
+                    source,
+                })
+            }
+        };
+        let lock = std::fs::canonicalize(lock).map_err(|source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        })?;
+        Ok(save == lock)
     }
 
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
@@ -531,33 +562,10 @@ impl SaveFile {
         }
     }
 
+    /// This directory's one lock file: fixed, so it never depends on the
+    /// save's basename, and short, so it always fits the component limit.
     fn lock_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".lock");
-        PathBuf::from(name)
-    }
-
-    /// The one sidecar every save reaching this fallback in a directory
-    /// shares, used when `<save>.lock` overflows the component limit.
-    ///
-    /// The name ignores the basename, so every spelling a case-folding or
-    /// normalising volume resolves to one save resolves to one lock here. A
-    /// per-name digest cannot: no `std` API exposes a host's comparison key,
-    /// ASCII folding misses `Ä` against `ä`, and Unicode folding crosses the
-    /// ASCII boundary -- APFS folds `K` (U+212A) to `k` -- so not even
-    /// "hash unless non-ASCII" separates the aliasing names from the rest.
-    /// Sharing one name serialises unrelated over-limit saves in the
-    /// directory, which only ever delays them; deriving two sidecars for one
-    /// save loses save data.
-    ///
-    /// Aliases of unequal byte length can still straddle the limit, leaving
-    /// the shorter spelling on its own `<save>.lock`; a host's aliases cannot
-    /// be enumerated, so preferring the byte-exact name keeps that residual.
-    ///
-    /// Named `.lock.shared` so it never ends in `.lock` and no ordinary lock
-    /// path can equal it.
-    fn shared_lock_path(&self) -> PathBuf {
-        self.path.with_file_name(SHARED_LOCK_NAME)
+        self.path.with_file_name(LOCK_FILE_NAME)
     }
 }
 

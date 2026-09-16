@@ -716,11 +716,12 @@ fn locking_synchronises_ancestors_only_once_the_lock_is_held() {
     let file = SaveFile::at(&path);
 
     let synced_while_locked = std::cell::Cell::new(false);
+    let lock_path = file.lock_path();
     let guard = file
         .lock_with(|_ancestor_parent| {
             let probe = std::fs::OpenOptions::new()
                 .write(true)
-                .open(sibling_path(&path, ".lock"))
+                .open(&lock_path)
                 .expect("the lock file must already exist while ancestors are synced");
             synced_while_locked.set(matches!(
                 probe.try_lock(),
@@ -748,7 +749,7 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
         .lock()
         .expect("locking must create the missing hierarchy");
     assert!(path.parent().unwrap().is_dir());
-    assert!(sibling_path(&path, ".lock").exists());
+    assert!(file.lock_path().exists());
 
     let (store, _, _) = saved_store();
     file.write(&store).unwrap();
@@ -799,8 +800,9 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
             .write(true)
             .open(sibling_path(&path, ".lock"))
             .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
-        "test setup must actually push the naive lock sibling over the host's component \
-         limit, or this does not exercise the fallback"
+        "test setup must actually push a `<save>.lock` sibling over the host's \
+         component limit: that name is what made this save unlockable, so a host \
+         that accepts it is not exercising the defect"
     );
 
     let guard = file
@@ -814,259 +816,91 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// A host limit under the naive `<save>.lock` name must fall back to the
-/// shared sidecar, and that fallback must actually be locked.
+/// Two distinct saves in one directory deliberately share the directory's
+/// one lock. That trade -- made because a volume's aliases cannot be
+/// enumerated, so any basename-derived name splits some one save across two
+/// locks -- is only sound if the shared lock genuinely excludes and
+/// genuinely releases, so both halves are pinned here.
 #[test]
-fn a_host_component_limit_below_the_naive_lock_name_falls_back_to_the_shared_lock_name() {
-    const HOST_NAME_MAX: usize = 143;
-    let dir = TempDir::new("lock-host-limit");
-    let path = dir.join(&"s".repeat(140));
-    let file = SaveFile::at(&path);
-
-    let attempted = std::cell::RefCell::new(Vec::new());
-    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
-        attempted.borrow_mut().push(candidate.to_path_buf());
-        let component_len = candidate
-            .file_name()
-            .map_or(0, |name| name.as_encoded_bytes().len());
-        if component_len > HOST_NAME_MAX {
-            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
-        }
-        SaveFile::open_lock_file(candidate)
-    };
-
-    let guard = file
-        .lock_with_open(|_| {}, refuse_long_components)
-        .expect("a host limit under the naive lock name must still be lockable");
+fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
+    let dir = TempDir::new("directory-lock-serialises");
+    let first = SaveFile::at(dir.join("first.sav"));
+    let second = SaveFile::at(dir.join("second.sav"));
 
     assert_eq!(
-        attempted.into_inner(),
-        vec![sibling_path(&path, ".lock"), file.shared_lock_path()],
-        "the shared fallback must be tried only after the naive name is refused"
+        first.lock_path(),
+        second.lock_path(),
+        "every save in one directory must take one lock"
     );
 
-    let probe = std::fs::OpenOptions::new()
-        .write(true)
-        .open(file.shared_lock_path())
-        .expect("the shared lock file exists while the guard is held");
+    let guard = first.lock().expect("the first save must be lockable");
+
+    let probe =
+        SaveFile::open_lock_file(&second.lock_path()).expect("the lock file must be openable");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
-        other => panic!("the shared lock must actually exclude a second locker, got {other:?}"),
-    }
-    drop(probe);
-    drop(guard);
-}
-
-/// Two distinct over-limit saves in one directory deliberately share the
-/// fallback sidecar. That trade -- made because a host's aliases cannot be
-/// enumerated, so no basename-derived name can keep one save on one lock --
-/// is only sound if the shared lock genuinely excludes and genuinely
-/// releases, so both halves are pinned here.
-#[test]
-fn two_over_limit_saves_in_one_directory_serialise_on_the_shared_lock() {
-    const HOST_NAME_MAX: usize = 143;
-    let dir = TempDir::new("shared-fallback-lock");
-    let first = SaveFile::at(dir.join(&format!("{}a", "s".repeat(139))));
-    let second = SaveFile::at(dir.join(&format!("{}b", "s".repeat(139))));
-
-    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
-        let component_len = candidate
-            .file_name()
-            .map_or(0, |name| name.as_encoded_bytes().len());
-        if component_len > HOST_NAME_MAX {
-            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
-        }
-        SaveFile::open_lock_file(candidate)
-    };
-
-    assert_eq!(
-        first.shared_lock_path(),
-        second.shared_lock_path(),
-        "every over-limit save in one directory must fall back to one sidecar"
-    );
-
-    let guard = first
-        .lock_with_open(|_| {}, refuse_long_components)
-        .expect("the first over-limit save must be lockable");
-
-    let probe = SaveFile::open_lock_file(&second.shared_lock_path())
-        .expect("the shared lock file must be openable");
-    match probe.try_lock() {
-        Err(std::fs::TryLockError::WouldBlock) => {}
-        other => {
-            panic!("the shared fallback must exclude the second over-limit save, got {other:?}")
-        }
+        other => panic!("the directory lock must exclude the second save, got {other:?}"),
     }
     drop(probe);
     drop(guard);
 
     let released = second
-        .lock_with_open(|_| {}, refuse_long_components)
-        .expect("the shared lock must be free once the first guard drops");
+        .lock()
+        .expect("the lock must be free once the first guard drops");
     drop(released);
 }
 
-/// A real, host-safe stand-in file for `candidate`, keyed by a hash of its
-/// raw bytes so two distinct candidates -- even non-UTF-8 ones no host need
-/// accept as a dirent -- get two distinct backing files without touching
-/// the raw name itself.
-fn non_utf8_safe_backing(dir: &Path) -> impl Fn(&Path) -> std::io::Result<std::fs::File> {
-    use std::hash::Hasher;
-
-    let dir = dir.to_path_buf();
-    move |candidate: &Path| {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        hasher.write(candidate.as_os_str().as_encoded_bytes());
-        SaveFile::open_lock_file(&dir.join(format!("{:016x}", hasher.finish())))
-    }
-}
-
-/// Two saves whose basenames are distinct non-UTF-8 byte strings are two
-/// distinct saves, so each must lock its own sidecar.
-#[cfg(unix)]
-#[test]
-fn distinct_non_utf8_save_basenames_do_not_share_one_lock() {
-    use std::os::unix::ffi::OsStrExt;
-
-    let dir = TempDir::new("non-utf8-lock");
-    let first = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x80")));
-    let second = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x81")));
-    assert_ne!(first.path(), second.path(), "the two saves must differ");
-
-    let held = first
-        .lock_with_open(|_| {}, non_utf8_safe_backing(&dir.path))
-        .expect("the first save must be lockable");
-    let (locked, waited) = std::sync::mpsc::channel();
-    let other = second.clone();
-    let backing_dir = dir.path.clone();
-    std::thread::spawn(move || {
-        let guard = other
-            .lock_with_open(|_| {}, non_utf8_safe_backing(&backing_dir))
-            .expect("the second save must be lockable");
-        let _sent = locked.send(());
-        drop(guard);
-    });
-    let unrelated_save_locks_independently = waited
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .is_ok();
-    drop(held);
-
-    assert!(
-        unrelated_save_locks_independently,
-        "{:?} waited on the lock held for the unrelated save {:?}: both saves resolve to \
-         one sidecar",
-        second.path(),
-        first.path()
-    );
-}
-
-/// The entry a case-folding host -- macOS and Windows by default -- resolves
-/// `candidate` to: one directory entry serves every ASCII case variant.
-fn case_folded_entry(candidate: &Path) -> PathBuf {
-    let name = candidate.file_name().unwrap_or_default().to_string_lossy();
-    candidate.with_file_name(name.to_lowercase())
-}
-
-/// The sidecar `file` ends up locking on a host that both refuses an
-/// over-limit component and folds the case of its directory entries.
-fn sidecar_locked_on_a_case_folding_host(file: &SaveFile) -> PathBuf {
-    const HOST_NAME_MAX: usize = 143;
-
-    let locked = std::cell::RefCell::new(PathBuf::new());
-    let guard = file
-        .lock_with_open(
-            |_| {},
-            |candidate: &Path| {
-                let component_len = candidate
-                    .file_name()
-                    .map_or(0, |name| name.as_encoded_bytes().len());
-                if component_len > HOST_NAME_MAX {
-                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
-                }
-                let entry = case_folded_entry(candidate);
-                let opened = SaveFile::open_lock_file(&entry)?;
-                *locked.borrow_mut() = entry;
-                Ok(opened)
-            },
-        )
-        .expect("an over-limit save must be lockable");
-    drop(guard);
-    locked.into_inner()
-}
-
-/// Two case variants of one over-limit save name one file on a case-folding
-/// host, so their locks must land on one sidecar and exclude one another.
-#[test]
-fn case_variants_of_one_over_limit_save_lock_one_sidecar_on_a_case_folding_host() {
-    let dir = TempDir::new("case-folding-lock");
-    let upper = SaveFile::at(dir.join(&"S".repeat(140)));
-    let lower = SaveFile::at(dir.join(&"s".repeat(140)));
-
-    assert_eq!(
-        sidecar_locked_on_a_case_folding_host(&upper),
-        sidecar_locked_on_a_case_folding_host(&lower),
-        "a case-folding host resolves {:?} and {:?} to one save, so a second locker \
-         must not walk away with a sidecar of its own",
-        upper.path().file_name().unwrap_or_default(),
-        lower.path().file_name().unwrap_or_default(),
-    );
-}
-
-/// A case-folding host folds non-ASCII case too, so `Ä` and `ä` name one
-/// save there. The fallback's first shape hashed the ASCII-lowercased
-/// basename, which leaves those two spellings byte-different: each locked a
-/// sidecar of its own and both ran the read-modify-write cycle this lock
-/// exists to serialise, losing whichever save wrote second.
-#[test]
-fn non_ascii_case_variants_of_one_over_limit_save_lock_one_sidecar_on_a_case_folding_host() {
-    let dir = TempDir::new("non-ascii-case-folding-lock");
-    // Seventy two-byte chars: 140 bytes, over the limit once `.lock` lands.
-    let upper = SaveFile::at(dir.join(&"\u{c4}".repeat(70)));
-    let lower = SaveFile::at(dir.join(&"\u{e4}".repeat(70)));
-
-    assert_eq!(
-        sidecar_locked_on_a_case_folding_host(&upper),
-        sidecar_locked_on_a_case_folding_host(&lower),
-        "a case-folding host resolves {:?} and {:?} to one save, so a second locker \
-         must not walk away with a sidecar of its own",
-        upper.path().file_name().unwrap_or_default(),
-        lower.path().file_name().unwrap_or_default(),
-    );
-}
-
-/// The fallback name must not be derived from the basename at all, and must
-/// be a fixed literal.
+/// The lock path must be one fixed name per directory, never derived from
+/// the save's basename.
 ///
-/// Not derived: the aliases a volume folds together cannot be enumerated
-/// from `std`. ASCII folding misses `Ä`/`ä`; bucketing the non-ASCII names
-/// apart misses folds that cross the ASCII boundary, such as `K` (U+212A)
-/// against `k`. Any basename-derived name therefore splits some one save
-/// across two locks.
-///
-/// A fixed literal: the name is cross-process, cross-build state. Its first
-/// shape hashed with `DefaultHasher`, whose algorithm `std` declines to
-/// promise across releases, so two binaries built on different toolchains
-/// could derive two sidecars for one save and both enter the guarded cycle.
+/// A volume's aliases cannot be enumerated from `std`. ASCII folding misses
+/// `Ä` against `ä`; bucketing the non-ASCII spellings apart misses folds
+/// that cross the ASCII boundary, such as `K` (U+212A) against `k`. Worse,
+/// that pair differs in encoded length, so a derived sidecar could overflow
+/// the component limit for one spelling while fitting for the other,
+/// splitting one save across a `<save>.lock` and a fallback. A fixed name
+/// has no spelling to split, and is stable across builds besides -- its
+/// first shape was a `DefaultHasher` digest, which `std` declines to promise
+/// across releases.
 #[test]
-fn the_fallback_lock_name_is_a_fixed_literal_independent_of_the_basename() {
-    let dir = TempDir::new("fallback-name-independence");
+fn the_lock_path_is_one_fixed_name_per_directory() {
+    let dir = TempDir::new("lock-path-fixed");
     let spellings = [
+        SAVE_FILE_NAME.to_owned(),
         "S".repeat(140),
         "s".repeat(140),
         "\u{c4}".repeat(70),
         "\u{e4}".repeat(70),
-        "\u{212a}".repeat(47),
+        // The straddling pair: 141 encoded bytes against 47, one entry.
         "k".repeat(141),
+        "\u{212a}".repeat(47),
     ];
 
     for spelling in &spellings {
         assert_eq!(
-            SaveFile::at(dir.join(spelling)).shared_lock_path(),
-            dir.path.join(".lock.shared"),
-            "every over-limit save in one directory must fall back to one fixed \
-             sidecar, whatever its basename and whatever toolchain built this"
+            SaveFile::at(dir.join(spelling)).lock_path(),
+            dir.path.join(".pokeemerald-rs.lock"),
+            "every save in one directory must derive one fixed lock path, whatever \
+             its basename's spelling or encoded length"
         );
     }
+}
+
+/// A save whose basename is not UTF-8 is still a save, and still takes the
+/// directory's lock: the lock name never reads the save's own bytes.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_save_basename_still_takes_the_directorys_lock() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = TempDir::new("non-utf8-lock");
+    let file = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x80")));
+
+    assert_eq!(file.lock_path(), dir.path.join(".pokeemerald-rs.lock"));
+    let guard = file
+        .lock()
+        .expect("a non-UTF-8 save basename must still be lockable");
+    drop(guard);
 }
 
 #[test]
@@ -1083,7 +917,7 @@ fn the_save_lock_excludes_a_second_locker_until_dropped() {
 
     let probe = std::fs::OpenOptions::new()
         .write(true)
-        .open(sibling_path(&path, ".lock"))
+        .open(file.lock_path())
         .expect("the lock file exists while the guard is held");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
@@ -1156,90 +990,75 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
     );
 }
 
-/// An ordinary lock path is always some basename with the literal `.lock`
-/// suffix appended, so it always ends in that suffix; a fallback name that
-/// also ended in `.lock` (its first, reported shape was `.<hash>.lock`)
-/// could always be some short save's own lock name. The fallback must use
-/// a namespace no ordinary lock path can reach.
+/// A save configured at the lock path itself must be refused, not locked.
+///
+/// Locking it would hand out a guard on that save's own data file, and its
+/// next write renames a fresh inode over that file: every later locker
+/// would open the replacement and exclude nobody, which is exactly the
+/// replaced-inode hazard the lock is sited on a sibling to avoid. Refusing
+/// fails closed instead.
 #[test]
-fn an_over_limit_saves_shared_lock_namespace_cannot_be_an_ordinary_locks_name() {
-    let dir = TempDir::new("shared-lock-namespace-shape");
-    let long = SaveFile::at(dir.join(&"s".repeat(140)));
+fn a_save_configured_at_the_lock_path_is_refused_rather_than_locked() {
+    let dir = TempDir::new("save-at-the-lock-path");
+    let file = SaveFile::at(dir.join(".pokeemerald-rs.lock"));
 
-    let fallback_name = long
-        .shared_lock_path()
-        .file_name()
-        .expect("the hashed lock path names a file")
-        .as_encoded_bytes()
-        .to_vec();
-
-    assert!(
-        !fallback_name.ends_with(b".lock"),
-        "a fallback name ending in `.lock` could always be produced by some short save's \
-         own basename plus the ordinary `.lock` suffix, got {:?}",
-        String::from_utf8_lossy(&fallback_name)
-    );
-}
-
-/// The over-limit save's fallback is named `.lock.<tag>`; reproduces the
-/// exact adversarial short save reported against the fallback's first
-/// shape, `.<tag>.lock` (a short save literally named `.<tag>`), keyed to
-/// the live tag so the guard tracks whatever it is. Those are two distinct
-/// saves, so holding the over-limit save's lock must leave the short save
-/// free.
-#[test]
-fn an_over_limit_saves_shared_lock_does_not_collide_with_a_short_saves_own_lock() {
-    const HOST_NAME_MAX: usize = 143;
-    let dir = TempDir::new("shared-lock-namespace");
-    let long = SaveFile::at(dir.join(&"s".repeat(140)));
-
-    let fallback = long.shared_lock_path();
-    let tag = fallback
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_prefix(".lock."))
-        .expect("the fallback name carries its tag after the `.lock.` namespace");
-
-    // The short save whose ordinary `<save>.lock` would have been the long
-    // save's fallback, had the fallback kept its first reported shape.
-    let short = SaveFile::at(dir.join(&format!(".{tag}")));
-    assert_ne!(
-        short.lock_path(),
-        fallback,
-        "the fallback namespace must never equal an ordinary lock name"
-    );
-    assert!(
-        short
-            .lock_path()
-            .file_name()
-            .is_some_and(|name| name.as_encoded_bytes().len() <= HOST_NAME_MAX),
-        "the colliding short save must be one this host accepts outright"
-    );
-
-    let refuse_long_components = |candidate: &Path| -> std::io::Result<std::fs::File> {
-        let component_len = candidate
-            .file_name()
-            .map_or(0, |name| name.as_encoded_bytes().len());
-        if component_len > HOST_NAME_MAX {
-            return Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename));
-        }
-        SaveFile::open_lock_file(candidate)
-    };
-
-    let guard = long
-        .lock_with_open(|_| {}, refuse_long_components)
-        .expect("the over-limit save must be lockable");
-
-    let probe = SaveFile::open_lock_file(&short.lock_path())
-        .expect("the short save's own lock file must be openable");
-    match probe.try_lock() {
-        Ok(()) => {}
+    match file.lock() {
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, file.lock_path()),
         other => panic!(
-            "locking {} must not block the unrelated save {}, got {other:?}",
-            long.path().display(),
-            short.path().display()
+            "a save at the lock path must be refused, got {:?}",
+            other.map(|_| "a guard")
         ),
     }
-    drop(probe);
+}
+
+/// The refusal must recognise the lock file by the entry it is, not by the
+/// name it is spelled with.
+///
+/// A case-folding or normalising volume resolves byte-different names to
+/// one entry, and `std` cannot enumerate those aliases, so comparing
+/// basenames bytewise would let an aliased spelling through. A symlink
+/// stands in for that aliasing here because it is the one alias a
+/// case-sensitive test host also supports.
+#[cfg(unix)]
+#[test]
+fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
+    let dir = TempDir::new("save-aliasing-the-lock-path");
+    let file = SaveFile::at(dir.join("aliased.sav"));
+
+    std::fs::write(dir.join(".pokeemerald-rs.lock"), b"").unwrap();
+    std::os::unix::fs::symlink(dir.join(".pokeemerald-rs.lock"), file.path()).unwrap();
+    assert_ne!(
+        file.path().file_name(),
+        file.lock_path().file_name(),
+        "the save must not be refusable by its name alone, or this proves nothing"
+    );
+
+    match file.lock() {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!(
+            "a save resolving to the lock file must be refused, got {:?}",
+            other.map(|_| "a guard")
+        ),
+    }
+}
+
+/// The refusal must catch only the save that *is* the lock file. An
+/// ordinary save sharing the directory holds that lock rather than being
+/// refused by it, before and after it exists on disk.
+#[test]
+fn an_ordinary_save_beside_the_lock_file_still_locks() {
+    let dir = TempDir::new("ordinary-save-beside-lock");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    let (store, _, _) = saved_store();
+
+    let guard = file
+        .lock()
+        .expect("a save that does not exist yet must be lockable");
+    file.write(&store).unwrap();
+    drop(guard);
+
+    let guard = file
+        .lock()
+        .expect("an existing ordinary save must still be lockable");
     drop(guard);
 }
