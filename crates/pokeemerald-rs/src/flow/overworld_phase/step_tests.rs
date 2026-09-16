@@ -1115,9 +1115,8 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     );
 }
 
-/// A completed step's door warp resolves at the retained previous elevation
-/// (issue #1127); a fired warp is observable pack-free only through the
-/// encounter roll it suppresses, as `a_door_warp_frame_never_reaches_the_encounter_roll` does.
+/// Observed through the suppressed encounter roll, as
+/// `a_door_warp_frame_never_reaches_the_encounter_roll` does.
 #[test]
 fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE};
