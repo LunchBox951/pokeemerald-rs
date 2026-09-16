@@ -74,6 +74,35 @@ fn empty_mixer_renders_silence() {
 }
 
 #[test]
+fn empty_one_shot_retires_after_one_mix_frame() {
+    const ECHO_VOLUME: u8 = 128;
+    const ECHO_LENGTH: u8 = 60;
+
+    let voice = Voice::new(
+        Arc::new(WaveData::one_shot(0, vec![])),
+        Adsr::flat(),
+        unity_freq(),
+        FULL_TRACK_VOLUME,
+        FULL_TRACK_VOLUME,
+        TEST_VELOCITY,
+        TIED_GATE_TIME,
+        60,
+        0,
+        ECHO_VOLUME,
+        ECHO_LENGTH,
+    );
+    let mut mixer = Mixer::default();
+    assert!(mixer.add_voice(voice));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    mixer.mix_frame(&mut out);
+    assert_eq!(
+        mixer.voice_count(),
+        0,
+        "an empty one-shot must not occupy a mixer slot"
+    );
+}
+
+#[test]
 fn single_voice_is_scaled_and_normalised() {
     const SAMPLE: i8 = 50;
 
