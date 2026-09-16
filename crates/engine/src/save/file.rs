@@ -22,6 +22,10 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
 
+/// The sidecar [`SaveFile::lock`] falls back to when `<save>.lock` overflows
+/// the host's component limit. See [`SaveFile::shared_lock_path`].
+const SHARED_LOCK_NAME: &str = ".lock.shared";
+
 /// File-system or path-resolution failure while accessing a save file.
 #[derive(Debug)]
 pub enum SaveFileError {
@@ -379,8 +383,10 @@ impl SaveFile {
     /// The lock lives on a sibling `.lock` file, not the save file itself:
     /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
     /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards. An over-limit name falls back to a basename
-    /// hash; a save configured at that exact name is outside this contract.
+    /// the path afterwards. An over-limit name falls back to one sidecar
+    /// shared by every over-limit save in the directory, so such saves
+    /// serialise against each other; a save configured at that exact name
+    /// is outside this contract.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -418,7 +424,7 @@ impl SaveFile {
             // The save basename itself was accepted, so only the `.lock`
             // suffix can have pushed this component over the limit.
             Err(source) if source.kind() == std::io::ErrorKind::InvalidFilename => {
-                let fallback = self.hashed_lock_path();
+                let fallback = self.shared_lock_path();
                 let file = open(&fallback).map_err(|source| SaveFileError::Lock {
                     path: fallback.clone(),
                     source,
@@ -531,21 +537,27 @@ impl SaveFile {
         PathBuf::from(name)
     }
 
-    /// A fixed-width sidecar hashing this save's whole basename, used when
-    /// `<save>.lock` overflows the filesystem's component limit. Named
-    /// `.lock.<hash>` so it never ends in `.lock` and no ordinary lock path
-    /// can equal it. Hashes the ASCII-lowercased basename so a case-folding
-    /// host's variants of one save share one sidecar; non-ASCII case is not
-    /// folded, and a case-sensitive host serialises ASCII case variants.
-    fn hashed_lock_path(&self) -> PathBuf {
-        use std::hash::Hasher;
-
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        if let Some(name) = self.path.file_name() {
-            hasher.write(&name.as_encoded_bytes().to_ascii_lowercase());
-        }
-        self.path
-            .with_file_name(format!(".lock.{:016x}", hasher.finish()))
+    /// The one sidecar every save reaching this fallback in a directory
+    /// shares, used when `<save>.lock` overflows the component limit.
+    ///
+    /// The name ignores the basename, so every spelling a case-folding or
+    /// normalising volume resolves to one save resolves to one lock here. A
+    /// per-name digest cannot: no `std` API exposes a host's comparison key,
+    /// ASCII folding misses `Ä` against `ä`, and Unicode folding crosses the
+    /// ASCII boundary -- APFS folds `K` (U+212A) to `k` -- so not even
+    /// "hash unless non-ASCII" separates the aliasing names from the rest.
+    /// Sharing one name serialises unrelated over-limit saves in the
+    /// directory, which only ever delays them; deriving two sidecars for one
+    /// save loses save data.
+    ///
+    /// Aliases of unequal byte length can still straddle the limit, leaving
+    /// the shorter spelling on its own `<save>.lock`; a host's aliases cannot
+    /// be enumerated, so preferring the byte-exact name keeps that residual.
+    ///
+    /// Named `.lock.shared` so it never ends in `.lock` and no ordinary lock
+    /// path can equal it.
+    fn shared_lock_path(&self) -> PathBuf {
+        self.path.with_file_name(SHARED_LOCK_NAME)
     }
 }
 
