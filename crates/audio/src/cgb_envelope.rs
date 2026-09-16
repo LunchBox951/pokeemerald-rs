@@ -160,6 +160,19 @@ impl CgbEnvelope {
         self.note_off_requested
     }
 
+    /// Return whether `ply_endtie` may select this envelope's channel: not
+    /// merely non-stopping, since an automatic pseudo-echo tail also fails
+    /// upstream's `START | ENV` match test (`m4a_1.s:1835`..`:1848`,
+    /// `m4a.c:1090`..`:1129`).
+    #[must_use]
+    pub(crate) fn is_end_tie_eligible(&self) -> bool {
+        !self.note_off_requested
+            && matches!(
+                self.phase,
+                Phase::Starting | Phase::Attack | Phase::Decay | Phase::Sustain
+            )
+    }
+
     /// The pacing this phase's NRx2 store programs, decoded by
     /// [`HardwareEnvelopePacing`]; `None` where the phase stores a bare
     /// direction bit and no step time, leaving hardware dead at its last
@@ -225,25 +238,26 @@ impl CgbEnvelope {
     /// or two iterations, so production rendering drives the envelope through
     /// `step_frame` rather than calling this directly (module docs).
     ///
-    /// Returns whether this iteration crossed a retrigger-worthy
-    /// `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`; see
-    /// [`crate::cgb_voice::Oscillator::retrigger`]).
-    pub fn step(&mut self) -> bool {
+    /// Returns `(transitioned, boundary)`: whether this iteration crossed a
+    /// retrigger-worthy `CGB_CHANNEL_MO_VOL` transition (`m4a.c:1090-1158`;
+    /// see [`crate::cgb_voice::Oscillator::retrigger`]), and whether it ran
+    /// the `envelopeCounter == 0` `CgbModVol` recompute at all -- true even
+    /// for a bare refresh that reports no transition (`m4a.c:1077-1085`).
+    pub fn step(&mut self) -> (bool, bool) {
         match self.phase {
-            Phase::Starting => self.start(),
+            Phase::Starting => (self.start(), true),
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
-            Phase::Sustain => {
-                self.sustain_step();
-                false
+            Phase::Sustain => (false, self.sustain_step()),
+            Phase::Release if self.adsr.release == 0 => {
+                (self.enter_pseudo_echo_or_silence(), false)
             }
-            Phase::Release if self.adsr.release == 0 => self.enter_pseudo_echo_or_silence(),
             Phase::Release => self.release_step(),
             Phase::PseudoEcho => {
                 self.pseudo_echo_step();
-                false
+                (false, false)
             }
-            Phase::Retired => false,
+            Phase::Retired => (false, false),
         }
     }
 
@@ -259,14 +273,17 @@ impl CgbEnvelope {
     /// other transition — note-on/note-off held frames included — falls
     /// through to that check normally and can be doubled.
     ///
-    /// Returns whether either iteration retriggered: upstream applies at
-    /// most one hardware write per `CgbSound` iteration (`m4a.c:1206-1226`).
-    pub(crate) fn step_frame(&mut self, extra_iteration: bool) -> bool {
-        let retriggered = self.step();
+    /// Returns `(transitioned, boundary)` OR'd across both iterations:
+    /// upstream applies at most one hardware write per `CgbSound` iteration
+    /// (`m4a.c:1206-1226`), but `chan->pan` still recomputes on either
+    /// (`step`'s doc).
+    pub(crate) fn step_frame(&mut self, extra_iteration: bool) -> (bool, bool) {
+        let (transitioned, boundary) = self.step();
         if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
-            return self.step() || retriggered;
+            let (transitioned2, boundary2) = self.step();
+            return (transitioned || transitioned2, boundary || boundary2);
         }
-        retriggered
+        (transitioned, boundary)
     }
 
     /// Decrement this phase's frame counter and report whether it just reached
@@ -294,25 +311,26 @@ impl CgbEnvelope {
             return false;
         }
         self.phase = Phase::Attack;
-        self.attack_step()
+        self.attack_step().0
     }
 
-    fn attack_step(&mut self) -> bool {
+    fn attack_step(&mut self) -> (bool, bool) {
         if self.adsr.attack == 0 {
-            return self.enter_decay();
+            return (self.enter_decay(), true);
         }
         if !self.paced_step_is_due() {
-            return false;
+            return (false, false);
         }
         if self.volume < self.goal {
             self.volume += 1;
         }
-        if self.volume >= self.goal {
+        let transitioned = if self.volume >= self.goal {
             self.enter_decay()
         } else {
             self.frames_until_step = self.adsr.attack;
             false
-        }
+        };
+        (transitioned, true)
     }
 
     /// Enter decay, reporting whether this is the attack-to-decay
@@ -327,19 +345,20 @@ impl CgbEnvelope {
         true
     }
 
-    fn decay_step(&mut self) -> bool {
+    fn decay_step(&mut self) -> (bool, bool) {
         if !self.paced_step_is_due() {
-            return false;
+            return (false, false);
         }
         if self.volume > self.sustain_goal {
             self.volume -= 1;
         }
-        if self.volume <= self.sustain_goal {
+        let transitioned = if self.volume <= self.sustain_goal {
             self.enter_sustain_start()
         } else {
             self.frames_until_step = self.adsr.decay;
             false
-        }
+        };
+        (transitioned, true)
     }
 
     /// Enter sustain, reporting whether this is the decay-to-sustain
@@ -354,26 +373,32 @@ impl CgbEnvelope {
         true
     }
 
-    fn sustain_step(&mut self) {
+    /// Reports whether the refresh was due, i.e. an `envelopeCounter == 0`
+    /// `CgbModVol` boundary (`step`'s doc), not just whether `volume` moved.
+    fn sustain_step(&mut self) -> bool {
         if self.paced_step_is_due() {
             self.volume = self.sustain_goal;
             self.frames_until_step = SUSTAIN_REFRESH_FRAMES;
+            true
+        } else {
+            false
         }
     }
 
-    fn release_step(&mut self) -> bool {
+    fn release_step(&mut self) -> (bool, bool) {
         if !self.paced_step_is_due() {
-            return false;
+            return (false, false);
         }
         if self.volume > 0 {
             self.volume -= 1;
         }
-        if self.volume == 0 {
+        let transitioned = if self.volume == 0 {
             self.enter_pseudo_echo_or_silence()
         } else {
             self.frames_until_step = self.adsr.release;
             false
-        }
+        };
+        (transitioned, true)
     }
 
     /// Enter the pseudo-echo tail, or silence outright when its floor is
@@ -733,7 +758,7 @@ mod tests {
              CGB_CHANNEL_MO_VOL write"
         );
         assert!(
-            !env.step(),
+            !env.step().0,
             "the short-circuit reaches CgbOscOff through `goto oscillator_off`, past the \
              modify/CgbModVol write (`m4a.c:988..996`, `:1040..1047`)"
         );

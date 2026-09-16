@@ -3,17 +3,20 @@
 //! Dragon Rage and Sonic Boom deal literal amounts. Seismic Toss and Night
 //! Shade use the attacker's level. Resolution consumes an accuracy draw and,
 //! after any landed move, a trailing effect-chance draw. Type effectiveness
-//! decides only immunity; other multipliers do not alter the damage. Fixed
-//! damage never consumes critical-hit or damage-variance draws.
+//! decides only immunity; other multipliers do not alter the damage, except
+//! that a Wonder Guard holder blocks every result short of strictly super
+//! effective (`battle_script_commands.c:1409-1418`), including an
+//! independently immune matchup. Fixed damage never consumes critical-hit or
+//! damage-variance draws.
 //!
 //! Upstream assigns the fixed amount after type calculation and then joins the
 //! ordinary-hit tail (`data/battle_scripts_1.s:819-828`, `:1195-1204`,
 //! `:1720-1729`). This ordering preserves immunity and the trailing draw while
 //! discarding every nonzero type multiplier.
 
-use assets::{MoveEffect, MoveId, Type};
+use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
-use crate::damage::{apply_dual_type_effectiveness, BattleRng};
+use crate::damage::{aggregate_type_effectiveness, apply_dual_type_effectiveness, BattleRng};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::{accuracy_roll, HitOutcome};
@@ -94,6 +97,16 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
     apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
 }
 
+/// Every [`FIXED_DAMAGE_EFFECTS`] move carries nonzero power (`power: 1` in
+/// each case, pinned by `four_moves_map_to_the_three_supported_effects`), so
+/// upstream's `gBattleMoves[gCurrentMove].power` gate on the Wonder Guard
+/// branch (`battle_script_commands.c:1411`) is always satisfied here.
+fn defender_wonder_guard_blocked(move_type: Type, defender: &BattlePokemon) -> bool {
+    defender.ability() == AbilityId::WONDER_GUARD
+        && aggregate_type_effectiveness(move_type, defender.types())
+            != Effectiveness::SuperEffective
+}
+
 /// Resolves one fixed-damage move against `defender`.
 ///
 /// A miss consumes one accuracy draw. A landed move consumes the accuracy and
@@ -126,9 +139,20 @@ pub fn resolve_fixed_damage_move(
     }
 
     let defender_is_immune = defender_is_immune(move_type, defender);
-    spend_effect_chance_draw(dex, move_id, !defender_is_immune, rng)?;
+    let defender_wonder_guard_blocked = defender_wonder_guard_blocked(move_type, defender);
+    let hit_had_effect = !defender_is_immune && !defender_wonder_guard_blocked;
+    // No `FIXED_DAMAGE_EFFECTS` entry is `EFFECT_POISON_HIT`, so the poison
+    // signal is always `false` here.
+    spend_effect_chance_draw(dex, move_id, hit_had_effect, defender, rng)?;
 
-    if defender_is_immune {
+    if defender_wonder_guard_blocked {
+        // Wonder Guard's `B_MSG_AVOIDED_DMG` (index 3) outranks the ordinary
+        // typing-immunity message (`Cmd_resultmessage`,
+        // `battle_script_commands.c:2048-2059`, comparing against
+        // `B_MSG_AVOIDED_ATK`, index 2), so it is reported even when the
+        // move is also independently type-immune.
+        Ok(HitOutcome::WonderGuardBlocked)
+    } else if defender_is_immune {
         Ok(HitOutcome::NoEffect)
     } else {
         Ok(HitOutcome::Hit {

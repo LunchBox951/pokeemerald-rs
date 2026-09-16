@@ -11,6 +11,15 @@ const PERSONALITY_ORDER_COUNT: usize = 24;
 pub const SECURE_REGION_LEN: usize = SUBSTRUCTURE_LEN * SUBSTRUCTURE_COUNT;
 const PERSONALITY_OFFSET: usize = 0;
 const OT_ID_OFFSET: usize = 4;
+/// The unencrypted header's nickname field
+/// (`struct BoxPokemon::nickname`, `pokeemerald/include/pokemon.h:200`).
+const NICKNAME_OFFSET: usize = 8;
+/// Fixed byte length of `BoxPokemon`'s unencrypted header nickname field
+/// (`POKEMON_NAME_LENGTH`, `pokeemerald/include/constants/global.h:95`).
+pub const BOX_NICKNAME_LEN: usize = 10;
+/// The unencrypted header's language byte
+/// (`struct BoxPokemon::language`, `pokeemerald/include/pokemon.h:201`).
+const LANGUAGE_OFFSET: usize = 18;
 const CHECKSUM_OFFSET: usize = 28;
 const SECURE_OFFSET: usize = 32;
 
@@ -191,6 +200,22 @@ impl BoxPokemon {
     #[must_use]
     pub fn ot_id(&self) -> u32 {
         read_u32(&self.bytes, OT_ID_OFFSET)
+    }
+
+    /// Overwrites the unencrypted header's nickname field.
+    ///
+    /// Independent of [`Self::set_substructures`], which only ever touches
+    /// the checksum and the encrypted secure region -- the header's
+    /// nickname, language, OT name, and markings bytes have no other
+    /// writer, so a caller that wants them set must call this (and
+    /// [`Self::set_language`]) directly.
+    pub fn set_nickname(&mut self, nickname: [u8; BOX_NICKNAME_LEN]) {
+        self.bytes[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN].copy_from_slice(&nickname);
+    }
+
+    /// Overwrites the unencrypted header's language byte.
+    pub fn set_language(&mut self, language: u8) {
+        self.bytes[LANGUAGE_OFFSET] = language;
     }
 
     /// Returns the stored checksum for the decrypted secure region.
@@ -500,6 +525,31 @@ mod tests {
             corrupt.substructures(),
             Err(PokemonError::ChecksumMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn nickname_and_language_write_only_the_unencrypted_header_bytes() {
+        let mut boxed = BoxPokemon::new(5, 0xA5A5_5A5A);
+        boxed.set_substructures(&distinct_substructures());
+        let before = boxed.to_bytes();
+
+        boxed.set_nickname(*b"TREECKO\xFF\0\0");
+        boxed.set_language(2);
+        let after = boxed.to_bytes();
+
+        assert_eq!(
+            &after[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN],
+            b"TREECKO\xFF\0\0"
+        );
+        assert_eq!(after[LANGUAGE_OFFSET], 2);
+        // Every other byte -- personality, OT id, the encrypted secure
+        // region, and the checksum -- is untouched.
+        let mut expected = before;
+        expected[NICKNAME_OFFSET..NICKNAME_OFFSET + BOX_NICKNAME_LEN]
+            .copy_from_slice(b"TREECKO\xFF\0\0");
+        expected[LANGUAGE_OFFSET] = 2;
+        assert_eq!(after, expected);
+        assert_eq!(boxed.substructures().unwrap(), distinct_substructures());
     }
 
     #[test]

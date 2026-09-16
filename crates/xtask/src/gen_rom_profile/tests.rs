@@ -41,7 +41,7 @@ fn distinctive_tiles(tile_count: usize) -> Vec<u8> {
 }
 
 /// Run a body against a fixture ROM and a pack built from `entries`.
-fn with_context<T>(
+pub(super) fn with_context<T>(
     name: &str,
     rom: &[u8],
     entries: Vec<pack_format::PackEntry>,

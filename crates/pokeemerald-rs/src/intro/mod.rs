@@ -1,99 +1,19 @@
-//! The new-game intro: Birch's speech (I-3, issue #149), transcribed from
-//! upstream's `Task_NewGameBirchSpeech_*` chain
-//! (`pokeemerald/src/main_menu.c:1279-1755`).
+//! Birch's new-game introduction.
 //!
-//! [`speech`] holds the actual dialogue text (module docs there for the
-//! exact upstream strings and the naming/gender-selection deviations);
-//! [`IntroScene`] drives it through a single
-//! [`engine::text::render::Printer`], re-armed
-//! ([`engine::text::render::Printer::restart`]) once per page, and paints it
-//! through the same [`crate::textbox`] pixel-blit path
-//! [`crate::main_menu::MainMenuScene`] uses for its own text window.
+//! # Reduced cinematic
 //!
-//! # Reduced cinematic -- what's rendered and what's deferred
+//! [`IntroScene`] renders the dialogue and standard message box. The scene
+//! omits the character animation, gender and naming screens, confirmation
+//! menu, and audio. Questions held on screen by those omitted transitions
+//! wait for A or B before the scene continues.
 //!
-//! In scope: the real speech text, paged with upstream's own `\p`/`\l`
-//! pacing (wait for a button press, then clear/scroll -- see
-//! [`engine::text::render::Printer`]'s module docs for the exact frame
-//! timing this reuses unmodified), inside the standard dialogue box
-//! (`engine::text::window::MessageBoxLayout::STANDARD`, the same layout a
-//! future NPC-interaction slice will reuse). Out of scope, matching the
-//! issue's own "reduced but faithful subset" allowance:
+//! # Advance
 //!
-//! - **No Birch/Lotad/player sprites, no platform background, no palette
-//!   fades/slides.** Upstream's task chain spends most of its state
-//!   machine animating `AddBirchSpeechObjects`' sprites in and out
-//!   (`Task_NewGameBirchSpeech_WaitToShowBirch` through
-//!   `Task_NewGameBirchSpeech_FadePlayerToWhite`) around the dialogue --
-//!   none of that is rendered here. `graphics/birch_speech` (the shadow/map
-//!   background graphics) stays untouched in the coverage ledger for
-//!   exactly this reason.
-//! - **No gender-select menu, no naming screen.** See
-//!   `crate::new_game`'s module docs -- the speech pages that would
-//!   normally frame those UI steps ([`speech::pages`]'s pages 4/5, "And you
-//!   are?"/"What's your name?") still print and still wait for a button
-//!   press before continuing (upstream holds both on screen too --
-//!   `Task_NewGameBirchSpeech_WaitPressBeforeNameChoice`,
-//!   `main_menu.c:1590`, for "What's your name?"; "And you are?" is
-//!   gated behind the unmodeled Birch/Lotad platform-fade sequence instead
-//!   of an explicit button-wait task state, `main_menu.c:1410-1501`, but a
-//!   press-wait reproduces upstream's actual observable pacing -- the page
-//!   stays up until *something* advances it -- without modeling that
-//!   animation) -- just with no gender-select menu or naming UI rendered
-//!   in between.
-//! - **No name-confirmation Yes/No menu.** [`speech::pages`]'s page 6
-//!   ("So it's ...?") is upstream's name confirmation prompt: it holds on
-//!   screen while `Task_NewGameBirchSpeech_ProcessNameYesNoMenu`
-//!   (`main_menu.c:1626`) waits on a real Yes/No menu. No menu is rendered
-//!   here, so that page too waits on a plain button press instead (see
-//!   `speech`'s `so_its_player` doc comment) -- answering "No" (which
-//!   upstream loops back to the naming step) has nothing to loop back to in
-//!   this slice.
-//! - **No music, no sound effects.** `PlayBGM(MUS_ROUTE122)` and every
-//!   `PlaySE` call in the task chain are silent here (no audio wiring in
-//!   this slice).
-//!
-//! # Advance (issue #393)
-//!
-//! [`IntroScene::tick`] takes one [`PrinterInput`] per frame -- newly-pressed
-//! and held A/B, forwarded straight to the underlying
-//! [`Printer::tick`](engine::text::render::Printer::tick) -- and no separate
-//! skip input. Real Emerald's intro cannot be skipped outright: B is an
-//! ordinary dialogue-advance button, not a whole-intro shortcut (upstream
-//! `JOY_NEW(A_BUTTON | B_BUTTON)` inside `TextPrinterWaitWithDownArrow`,
-//! `pokeemerald/src/text.c:874-879`, which both `\p` and `\l` wait on --
-//! either button clears/scrolls a page identically, module docs on
-//! [`engine::text::render::Printer::tick`]). An earlier pre-1.0 revision of
-//! this scene wired B to a `skip_pressed` shortcut with no upstream
-//! analogue at all; issue #393 flagged and deleted it as a dev
-//! convenience that would otherwise have run into the `V-7`/`H-1` gates
-//! (`docs/acceptance/v1.md`) at release time. The closest real Emerald gets to a B
-//! shortcut is `WhatsYourName`'s own wait state also accepting B
-//! (`main_menu.c:1590`) -- ordinary dialogue-advance, exactly what this
-//! scene now does.
-//!
-//! The intro's own [`Printer`] opts into upstream's held-A/B print
-//! speed-up (`AddTextPrinterForMessage(TRUE)`, `main_menu.c:1339`) via
-//! [`Printer::with_ab_speed_up_print`] -- see that method's docs and
-//! [`engine::text::render`]'s own "Held-A/B print speed-up" module docs for
-//! the exact semantics.
+//! A and B advance printer waits, and holding either button accelerates text.
 //!
 //! # Traversal pacing
 //!
-//! [`TRAVERSAL_RUNS`] pins, frame by frame, how long a full read of the
-//! speech takes at [`TextSpeed::Mid`] when the player never holds a button:
-//! thirty-six runs of no input, twenty-four of them ended by a single
-//! confirm press at a `\p`/`\l` wait, the other twelve (four scroll
-//! animations, eight page-terminator drains) needing no input at all.
-//! [`TRAVERSAL_FRAMES`] is their total.
-//!
-//! That table is a *derived* measurement, re-computed from the real
-//! [`Printer`] on every CI run by this module's own pack-free
-//! `traversal_runs_match_the_pinned_table` test -- not a set of magic
-//! numbers. `xtask`'s `boot-to-first-fight` scenario reads Birch's whole
-//! speech, so its authored script needs exactly these counts; publishing
-//! them here (rather than re-typing them into the script) keeps one
-//! machine-checked source for the intro's pacing.
+//! [`TRAVERSAL_RUNS`] records the printer-derived timing used by scripted runs.
 
 mod speech;
 
@@ -108,106 +28,72 @@ use crate::textbox::{self, FrameAssets};
 
 pub use speech::NUM_PAGES;
 
-/// One uninterrupted run of *no* input while reading Birch's speech
-/// (module docs' "Traversal pacing" section) -- how many frames printing,
-/// scrolling or draining takes before the next thing happens, and whether
-/// that next thing is a single confirm press.
-///
-/// Plain data with public fields `(oop-boundaries)`: this is a measurement,
-/// not an object with behaviour.
+/// A consecutive span of frames without input while reading Birch's speech.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TraversalRun {
-    /// Frames of no input in this run, counting the frame the run's own
-    /// terminating event fires on (the `\p`/`\l` wait being reached, the
-    /// scroll animation finishing, or the page's terminator being
-    /// consumed).
+    /// Frames elapsed before the printer waits or continues automatically.
     pub frames: u32,
-    /// Whether exactly one confirm-press frame follows this run: true for
-    /// a run that ended on a `\p`/`\l` wait, false for a scroll-animation
-    /// drain or a page's own terminator drain, which need no input.
+    /// Whether the next frame must contain an A or B press.
     pub confirm_after: bool,
 }
 
-/// Every [`TraversalRun`] of a full, never-held read of Birch's whole
-/// eight-page speech at [`TextSpeed::Mid`]
-/// ([`IntroScene::from_pack`]'s own speed), in order -- the intro's
-/// frame-level pacing contract (module docs' "Traversal pacing" section).
-///
-/// **Derived, not hand-copied.** `tests::traversal_runs_match_the_pinned_table`
-/// re-derives this whole table every CI run by driving [`speech::pages`]
-/// through a real [`Printer`] over a synthetic glyph sheet (no asset pack:
-/// only the compiled-in advance-width table, not sheet pixels, affects
-/// *when* a wait is reached), so any change to the printer's state machine,
-/// to a speech page's text, or to the reveal-delay timing fails that test
-/// instead of silently re-pacing the intro.
-///
-/// `xtask`'s `boot-to-first-fight` scenario script is the consumer: its
-/// intro block presses A or B on exactly the frames this table says a wait
-/// is reached, and its own tests assert the authored script against this
-/// table frame for frame.
+/// Printer-derived timing for a full read at [`TextSpeed::Mid`] without held input.
 pub const TRAVERSAL_RUNS: &[TraversalRun] = &[
-    // --- page 0: WELCOME ---
-    run(121, true), // prompt 1 (\p)
-    run(132, true), // prompt 2 (\p)
-    run(72, true),  // prompt 3 (\p)
-    run(179, true), // prompt 4 (\p)
-    run(4, false),  // reveal-delay drain, then the page terminator
-    // --- page 1: THIS_IS_A_POKEMON (its {PAUSE 96} is inside this run) ---
-    run(230, true), // prompt 1 (\p)
-    run(4, false),  // page terminator drain
-    // --- page 2: MAIN_SPEECH ---
-    run(244, true), // prompt 1 (\p)
-    run(279, true), // prompt 2 (\l)
-    run(9, false),  // scroll animation, no input needed
-    run(140, true), // prompt 3 (\p)
-    run(235, true), // prompt 4 (\p)
-    run(267, true), // prompt 5 (\p)
-    run(235, true), // prompt 6 (\p)
-    run(247, true), // prompt 7 (\l)
-    run(9, false),  // scroll animation
-    run(72, true),  // prompt 8 (\p)
-    run(4, false),  // page terminator drain
-    // --- page 3: AND_YOU_ARE ---
-    run(49, true), // prompt 1 (\p)
-    run(4, false), // page terminator drain
-    // --- page 4: WHATS_YOUR_NAME ---
-    run(112, true), // prompt 1 (\p)
-    run(4, false),  // page terminator drain
-    // --- page 5: so_its_player ---
-    run(49, true), // prompt 1 (\p)
-    run(4, false), // page terminator drain
-    // --- page 6: youre_player ---
-    run(37, true),  // prompt 1 (\p)
-    run(215, true), // prompt 2 (\l)
-    run(9, false),  // scroll animation
-    run(56, true),  // prompt 3 (\p)
-    run(4, false),  // page terminator drain
-    // --- page 7: ARE_YOU_READY ---
-    run(101, true), // prompt 1 (\p)
-    run(175, true), // prompt 2 (\p)
-    run(251, true), // prompt 3 (\l)
-    run(9, false),  // scroll animation
-    run(136, true), // prompt 4 (\p)
-    run(263, true), // prompt 5 (\p)
-    run(4, false),  // the last drain: its final frame hands off to the overworld
+    waits_for_confirmation(121),
+    waits_for_confirmation(132),
+    waits_for_confirmation(72),
+    waits_for_confirmation(179),
+    advances_automatically(4),
+    waits_for_confirmation(230),
+    advances_automatically(4),
+    waits_for_confirmation(244),
+    waits_for_confirmation(279),
+    advances_automatically(9),
+    waits_for_confirmation(140),
+    waits_for_confirmation(235),
+    waits_for_confirmation(267),
+    waits_for_confirmation(235),
+    waits_for_confirmation(247),
+    advances_automatically(9),
+    waits_for_confirmation(72),
+    advances_automatically(4),
+    waits_for_confirmation(49),
+    advances_automatically(4),
+    waits_for_confirmation(112),
+    advances_automatically(4),
+    waits_for_confirmation(49),
+    advances_automatically(4),
+    waits_for_confirmation(37),
+    waits_for_confirmation(215),
+    advances_automatically(9),
+    waits_for_confirmation(56),
+    advances_automatically(4),
+    waits_for_confirmation(101),
+    waits_for_confirmation(175),
+    waits_for_confirmation(251),
+    advances_automatically(9),
+    waits_for_confirmation(136),
+    waits_for_confirmation(263),
+    advances_automatically(4),
 ];
 
-/// [`TraversalRun`]'s own terser constructor, so [`TRAVERSAL_RUNS`] reads
-/// as a table of numbers rather than thirty-six struct literals.
-const fn run(frames: u32, confirm_after: bool) -> TraversalRun {
+const fn waits_for_confirmation(frames: u32) -> TraversalRun {
     TraversalRun {
         frames,
-        confirm_after,
+        confirm_after: true,
     }
 }
 
-/// Total frames a full, never-held read of Birch's speech takes: every
-/// [`TRAVERSAL_RUNS`] entry's own frames plus the single confirm-press
-/// frame after each run that needs one.
+const fn advances_automatically(frames: u32) -> TraversalRun {
+    TraversalRun {
+        frames,
+        confirm_after: false,
+    }
+}
+
+/// Total frames for [`TRAVERSAL_RUNS`], including required confirmation frames.
 pub const TRAVERSAL_FRAMES: usize = traversal_frames(TRAVERSAL_RUNS);
 
-/// [`TRAVERSAL_FRAMES`]'s sum, as a `const fn` so the total stays derived
-/// from the table instead of being a second number to keep in step.
 const fn traversal_frames(runs: &[TraversalRun]) -> usize {
     let mut total = 0;
     let mut i = 0;
@@ -221,16 +107,12 @@ const fn traversal_frames(runs: &[TraversalRun]) -> usize {
     total
 }
 
-/// Why building [`IntroScene`] failed.
-///
-/// Concrete per-crate-boundary enum `(oop-boundaries)`, mirroring
-/// [`crate::main_menu::MainMenuSceneError`].
+/// An error while building an [`IntroScene`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntroSceneError {
-    /// Loading or reading the asset pack failed -- most commonly
-    /// [`PackError::NotFound`] (see [`IntroSceneError::is_pack_missing`]).
+    /// The asset pack could not be loaded or read.
     Pack(PackError),
-    /// The font glyph sheet fetched from the pack didn't decode.
+    /// The font glyph sheet could not be decoded.
     Font(assets::AssetError),
 }
 
@@ -258,45 +140,23 @@ impl From<assets::AssetError> for IntroSceneError {
 }
 
 impl IntroSceneError {
-    /// Whether this is specifically the "no pack on disk" diagnostic --
-    /// mirrors [`crate::title::TitleSceneError::is_pack_missing`].
+    /// Returns whether the asset pack was not found.
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(PackError::NotFound(_)))
     }
 }
 
-/// Whether the intro is still running or has handed off to the overworld
-/// (module docs' "Advance" section).
+/// The introduction's progress towards the overworld handoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntroStatus {
-    /// More pages remain (or the current one is still printing/paging).
+    /// The current page or a later page still needs processing.
     Continue,
-    /// Every page finished. The caller should transition to the overworld.
+    /// Every page has finished.
     Finished,
 }
 
-/// Birch's speech, one page at a time (module docs).
-///
-/// # Ownership
-///
-/// Owns every byte it renders -- the decoded glyph sheet
-/// ([`OwnedFontGlyphSheet`], held inside the [`Printer`]) and the dialogue
-/// frame ([`FrameAssets`]) -- exactly like
-/// [`crate::title::TitleScene`]/[`crate::overworld::OverworldScene`]/
-/// [`crate::main_menu::MainMenuScene`] do. Nothing here borrows from an
-/// [`AssetPack`], so the pack a scene was built from is dropped the moment
-/// [`from_pack`](Self::from_pack) returns and every fresh intro reads
-/// whatever is on disk *then* -- a regenerated pack (`cargo xtask extract`
-/// re-run mid-session, an embedding host restarting the game) is picked up
-/// like any other scene's, and there is no process-global state to make one
-/// session's pack outlive it `(oop-boundaries)`.
-///
-/// The intro is the one scene whose [`Printer`] stays alive *across* frames
-/// (the others drive a throwaway one to completion inside a single
-/// function), which is why the printer holds an owned glyph source rather
-/// than a pack-borrowed [`assets::fonts::FontGlyphSheet`]: see
-/// [`Printer`]'s own "Sheet ownership" docs.
+/// Birch's introduction speech, rendered one page at a time.
 #[derive(Debug)]
 pub struct IntroScene {
     frame: FrameAssets,
@@ -308,20 +168,11 @@ pub struct IntroScene {
 }
 
 impl IntroScene {
-    /// Build a fresh intro over an already-decoded font `sheet` and dialogue
-    /// `frame`, printing at `speed`.
-    ///
-    /// `pub(crate)`, not `pub`: [`FrameAssets`] (its `frame` parameter) is
-    /// itself crate-private (see its own docs), and every real caller goes
-    /// through [`from_pack`](Self::from_pack)/[`load_default`] -- this
-    /// constructor exists as a seam for those and for this crate's own
-    /// synthetic-fixture tests.
+    /// Creates an introduction from decoded rendering assets at `speed`.
     #[must_use]
     pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, speed: TextSpeed) -> Self {
         let pages = speech::pages();
-        // Upstream's `AddTextPrinterForMessage(TRUE)` (`main_menu.c:1339`):
-        // Birch's speech is the one printer in this port with held-A/B
-        // speed-up enabled (module docs' "Advance" section).
+        // The upstream speech printer enables held-A/B acceleration (src/main_menu.c:1339).
         let printer = Printer::new(
             pages[0].clone(),
             sheet,
@@ -339,59 +190,39 @@ impl IntroScene {
         }
     }
 
-    /// Copy [`IntroScene`]'s two required entries -- the normal-weight font
-    /// sheet and the dialogue frame -- out of an already-loaded `pack` into
-    /// owned storage (struct docs), mirroring
-    /// [`crate::main_menu::MainMenuScene::from_pack`]. `pack` is only
-    /// borrowed for this call; the returned scene does not reference it.
-    ///
-    /// Prints at [`TextSpeed::Mid`], upstream's own new-game default
-    /// (`SetDefaultOptions`'s `optionsTextSpeed = OPTIONS_TEXT_SPEED_MID`,
-    /// `pokeemerald/src/new_game.c:91-93`) -- the save flow's own SAVE-menu
-    /// messages read the live save block's decoded option instead
-    /// (`crate::start_menu::save_dialog::SaveTarget::player_text_speed`,
-    /// issue #927), but the intro plays before any save block exists, so a
-    /// fixed MID stays correct here regardless.
+    /// Loads owned rendering assets from `pack` at the default text speed.
     ///
     /// # Errors
     ///
-    /// [`IntroSceneError::Pack`] if `pack` is missing its
-    /// `font/normal/glyphs` or message-box entries (or either is malformed);
-    /// [`IntroSceneError::Font`] if the font sheet doesn't decode.
+    /// Returns [`IntroSceneError::Pack`] if an asset is missing or malformed,
+    /// or [`IntroSceneError::Font`] if the font sheet cannot be decoded.
     pub fn from_pack(pack: &AssetPack) -> Result<Self, IntroSceneError> {
         let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
         Ok(Self::new(sheet, frame, TextSpeed::Mid))
     }
 
-    /// The current page index (`0..NUM_PAGES`), for tests/diagnostics.
+    /// Returns the current page index in `0..NUM_PAGES`.
     #[must_use]
     pub const fn page_index(&self) -> usize {
         self.page_index
     }
 
-    /// Whether every page has finished.
+    /// Returns whether every page has finished.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
         self.finished
     }
 
-    /// How many glyphs are currently visible on screen (cleared on a `\p`
-    /// page break, shifted -- not cleared -- by a `\l` scroll). Exposed for
-    /// tests; [`IntroScene::compose`] is the production consumer.
+    /// Returns the number of glyphs currently visible.
     #[must_use]
     pub fn revealed_glyph_count(&self) -> usize {
         self.revealed.len()
     }
 
-    /// Advance the intro by exactly one frame.
+    /// Advances the introduction by one frame.
     ///
-    /// `input` is this frame's A/B edges and holds, forwarded straight to
-    /// the current page's [`Printer::tick`] (module docs' "Advance"
-    /// section) -- once [`IntroStatus::Finished`] is returned, every further
-    /// call returns it again without doing anything (mirrors
-    /// [`engine::text::render::Printer::is_finished`]'s own terminal
-    /// contract).
+    /// Once this returns [`IntroStatus::Finished`], later calls also return it.
     pub fn tick(&mut self, input: PrinterInput) -> IntroStatus {
         if self.finished {
             return IntroStatus::Finished;
@@ -424,9 +255,6 @@ impl IntroScene {
         }
     }
 
-    /// Re-arm the printer over the next page ([`Printer::restart`] -- same
-    /// printer, same owned glyph sheet, fresh token stream), or mark the
-    /// intro finished if [`Self::page_index`] was already the last page.
     fn advance_page(&mut self) {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
@@ -437,8 +265,7 @@ impl IntroScene {
         }
     }
 
-    /// Composite the dialogue box and every currently-revealed glyph into a
-    /// fresh [`Framebuffer`].
+    /// Renders the dialogue box and visible glyphs into a new framebuffer.
     #[must_use]
     pub fn compose(&self) -> Framebuffer {
         let mut fb = Framebuffer::new();
@@ -456,63 +283,35 @@ impl IntroScene {
         fb
     }
 
-    /// [`compose`](Self::compose), converted to `platform`'s
-    /// presentation-ready pixel format -- mirrors
-    /// [`crate::title::TitleScene::compose_frame`].
+    /// Renders a presentation-ready frame.
     #[must_use]
     pub fn compose_frame(&self) -> Box<platform::Frame> {
         crate::frame::to_platform_frame(&self.compose())
     }
 }
 
-/// Load the pack from its default location, build the intro out of it, and
-/// drop the pack again -- mirrors [`crate::main_menu::load_default`] /
-/// [`crate::title::load_default`].
-///
-/// Reads from disk on every call, by design: an intro built here owns every
-/// byte it renders ([`IntroScene`]'s struct docs), so a second call after
-/// the pack on disk changed builds a scene from the *new* bytes. Nothing is
-/// cached process-wide and nothing is leaked.
+/// Loads an introduction from the default asset pack.
 ///
 /// # Errors
 ///
-/// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet; see [`IntroScene::from_pack`] for the
-/// other (real-pack-only) error cases.
+/// Returns an error if the pack cannot be loaded or its rendering assets
+/// cannot be decoded.
 pub fn load_default() -> Result<IntroScene, IntroSceneError> {
     load(crate::pack_source::PackSource::Runtime)
 }
 
-/// [`load_default`], pinned to whichever [`crate::pack_source::PackSource`]
-/// `source` names instead of always the runtime resolver (issue #412) --
-/// what [`crate::flow::advance_scene`] calls with the same source
-/// [`crate::App`] resolved at construction, so a headless-real scenario's
-/// `MainMenu` -> `Intro` transition keeps reading the checkout's own pack.
+/// Loads an introduction from `source`.
 ///
 /// # Errors
 ///
-/// See [`load_default`].
+/// Returns an error if the pack cannot be loaded or its rendering assets
+/// cannot be decoded.
 pub(crate) fn load(source: crate::pack_source::PackSource) -> Result<IntroScene, IntroSceneError> {
     let pack = source.load()?;
     IntroScene::from_pack(&pack)
 }
 
-/// Test-only: an [`IntroScene`] already at [`IntroStatus::Finished`], built
-/// the same synthetic way [`tests`]'s own fixtures are -- a blank glyph
-/// sheet plus a blank dialogue frame, no local pack needed -- so
-/// [`crate::flow`]'s own tests can put one straight into an
-/// [`crate::flow::AppScene::Intro`], the same shape [`load_default`] would
-/// hand [`crate::flow::advance_scene`]. Fully owned, like every real scene
-/// ([`IntroScene`]'s struct docs): nothing leaked, nothing `'static`.
-///
-/// Drives the real page-by-page advance to completion (module docs'
-/// "Advance" section -- there is no shortcut past it since issue #393
-/// deleted the pre-1.0 whole-intro B-skip this helper used to take): at
-/// [`TextSpeed::Instant`] every glyph reveals in one tick and every
-/// `\p`/`\l` wait resolves on the very next confirmed one, so this
-/// terminates in well under the bound, mirroring
-/// [`tests::confirming_every_frame_advances_through_every_page_to_the_overworld_handoff`]'s
-/// identical loop shape.
+/// Returns a synthetic, finished introduction for flow tests.
 #[cfg(test)]
 pub(crate) fn synthetic_finished_scene() -> IntroScene {
     use assets::fonts::FontImageRef;
@@ -520,6 +319,9 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
 
     const SHEET_WIDTH: u32 = 256;
     const SHEET_HEIGHT: u32 = 512;
+    const FRAME_WIDTH: u32 = 56;
+    const FRAME_HEIGHT: u32 = 16;
+    const MAX_TICKS_TO_FINISH: usize = 5_000;
     let pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
     let image = ImageRef {
         width: SHEET_WIDTH,
@@ -530,9 +332,9 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
     let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
         .expect("this is the exact real glyph-sheet shape");
     let frame = FrameAssets {
-        pixels: vec![0u8; 56 * 16],
-        width: 56,
-        height: 16,
+        pixels: vec![0u8; (FRAME_WIDTH * FRAME_HEIGHT) as usize],
+        width: FRAME_WIDTH,
+        height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; 16],
     };
     let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant);
@@ -543,7 +345,7 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         b_held: false,
     };
     let mut status = IntroStatus::Continue;
-    for _ in 0..5000 {
+    for _ in 0..MAX_TICKS_TO_FINISH {
         status = scene.tick(confirm_a);
         if status == IntroStatus::Finished {
             break;

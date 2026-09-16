@@ -494,7 +494,7 @@ fn a_file_of_the_wrong_length_is_rejected_by_length_not_silently_padded() {
     match err {
         SaveFileError::BadLength { expected, got, .. } => {
             assert_eq!(expected, FLASH_IMAGE_LEN);
-            assert_eq!(got, FLASH_IMAGE_LEN - 1);
+            assert_eq!(got, u64::try_from(FLASH_IMAGE_LEN - 1).unwrap());
         }
         other => panic!("expected a length rejection, got {other:?}"),
     }
@@ -504,16 +504,40 @@ fn a_file_of_the_wrong_length_is_rejected_by_length_not_silently_padded() {
 fn an_oversized_file_is_rejected_after_a_bounded_read() {
     let dir = TempDir::new("oversized");
     let path = dir.join(SAVE_FILE_NAME);
-    std::fs::write(&path, vec![0u8; FLASH_IMAGE_LEN + 4096]).unwrap();
+    let actual_len = FLASH_IMAGE_LEN + 4096;
+    std::fs::write(&path, vec![0u8; actual_len]).unwrap();
 
     let err = SaveFile::at(&path).read().unwrap_err();
     match err {
         SaveFileError::BadLength { expected, got, .. } => {
             assert_eq!(expected, FLASH_IMAGE_LEN);
-            assert_eq!(got, FLASH_IMAGE_LEN + 1);
+            assert_eq!(
+                got,
+                u64::try_from(actual_len).unwrap(),
+                "the bounded probe cap must not leak into the reported length"
+            );
         }
         other => panic!("expected a length rejection, got {other:?}"),
     }
+}
+
+#[test]
+fn an_oversized_files_rejection_does_not_misstate_its_length() {
+    let dir = TempDir::new("oversized-message");
+    let path = dir.join(SAVE_FILE_NAME);
+    let actual_len = FLASH_IMAGE_LEN + 4096;
+    std::fs::write(&path, vec![0u8; actual_len]).unwrap();
+
+    let message = SaveFile::at(&path).read().unwrap_err().to_string();
+    let bounded_probe_len = FLASH_IMAGE_LEN + 1;
+    assert!(
+        !message.contains(&format!("is {bounded_probe_len} bytes")),
+        "the rejection states a length the {actual_len}-byte file does not have: {message}"
+    );
+    assert!(
+        message.contains(&format!("is {actual_len} bytes")),
+        "the rejection must state the file's true length: {message}"
+    );
 }
 
 #[test]

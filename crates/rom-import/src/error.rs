@@ -13,6 +13,7 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+use crate::one_line::OneLinePath;
 use crate::profile::EMERALD_US_REV0;
 use crate::sha1::Digest;
 
@@ -65,11 +66,10 @@ pub enum SongFault {
     Repeat,
     /// `PATT` nested past the engine's three-deep stack.
     PatternTooDeep,
-    /// A `GOTO` or branch whose pointer is not a command boundary of this
-    /// track.
-    JumpOutsideTrack,
-    /// The track never reached `FINE`.
-    NoFine,
+    /// A control-flow pointer addresses bytes outside the ROM image.
+    JumpOutsideRom,
+    /// The track exceeds the decoder's execution-context or output-event limit.
+    DecodeLimit,
 }
 
 impl fmt::Display for SongFault {
@@ -83,8 +83,8 @@ impl fmt::Display for SongFault {
             Self::UnknownMemAccOp(op) => write!(f, "unknown MEMACC operation {op}"),
             Self::Repeat => f.write_str("REPT is not supported"),
             Self::PatternTooDeep => f.write_str("PATT nested more than three deep"),
-            Self::JumpOutsideTrack => f.write_str("a jump to somewhere that is not this track"),
-            Self::NoFine => f.write_str("no FINE within the event limit"),
+            Self::JumpOutsideRom => f.write_str("a jump outside the ROM image"),
+            Self::DecodeLimit => f.write_str("track exceeds the decoder state or event limit"),
         }
     }
 }
@@ -343,9 +343,11 @@ impl fmt::Display for ImportError {
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ReadFailed { path, source } => {
-                write!(f, "could not read ROM `{}`: {source}", path.display())
-            }
+            Self::ReadFailed { path, source } => write!(
+                f,
+                "could not read ROM `{}`: {source}",
+                OneLinePath(path)
+            ),
             Self::WrongSize { actual } => write!(
                 f,
                 "ROM is {actual} bytes; a Pokemon Emerald ROM is exactly {} bytes",
@@ -436,11 +438,13 @@ impl fmt::Display for ImportError {
             Self::SameFile { path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`",
-                path.display()
+                OneLinePath(path)
             ),
-            Self::WriteFailed { path, source } => {
-                write!(f, "could not write `{}`: {source}", path.display())
-            }
+            Self::WriteFailed { path, source } => write!(
+                f,
+                "could not write `{}`: {source}",
+                OneLinePath(path)
+            ),
             Self::EmptyPack => f.write_str(
                 "the ROM's profile records no assets, so no pack was written",
             ),
@@ -517,6 +521,76 @@ mod tests {
     }
 
     #[test]
+    fn path_bearing_messages_are_escaped_and_stay_one_line() {
+        // A player's own path is untrusted the same way the ROM's header
+        // bytes are (`write_ascii`, above): a name holding a newline or an
+        // ESC byte must not reach the terminal verbatim, or the "one line"
+        // promise at the top of this module breaks on the player's own
+        // filename rather than on anything the ROM contributed.
+        let hostile = std::path::PathBuf::from("roms/one\ntwo\u{1b}[2Kthree.gba");
+        let cases = [
+            ImportError::ReadFailed {
+                path: hostile.clone(),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            },
+            ImportError::SameFile {
+                path: hostile.clone(),
+            },
+            ImportError::WriteFailed {
+                path: hostile,
+                source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            },
+        ];
+        for case in cases {
+            let text = case.to_string();
+            assert!(!text.contains('\n'), "{text:?}");
+            assert!(!text.contains('\u{1b}'), "{text:?}");
+            // The escaped path must still be legible, not merely stripped
+            // silently.
+            assert!(
+                text.contains(r"roms/one\ntwo\u{1b}[2Kthree.gba"),
+                "escaped path missing from {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_path_prints_the_literal_a_player_can_copy_back() {
+        let err = ImportError::SameFile {
+            path: std::path::PathBuf::from(r#"C:\Users\me\my "roms"\emerald.gba"#),
+        };
+        assert!(
+            err.to_string()
+                .contains(r#"`C:\Users\me\my "roms"\emerald.gba`"#),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn every_line_breaker_and_terminal_control_is_escaped() {
+        let path = std::path::PathBuf::from("a\rb\tc\u{7f}d\u{9b}e\u{2028}f\u{2029}g");
+        let text = ImportError::SameFile { path }.to_string();
+        assert!(
+            text.contains(r"a\rb\tc\u{7f}d\u{9b}e\u{2028}f\u{2029}g"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn bidi_controls_cannot_reorder_the_text_after_the_path() {
+        let path = std::path::PathBuf::from(
+            "a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l\u{61c}m",
+        );
+        let text = ImportError::SameFile { path }.to_string();
+        assert!(
+            text.contains(
+                r"a\u{202e}b\u{202a}c\u{202b}d\u{202c}e\u{202d}f\u{2066}g\u{2067}h\u{2068}i\u{2069}j\u{200e}k\u{200f}l\u{61c}m"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn messages_are_single_line() {
         let cases = [
             ImportError::WrongSize { actual: 12 },
@@ -582,7 +656,7 @@ mod tests {
                 id: "audio/song/mus_title",
                 track: 2,
                 at: 0x10,
-                fault: SongFault::JumpOutsideTrack,
+                fault: SongFault::JumpOutsideRom,
             },
             ImportError::EmptyPack,
             ImportError::SameFile {

@@ -57,6 +57,38 @@ impl EntryKind {
     }
 }
 
+/// The image bit depths the format publishes ([`EntryKind::Image`]'s
+/// `bit_depth`). The payload is one byte per pixel at every one of them, so
+/// this is the closed set a consumer may see, not a size input.
+///
+/// The single source of truth for both sides: the reader rejects a
+/// directory entry outside this set
+/// ([`PackReadError::BadImageBitDepth`](crate::PackReadError::BadImageBitDepth)),
+/// and the writer refuses to serialize one
+/// ([`PackWriteError::InvalidImageBitDepth`](crate::PackWriteError::InvalidImageBitDepth)),
+/// so the two can never disagree about which depths are valid.
+pub(crate) const IMAGE_BIT_DEPTHS: [u8; 3] = [2, 4, 8];
+
+/// The payload length in bytes that `kind`'s own metadata addresses:
+/// `width * height` for an image, `color_count * 2` for a palette. `None`
+/// for [`EntryKind::Raw`], whose payload is opaque to this container and
+/// carries no addressed length to check against.
+///
+/// The single source of truth for both sides: the reader rejects a payload
+/// whose length disagrees
+/// ([`PackReadError::MisshapenPayload`](crate::PackReadError::MisshapenPayload)),
+/// and the writer refuses to serialize one
+/// ([`PackWriteError::MisshapenPayload`](crate::PackWriteError::MisshapenPayload)).
+///
+/// The products cannot overflow `u64`: `u32 * u32` and `u16 * 2` both fit.
+pub(crate) fn addressed_payload_len(kind: EntryKind) -> Option<u64> {
+    match kind {
+        EntryKind::Image { width, height, .. } => Some(u64::from(width) * u64::from(height)),
+        EntryKind::Palette { color_count } => Some(u64::from(color_count) * 2),
+        EntryKind::Raw => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{EntryKind, FORMAT_VERSION, MAGIC};

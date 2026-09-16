@@ -19,17 +19,20 @@
 //! of `sTreeckoLevelUpLearnset`, `level_up_learnsets.h:3572`-`:3574`;
 //! Absorb is level 6).
 //!
-//! Two-mon parties do not exist on Route 103, so the send-out-in-party-order
-//! rule is exercised against a hand-built party instead — the rule is
-//! upstream's, and pinning it only against a one-mon party would pin
-//! nothing.
+//! Two-mon parties do not exist on Route 103, so the forced-replacement
+//! fixtures below use hand-built parties instead — pinning behaviour only
+//! against a one-mon party would pin nothing. A forced post-faint send-out
+//! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
+//! falling back to party order; see `TrainerContext::send_out_next`'s docs
+//! (issue #1040).
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
+use battle::status1::poison_residual_damage;
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
-    MoveLearnDecision, PlayerAction, PpBonuses,
+    MoveLearnDecision, PlayerAction, PpBonuses, Status1,
 };
 
 /// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
@@ -44,6 +47,11 @@ const TORCHIC: u16 = 280;
 const MUDKIP: u16 = 283;
 const ZIGZAGOON: u16 = 288;
 const PICHU: u16 = 172;
+/// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
+const CHANSEY: u16 = 113;
+/// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
+/// [`CHANSEY`].
+const KANGASKHAN: u16 = 115;
 
 const POUND: MoveId = MoveId(1);
 const SCRATCH: MoveId = MoveId(10);
@@ -61,6 +69,13 @@ const SAND_ATTACK: MoveId = MoveId(28);
 const FIRE_SPIN: MoveId = MoveId(83);
 const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
+/// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
+/// move with far more power than Tackle's, for a most-damage-fallback
+/// fixture proving that power difference no longer matters once base
+/// damage comes from one shared, stale move.
+const MEGA_KICK: MoveId = MoveId(25);
+/// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
+const WATER_GUN: MoveId = MoveId(55);
 
 /// The rival's real party: one level-5 Treecko knowing Pound and Leer.
 fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
@@ -223,15 +238,17 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
     );
 }
 
-/// The forced post-faint send-out: party order, at the *end* of the turn,
-/// and the battle carries on.
+/// Coincidence, not a party-order rule: nothing is ever super effective
+/// against a pure Normal-type player, so this fixture always reaches the
+/// damage fallback. Scratch and Tackle are both Normal, so they score
+/// identically there too, and the tie-break keeps the earlier bench member,
+/// Torchic.
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
     // A three-mon party. Route 103's is one mon, so this is a synthetic
-    // party against a real trainer id -- the send-out *rule* is upstream's
-    // regardless of who is fielding it.
+    // party against a real trainer id.
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
@@ -287,6 +304,106 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
+/// Fire-type player: the type/super-effective pass picks the Grass member
+/// for worst typing, rejects it for lacking a super-effective move, then
+/// picks the Water member with Water Gun instead of the party-order Grass
+/// member (`pokeemerald/src/battle_ai_switch_items.c:690`-`:738`).
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TORCHIC, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE, GROWL]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN, TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(MUDKIP),
+            bench_remaining: 1,
+        }),
+        "the super-effective Mudkip comes out, not the party-order Treecko: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+}
+
+/// Proves the most-damage fallback independently of party order: a pure
+/// Normal-type player is never hit super effectively, so the type pass
+/// declines both bench members. Upstream's most-damage pass then scores
+/// every candidate off the *same* base damage (the fainted Zigzagoon's
+/// stats against a stale move, `pokeemerald/src/battle_ai_switch_items.c:772`-`:779`),
+/// so only each candidate's own move's STAB and type effectiveness can
+/// still differ the outcome: Water Gun earns no STAB from a Normal-type
+/// Zigzagoon, but Tackle does, so the party-order-second Pichu is sent out
+/// over the party-order-first Mudkip.
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_party_order() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        }),
+        "Tackle's STAB from the Normal-type Zigzagoon sends out Pichu, not the party-order Mudkip: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}
+
+/// Two Normal moves against the same defender score identically once base
+/// damage comes from the one stale move rather than each candidate's own
+/// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+/// `battle_script_commands.c:1306`-`:1311`,`:1536`-`:1552`), so the strict
+/// `bestDmg < gBattleMoveDamage` comparison keeps the earlier party member
+/// regardless of Mega Kick's vastly higher power.
+#[test]
+fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![MEGA_KICK]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        }),
+        "Mega Kick's power cannot outscore Tackle when both are Normal: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}
+
 /// EXP is applied to the owned player before trainer continuation, so a
 /// replacement fights the levelled-up mon rather than its stale snapshot.
 #[test]
@@ -333,6 +450,7 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
             &mut hit_rng,
         )
         .unwrap()
+        .outcome
         {
             HitOutcome::Hit { damage, .. } => damage,
             other => panic!("the deterministic Slash should hit: {other:?}"),
@@ -1131,4 +1249,69 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
         .unwrap_err(),
         BattleError::UnknownTrainer(TrainerId(60_000))
     );
+}
+
+/// The replacement selector only runs once `HandleAction_ActionFinished` has
+/// cleared `gCurrentMove` (`pokeemerald/src/battle_util.c:657`-`:670`), ahead
+/// of `BattleTurnPassed`'s own residual pass
+/// (`pokeemerald/src/battle_main.c:3956`-`:3969`) -- see the ledger's
+/// `GetMostSuitableMonToSwitchInto` entry for what a cleared versus stale
+/// base damage does to the most-damage pass's outcome.
+#[test]
+fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
+    let dex = Dex::new();
+    // Chansey: pure Normal, so nothing on the bench is super effective and
+    // the selector always reaches the most-damage pass; slower than
+    // Kangaskhan, so the turn's last action -- and so the stale move -- is
+    // the player's own Mega Kick. Level 100 keeps the knockout's award from
+    // deferring the send-out behind a level-up prompt.
+    let player = max_iv_mon(&dex, CHANSEY, 100, vec![MEGA_KICK]);
+    let mut lead = max_iv_mon(&dex, KANGASKHAN, 100, vec![GROWL]);
+    lead.set_status1(Status1::Poisoned);
+    let residual = poison_residual_damage(lead.stats().max_hp);
+    lead.apply_damage(lead.stats().max_hp - residual);
+    let party = vec![
+        lead,
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let tick_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("the lead must fall to the residual, not the hit: {events:?}"));
+    let sent_out_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .unwrap_or_else(|| panic!("the bench replaces the fallen lead: {events:?}"));
+    assert!(
+        tick_index < sent_out_index,
+        "the send-out is the residual pass's, not the action phase's: {events:?}"
+    );
+    assert_eq!(
+        events[sent_out_index],
+        BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        },
+        "a cleared gCurrentMove scores every candidate off the floor base, \
+         so Tackle's STAB keeps party-order-first Pichu: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
 }

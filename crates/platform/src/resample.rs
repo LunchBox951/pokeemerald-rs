@@ -4,13 +4,16 @@
 //! 13379 Hz M4A mixer rate, this is the *common* path, not a rare one (see
 //! `crate::audio`).
 //!
-//! [`Resampler`] drains all the source frames a callback needs in **one**
+//! [`Resampler`] drains the source frames one output chunk needs in **one**
 //! [`crate::ring::Consumer::fill`] call into a preallocated scratch buffer,
-//! then linearly interpolates from that scratch. That honours `crate::ring`'s
-//! invariant — one queue-lock acquisition per callback, never one per source
-//! frame — so the resampled path locks no more often than the direct path,
-//! and underrun accounting (counted inside `Consumer::fill`) is identical
-//! whether or not resampling is in play.
+//! then linearly interpolates from that scratch. A callback within the
+//! constructor's advertised bound is one such chunk, so it is one bulk drain;
+//! an oversized callback (see [`Self::fill`]) is split into several bounded
+//! chunks rather than growing scratch, so it is several. Either way `fill`
+//! never drains the ring one source frame at a time, so the resampled path
+//! is no more contended than the direct path, and underrun accounting
+//! (counted inside `Consumer::fill`) is identical whether or not resampling
+//! is in play.
 //!
 //! A source frame is pulled only when an output frame actually consumes it:
 //! the per-frame advance runs *before* producing each frame (never as a
@@ -45,10 +48,15 @@ pub struct Resampler {
     frac: f64,
     prev: Vec<f32>,
     next: Vec<f32>,
-    /// Preallocated interleaved source-frame scratch, bulk-drained under one
-    /// lock per callback (grown off the hot path only if a callback is larger
-    /// than the constructor's estimate).
+    /// Preallocated interleaved source-frame scratch, bulk-drained in one
+    /// non-blocking call per chunk. Fixed at construction; [`Self::fill`]
+    /// splits an oversized `out` into `chunk_frames`-bounded chunks instead
+    /// of ever growing this.
     scratch: Vec<f32>,
+    /// The most output frames one chunk of [`Self::fill`] may cover without
+    /// risking a `scratch` overrun — the same `max_output_frames` bound
+    /// `scratch` was sized against.
+    chunk_frames: usize,
     primed: bool,
     /// Whether the next output frame should first advance the interpolation
     /// cursor. `false` only for the very first frame ever produced (which sits
@@ -65,9 +73,10 @@ impl Resampler {
     ///
     /// `max_output_frames` is the device's largest advertised callback size
     /// in frames (`0` if the device advertises none); it bounds — and lets
-    /// the constructor preallocate — the per-callback source scratch buffer
-    /// so the real-time [`Self::fill`] never locks per frame and, in steady
-    /// state, never allocates.
+    /// the constructor preallocate — the per-chunk source scratch buffer, and
+    /// bounds each chunk [`Self::fill`] processes an oversized callback in,
+    /// so the real-time `fill` never drains per frame and never allocates,
+    /// however large a callback the device hands it.
     #[must_use]
     pub fn new(
         consumer: Consumer,
@@ -79,11 +88,13 @@ impl Resampler {
         let channels = usize::from(channels.max(1));
         let step = f64::from(source_rate) / f64::from(device_rate.max(1));
 
-        // Upper bound on the source frames one callback can consume: two
-        // priming frames plus one per source-frame boundary the interpolation
-        // cursor crosses over `max_output_frames` output frames. `frac` starts
-        // below 1, so `ceil(frames * step) + 1` safely covers the crossings;
-        // `Self::fill` still resizes as a last resort for a larger callback.
+        // Upper bound on the source frames one chunk can consume: two priming
+        // frames plus one per source-frame boundary the interpolation cursor
+        // crosses over `bound` output frames. `frac` starts below 1, so
+        // `ceil(frames * step) + 1` safely covers the crossings with one
+        // frame of slack. `Self::fill` never processes more than `bound`
+        // output frames per chunk (splitting a larger `out` instead of
+        // growing `scratch`), so this bound is never exceeded.
         let bound = if max_output_frames == 0 {
             DEFAULT_MAX_OUTPUT_FRAMES
         } else {
@@ -102,6 +113,7 @@ impl Resampler {
             prev: vec![0.0; channels],
             next: vec![0.0; channels],
             scratch: vec![0.0; scratch_frames * channels],
+            chunk_frames: bound,
             primed: false,
             need_advance: false,
         }
@@ -120,12 +132,17 @@ impl Resampler {
     /// `out.len()` should be a multiple of `channels`; a short trailing
     /// partial frame is filled as far as it goes and otherwise ignored.
     ///
-    /// A zero-length `out` is a no-op: it does not lock the ring buffer,
+    /// A zero-length `out` is a no-op: it does not drain the ring buffer,
     /// prime the interpolator, or count an underrun.
     ///
-    /// Locks the ring buffer exactly once: all the source frames this call
-    /// needs are bulk-drained up front (see the module docs), then the
-    /// interpolation loop reads them from scratch without touching the queue.
+    /// Splits `out` into `chunk_frames`-bounded chunks (one, for any callback
+    /// within the constructor's advertised bound) and drains the ring buffer
+    /// exactly once per chunk: all the source frames a chunk needs are
+    /// bulk-drained into the fixed `scratch` up front, then the interpolation
+    /// loop reads them from scratch without touching the ring again. Chunking
+    /// this way — rather than draining `out`'s full demand into a `scratch`
+    /// grown to fit — is what keeps `scratch` fixed after construction, so an
+    /// oversized callback still never allocates.
     pub fn fill(&mut self, out: &mut [f32]) {
         // A zero-length fill must not move the stream: no priming frames
         // drained, no queue occupancy change, no underrun accounted. Every
@@ -136,6 +153,23 @@ impl Resampler {
             return;
         }
 
+        // Saturating: `chunk_frames` is caller-supplied via `Self::new`'s
+        // `max_output_frames` with no documented upper bound. Saturating to
+        // `usize::MAX` rather than overflow-panicking just disables chunking
+        // for such a pathological bound — `out` (a real caller's buffer)
+        // stays far smaller than `usize::MAX` regardless, so it is still
+        // processed as one `chunks_mut` chunk, correctly.
+        let chunk_samples = self.chunk_frames.saturating_mul(self.channels);
+        for chunk in out.chunks_mut(chunk_samples) {
+            self.fill_chunk(chunk);
+        }
+    }
+
+    /// Fill one chunk (`out.len() <= chunk_frames * channels` samples) of
+    /// [`Self::fill`]'s output. See [`Self::fill`] and the module docs; the
+    /// per-chunk bound is exactly what `scratch` was sized against, so this
+    /// never grows it.
+    fn fill_chunk(&mut self, out: &mut [f32]) {
         // Number of interpolation steps == number of `chunks_mut` iterations
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
@@ -168,11 +202,15 @@ impl Resampler {
         let source_frames = prime + crossings;
         let needed = source_frames * self.channels;
 
-        // Bulk-drain every needed source frame under ONE lock. Grow only here,
-        // off the per-frame hot loop, for a larger-than-estimated callback.
-        if self.scratch.len() < needed {
-            self.scratch.resize(needed, 0.0);
-        }
+        // Bulk-drain every needed source frame in ONE non-blocking call, into
+        // the fixed `scratch`. `out.len() <= chunk_frames * channels` (see
+        // `Self::fill`) is exactly the bound `scratch` was sized against, so
+        // `needed` never exceeds it here.
+        debug_assert!(
+            needed <= self.scratch.len(),
+            "a chunk bounded by chunk_frames must never demand more source \
+             frames than scratch was sized for"
+        );
         self.consumer.fill(&mut self.scratch[..needed]);
 
         // Cursor into the drained scratch, in frames.
@@ -241,6 +279,46 @@ mod tests {
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 10.0, 20.0, 30.0]);
         assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn a_callback_larger_than_the_advertised_bound_is_chunked_not_grown() {
+        // `max_output_frames = 4` bounds every chunk `fill` processes
+        // internally to 4 output frames, so a single 20-frame call must
+        // split into 5 such chunks. That must produce exactly what 5
+        // separate 4-frame calls would (state carries across a chunk
+        // boundary exactly as it carries across a callback boundary), and
+        // must never grow `scratch` doing it — the oversized-callback path
+        // regressed by this fix.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..30, exactly representable in f32"
+        )]
+        let source: Vec<f32> = (0..30_i32).map(|i| i as f32).collect();
+
+        let (producer_a, consumer_a) = ring_buffer(64);
+        assert_eq!(producer_a.push(&source), 30);
+        let mut oversized = Resampler::new(consumer_a, 1, 1, 1, 4);
+        let scratch_capacity = oversized.scratch.len();
+
+        let mut big_out = [0.0; 20];
+        oversized.fill(&mut big_out);
+        assert_eq!(
+            oversized.scratch.len(),
+            scratch_capacity,
+            "an oversized single call must never grow scratch"
+        );
+
+        let (producer_b, consumer_b) = ring_buffer(64);
+        assert_eq!(producer_b.push(&source), 30);
+        let mut chunked = Resampler::new(consumer_b, 1, 1, 1, 4);
+        let mut small_out = [0.0; 20];
+        for chunk in small_out.chunks_mut(4) {
+            chunked.fill(chunk);
+        }
+
+        assert_eq!(big_out, small_out);
+        assert_eq!(oversized.underruns(), chunked.underruns());
     }
 
     #[test]

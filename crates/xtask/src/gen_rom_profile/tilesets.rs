@@ -226,11 +226,8 @@ fn locate_tiles(
             reason: "the tiles pointer is not a cartridge address".to_owned(),
         })?;
     let rom_tiles = if is_compressed {
-        // `to_offset` only rejects an address below the cartridge base, so
-        // a candidate struct whose tiles field points past the end of this
-        // image still arrives here. Ask for the slice rather than take it:
-        // an out-of-range pointer is a struct that was never the tileset,
-        // which is a mismatch to report, not a panic.
+        // A pointer inside the cartridge window can still lie past this ROM
+        // image's length, so the slice lookup below stays fallible.
         let stream = ctx
             .rom
             .get(offset..)

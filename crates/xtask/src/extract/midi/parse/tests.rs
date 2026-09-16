@@ -87,7 +87,7 @@ fn terminated_track(mut body: Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
-fn note_on_and_off_with_running_status() {
+fn a_running_status_velocity_zero_note_on_stays_distinguishable_from_note_off() {
     let mut body = Vec::new();
     push_timed(&mut body, 0, note_on(0, 60, 100));
     push_timed(&mut body, 24, running_note_on(60, 0));
@@ -106,7 +106,7 @@ fn note_on_and_off_with_running_status() {
             ),
             (
                 24,
-                RawEvent::NoteOff {
+                RawEvent::VelocityZeroNoteOn {
                     channel: 0,
                     key: 60
                 }

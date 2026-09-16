@@ -526,7 +526,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let first = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .expect("run `cargo xtask extract` first");
@@ -538,7 +538,7 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
 
     let second = run_with_paths(
         Scene::MainMenuNewGame,
-        &assets::pack::AssetPack::default_path(),
+        &assets::pack::AssetPack::repo_pack_path(),
         &output_dir,
     )
     .unwrap();
@@ -551,4 +551,184 @@ fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
     assert_eq!(first.pack_hash, second.pack_hash);
 
     drop(guard);
+}
+
+/// The staging suffix value used to deterministically pin one pointer
+/// candidate, matching `extract::mod`'s `TEST_STAGING_VALUE` convention.
+const TEST_POINTER_STAGING_VALUE: u64 = 0x00AB_CDEF_0123;
+
+/// A symlink planted at the first pointer-staging candidate is refused, not
+/// followed; publication proceeds at the next unpredictable candidate.
+#[cfg(unix)]
+#[test]
+fn a_planted_pointer_symlink_is_never_written_through() {
+    let output_dir = scratch_path("pointer-symlink-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-symlink-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+
+    let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
+    let occupied =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    let bystander = bystander_dir.join("bystander");
+    std::os::unix::fs::symlink(&bystander, &occupied).unwrap();
+
+    let staged =
+        super::stage_pointer_with_candidates(b"a-generation\n", [occupied.clone(), free.clone()])
+            .unwrap();
+    staged.publish(&pointer_path).unwrap();
+
+    assert!(
+        !bystander.exists(),
+        "publishing followed the planted symlink and wrote outside {}",
+        output_dir.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&occupied)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a refused planted symlink must be left alone, not consumed as staging"
+    );
+    assert!(
+        !free.exists(),
+        "the free candidate is consumed and renamed onto the pointer, not left behind"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&pointer_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the published pointer must be a regular file, not a planted symlink"
+    );
+    assert_eq!(std::fs::read(&pointer_path).unwrap(), b"a-generation\n");
+
+    drop(bystander_guard);
+    drop(out_guard);
+}
+
+/// A name a different owner already holds is left untouched; the bounded
+/// walk retries the next unpredictable candidate instead of failing outright.
+#[test]
+fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_free_name() {
+    let output_dir = scratch_path("pointer-collision-retry-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let pointer_path = output_dir.join(format!("{}.generation", Scene::MainMenuNewGame.name()));
+    let occupied =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE);
+    let free =
+        super::pointer_staging_path_with_value(&pointer_path, TEST_POINTER_STAGING_VALUE + 1);
+    std::fs::write(&occupied, b"someone else's staging file").unwrap();
+
+    let staged =
+        super::stage_pointer_with_candidates(b"a-generation\n", [occupied.clone(), free.clone()])
+            .unwrap();
+    staged.publish(&pointer_path).unwrap();
+
+    assert_eq!(
+        std::fs::read(&occupied).unwrap(),
+        b"someone else's staging file",
+        "a name already taken must be left to its owner, not overwritten"
+    );
+    assert!(
+        !free.exists(),
+        "the free candidate is consumed and renamed onto the pointer, not left behind"
+    );
+    assert_eq!(std::fs::read(&pointer_path).unwrap(), b"a-generation\n");
+
+    drop(out_guard);
+}
+
+/// Publication must stage the pointer outside every name the generation makes
+/// guessable: links planted at all of them neither starve the capture nor take
+/// a write.
+#[cfg(unix)]
+#[test]
+fn publication_stages_the_pointer_outside_every_generation_derived_name() {
+    /// Covers every generation-derived pointer name this process could reach.
+    const PREDICTABLE_INDICES: u64 = 256;
+
+    let output_dir = scratch_path("pointer-predictable-name-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let bystander_dir = scratch_path("pointer-predictable-name-bystander");
+    let bystander_guard = ScratchGuard(bystander_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&bystander_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    for index in 0..PREDICTABLE_INDICES {
+        let generation = format!("{}.generation-{}-{index}", scene.name(), std::process::id());
+        std::os::unix::fs::symlink(
+            bystander_dir.join(format!("bystander-{index}")),
+            output_dir.join(format!(".{generation}.pointer")),
+        )
+        .unwrap();
+    }
+
+    let (rgb_path, meta_path) =
+        super::publish_generation(scene, &output_dir, b"rgb-bytes", b"meta-bytes", || Ok(()))
+            .unwrap();
+
+    assert_eq!(std::fs::read(&rgb_path).unwrap(), b"rgb-bytes");
+    assert_eq!(std::fs::read(&meta_path).unwrap(), b"meta-bytes");
+    let published = rgb_path.parent().unwrap().file_name().unwrap();
+    let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
+    assert_eq!(
+        std::fs::read(&pointer_path).unwrap(),
+        format!("{}\n", published.to_str().unwrap()).as_bytes(),
+        "the pointer must name the generation that was just published"
+    );
+    let escaped: Vec<_> = std::fs::read_dir(&bystander_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(
+        escaped.is_empty(),
+        "publishing followed a planted symlink and wrote {escaped:?} outside {}",
+        output_dir.display()
+    );
+
+    drop(bystander_guard);
+    drop(out_guard);
+}
+
+/// A promoting rename that fails must not turn into an unlink of whatever
+/// now holds the staging name. On unix the held handle's inode confirms the
+/// file is still the staged one, so it is removed; on Windows the hold had
+/// to be released for the rename, nothing can confirm identity afterwards,
+/// and the file is left in place and reported.
+#[test]
+fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() {
+    let dir = scratch_path("failed-publish");
+    let _guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let unreachable_dest = dir.join("missing-parent").join("pointer");
+
+    let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+    let error = staged.publish(&unreachable_dest).unwrap_err();
+
+    if cfg!(windows) {
+        assert!(
+            staging_path.symlink_metadata().is_ok(),
+            "Windows cannot re-confirm ownership once the hold is released, so the staging file must stay"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&staging_path.display().to_string()),
+            "the error must name the staging file left behind: {error}"
+        );
+    } else {
+        assert!(
+            staging_path.symlink_metadata().is_err(),
+            "the held handle proves the staging file is still ours, so it must be removed: {error}"
+        );
+    }
 }

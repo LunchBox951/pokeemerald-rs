@@ -99,16 +99,18 @@ pub fn resolve_multi_hit(
 ///
 /// # Errors
 ///
-/// Returns any error from [`spend_effect_chance_draw`]. Variable-count
-/// multi-hit moves have no ported secondary-effect trampoline, so their draw
-/// is discarded.
+/// Returns any error from [`spend_effect_chance_draw`]. `EFFECT_MULTI_HIT`
+/// is never `EFFECT_POISON_HIT`, so the poison signal is always `false` and
+/// the draw is discarded.
 pub fn spend_multi_hit_effect_chance_draw(
     dex: &Dex,
     move_id: MoveId,
     any_hit_had_effect: bool,
+    defender: &BattlePokemon,
     rng: &mut impl BattleRng,
 ) -> Result<(), BattleError> {
-    spend_effect_chance_draw(dex, move_id, any_hit_had_effect, rng)
+    spend_effect_chance_draw(dex, move_id, any_hit_had_effect, defender, rng)?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -2,9 +2,10 @@
 //! [`super::OverworldPhase`] test suite.
 
 use super::OverworldPhase;
+use crate::overworld::OverworldScene;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
-use engine::overworld::metatile_behavior::{MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
+use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
 use engine::overworld::{
     ConnectedMapData, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE,
 };
@@ -108,6 +109,14 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
 /// unlike `MapRuntime`, is pack-backed -- see the sibling test modules'
 /// pack-dependent, `#[ignore]`d tests).
 pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
+    runtime_with_connections(width, height, &[])
+}
+
+fn runtime_with_connections(
+    width: u16,
+    height: u16,
+    connections: &'static [assets::MapConnection],
+) -> MapRuntime<'static> {
     let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
     for _ in 0..width * height {
         let raw = MetatileCell {
@@ -136,7 +145,7 @@ pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
         allow_run: true,
         show_name: false,
         battle_scene: assets::BattleScene::Normal,
-        connections: &[],
+        connections,
     }));
     let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
         id: MapId("MAP_TEST"),
@@ -239,8 +248,7 @@ pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
 /// `target` with `offset` -- the fixture the coordinate-translation tests
 /// below step off the edge of. Mirrors [`flat_runtime`] plus
 /// `engine::overworld::map_runtime::tests::south_connected_runtime`'s own
-/// shape (that fixture is private to `engine`, so this is a small
-/// reimplementation, not a shared helper).
+/// shape (that fixture is private to `engine`).
 pub(super) fn connected_runtime(
     width: u16,
     height: u16,
@@ -248,69 +256,13 @@ pub(super) fn connected_runtime(
     offset: i32,
     target: MapId,
 ) -> MapRuntime<'static> {
-    let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
-    for _ in 0..width * height {
-        let raw = MetatileCell {
-            metatile_id: 1,
-            collision: 0,
-            elevation: 3,
-        }
-        .pack();
-        bytes.extend_from_slice(&raw.to_le_bytes());
-    }
-    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-
     let connections: &'static [assets::MapConnection] =
         Box::leak(Box::new([assets::MapConnection {
             direction,
             offset,
             target,
         }]));
-    let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
-        id: MapId("MAP_TEST"),
-        group: 0,
-        num: 0,
-        name: "MapTest",
-        layout: assets::LayoutId("MAP_TEST"),
-        music: assets::MusicId(0),
-        region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
-        requires_flash: false,
-        weather: assets::Weather::None,
-        map_type: assets::MapType::Route,
-        allow_bike: true,
-        allow_escape: true,
-        allow_run: true,
-        show_name: false,
-        battle_scene: assets::BattleScene::Normal,
-        connections,
-    }));
-    let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
-        id: MapId("MAP_TEST"),
-        shared_events_map: None,
-        object_events: &[],
-        warp_events: &[],
-        coord_events: &[],
-        bg_events: &[],
-    }));
-
-    let layout: &'static MapLayout = Box::leak(Box::new(MapLayout {
-        id: assets::LayoutId("MAP_TEST"),
-        name: "MapTest",
-        width,
-        height,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
-    }));
-    let grid = layout.grid(bytes).unwrap();
-
-    MapRuntime::new(
-        MapId("MAP_TEST"),
-        header,
-        events,
-        grid,
-        assets::MetatileAttributeTable::new(&[]),
-        assets::MetatileAttributeTable::new(&[]),
-    )
+    runtime_with_connections(width, height, connections)
 }
 
 /// A phase standing on 1F's own floor, for `warp_tests`' doormat tests: a real
@@ -376,6 +328,118 @@ pub(super) fn walkable_south_arrow_phase() -> OverworldPhase {
         "fixture precondition: (8, 9) must be walkable, unlike the real doormat's off-map tile"
     );
 
+    phase
+}
+
+/// Littleroot Town's own lab-door warp event -- real event data, available
+/// pack-free (`warp_tile_behavior`'s own doc comment) -- combined with a
+/// **synthetic**, walkable `MB_ANIMATED_DOOR` tile at that same position,
+/// `(7, 16)`, matching what the real extracted attribute data decodes there
+/// (issue #851). Walkable so a regressed (no-op) door check would let the
+/// player step onto it instead of the fixture's own solidity doing the
+/// preempting's job; the pack-gated sibling tests cover the real room.
+pub(super) fn littleroot_lab_door_scene() -> OverworldScene {
+    let events = assets::MapEventsTable::new()
+        .resolve(MapId("MAP_LITTLEROOT_TOWN"))
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+    let door = events.warp_events[2];
+    assert_eq!(
+        (door.x, door.y),
+        (7, 16),
+        "fixture precondition: Littleroot's warp #2 is the lab door"
+    );
+
+    crate::overworld::tests::synthetic_scene_with_special_tile(20, 20, (7, 16), MB_ANIMATED_DOOR)
+}
+
+/// A runtime over `scene` bound to Littleroot's real header and events, for
+/// a caller testing a decision against the map directly rather than driving
+/// whole frames through an [`OverworldPhase`].
+pub(super) fn littleroot_runtime(scene: &OverworldScene) -> MapRuntime<'_> {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let header = assets::MapHeaderTable::new()
+        .header(littleroot)
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-header table");
+    let events = assets::MapEventsTable::new()
+        .resolve(littleroot)
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+    scene.runtime(littleroot, header, events)
+}
+
+/// [`littleroot_lab_door_scene`] with the player standing one tile south of
+/// the door, for a stationary press.
+pub(super) fn facing_littleroot_lab_door_phase(facing: Direction) -> OverworldPhase {
+    OverworldPhase::for_test(
+        littleroot_lab_door_scene(),
+        MapId("MAP_LITTLEROOT_TOWN"),
+        PlayerState::new((7, 17), 3, facing),
+        None,
+    )
+}
+
+/// [`facing_littleroot_lab_door_phase`]'s own fixture, but the player starts
+/// three tiles south of the door, already facing North, so a caller can
+/// drive a genuine *walked* approach (holding Up the whole way, two full
+/// tile crossings) instead of a stationary press -- exercising the frame on
+/// which a completed crossing first becomes visible to the pre-movement
+/// door check (`super::animated_door`'s own module docs).
+pub(super) fn approaching_littleroot_lab_door_phase() -> OverworldPhase {
+    OverworldPhase::for_test(
+        littleroot_lab_door_scene(),
+        MapId("MAP_LITTLEROOT_TOWN"),
+        PlayerState::new((7, 19), 3, Direction::North),
+        None,
+    )
+}
+
+/// Littleroot Town's Brendan's-house door warp at `(5, 8)` -- the one tile
+/// in bundled data where a scripted object event (Mom outside,
+/// `LittlerootTown_EventScript_Mom`) stands on a house door -- pinned to
+/// `MB_ANIMATED_DOOR` on a synthetic scene the same way
+/// [`littleroot_lab_door_scene`] pins the lab door. Mom outside is hidden on
+/// a fresh save, so her hide flag is cleared here: this fixture is exactly
+/// upstream's "an NPC is standing in the doorway" frame.
+pub(super) fn mom_standing_in_the_house_door_phase() -> OverworldPhase {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let events = assets::MapEventsTable::new()
+        .resolve(littleroot)
+        .expect("MAP_LITTLEROOT_TOWN must resolve in the generated map-events table");
+    let door = events.warp_events[1];
+    assert_eq!(
+        (door.x, door.y),
+        (5, 8),
+        "fixture precondition: Littleroot's warp #1 is Brendan's house door"
+    );
+    let mom = events.object_events[3];
+    assert_eq!(
+        (mom.x, mom.y),
+        (5, 8),
+        "fixture precondition: Mom outside stands on that same door tile"
+    );
+    assert_ne!(
+        mom.script, "0x0",
+        "fixture precondition: Mom's script is a real one, so A interacts"
+    );
+
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        20,
+        20,
+        (5, 8),
+        MB_ANIMATED_DOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((5, 9), 3, Direction::North),
+        None,
+    );
+    let hide_mom = assets::object_event_flags::resolve(mom.flag)
+        .expect("Mom outside's hide flag must resolve");
+    phase
+        .save1
+        .event_data
+        .flag_clear(hide_mom)
+        .expect("clearing Mom outside's hide flag must succeed");
     phase
 }
 

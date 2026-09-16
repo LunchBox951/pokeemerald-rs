@@ -2,8 +2,9 @@ use std::mem::size_of;
 
 use super::{
     affine_tilemap_from_raw, cloud_scroll_y, crop_and_pack_tile_bytes, image_to_tileset,
-    press_start_visible, regular_tilemap_from_raw, sprite_entries, title_palette_from_refs,
-    TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES, NUM_PRESS_START_FRAMES,
+    press_start_tileset, press_start_visible, regular_tilemap_from_raw, sprite_entries,
+    title_palette_from_refs, TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES,
+    NUM_PRESS_START_FRAMES, PRESS_START_SHEET_TILES,
 };
 use assets::{AssetPack, ImageRef};
 use rendering::{BitDepth, RenderError};
@@ -523,6 +524,57 @@ fn sprite_entries_convert_upstream_centers_to_oam_origins() {
 }
 
 #[test]
+fn press_start_and_copyright_entries_use_upstream_anim_frame_tiles() {
+    // `sOamAnimCmds`'s frames select these exact tiles (title_screen.c:214-262,
+    // sprite.c:936); bases 0 and 20 shifted both banners 8px right (#1156).
+    let entries = sprite_entries(0);
+    let press_start: Vec<_> = entries[2..2 + NUM_PRESS_START_FRAMES]
+        .iter()
+        .map(|entry| entry.tile_index())
+        .collect();
+    let copyright: Vec<_> = entries
+        [2 + NUM_PRESS_START_FRAMES..2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES]
+        .iter()
+        .map(|entry| entry.tile_index())
+        .collect();
+
+    assert_eq!(press_start, [1, 5, 9, 13, 17]);
+    assert_eq!(copyright, [21, 25, 29, 33, 37]);
+}
+
+#[test]
+fn press_start_tileset_packs_the_upstream_41_tile_raster_sheet() {
+    // Each tile carries its raster index in its first two 4bpp nibbles, so a
+    // transposed, dropped, or duplicated tile mismatches; only 0..=40 pack.
+    const SHEET_TILE_COLS: usize = 20;
+    let mut pixels = vec![0u8; 160 * 24];
+    for tile_row in 0..3usize {
+        for tile_col in 0..SHEET_TILE_COLS {
+            let tile_number = tile_row * SHEET_TILE_COLS + tile_col;
+            let low = u8::try_from(tile_number & 0x0F).unwrap();
+            let high = u8::try_from((tile_number >> 4) & 0x0F).unwrap();
+            let row_start = tile_row * 8 * 160 + tile_col * 8;
+            pixels[row_start] = low;
+            pixels[row_start + 1] = high;
+        }
+    }
+    let image = ImageRef {
+        width: 160,
+        height: 24,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let tileset = press_start_tileset("test", image).unwrap();
+
+    assert_eq!(tileset.len(), usize::from(PRESS_START_SHEET_TILES));
+    for index in 0..PRESS_START_SHEET_TILES {
+        let tile = tileset.tile(index).unwrap();
+        let decoded = tile.index(0, 0) | (tile.index(1, 0) << 4);
+        assert_eq!(decoded, u8::try_from(index).unwrap(), "tile {index}");
+    }
+}
+
+#[test]
 fn sprite_entries_always_includes_5_press_start_and_5_copyright_segments() {
     for frame in [0, 15, 16, 37] {
         let entries = sprite_entries(frame);
@@ -596,4 +648,78 @@ fn crop_and_pack_tile_bytes_rejects_a_short_payload_instead_of_panicking() {
             actual: 16 * 8 - 1,
         }
     );
+}
+
+#[test]
+fn compose_draws_banner_segments_from_their_upstream_sheet_columns() {
+    // `TitleScene::compose` hands `sprite_entries`'s tile bases and the packed
+    // sheet to `SpriteLayer`; three marker pixels catch a base/packing regression.
+    const ROW0_COL1: u8 = 1;
+    const ROW1_COL0: u8 = 2;
+    const ROW2_COL0: u8 = 3;
+    const SHEET_W: usize = 160;
+    const VISIBLE_FRAME: u32 = 16;
+
+    let mut sheet = vec![0u8; SHEET_W * 24];
+    sheet[8] = ROW0_COL1;
+    sheet[8 * SHEET_W] = ROW1_COL0;
+    sheet[16 * SHEET_W] = ROW2_COL0;
+    let image = ImageRef {
+        width: 160,
+        height: 24,
+        bit_depth: 4,
+        pixels: &sheet,
+    };
+
+    let mut colors = [rendering::Bgr555::default(); rendering::Palette::LEN];
+    let bank = usize::from(super::SPRITE_4BPP_BANK) * rendering::Palette::BANK_LEN;
+    colors[bank + usize::from(ROW0_COL1)] = rendering::Bgr555::from_channels(31, 0, 0);
+    colors[bank + usize::from(ROW1_COL0)] = rendering::Bgr555::from_channels(0, 31, 0);
+    colors[bank + usize::from(ROW2_COL0)] = rendering::Bgr555::from_channels(0, 0, 31);
+    let sprite_palette = rendering::Palette::new(colors);
+
+    let blank_4bpp = rendering::Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap();
+    let blank_8bpp = rendering::Tileset::decode(BitDepth::Bpp8, &[0u8; 64]).unwrap();
+    let scene = super::TitleScene {
+        rayquaza_tiles: rendering::Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap(),
+        clouds_tiles: blank_4bpp,
+        logo_tiles: rendering::Tileset::decode(BitDepth::Bpp8, &[0u8; 64]).unwrap(),
+        palette: rendering::Palette::new([rendering::Bgr555::default(); rendering::Palette::LEN]),
+        rayquaza_map: rendering::Tilemap::new(
+            32,
+            32,
+            vec![rendering::ScreenEntry::from_raw(0); 1024],
+        )
+        .unwrap(),
+        clouds_map: rendering::Tilemap::new(
+            32,
+            32,
+            vec![rendering::ScreenEntry::from_raw(0); 1024],
+        )
+        .unwrap(),
+        logo_map: rendering::AffineTilemap::new(32, 32, vec![0u8; 1024]).unwrap(),
+        sprite_tiles_4bpp: press_start_tileset("test", image).unwrap(),
+        sprite_tiles_8bpp: blank_8bpp,
+        sprite_palette,
+    };
+
+    assert!(press_start_visible(VISIBLE_FRAME));
+    let composed = scene.compose(VISIBLE_FRAME);
+    let red = rendering::Bgr555::from_channels(31, 0, 0).to_rgb888();
+    let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
+    let blue = rendering::Bgr555::from_channels(0, 0, 31).to_rgb888();
+
+    // Sheet column 1 is the "Press Start" banner's own first column: segment 0
+    // starts at screen x 48, not 8 pixels right of it.
+    assert_eq!(composed.pixel(48, 104), Some(red), "press-start segment 0");
+    assert_eq!(composed.pixel(56, 104), Some(rendering::Rgb888::BLACK));
+    // Sheet row 1 column 0 (tile 20) wraps into the banner's last segment, and
+    // row 2 column 0 (tile 40) into the copyright line's last segment -- both
+    // only reachable through the contiguous 41-tile sheet.
+    assert_eq!(
+        composed.pixel(200, 104),
+        Some(green),
+        "press-start segment 4"
+    );
+    assert_eq!(composed.pixel(200, 144), Some(blue), "copyright segment 4");
 }

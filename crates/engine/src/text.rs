@@ -7,9 +7,10 @@
 //! # Font support
 //!
 //! Japanese glyphs are not implemented. Latin and Japanese glyph bytes overlap,
-//! so [`decode`] returns [`TextError::UnsupportedJapanese`] for a glyph after a
-//! Japanese-font switch. Font-independent control codes continue to decode, and
-//! an English-font switch restores Latin glyph decoding.
+//! so both [`decode`] and [`encode`] return [`TextError::UnsupportedJapanese`]
+//! for a glyph after a Japanese-font switch. Font-independent control codes
+//! continue to decode or encode, and an English-font switch restores Latin
+//! glyph handling in both directions.
 
 use std::fmt;
 
@@ -373,16 +374,36 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
 ///
 /// # Errors
 ///
-/// Returns [`TextError::UnencodableChar`] for an unsupported character or
-/// [`TextError::ExtCtrlArity`] for the wrong number of control arguments.
+/// Returns [`TextError::UnencodableChar`] for an unsupported character,
+/// [`TextError::ExtCtrlArity`] for the wrong number of control arguments, or
+/// [`TextError::UnsupportedJapanese`] for a Latin glyph token after a
+/// Japanese-font switch, mirroring [`decode`]'s font-state contract.
 pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
     let mut out = Vec::new();
+    let mut active_font = Font::Latin;
     for tok in tokens {
         match tok {
-            Token::Char(c) => out.push(char_to_byte(*c).ok_or(TextError::UnencodableChar(*c))?),
-            Token::Symbol(s) => out.push(byte_from_symbol(*s)),
+            Token::Char(c) => {
+                let byte = char_to_byte(*c).ok_or(TextError::UnencodableChar(*c))?;
+                if active_font == Font::Japanese {
+                    return Err(TextError::UnsupportedJapanese(byte));
+                }
+                out.push(byte);
+            }
+            Token::Symbol(s) => {
+                let byte = byte_from_symbol(*s);
+                if active_font == Font::Japanese {
+                    return Err(TextError::UnsupportedJapanese(byte));
+                }
+                out.push(byte);
+            }
             Token::Newline => out.push(CHAR_NEWLINE),
-            Token::BardWordDelimit => out.push(CHAR_BARD_WORD_DELIMIT),
+            Token::BardWordDelimit => {
+                if active_font == Font::Japanese {
+                    return Err(TextError::UnsupportedJapanese(CHAR_BARD_WORD_DELIMIT));
+                }
+                out.push(CHAR_BARD_WORD_DELIMIT);
+            }
             Token::PromptScroll => out.push(CHAR_PROMPT_SCROLL),
             Token::PromptClear => out.push(CHAR_PROMPT_CLEAR),
             Token::Placeholder(idx) => {
@@ -410,11 +431,20 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
                         got: args.len(),
                     });
                 }
+                match *sub {
+                    EXT_CTRL_CODE_JPN => active_font = Font::Japanese,
+                    EXT_CTRL_CODE_ENG => active_font = Font::Latin,
+                    _ => {}
+                }
                 out.push(EXT_CTRL_CODE_BEGIN);
                 out.push(*sub);
                 out.extend_from_slice(args);
             }
-            Token::End => out.push(EOS),
+            Token::End => {
+                out.push(EOS);
+                // Each string starts Latin, as [`decode`] does from its own slice.
+                active_font = Font::Latin;
+            }
         }
     }
     Ok(out)
@@ -1300,6 +1330,64 @@ mod tests {
             ]
         );
         assert_eq!(encode(&toks).unwrap(), bytes);
+    }
+
+    #[test]
+    fn encode_rejects_latin_glyphs_under_japanese_font() {
+        let latin_a = char_to_byte('A').unwrap();
+        let jpn_switch = Token::ExtCtrl {
+            sub: EXT_CTRL_CODE_JPN,
+            args: vec![],
+        };
+        assert_eq!(
+            encode(&[jpn_switch.clone(), Token::Char('A'), Token::End]).unwrap_err(),
+            TextError::UnsupportedJapanese(latin_a)
+        );
+        assert_eq!(
+            encode(&[jpn_switch.clone(), Token::Symbol(Symbol::Lv), Token::End]).unwrap_err(),
+            TextError::UnsupportedJapanese(byte_from_symbol(Symbol::Lv))
+        );
+        assert_eq!(
+            encode(&[jpn_switch.clone(), Token::BardWordDelimit, Token::End]).unwrap_err(),
+            TextError::UnsupportedJapanese(CHAR_BARD_WORD_DELIMIT)
+        );
+        assert_eq!(
+            encode(&[jpn_switch, Token::End, Token::Char('A'), Token::End]).unwrap(),
+            vec![EXT_CTRL_CODE_BEGIN, EXT_CTRL_CODE_JPN, EOS, latin_a, EOS],
+            "a terminator ends the Japanese font along with the string"
+        );
+    }
+
+    #[test]
+    fn encode_restores_latin_glyphs_after_english_font_switch() {
+        let latin_a = char_to_byte('A').unwrap();
+        let jpn_switch = Token::ExtCtrl {
+            sub: EXT_CTRL_CODE_JPN,
+            args: vec![],
+        };
+        let eng_switch = Token::ExtCtrl {
+            sub: EXT_CTRL_CODE_ENG,
+            args: vec![],
+        };
+
+        // Without the English-font switch, the same glyph is still rejected;
+        // this is the failure boundary the English switch must clear.
+        assert_eq!(
+            encode(&[jpn_switch.clone(), Token::Char('A'), Token::End]).unwrap_err(),
+            TextError::UnsupportedJapanese(latin_a)
+        );
+
+        let toks = vec![jpn_switch, eng_switch, Token::Char('A'), Token::End];
+        let bytes = [
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_JPN,
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_ENG,
+            latin_a,
+            EOS,
+        ];
+        assert_eq!(encode(&toks).unwrap(), bytes);
+        assert_eq!(decode(&bytes).unwrap(), toks);
     }
 
     #[test]

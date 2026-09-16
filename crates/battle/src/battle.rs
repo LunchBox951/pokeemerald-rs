@@ -3,7 +3,8 @@
 //! [`Battle`] supports ordinary wild encounters, the scripted first battle,
 //! and trainer parties. An accepted turn chooses the opponent's action before
 //! resolving a run or move order, skips queued actions once either battler
-//! faints, applies charge timers, and then settles trainer replacements.
+//! faints, settles the knockouts that leaves, and then applies end-of-turn
+//! residuals in that same turn order.
 //!
 //! Construction consumes a turn-number draw and a conditional Speed-tie draw.
 //! Each accepted turn consumes another turn-number draw before opponent action
@@ -11,7 +12,7 @@
 //! (`src/battle_main.c:3140`, `:3852`-`:3861`, `:3923`, `:4013`).
 
 use assets::trainers::TrainerId;
-use assets::MoveId;
+use assets::{AbilityId, MoveId, MoveTarget};
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::defense_curl;
@@ -19,13 +20,15 @@ use crate::dex::Dex;
 use crate::drain;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
+use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::fixed_damage;
 use crate::flag_move;
 use crate::multi_hit;
 use crate::paralyze;
-use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
+use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
+use crate::secondary;
 use crate::stat_change;
-use crate::status1::draws_full_paralysis;
+use crate::status1::{draws_full_paralysis, poison_residual_damage};
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -104,6 +107,13 @@ pub struct Battle {
     kind: BattleKind,
     turn_counter: u8,
     turn_has_started: bool,
+    pending_residual_order: Option<Order>,
+    /// `gCurrentMove` (`pokeemerald/include/battle.h`): the most recently
+    /// attempted move, `MOVE_NONE` before any has been. A forced trainer
+    /// replacement's most-damage fallback reads this stale value as its
+    /// base-damage move, matching upstream
+    /// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`).
+    last_move_used: MoveId,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +179,7 @@ impl Battle {
             // (`src/battle_script_commands.c:934`-`:939`).
             if slot.pp > 0 {
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+                secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }
         }
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
@@ -186,6 +197,8 @@ impl Battle {
             },
             turn_counter: 0,
             turn_has_started: false,
+            pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         })
     }
 
@@ -223,6 +236,7 @@ impl Battle {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
                 if slot.pp > 0 {
                     paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
+                    secondary::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                 }
             }
         }
@@ -239,6 +253,8 @@ impl Battle {
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
             turn_has_started: false,
+            pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         })
     }
 
@@ -291,14 +307,17 @@ impl Battle {
     /// Resolves the pending move-learning decision and returns its ordered events.
     ///
     /// Another prompt may follow immediately. Resolving the final prompt also
-    /// releases any deferred replacement, prize money, and battle outcome.
+    /// releases any deferred replacement, prize money, and battle outcome, and
+    /// then runs the residual pass the prompt held back.
     ///
     /// # Errors
     ///
     /// Returns [`BattleError::NoMoveLearnPending`] when no decision is waiting,
     /// [`BattleError::InvalidMoveSlot`] for an invalid replacement slot, or
-    /// [`BattleError::HmMoveCantBeForgotten`] for an HM replacement. Errors
-    /// preserve the pending decision.
+    /// [`BattleError::HmMoveCantBeForgotten`] for an HM replacement; all three
+    /// preserve the pending decision. Returns [`BattleError::UnknownSpecies`]
+    /// when the released residual pass fells a battler whose reward needs a
+    /// dex lookup.
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
@@ -321,11 +340,24 @@ impl Battle {
                 move_id: asked_move,
             }),
         }
-        match resolution.next {
-            Some(next) => events.push(BattleEvent::MoveLearnPrompt {
+        if let Some(next) = resolution.next {
+            events.push(BattleEvent::MoveLearnPrompt {
                 move_id: next.move_id(),
-            }),
-            None => self.settle_fainted_enemy(&mut events),
+            });
+        } else {
+            self.settle_fainted_enemy(&mut events)?;
+            // Upstream's yes/no box sits inside `HandleFaintedMonActions`,
+            // which every path to the residual pass crosses first
+            // (`src/battle_util.c:1912`-`:1923`).
+            if let Some(order) = self.pending_residual_order.take() {
+                // Upstream zeroes `gCurrentMove` as each action closes, before
+                // the residual pass runs, regardless of a move-learn prompt
+                // deferring that pass to this later call
+                // (`pokeemerald/src/battle_util.c:658`-`:671`).
+                self.last_move_used = MOVE_NONE;
+                self.residual_effects(order, &mut events);
+                self.handle_fainted_mons(&mut events)?;
+            }
         }
         Ok(events)
     }
@@ -356,6 +388,7 @@ impl Battle {
         }
         ensure_executable(&self.dex, slot.move_id)?;
         paralyze::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
+        secondary::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         Ok(slot.move_id)
     }
 
@@ -393,21 +426,22 @@ impl Battle {
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
-        match player_action {
+        let order = match player_action {
             ValidatedPlayerAction::UseMove { slot, move_id } => {
-                self.resolve_move_exchange(slot, move_id, enemy_action, rng, events)?;
+                self.resolve_move_exchange(slot, move_id, enemy_action, rng, events)?
             }
             ValidatedPlayerAction::Run => {
                 self.resolve_run_attempt(enemy_action, rng, events)?;
                 if self.outcome.is_some() {
                     return Ok(());
                 }
+                // A chosen run always takes the first slot in
+                // `gBattlerByTurnOrder` (`src/battle_main.c:4797`-`:4808`).
+                Order::AttackerFirst
             }
-        }
+        };
 
-        self.tick_charge_effects();
-        self.settle_end_of_turn(events);
-        Ok(())
+        self.pass_turn(order, events)
     }
 
     fn validate_player_action(
@@ -497,7 +531,7 @@ impl Battle {
         enemy_action: EnemyAction,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
+    ) -> Result<Order, BattleError> {
         let player_priority = self.dex.move_data(player_move)?.priority;
         let enemy_priority = match enemy_action {
             EnemyAction::Move(slot) => {
@@ -530,37 +564,166 @@ impl Battle {
                 }
             }
         }
-        Ok(())
+        Ok(order)
     }
 
     fn both_battlers_can_act(&self) -> bool {
         self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted()
     }
 
-    fn tick_charge_effects(&mut self) {
+    fn pass_turn(
+        &mut self,
+        order: Order,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        // Upstream reaches `HandleFaintedMonActions` twice a turn: from each
+        // action's own `Cmd_end`, and again behind `BattleTurnPassed`'s
+        // residual pass (`src/battle_main.c:549`, `:3960`-`:3968`).
+        self.handle_fainted_mons(events)?;
+        if self.player.pending_move_learn().is_some() {
+            self.pending_residual_order = Some(order);
+            return Ok(());
+        }
+        // Upstream zeroes `gCurrentMove` as each action closes, before the
+        // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
+        self.last_move_used = MOVE_NONE;
+        self.residual_effects(order, events);
+        self.handle_fainted_mons(events)
+    }
+
+    fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() {
             return;
         }
-        self.player.volatiles_mut().tick_charge();
-        self.enemy.volatiles_mut().tick_charge();
+        // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
+        // own move order -- and reaches ENDTURN_POISON before ENDTURN_CHARGE
+        // within each battler's pass (`src/battle_util.c:1442`-`:1474`).
+        let player_first = matches!(order, Order::AttackerFirst);
+        for is_player in [player_first, !player_first] {
+            let already_fainted = if is_player {
+                self.player.is_fainted()
+            } else {
+                self.enemy.is_fainted()
+            };
+            if already_fainted {
+                continue;
+            }
+            self.apply_poison_residual(is_player, events);
+            if is_player {
+                self.player.volatiles_mut().tick_charge();
+            } else {
+                self.enemy.volatiles_mut().tick_charge();
+            }
+            let now_fainted = if is_player {
+                self.player.is_fainted()
+            } else {
+                self.enemy.is_fainted()
+            };
+            if now_fainted {
+                self.settle_faint(is_player, events);
+                if self.fainting_decides_the_battle(is_player) {
+                    break;
+                }
+            }
+        }
     }
 
-    fn settle_end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
-        if self.player.pending_move_learn().is_some() {
+    fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
+        // `Cmd_checkteamslost` totals a whole party's HP
+        // (`src/battle_script_commands.c:3534`-`:3577`); this crate benches
+        // nothing for the player, so any player faint exhausts that side.
+        if is_player {
+            return true;
+        }
+        match &self.kind {
+            BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
+            BattleKind::Wild | BattleKind::FirstBattle => true,
+        }
+    }
+
+    fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || !battler.status1().is_poisoned() {
             return;
         }
-        self.settle_fainted_enemy(events);
+        let damage = poison_residual_damage(battler.stats().max_hp);
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let dealt = damage.min(target.current_hp());
+        target.apply_damage(dealt);
+        events.push(BattleEvent::HurtByPoison {
+            by_player: is_player,
+            damage: dealt,
+        });
     }
 
-    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
+    fn handle_fainted_mons(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
+            return Ok(());
+        }
+        // A double faint sets both of `Cmd_checkteamslost`'s outcome bits at
+        // once, and BattleScript_HandleFaintedMon then skips the reward and
+        // the switch-in entirely (`data/battle_scripts_1.s:2831`-`:2832`).
+        if self.player.is_fainted() {
+            self.finish(events, BattleOutcome::PlayerLost);
+            return Ok(());
+        }
+        if !self.enemy.is_fainted() {
+            return Ok(());
+        }
+        // Case 1 runs `BattleScript_GiveExp` to completion, the yes/no box
+        // included, before case 4 replaces or pays out
+        // (`src/battle_util.c:1912`-`:1946`).
+        self.settle_enemy_reward(events)?;
+        if self.player.pending_move_learn().is_some() {
+            return Ok(());
+        }
+        self.settle_fainted_enemy(events)?;
+        Ok(())
+    }
+
+    fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
+        // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
+        // and `MonGainEVs` for a recipient already at the cap
+        // (`src/battle_script_commands.c:3351`-`:3356`).
+        if self.player.level() >= MAX_LEVEL {
+            return Ok(());
+        }
+        let defeated = self.dex.species(self.enemy.species())?;
+        let level = self.enemy.level();
+        let exp = if self.trainer().is_some() {
+            trainer_faint_exp(defeated.base_exp, level)
+        } else {
+            wild_faint_exp(defeated.base_exp, level)
+        };
+        // `MonGainEVs` runs ahead of the exp and level-up sequence, so a
+        // level crossed this turn snapshots the gain
+        // (`src/battle_script_commands.c:3420`).
+        self.player.gain_evs(defeated.ev_yield);
+        let pending = self.player.apply_experience(&self.dex, exp)?;
+        events.push(BattleEvent::ExpGained(exp));
+        if let Some(prompt) = pending {
+            events.push(BattleEvent::MoveLearnPrompt {
+                move_id: prompt.move_id(),
+            });
+        }
+        Ok(())
+    }
+
+    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
-            return;
+            return Ok(());
         }
         let BattleKind::Trainer(context) = &mut self.kind else {
             self.finish(events, BattleOutcome::PlayerWon);
-            return;
+            return Ok(());
         };
-        if let Some(next) = context.send_out_next() {
+        if let Some(next) =
+            context.send_out_next(&self.dex, &self.enemy, self.last_move_used, &self.player)?
+        {
             let species = next.species();
             let bench_remaining = context.bench_len();
             self.enemy = next;
@@ -568,11 +731,12 @@ impl Battle {
                 species,
                 bench_remaining,
             });
-            return;
+            return Ok(());
         }
         let money = context.money();
         events.push(BattleEvent::MoneyGained(money));
         self.finish(events, BattleOutcome::PlayerWon);
+        Ok(())
     }
 
     fn act(
@@ -583,6 +747,11 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // `gCurrentMove` is set for the chosen action before anything can
+        // gate its execution (`HandleAction_UseMove`,
+        // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
+        // even when full paralysis or empty PP stop this one from landing.
+        self.last_move_used = move_id;
         let attacker_status1 = if player_is_attacker {
             self.player.status1()
         } else {
@@ -595,8 +764,9 @@ impl Battle {
             });
             return Ok(());
         }
+        let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
         if player_is_attacker {
-            self.player.deduct_pp(slot)?;
+            self.player.deduct_pp_by(slot, pp_cost)?;
         } else if self.enemy.moves()[slot].pp == 0 {
             events.push(BattleEvent::FailedNoPp {
                 by_player: false,
@@ -604,9 +774,29 @@ impl Battle {
             });
             return Ok(());
         } else {
-            self.enemy.deduct_pp(slot)?;
+            self.enemy.deduct_pp_by(slot, pp_cost)?;
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
+    }
+
+    /// PP a move spends: two against a distinct target with Pressure, one
+    /// otherwise; self-targeted moves are exempt
+    /// (`battle_script_commands.c:1205`-`:1228`).
+    fn move_pp_cost(&self, player_is_attacker: bool, move_id: MoveId) -> Result<u8, BattleError> {
+        let target = self.dex.move_data(move_id)?.target;
+        if target == MoveTarget::USER {
+            return Ok(1);
+        }
+        let defender = if player_is_attacker {
+            &self.enemy
+        } else {
+            &self.player
+        };
+        if defender.ability() == AbilityId::PRESSURE {
+            Ok(2)
+        } else {
+            Ok(1)
+        }
     }
 
     fn resolve_enemy_action(
@@ -620,6 +810,9 @@ impl Battle {
                 self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
             }
             EnemyAction::Struggle => {
+                // `gCurrentMove` is set to Struggle before anything else runs
+                // (`HandleAction_UseMove`, `pokeemerald/src/battle_util.c:103`).
+                self.last_move_used = STRUGGLE;
                 // Struggle reaches the paralysis gate before its unsupported
                 // recoil path (`data/battle_scripts_1.s:241`-`:247`).
                 if draws_full_paralysis(self.enemy.status1(), rng) {
@@ -718,6 +911,8 @@ mod tests {
             kind: BattleKind::Trainer(trainer),
             turn_counter: 0,
             turn_has_started: false,
+            pending_residual_order: None,
+            last_move_used: MOVE_NONE,
         };
         (battle, player_max_hp, player_move_max_pp)
     }

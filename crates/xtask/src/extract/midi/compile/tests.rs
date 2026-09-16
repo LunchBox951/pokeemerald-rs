@@ -460,6 +460,77 @@ fn an_extended_command_selector_near_a_grid_line_preserves_later_ticks() {
 }
 
 #[test]
+fn a_velocity_zero_note_on_bounds_an_extended_command_selector_gap() {
+    // Upstream retains a velocity-zero note-on as a silent, type-zero track
+    // event even though it also ends the note it matches, but drops an
+    // explicit note-off entirely (`tools/mid2agb/midi.cpp:471-514`). That
+    // silent event still bounds an extended-command selector's suppressed
+    // gap, exactly like any other retained item does.
+    fn midi_with_note_end(note_end: [u8; 3]) -> Vec<u8> {
+        let mut body = Vec::new();
+        push_timed(&mut body, 0, note_on(0, 60, 100));
+        push_timed(
+            &mut body,
+            4,
+            control_change(0, EXTENDED_COMMAND_SELECTOR, PSEUDO_ECHO_VOLUME_COMMAND),
+        );
+        push_timed(&mut body, 10, note_end);
+        push_timed(&mut body, 10, note_on(0, 64, 100));
+        push_timed(&mut body, 6, note_off(0, 64));
+        single_track_midi(24, body)
+    }
+
+    // The note-end at tick 14 is a velocity-zero note-on: it is retained as
+    // a silent boundary, so the selector's suppressed gap stops there and
+    // the remaining 10 ticks to the next note surface as an ordinary wait.
+    let velocity_zero = compile(&midi_with_note_end(note_on(0, 60, 0)), &cfg()).unwrap();
+    assert_eq!(
+        velocity_zero.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 14,
+            },
+            SongEvent::Wait(14), // 4 (pre-selector) + 10 (selector to the silent boundary): canonical waits
+            SongEvent::Note {
+                key: 64,
+                velocity: 100,
+                gate: 6,
+            },
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+
+    // The same note-end as an explicit note-off leaves no boundary behind,
+    // so the selector's suppression reaches all the way to the next note.
+    let explicit_off = compile(&midi_with_note_end(note_off(0, 60)), &cfg()).unwrap();
+    assert_eq!(
+        explicit_off.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 14,
+            },
+            SongEvent::Wait(4),
+            SongEvent::Note {
+                key: 64,
+                velocity: 100,
+                gate: 6,
+            },
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+#[test]
 fn a_time_signature_rephases_the_extended_command_timing_grid() {
     let mut body = Vec::new();
     push_timed(&mut body, 0, time_signature(2, 2));
@@ -852,6 +923,47 @@ fn an_over_long_zero_delta_preserves_the_prior_absolute_tick() {
                 gate: 24,
             },
             SongEvent::Wait(24),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+#[test]
+fn a_same_tick_velocity_zero_note_on_precedes_an_extended_command_selector() {
+    // The retained velocity-zero note-on shares tick 4 with the selector.
+    // Upstream's type-zero event sorts before the controller, so the
+    // selector still owns the outgoing 10-tick gap and suppresses its first
+    // wait chunk; ordering it after the selector would give the selector a
+    // zero gap to suppress and surface a Wait(10) instead.
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, note_on(0, 60, 100));
+    push_timed(
+        &mut body,
+        4,
+        control_change(0, EXTENDED_COMMAND_SELECTOR, PSEUDO_ECHO_VOLUME_COMMAND),
+    );
+    push_timed(&mut body, 0, note_on(0, 60, 0));
+    push_timed(&mut body, 10, note_on(0, 64, 100));
+    push_timed(&mut body, 6, note_off(0, 64));
+
+    let compiled = compile(&single_track_midi(24, body), &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4,
+            },
+            SongEvent::Wait(4),
+            SongEvent::Note {
+                key: 64,
+                velocity: 100,
+                gate: 6,
+            },
+            SongEvent::Wait(6),
             SongEvent::Fine,
         ]
     );

@@ -6,7 +6,7 @@
 //! address once it leaves this module, so nothing downstream has to
 //! remember whether it is holding an offset or a pointer.
 
-use rom_import::ROM_BASE;
+use rom_import::{ROM_BASE, ROM_WINDOW_END};
 
 use super::error::GenRomProfileError;
 
@@ -17,8 +17,15 @@ pub const fn to_addr(offset: u32) -> u32 {
 
 /// Turn a GBA bus address into a ROM offset, or `None` if it is not a
 /// cartridge address at all.
+///
+/// The cartridge window is half-open: an address at or past
+/// [`ROM_WINDOW_END`] is rejected the same as one below [`ROM_BASE`], so
+/// this stays the one place callers need to check before treating a word as
+/// a pointer.
 pub fn to_offset(addr: u32) -> Option<usize> {
-    addr.checked_sub(ROM_BASE).map(|off| off as usize)
+    (ROM_BASE..ROM_WINDOW_END)
+        .contains(&addr)
+        .then(|| (addr - ROM_BASE) as usize)
 }
 
 /// Accept a search result only when it found exactly one place.
@@ -160,7 +167,9 @@ pub fn only_one_matching<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::{exactly_one, only_one_matching, to_addr, to_offset, u32_at_addr};
+    use super::{
+        exactly_one, only_one_matching, to_addr, to_offset, u32_at_addr, ROM_BASE, ROM_WINDOW_END,
+    };
     use crate::gen_rom_profile::error::GenRomProfileError;
 
     #[test]
@@ -168,6 +177,18 @@ mod tests {
         assert_eq!(to_addr(0x1234), 0x0800_1234);
         assert_eq!(to_offset(0x0800_1234), Some(0x1234));
         assert_eq!(to_offset(0x0000_0004), None);
+    }
+
+    #[test]
+    fn addresses_outside_the_cartridge_window_are_not_offsets() {
+        assert_eq!(to_offset(ROM_BASE - 1), None);
+        assert_eq!(to_offset(ROM_BASE), Some(0));
+        assert_eq!(
+            to_offset(ROM_WINDOW_END - 1),
+            Some((ROM_WINDOW_END - ROM_BASE - 1) as usize)
+        );
+        assert_eq!(to_offset(ROM_WINDOW_END), None);
+        assert_eq!(to_offset(0xFFFF_FFFF), None);
     }
 
     #[test]

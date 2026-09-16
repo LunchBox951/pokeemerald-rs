@@ -702,8 +702,9 @@ impl BattlePokemon {
     /// unlike stages and volatiles: `crates/pokeemerald-rs`'s
     /// `finalize_battle_turn` calls this on the surviving lead mon after
     /// *every* battle outcome, including an ordinary win, and upstream
-    /// paralysis outlives a win precisely because nothing but a faint, a
-    /// heal, or a cure clears it — only `Cmd_cleareffectsonfaint`'s `hp == 0`
+    /// paralysis or poison outlives a win precisely because nothing but a
+    /// faint, a heal, or a cure clears either — only
+    /// `Cmd_cleareffectsonfaint`'s `hp == 0`
     /// branch zeroes `status1` (`battle_script_commands.c:3063`-`:3077`), a
     /// narrower precondition than "this battler is leaving battle" that this
     /// one shared method cannot express for both of its callers at once.
@@ -807,19 +808,41 @@ impl BattlePokemon {
     }
 
     /// Attacking stat and stage for the move category.
+    ///
+    /// A Hustle holder's, then a statused Guts holder's, raw physical Attack
+    /// is each raised 150% before the stage is applied, matching upstream's
+    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3205-3206, :3211-3212`);
+    /// special Attack never changes.
     #[must_use]
     pub fn attacking_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
-            crate::damage::MoveCategory::Physical => (self.stats.attack, self.stages.attack),
+            crate::damage::MoveCategory::Physical => {
+                let raw_attack = crate::ability::hustle_attack(self.ability(), self.stats.attack);
+                let raw_attack =
+                    crate::ability::guts_attack(self.ability(), self.status1, raw_attack);
+                (raw_attack, self.stages.attack)
+            }
             crate::damage::MoveCategory::Special => (self.stats.sp_attack, self.stages.sp_attack),
         }
     }
 
     /// Defending stat and stage for the move category.
+    ///
+    /// A statused Marvel Scale holder's raw physical Defense is raised 150%
+    /// before the stage is applied, matching upstream's
+    /// `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3213-3214`); special
+    /// Defense never changes.
     #[must_use]
     pub fn defending_stat(&self, category: crate::damage::MoveCategory) -> (u32, StatStage) {
         match category {
-            crate::damage::MoveCategory::Physical => (self.stats.defense, self.stages.defense),
+            crate::damage::MoveCategory::Physical => {
+                let raw_defense = crate::ability::marvel_scale_defense(
+                    self.ability(),
+                    self.status1,
+                    self.stats.defense,
+                );
+                (raw_defense, self.stages.defense)
+            }
             crate::damage::MoveCategory::Special => (self.stats.sp_defense, self.stages.sp_defense),
         }
     }
@@ -856,6 +879,21 @@ impl BattlePokemon {
     /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty, or
     /// [`BattleError::NoPpRemaining`] when the slot is exhausted.
     pub fn deduct_pp(&mut self, index: usize) -> Result<(), BattleError> {
+        self.deduct_pp_by(index, 1)
+    }
+
+    /// Deducts `amount` PP from a move slot, saturating at zero rather than
+    /// underflowing (`battle_script_commands.c:1234`-`:1237`).
+    ///
+    /// The caller computes `amount`, incrementing it when the move's target
+    /// has Pressure (`battle_script_commands.c:1205`-`:1228`); this method
+    /// only applies the reduction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::InvalidMoveSlot`] when `index` is empty, or
+    /// [`BattleError::NoPpRemaining`] when the slot is already exhausted.
+    pub(crate) fn deduct_pp_by(&mut self, index: usize, amount: u8) -> Result<(), BattleError> {
         let slot = self
             .moves
             .get_mut(index)
@@ -863,7 +901,7 @@ impl BattlePokemon {
         if slot.pp == 0 {
             return Err(BattleError::NoPpRemaining(index));
         }
-        slot.pp -= 1;
+        slot.pp = slot.pp.saturating_sub(amount);
         Ok(())
     }
 

@@ -15,16 +15,25 @@
 //! met data, poké ball, OT gender, ribbons, markings, nickname, OT name,
 //! language, mail, the egg bit, and contest condition (`PokemonSubstruct2`'s
 //! trailing six bytes). [`to_save_pokemon`], which has no record to retain
-//! them from, writes upstream's own `CreateMon` default for each instead;
-//! friendship is derived from the species' base friendship, matching
-//! `CreateBoxMon`.
+//! them from, writes upstream's own `CreateMon` default for whichever of
+//! those it can derive from its own two arguments (issue #869): nickname
+//! (the species' display name), language (`GAME_LANGUAGE`), met level
+//! ([`battle::BattlePokemon::created_at_level`], not the live level -- a
+//! mon that levels up before its first save still files the level it was
+//! created at, matching `CreateBoxMon`'s one-time stamp), met game
+//! (`VERSION_EMERALD`), and poké ball (`ITEM_POKE_BALL`) -- friendship is
+//! derived from the species' base
+//! friendship the same way, matching `CreateBoxMon`. OT name, met location,
+//! and OT gender instead come from the current save's player identity and
+//! map upstream, which `to_save_pokemon` has no way to see; those three stay
+//! zero, same as every other field `battle` does not model, until a caller
+//! that holds that state is threaded through.
 //!
 //! Non-volatile status is likewise retained rather than merged: `battle`
-//! now models [`battle::Status1::Paralysed`] in-battle, but neither encoder
-//! reads or writes it, so a battler paralysed this session keeps the
-//! backing record's own stored status word through an ordinary save exactly
-//! as before -- wiring that overlay is a later slice's boundary, not this
-//! one's.
+//! now models [`battle::Status1::Paralysed`] and [`battle::Status1::Poisoned`]
+//! in-battle, but neither encoder reads or writes either, so a battler
+//! paralysed or poisoned this session keeps the backing record's own stored
+//! status word through an ordinary save.
 //!
 //! Effort values are the one battle-authoritative field with its own
 //! adoption/gain contract -- see [`battle::pokemon::evs`] for that. Both
@@ -55,7 +64,7 @@
 use std::ops::Range;
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
-use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
+use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN};
 
 const MAIL_NONE: u8 = u8::MAX;
 const SPECIES_NONE: u16 = 0;
@@ -71,6 +80,26 @@ const MISC_IV_WORD: Range<usize> = 4..8;
 const IV_FIELD_WIDTH: usize = 5;
 const IV_FIELD_MASK: u32 = 0x1F;
 const IS_EGG_BIT: u32 = 1 << 30;
+
+/// `PokemonSubstruct3`'s origins word (`pokeemerald/include/pokemon.h:131-149`):
+/// met level in bits 0-6, met game in bits 7-10, poké ball in bits 11-14, OT
+/// gender in bit 15.
+const MISC_MET_DATA: Range<usize> = 2..4;
+const MET_LEVEL_MASK: u16 = 0x7F;
+const MET_GAME_SHIFT: u16 = 7;
+const POKE_BALL_SHIFT: u16 = 11;
+
+/// `VERSION_EMERALD` (`pokeemerald/include/constants/global.h:8-16`) --
+/// `gGameVersion`'s fixed value for this build, not player state, so
+/// [`to_save_pokemon`] can write it unconditionally.
+const VERSION_EMERALD: u16 = 3;
+/// `ITEM_POKE_BALL` (`pokeemerald/include/constants/items.h:10`) --
+/// `CreateBoxMon`'s own unconditional default ball.
+const ITEM_POKE_BALL: u16 = 4;
+/// `GAME_LANGUAGE` (`pokeemerald/include/constants/global.h:21-30`,
+/// `LANGUAGE_ENGLISH`) -- `gGameLanguage`'s fixed value for this build, not
+/// player state.
+const LANGUAGE_ENGLISH: u8 = 2;
 const ABILITY_SLOT_SHIFT: usize = 31;
 
 const MOVE_ID_WIDTH: usize = size_of::<u16>();
@@ -222,6 +251,14 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut misc = [0u8; SUBSTRUCTURE_LEN];
     let iv_word = pack_ivs(mon.ivs()) | (u32::from(mon.ability_slot()) << ABILITY_SLOT_SHIFT);
     misc[MISC_IV_WORD].copy_from_slice(&iv_word.to_le_bytes());
+    // Met level is the level the record was first built at, not the live
+    // level: `CreateBoxMon` stamps it once and later saves copy it unchanged
+    // (`pokeemerald/src/pokemon.c:2259`). Met location and OT gender stay
+    // clear; see the module docs.
+    let origins = (u16::from(mon.created_at_level()) & MET_LEVEL_MASK)
+        | (VERSION_EMERALD << MET_GAME_SHIFT)
+        | (ITEM_POKE_BALL << POKE_BALL_SHIFT);
+    misc[MISC_MET_DATA].copy_from_slice(&origins.to_le_bytes());
 
     // `PokemonSubstruct2` -- the mon's own EVs (`0` for a mon
     // nothing has ever called `with_evs`/`gain_evs` on, matching `CreateMon`'s
@@ -237,6 +274,13 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         evs_and_condition,
         misc,
     });
+    // Unencrypted header bytes `set_substructures` never touches --
+    // `CreateBoxMon` stamps both unconditionally
+    // (`pokeemerald/src/pokemon.c:2251-2252`). OT name stays clear: it needs
+    // the current save's player identity, which this function does not have
+    // (module docs).
+    box_data.set_nickname(create_mon_nickname(mon.species()));
+    box_data.set_language(LANGUAGE_ENGLISH);
 
     let mut record = Pokemon {
         box_data,
@@ -258,6 +302,23 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let gap = clamp_i32(stats.max_hp.saturating_sub(mon.stats().max_hp));
     overlay_current_hp_with_hidden_points(&mut record, mon, gap);
     record
+}
+
+/// [`to_save_pokemon`]'s nickname: `species`'s display name, game-text
+/// encoded and copied into the fixed-width header field exactly as
+/// `SetBoxMonData(MON_DATA_NICKNAME, speciesName)` does
+/// (`pokeemerald/src/pokemon.c:2249-2250`, `GetSpeciesName`). A species id or
+/// name this port cannot resolve or encode falls back to an all-clear
+/// nickname -- the record's own already-zeroed bytes -- rather than panic.
+fn create_mon_nickname(species: assets::SpeciesId) -> [u8; BOX_NICKNAME_LEN] {
+    let mut nickname = [0u8; BOX_NICKNAME_LEN];
+    if let Ok(name) = assets::SpeciesNames::new().name(species) {
+        if let Ok(encoded) = engine::text::encode_str(name) {
+            let copy_len = encoded.len().min(nickname.len());
+            nickname[..copy_len].copy_from_slice(&encoded[..copy_len]);
+        }
+    }
+    nickname
 }
 
 fn encode_attacks(mon: &BattlePokemon) -> [u8; SUBSTRUCTURE_LEN] {
@@ -370,8 +431,9 @@ pub(crate) fn merge_into_save_pokemon(
         Err(reason) => {
             eprintln!(
                 "save: party slot 0 {reason} -- writing a record built from the battler \
-                 alone, so every field the battle model does not carry takes CreateMon's \
-                 own default"
+                 alone: nickname, language, met level/game/ball, and friendship take \
+                 CreateMon's own default, but OT name, met location, and OT gender stay \
+                 clear -- this path has no save identity or map to draw them from"
             );
             let record = to_save_pokemon(dex, mon);
             // Carried forward, not zeroed (this function's own doc comment

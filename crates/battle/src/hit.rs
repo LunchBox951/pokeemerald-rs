@@ -6,19 +6,19 @@
 //! type immunity still consumes the damage and effect-chance draws. Struggle
 //! skips the trailing effect-chance draw.
 
-use assets::{MoveEffect, MoveId, Type};
+use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
 use crate::ability::{huge_power_attack, pinch_boosts_power, suppresses_critical_hits};
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
 use crate::damage::{
-    apply_damage_roll, apply_dual_type_effectiveness, apply_stab, base_damage, has_stab, BattleRng,
-    DamageInput, MoveCategory, Weather, STRUGGLE,
+    aggregate_type_effectiveness, apply_damage_roll, apply_dual_type_effectiveness, apply_stab,
+    base_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::BattlePokemon;
-use crate::secondary::spend_effect_chance_draw;
+use crate::secondary::{is_poison_hit_effect, spend_effect_chance_draw};
 
 const EFFECT_HIT: MoveEffect = MoveEffect(0);
 const EFFECT_SPEED_UP: MoveEffect = MoveEffect(12);
@@ -76,6 +76,13 @@ pub enum HitOutcome {
     Miss,
     /// The move connected, but the target was immune.
     NoEffect,
+    /// A Ground move was blocked by the target's Levitate
+    /// (`battle_script_commands.c:1375-1383`).
+    LevitateBlocked,
+    /// A powered move other than Struggle that was not strictly super
+    /// effective was blocked by the target's Wonder Guard
+    /// (`battle_script_commands.c:1409-1418`; Struggle bypasses `typecalc`).
+    WonderGuardBlocked,
     /// The move connected and dealt damage.
     Hit {
         /// HP of damage dealt.
@@ -114,7 +121,12 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     if move_data.move_type.battle_type().is_none() {
         return Err(BattleError::UnsupportedMoveType(move_id));
     }
-    if !is_ordinary_hit_effect(move_data.effect) && move_id != STRUGGLE {
+    // `EFFECT_POISON_HIT` resolves through this same damage script while
+    // keeping its own trampoline dispatch in `spend_effect_chance_draw`.
+    if !is_ordinary_hit_effect(move_data.effect)
+        && !is_poison_hit_effect(move_data.effect)
+        && move_id != STRUGGLE
+    {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
     }
     Ok(())
@@ -139,6 +151,8 @@ pub fn accuracy_roll(
     Ok(accuracy_check(
         move_data.accuracy,
         move_data.effect,
+        move_data.move_type,
+        attacker.ability(),
         attacker.stages().accuracy,
         defender.stages().evasion,
         rng,
@@ -152,6 +166,12 @@ pub struct RawDamage {
     pub damage: u32,
     /// Whether the hit was critical.
     pub is_critical: bool,
+    /// Whether `damage` is zero because a Ground move met a Levitate holder,
+    /// rather than an ordinary type immunity.
+    pub levitate_blocked: bool,
+    /// Whether `damage` is zero because Wonder Guard blocked a hit that was
+    /// not strictly super effective, rather than an ordinary type immunity.
+    pub wonder_guard_blocked: bool,
 }
 
 fn roll_critical_hit(
@@ -210,7 +230,9 @@ fn damage_input(
 /// variance.
 ///
 /// The critical-hit draw is skipped when either the caller or defender's
-/// ability suppresses critical hits.
+/// ability suppresses critical hits. A Ground move against a Levitate holder
+/// is zeroed before the type chart is consulted, matching
+/// `Cmd_typecalc`'s dedicated Levitate branch upstream.
 ///
 /// # Errors
 ///
@@ -250,8 +272,17 @@ pub fn damage_before_roll(
     } else {
         damage_after_critical
     };
+    let levitate_blocked = move_id != STRUGGLE
+        && move_type == Type::Ground
+        && defender.ability() == AbilityId::LEVITATE;
+    let wonder_guard_blocked = move_id != STRUGGLE
+        && defender.ability() == AbilityId::WONDER_GUARD
+        && aggregate_type_effectiveness(move_type, defender.types())
+            != Effectiveness::SuperEffective;
     let damage = if move_id == STRUGGLE {
         damage_after_charge
+    } else if levitate_blocked || wonder_guard_blocked {
+        0
     } else {
         let damage_after_stab = apply_stab(
             damage_after_charge,
@@ -263,6 +294,8 @@ pub fn damage_before_roll(
     Ok(RawDamage {
         damage,
         is_critical,
+        levitate_blocked,
+        wonder_guard_blocked,
     })
 }
 
@@ -295,13 +328,31 @@ pub fn damage_core(
     let damage = apply_damage_roll(raw_damage.damage, rng);
 
     if damage == 0 {
-        Ok(HitOutcome::NoEffect)
+        if raw_damage.wonder_guard_blocked {
+            Ok(HitOutcome::WonderGuardBlocked)
+        } else if raw_damage.levitate_blocked {
+            Ok(HitOutcome::LevitateBlocked)
+        } else {
+            Ok(HitOutcome::NoEffect)
+        }
     } else {
         Ok(HitOutcome::Hit {
             damage,
             is_critical: raw_damage.is_critical,
         })
     }
+}
+
+/// [`resolve_hit`]'s full result: the damage verdict, plus whether the
+/// trailing effect-chance draw wants to poison `defender`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HitResolution {
+    /// The damage verdict.
+    pub outcome: HitOutcome,
+    /// Whether the caller should write [`crate::status1::Status1::Poisoned`]
+    /// to `defender`, subject to the caller's own post-damage faint check
+    /// ([`spend_effect_chance_draw`]).
+    pub poisons_defender: bool,
 }
 
 /// Resolves an ordinary hit against one target.
@@ -323,11 +374,14 @@ pub fn resolve_hit(
     defender: &BattlePokemon,
     critical_hits_suppressed: bool,
     rng: &mut impl BattleRng,
-) -> Result<HitOutcome, BattleError> {
+) -> Result<HitResolution, BattleError> {
     ensure_resolvable(dex, move_id)?;
 
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
-        return Ok(HitOutcome::Miss);
+        return Ok(HitResolution {
+            outcome: HitOutcome::Miss,
+            poisons_defender: false,
+        });
     }
 
     let outcome = damage_core(
@@ -339,12 +393,24 @@ pub fn resolve_hit(
         rng,
     )?;
 
-    if move_id != STRUGGLE {
-        let hit_had_effect = outcome != HitOutcome::NoEffect;
-        spend_effect_chance_draw(dex, move_id, hit_had_effect, rng)?;
-    }
+    let poisons_defender = if move_id == STRUGGLE {
+        false
+    } else {
+        // Wonder Guard's block carries `MOVE_RESULT_MISSED`, part of
+        // upstream's `MOVE_RESULT_NO_EFFECT` bitmask
+        // (`include/constants/battle.h:220-228`), so it suppresses a
+        // secondary effect exactly like an ordinary `NoEffect` immunity.
+        let hit_had_effect = !matches!(
+            outcome,
+            HitOutcome::NoEffect | HitOutcome::WonderGuardBlocked
+        );
+        spend_effect_chance_draw(dex, move_id, hit_had_effect, defender, rng)?
+    };
 
-    Ok(outcome)
+    Ok(HitResolution {
+        outcome,
+        poisons_defender,
+    })
 }
 
 #[cfg(test)]

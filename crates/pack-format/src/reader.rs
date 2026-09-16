@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use crate::layout::{EntryKind, FORMAT_VERSION, MAGIC};
+use crate::layout::{addressed_payload_len, EntryKind, FORMAT_VERSION, IMAGE_BIT_DEPTHS, MAGIC};
 
 /// Cap on how many directory entries [`parse_directory`] pre-reserves from
 /// the untrusted `entry_count` header field. A corrupt count near `u32::MAX`
@@ -27,11 +27,6 @@ const MAX_INITIAL_DIRECTORY_CAPACITY: usize = 1024;
 const IMAGE_KIND_TAG: u8 = 0;
 const PALETTE_KIND_TAG: u8 = 1;
 const RAW_KIND_TAG: u8 = 2;
-
-/// The image bit depths the format publishes ([`EntryKind::Image`]'s
-/// `bit_depth`). The payload is one byte per pixel at every one of them, so
-/// this is the closed set a consumer may see, not a size input.
-const IMAGE_BIT_DEPTHS: [u8; 3] = [2, 4, 8];
 
 /// One parsed directory entry: an id, its kind metadata, and where its
 /// payload lives in the pack's byte buffer.
@@ -206,10 +201,8 @@ impl<'a> DirectoryReader<'a> {
 ///
 /// The products cannot overflow: `u32 * u32` and `u16 * 2` both fit `u64`.
 fn check_payload_shape(entry: &DirectoryEntry) -> Result<(), PackReadError> {
-    let addressed = match entry.kind {
-        EntryKind::Image { width, height, .. } => u64::from(width) * u64::from(height),
-        EntryKind::Palette { color_count } => u64::from(color_count) * 2,
-        EntryKind::Raw => return Ok(()),
+    let Some(addressed) = addressed_payload_len(entry.kind) else {
+        return Ok(());
     };
     if u64::try_from(entry.length).is_ok_and(|length| length == addressed) {
         Ok(())

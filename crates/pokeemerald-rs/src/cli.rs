@@ -1,11 +1,11 @@
 //! The shipped binary's command line (S-4, Discussion #71 policy C, issue
 //! #122).
 //!
-//! Hand-rolled and std-only. `xtask`'s `Command` enum
-//! (`crates/xtask/src/main.rs`) is the precedent: one [`parse`] function,
-//! one concrete error enum, no `clap` `(minimal-deps)`. The surface is
-//! deliberately tiny, because a player runs this binary with no arguments
-//! at all; `--import-rom` is the one thing they type once.
+//! Hand-rolled; the parse itself needs nothing but `std`. `xtask`'s
+//! `Command` enum (`crates/xtask/src/main.rs`) is the precedent: one
+//! [`parse`] function, one concrete error enum, no `clap` `(minimal-deps)`.
+//! The surface is deliberately tiny, because a player runs this binary with
+//! no arguments at all; `--import-rom` is the one thing they type once.
 //!
 //! Parsing is pure: [`parse`] takes the arguments as a slice and returns a
 //! [`Command`], so every branch is unit-tested without spawning a process.
@@ -14,6 +14,8 @@ use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
+
+use rom_import::OneLine;
 
 /// The `--import-rom` flag's long form.
 const IMPORT_ROM: &str = "--import-rom";
@@ -50,7 +52,9 @@ pub enum Command {
 ///
 /// Concrete per-crate enum `(oop-boundaries)`; no `anyhow`. Every message
 /// is one line, with [`USAGE`] appended, so a mistyped flag shows both what
-/// was wrong and what was accepted.
+/// was wrong and what was accepted. The token [`CliError::UnexpectedArg`]
+/// quotes comes straight off `args_os`, so it renders through [`OneLine`] to
+/// keep that line intact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CliError {
     /// `--import-rom` was given without a path, or with an empty one.
@@ -69,7 +73,7 @@ impl fmt::Display for CliError {
                 writeln!(f, "`{IMPORT_ROM}` requires a path to a ROM file")?;
             }
             Self::UnexpectedArg(arg) => {
-                writeln!(f, "unexpected argument `{arg}`")?;
+                writeln!(f, "unexpected argument `{}`", OneLine(arg))?;
             }
             Self::DuplicateImportRom => {
                 writeln!(f, "`{IMPORT_ROM}` was given more than once")?;
@@ -175,6 +179,31 @@ mod tests {
 
     fn args(parts: &[&str]) -> Vec<OsString> {
         parts.iter().map(OsString::from).collect()
+    }
+
+    /// The diagnosis is one terminal row (module docs on [`CliError`]), and
+    /// the token it quotes comes straight from `args_os`, so a newline or an
+    /// ESC in it must not reach the terminal. This pins that the token
+    /// reaches the row through `OneLine` at all; the escaping rule itself
+    /// is pinned where it lives (`crates/rom-import/src/one_line.rs`).
+    #[test]
+    fn an_unexpected_argument_cannot_add_rows_to_the_diagnosis() {
+        let rendered = parse(&args(&["--bad\nforged: import succeeded\u{1b}]0;x\u{7}"]))
+            .unwrap_err()
+            .to_string();
+        let diagnosis = rendered
+            .strip_suffix(USAGE)
+            .and_then(|head| head.strip_suffix('\n'))
+            .expect("the usage block follows the diagnosis");
+        assert!(
+            !diagnosis.chars().any(char::is_control),
+            "the diagnosis must stay one printable row: {diagnosis:?}"
+        );
+        // Escaped, not silently dropped: the token is still legible.
+        assert!(
+            diagnosis.contains(r"--bad\nforged: import succeeded\u{1b}]0;x\u{7}"),
+            "escaped token missing from {diagnosis:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -354,6 +383,25 @@ mod tests {
             // One line of diagnosis, then the usage block.
             assert!(rendered.starts_with('`') || rendered.starts_with("unexpected"));
         }
+    }
+
+    /// The line separators `U+2028`/`U+2029` and the `Bidi_Control`
+    /// characters are outside `char::is_control`, so the control-byte test
+    /// above cannot see them; `rom-import` pins the same spellings.
+    #[test]
+    fn a_separator_or_bidi_control_in_an_argument_is_escaped_too() {
+        let hostile = "--a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o";
+        let rendered = parse(&args(&[hostile])).unwrap_err().to_string();
+        let diagnosis = rendered
+            .strip_suffix(USAGE)
+            .and_then(|head| head.strip_suffix('\n'))
+            .expect("the usage block follows the diagnosis");
+        assert!(
+            diagnosis.contains(
+                r"--a\u{2028}b\u{2029}c\u{202e}d\u{202a}e\u{202b}f\u{202c}g\u{202d}h\u{2066}i\u{2067}j\u{2068}k\u{2069}l\u{200e}m\u{200f}n\u{61c}o"
+            ),
+            "escaped token missing from {diagnosis:?}"
+        );
     }
 
     #[test]

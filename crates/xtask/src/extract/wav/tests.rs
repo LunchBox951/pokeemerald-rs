@@ -230,6 +230,17 @@ fn midi_key_one_octave_above_unity_halves_the_computed_pitch() {
 }
 
 #[test]
+fn nonzero_smpl_pitch_fraction_matches_wav2agb_derivation() {
+    let data = [128u8];
+    let midi_pitch_fraction = 1_u32 << 31;
+    let smpl = smpl_chunk(60, midi_pitch_fraction, 0, 0);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &data);
+    let sample = decode(&bytes).unwrap();
+    // wav2agb wav_file.cpp:166-170: u32(offset 16) / (2^32 * 100) = 0.005 cents.
+    assert_eq!(sample.base_frequency, 8_192_023);
+}
+
+#[test]
 fn s16_format_decodes() {
     let mut data = Vec::new();
     data.extend_from_slice(&i16::MIN.to_le_bytes());

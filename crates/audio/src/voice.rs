@@ -180,7 +180,7 @@ impl StereoGain {
 
 #[derive(Clone, Copy, Debug)]
 struct VoiceIdentity {
-    track: usize,
+    track: Option<usize>,
     played_key: u8,
     pitch_key: u8,
     note_on_ordinal: u64,
@@ -190,7 +190,7 @@ struct VoiceIdentity {
 impl VoiceIdentity {
     fn new(track: usize, played_key: u8) -> Self {
         Self {
-            track,
+            track: Some(track),
             played_key,
             pitch_key: played_key,
             note_on_ordinal: 0,
@@ -296,10 +296,16 @@ impl Voice {
         self.envelope.is_active()
     }
 
-    /// Return the owning track index.
+    /// Return the owning track index, or `None` once `detach_track` has run.
     #[must_use]
-    pub fn track(&self) -> usize {
+    pub fn track(&self) -> Option<usize> {
         self.identity.track
+    }
+
+    /// Clear allocation ownership so a released-slot tie never favours this
+    /// voice over one a track still owns (`RealClearChain`, `m4a_1.s:744-745`).
+    pub(crate) fn detach_track(&mut self) {
+        self.identity.track = None;
     }
 
     /// Return the played MIDI key used for tie matching.
@@ -385,6 +391,10 @@ impl Voice {
             let sample = self.source_position.interpolated_sample(&self.wave);
             self.frame_gain.accumulate(sample, output);
             self.source_position.advance_wrapping(phase_step);
+            if !self.wave.is_looping() && self.source_position.sample_index >= self.wave.len() {
+                self.envelope.retire();
+                break;
+            }
         }
     }
 }
@@ -527,6 +537,27 @@ mod tests {
             (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS
         );
         assert_eq!(acc[7], (0, 0));
+    }
+
+    #[test]
+    fn one_shot_voice_retires_when_its_last_sample_fills_the_final_output_slot() {
+        let mut voice = voice(
+            wave(0, vec![10, 20, 30, 40]),
+            approximately_unity_frequency(),
+            u8::MAX,
+            u8::MAX,
+            0,
+        )
+        .fixed_rate(true);
+        let mut acc = vec![(0, 0); 4];
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert_eq!(voice.source_index(), 4, "the whole wave was consumed");
+        assert!(
+            !voice.is_active(),
+            "a one-shot whose last sample lands in the final output slot must \
+             retire on that mixer iteration"
+        );
     }
 
     #[test]

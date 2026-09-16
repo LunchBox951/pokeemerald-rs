@@ -105,11 +105,16 @@
 //! touches one file, and `xtask` and `assets` never depend on each other.
 //!
 //! The entry constructors are what makes two backends produce one pack. A
-//! hand-built [`PackEntry`] literal can promise a `color_count` or a
-//! `width`/`height` its payload does not deliver, and two backends writing
-//! their own literals drift. Both now shape entries here, so the same
-//! normalized input yields the same bytes whichever backend read it. See
-//! the `entry` module docs.
+//! hand-built [`PackEntry`] literal can still promise an image bit depth
+//! the format does not publish, or a `color_count` or `width`/`height` its
+//! payload does not deliver — [`PackWriter::finish`] refuses to serialize
+//! one, the same shape check [`parse_directory`] applies on the way back,
+//! so that particular literal never reaches a reader as a pack. Two
+//! backends independently shaping otherwise-valid payloads can still drift
+//! from each other without either violating the format, which finish
+//! cannot catch. Both now shape entries here, so the same normalized input
+//! yields the same bytes whichever backend read it. See the `entry` module
+//! docs.
 //!
 //! [`default_pack_path`] resolves at runtime, first match wins:
 //! 1. `$POKEEMERALD_PACK`, if set and non-empty.
