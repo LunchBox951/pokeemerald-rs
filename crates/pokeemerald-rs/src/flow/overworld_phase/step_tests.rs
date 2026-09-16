@@ -1192,12 +1192,8 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     );
 }
 
-/// Issue #1127's remaining arrow half: the same `previous_elevation()`
-/// contract for the *post-movement* arrow re-poll (`step.rs:620-627`).
-/// Pack-gated, unlike its door sibling above, because only the warp landing
-/// is observable here; `step`'s own `pre_movement_arrow_elevation_tests` and
-/// `post_movement_arrow_elevation_tests` assert the two arrow lookups
-/// pack-free instead.
+/// End-to-end landing check for the post-movement arrow lookup; the pack-free
+/// `post_movement_arrow_elevation_tests` in `step.rs` pins the lookup itself.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
