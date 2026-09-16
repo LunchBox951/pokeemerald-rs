@@ -47,16 +47,13 @@ const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 struct PreMovementFieldInput {
     facing: Direction,
     position: (i32, i32),
-    /// The pre-movement *collision* elevation, for [`Self::step`]'s crossing-
-    /// refusal restore only -- not a warp-lookup elevation (those are
-    /// [`PlayerState::previous_elevation`], resolved locally where each
-    /// lookup happens).
+    /// The pre-movement collision elevation, restored after a refused crossing.
     elevation: u8,
     arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
     /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
-    /// against the tile the player *faces*, not one they stand on -- see [`Self::step`]'s
-    /// "Warp timing" section.
+    /// against the tile the player *faces*, not one they stand on -- see
+    /// [`OverworldPhase::step`]'s "Warp timing" section.
     animated_door_trigger: Option<WarpTrigger>,
     interaction: Option<InteractionOutcome>,
     /// The menu a fresh `START` press built, if
@@ -1150,6 +1147,91 @@ mod pre_movement_arrow_elevation_tests {
              3 (field_player_avatar.c:1192-1195) -- a lookup at the collision elevation \
              0 misses the warp event stored at 3; got {:?}",
             pre.arrow_trigger
+        );
+    }
+}
+
+#[cfg(test)]
+mod animated_door_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_NORMAL};
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::Buttons;
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const DOOR: (u16, u16) = (8, 5);
+
+    fn cave_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        scene.runtime(CAVE, header, events)
+    }
+
+    /// A transition landing then a multi-level landing keeps collision 0 and
+    /// retained 3 (`PlayerState::adopt_elevation`).
+    #[test]
+    fn the_animated_door_poll_resolves_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        assert!(
+            events
+                .warp_events
+                .iter()
+                .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+            "fixture precondition: the door tile carries a warp event stored at elevation 3"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[
+                    (DOOR, MB_ANIMATED_DOOR, 3),
+                    ((8, 6), MB_NORMAL, 15),
+                    ((8, 7), MB_NORMAL, 0),
+                ],
+            ),
+            CAVE,
+            PlayerState::new((8, 8), 3, Direction::North),
+            None,
+        );
+
+        for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::UP));
+        }
+        assert_eq!(phase.player.position(), (8, 6));
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3)
+        );
+
+        let pre: PreMovementFieldInput = {
+            let runtime = cave_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::UP),
+                Some(Direction::North),
+                &runtime,
+            )
+        };
+        assert!(
+            matches!(
+                pre.animated_door_trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_GRANITE_CAVE_B2F")
+            ),
+            "the animated-door poll must resolve at PlayerGetElevation()'s retained 3 \
+             (field_player_avatar.c:1192-1195) -- a lookup at the collision elevation 0 \
+             misses the warp event stored at 3; got {:?}",
+            pre.animated_door_trigger
         );
     }
 }

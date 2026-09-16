@@ -1125,9 +1125,6 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
     const FLOOR: (u16, u16) = (7, 5);
     const DOOR: (u16, u16) = (8, 5);
 
-    // Fixture precondition, read off the generated table rather than
-    // restated: the map really declares a warp event on the door tile, at
-    // an ordinary (non-transition) elevation.
     let events = assets::MapEventsTable::new()
         .resolve(CAVE)
         .expect("Granite Cave B1F resolves in the generated map-events table");
@@ -1150,15 +1147,9 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
         None,
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
-    // Granite Cave's table fails today's executability screen, which would
-    // freeze the very bookkeeping this test reads the warp through; the
-    // screen has its own tests (same override, same reason, as
-    // `a_door_warp_frame_never_reaches_the_encounter_roll`).
+    // Same screen override as `a_door_warp_frame_never_reaches_the_encounter_roll`.
     phase.wild_table_screen = Some((CAVE, true));
 
-    // One step east onto the elevation-3 cave floor: inside the
-    // post-transition immunity window, so it draws nothing, but it does
-    // record its tile's behavior.
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::RIGHT));
     }
@@ -1169,7 +1160,6 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
         "fixture precondition: an unsuppressed roll really does overwrite this"
     );
 
-    // One more step east, onto the door tile's transition elevation.
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::RIGHT));
     }
@@ -1201,10 +1191,6 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
     const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
     const DOORMAT: (u16, u16) = (7, 8);
 
-    // Fixture preconditions, read off the generated table rather than
-    // restated: the doormat carries a real warp event stored at an ordinary
-    // (non-transition) elevation, and it leads to the map this test watches
-    // for.
     let events = assets::MapEventsTable::new()
         .resolve(CENTER)
         .expect("Oldale Town's Pokémon Center resolves in the generated map-events table");
