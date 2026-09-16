@@ -1401,7 +1401,7 @@ fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
 }
 
 /// A directory exactly `total_len` bytes long, from components under 255 bytes.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {
     let mut path = root.to_path_buf();
     let mut remaining = total_len - path.as_os_str().len();
@@ -1422,8 +1422,9 @@ fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {
     path
 }
 
-/// The fixed lock name must not push a host-valid save path past `PATH_MAX`.
-#[cfg(unix)]
+/// The fixed lock name must not push a host-valid save path past `PATH_MAX`;
+/// the limit is Linux's, so the test is too.
+#[cfg(target_os = "linux")]
 #[test]
 fn locks_a_save_whose_directory_leaves_room_for_the_save_but_not_the_lock_name() {
     const LONGEST_PATH: usize = 4095;
