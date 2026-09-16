@@ -437,7 +437,7 @@ impl SaveFile {
         };
         let file = Self::open_lock_file(&path).map_err(lock_error)?;
         file.lock().map_err(lock_error)?;
-        if self.resolves_to(&path)? {
+        if self.resolves_to(&path, &file)? {
             return Err(SaveFileError::LockPathIsSave { path });
         }
         if first_save {
@@ -448,38 +448,80 @@ impl SaveFile {
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// Whether this save path names the same entry as `lock`.
+    /// Whether this save path names the same directory entry as the lock
+    /// file `file`, opened at `lock`.
     ///
-    /// Compares the host's own canonical spelling of each path, not their
-    /// bytes. A volume's aliases -- ASCII and non-ASCII case folding,
-    /// Unicode normalisation, symlinks -- cannot be enumerated from `std`,
-    /// but `canonicalize` reports the entry a name actually resolves to, so
-    /// one object under two spellings is caught whatever the spellings are.
+    /// Compares filesystem identity, not path text. A volume's aliases --
+    /// ASCII and non-ASCII case folding, Unicode normalisation, symlinks,
+    /// hard links -- cannot be enumerated from `std`, and canonical text
+    /// does not stand in for identity: on a case-folding Linux directory
+    /// `canonicalize` is `realpath`, which keeps the caller's own spelling,
+    /// so `.EMERALD.LOCK` and `.emerald.lock` name one entry yet compare
+    /// unequal. `st_dev` and `st_ino`, taken from the open lock handle
+    /// rather than from its path, answer the question directly.
+    ///
     /// Callers open the lock file first, so a save path aliasing it resolves
     /// to a file that exists by the time this runs.
     ///
     /// A save that does not exist is not the lock file. Any other failure to
-    /// resolve it is reported rather than assumed distinct.
+    /// inspect it is reported rather than assumed distinct.
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Lock`] if either path could not be resolved.
-    fn resolves_to(&self, lock: &Path) -> Result<bool, SaveFileError> {
-        let save = match std::fs::canonicalize(&self.path) {
-            Ok(save) => save,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(source) => {
-                return Err(SaveFileError::Lock {
-                    path: self.path.clone(),
-                    source,
-                })
-            }
+    /// [`SaveFileError::Lock`] if either file could not be inspected.
+    #[cfg(unix)]
+    fn resolves_to(&self, lock: &Path, file: &std::fs::File) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let held = file.metadata().map_err(|source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        })?;
+        let Some(save) = self.metadata_following_links()? else {
+            return Ok(false);
         };
+        Ok((save.dev(), save.ino()) == (held.dev(), held.ino()))
+    }
+
+    /// As the `unix` [`SaveFile::resolves_to`], comparing canonical paths.
+    ///
+    /// Windows exposes no *stable* by-handle identity accessor, but its
+    /// `canonicalize` resolves through `GetFinalPathNameByHandle`, which
+    /// reports the entry's own stored spelling rather than the caller's.
+    /// One entry under two spellings therefore canonicalises to one path,
+    /// so the comparison is identity-equivalent for the aliases a Windows
+    /// volume folds together.
+    #[cfg(not(unix))]
+    fn resolves_to(&self, lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
+        let Some(_) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
+        let save = std::fs::canonicalize(&self.path).map_err(|source| SaveFileError::Lock {
+            path: self.path.clone(),
+            source,
+        })?;
         let lock = std::fs::canonicalize(lock).map_err(|source| SaveFileError::Lock {
             path: lock.to_path_buf(),
             source,
         })?;
         Ok(save == lock)
+    }
+
+    /// This save's metadata, following a final symlink, or `None` when no
+    /// file is there yet.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if the save exists but could not be inspected.
+    fn metadata_following_links(&self) -> Result<Option<std::fs::Metadata>, SaveFileError> {
+        match std::fs::metadata(&self.path) {
+            Ok(metadata) => Ok(Some(metadata)),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(SaveFileError::Lock {
+                path: self.path.clone(),
+                source,
+            }),
+        }
     }
 
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {

@@ -1042,6 +1042,42 @@ fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
     }
 }
 
+/// The refusal must compare filesystem identity, not canonical path text.
+///
+/// `canonicalize` is not a canonical *entry*: on a case-folding Linux
+/// directory it is `realpath`, which keeps the caller's own spelling, so a
+/// save configured as `.EMERALD.LOCK` names the same entry as
+/// `.emerald.lock` yet canonicalises to a different string -- and a
+/// text comparison would admit it, after which its write renames a fresh
+/// inode over the file every locker holds.
+///
+/// A hard link reproduces exactly that shape -- one inode, two canonical
+/// paths -- on any Unix host, so the property is pinned without needing a
+/// case-folding volume to test on.
+#[cfg(unix)]
+#[test]
+fn a_save_sharing_the_lock_files_inode_is_refused_despite_a_different_canonical_path() {
+    let dir = TempDir::new("save-hard-linked-to-the-lock");
+    let file = SaveFile::at(dir.join("linked.sav"));
+
+    std::fs::write(dir.join(LOCK_FILE_NAME), b"").unwrap();
+    std::fs::hard_link(dir.join(LOCK_FILE_NAME), file.path()).unwrap();
+    assert_ne!(
+        std::fs::canonicalize(file.path()).unwrap(),
+        std::fs::canonicalize(file.lock_path()).unwrap(),
+        "the two names must canonicalise differently, or this does not exercise the \
+         boundary a path-text comparison misses"
+    );
+
+    match file.lock() {
+        Err(SaveFileError::LockPathIsSave { .. }) => {}
+        other => panic!(
+            "a save on the lock file's own inode must be refused, got {:?}",
+            other.map(|_| "a guard")
+        ),
+    }
+}
+
 /// The refusal must catch only the save that *is* the lock file. An
 /// ordinary save sharing the directory holds that lock rather than being
 /// refused by it, before and after it exists on disk.
