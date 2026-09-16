@@ -22,9 +22,8 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
 
-/// The one lock file [`SaveFile::lock`] uses in any save directory. See
-/// [`SaveFile::lock_path`]. At most `_POSIX_NAME_MAX` (14) bytes, so it fits
-/// every host whose save the staging code can already narrow a name onto.
+/// The one lock file [`SaveFile::lock`] uses in any save directory. At most
+/// `_POSIX_NAME_MAX` (14) bytes, so it fits every host that accepts a save.
 pub const LOCK_FILE_NAME: &str = ".emerald.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
