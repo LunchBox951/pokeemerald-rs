@@ -65,6 +65,11 @@ pub enum SaveFileError {
         /// The lock path the save path resolves to.
         path: PathBuf,
     },
+    /// The lock slot leads somewhere else instead of being a file itself.
+    LockPathIsAlias {
+        /// The lock path that does not name the file it opens.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -96,6 +101,13 @@ impl std::fmt::Display for SaveFileError {
             Self::Lock { path, source } => {
                 write!(f, "save file: locking {} failed: {source}", path.display())
             }
+            Self::LockPathIsAlias { path } => write!(
+                f,
+                "save file: the lock slot {} does not name the file it opens -- each \
+                 locker would follow it to whatever it led to at the time, so they \
+                 would not exclude one another",
+                path.display()
+            ),
             Self::LockPathIsSave { path } => write!(
                 f,
                 "save file: this save resolves to {}, the lock file every save in that \
@@ -122,7 +134,10 @@ impl std::error::Error for SaveFileError {
             | Self::Read { source, .. }
             | Self::Write { source, .. }
             | Self::Lock { source, .. } => Some(source),
-            Self::NoDataDirectory | Self::LockPathIsSave { .. } | Self::BadLength { .. } => None,
+            Self::NoDataDirectory
+            | Self::LockPathIsSave { .. }
+            | Self::LockPathIsAlias { .. }
+            | Self::BadLength { .. } => None,
         }
     }
 }
@@ -437,6 +452,9 @@ impl SaveFile {
         };
         let file = Self::open_lock_file(&path).map_err(lock_error)?;
         file.lock().map_err(lock_error)?;
+        if !Self::names_its_own_entry(&path, &file)? {
+            return Err(SaveFileError::LockPathIsAlias { path });
+        }
         if self.resolves_to(&path, &file)? {
             return Err(SaveFileError::LockPathIsSave { path });
         }
@@ -446,6 +464,63 @@ impl SaveFile {
             }
         }
         Ok(SaveFileGuard { _lock_file: file })
+    }
+
+    /// Whether the entry at `lock` is the very file `file` was opened on.
+    ///
+    /// Opening follows a symlink, so a symlink planted in the fixed lock
+    /// slot silently redirects every locker to whatever it points at *at
+    /// that moment*. Two lockers that open it either side of the target's
+    /// own rename then hold two different inodes and exclude nobody, so the
+    /// slot must name the inode it opens rather than merely lead to one.
+    /// Comparing the unfollowed entry against the open handle says exactly
+    /// that, and catches an entry swapped since the open besides.
+    ///
+    /// A hard link is deliberately *not* refused. It is a name of its own,
+    /// so the slot keeps naming the inode this guard holds however the
+    /// link's other names are renamed, and a later locker opening the slot
+    /// still lands on that same inode. Refusing it would break the
+    /// hard-linking backup tools that snapshot a save directory, for a
+    /// hazard it does not carry.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if either the entry or the handle could not
+    /// be inspected.
+    #[cfg(unix)]
+    fn names_its_own_entry(lock: &Path, file: &std::fs::File) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let lock_error = |source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        };
+        let held = file.metadata().map_err(lock_error)?;
+        let slot = std::fs::symlink_metadata(lock).map_err(lock_error)?;
+        Ok((slot.dev(), slot.ino()) == (held.dev(), held.ino()))
+    }
+
+    /// As the `unix` [`SaveFile::names_its_own_entry`], rejecting a
+    /// symlinked slot outright.
+    ///
+    /// Windows exposes no *stable* by-handle identity, so the entry cannot
+    /// be compared against the open handle; refusing a slot that is a
+    /// symlink at all covers the same ground more bluntly. Creating one
+    /// there demands a privilege an ordinary user does not hold, and
+    /// [`SaveFile::deny_delete_sharing`] already stops an aliased target
+    /// from being replaced while any guard holds it -- the step that would
+    /// otherwise split two lockers across two inodes.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if the entry could not be inspected.
+    #[cfg(not(unix))]
+    fn names_its_own_entry(lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
+        let slot = std::fs::symlink_metadata(lock).map_err(|source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        })?;
+        Ok(!slot.is_symlink())
     }
 
     /// Whether this save path names the same directory entry as the lock

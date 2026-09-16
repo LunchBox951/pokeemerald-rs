@@ -1083,6 +1083,70 @@ fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
     drop(guard);
 }
 
+/// A symlink planted in the fixed lock slot must be refused.
+///
+/// Opening follows it, so every locker lands on whatever it points at at
+/// that moment. Let the target be replaced by its own directory's save --
+/// an ordinary rename there -- and a locker from before the rename holds
+/// the old inode while one from after holds the new, so two processes run
+/// the read-modify-write cycle this lock exists to serialise.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_slot_is_refused() {
+    let dir = TempDir::new("symlinked-lock-slot");
+    let elsewhere = TempDir::new("symlinked-lock-slot-target");
+    let target = elsewhere.join("someone-elses.sav");
+    std::fs::write(&target, b"").unwrap();
+
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    std::os::unix::fs::symlink(&target, file.lock_path()).unwrap();
+
+    match file.lock() {
+        Err(SaveFileError::LockPathIsAlias { path }) => assert_eq!(path, file.lock_path()),
+        other => panic!(
+            "a symlinked lock slot must be refused, got {:?}",
+            other.map(|_| "a guard")
+        ),
+    }
+}
+
+/// A hard link in the lock slot must still be accepted.
+///
+/// Unlike a symlink it is a name of its own: renaming any of the inode's
+/// other names leaves this slot naming the inode this guard holds, so a
+/// later locker still lands on it and is still excluded. Hard-linking
+/// backup tools snapshot directories this way, and refusing them would
+/// cost availability for a hazard that is not there.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_lock_slot_is_still_accepted() {
+    let dir = TempDir::new("hard-linked-lock-slot");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+
+    std::fs::write(file.lock_path(), b"").unwrap();
+    std::fs::hard_link(file.lock_path(), dir.join("backup-snapshot")).unwrap();
+
+    let guard = file
+        .lock()
+        .expect("a second name for the lock file's own inode must not refuse the lock");
+    drop(guard);
+}
+
+/// An ordinary lock file an earlier run left behind must still be usable:
+/// the slot check must reject aliases, not every pre-existing file.
+#[cfg(unix)]
+#[test]
+fn an_ordinary_pre_existing_lock_file_is_still_accepted() {
+    let dir = TempDir::new("pre-existing-lock-slot");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    std::fs::write(file.lock_path(), b"left by an earlier run").unwrap();
+
+    let guard = file
+        .lock()
+        .expect("an ordinary lock file from an earlier run must be reusable");
+    drop(guard);
+}
+
 /// The refusal must compare filesystem identity, not canonical path text.
 ///
 /// `canonicalize` is not a canonical *entry*: on a case-folding Linux
