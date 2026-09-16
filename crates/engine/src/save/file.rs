@@ -680,18 +680,11 @@ impl SaveFile {
     /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
     /// read-only handle, and these contents are never read or written.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
-        // `create_new` is `O_EXCL`: it never follows a symlink, so a slot
-        // swapped in after the vetting cannot make this create a file
-        // elsewhere. Only a file this call created has its mode widened.
-        let mut fresh = std::fs::OpenOptions::new();
-        fresh.read(true).write(true).create_new(true);
-        Self::deny_delete_sharing(&mut fresh);
-        match fresh.open(path) {
-            Ok(file) => {
-                Self::open_to_every_owner(&file);
-                return Ok(file);
-            }
-            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
+        // Creation is exclusive and never follows a symlink, so a slot
+        // swapped in after the vetting cannot make this create a file elsewhere.
+        match Self::create_lock_file(path) {
+            Ok(Some(file)) => return Ok(file),
+            Ok(None) => {}
             Err(other) => return Err(other),
         }
         let mut existing = std::fs::OpenOptions::new();
@@ -722,19 +715,61 @@ impl SaveFile {
     ///
     /// Read and write sharing stay permitted, so a second process still
     /// opens this same file to contend for the lock; only delete is denied.
-    /// A lock created under `umask 077` is `0600`, which the read-only
-    /// fallback cannot open either; the creator widens the file it created
-    /// to `0666` so every later owner can lock it. A pre-existing slot keeps
-    /// whatever mode its owner chose. Best effort.
+    /// Creates the lock slot, or returns `None` when it already exists.
+    ///
+    /// A lock created under `umask 077` is `0600`, which no later owner can
+    /// open; the file is staged beside the slot at `0666` and published with
+    /// `link(2)`, which is atomic and never follows a symlink, so no process
+    /// can observe a fresh lock before its mode is final. A pre-existing slot
+    /// keeps whatever mode its owner chose. A filesystem without hard links
+    /// falls back to creating the slot in place and widening it afterwards.
     #[cfg(unix)]
-    fn open_to_every_owner(file: &std::fs::File) {
+    fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         use std::os::unix::fs::PermissionsExt;
+        let staged = path.with_file_name(format!(".lk{}", std::process::id()));
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        let file = match options.open(&staged) {
+            Ok(file) => file,
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::fs::remove_file(&staged)?;
+                options.open(&staged)?
+            }
+            Err(other) => return Err(other),
+        };
         let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+        let linked = std::fs::hard_link(&staged, path);
+        let _ = std::fs::remove_file(&staged);
+        match linked {
+            Ok(()) => Ok(Some(file)),
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(_) => {
+                let created = options.open(path);
+                match created {
+                    Ok(file) => {
+                        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+                        Ok(Some(file))
+                    }
+                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+                    Err(other) => Err(other),
+                }
+            }
+        }
     }
 
-    /// Windows has no umask; ACLs inherit from the directory.
+    /// Windows has no umask; ACLs inherit from the directory, so the slot is
+    /// created in place.
     #[cfg(not(unix))]
-    fn open_to_every_owner(_file: &std::fs::File) {}
+    fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+        let mut fresh = std::fs::OpenOptions::new();
+        fresh.read(true).write(true).create_new(true);
+        Self::deny_delete_sharing(&mut fresh);
+        match fresh.open(path) {
+            Ok(file) => Ok(Some(file)),
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
 
     #[cfg(windows)]
     fn deny_delete_sharing(options: &mut std::fs::OpenOptions) {
