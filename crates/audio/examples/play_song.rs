@@ -73,15 +73,17 @@ fn main() -> ExitCode {
     let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
 
     // Queue samples the device can consume the instant it starts, before the
-    // stream exists to consume anything.
-    let dropped = prefill(&mut seq, &producer, &mut buffer, |chunk| {
-        producer.push(chunk)
-    });
-    if dropped > 0 {
-        eprintln!("audio playback setup failed: prefill dropped {dropped} sample(s)");
-        return ExitCode::FAILURE;
-    }
-    match start_playback(&mut output, AudioOutput::start) {
+    // stream exists to consume anything. The ordering lives inside
+    // `prefill_then_start`, which is the only startup step `main` performs,
+    // so the test that drives it pins the sequence this call site uses.
+    match prefill_then_start(
+        &mut seq,
+        &producer,
+        &mut buffer,
+        &mut output,
+        |chunk| producer.push(chunk),
+        AudioOutput::start,
+    ) {
         StartOutcome::Playing => {}
         StartOutcome::PlaybackSetupFailure => return ExitCode::FAILURE,
     }
@@ -214,6 +216,36 @@ fn prefill(
         queued += buffer.len();
     }
     dropped
+}
+
+/// Fill the ring, then start the stream — `main`'s whole startup step, in
+/// one place.
+///
+/// The device's first callback can fire the instant `start` returns, so every
+/// sample [`prefill`] queues has to be in the ring before that call; a stream
+/// started on an empty ring zero-fills and counts an underrun before the
+/// first frame exists. Keeping both steps here, rather than as two statements
+/// in `main`, gives that ordering a single call site the tests below drive
+/// through the injected `start`, the same seam
+/// `pokeemerald_rs::music::player`'s `start_with_context_and_starter` uses.
+///
+/// A prefill the ring refuses is a setup failure reported in the wording
+/// [`classify_open_error`] uses, and the stream is never started. `push` and
+/// `start` are injected as in [`push_frame`].
+fn prefill_then_start(
+    seq: &mut Sequencer,
+    producer: &Producer,
+    buffer: &mut [f32],
+    output: &mut AudioOutput,
+    push: impl FnMut(&[f32]) -> usize,
+    start: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
+) -> StartOutcome {
+    let dropped = prefill(seq, producer, buffer, push);
+    if dropped > 0 {
+        eprintln!("audio playback setup failed: prefill dropped {dropped} sample(s)");
+        return StartOutcome::PlaybackSetupFailure;
+    }
+    start_playback(output, start)
 }
 
 /// Bounds on how long [`push_frame`] and [`wait_for_drain`] keep retrying.
@@ -455,10 +487,10 @@ mod tests {
     use platform::{AudioOutput, PlatformError};
 
     use super::{
-        build_song, classify_open_error, device_tail_wait, prefill, push_frame, start_playback,
-        wait_for_device_tail, wait_for_drain, wait_for_frame_deadline, DrainError, OpenOutcome,
-        PushError, RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN,
-        DEVICE_TAIL_MAX,
+        build_song, classify_open_error, device_tail_wait, prefill_then_start, push_frame,
+        start_playback, wait_for_device_tail, wait_for_drain, wait_for_frame_deadline, DrainError,
+        OpenOutcome, PushError, RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK,
+        DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -511,6 +543,11 @@ mod tests {
     /// samples must already be sitting in the ring before that call — not
     /// queued afterward, by which point a real callback could already have
     /// drained an empty ring into an underrun.
+    ///
+    /// This drives `prefill_then_start`, the single startup step `main`
+    /// performs, rather than sequencing the two halves here: reversing them
+    /// at that call site leaves the starter looking at an untouched ring and
+    /// fails this test, which reproducing the order locally would not catch.
     #[test]
     fn samples_are_queued_before_the_starter_runs() {
         let mut output = AudioOutput::null(512);
@@ -518,29 +555,71 @@ mod tests {
         let capacity = producer.capacity();
         let mut seq = Sequencer::new(build_song());
         let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+        let starter_saw_queued_samples = Cell::new(false);
 
-        let dropped = prefill(&mut seq, &producer, &mut buffer, |chunk| {
-            producer.push(chunk)
-        });
+        let result = prefill_then_start(
+            &mut seq,
+            &producer,
+            &mut buffer,
+            &mut output,
+            |chunk| producer.push(chunk),
+            |output| {
+                starter_saw_queued_samples.set(producer.available_space() < capacity);
+                AudioOutput::start(output)
+            },
+        );
+
         assert_eq!(
-            dropped, 0,
+            result,
+            StartOutcome::Playing,
             "a fresh ring must accept the whole prefill with room to spare"
         );
         assert!(
-            producer.available_space() < capacity,
-            "prefill must have queued samples before the starter ever runs"
-        );
-
-        let starter_saw_queued_samples = Cell::new(false);
-        let result = start_playback(&mut output, |output| {
-            starter_saw_queued_samples.set(producer.available_space() < capacity);
-            AudioOutput::start(output)
-        });
-
-        assert_eq!(result, StartOutcome::Playing);
-        assert!(
             starter_saw_queued_samples.get(),
             "samples must already be queued when the starter is invoked, not after"
+        );
+        assert!(output.is_running(), "an accepted start must play");
+    }
+
+    /// A ring that refuses part of the prefill means the startup assumption
+    /// this file rests on is broken, so the stream must never be started on
+    /// that short fill — the empty-ring underrun the prefill exists to
+    /// prevent would simply happen a frame later.
+    #[test]
+    fn a_refused_prefill_is_a_setup_failure_and_never_starts_the_device() {
+        let mut output = AudioOutput::null(512);
+        let producer = output.producer();
+        let capacity = producer.capacity();
+        let mut seq = Sequencer::new(build_song());
+        let mut buffer = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+        let starter_ran = Cell::new(false);
+
+        let result = prefill_then_start(
+            &mut seq,
+            &producer,
+            &mut buffer,
+            &mut output,
+            // One sample short of the frame, every frame: the accounting
+            // `platform::Producer::push` documents for a refused tail.
+            |chunk| producer.push(&chunk[..chunk.len().saturating_sub(1)]),
+            |output| {
+                starter_ran.set(true);
+                AudioOutput::start(output)
+            },
+        );
+
+        assert_eq!(result, StartOutcome::PlaybackSetupFailure);
+        assert!(
+            !starter_ran.get(),
+            "a prefill the ring refused must not reach the starter"
+        );
+        assert!(
+            !output.is_running(),
+            "a refused prefill must not leave the device playing"
+        );
+        assert!(
+            producer.available_space() < capacity,
+            "the accepted head of the prefill is still queued; only the tail was refused"
         );
     }
 
