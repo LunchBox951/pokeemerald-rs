@@ -23,8 +23,9 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
 
 /// The one lock file [`SaveFile::lock`] uses in any save directory. See
-/// [`SaveFile::lock_path`].
-const LOCK_FILE_NAME: &str = ".pokeemerald-rs.lock";
+/// [`SaveFile::lock_path`]. At most `_POSIX_NAME_MAX` (14) bytes, so it fits
+/// every host whose save the staging code can already narrow a name onto.
+pub const LOCK_FILE_NAME: &str = ".emerald.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
 #[derive(Debug)]
@@ -563,7 +564,7 @@ impl SaveFile {
     }
 
     /// This directory's one lock file: fixed, so it never depends on the
-    /// save's basename, and short, so it always fits the component limit.
+    /// save's basename, and within the POSIX minimum component limit.
     fn lock_path(&self) -> PathBuf {
         self.path.with_file_name(LOCK_FILE_NAME)
     }

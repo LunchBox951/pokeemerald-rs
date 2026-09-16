@@ -1,8 +1,8 @@
 //! Persistence tests use per-test scratch paths and never the per-user save.
 
 use engine::save::{
-    SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStore, Sector, SECTOR_SIGNATURE,
-    SECTOR_SIZE,
+    SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStore, Sector, LOCK_FILE_NAME,
+    SECTOR_SIGNATURE, SECTOR_SIZE,
 };
 
 use super::{SaveFileStatus, SaveLineage, SaveSlot};
@@ -461,7 +461,7 @@ fn storing_takes_the_inter_process_lock() {
     )
     .unwrap();
 
-    let lock_path = temp.dir.join(".pokeemerald-rs.lock");
+    let lock_path = temp.dir.join(LOCK_FILE_NAME);
     assert!(
         lock_path.exists(),
         "SaveSlot::store must acquire SaveFile::lock, which creates {}",

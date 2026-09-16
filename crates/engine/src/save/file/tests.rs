@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::{
     data_dir_for, default_save_path_from, staging, HostFamily, SaveFile, SaveFileError,
-    SAVE_DIR_NAME, SAVE_FILE_NAME, SAVE_PATH_ENV,
+    LOCK_FILE_NAME, SAVE_DIR_NAME, SAVE_FILE_NAME, SAVE_PATH_ENV,
 };
 use crate::save::block::{SaveBlock1, SaveBlock2};
 use crate::save::store::{SaveStatus, SaveStore, FLASH_IMAGE_LEN};
@@ -879,7 +879,7 @@ fn the_lock_path_is_one_fixed_name_per_directory() {
     for spelling in &spellings {
         assert_eq!(
             SaveFile::at(dir.join(spelling)).lock_path(),
-            dir.path.join(".pokeemerald-rs.lock"),
+            dir.path.join(LOCK_FILE_NAME),
             "every save in one directory must derive one fixed lock path, whatever \
              its basename's spelling or encoded length"
         );
@@ -896,7 +896,7 @@ fn a_non_utf8_save_basename_still_takes_the_directorys_lock() {
     let dir = TempDir::new("non-utf8-lock");
     let file = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x80")));
 
-    assert_eq!(file.lock_path(), dir.path.join(".pokeemerald-rs.lock"));
+    assert_eq!(file.lock_path(), dir.path.join(LOCK_FILE_NAME));
     let guard = file
         .lock()
         .expect("a non-UTF-8 save basename must still be lockable");
@@ -1000,7 +1000,7 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
 #[test]
 fn a_save_configured_at_the_lock_path_is_refused_rather_than_locked() {
     let dir = TempDir::new("save-at-the-lock-path");
-    let file = SaveFile::at(dir.join(".pokeemerald-rs.lock"));
+    let file = SaveFile::at(dir.join(LOCK_FILE_NAME));
 
     match file.lock() {
         Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, file.lock_path()),
@@ -1025,8 +1025,8 @@ fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
     let dir = TempDir::new("save-aliasing-the-lock-path");
     let file = SaveFile::at(dir.join("aliased.sav"));
 
-    std::fs::write(dir.join(".pokeemerald-rs.lock"), b"").unwrap();
-    std::os::unix::fs::symlink(dir.join(".pokeemerald-rs.lock"), file.path()).unwrap();
+    std::fs::write(dir.join(LOCK_FILE_NAME), b"").unwrap();
+    std::os::unix::fs::symlink(dir.join(LOCK_FILE_NAME), file.path()).unwrap();
     assert_ne!(
         file.path().file_name(),
         file.lock_path().file_name(),
@@ -1061,4 +1061,13 @@ fn an_ordinary_save_beside_the_lock_file_still_locks() {
         .lock()
         .expect("an existing ordinary save must still be lockable");
     drop(guard);
+}
+
+/// `_POSIX_NAME_MAX` is 14; a host at that limit still writes short saves.
+#[test]
+fn the_lock_file_name_fits_the_posix_minimum_component_limit() {
+    assert!(
+        LOCK_FILE_NAME.len() <= 14,
+        "{LOCK_FILE_NAME:?} exceeds 14 bytes"
+    );
 }
