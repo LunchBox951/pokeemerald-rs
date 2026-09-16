@@ -205,6 +205,7 @@ where
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
 
+    let mut renamed = false;
     let result = (|| {
         std::fs::write(&staged_rgb, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
@@ -213,6 +214,7 @@ where
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        renamed = true;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
@@ -225,10 +227,10 @@ where
         ))
     })();
 
-    if result.is_err() {
-        // `staging` already cleans up its own candidate, respecting ownership.
+    // Neither staging name is removed once it may no longer be exclusively
+    // ours: the rename frees `staged_dir`'s name, and `generation_dir`'s was never claimed.
+    if result.is_err() && !renamed {
         let _ = std::fs::remove_dir_all(&staged_dir);
-        let _ = std::fs::remove_dir_all(&generation_dir);
     }
     result
 }

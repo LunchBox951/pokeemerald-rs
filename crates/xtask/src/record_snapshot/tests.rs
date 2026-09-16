@@ -732,3 +732,55 @@ fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() 
         );
     }
 }
+
+/// Failure cleanup must only remove what this publish created. The generation
+/// name is derived from the scene, the process id, and a counter, so another
+/// writer with access to `output_dir` can take that name after the `exists`
+/// probe. The promoting rename then fails, and the cleanup that follows must
+/// not recursively delete a directory this publish never owned.
+#[test]
+fn failed_publication_leaves_a_generation_directory_it_never_created() {
+    let output_dir = scratch_path("unowned-generation-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    let planted = std::cell::RefCell::new(PathBuf::new());
+    let take_the_generation_name = || {
+        // Whatever name this publish staged under is the name it will rename to.
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it renames");
+        let generation = staged
+            .trim_start_matches('.')
+            .trim_end_matches(".staged")
+            .to_owned();
+        let generation_dir = output_dir.join(generation);
+        std::fs::create_dir(&generation_dir).unwrap();
+        std::fs::write(generation_dir.join("bystander"), b"not ours").unwrap();
+        *planted.borrow_mut() = generation_dir;
+        Ok(())
+    };
+
+    let error = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_generation_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let planted = planted.borrow().clone();
+    assert_eq!(
+        std::fs::read(planted.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish never created",
+        planted.display()
+    );
+
+    drop(out_guard);
+}
