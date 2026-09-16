@@ -997,8 +997,7 @@ mod post_movement_arrow_elevation_tests {
         scene.runtime(CENTER, header, events)
     }
 
-    /// The post-movement arrow poll resolves at the retained previous
-    /// elevation, asserted on `resolve_warp_trigger` since pack-free `warp_to` is a no-op.
+    /// Asserted on `resolve_warp_trigger`, since pack-free `warp_to` is a no-op.
     #[test]
     fn the_drain_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
         let events = assets::MapEventsTable::new()
@@ -1008,8 +1007,7 @@ mod post_movement_arrow_elevation_tests {
         assert_eq!((doormat.x, doormat.y), (7, 8));
         assert_eq!(
             doormat.elevation, 3,
-            "fixture precondition: the doormat's warp event is stored at an ordinary \
-             elevation, not the transition wildcard every query already matches"
+            "fixture precondition: the doormat's warp event is stored at elevation 3"
         );
 
         let mut phase = OverworldPhase::for_test(
@@ -1023,19 +1021,14 @@ mod post_movement_arrow_elevation_tests {
             None,
         );
 
-        // One call short of the crossing's drain: Down held throughout, as
-        // upstream's `heldDirection` gate requires (`field_control_avatar.c:164-168`).
+        // One call short of the drain.
         for _ in 0..u32::from(WALK_FRAMES_PER_TILE) - 1 {
             phase.step(held(Buttons::DOWN));
         }
         assert_eq!(phase.player.position(), (7, 8));
-        assert!(
-            phase.player.in_transit(),
-            "fixture precondition: the crossing must still be draining here"
-        );
+        assert!(phase.player.in_transit());
 
-        // Replay the drain call in `step`'s own order: pre-movement field
-        // input, then this frame's movement, then the warp decision.
+        // The drain call, in `step`'s own order.
         let pre: PreMovementFieldInput = {
             let runtime = center_runtime(&phase.scene);
             phase.resolve_pre_movement_field_input(
@@ -1046,17 +1039,13 @@ mod post_movement_arrow_elevation_tests {
         };
         assert!(
             pre.arrow_trigger.is_none(),
-            "fixture precondition: the pre-movement preempt sees a player still in \
-             transit, so only the post-movement poll can fire this frame"
+            "fixture precondition: the pre-movement preempt sees a player in transit"
         );
         phase.player.tick();
         assert!(!phase.player.in_transit());
         assert_eq!(
             (phase.player.elevation(), phase.player.previous_elevation()),
-            (0, 3),
-            "fixture precondition: the landed transition cell is the collision \
-             elevation, while the retained previousElevation upstream looks warps up \
-             at is still 3"
+            (0, 3)
         );
 
         let runtime = center_runtime(&phase.scene);
@@ -1097,8 +1086,7 @@ mod pre_movement_arrow_elevation_tests {
         scene.runtime(CAVE, header, events)
     }
 
-    /// The at-rest arrow preempt resolves at the retained previous elevation
-    /// on a frame inside the turn lock, where upstream already reaches `TryArrowWarp`.
+    /// A frame inside the turn lock, where upstream already reaches `TryArrowWarp`.
     #[test]
     fn a_turning_frame_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
         let events = assets::MapEventsTable::new()
@@ -1109,8 +1097,7 @@ mod pre_movement_arrow_elevation_tests {
                 .warp_events
                 .iter()
                 .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
-            "fixture precondition: the arrow tile carries a warp event stored at \
-             elevation 3, not the transition wildcard every query already matches"
+            "fixture precondition: the arrow tile carries a warp event stored at elevation 3"
         );
 
         let mut phase = OverworldPhase::for_test(
@@ -1124,9 +1111,7 @@ mod pre_movement_arrow_elevation_tests {
             None,
         );
 
-        // One step east onto the arrow tile. East never matches a north
-        // arrow, so this walk only puts the player on a transition cell
-        // whose retained elevation is still 3.
+        // East never matches a north arrow; this only lands on the transition cell.
         for _ in 0..WALK_FRAMES_PER_TILE {
             phase.step(held(Buttons::RIGHT));
         }
@@ -1134,21 +1119,17 @@ mod pre_movement_arrow_elevation_tests {
         assert!(!phase.player.in_transit());
         assert_eq!(
             (phase.player.elevation(), phase.player.previous_elevation()),
-            (0, 3),
-            "fixture precondition: the transition cell is the collision elevation, \
-             while the retained previousElevation upstream looks warps up at is 3"
+            (0, 3)
         );
 
-        // A neutral frame ends the movement streak, so the next Up frame
-        // turns in place instead of stepping.
+        // A neutral frame ends the streak, so the next Up frame turns in place.
         phase.step(ButtonState::new());
         phase.step(held(Buttons::UP));
         assert_eq!(phase.player.facing(), Direction::North);
         assert_eq!(phase.player.position(), (8, 5), "the Up frame only turned");
         assert!(
             phase.player.turn_frames_remaining() > 0,
-            "fixture precondition: the standstill turn's lock is still draining, so \
-             this is exactly the frame upstream still runs TryArrowWarp on"
+            "fixture precondition: the standstill turn's lock is still draining"
         );
 
         let pre: PreMovementFieldInput = {

@@ -1213,8 +1213,7 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
     assert_eq!((doormat.x, doormat.y), (7, 8));
     assert_eq!(
         doormat.elevation, 3,
-        "fixture precondition: the doormat's warp event is stored at elevation 3, \
-         not the transition wildcard every query already matches"
+        "fixture precondition: the doormat's warp event is stored at elevation 3"
     );
 
     let mut phase = OverworldPhase::for_test(
@@ -1228,11 +1227,7 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
         None,
     );
 
-    // Down held for the whole crossing, as upstream's `heldDirection` gate
-    // requires (`field_control_avatar.c:164-168`). The step onto the
-    // doormat commits on the first frame, but the poll stays shut for every
-    // frame the walk animation is still draining
-    // (`crate::flow::wild_encounter::arrow_poll_open`).
+    // The poll stays shut while the walk animation drains (`arrow_poll_open`).
     for frame in 1..u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
@@ -1245,17 +1240,10 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
     assert!(phase.player.in_transit());
     assert_eq!(
         (phase.player.elevation(), phase.player.previous_elevation()),
-        (0, 3),
-        "fixture precondition: the landed transition cell is the collision \
-         elevation, while the retained previousElevation upstream looks warps \
-         up at is still 3"
+        (0, 3)
     );
 
-    // The drain frame: at rest on the transition cell, Down still held and
-    // still equal to the facing the frame started with, with the door check
-    // and the encounter roll both fallen through -- `TryArrowWarp`'s gate,
-    // resolved at `PlayerGetElevation()`'s retained 3
-    // (`field_player_avatar.c:1192-1195`).
+    // The drain frame.
     phase.step(held(Buttons::DOWN));
 
     assert_eq!(
