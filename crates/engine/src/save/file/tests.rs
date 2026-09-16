@@ -1110,6 +1110,92 @@ fn a_symlinked_lock_slot_is_refused() {
     }
 }
 
+/// A dangling symlink in the lock slot must be refused before anything
+/// opens it.
+///
+/// The open carries `create`, so following one would create its target
+/// outside the save directory -- a side effect no later check can undo,
+/// which is why the refusal has to come first. The same ordering is what
+/// keeps a slot pointing at a FIFO from parking the open until some reader
+/// turns up.
+#[cfg(unix)]
+#[test]
+fn a_dangling_symlinked_lock_slot_is_refused_without_creating_its_target() {
+    let dir = TempDir::new("dangling-lock-slot");
+    let elsewhere = TempDir::new("dangling-lock-slot-target");
+    let target = elsewhere.join("never-created.sav");
+
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    std::os::unix::fs::symlink(&target, file.lock_path()).unwrap();
+
+    match file.lock() {
+        Err(SaveFileError::LockPathIsAlias { path }) => assert_eq!(path, file.lock_path()),
+        other => panic!(
+            "a dangling symlinked lock slot must be refused, got {:?}",
+            other.map(|_| "a guard")
+        ),
+    }
+    assert!(
+        !target.exists(),
+        "the refusal must precede the open, which would otherwise have created {} \
+         outside the save directory",
+        target.display()
+    );
+}
+
+/// A lock slot that is not a plain file must be refused rather than
+/// opened: it cannot carry a lock, and opening a FIFO there would block.
+/// A directory stands in, being the one such entry `std` can create.
+#[test]
+fn a_lock_slot_that_is_not_a_plain_file_is_refused() {
+    let dir = TempDir::new("non-file-lock-slot");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+    std::fs::create_dir(file.lock_path()).unwrap();
+
+    match file.lock() {
+        Err(SaveFileError::LockPathNotAPlainFile { path }) => assert_eq!(path, file.lock_path()),
+        other => panic!(
+            "a lock slot that is not a plain file must be refused, got {:?}",
+            other.map(|_| "a guard")
+        ),
+    }
+}
+
+/// One lock file serves every save in a directory, so it is created under
+/// whichever umask its first saver had. A later saver who cannot write
+/// that file must still be able to lock it -- otherwise a second user in a
+/// shared directory, or the same user after a run under different
+/// privileges, is shut out of a perfectly valid save for good.
+///
+/// A privileged runner bypasses the mode outright, so it is CI's
+/// unprivileged runners that actually drive the fallback here; the
+/// property asserted holds either way.
+#[cfg(unix)]
+#[test]
+fn a_lock_file_this_user_cannot_write_is_still_lockable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new("read-only-lock-file");
+    let first = SaveFile::at(dir.join("first.sav"));
+    let second = SaveFile::at(dir.join("second.sav"));
+
+    std::fs::write(first.lock_path(), b"").unwrap();
+    std::fs::set_permissions(first.lock_path(), std::fs::Permissions::from_mode(0o444)).unwrap();
+
+    let guard = first
+        .lock()
+        .expect("a lock file this user cannot write must still be lockable");
+
+    let probe = SaveFile::open_lock_file(&second.lock_path())
+        .expect("a second saver must still open the shared lock");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("a read-only lock handle must still exclude a second saver, got {other:?}"),
+    }
+    drop(probe);
+    drop(guard);
+}
+
 /// A hard link in the lock slot must still be accepted.
 ///
 /// Unlike a symlink it is a name of its own: renaming any of the inode's

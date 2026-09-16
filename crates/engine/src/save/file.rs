@@ -70,6 +70,11 @@ pub enum SaveFileError {
         /// The lock path that does not name the file it opens.
         path: PathBuf,
     },
+    /// The lock slot is occupied by something other than a plain file.
+    LockPathNotAPlainFile {
+        /// The lock path that is not a plain file.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -108,6 +113,13 @@ impl std::fmt::Display for SaveFileError {
                  would not exclude one another",
                 path.display()
             ),
+            Self::LockPathNotAPlainFile { path } => write!(
+                f,
+                "save file: the lock slot {} is not a plain file -- a directory, socket, \
+                 or device there cannot carry a lock, and opening a FIFO would wait for \
+                 a reader that never comes",
+                path.display()
+            ),
             Self::LockPathIsSave { path } => write!(
                 f,
                 "save file: this save resolves to {}, the lock file every save in that \
@@ -137,6 +149,7 @@ impl std::error::Error for SaveFileError {
             Self::NoDataDirectory
             | Self::LockPathIsSave { .. }
             | Self::LockPathIsAlias { .. }
+            | Self::LockPathNotAPlainFile { .. }
             | Self::BadLength { .. } => None,
         }
     }
@@ -446,6 +459,7 @@ impl SaveFile {
         let parent = self.create_parent_directory()?;
 
         let path = self.lock_path();
+        Self::refuse_an_unusable_slot(&path)?;
         let lock_error = |source| SaveFileError::Lock {
             path: path.clone(),
             source,
@@ -464,6 +478,52 @@ impl SaveFile {
             }
         }
         Ok(SaveFileGuard { _lock_file: file })
+    }
+
+    /// Refuses a lock slot that is not this directory's own plain file,
+    /// before anything opens it.
+    ///
+    /// Opening follows a symlink, so [`SaveFile::names_its_own_entry`] is
+    /// too late to prevent its side effects: a dangling symlink would have
+    /// the open create its target outside this directory, and one pointing
+    /// at a FIFO would have the open block until some reader appeared,
+    /// neither of which any later check can undo. Anything that is not a
+    /// plain file is refused for the same reason -- it cannot carry a lock,
+    /// and opening it can block or disturb it.
+    ///
+    /// An alias planted between this check and the open is still caught
+    /// afterwards, by identity. What this forestalls is one already sitting
+    /// in a directory the user controls, not a race.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::LockPathIsAlias`] if the slot is a symlink;
+    /// [`SaveFileError::LockPathNotAPlainFile`] if it is anything else that
+    /// is not a plain file; [`SaveFileError::Lock`] if it could not be
+    /// inspected.
+    fn refuse_an_unusable_slot(lock: &Path) -> Result<(), SaveFileError> {
+        let slot = match std::fs::symlink_metadata(lock) {
+            Ok(slot) => slot,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(SaveFileError::Lock {
+                    path: lock.to_path_buf(),
+                    source,
+                })
+            }
+        };
+        if slot.is_symlink() {
+            return Err(SaveFileError::LockPathIsAlias {
+                path: lock.to_path_buf(),
+            });
+        }
+        if slot.is_file() {
+            Ok(())
+        } else {
+            Err(SaveFileError::LockPathNotAPlainFile {
+                path: lock.to_path_buf(),
+            })
+        }
     }
 
     /// Whether the entry at `lock` is the very file `file` was opened on.
@@ -603,11 +663,32 @@ impl SaveFile {
         }
     }
 
+    /// Opens this directory's lock file, falling back to a read-only handle
+    /// when the entry exists but this user may not write it.
+    ///
+    /// One lock file now serves every save in a directory, so whoever
+    /// creates it does so under their own umask -- commonly `0644`. Without
+    /// this fallback a second user saving to a shared directory, or the same
+    /// user after one run under different privileges, would be shut out of
+    /// their own perfectly valid save for good, which the former per-save
+    /// sidecars never did.
+    ///
+    /// Locking wants an open file, not a writable one: `File::lock` is
+    /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
+    /// read-only handle, and these contents are never read or written.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
         let mut options = std::fs::OpenOptions::new();
-        options.create(true).truncate(false).write(true);
+        options.read(true).write(true).create(true).truncate(false);
         Self::deny_delete_sharing(&mut options);
-        options.open(path)
+        match options.open(path) {
+            Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => {
+                let mut options = std::fs::OpenOptions::new();
+                options.read(true);
+                Self::deny_delete_sharing(&mut options);
+                options.open(path)
+            }
+            result => result,
+        }
     }
 
     /// Opens the lock file denying `FILE_SHARE_DELETE`, so that while any
