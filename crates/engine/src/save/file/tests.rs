@@ -1318,3 +1318,23 @@ fn a_freshly_created_lock_file_is_lockable_by_every_owner() {
     );
     drop(guard);
 }
+
+/// Only the creator widens; an existing slot keeps its owner's mode.
+#[cfg(unix)]
+#[test]
+fn a_pre_existing_lock_file_keeps_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("lock-mode-kept");
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    std::fs::write(&lock_path, b"").unwrap();
+    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file.lock().expect("a guard");
+    let mode = std::fs::metadata(&lock_path).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o600,
+        "an existing slot's mode was rewritten to {mode:o}"
+    );
+    drop(guard);
+}

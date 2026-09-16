@@ -680,19 +680,29 @@ impl SaveFile {
     /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
     /// read-only handle, and these contents are never read or written.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
-        let mut options = std::fs::OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        Self::deny_delete_sharing(&mut options);
-        match options.open(path) {
+        // `create_new` is `O_EXCL`: it never follows a symlink, so a slot
+        // swapped in after the vetting cannot make this create a file
+        // elsewhere. Only a file this call created has its mode widened.
+        let mut fresh = std::fs::OpenOptions::new();
+        fresh.read(true).write(true).create_new(true);
+        Self::deny_delete_sharing(&mut fresh);
+        match fresh.open(path) {
             Ok(file) => {
                 Self::open_to_every_owner(&file);
-                Ok(file)
+                return Ok(file);
             }
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(other) => return Err(other),
+        }
+        let mut existing = std::fs::OpenOptions::new();
+        existing.read(true).write(true);
+        Self::deny_delete_sharing(&mut existing);
+        match existing.open(path) {
             Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => {
-                let mut options = std::fs::OpenOptions::new();
-                options.read(true);
-                Self::deny_delete_sharing(&mut options);
-                options.open(path)
+                let mut read_only = std::fs::OpenOptions::new();
+                read_only.read(true);
+                Self::deny_delete_sharing(&mut read_only);
+                read_only.open(path)
             }
             result => result,
         }
@@ -713,8 +723,9 @@ impl SaveFile {
     /// Read and write sharing stay permitted, so a second process still
     /// opens this same file to contend for the lock; only delete is denied.
     /// A lock created under `umask 077` is `0600`, which the read-only
-    /// fallback cannot open either; the creator widens it to `0666` so every
-    /// later owner can lock it. Best effort: a non-owner has no say here.
+    /// fallback cannot open either; the creator widens the file it created
+    /// to `0666` so every later owner can lock it. A pre-existing slot keeps
+    /// whatever mode its owner chose. Best effort.
     #[cfg(unix)]
     fn open_to_every_owner(file: &std::fs::File) {
         use std::os::unix::fs::PermissionsExt;
