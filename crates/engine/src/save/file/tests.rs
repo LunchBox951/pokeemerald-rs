@@ -1316,6 +1316,12 @@ fn a_freshly_created_lock_file_is_lockable_by_every_owner() {
         0o666,
         "lock mode {mode:o} shuts later owners out"
     );
+    let leftovers: Vec<_> = std::fs::read_dir(&dir.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != LOCK_FILE_NAME)
+        .collect();
+    assert!(leftovers.is_empty(), "staging left {leftovers:?} behind");
     drop(guard);
 }
 
