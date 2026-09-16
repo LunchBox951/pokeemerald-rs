@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Regression tests for the direct channel ladder and its workflow contract."""
 
+import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 import channel_ladder
@@ -19,6 +23,46 @@ SOURCE_GATE_WORKFLOW = (
 READINESS_RECORDER = (
     REPOSITORY_ROOT / "scripts/record_nightly_readiness.py"
 ).read_text()
+
+
+GH_STUB = r"""#!/usr/bin/env python3
+# Minimal `gh api` stub: real pagination semantics over fixture pages.
+
+import json
+import os
+import subprocess
+import sys
+
+arguments = sys.argv[1:]
+assert arguments[0] == "api", arguments
+with open(os.environ["GH_STUB_FIXTURE"], encoding="utf-8") as handle:
+    pages = json.load(handle)
+jq_filter = arguments[arguments.index("--jq") + 1]
+paginate = "--paginate" in arguments
+slurp = "--slurp" in arguments
+
+
+def apply_filter(document):
+    result = subprocess.run(
+        ["jq", "-r", jq_filter],
+        input=json.dumps(document),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        sys.exit(result.returncode)
+    return result.stdout
+
+
+if paginate and slurp:
+    sys.stdout.write(apply_filter(pages))
+elif paginate:
+    for page in pages:
+        sys.stdout.write(apply_filter(page))
+else:
+    sys.stdout.write(apply_filter(pages[0]))
+"""
 
 
 class ChannelLadderTest(unittest.TestCase):
@@ -206,6 +250,74 @@ class PromotionWorkflowContractTest(unittest.TestCase):
         self.assertIn('"repos/${REPOSITORY}/commits/${sha}/statuses?per_page=100"', PROMOTE_WORKFLOW)
         self.assertNotIn('"repos/${REPOSITORY}/commits/${sha}/status"', PROMOTE_WORKFLOW)
         self.assertIn(".creator.login // empty", PROMOTE_WORKFLOW)
+
+
+class ReadinessStatusPaginationTest(unittest.TestCase):
+    """The readiness lookup must see every page of a commit's statuses."""
+
+    OWNER = "LunchBox951"
+    SHA = "f55480978f7a7bcb4a5fc591ddccdfed4084161e"
+
+    def run_status_creator(self, pages):
+        """Run promote.yml's status_creator against a stubbed gh/statuses API."""
+        function = re.search(
+            r"( *)status_creator\(\) \{.*?\n\1\}",
+            PROMOTE_WORKFLOW,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(function, "status_creator is missing from promote.yml")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "fixture.json").write_text(json.dumps(pages))
+            (root / "gh").write_text(GH_STUB)
+            (root / "gh").chmod(0o755)
+            script = (
+                "set -euo pipefail\n"
+                'REPOSITORY="LunchBox951/pokeemerald-rs"\n'
+                f"{function.group(0)}\n"
+                f'status_creator "{self.SHA}" release-readiness\n'
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                text=True,
+                env={
+                    **os.environ,
+                    "PATH": f"{root}:{os.environ['PATH']}",
+                    "GH_STUB_FIXTURE": str(root / "fixture.json"),
+                },
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def readiness(self, identifier, minute):
+        return {
+            "id": identifier,
+            "context": "release-readiness",
+            "state": "success",
+            "created_at": f"2026-09-16T00:{minute:02d}:00Z",
+            "creator": {"login": self.OWNER},
+        }
+
+    def noise(self, count, start_id, minute):
+        return [
+            {
+                "id": start_id + index,
+                "context": f"buildkite/shard-{index}",
+                "state": "success",
+                "created_at": f"2026-09-16T01:{minute:02d}:00Z",
+                "creator": {"login": "some-app[bot]"},
+            }
+            for index in range(count)
+        ]
+
+    def test_readiness_on_the_first_page_is_found(self):
+        pages = [[self.readiness(2, 30), *self.noise(50, 100, 10)]]
+        self.assertEqual(self.run_status_creator(pages), self.OWNER)
+
+    def test_readiness_behind_a_full_page_of_newer_statuses_is_found(self):
+        pages = [self.noise(100, 1000, 10), [self.readiness(2, 30)]]
+        self.assertEqual(self.run_status_creator(pages), self.OWNER)
 
 
 class CiVersionWorkflowContractTest(unittest.TestCase):
