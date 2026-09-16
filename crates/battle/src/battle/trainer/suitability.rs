@@ -417,6 +417,46 @@ mod tests {
         );
     }
 
+    /// The most-damage pass's shared base figure must inherit Hustle from
+    /// `fainted.attacking_stat`, the same accessor the real hit and
+    /// trainer-AI estimate read, so all three agree.
+    #[test]
+    fn stale_base_damage_carries_a_hustle_fainted_attackers_boost() {
+        // `SPECIES_DELIBIRD`: Vital Spirit in slot 0, Hustle in slot 1 --
+        // unlike a single-ability species, a same-species non-Hustle control
+        // is reachable through `with_ability_slot`.
+        const DELIBIRD: SpeciesId = SpeciesId(225);
+        const SQUIRTLE: SpeciesId = SpeciesId(7);
+        const TACKLE: MoveId = MoveId(33);
+
+        let dex = Dex::new();
+        let hustle_fainted =
+            BattlePokemon::new(&dex, DELIBIRD, 20, fixed_ivs(255), 0, vec![TACKLE])
+                .expect("dex-resident")
+                .with_ability_slot(1);
+        assert_eq!(hustle_fainted.ability(), AbilityId::HUSTLE);
+        let control_fainted =
+            BattlePokemon::new(&dex, DELIBIRD, 20, fixed_ivs(255), 0, vec![TACKLE])
+                .expect("dex-resident")
+                .with_ability_slot(0);
+        assert_ne!(control_fainted.ability(), AbilityId::HUSTLE);
+        let player = BattlePokemon::new(&dex, SQUIRTLE, 20, fixed_ivs(255), 0, vec![TACKLE])
+            .expect("dex-resident");
+
+        let hustle_base = super::stale_base_damage(&dex, TACKLE, &hustle_fainted, &player)
+            .unwrap()
+            .unwrap();
+        let control_base = super::stale_base_damage(&dex, TACKLE, &control_fainted, &player)
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            hustle_base > control_base,
+            "a Hustle fainted attacker's stale base damage must carry the boost: \
+             {hustle_base} vs {control_base}"
+        );
+    }
+
     /// The super-effective check reads `TypeCalc`'s flags, where an immunity
     /// row is terminal: against Gligar (Ground/Flying) the table's
     /// Electric->Ground no-effect row (`pokeemerald/src/battle_main.c:356`)

@@ -180,7 +180,7 @@ where
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
-    let (generation, staged_dir, generation_dir, pointer_tmp) = loop {
+    let (generation, staged_dir, generation_dir) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
             scene.name(),
@@ -189,13 +189,12 @@ where
         );
         let staged_dir = output_dir.join(format!(".{generation}.staged"));
         let generation_dir = output_dir.join(&generation);
-        let pointer_tmp = output_dir.join(format!(".{generation}.pointer"));
-        // Cheap early skip only; `staging::stage` is the actual guard.
-        if generation_dir.exists() || pointer_tmp.exists() {
+        // Cheap early skip only; `std::fs::create_dir`'s exclusivity is the actual guard.
+        if generation_dir.exists() {
             continue;
         }
         match std::fs::create_dir(&staged_dir) {
-            Ok(()) => break (generation, staged_dir, generation_dir, pointer_tmp),
+            Ok(()) => break (generation, staged_dir, generation_dir),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
                 return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
@@ -215,8 +214,8 @@ where
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
         // See `staging` for the guard this stage-then-publish pair provides.
-        let staged_pointer = staging::stage(&pointer_tmp, format!("{generation}\n").as_bytes())
-            .map_err(|e| RecordSnapshotError::Write(pointer_tmp.clone(), e.to_string()))?;
+        let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
+            .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
@@ -227,11 +226,90 @@ where
     })();
 
     if result.is_err() {
-        // `staging` already cleans up `pointer_tmp`, respecting ownership.
+        // `staging` already cleans up its own candidate, respecting ownership.
         let _ = std::fs::remove_dir_all(&staged_dir);
         let _ = std::fs::remove_dir_all(&generation_dir);
     }
     result
+}
+
+/// Hex width of the pointer staging suffix, matching [`crate::extract`]'s
+/// unpredictable staging names for the identical risk (F-3).
+const POINTER_STAGING_HEX_DIGITS: usize = 10;
+
+/// How many unpredictable pointer staging names one publish tries before
+/// giving up on a genuine collision; a planted name is refused outright.
+const POINTER_STAGING_ATTEMPTS: usize = 256;
+
+/// Stages the pointer at an unguessable sibling of `pointer_path`, retrying
+/// through [`pointer_staging_candidates`] on a genuine name collision.
+fn stage_pointer(pointer_path: &Path, bytes: &[u8]) -> std::io::Result<staging::StagedFile> {
+    stage_pointer_with_candidates(bytes, pointer_staging_candidates(pointer_path))
+}
+
+/// Stages `bytes` at the first of `candidates` that `staging::stage` finds
+/// free, reporting the last collision once they have all turned out taken.
+fn stage_pointer_with_candidates(
+    bytes: &[u8],
+    candidates: impl IntoIterator<Item = PathBuf>,
+) -> std::io::Result<staging::StagedFile> {
+    let mut last_collision = None;
+    for candidate in candidates {
+        match staging::stage(&candidate, bytes) {
+            Ok(staged) => return Ok(staged),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_collision = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_collision.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "exhausted pointer staging attempts",
+        )
+    }))
+}
+
+/// The unpredictable sibling names one pointer publish walks, in the order
+/// tried.
+fn pointer_staging_candidates(pointer_path: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    let mask = pointer_staging_value_mask();
+    let mut value = pointer_staging_unique_value();
+    std::iter::repeat_with(move || {
+        let candidate = pointer_staging_path_with_value(pointer_path, value);
+        value = value.wrapping_add(1) & mask;
+        candidate
+    })
+    .take(POINTER_STAGING_ATTEMPTS)
+}
+
+/// Renders the sibling name for one candidate `value`, `.tmp.<hex>` suffixed
+/// onto `pointer_path`'s own name.
+fn pointer_staging_path_with_value(pointer_path: &Path, value: u64) -> PathBuf {
+    let mut name = pointer_path.as_os_str().to_os_string();
+    name.push(format!(".tmp.{value:0POINTER_STAGING_HEX_DIGITS$x}"));
+    PathBuf::from(name)
+}
+
+/// `std`-only entropy folded into one value: process id, clock nanoseconds,
+/// and a fresh `RandomState` key.
+fn pointer_staging_unique_value() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u32(std::process::id());
+    hasher.write_u128(nanos);
+    hasher.finish() & pointer_staging_value_mask()
+}
+
+/// Every value [`POINTER_STAGING_HEX_DIGITS`] hex digits can render, and no
+/// other.
+fn pointer_staging_value_mask() -> u64 {
+    (1_u64 << (4 * POINTER_STAGING_HEX_DIGITS)) - 1
 }
 
 fn compose(

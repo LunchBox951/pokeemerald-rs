@@ -150,10 +150,14 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them; [`paralyze::ensure_admissible`] admits both holders. Compound
-//! Eyes and Hustle scale the stage-adjusted accuracy threshold inside
-//! [`accuracy::accuracy_check`], as `Cmd_accuracycheck` does, for every
-//! path that rolls to hit.
+//! them; [`paralyze::ensure_admissible`] admits both holders.
+//! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
+//! 150% the same way, before the same stage multiply
+//! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
+//! trainer AI's estimate, and forced-replacement suitability all agree.
+//! Compound Eyes and Hustle scale the stage-adjusted accuracy threshold
+//! inside [`accuracy::accuracy_check`], as `Cmd_accuracycheck` does, for
+//! every path that rolls to hit.
 //! [`pokemon::BattlePokemon::ability`] derives the ability from the
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.

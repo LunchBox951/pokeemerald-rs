@@ -184,6 +184,22 @@ fn released_voices_compete_among_themselves_on_priority() {
 }
 
 #[test]
+fn a_finished_track_gives_up_its_released_voices_ownership() {
+    // `ply_fine` nulls each channel's track pointer via `RealClearChain`
+    // (m4a_1.s:757-767, :744-745); a null owner never outranks a live one.
+    let mut mixer = mixer_with_full_pool(vec![voice(1, 60, 60), voice(3, 60, 61)]);
+    release_slot(&mut mixer, 0);
+    mixer.release_track(3);
+    assert!(occupied_slot(&mixer, 1).is_stopping());
+    assert!(mixer.add_voice(voice(2, 60, 70)));
+    assert_eq!(
+        live_keys(&mixer),
+        vec![70, 61],
+        "the finished track's tail keeps its slot; the still-owned tail is evicted",
+    );
+}
+
+#[test]
 fn a_saturated_priority_note_outranks_every_unsaturated_one() {
     let highest_unsaturated_priority = u8::MAX - 1;
     let mut mixer = mixer_with_full_pool(vec![
