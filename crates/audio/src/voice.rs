@@ -375,7 +375,9 @@ impl Voice {
     pub fn render(&mut self, acc: &mut [StereoAcc]) {
         let phase_step = self.playback_rate.phase_step(self.frequency);
         if self.wave.is_empty() {
-            self.envelope.note_off();
+            // An empty wave is already exhausted and cannot produce release or
+            // pseudo-echo samples.
+            self.envelope.retire();
             return;
         }
 
