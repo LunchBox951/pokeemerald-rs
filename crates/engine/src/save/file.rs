@@ -489,8 +489,12 @@ impl SaveFile {
     /// `canonicalize` resolves through `GetFinalPathNameByHandle`, which
     /// reports the entry's own stored spelling rather than the caller's.
     /// One entry under two spellings therefore canonicalises to one path,
-    /// so the comparison is identity-equivalent for the aliases a Windows
-    /// volume folds together.
+    /// so this recognises the aliases a Windows volume folds together.
+    ///
+    /// It does not recognise a hard link, whose own name canonicalises to
+    /// itself; this is the early, friendly error for a direct alias, and
+    /// [`SaveFile::deny_delete_sharing`] is what makes the refusal complete
+    /// by stopping any alias from replacing the held entry at all.
     #[cfg(not(unix))]
     fn resolves_to(&self, lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
         let Some(_) = self.metadata_following_links()? else {
@@ -525,12 +529,42 @@ impl SaveFile {
     }
 
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(false).write(true);
+        Self::deny_delete_sharing(&mut options);
+        options.open(path)
     }
+
+    /// Opens the lock file denying `FILE_SHARE_DELETE`, so that while any
+    /// process holds it no rename can replace that entry and no unlink can
+    /// remove it.
+    ///
+    /// This, not [`SaveFile::resolves_to`], is what makes the Windows
+    /// refusal complete: with no stable by-handle identity to compare,
+    /// canonical paths cannot recognise a hard link to the lock file, whose
+    /// own name canonicalises to itself. Denying delete sharing closes the
+    /// hazard instead of detecting it -- an aliasing save's publishing
+    /// rename fails with a sharing violation, a reported error, rather than
+    /// silently replacing the inode every locker holds.
+    ///
+    /// Read and write sharing stay permitted, so a second process still
+    /// opens this same file to contend for the lock; only delete is denied.
+    #[cfg(windows)]
+    fn deny_delete_sharing(options: &mut std::fs::OpenOptions) {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        /// `FILE_SHARE_READ | FILE_SHARE_WRITE`, omitting the
+        /// `FILE_SHARE_DELETE` that `std` would otherwise add.
+        const SHARE_READ_AND_WRITE_BUT_NOT_DELETE: u32 = 0x1 | 0x2;
+
+        options.share_mode(SHARE_READ_AND_WRITE_BUT_NOT_DELETE);
+    }
+
+    /// Nothing to deny: a Unix rename cannot replace the inode behind an
+    /// open handle, and [`SaveFile::resolves_to`] compares that inode
+    /// directly.
+    #[cfg(not(windows))]
+    fn deny_delete_sharing(_options: &mut std::fs::OpenOptions) {}
 
     /// Creates the save file's parent directory and any missing ancestors;
     /// on a first save, best-effort synchronises every ancestor.

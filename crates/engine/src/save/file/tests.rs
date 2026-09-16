@@ -1042,6 +1042,47 @@ fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
     }
 }
 
+/// Windows has no stable by-handle identity, so a hard link to the lock
+/// file canonicalises to itself and no path comparison can recognise it.
+/// The lock handle therefore denies `FILE_SHARE_DELETE`, which closes the
+/// hazard rather than detecting it: while the guard is held, nothing can
+/// rename over that entry or unlink it, so an aliasing save's publishing
+/// rename fails loudly instead of quietly replacing the locked inode.
+///
+/// That denial must not cost the contention path it protects: a second
+/// locker must still open the very same file and block on it.
+#[cfg(windows)]
+#[test]
+fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
+    let dir = TempDir::new("windows-lock-sharing");
+    let first = SaveFile::at(dir.join("first.sav"));
+    let second = SaveFile::at(dir.join("second.sav"));
+
+    let guard = first.lock().expect("the first save must be lockable");
+
+    let probe = SaveFile::open_lock_file(&second.lock_path())
+        .expect("denying delete sharing must still admit a second locker's open");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("the held lock must exclude the second locker, got {other:?}"),
+    }
+    drop(probe);
+
+    let replacement = dir.join("replacement");
+    std::fs::write(&replacement, b"").unwrap();
+    assert!(
+        std::fs::rename(&replacement, first.lock_path()).is_err(),
+        "renaming over a held lock must fail: replacing that inode would leave this \
+         guard holding an unlinked file and exclude nobody afterwards"
+    );
+    assert!(
+        std::fs::remove_file(first.lock_path()).is_err(),
+        "unlinking a held lock must fail for the same reason"
+    );
+
+    drop(guard);
+}
+
 /// The refusal must compare filesystem identity, not canonical path text.
 ///
 /// `canonicalize` is not a canonical *entry*: on a case-folding Linux
