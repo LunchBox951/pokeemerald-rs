@@ -1399,3 +1399,80 @@ fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
         );
     }
 }
+
+/// A directory exactly `total_len` bytes long, from components under 255 bytes.
+#[cfg(unix)]
+fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {
+    let mut path = root.to_path_buf();
+    let mut remaining = total_len - path.as_os_str().len();
+    assert!(remaining >= 2, "the scratch root must leave room to nest");
+    let mut first = remaining % 201;
+    if first < 2 {
+        first += 201;
+    }
+    path.push("d".repeat(first - 1));
+    std::fs::create_dir(&path).unwrap();
+    remaining -= first;
+    while remaining > 0 {
+        path.push("d".repeat(200));
+        std::fs::create_dir(&path).unwrap();
+        remaining -= 201;
+    }
+    assert_eq!(path.as_os_str().len(), total_len);
+    path
+}
+
+/// The fixed lock name must not push a host-valid save path past `PATH_MAX`.
+#[cfg(unix)]
+#[test]
+fn locks_a_save_whose_directory_leaves_room_for_the_save_but_not_the_lock_name() {
+    const LONGEST_PATH: usize = 4095;
+    let temp = TempDir::new("deep-directory");
+    let parent = directory_of_length(&temp.path, LONGEST_PATH - LOCK_FILE_NAME.len());
+    let save_path = parent.join("a");
+    std::fs::write(&save_path, [0u8; 1]).expect("the host accepts this save path");
+    assert!(save_path.as_os_str().len() <= LONGEST_PATH);
+    let guard = SaveFile::at(&save_path)
+        .lock()
+        .expect("a host-valid save path locks");
+    let probe = std::fs::File::open(&parent).unwrap();
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("the directory lock must exclude a second locker, got {other:?}"),
+    }
+    drop(probe);
+    drop(guard);
+}
+
+/// The name staging draws is `.lk` plus eleven hex digits, never a pid name.
+#[cfg(unix)]
+#[test]
+fn the_drawn_lock_staging_name_is_eleven_hex_digits() {
+    let pid_name = format!(".lk{}", std::process::id());
+    for _ in 0..64 {
+        let name = SaveFile::staging_name();
+        let digits = name.strip_prefix(".lk").expect("a .lk staging name");
+        assert_eq!(digits.len(), 11, "{name} is not eleven digits wide");
+        assert!(
+            digits.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{name} is not hexadecimal"
+        );
+        assert_ne!(name, pid_name);
+    }
+}
+
+/// Staging cleanup unlinks only the inode it created.
+#[cfg(unix)]
+#[test]
+fn lock_staging_cleanup_spares_an_entry_it_did_not_create() {
+    let dir = TempDir::new("lock-stage-not-mine");
+    let staged = dir.path.join(SaveFile::staging_name());
+    let mine = std::fs::File::create(&staged).unwrap();
+    std::fs::remove_file(&staged).unwrap();
+    std::fs::write(&staged, b"a stranger's file under the staging name").unwrap();
+    SaveFile::remove_only_own_staging(&staged, &mine);
+    assert_eq!(
+        std::fs::read(&staged).expect("the stranger's file survives"),
+        b"a stranger's file under the staging name"
+    );
+}

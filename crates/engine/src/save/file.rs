@@ -449,19 +449,32 @@ impl SaveFile {
         let parent = self.create_parent_directory()?;
 
         let path = self.lock_path();
-        Self::refuse_an_unusable_slot(&path)?;
         let lock_error = |source| SaveFileError::Lock {
             path: path.clone(),
             source,
         };
-        let file = Self::open_lock_file(&path).map_err(lock_error)?;
-        file.lock().map_err(lock_error)?;
-        if !Self::names_its_own_entry(&path, &file)? {
-            return Err(SaveFileError::LockPathIsAlias { path });
-        }
-        if self.resolves_to(&path, &file)? {
-            return Err(SaveFileError::LockPathIsSave { path });
-        }
+        let slot = Self::refuse_an_unusable_slot(&path)
+            .and_then(|()| Self::open_lock_file(&path).map_err(lock_error));
+        let file = match slot {
+            Ok(file) => {
+                file.lock().map_err(lock_error)?;
+                if !Self::names_its_own_entry(&path, &file)? {
+                    return Err(SaveFileError::LockPathIsAlias { path });
+                }
+                if self.resolves_to(&path, &file)? {
+                    return Err(SaveFileError::LockPathIsSave { path });
+                }
+                file
+            }
+            // The slot name pushed a host-valid save path past the path limit.
+            Err(SaveFileError::Lock { source, .. })
+                if source.kind() == std::io::ErrorKind::InvalidFilename =>
+            {
+                Self::lock_directory_itself(self.path.parent().unwrap_or(Path::new(".")))
+                    .map_err(lock_error)?
+            }
+            Err(other) => return Err(other),
+        };
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
@@ -637,6 +650,22 @@ impl SaveFile {
     /// Locking wants an open file, not a writable one: `File::lock` is
     /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
     /// read-only handle, and these contents are never read or written.
+    /// Locks the save directory's own inode when no sidecar name fits beside
+    /// the save; `flock(2)` takes a directory descriptor.
+    #[cfg(unix)]
+    fn lock_directory_itself(dir: &Path) -> std::io::Result<std::fs::File> {
+        let dir = std::fs::File::open(dir)?;
+        dir.lock()?;
+        Ok(dir)
+    }
+
+    /// Windows cannot lock a directory handle through `std`; the slot's own
+    /// error stands.
+    #[cfg(not(unix))]
+    fn lock_directory_itself(_dir: &Path) -> std::io::Result<std::fs::File> {
+        Err(std::io::Error::from(std::io::ErrorKind::InvalidFilename))
+    }
+
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
         // An existing slot is opened first, so staging happens only for a
         // first save and leftover staging names can never block a valid lock.
