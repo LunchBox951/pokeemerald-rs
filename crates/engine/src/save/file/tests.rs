@@ -853,15 +853,8 @@ fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
 /// The lock path must be one fixed name per directory, never derived from
 /// the save's basename.
 ///
-/// A volume's aliases cannot be enumerated from `std`. ASCII folding misses
-/// `Ä` against `ä`; bucketing the non-ASCII spellings apart misses folds
-/// that cross the ASCII boundary, such as `K` (U+212A) against `k`. Worse,
-/// that pair differs in encoded length, so a derived sidecar could overflow
-/// the component limit for one spelling while fitting for the other,
-/// splitting one save across a `<save>.lock` and a fallback. A fixed name
-/// has no spelling to split, and is stable across builds besides -- its
-/// first shape was a `DefaultHasher` digest, which `std` declines to promise
-/// across releases.
+/// A volume's aliases cannot be enumerated from `std`, and `K` (U+212A)
+/// against `k` also differs in encoded length; a fixed name has no spelling to split.
 #[test]
 fn the_lock_path_is_one_fixed_name_per_directory() {
     let dir = TempDir::new("lock-path-fixed");

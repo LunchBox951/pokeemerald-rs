@@ -669,12 +669,9 @@ impl SaveFile {
     /// Opens this directory's lock file, falling back to a read-only handle
     /// when the entry exists but this user may not write it.
     ///
-    /// One lock file now serves every save in a directory, so whoever
-    /// creates it does so under their own umask -- commonly `0644`. Without
-    /// this fallback a second user saving to a shared directory, or the same
-    /// user after one run under different privileges, would be shut out of
-    /// their own perfectly valid save for good, which the former per-save
-    /// sidecars never did.
+    /// One lock file serves every save in a directory, so a second user in a
+    /// shared directory, or the same user after a run under other
+    /// privileges, must still be able to lock a file they cannot write.
     ///
     /// Locking wants an open file, not a writable one: `File::lock` is
     /// `flock(2)` on Unix and `LockFileEx` on Windows, both of which take a
