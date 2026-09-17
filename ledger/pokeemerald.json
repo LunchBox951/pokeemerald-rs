@@ -26354,7 +26354,7 @@
           "status": "rewritten"
         },
         "PlayerGetElevation": {
-          "reason": "Elevation accessor re-implemented as PlayerState::elevation",
+          "reason": "Elevation accessor re-implemented as PlayerState::previous_elevation, the retained previousElevation upstream returns (field_player_avatar.c:1192-1195); PlayerState::elevation is the collision elevation of the current tile",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
