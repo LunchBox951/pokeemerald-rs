@@ -777,6 +777,24 @@ impl Battle {
             return Ok(());
         }
         let pp_cost = self.move_pp_cost(player_is_attacker, move_id)?;
+        // `attackcanceler` runs the Soundproof move-block ahead of its no-PP
+        // test (`battle_script_commands.c:932-939`); the blocked script's
+        // `ppreduce` spends nothing from an empty slot (`:1230`).
+        let (attacker, defender) = if player_is_attacker {
+            (&mut self.player, &self.enemy)
+        } else {
+            (&mut self.enemy, &self.player)
+        };
+        if stat_change::soundproof_block(&self.dex, move_id, defender)? {
+            if attacker.moves()[slot].pp > 0 {
+                attacker.deduct_pp_by(slot, pp_cost)?;
+            }
+            events.push(BattleEvent::SoundproofProtected {
+                by_player: player_is_attacker,
+                move_id,
+            });
+            return Ok(());
+        }
         if player_is_attacker {
             self.player.deduct_pp_by(slot, pp_cost)?;
         } else if self.enemy.moves()[slot].pp == 0 {

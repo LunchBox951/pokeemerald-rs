@@ -178,8 +178,11 @@ impl Rom {
     /// A pathname can be redirected between two opens; a descriptor cannot.
     ///
     /// The size is taken from the handle, and the whole ROM is read from
-    /// the *start* of it: the answer does not depend on where `rom` happens
-    /// to be pointing, and does not move it. See [`read_whole`].
+    /// the *start* of it: the answer never depends on where `rom` happens to
+    /// be pointing. On unix this never moves the shared cursor either; on
+    /// Windows, where no positional read leaves a synchronous handle's
+    /// cursor untouched, it lands the cursor at the end of the read and does
+    /// not restore it. See [`read_whole`].
     ///
     /// # Errors
     ///
@@ -262,36 +265,60 @@ fn rom_size_u64() -> u64 {
     u64::try_from(ROM_SIZE).unwrap_or(u64::MAX)
 }
 
-/// Fill `buf` from the start of `rom`, leaving its cursor where it was.
+/// Fill `buf` from the start of `rom`, leaving its cursor untouched.
 ///
-/// A ROM is a whole file, so reading one must not depend on where a handle
-/// is pointing — least of all on a handle that has already been read once,
-/// which is sitting at EOF and would yield nothing at all. That would be
-/// reported as the wrong size for a file whose size had just been checked
-/// and was right: a diagnosis contradicting itself. The cursor is put back
-/// afterwards, including when the read fails, because the handle belongs to
-/// the caller and this is a question about the file rather than a read of
-/// their stream.
-///
-/// A seek pair rather than a positional read: `pread` is Unix-only and
-/// Windows' `seek_read` moves the cursor regardless, so the split would buy
-/// one code path per host where this buys one for all of them.
+/// A peer sharing this `Sync` handle may seek it concurrently; naming this
+/// read's own offset, not the shared cursor, keeps it correct regardless.
+#[cfg(unix)]
 fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
-    use std::io::{Read as _, Seek as _, SeekFrom};
+    use std::os::unix::fs::FileExt as _;
+    rom.read_exact_at(buf, 0)
+}
 
-    let mut handle = rom;
-    let resume = handle.stream_position()?;
-    handle.seek(SeekFrom::Start(0))?;
-    let read = handle.read_exact(buf);
-    let restored = handle.seek(SeekFrom::Start(resume)).map(drop);
-    // The read's own failure is the one worth reporting; a restore that
-    // fails on top of a good read still has to be told.
-    read.and(restored)
+/// [`read_whole`] for Windows.
+///
+/// `seek_read` is offset-safe — each call names its own position, so a
+/// peer's concurrent seek can never change what this read returns — but on a
+/// synchronous handle it is not cursor-safe: Windows moves the shared cursor
+/// to the offset each call just read from. A read that restored the cursor
+/// afterward would first have to ask the cursor where it was, and a peer's
+/// seek landing on that same question between the ask and the restore is
+/// indistinguishable from this read's own movement; there is no way to make
+/// that check-then-act atomic on a handle shared with a peer. So this
+/// function does not try: it leaves the cursor exactly where its last
+/// `seek_read` put it (the end of the read, on success) and never restores
+/// it. Callers that share a Windows handle must not rely on this read
+/// preserving the cursor.
+#[cfg(windows)]
+fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
+    use std::os::windows::fs::FileExt as _;
+
+    let mut remaining = &mut buf[..];
+    let mut offset = 0u64;
+    loop {
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        match rom.seek_read(remaining, offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "failed to fill whole buffer",
+                ))
+            }
+            Ok(got) => {
+                offset += u64::try_from(got).unwrap_or(u64::MAX);
+                remaining = &mut remaining[got..];
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{checksum, GbaHeader, Rom, ROM_SIZE};
+    use super::{checksum, read_whole, GbaHeader, Rom, ROM_SIZE};
     use crate::error::{HeaderFault, ImportError};
     use crate::fixture::{shared_emerald_rom, RomFixture};
 
@@ -428,12 +455,14 @@ mod tests {
     }
 
     #[test]
-    fn read_from_neither_depends_on_the_handles_cursor_nor_moves_it() {
+    fn read_from_gives_the_same_rom_regardless_of_the_handles_cursor() {
         // A handle is not a stream here: the same one has to give the same
-        // ROM however many times it is asked, and has to give it back
-        // pointing where it was found. Reading to the end and asking again
-        // is what caught this — the second read saw nothing and called a
-        // file that had just measured 16 MiB the wrong size.
+        // ROM however many times it is asked, wherever its cursor sits when
+        // asked. Reading to the end and asking again is what caught this —
+        // a stream-shaped second read saw nothing and called a file that
+        // had just measured 16 MiB the wrong size. What the cursor itself
+        // does afterward is platform-specific; see the unix and windows
+        // variants below.
         use std::io::{Seek as _, SeekFrom};
 
         let dir = std::env::temp_dir().join(format!(
@@ -447,12 +476,6 @@ mod tests {
 
         let mut handle = std::fs::File::open(&path).expect("the ROM opens");
         let first = Rom::read_from(&handle, &path).expect("the first read validates");
-        assert_eq!(
-            handle.stream_position().expect("the cursor reads"),
-            0,
-            "the read must leave the cursor where it found it"
-        );
-
         let second = Rom::read_from(&handle, &path).expect("a second read validates too");
         assert_eq!(first.digest(), second.digest());
 
@@ -463,10 +486,180 @@ mod tests {
             .expect("the cursor moves");
         let parked = Rom::read_from(&handle, &path).expect("a parked handle validates");
         assert_eq!(parked.digest(), first.digest());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On unix, `read_from` is built on `pread`, which never consults or
+    /// moves the shared cursor: a caller — or a peer sharing the same
+    /// handle — finds it exactly where it left it, however many reads run
+    /// in between.
+    #[cfg(unix)]
+    #[test]
+    fn read_from_leaves_the_cursor_where_it_found_it() {
+        use std::io::{Seek as _, SeekFrom};
+
+        let dir = std::env::temp_dir().join(format!(
+            "rom-import-cursor-unix-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("emerald.gba");
+        std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
+
+        let mut handle = std::fs::File::open(&path).expect("the ROM opens");
+        Rom::read_from(&handle, &path).expect("the first read validates");
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            0,
+            "the read must leave the cursor where it found it"
+        );
+
+        handle
+            .seek(SeekFrom::Start(4096))
+            .expect("the cursor moves");
+        Rom::read_from(&handle, &path).expect("a parked handle validates");
         assert_eq!(
             handle.stream_position().expect("the cursor reads"),
             4096,
             "the caller's cursor must survive the read"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Windows, `seek_read` moves a synchronous handle's shared cursor to
+    /// wherever its own last positional read landed, and `read_from` does
+    /// not restore it (see [`read_whole`]'s windows doc). With no peer
+    /// touching the handle for the duration of the call, that landing spot
+    /// is deterministic: a successful read's own last `seek_read` always
+    /// ends at [`ROM_SIZE`], whatever the cursor held beforehand. That
+    /// guarantee covers only this function's own operation, though — a peer
+    /// is free to seek the instant it gets the handle back, same as with
+    /// any shared cursor, and nothing here promises what it finds.
+    #[cfg(windows)]
+    #[test]
+    fn read_from_leaves_the_cursor_at_the_end_of_the_read() {
+        use std::io::{Seek as _, SeekFrom};
+
+        let dir = std::env::temp_dir().join(format!(
+            "rom-import-cursor-windows-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("emerald.gba");
+        std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
+
+        let mut handle = std::fs::File::open(&path).expect("the ROM opens");
+        Rom::read_from(&handle, &path).expect("the first read validates");
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            ROM_SIZE as u64,
+            "a successful read must land the cursor at the end of the buffer it filled"
+        );
+
+        // Parking the cursor first changes nothing: the read is positional
+        // from the start regardless, and still ends the same place.
+        handle
+            .seek(SeekFrom::Start(4096))
+            .expect("the cursor moves");
+        Rom::read_from(&handle, &path).expect("a parked handle validates");
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            ROM_SIZE as u64,
+            "the cursor must land at the end of the read regardless of where it started"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_whole_reads_from_the_start_while_a_peer_moves_the_shared_cursor() {
+        // A peer holding the same shared handle can seek it mid-read; the
+        // read must still return the file's own bytes from its own start.
+        use std::io::{Seek as _, SeekFrom};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = std::env::temp_dir().join(format!(
+            "rom-import-shared-cursor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("rom.bin");
+        let contents: Vec<u8> = (0..=u8::MAX).cycle().take(4096).collect();
+        std::fs::write(&path, &contents).expect("the file writes");
+
+        let handle = std::fs::File::open(&path).expect("the file opens");
+        let stop = AtomicBool::new(false);
+        let mut outcome = Ok(());
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = (&handle).seek(SeekFrom::Start(2048));
+                }
+            });
+
+            let mut buf = vec![0u8; contents.len()];
+            for _ in 0..10_000 {
+                buf.fill(0);
+                match read_whole(&handle, &mut buf) {
+                    Err(error) => {
+                        outcome = Err(format!("the whole file must read: {error}"));
+                        break;
+                    }
+                    Ok(()) if buf != contents => {
+                        outcome = Err("the read must start at the file's start".to_owned());
+                        break;
+                    }
+                    Ok(()) => {}
+                }
+            }
+            stop.store(true, Ordering::Relaxed);
+        });
+
+        let _ = std::fs::remove_dir_all(&dir);
+        outcome.expect("a peer's seek must not change what the whole file reads as");
+    }
+
+    /// The test above proves a peer's seek can't corrupt what this read
+    /// returns; this one pins the other half — that a peer's cursor
+    /// survives the read too. `pread` never touches the shared cursor, so
+    /// this holds with no concurrency to race against: wherever the handle
+    /// is parked when `read_whole` is called is exactly where it is parked
+    /// after.
+    #[cfg(unix)]
+    #[test]
+    fn read_whole_never_moves_a_peers_cursor() {
+        use std::io::{Seek as _, SeekFrom};
+
+        let dir = std::env::temp_dir().join(format!(
+            "rom-import-peer-cursor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("rom.bin");
+        let contents: Vec<u8> = (0..=u8::MAX).cycle().take(4096).collect();
+        std::fs::write(&path, &contents).expect("the file writes");
+
+        let mut handle = std::fs::File::open(&path).expect("the file opens");
+        // Stands in for a peer having parked the shared handle here.
+        handle
+            .try_clone()
+            .expect("the handle clones")
+            .seek(SeekFrom::Start(2048))
+            .expect("the cursor moves");
+
+        let mut buf = vec![0u8; contents.len()];
+        read_whole(&handle, &mut buf).expect("the whole file must read");
+        assert_eq!(buf, contents);
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            2048,
+            "a peer's cursor must be exactly where it left it, not where this read touched"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
