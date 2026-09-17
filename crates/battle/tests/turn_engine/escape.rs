@@ -1,6 +1,9 @@
 //! Escape attempts, run counters, and escape-specific turn behavior.
 
-use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
+use crate::common::{
+    max_iv_mon, max_iv_mon_with_personality, slow_runner_rattata, SequenceRng,
+    SECONDARY_ABILITY_PERSONALITY,
+};
 use assets::{AbilityId, MoveId};
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, STRUGGLE,
@@ -364,5 +367,158 @@ fn the_slow_runner_fixture_does_not_carry_run_away() {
         runner.ability(),
         AbilityId::RUN_AWAY,
         "the runner escapes unconditionally upstream, so its failed runs are unreachable"
+    );
+}
+
+#[test]
+fn run_away_escapes_without_an_escape_roll_or_a_run_try() {
+    let dex = Dex::new();
+    // Rattata's primary ability is Run Away; the default (even) personality
+    // used by `max_iv_mon` selects ability slot 0. The runner is much slower
+    // than the enemy, which would otherwise force the RNG-driven branch.
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    assert_eq!(player.ability(), AbilityId::RUN_AWAY);
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast Charmander
+
+    // Battle-start turn number, the turn's own turn number, and the wild
+    // mon's move pick. Run Away's non-Pyramid branch draws nothing for an
+    // escape roll (`pokeemerald/src/battle_util.c:427`-`:447`).
+    let mut rng = SequenceRng::new([0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(rng.draws(), 3, "the Run Away branch draws nothing");
+    assert_eq!(
+        battle.run_tries(),
+        0,
+        "`runTries++` lives in the ordinary branch only (`battle_util.c:475`)"
+    );
+}
+
+#[test]
+fn shadow_tag_refuses_a_nominally_successful_run() {
+    let dex = Dex::new();
+    // Fast enough to have escaped unconditionally were the selection admitted.
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // Charmander
+    let enemy = max_iv_mon(&dex, 202, 5, vec![MoveId(33)]); // Wobbuffet
+    assert_eq!(enemy.ability(), AbilityId::SHADOW_TAG);
+
+    let mut rng = SequenceRng::new([0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert_eq!(
+        rng.draws(),
+        1,
+        "construction still takes its battle-start draw"
+    );
+    let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
+    assert_eq!(failure.error(), BattleError::RunForbidden);
+    assert_eq!(
+        failure.events(),
+        [],
+        "`IsRunningFromBattleImpossible` refuses the selection before any \
+         event or draw (`battle_main.c:4043`-`:4052`)"
+    );
+    assert_eq!(rng.draws(), 1, "the refusal itself draws nothing");
+    assert_eq!(battle.run_tries(), 0);
+    assert!(battle.outcome().is_none());
+}
+
+#[test]
+fn arena_trap_refuses_a_grounded_nominally_successful_run() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast, grounded Charmander
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        332, // Trapinch
+        5,
+        vec![MoveId(33)],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
+
+    let mut rng = SequenceRng::new([0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
+    assert_eq!(failure.error(), BattleError::RunForbidden);
+    assert_eq!(
+        failure.events(),
+        [],
+        "`IsRunningFromBattleImpossible` refuses the selection before any \
+         event or draw (`battle_main.c:4053`-`:4062`)"
+    );
+    assert_eq!(battle.run_tries(), 0);
+    assert!(battle.outcome().is_none());
+}
+
+#[test]
+fn arena_trap_exempts_a_levitate_runner() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 93, 5, vec![MoveId(33)]); // Haunter
+    assert_eq!(player.ability(), AbilityId::LEVITATE);
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        332, // Trapinch
+        5,
+        vec![MoveId(33)],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
+
+    // Battle-start, turn number, pick; Haunter's raw Speed (16) already
+    // exceeds Trapinch's (7), so escape is unconditional and draws nothing.
+    let mut rng = SequenceRng::new([0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ],
+        "Arena Trap does not apply to a Levitate holder (`battle_main.c:4056`)"
+    );
+}
+
+#[test]
+fn arena_trap_exempts_a_flying_runner() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 16, 5, vec![MoveId(33)]); // Pidgey: Normal/Flying
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        332, // Trapinch
+        5,
+        vec![MoveId(33)],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
+
+    // Battle-start, turn number, pick; Pidgey's raw Speed (12) already
+    // exceeds Trapinch's (7), so escape is unconditional and draws nothing.
+    let mut rng = SequenceRng::new([0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ],
+        "Arena Trap does not apply to a Flying-type runner (`battle_main.c:4057`)"
     );
 }
