@@ -22,9 +22,8 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
 
-/// The one lock file [`SaveFile::lock`] uses in any save directory on hosts
-/// that cannot lock a directory handle. At most `_POSIX_NAME_MAX` (14) bytes,
-/// so it fits every host that accepts a save.
+/// The one lock file [`SaveFile::lock`] uses in any save directory. At most
+/// `_POSIX_NAME_MAX` (14) bytes, so it fits every host that accepts a save.
 pub const LOCK_FILE_NAME: &str = ".emerald.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
@@ -53,9 +52,9 @@ pub enum SaveFileError {
         /// The underlying I/O failure.
         source: std::io::Error,
     },
-    /// Opening or locking the entry this save's lock is taken on failed.
+    /// Creating or locking the sibling lock file failed.
     Lock {
-        /// The entry that could not be opened or locked.
+        /// The lock file that could not be created or locked.
         path: PathBuf,
         /// The underlying I/O failure.
         source: std::io::Error,
@@ -418,11 +417,14 @@ impl SaveFile {
         drop(std::fs::File::open(path).and_then(|directory| directory.sync_all()));
     }
 
-    /// Acquires an advisory inter-process lock for this save's directory.
+    /// Acquires an advisory inter-process lock for this save path.
     ///
-    /// On Unix the lock is the save directory's own inode, so every spelling
-    /// of that directory takes one lock; elsewhere it is that directory's
-    /// [`LOCK_FILE_NAME`] sidecar, and a save resolving to it is refused.
+    /// The lock is [`LOCK_FILE_NAME`], one fixed file per directory on every
+    /// host: a name derived from the save's basename cannot be made
+    /// alias-safe, and [`SaveFile::write`] replaces the save's own inode by
+    /// rename. A save that resolves to the lock file is refused, and a
+    /// directory leaving no room for the name is refused rather than locked
+    /// on some other entry, which would exclude nobody.
     ///
     /// Hold the returned guard across the complete read-modify-write cycle.
     ///
@@ -432,12 +434,12 @@ impl SaveFile {
     /// # Errors
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
-    /// be created; [`SaveFileError::Lock`] if the locked entry could not be
-    /// opened, locked, or resolved; [`SaveFileError::LockPathIsSave`] if this
-    /// save resolves to the sidecar; [`SaveFileError::LockPathIsAlias`] if
-    /// the sidecar slot is a symlink or does not name the file it opens;
-    /// [`SaveFileError::LockPathNotAPlainFile`] if something other than a
-    /// plain file occupies that slot.
+    /// be created; [`SaveFileError::Lock`] if the lock file could not be
+    /// created, locked, or resolved; [`SaveFileError::LockPathIsSave`] if
+    /// this save path resolves to the lock file;
+    /// [`SaveFileError::LockPathIsAlias`] if the lock slot is a symlink or
+    /// does not name the file it opens; [`SaveFileError::LockPathNotAPlainFile`]
+    /// if something other than a plain file already occupies the slot.
     pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
         self.lock_with(Self::sync_directory_best_effort)
     }
@@ -448,11 +450,18 @@ impl SaveFile {
         let first_save = !self.exists();
         let parent = self.create_parent_directory()?;
 
-        let file = self.open_lock_target()?;
+        let path = self.lock_path();
+        let file = self.open_lock_slot()?;
         file.lock().map_err(|source| SaveFileError::Lock {
-            path: self.lock_target(),
+            path: path.clone(),
             source,
         })?;
+        if !Self::names_its_own_entry(&path, &file)? {
+            return Err(SaveFileError::LockPathIsAlias { path });
+        }
+        if self.resolves_to(&path, &file)? {
+            return Err(SaveFileError::LockPathIsSave { path });
+        }
         if first_save {
             if let Some(parent) = parent {
                 Self::sync_ancestor_chain(parent, sync_directory);
@@ -461,71 +470,16 @@ impl SaveFile {
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// The directory holding this save's entry: `.` for a bare relative path.
-    #[cfg(unix)]
-    fn save_directory(&self) -> &Path {
-        self.path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."))
-    }
-
-    /// The entry [`SaveFile::lock`] takes its lock on.
-    #[cfg(unix)]
-    fn lock_target(&self) -> PathBuf {
-        self.save_directory().to_path_buf()
-    }
-
-    /// As the `unix` [`SaveFile::lock_target`], naming the sidecar instead.
-    #[cfg(not(unix))]
-    fn lock_target(&self) -> PathBuf {
-        self.path.with_file_name(LOCK_FILE_NAME)
-    }
-
-    /// Opens the save directory, whose inode carries the lock.
-    ///
-    /// Every spelling of one directory resolves to one inode and `flock(2)`
-    /// takes a directory descriptor, so no name is derived and no alias of
-    /// the save, of its basename, or of the directory itself can split one
-    /// save directory across two locks. The directory is always shorter than
-    /// the save path the host already accepted, so it always fits.
+    /// Opens this directory's vetted lock slot, without locking it.
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Lock`] if the directory could not be opened.
-    #[cfg(unix)]
-    fn open_lock_target(&self) -> Result<std::fs::File, SaveFileError> {
-        let dir = self.save_directory();
-        std::fs::File::open(dir).map_err(|source| SaveFileError::Lock {
-            path: dir.to_path_buf(),
-            source,
-        })
-    }
-
-    /// Opens this directory's sidecar lock file, which must be a plain file
-    /// that names the entry it opens and is not this save.
-    ///
-    /// # Errors
-    ///
-    /// As [`SaveFile::lock`], less [`SaveFileError::CreateDirectory`].
-    #[cfg(not(unix))]
-    fn open_lock_target(&self) -> Result<std::fs::File, SaveFileError> {
-        let path = self.lock_target();
+    /// As [`SaveFile::lock`], less [`SaveFileError::CreateDirectory`] and the
+    /// identity refusals that need the locked handle.
+    fn open_lock_slot(&self) -> Result<std::fs::File, SaveFileError> {
+        let path = self.lock_path();
         Self::refuse_an_unusable_slot(&path)?;
-        let file = Self::open_lock_file(&path).map_err(|source| SaveFileError::Lock {
-            path: path.clone(),
-            source,
-        })?;
-        // The open denies `FILE_SHARE_DELETE`, so nothing can rename over or
-        // unlink the entry once it succeeds; these two answers therefore
-        // still hold for as long as the guard lives.
-        if !Self::names_its_own_entry(&path)? {
-            return Err(SaveFileError::LockPathIsAlias { path });
-        }
-        if self.resolves_to(&path)? {
-            return Err(SaveFileError::LockPathIsSave { path });
-        }
-        Ok(file)
+        Self::open_lock_file(&path).map_err(|source| SaveFileError::Lock { path, source })
     }
 
     /// Refuses a symlinked or non-plain-file lock slot before anything opens
@@ -537,7 +491,6 @@ impl SaveFile {
     /// [`SaveFileError::LockPathNotAPlainFile`] if it is anything else that
     /// is not a plain file; [`SaveFileError::Lock`] if it could not be
     /// inspected.
-    #[cfg(not(unix))]
     fn refuse_an_unusable_slot(lock: &Path) -> Result<(), SaveFileError> {
         let slot = match std::fs::symlink_metadata(lock) {
             Ok(slot) => slot,
@@ -563,19 +516,42 @@ impl SaveFile {
         }
     }
 
-    /// Whether the entry at `lock` names the file a locker opens there.
+    /// Whether the unfollowed entry at `lock` is the inode `file` holds. A
+    /// hard link passes: it is a name of its own, and backup tools make them.
     ///
-    /// Windows exposes no *stable* by-handle identity, so the entry cannot be
-    /// compared against the open handle; refusing a slot that is a symlink at
-    /// all covers the same ground more bluntly, and
-    /// [`SaveFile::deny_delete_sharing`] stops an aliased target from being
-    /// replaced while any guard holds it.
+    /// # Errors
+    ///
+    /// [`SaveFileError::Lock`] if either the entry or the handle could not
+    /// be inspected.
+    #[cfg(unix)]
+    fn names_its_own_entry(lock: &Path, file: &std::fs::File) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let lock_error = |source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        };
+        let held = file.metadata().map_err(lock_error)?;
+        let slot = std::fs::symlink_metadata(lock).map_err(lock_error)?;
+        Ok((slot.dev(), slot.ino()) == (held.dev(), held.ino()))
+    }
+
+    /// As the `unix` [`SaveFile::names_its_own_entry`], rejecting a
+    /// symlinked slot outright.
+    ///
+    /// Windows exposes no *stable* by-handle identity, so the entry cannot
+    /// be compared against the open handle; refusing a slot that is a
+    /// symlink at all covers the same ground more bluntly. Creating one
+    /// there demands a privilege an ordinary user does not hold, and
+    /// [`SaveFile::deny_delete_sharing`] already stops an aliased target
+    /// from being replaced while any guard holds it -- the step that would
+    /// otherwise split two lockers across two inodes.
     ///
     /// # Errors
     ///
     /// [`SaveFileError::Lock`] if the entry could not be inspected.
     #[cfg(not(unix))]
-    fn names_its_own_entry(lock: &Path) -> Result<bool, SaveFileError> {
+    fn names_its_own_entry(lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
         let slot = std::fs::symlink_metadata(lock).map_err(|source| SaveFileError::Lock {
             path: lock.to_path_buf(),
             source,
@@ -583,22 +559,58 @@ impl SaveFile {
         Ok(!slot.is_symlink())
     }
 
-    /// Whether this save is the lock file at `lock`, compared by canonical
-    /// path: `GetFinalPathNameByHandle` reports the entry's own spelling, so
-    /// one entry under two spellings canonicalises to one path.
+    /// Whether this save path names the same directory entry as the lock
+    /// file `file`, opened at `lock`.
     ///
-    /// A hard link canonicalises to itself, so this is the early, friendly
-    /// error for a direct alias; [`SaveFile::deny_delete_sharing`] is what
-    /// stops any alias from replacing the held entry at all.
+    /// Compares filesystem identity, not path text. A volume's aliases --
+    /// ASCII and non-ASCII case folding, Unicode normalisation, symlinks,
+    /// hard links -- cannot be enumerated from `std`, and canonical text
+    /// does not stand in for identity: on a case-folding Linux directory
+    /// `canonicalize` is `realpath`, which keeps the caller's own spelling,
+    /// so `.EMERALD.LOCK` and `.emerald.lock` name one entry yet compare
+    /// unequal. `st_dev` and `st_ino`, taken from the open lock handle
+    /// rather than from its path, answer the question directly.
+    ///
+    /// Callers open the lock file first, so a save path aliasing it resolves
+    /// to a file that exists by the time this runs.
+    ///
+    /// A save that does not exist is not the lock file. Any other failure to
+    /// inspect it is reported rather than assumed distinct.
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Lock`] if either path could not be resolved.
-    #[cfg(not(unix))]
-    fn resolves_to(&self, lock: &Path) -> Result<bool, SaveFileError> {
-        if self.metadata_following_links()?.is_none() {
+    /// [`SaveFileError::Lock`] if either file could not be inspected.
+    #[cfg(unix)]
+    fn resolves_to(&self, lock: &Path, file: &std::fs::File) -> Result<bool, SaveFileError> {
+        use std::os::unix::fs::MetadataExt;
+
+        let held = file.metadata().map_err(|source| SaveFileError::Lock {
+            path: lock.to_path_buf(),
+            source,
+        })?;
+        let Some(save) = self.metadata_following_links()? else {
             return Ok(false);
-        }
+        };
+        Ok((save.dev(), save.ino()) == (held.dev(), held.ino()))
+    }
+
+    /// As the `unix` [`SaveFile::resolves_to`], comparing canonical paths.
+    ///
+    /// Windows exposes no *stable* by-handle identity accessor, but its
+    /// `canonicalize` resolves through `GetFinalPathNameByHandle`, which
+    /// reports the entry's own stored spelling rather than the caller's.
+    /// One entry under two spellings therefore canonicalises to one path,
+    /// so this recognises the aliases a Windows volume folds together.
+    ///
+    /// It does not recognise a hard link, whose own name canonicalises to
+    /// itself; this is the early, friendly error for a direct alias, and
+    /// [`SaveFile::deny_delete_sharing`] is what makes the refusal complete
+    /// by stopping any alias from replacing the held entry at all.
+    #[cfg(not(unix))]
+    fn resolves_to(&self, lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
+        let Some(_) = self.metadata_following_links()? else {
+            return Ok(false);
+        };
         let save = std::fs::canonicalize(&self.path).map_err(|source| SaveFileError::Lock {
             path: self.path.clone(),
             source,
@@ -616,7 +628,6 @@ impl SaveFile {
     /// # Errors
     ///
     /// [`SaveFileError::Lock`] if the save exists but could not be inspected.
-    #[cfg(not(unix))]
     fn metadata_following_links(&self) -> Result<Option<std::fs::Metadata>, SaveFileError> {
         match std::fs::metadata(&self.path) {
             Ok(metadata) => Ok(Some(metadata)),
@@ -628,42 +639,79 @@ impl SaveFile {
         }
     }
 
-    /// Opens the sidecar lock file, creating it when the slot is free.
-    #[cfg(not(unix))]
+    /// Opens this directory's lock file, creating it when the slot is free.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
         match Self::open_existing_lock(path) {
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
             result => return result,
         }
+        // Creation is exclusive and never follows a symlink, so a slot
+        // swapped in after the vetting cannot make this create a file elsewhere.
         match Self::create_lock_file(path)? {
             Some(file) => Ok(file),
             None => Self::open_existing_lock(path),
         }
     }
 
-    /// Opens the slot read-write, then read-only when this user may not write
-    /// it: `LockFileEx` needs an open handle, not a writable one, and one
-    /// lock file serves every save in its directory.
-    #[cfg(not(unix))]
+    /// Opens the slot read-write, then read-only when this user cannot write
+    /// it, so one run under `sudo` never shuts a user out of their own save:
+    /// `LockFileEx` and a local `flock(2)` want an open handle, not a
+    /// writable one, and these contents are never read or written. A denial
+    /// is retried briefly, since a creator widens a fresh slot's mode just
+    /// after publishing it.
+    ///
+    /// On NFS `flock(2)` is emulated as a whole-file write lock, which needs
+    /// the writable handle; there the read-only fallback reports its own
+    /// failure rather than passing for exclusion.
     fn open_existing_lock(path: &Path) -> std::io::Result<std::fs::File> {
-        let mut existing = std::fs::OpenOptions::new();
-        existing.read(true).write(true);
-        Self::deny_delete_sharing(&mut existing);
-        let denied = match existing.open(path) {
-            Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => denied,
-            result => return result,
-        };
-        let mut read_only = std::fs::OpenOptions::new();
-        read_only.read(true);
-        Self::deny_delete_sharing(&mut read_only);
-        match read_only.open(path) {
-            Err(still) if still.kind() == std::io::ErrorKind::PermissionDenied => Err(denied),
-            result => result,
+        const RETRIES: u32 = 5;
+        let mut attempt = 0;
+        loop {
+            let mut existing = std::fs::OpenOptions::new();
+            existing.read(true).write(true);
+            Self::deny_delete_sharing(&mut existing);
+            let denied = match existing.open(path) {
+                Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => denied,
+                result => return result,
+            };
+            let mut read_only = std::fs::OpenOptions::new();
+            read_only.read(true);
+            Self::deny_delete_sharing(&mut read_only);
+            match read_only.open(path) {
+                Err(still) if still.kind() == std::io::ErrorKind::PermissionDenied => {
+                    if attempt == RETRIES {
+                        return Err(denied);
+                    }
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                result => return result,
+            }
         }
     }
 
-    /// Creates the lock slot, or returns `None` when it already exists.
-    /// Windows has no umask; ACLs inherit from the directory.
+    /// Creates the lock slot, or returns `None` when it already exists. The
+    /// exclusive create never follows a symlink, and the fresh inode is
+    /// widened to `0666` through its own descriptor, so a `umask 077` creator
+    /// never leaves a lock the directory's other owners cannot open.
+    #[cfg(unix)]
+    fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        match options.open(path) {
+            Ok(file) => {
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+                Ok(Some(file))
+            }
+            Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Windows has no umask; ACLs inherit from the directory, so the slot is
+    /// created in place.
     #[cfg(not(unix))]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         let mut fresh = std::fs::OpenOptions::new();
@@ -689,8 +737,10 @@ impl SaveFile {
         options.share_mode(SHARE_READ_AND_WRITE_BUT_NOT_DELETE);
     }
 
-    /// Only Windows has a share mode to narrow.
-    #[cfg(not(any(unix, windows)))]
+    /// Nothing to deny: a Unix rename cannot replace the inode behind an
+    /// open handle, and [`SaveFile::resolves_to`] compares that inode
+    /// directly.
+    #[cfg(not(windows))]
     fn deny_delete_sharing(_options: &mut std::fs::OpenOptions) {}
 
     /// Creates the save file's parent directory and any missing ancestors;
@@ -764,6 +814,12 @@ impl SaveFile {
                 | Component::ParentDir,
             ) => None,
         }
+    }
+
+    /// This directory's one lock file: fixed, so it never depends on the
+    /// save's basename, and within the POSIX minimum component limit.
+    fn lock_path(&self) -> PathBuf {
+        self.path.with_file_name(LOCK_FILE_NAME)
     }
 }
 
