@@ -27143,10 +27143,28 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsEastwardCurrent": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsIce_2": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsLandWildEncounter": {
           "reason": "metatile_behavior.c:819-826. Fully modelled as is_land_wild_encounter, the gate StandardWildEncounter checks first on its land path. Upstream composes it from MetatileBehavior_IsEncounterTile (:135-142, TILE_FLAG_HAS_ENCOUNTERS) AND NOT MetatileBehavior_IsSurfableWaterOrUnderwater (:280-287, TILE_FLAG_SURFABLE), both indexing the ~200-entry sTileBitAttributes array (:9); re-expressed here as the derived id set rather than transcribing that array for one predicate -- exactly the eight ids flagged HAS_ENCOUNTERS without SURFABLE (MB_TALL_GRASS, MB_LONG_GRASS, MB_UNUSED_05, MB_DEEP_SAND, MB_CAVE, MB_INDOOR_ENCOUNTER, MB_ASHGRASS, MB_FOOTPRINTS; :12-20, :40-41), pinned by an exhaustive test over the whole u8 id space. The set is complete for the whole game, not a v1 subset. MetatileBehavior_IsWaterWildEncounter (:828-835) and the surfable half of the table are separately NOT modelled: surfing does not exist in this port, so a water encounter is unreachable and a predicate for it would be an untested claim.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-4",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsMuddySlope": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsNonAnimDoor": {
@@ -27167,6 +27185,48 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsNorthwardCurrent": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseJumpMat": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseSpinMat": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideEast": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideNorth": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideSouth": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideWest": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSouthArrowWarp": {
           "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_south_arrow_warp (exact upstream id membership incl. the MB_WATER_SOUTH_ARROW_WARP/MB_SHOAL_CAVE_ENTRANCE aliases), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -27179,8 +27239,50 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsSouthwardCurrent": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrickHouseSlipperyFloor": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkEast": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkNorth": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkSouth": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkWest": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsWarpDoor": {
           "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWaterfall": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27193,6 +27295,12 @@
         },
         "MetatileBehavior_IsWestBlocked": {
           "reason": "Transcribed as metatile_behavior::is_west_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_WEST/_NORTHWEST/_SOUTHWEST/_WEST_AND_EAST plus MB_SECRET_BASE_BREAKABLE_DOOR (carried verbatim even though secret bases are out of scope, so the predicate is not narrower than upstream's)) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as the standing-tile predicate for a westward move and the destination predicate for an eastward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWestwardCurrent": {
+          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
