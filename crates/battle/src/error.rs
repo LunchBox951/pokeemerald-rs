@@ -77,9 +77,10 @@ pub enum BattleError {
     /// A turn was requested after the battle reached a terminal outcome.
     BattleAlreadyOver,
 
-    /// A caller tried to run from the first battle. The selection is rejected
-    /// before turn state or randomness changes, matching the upstream action
-    /// gate (`pokeemerald/src/battle_main.c:4078`-`:4082`, `:4339`-`:4344`).
+    /// A caller tried to run from the first battle, or a wild battle whose
+    /// opponent's Shadow Tag or grounded Arena Trap forbids escape. Rejected
+    /// before turn state or randomness changes
+    /// (`pokeemerald/src/battle_main.c:4038`-`:4062`, `:4078`-`:4082`, `:4339`-`:4344`).
     RunForbidden,
 
     /// A caller tried to run from a trainer battle. The selection is rejected
@@ -163,7 +164,7 @@ impl fmt::Display for BattleError {
             }
             Self::BattleAlreadyOver => write!(f, "the battle has already ended"),
             Self::RunForbidden => {
-                write!(f, "running is forbidden in the first battle")
+                write!(f, "running is forbidden by this battle's rules")
             }
             Self::NoRunningFromTrainer => {
                 write!(f, "running is forbidden in trainer battles")
