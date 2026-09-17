@@ -19,7 +19,7 @@ use crate::defense_curl;
 use crate::dex::Dex;
 use crate::drain;
 use crate::error::BattleError;
-use crate::escape::try_run_from_battle;
+use crate::escape::{ensure_admissible, try_run_from_battle};
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::fixed_damage;
 use crate::flag_move;
@@ -362,7 +362,9 @@ impl Battle {
         Ok(events)
     }
 
-    /// Returns the number of run attempts made in this battle.
+    /// Returns the number of ordinary run attempts made in this battle. A
+    /// Run Away holder's escape does not advance this counter
+    /// (`pokeemerald/src/battle_util.c:427`-`:447`, `:475`).
     #[must_use]
     pub const fn run_tries(&self) -> u8 {
         self.run_attempts
@@ -459,7 +461,10 @@ impl Battle {
             PlayerAction::Run => match self.kind {
                 BattleKind::Trainer(_) => Err(BattleError::NoRunningFromTrainer),
                 BattleKind::FirstBattle => Err(BattleError::RunForbidden),
-                BattleKind::Wild => Ok(ValidatedPlayerAction::Run),
+                BattleKind::Wild => {
+                    ensure_admissible(&self.player, &self.enemy)?;
+                    Ok(ValidatedPlayerAction::Run)
+                }
             },
             PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
                 slot,
@@ -504,15 +509,22 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        // Escape uses raw battle stats, not stage-modified turn-order Speed
-        // (`src/battle_util.c:463`-`:465`).
-        let success = try_run_from_battle(
-            self.player.stats().speed,
-            self.enemy.stats().speed,
-            self.run_attempts,
-            rng,
-        );
-        self.run_attempts = self.run_attempts.wrapping_add(1);
+        // Run Away escapes with no draw and no `run_tries` increment
+        // (`pokeemerald/src/battle_util.c:427`-`:447`, `:475`).
+        let success = if self.player.ability() == AbilityId::RUN_AWAY {
+            true
+        } else {
+            // Escape uses raw battle stats, not stage-modified turn-order
+            // Speed (`src/battle_util.c:463`-`:465`).
+            let success = try_run_from_battle(
+                self.player.stats().speed,
+                self.enemy.stats().speed,
+                self.run_attempts,
+                rng,
+            );
+            self.run_attempts = self.run_attempts.wrapping_add(1);
+            success
+        };
         events.push(BattleEvent::RunAttempt {
             by_player: true,
             success,
