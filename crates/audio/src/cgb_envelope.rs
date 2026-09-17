@@ -104,7 +104,7 @@ pub struct CgbEnvelope {
     sustain_goal: u8,
     phase: Phase,
     volume: u8,
-    frames_until_step: u8,
+    frames_until_step: u16,
     note_off_requested: bool,
     echo_volume: u8,
     echo_length: u8,
@@ -116,11 +116,11 @@ fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
     u8::try_from(rounded_up.min(u32::from(u8::MAX))).unwrap_or(u8::MAX)
 }
 
-fn transition_frame_delay(period: u8) -> u8 {
+fn transition_frame_delay(period: u8) -> u16 {
     // CgbSound renders the note-on or note-off frame before decrementing its
     // counter (m4a.c:1031..1035, 1063..1067, 1176). This state machine checks
     // before rendering, so one extra frame preserves that cadence.
-    period.saturating_add(1)
+    u16::from(period) + 1
 }
 
 impl CgbEnvelope {
@@ -348,7 +348,7 @@ impl CgbEnvelope {
         let transitioned = if self.volume >= self.goal {
             self.enter_decay()
         } else {
-            self.frames_until_step = self.adsr.attack;
+            self.frames_until_step = u16::from(self.adsr.attack);
             false
         };
         (transitioned, true)
@@ -362,7 +362,7 @@ impl CgbEnvelope {
         }
         self.volume = self.goal;
         self.phase = Phase::Decay;
-        self.frames_until_step = self.adsr.decay;
+        self.frames_until_step = u16::from(self.adsr.decay);
         true
     }
 
@@ -377,7 +377,7 @@ impl CgbEnvelope {
         let transitioned = if self.volume <= self.sustain_goal {
             self.enter_sustain_start()
         } else {
-            self.frames_until_step = self.adsr.decay;
+            self.frames_until_step = u16::from(self.adsr.decay);
             false
         };
         (transitioned, true)
@@ -391,7 +391,7 @@ impl CgbEnvelope {
         }
         self.volume = self.sustain_goal;
         self.phase = Phase::Sustain;
-        self.frames_until_step = SUSTAIN_REFRESH_FRAMES;
+        self.frames_until_step = u16::from(SUSTAIN_REFRESH_FRAMES);
         true
     }
 
@@ -402,7 +402,7 @@ impl CgbEnvelope {
         if self.paced_step_is_due() {
             self.latch_goal(live_goal);
             self.volume = self.sustain_goal;
-            self.frames_until_step = SUSTAIN_REFRESH_FRAMES;
+            self.frames_until_step = u16::from(SUSTAIN_REFRESH_FRAMES);
             true
         } else {
             false
@@ -420,7 +420,7 @@ impl CgbEnvelope {
         let transitioned = if self.volume == 0 {
             self.enter_pseudo_echo_or_silence()
         } else {
-            self.frames_until_step = self.adsr.release;
+            self.frames_until_step = u16::from(self.adsr.release);
             false
         };
         (transitioned, true)
@@ -566,6 +566,18 @@ mod tests {
         let mut env = plain_envelope(adsr(2, 0, 15, 0), 4);
 
         assert_eq!(step_volumes::<5>(&mut env), [0, 0, 1, 1, 2]);
+    }
+
+    /// An attack of 255 reaches its first `CgbModVol` boundary on iteration
+    /// 256, one past note-on's counter load (`m4a.c:1035`, `:1176`).
+    #[test]
+    fn a_maximal_attack_period_latches_on_upstreams_boundary_iteration() {
+        let mut env = plain_envelope(adsr(u8::MAX, 0, 15, 0), 15);
+        assert_eq!(env.step(), (false, true), "note-on runs CgbModVol itself");
+
+        let boundaries: Vec<u32> = (2..=256).filter(|_| env.step().1).collect();
+
+        assert_eq!(boundaries, vec![256]);
     }
 
     #[test]
