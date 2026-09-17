@@ -242,11 +242,11 @@ fn metatile_layers(
 
 type MetatileQuad = [ScreenEntry; 4];
 
+/// `DrawMetatile`'s fixed BG3 screen entry for a `Normal` metatile
+/// (`pokeemerald/src/field_camera.c:287-292`).
+const NORMAL_BG3_ENTRY: ScreenEntry = ScreenEntry::from_raw(0x3014);
+
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
-///
-/// `Normal` leaves the bottom background transparent instead of reproducing
-/// upstream's fixed BG3 entry; the module docs' "Fidelity differences"
-/// section states that deviation and its consequence.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
@@ -257,7 +257,7 @@ fn route_layers(
     match layer_type {
         MetatileLayerType::Split => (bottom_half, [blank; 4], top_half),
         MetatileLayerType::Covered => (bottom_half, top_half, [blank; 4]),
-        MetatileLayerType::Normal => ([blank; 4], bottom_half, top_half),
+        MetatileLayerType::Normal => ([NORMAL_BG3_ENTRY; 4], bottom_half, top_half),
     }
 }
 
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(t, [blank; 4]);
 
         let (b, m, t) = route_layers(entries, MetatileLayerType::Normal, blank);
-        assert_eq!(b, [blank; 4]);
+        assert_eq!(b, [ScreenEntry::from_raw(0x3014); 4]);
         assert_eq!(m, [entries[0], entries[1], entries[2], entries[3]]);
         assert_eq!(t, [entries[4], entries[5], entries[6], entries[7]]);
     }
