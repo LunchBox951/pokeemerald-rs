@@ -805,3 +805,88 @@ fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() 
         );
     }
 }
+
+/// A competitor that takes `generation_dir` away *after* this call claimed it
+/// must not have its own directory deleted by this call's failure cleanup:
+/// `create_dir` proves ownership only at the instant it returns, and the flag
+/// it sets records a name, not the directory's identity, so cleanup has to
+/// confirm the directory is still the one this call created before removing
+/// it. The pointer path is planted as a directory so the promoting rename
+/// fails and cleanup is reached deterministically.
+#[test]
+fn failure_cleanup_leaves_a_generation_dir_replaced_after_the_claim() {
+    let output_dir = scratch_path("replaced-generation-dir-out");
+    let _out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let scene = Scene::MainMenuNewGame;
+    std::fs::create_dir(output_dir.join(format!("{}.generation", scene.name()))).unwrap();
+
+    let (send, recv) = std::sync::mpsc::channel::<PathBuf>();
+    let competitor_output_dir = output_dir.clone();
+    let competitor = std::thread::spawn(move || {
+        let generation_dir = recv.recv().unwrap();
+        let generation_rgb = generation_dir.join(format!("{}.rgb", scene.name()));
+        let bystander = competitor_output_dir.join(".competitor-directory");
+        std::fs::create_dir(&bystander).unwrap();
+        std::fs::write(bystander.join("competitor.marker"), b"competitor").unwrap();
+        while !generation_rgb.exists() {
+            std::hint::spin_loop();
+        }
+        // The claim has provably happened by now, since this call's own
+        // payload is already inside the claimed directory.
+        let mut removed = false;
+        for _ in 0..1024 {
+            if std::fs::remove_dir_all(&generation_dir).is_ok() {
+                removed = true;
+                break;
+            }
+            if !generation_dir.exists() {
+                break;
+            }
+        }
+        let replaced = std::fs::rename(&bystander, &generation_dir).is_ok();
+        (removed, replaced)
+    });
+
+    let mut claimed: Option<PathBuf> = None;
+    let announce_the_claimed_generation_dir = || {
+        let generation = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .find_map(|entry| {
+                let name = entry.unwrap().file_name();
+                let name = name.to_str()?;
+                name.strip_prefix('.')?
+                    .strip_suffix(".staged")
+                    .map(str::to_owned)
+            })
+            .expect("this call's own staging directory must exist by now");
+        let generation_dir = output_dir.join(&generation);
+        claimed = Some(generation_dir.clone());
+        send.send(generation_dir).unwrap();
+        Ok(())
+    };
+
+    let result = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        announce_the_claimed_generation_dir,
+    );
+    let (removed, replaced) = competitor.join().unwrap();
+    let generation_dir = claimed.expect("the hook must have run");
+
+    assert!(
+        result.is_err(),
+        "a directory at the pointer path must fail promotion"
+    );
+    assert!(
+        removed && replaced,
+        "the competitor must have replaced the claimed directory while this call still held it (removed={removed}, replaced={replaced})"
+    );
+    assert_eq!(
+        std::fs::read(generation_dir.join("competitor.marker")).ok(),
+        Some(b"competitor".to_vec()),
+        "failure cleanup must not delete a directory this call did not create"
+    );
+}
