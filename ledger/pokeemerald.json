@@ -26210,7 +26210,7 @@
           "status": "rewritten"
         },
         "DrawMetatile": {
-          "reason": "Per-METATILE_LAYER_TYPE bottom/middle/top BG-layer routing of a metatile's 8 raw tile entries, ported into viewport::route_layers; the NORMAL case's 'garbage' bottom-layer write is a documented fidelity delta (drawn transparent instead, since it is implementation-undefined and never reaches the screen behind the always-opaque middle layer in the common case).",
+          "reason": "Per-METATILE_LAYER_TYPE bottom/middle/top BG-layer routing of a metatile's 8 raw tile entries, implemented in viewport::route_layers; NORMAL reproduces DrawMetatile's fixed 0x3014 write to all four BG3 cells.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
