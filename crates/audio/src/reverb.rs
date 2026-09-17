@@ -2,7 +2,8 @@
 //!
 //! Each output sample sums both stereo channels from a 1,568-sample tap and a
 //! 1,344-sample tap, scales the sum by the song's reverb level, and seeds both
-//! mixer channels with the same wet sample before voices add dry audio.
+//! mixer channels with the same wet sample before DirectSound voices add dry
+//! audio (`m4a_1.s:88..119`); CGB output never enters this ring.
 //!
 //! The hardware buffer holds 1,584 samples, but `pcmDmaPeriod` truncates that
 //! to seven complete 224-sample mixer frames (`m4a.c:407`). The native ring
@@ -15,9 +16,10 @@
 //! negative results toward zero and also biases exact negative multiples one
 //! step toward zero, so ordinary signed division is not equivalent.
 //!
-//! The mixer commits the final clipped wet-plus-dry frame back to the ring.
-//! Clipping therefore occurs inside the feedback loop; unlike the hardware's
-//! byte accumulator, the native mixer deliberately does not wrap overflow.
+//! The mixer commits the clipped wet-plus-DirectSound-dry frame back to the
+//! ring. Clipping therefore occurs inside the feedback loop; unlike the
+//! hardware's byte accumulator, the native mixer deliberately does not wrap
+//! overflow.
 
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::voice::StereoAcc;
