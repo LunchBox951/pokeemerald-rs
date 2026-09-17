@@ -2259,6 +2259,35 @@ mod tests {
         );
     }
 
+    /// `FadeOutBody`'s terminal step stops every track outright
+    /// (`m4a.c:750`-`:757`) and `TrackStop` turns the CGB channel off as it
+    /// goes (`m4a_1.s:1490`-`:1493`), so the PSG voice is gone after that
+    /// frame -- not merely scaled to zero in the output buffer.
+    #[test]
+    fn a_terminal_fade_step_retires_a_sustained_cgb_voice() {
+        let voices = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })];
+        let track = vec![Event::Voice(0), tied_note(60), Event::Wait(200)];
+        let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame_with_fade(&mut out, Some(64));
+        assert!(
+            seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()].is_some(),
+            "sanity: the CGB voice must be sounding before the terminal step"
+        );
+
+        seq.render_frame_with_fade(&mut out, Some(0));
+        assert!(
+            seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()].is_none(),
+            "the terminal fade step must retire the CGB voice, not just silence its output"
+        );
+    }
+
     #[test]
     fn bend_changes_a_held_notes_frequency() {
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
