@@ -451,69 +451,48 @@ fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
 }
 
 /// `SaveSlot::store` must run its whole read-modify-write cycle under
-/// `SaveFile::lock`, so a store started while another locker holds that lock
-/// cannot finish until the lock is released. The entry the lock is taken on
-/// is the engine's business and differs by host, so this observes exclusion
-/// rather than any artefact on disk.
+/// `SaveFile::lock`, so a locker that hands the lock to a store cannot take
+/// it back before that store has written.
 #[test]
 fn storing_takes_the_inter_process_lock() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
     let temp = TempSave::new("lock-taken");
-    let guard = SaveFile::at(temp.path.clone())
-        .lock()
-        .expect("the scratch save must be lockable");
-    let lock_released = Arc::new(AtomicBool::new(false));
-    let store_started = Arc::new(AtomicBool::new(false));
-    let store_finished = Arc::new(AtomicBool::new(false));
+    let file = SaveFile::at(temp.path.clone());
+    let guard = file.lock().expect("the scratch save must be lockable");
+    let (acquired, lock_acquired) = std::sync::mpsc::channel();
 
     let contender = {
-        let lock_released = Arc::clone(&lock_released);
-        let store_started = Arc::clone(&store_started);
-        let store_finished = Arc::clone(&store_finished);
         let mut slot = temp.slot();
         std::thread::spawn(move || {
-            store_started.store(true, Ordering::SeqCst);
-            slot.store(
+            slot.store_under(
                 &SaveBlock1::default(),
                 &SaveBlock2::default(),
+                true,
                 SaveLineage::Continued,
+                |file| {
+                    let held = file.lock()?;
+                    acquired.send(()).unwrap();
+                    Ok(held)
+                },
             )
             .unwrap();
-            store_finished.store(true, Ordering::SeqCst);
-            lock_released.load(Ordering::SeqCst)
         })
     };
-    // The timer starts only once the contender is running and calling `store`,
-    // so an unscheduled thread cannot pass this vacuously. A store that skips
-    // the lock then finishes in milliseconds; one that takes it cannot finish
-    // at all while the guard is held, however long this waits.
-    let scheduled = std::time::Instant::now();
-    while !store_started.load(Ordering::SeqCst) {
-        assert!(
-            scheduled.elapsed() < std::time::Duration::from_secs(10),
-            "the contender never started"
-        );
-        std::thread::yield_now();
-    }
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        !store_finished.load(Ordering::SeqCst),
-        "SaveSlot::store completed while another locker still held SaveFile::lock"
-    );
-    lock_released.store(true, Ordering::SeqCst);
-    drop(guard);
 
-    assert!(
-        contender.join().expect("the contender must not panic"),
-        "SaveSlot::store completed while another locker still held SaveFile::lock"
-    );
+    drop(guard);
+    lock_acquired
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("SaveSlot::store never took SaveFile::lock");
+    // Blocks until the store's own guard drops, which happens after its write.
+    let reacquired = file
+        .lock()
+        .expect("the lock must return once the store releases it");
     assert!(
         temp.path.exists(),
-        "the contender's store must have written {}",
+        "SaveSlot::store released SaveFile::lock before writing {}",
         temp.path.display()
     );
+    drop(reacquired);
+    contender.join().expect("the contender must not panic");
 }
 
 #[test]
