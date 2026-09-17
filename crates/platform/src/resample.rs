@@ -72,8 +72,11 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
         bound
     };
 
+    // Hard clamp: `bound`'s `.max(1.0)` floor cannot shrink below 1, so
+    // `step` alone can still exceed `source_cap`; `Self::fill_chunk` caps
+    // its own crossings identically.
     #[allow(clippy::cast_precision_loss)]
-    let crossings = (bound as f64 * step).ceil();
+    let crossings = (bound as f64 * step).ceil().min(source_cap);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let scratch_frames = 2 + crossings as usize + 1;
     (bound, scratch_frames)
@@ -226,14 +229,20 @@ impl Resampler {
         // consumption precisely — never relying on `floor` agreeing with
         // incremental accumulation at an exact boundary (a mismatch would drop
         // a source frame or index past the scratch).
+        // Capped at `MAX_SCRATCH_SOURCE_FRAMES` (matching `scratch_layout`):
+        // an unresolved `frac_probe >= 1.0` past that carries over, worked
+        // down over later calls instead of spinning or indexing unboundedly.
         let prime = if self.primed { 0 } else { 2 };
         let mut frac_probe = self.frac;
         let mut advance_probe = self.need_advance;
         let mut crossings = 0usize;
-        for _ in 0..steps {
+        'dry_run: for _ in 0..steps {
             if advance_probe {
                 frac_probe += self.step;
                 while frac_probe >= 1.0 {
+                    if crossings >= MAX_SCRATCH_SOURCE_FRAMES {
+                        break 'dry_run;
+                    }
                     frac_probe -= 1.0;
                     crossings += 1;
                 }
@@ -264,19 +273,26 @@ impl Resampler {
             self.primed = true;
         }
 
+        let mut crossed = 0usize;
         for frame in out.chunks_mut(self.channels) {
             // Advance to this frame's position first, pulling the source
             // frame(s) it needs. Skipped only for the first frame ever, which
             // sits exactly on the primed `prev`/`next` pair at `frac == 0`.
+            // Mirrors the dry run's own `crossings` cap, so this never reads
+            // past what was actually drained into `scratch`.
             if self.need_advance {
                 self.frac += self.step;
                 while self.frac >= 1.0 {
+                    if crossed >= crossings {
+                        break;
+                    }
                     self.frac -= 1.0;
                     std::mem::swap(&mut self.prev, &mut self.next);
                     let base = src * self.channels;
                     self.next
                         .copy_from_slice(&self.scratch[base..base + self.channels]);
                     src += 1;
+                    crossed += 1;
                 }
             }
             self.need_advance = true;
@@ -394,6 +410,45 @@ mod tests {
     }
 
     #[test]
+    fn a_rate_ratio_past_the_source_cap_still_bounds_scratch() {
+        // The other extreme of the same advertisement `scratch_layout`
+        // documents it re-derives `bound` against: a ratio so large that
+        // `floor(MAX_SCRATCH_SOURCE_FRAMES / step)` is 0 and the `.max(1.0)`
+        // floor leaves `bound == 1`, so `bound * step` is still the whole
+        // step. `Resampler::new` accepts any `u32` source/device rate pair,
+        // so `step` here is one it would actually derive. Pure-function
+        // check: never allocates the buffer this would size.
+        let step = f64::from(u32::MAX); // source_rate = u32::MAX, device_rate = 1
+        let (_bound, scratch_frames) = scratch_layout(DEFAULT_MAX_OUTPUT_FRAMES, step);
+        assert!(
+            scratch_frames <= MAX_SCRATCH_SOURCE_FRAMES + 4,
+            "scratch_frames must stay at MAX_SCRATCH_SOURCE_FRAMES's scale: got {scratch_frames}"
+        );
+    }
+
+    #[test]
+    fn fill_never_panics_for_a_rate_ratio_past_the_source_cap() {
+        // `a_rate_ratio_past_the_source_cap_still_bounds_scratch` pins the
+        // allocation; this pins that a real `fill()` against that same
+        // extreme construction stays memory-safe too. `fill_chunk`'s advance
+        // loop caps its own crossings identically to what `scratch` was
+        // drained for, so the backlog this step implies is worked down over
+        // several calls instead of ever indexing past `scratch`.
+        let (_producer, consumer) = ring_buffer(16);
+        let mut resampler = Resampler::new(consumer, 1, u32::MAX, 1, DEFAULT_MAX_OUTPUT_FRAMES);
+        let mut out = [0.0_f32; 4];
+        for _ in 0..8 {
+            resampler.fill(&mut out);
+            for sample in out {
+                assert!(
+                    sample.is_finite(),
+                    "fill must never produce non-finite output"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn constructing_with_an_extreme_bound_and_rate_ratio_stays_cheap() {
         // Both caps compose: an advertised `u32::MAX` buffer maximum and an
         // advertised near-zero device rate (13379/1 -- cpal's ALSA backend
@@ -434,6 +489,42 @@ mod tests {
         let mut reference = Resampler::new(consumer_b, 1, 1, 1, 4);
         let mut small_out = [0.0; 20];
         for chunk in small_out.chunks_mut(4) {
+            reference.fill(chunk);
+        }
+
+        assert_eq!(big_out, small_out);
+        assert_eq!(capped.underruns(), reference.underruns());
+    }
+
+    #[test]
+    fn a_fill_larger_than_the_capped_chunk_matches_correctly_sequenced_chunks() {
+        // Adjudication probe: `chunk_frames` is the capped
+        // `DEFAULT_MAX_OUTPUT_FRAMES`, so the output must exceed *that* for
+        // `fill` to split internally at the production chunk size.
+        let above_cap = DEFAULT_MAX_OUTPUT_FRAMES * 4;
+        let frames = DEFAULT_MAX_OUTPUT_FRAMES + 5;
+        #[expect(clippy::cast_precision_loss, reason = "probe")]
+        let source: Vec<f32> = (0..(frames + 8)).map(|i| i as f32).collect();
+
+        let (producer_a, consumer_a) = ring_buffer(source.len());
+        assert_eq!(producer_a.push(&source), source.len());
+        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap);
+        assert_eq!(capped.chunk_frames, DEFAULT_MAX_OUTPUT_FRAMES);
+        let scratch_capacity = capped.scratch.len();
+
+        let mut big_out = vec![0.0; frames];
+        assert!(
+            big_out.len() > capped.chunk_frames,
+            "the probe must cross the capped chunk boundary"
+        );
+        capped.fill(&mut big_out);
+        assert_eq!(capped.scratch.len(), scratch_capacity);
+
+        let (producer_b, consumer_b) = ring_buffer(source.len());
+        assert_eq!(producer_b.push(&source), source.len());
+        let mut reference = Resampler::new(consumer_b, 1, 1, 1, above_cap);
+        let mut small_out = vec![0.0; frames];
+        for chunk in small_out.chunks_mut(DEFAULT_MAX_OUTPUT_FRAMES) {
             reference.fill(chunk);
         }
 
