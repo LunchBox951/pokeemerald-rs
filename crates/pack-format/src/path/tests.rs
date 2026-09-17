@@ -1,10 +1,11 @@
 //! Unit tests for pack-path resolution.
 //!
-//! Every test drives [`super::resolve`] / [`super::data_dir`] with a fake
-//! environment, a fake executable directory, and a fake existence
+//! The resolution tests drive [`super::resolve`] / [`super::data_dir`] with a
+//! fake environment, a fake executable directory, and a fake existence
 //! predicate, so all four rungs and all three OS conventions are checked on
-//! whichever host runs the suite. Nothing here reads or writes the real
-//! environment.
+//! whichever host runs the suite. The tests of [`super::probe`] itself and of
+//! the developer-checkout guard use a scratch directory under the temp dir
+//! and the real probe; nothing reads or writes the real environment.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
