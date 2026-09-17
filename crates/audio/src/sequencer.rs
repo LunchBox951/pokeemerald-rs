@@ -366,13 +366,31 @@ impl Sequencer {
     /// every surviving track's volume after this frame's tick, matching
     /// `FadeOutBody`'s immediate write (`m4a.c:750`-`:757`) ahead of
     /// `TrkVolPitSet`'s own deferred, post-tick propagation
-    /// (`m4a_1.s:1361`-`:1400`).
+    /// (`m4a_1.s:1361`-`:1400`). The terminal step (`volX == 0`) instead
+    /// stops every track outright and skips the tick, matching
+    /// `FadeOutBody`'s own early return once paused (`m4a.c:713`-`:744`).
     pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
-        let changed_tracks =
-            fade_vol_x.map_or_else(Vec::new, |vol_x| self.mark_fade_volume_x(vol_x));
-        self.advance_frame();
-        self.propagate_fade_volume(&changed_tracks);
+        match fade_vol_x {
+            Some(0) => self.stop_all_tracks(),
+            Some(vol_x) => {
+                let changed_tracks = self.mark_fade_volume_x(vol_x);
+                self.advance_frame();
+                self.propagate_fade_volume(&changed_tracks);
+            }
+            None => self.advance_frame(),
+        }
         self.mixer.mix_frame(out);
+    }
+
+    /// Stops every not-yet-ended track's voices outright, matching
+    /// `TrackStop` (`m4a_1.s:1469`-`:1506`).
+    fn stop_all_tracks(&mut self) {
+        let Self { tracks, mixer, .. } = self;
+        for (track_id, track) in tracks.iter().enumerate() {
+            if !track.ended {
+                mixer.stop_track(track_id);
+            }
+        }
     }
 
     /// Writes `vol_x` into every changed, not-yet-ended track; returns which changed.

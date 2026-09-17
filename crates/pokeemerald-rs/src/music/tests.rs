@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use audio::{Adsr, Event, Instrument, Sequencer, Song, ToneData, WaveData};
+use audio::song::SquareTone;
+use audio::{Adsr, CgbAdsr, Event, Instrument, Sequencer, Song, ToneData, WaveData};
 use platform::AudioOutput;
 
 use super::{load_song_from_pack, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
@@ -806,4 +807,67 @@ mod oracle {
              {reference_rms:.4} (tolerance {tolerance:.4})"
         );
     }
+}
+
+/// The PSG counterpart to [`sustained_song`]: one CGB square voice holding a
+/// tied note, so a fade's terminal frame can be inspected on a channel whose
+/// gain runs through the CGB envelope rather than the `DirectSound` mixer.
+fn sustained_cgb_song() -> Song {
+    let voices = vec![Instrument::CgbSquare1(SquareTone {
+        duty: 2,
+        sweep: 0,
+        adsr: CgbAdsr::flat(),
+        fixed_rate: false,
+    })];
+    let track = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(200),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![track], 150)
+}
+
+/// `FadeOutBody` stops every existing track outright on the step that reaches
+/// `volX == 0` (`m4a.c:750`-`:757`), and `TrackStop` turns each CGB channel
+/// off as it goes -- so the frame mixed after that step carries no PSG sound.
+#[test]
+fn a_finished_fade_silences_a_sustained_cgb_voice_on_its_terminal_frame() {
+    const FADE_FRAMES: u32 = 64;
+
+    let mut player = MusicPlayer::start(
+        sustained_cgb_song(),
+        AudioOutput::null(RING_CAPACITY_FRAMES),
+    )
+    .expect("null backend never errors");
+    drain_everything(&mut player);
+    player.fade_out(TITLE_FADE_OUT_SPEED);
+
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut any_audible = false;
+    for _ in 1..=FADE_FRAMES {
+        player.advance_frame();
+        player.drain_null_for_test(&mut frame);
+        if frame.iter().any(|&s| s != 0.0) {
+            any_audible = true;
+        }
+    }
+
+    assert!(
+        player.fade_finished(),
+        "sanity: the fade must finish on frame {FADE_FRAMES}"
+    );
+    assert!(
+        any_audible,
+        "sanity: the CGB voice must actually have been producing sound to fade"
+    );
+    assert!(
+        frame.iter().all(|&s| s == 0.0),
+        "the terminal fade frame must be silent, got {:?}",
+        &frame[..4]
+    );
 }

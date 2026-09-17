@@ -585,6 +585,15 @@ impl CgbVoice {
         }
     }
 
+    /// Stop outright, matching `TrackStop`'s explicit `CgbOscOff`
+    /// (`m4a_1.s:1490`-`:1493`): unlike [`Self::note_off`], this silences the
+    /// oscillator immediately rather than deferring to the next latched
+    /// envelope goal.
+    pub(crate) fn stop(&mut self) {
+        self.hardware_muted = true;
+        self.envelope.retire();
+    }
+
     /// Applies [`Oscillator::retrigger`], muting the channel instead of
     /// retiring the voice when the trigger disables it (`m4a.c:1053-1056`).
     fn apply_retrigger(&mut self) {
