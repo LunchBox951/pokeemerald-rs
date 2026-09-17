@@ -40,7 +40,8 @@ pub(crate) mod trainer_ai;
 pub use events::{BattleEvent, TurnError};
 
 use opponent_ai::{
-    choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
+    all_known_moves_are_spent, choose_enemy_action_first_battle, choose_enemy_move,
+    selectable_slot, EnemyAction,
 };
 use trainer::TrainerContext;
 use trainer_ai::choose_trainer_action;
@@ -71,10 +72,9 @@ pub enum BattleOutcome {
 
 /// Validates that one complete move-effect pipeline can execute a move.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    // The ordinary-hit pipeline cannot apply Struggle's recoil half.
-    if move_id == STRUGGLE {
-        return Err(BattleError::UnsupportedMoveEffect(move_id));
-    }
+    // Struggle is admitted through the ordinary-hit pipeline: `hit::
+    // ensure_resolvable` special-cases it, and `execute_hit_move` applies its
+    // quarter-HP recoil once it lands.
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
@@ -125,7 +125,14 @@ enum BattleKind {
 
 #[derive(Debug, Clone, Copy)]
 enum ValidatedPlayerAction {
-    UseMove { slot: usize, move_id: MoveId },
+    /// `slot` is `None` for a forced Struggle: every known move is spent, so
+    /// upstream substitutes `MOVE_STRUGGLE` at selection with no PP slot to
+    /// deduct from (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
+    /// `:1139`, `:100`-`:104`).
+    UseMove {
+        slot: Option<usize>,
+        move_id: MoveId,
+    },
     Run,
 }
 
@@ -385,7 +392,10 @@ impl Battle {
         if !selectable_slot(Some(slot.move_id)) {
             return Err(BattleError::PlaceholderMove(index));
         }
-        if slot.pp == 0 {
+        // This pre-draw screen mirrors `Cmd_attackcanceler`'s mid-script
+        // no-PP abort, which exempts Struggle (`:934`); `Battle::act` mirrors
+        // the exemption itself once the turn actually reaches this slot.
+        if slot.pp == 0 && slot.move_id != STRUGGLE {
             return Err(BattleError::NoPpRemaining(index));
         }
         ensure_executable(&self.dex, slot.move_id)?;
@@ -402,10 +412,8 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`TurnError`] for an invalid state or action. Pre-turn failures
-    /// consume no RNG and contain no events. A wild opponent forced to use the
-    /// unsupported Struggle may fail after draws or earlier events; those events
-    /// remain in [`TurnError::events`]. A pending move-learning decision takes
-    /// precedence over an existing outcome.
+    /// consume no RNG and contain no events. A pending move-learning decision
+    /// takes precedence over an existing outcome.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -466,8 +474,18 @@ impl Battle {
                     Ok(ValidatedPlayerAction::Run)
                 }
             },
+            // `AreAllMovesUnusable` (`pokeemerald/src/battle_util.c:1125`-
+            // `:1139`) runs before the chosen slot is even looked at: an
+            // all-spent moveset always forces Struggle, regardless of which
+            // index was picked.
+            PlayerAction::UseMove(_) if all_known_moves_are_spent(&self.player) => {
+                Ok(ValidatedPlayerAction::UseMove {
+                    slot: None,
+                    move_id: STRUGGLE,
+                })
+            }
             PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
-                slot,
+                slot: Some(slot),
                 move_id: self.validate_player_move(slot)?,
             }),
         }
@@ -538,7 +556,7 @@ impl Battle {
 
     fn resolve_move_exchange(
         &mut self,
-        player_slot: usize,
+        player_slot: Option<usize>,
         player_move: MoveId,
         enemy_action: EnemyAction,
         rng: &mut impl BattleRng,
@@ -751,11 +769,19 @@ impl Battle {
         Ok(())
     }
 
+    /// Runs one battler's turn-order slot: the full-paralysis draw, the
+    /// Soundproof block, PP handling, then execution.
+    ///
+    /// `slot` is `None` for a forced Struggle, which spends no PP
+    /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`)
+    /// -- this is the same slot both an ordinary move and a forced Struggle
+    /// run through, for either battler, mirroring upstream's single
+    /// `HandleAction_UseMove` entry point.
     fn act(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
-        slot: usize,
+        slot: Option<usize>,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
@@ -786,8 +812,10 @@ impl Battle {
             (&mut self.enemy, &self.player)
         };
         if stat_change::soundproof_block(&self.dex, move_id, defender)? {
-            if attacker.moves()[slot].pp > 0 {
-                attacker.deduct_pp_by(slot, pp_cost)?;
+            if let Some(slot) = slot {
+                if attacker.moves()[slot].pp > 0 {
+                    attacker.deduct_pp_by(slot, pp_cost)?;
+                }
             }
             events.push(BattleEvent::SoundproofProtected {
                 by_player: player_is_attacker,
@@ -795,16 +823,32 @@ impl Battle {
             });
             return Ok(());
         }
-        if player_is_attacker {
-            self.player.deduct_pp_by(slot, pp_cost)?;
-        } else if self.enemy.moves()[slot].pp == 0 {
-            events.push(BattleEvent::FailedNoPp {
-                by_player: false,
-                move_id,
-            });
-            return Ok(());
-        } else {
-            self.enemy.deduct_pp_by(slot, pp_cost)?;
+        if let Some(slot) = slot {
+            let slot_pp = if player_is_attacker {
+                self.player.moves()[slot].pp
+            } else {
+                self.enemy.moves()[slot].pp
+            };
+            if slot_pp == 0 {
+                // `Cmd_attackcanceler`'s no-PP abort exempts Struggle
+                // (`gCurrentMove != MOVE_STRUGGLE`,
+                // `battle_script_commands.c:934`), and `Cmd_ppreduce` no-ops
+                // on an already-empty slot regardless of
+                // `HITMARKER_NO_PPDEDUCT` (`:1230`) -- so a directly chosen
+                // Struggle with no PP left still executes, spending nothing,
+                // the same as the forced all-spent substitution.
+                if move_id != STRUGGLE {
+                    events.push(BattleEvent::FailedNoPp {
+                        by_player: player_is_attacker,
+                        move_id,
+                    });
+                    return Ok(());
+                }
+            } else if player_is_attacker {
+                self.player.deduct_pp_by(slot, pp_cost)?;
+            } else {
+                self.enemy.deduct_pp_by(slot, pp_cost)?;
+            }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
     }
@@ -836,25 +880,18 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         match action {
-            EnemyAction::Move(slot) => {
-                self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
-            }
-            EnemyAction::Struggle => {
-                // `gCurrentMove` is set to Struggle before anything else runs
-                // (`HandleAction_UseMove`, `pokeemerald/src/battle_util.c:103`).
-                self.last_move_used = STRUGGLE;
-                // Struggle reaches the paralysis gate before its unsupported
-                // recoil path (`data/battle_scripts_1.s:241`-`:247`).
-                if draws_full_paralysis(self.enemy.status1(), rng) {
-                    events.push(BattleEvent::FullyParalyzed {
-                        by_player: false,
-                        move_id: STRUGGLE,
-                    });
-                    Ok(())
-                } else {
-                    Err(BattleError::UnsupportedMoveEffect(STRUGGLE))
-                }
-            }
+            EnemyAction::Move(slot) => self.act(
+                false,
+                self.enemy.moves()[slot].move_id,
+                Some(slot),
+                rng,
+                events,
+            ),
+            // An all-spent opponent's forced Struggle runs through the same
+            // slot as an ordinary move, just with no PP to deduct
+            // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
+            // `:1139`, `:100`-`:104`).
+            EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
