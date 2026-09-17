@@ -204,31 +204,67 @@ where
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
+    let generation_rgb = generation_dir.join(format!("{}.rgb", scene.name()));
+    let generation_meta = generation_dir.join(format!("{}.meta", scene.name()));
 
+    // Proves this call, not merely this name, owns `generation_dir` once set:
+    // only a `create_dir` this call performed can set it, so cleanup below
+    // never removes a directory a competing writer claimed there instead.
+    // `generation_populated` narrows that further: while it is still false,
+    // this call has written nothing into `generation_dir`, so anything
+    // found occupying it cannot be this call's own and is left alone rather
+    // than guessed at; once true, the directory holds this call's own
+    // write and cleanup may take it back.
+    let mut generation_dir_created = false;
+    let mut generation_populated = false;
     let result = (|| {
         std::fs::write(&staged_rgb, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
         after_rgb_staged()?;
         std::fs::write(&staged_meta, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
-        std::fs::rename(&staged_dir, &generation_dir)
+        // `create_dir`'s exclusivity is the actual guard, matching
+        // `staged_dir` above: it fails outright if a competing writer
+        // already claimed the name, unlike a bare rename onto
+        // `generation_dir`, which POSIX (and Windows with `FileRenameInfoEx`
+        // support) permits when the destination is an empty directory.
+        // Promoting the two staged files individually into the claimed
+        // directory, rather than renaming `staged_dir` itself over
+        // `generation_dir`, also avoids relying on that same
+        // directory-replace behavior, which `std::fs::rename` documents as
+        // refused outright on Windows targets without `FileRenameInfoEx`.
+        std::fs::create_dir(&generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        generation_dir_created = true;
+        std::fs::rename(&staged_rgb, &generation_rgb)
+            .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        generation_populated = true;
+        std::fs::rename(&staged_meta, &generation_meta)
+            .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        std::fs::remove_dir(&staged_dir)
+            .map_err(|e| RecordSnapshotError::Write(staged_dir.clone(), e.to_string()))?;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
-        Ok((
-            generation_dir.join(format!("{}.rgb", scene.name())),
-            generation_dir.join(format!("{}.meta", scene.name())),
-        ))
+        Ok((generation_rgb, generation_meta))
     })();
 
     if result.is_err() {
         // `staging` already cleans up its own candidate, respecting ownership.
         let _ = std::fs::remove_dir_all(&staged_dir);
-        let _ = std::fs::remove_dir_all(&generation_dir);
+        if generation_populated {
+            let _ = std::fs::remove_dir_all(&generation_dir);
+        } else if generation_dir_created {
+            // Nothing of this call's own has landed here yet, so a
+            // directory a competing writer replaced ours with is not empty
+            // in the way this call left it; `remove_dir` refuses exactly
+            // that case instead of recursing into a directory that may not
+            // be this call's to remove.
+            let _ = std::fs::remove_dir(&generation_dir);
+        }
     }
     result
 }

@@ -698,6 +698,79 @@ fn publication_stages_the_pointer_outside_every_generation_derived_name() {
     drop(out_guard);
 }
 
+/// A competing writer that claims `generation_dir` in the window between the
+/// loop's early `exists()` skip and promotion -- here simulated from the
+/// `after_rgb_staged` hook, well past that skip -- must not have its
+/// directory silently replaced: POSIX `rename(2)` (and, on modern NTFS,
+/// `std::fs::rename`'s Windows path too) succeeds when the destination is an
+/// empty directory, so promotion must claim `generation_dir` exclusively
+/// before ever attempting that rename.
+#[test]
+fn publish_refuses_to_replace_a_racing_empty_generation_dir() {
+    let output_dir = scratch_path("racing-generation-dir-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    let plant_competing_generation_dir = || {
+        // By the time this hook runs, `staged_rgb` has already been written,
+        // so this call's own `staged_dir` is the sole `.*.staged` entry;
+        // its name is this call's generation, discovered rather than
+        // recomputed, since the shared generation counter makes it
+        // otherwise unpredictable under parallel tests.
+        let generation = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .find_map(|entry| {
+                let name = entry.unwrap().file_name();
+                let name = name.to_str()?;
+                name.strip_prefix('.')?
+                    .strip_suffix(".staged")
+                    .map(str::to_owned)
+            })
+            .expect("this call's own staging directory must exist by now");
+        std::fs::create_dir(output_dir.join(&generation)).unwrap();
+        Ok(())
+    };
+
+    let error = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        plant_competing_generation_dir,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+    assert!(
+        visible_generation(&output_dir, scene).is_none(),
+        "a refused promotion must not publish a pointer"
+    );
+    let generation_dirs: Vec<PathBuf> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !name.starts_with('.'))
+        })
+        .collect();
+    assert_eq!(
+        generation_dirs.len(),
+        1,
+        "only the competing writer's generation directory may remain: {generation_dirs:?}"
+    );
+    assert!(
+        std::fs::read_dir(&generation_dirs[0])
+            .unwrap()
+            .next()
+            .is_none(),
+        "the competing writer's directory must be left exactly as found, still empty"
+    );
+
+    drop(out_guard);
+}
+
 /// A promoting rename that fails must not turn into an unlink of whatever
 /// now holds the staging name. On unix the held handle's inode confirms the
 /// file is still the staged one, so it is removed; on Windows the hold had
