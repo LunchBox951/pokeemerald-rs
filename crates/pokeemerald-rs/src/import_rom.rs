@@ -749,10 +749,12 @@ struct CreatedDirectory {
     parent: std::os::fd::OwnedFd,
     /// This level's own basename inside `parent`.
     name: std::ffi::OsString,
-    /// This level's own device, captured right after it was created.
-    dev: u64,
-    /// This level's own inode, captured right after it was created.
-    ino: u64,
+    /// This level's own device and inode, captured right after it was
+    /// created. Kept as `rustix`'s own platform-native [`rustix::fs::Stat`],
+    /// not normalized into a fixed-width type: `st_dev`'s width and
+    /// signedness differ across Unixes this ships to (`i32` on macOS, `u64`
+    /// on Linux).
+    identity: rustix::fs::Stat,
 }
 
 /// [`CreatedDirectory`]'s off-Unix shape: see its own docs for why.
@@ -807,22 +809,22 @@ fn create_directories(
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let mut parent_fd = match dest::open_directory(start) {
+    let mut parent_fd = match dest::open_traversal_directory(start) {
         Ok(fd) => fd,
         Err(source) => return Err((Vec::new(), source)),
     };
 
     let mut created = Vec::new();
     for level in levels {
-        // `directories_to_create`'s own walk is lexical (`Path::parent`),
-        // not filesystem-aware, so a `$POKEEMERALD_PACK` spelled through a
-        // `..` produces a level that is its own ancestor rather than a new
-        // name -- `Path::file_name` is `None` for one, and there is nothing
-        // to make or pin: a plain reopen finds exactly the directory this
-        // loop already stood in one level up, the same one path-based
-        // `create_dir_all` would have found without ever tripping on it.
+        // `directories_to_create`'s lexical walk can produce a `..` level
+        // (`Path::file_name` is `None` for one) that names no new component
+        // to make. It resolves relative to the descent itself (`..` from
+        // `parent_fd`, which already stands where this loop last made or
+        // found a level) rather than by reopening `level`'s full path,
+        // which would re-walk -- and so trust again -- every component
+        // already pinned.
         let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
-            parent_fd = match dest::open_directory(&level) {
+            parent_fd = match dest::open_directory_at(&parent_fd, OsStr::new("..")) {
                 Ok(fd) => fd,
                 Err(source) => return Err((created, source)),
             };
@@ -845,12 +847,12 @@ fn create_directories(
                 // way, without following it as a symlink might.
                 let found =
                     rustix::fs::statat(&parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
-                let (dev, ino) = match found {
+                let identity = match found {
                     Ok(found)
                         if rustix::fs::FileType::from_raw_mode(found.st_mode)
                             == rustix::fs::FileType::Directory =>
                     {
-                        (found.st_dev, found.st_ino)
+                        found
                     }
                     Ok(_) => {
                         return Err((
@@ -867,8 +869,7 @@ fn create_directories(
                     path: level,
                     parent: parent_fd,
                     name,
-                    dev,
-                    ino,
+                    identity,
                 });
                 parent_fd = match descend {
                     Ok(fd) => fd,
@@ -936,11 +937,15 @@ fn create_directories(
 /// that never reached the disk.
 ///
 /// Best-effort throughout: a weaker durability guarantee is not something
-/// to fail a finished import over.
+/// to fail a finished import over -- including `dir.parent` itself being a
+/// traversal-only descriptor nothing can `fsync` directly
+/// ([`dest::reopen_for_sync`]).
 #[cfg(unix)]
 fn sync_created_directories(created: &[CreatedDirectory]) {
     for dir in created {
-        let _ = rustix::fs::fsync(&dir.parent);
+        if let Ok(real) = dest::reopen_for_sync(&dir.parent) {
+            let _ = rustix::fs::fsync(&real);
+        }
     }
 }
 
@@ -991,7 +996,9 @@ fn undo_created_directories(created: &[CreatedDirectory]) {
             &dir.name,
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         ) {
-            Ok(stat) if stat.st_dev == dir.dev && stat.st_ino == dir.ino => {
+            Ok(stat)
+                if stat.st_dev == dir.identity.st_dev && stat.st_ino == dir.identity.st_ino =>
+            {
                 match rustix::fs::unlinkat(&dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR) {
                     Ok(()) => {}
                     // Already gone is already taken care of.

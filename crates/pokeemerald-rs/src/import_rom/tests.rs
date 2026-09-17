@@ -197,6 +197,37 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     assert!(again.is_empty(), "a run that created nothing owns nothing");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Creating a name inside a directory needs write and search on it,
+    // never read: a `0o300` parent is a destination the path-based
+    // `mkdir` this replaced always accepted, and the levels below it are
+    // this run's own to make and to read.
+    let dir = TempDir::new("unreadable-parent");
+    let parent = dir.join("drop-box");
+    fs::create_dir(&parent).expect("the parent is created");
+    let level = parent.join("pokeemerald-rs");
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("the parent closes");
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert. Asked of the
+    // outcome rather than of the uid, so it needs no libc.
+    let unreadable = fs::read_dir(&parent).is_err();
+    let created = create_directories(&level);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
+
+    if unreadable {
+        let created = created
+            .map_err(|(_, source)| source)
+            .expect("a writable, searchable parent takes a new level");
+        assert_eq!(created_paths(&created), std::slice::from_ref(&level));
+        assert!(level.is_dir());
+    }
+}
+
 #[test]
 fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
     // The overlong component trips the create after `new/` is on disk, and
@@ -1305,5 +1336,78 @@ fn discard_reports_a_name_that_is_gone_and_one_it_could_not_remove() {
     assert!(
         !dest.discard(OsStr::new("a-directory")),
         "a name that survives must report as still there"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
+    // A `..` level used to be reopened by its whole path, walking every
+    // component before it again -- including one this run already created
+    // and pinned. Another account could swap that component for a symlink
+    // into a tree of its own after the pin, landing the reopen there; the
+    // level *after* the `..` would then be created inside the attacker's
+    // tree, through an `mkdirat` the pinned descent was supposed to keep
+    // out of reach.
+    const LEVELS: usize = 128;
+
+    let dir = TempDir::new("dotdot-swap");
+    let names: Vec<String> = (0..LEVELS).map(|level| format!("l{level:03}")).collect();
+    let mut dest = dir.path.clone();
+    for name in &names {
+        dest.push(name);
+    }
+    dest.push("..");
+    dest.push("downstream");
+
+    // The attacker's tree mirrors the levels below the swapped component,
+    // so the reopened path resolves through it instead of failing.
+    let mirror = dir.join("attacker");
+    let mut mirror_leaf = mirror.clone();
+    for name in &names[1..] {
+        mirror_leaf.push(name);
+    }
+    fs::create_dir_all(&mirror_leaf).expect("the attacker's mirror is built");
+    let mirror_dotdot = mirror_leaf
+        .parent()
+        .expect("the mirror has a parent")
+        .to_path_buf();
+
+    let swapped = dir.join(&names[0]);
+    let moved = dir.join("carried-off");
+    let probe = swapped.join(&names[1]).join(&names[2]);
+    let deepest = {
+        let mut deepest = moved.clone();
+        for name in &names[1..] {
+            deepest.push(name);
+        }
+        deepest
+    };
+    let attacker = {
+        let (swapped, moved) = (swapped.clone(), moved.clone());
+        std::thread::spawn(move || {
+            // Wait until the descent is past the component being swapped,
+            // so the swap cannot disturb its own creation or pin.
+            while !probe.exists() {
+                std::hint::spin_loop();
+            }
+            fs::rename(&swapped, &moved).expect("the pinned level is carried off");
+            std::os::unix::fs::symlink(&mirror, &swapped).expect("a symlink takes its name");
+            // Proof the swap landed before the `..` level was reached: the
+            // innermost level is not created yet.
+            !deepest.exists()
+        })
+    };
+
+    let made_them = create_directories(&dest).is_ok();
+    let in_time = attacker.join().expect("the attacker thread finishes");
+    assert!(
+        in_time,
+        "the swap has to land before the `..` level is reopened"
+    );
+
+    assert!(
+        !mirror_dotdot.join("downstream").exists(),
+        "a level after `..` was created inside the attacker's tree (run succeeded: {made_them})"
     );
 }

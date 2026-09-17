@@ -68,17 +68,9 @@ fn next_temp_name(sequence: &AtomicU64) -> OsString {
     ))
 }
 
-/// Open `path` as a directory, pinned.
-///
-/// The one place [`Dest::open`] and `import_rom`'s own directory-level
-/// creation resolve a directory component by path rather than through an
-/// already-open handle: [`Dest::open`] because it is the first handle
-/// there is, and `create_directories` because the parent of the outermost
-/// level it has to make is, by construction, the first ancestor that
-/// already exists. Everything either of them does afterward walks down
-/// from the descriptor this hands back, by basename
-/// (`openat`/`mkdirat`/`renameat`/`unlinkat`), never by re-resolving a
-/// path.
+/// Open `path` as a directory, pinned for real I/O -- in particular,
+/// `fsync` ([`Dest::publish`]), which an `O_PATH` handle cannot do. Needs
+/// read permission on `path`, like any ordinary read-mode `open(2)`.
 #[cfg(unix)]
 pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
@@ -88,19 +80,49 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     )?)
 }
 
+/// Open `path` as a directory, pinned for traversal only (`mkdirat`,
+/// `statat`, `openat`, `unlinkat`) -- `create_directories`'s one
+/// path-resolved component, the first ancestor of its destination that
+/// already exists. `O_PATH` needs no read permission on `path`, unlike
+/// [`open_directory`]; off Linux, where `rustix` exposes no `O_PATH`, this
+/// falls back to that same real, read-requiring open.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_traversal_directory`]'s fallback where `rustix` has no `O_PATH`.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    open_directory(path)
+}
+
 /// Open `name`, inside the already-pinned directory `parent`, as a
-/// directory of its own -- following a final symlink.
-///
-/// `import_rom::create_directories`'s own way of walking down through a
-/// level it found *already standing* (another process won the create race,
-/// or `name` is the lexical `..` a `$POKEEMERALD_PACK` can spell) without
-/// ever re-resolving a path: the returned handle becomes the next level's
-/// `parent`. Follows a final symlink, like [`std::path::Path::is_dir`] does
-/// and this tolerance always has -- unlike [`Dest::name_is_directory`]'s
-/// refusal check, nothing here is deciding whether to publish over `name`.
-/// For a level this run just made itself, see
-/// [`open_created_directory_at`] instead.
-#[cfg(unix)]
+/// directory of its own, for traversal only -- following a final symlink.
+/// `create_directories`'s way of walking down through a level it found
+/// *already standing* (another process won the create race, or `name` is
+/// the lexical `..` a `$POKEEMERALD_PACK` can spell) without re-resolving
+/// a path: the returned handle becomes the next level's `parent`. For a
+/// level this run just made itself, see [`open_created_directory_at`].
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`]'s fallback where `rustix` has no `O_PATH`.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(super) fn open_directory_at(
     parent: &std::os::fd::OwnedFd,
     name: &OsStr,
@@ -124,7 +146,24 @@ pub(super) fn open_directory_at(
 /// subsequent level's own `mkdirat` an attacker-chosen directory to
 /// descend into, which is worse than merely recording the wrong identity
 /// for this one -- see the module docs.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_created_directory_at`]'s fallback where `rustix` has no `O_PATH`.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(super) fn open_created_directory_at(
     parent: &std::os::fd::OwnedFd,
     name: &OsStr,
@@ -136,6 +175,21 @@ pub(super) fn open_created_directory_at(
             | rustix::fs::OFlags::DIRECTORY
             | rustix::fs::OFlags::CLOEXEC
             | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// Reopen the directory `dir` (possibly an `O_PATH` handle) names, for real
+/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm.
+/// Needs read permission `open_traversal_directory` did not, so a parent
+/// this run cannot read is a sync silently skipped, best-effort like
+/// [`Dest::publish`]'s own.
+#[cfg(unix)]
+pub(super) fn reopen_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        dir,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )?)
 }
