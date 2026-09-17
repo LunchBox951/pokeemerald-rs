@@ -1,8 +1,8 @@
 //! Persistence tests use per-test scratch paths and never the per-user save.
 
 use engine::save::{
-    SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStore, Sector, LOCK_FILE_NAME,
-    SECTOR_SIGNATURE, SECTOR_SIZE,
+    SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStore, Sector, SECTOR_SIGNATURE,
+    SECTOR_SIZE,
 };
 
 use super::{SaveFileStatus, SaveLineage, SaveSlot};
@@ -450,22 +450,48 @@ fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
     );
 }
 
+/// `SaveSlot::store` must run its whole read-modify-write cycle under
+/// `SaveFile::lock`, so a store started while another locker holds that lock
+/// cannot finish until the lock is released. The entry the lock is taken on
+/// is the engine's business and differs by host, so this observes exclusion
+/// rather than any artefact on disk.
 #[test]
 fn storing_takes_the_inter_process_lock() {
-    let temp = TempSave::new("lock-taken");
-    let mut slot = temp.slot();
-    slot.store(
-        &SaveBlock1::default(),
-        &SaveBlock2::default(),
-        SaveLineage::Continued,
-    )
-    .unwrap();
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
-    let lock_path = temp.dir.join(LOCK_FILE_NAME);
+    let temp = TempSave::new("lock-taken");
+    let guard = SaveFile::at(temp.path.clone())
+        .lock()
+        .expect("the scratch save must be lockable");
+    let lock_released = Arc::new(AtomicBool::new(false));
+
+    let contender = {
+        let lock_released = Arc::clone(&lock_released);
+        let mut slot = temp.slot();
+        std::thread::spawn(move || {
+            slot.store(
+                &SaveBlock1::default(),
+                &SaveBlock2::default(),
+                SaveLineage::Continued,
+            )
+            .unwrap();
+            lock_released.load(Ordering::SeqCst)
+        })
+    };
+    // This gives the contender a chance to block before the lock is released.
+    std::thread::yield_now();
+    lock_released.store(true, Ordering::SeqCst);
+    drop(guard);
+
     assert!(
-        lock_path.exists(),
-        "SaveSlot::store must acquire SaveFile::lock, which creates {}",
-        lock_path.display()
+        contender.join().expect("the contender must not panic"),
+        "SaveSlot::store completed while another locker still held SaveFile::lock"
+    );
+    assert!(
+        temp.path.exists(),
+        "the contender's store must have written {}",
+        temp.path.display()
     );
 }
 

@@ -716,13 +716,11 @@ fn locking_synchronises_ancestors_only_once_the_lock_is_held() {
     let file = SaveFile::at(&path);
 
     let synced_while_locked = std::cell::Cell::new(false);
-    let lock_path = file.lock_path();
     let guard = file
         .lock_with(|_ancestor_parent| {
-            let probe = std::fs::OpenOptions::new()
-                .write(true)
-                .open(&lock_path)
-                .expect("the lock file must already exist while ancestors are synced");
+            let probe = file
+                .open_lock_target()
+                .expect("the locked entry must already exist while ancestors are synced");
             synced_while_locked.set(matches!(
                 probe.try_lock(),
                 Err(std::fs::TryLockError::WouldBlock)
@@ -749,7 +747,7 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
         .lock()
         .expect("locking must create the missing hierarchy");
     assert!(path.parent().unwrap().is_dir());
-    assert!(file.lock_path().exists());
+    assert!(file.lock_target().exists());
 
     let (store, _, _) = saved_store();
     file.write(&store).unwrap();
@@ -828,15 +826,16 @@ fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
     let second = SaveFile::at(dir.join("second.sav"));
 
     assert_eq!(
-        first.lock_path(),
-        second.lock_path(),
+        first.lock_target(),
+        second.lock_target(),
         "every save in one directory must take one lock"
     );
 
     let guard = first.lock().expect("the first save must be lockable");
 
-    let probe =
-        SaveFile::open_lock_file(&second.lock_path()).expect("the lock file must be openable");
+    let probe = second
+        .open_lock_target()
+        .expect("the locked entry must be openable");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
         other => panic!("the directory lock must exclude the second save, got {other:?}"),
@@ -850,13 +849,14 @@ fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
     drop(released);
 }
 
-/// The lock path must be one fixed name per directory, never derived from
-/// the save's basename.
+/// The locked entry must be one per directory, never derived from the save's
+/// basename.
 ///
 /// A volume's aliases cannot be enumerated from `std`, and `K` (U+212A)
-/// against `k` also differs in encoded length; a fixed name has no spelling to split.
+/// against `k` also differs in encoded length; a name no basename feeds has
+/// no spelling to split.
 #[test]
-fn the_lock_path_is_one_fixed_name_per_directory() {
+fn every_save_in_one_directory_locks_one_entry() {
     let dir = TempDir::new("lock-path-fixed");
     let spellings = [
         SAVE_FILE_NAME.to_owned(),
@@ -869,12 +869,13 @@ fn the_lock_path_is_one_fixed_name_per_directory() {
         "\u{212a}".repeat(47),
     ];
 
+    let expected = SaveFile::at(dir.join(SAVE_FILE_NAME)).lock_target();
     for spelling in &spellings {
         assert_eq!(
-            SaveFile::at(dir.join(spelling)).lock_path(),
-            dir.path.join(LOCK_FILE_NAME),
-            "every save in one directory must derive one fixed lock path, whatever \
-             its basename's spelling or encoded length"
+            SaveFile::at(dir.join(spelling)).lock_target(),
+            expected,
+            "every save in one directory must lock one entry, whatever its \
+             basename's spelling or encoded length"
         );
     }
 }
@@ -889,7 +890,7 @@ fn a_non_utf8_save_basename_still_takes_the_directorys_lock() {
     let dir = TempDir::new("non-utf8-lock");
     let file = SaveFile::at(dir.path.join(std::ffi::OsStr::from_bytes(b"\x80")));
 
-    assert_eq!(file.lock_path(), dir.path.join(LOCK_FILE_NAME));
+    assert_eq!(file.lock_target(), dir.path);
     let guard = file
         .lock()
         .expect("a non-UTF-8 save basename must still be lockable");
@@ -908,10 +909,9 @@ fn the_save_lock_excludes_a_second_locker_until_dropped() {
 
     let guard = file.lock().expect("first lock must succeed");
 
-    let probe = std::fs::OpenOptions::new()
-        .write(true)
-        .open(file.lock_path())
-        .expect("the lock file exists while the guard is held");
+    let probe = file
+        .open_lock_target()
+        .expect("the locked entry exists while the guard is held");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
         other => panic!("the held lock must exclude a second locker, got {other:?}"),
@@ -983,53 +983,22 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
     );
 }
 
-/// A save configured at the lock path itself must be refused, not locked.
+/// A save configured at the sidecar lock path itself must be refused, not
+/// locked.
 ///
 /// Locking it would hand out a guard on that save's own data file, and its
 /// next write renames a fresh inode over that file: every later locker
-/// would open the replacement and exclude nobody, which is exactly the
-/// replaced-inode hazard the lock is sited on a sibling to avoid. Refusing
-/// fails closed instead.
+/// would open the replacement and exclude nobody.
+#[cfg(not(unix))]
 #[test]
 fn a_save_configured_at_the_lock_path_is_refused_rather_than_locked() {
     let dir = TempDir::new("save-at-the-lock-path");
     let file = SaveFile::at(dir.join(LOCK_FILE_NAME));
 
     match file.lock() {
-        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, file.lock_path()),
+        Err(SaveFileError::LockPathIsSave { path }) => assert_eq!(path, file.lock_target()),
         other => panic!(
             "a save at the lock path must be refused, got {:?}",
-            other.map(|_| "a guard")
-        ),
-    }
-}
-
-/// The refusal must recognise the lock file by the entry it is, not by the
-/// name it is spelled with.
-///
-/// A case-folding or normalising volume resolves byte-different names to
-/// one entry, and `std` cannot enumerate those aliases, so comparing
-/// basenames bytewise would let an aliased spelling through. A symlink
-/// stands in for that aliasing here because it is the one alias a
-/// case-sensitive test host also supports.
-#[cfg(unix)]
-#[test]
-fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
-    let dir = TempDir::new("save-aliasing-the-lock-path");
-    let file = SaveFile::at(dir.join("aliased.sav"));
-
-    std::fs::write(dir.join(LOCK_FILE_NAME), b"").unwrap();
-    std::os::unix::fs::symlink(dir.join(LOCK_FILE_NAME), file.path()).unwrap();
-    assert_ne!(
-        file.path().file_name(),
-        file.lock_path().file_name(),
-        "the save must not be refusable by its name alone, or this proves nothing"
-    );
-
-    match file.lock() {
-        Err(SaveFileError::LockPathIsSave { .. }) => {}
-        other => panic!(
-            "a save resolving to the lock file must be refused, got {:?}",
             other.map(|_| "a guard")
         ),
     }
@@ -1053,7 +1022,8 @@ fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
 
     let guard = first.lock().expect("the first save must be lockable");
 
-    let probe = SaveFile::open_lock_file(&second.lock_path())
+    let probe = second
+        .open_lock_target()
         .expect("denying delete sharing must still admit a second locker's open");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
@@ -1064,89 +1034,30 @@ fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
     let replacement = dir.join("replacement");
     std::fs::write(&replacement, b"").unwrap();
     assert!(
-        std::fs::rename(&replacement, first.lock_path()).is_err(),
+        std::fs::rename(&replacement, first.lock_target()).is_err(),
         "renaming over a held lock must fail: replacing that inode would leave this \
          guard holding an unlinked file and exclude nobody afterwards"
     );
     assert!(
-        std::fs::remove_file(first.lock_path()).is_err(),
+        std::fs::remove_file(first.lock_target()).is_err(),
         "unlinking a held lock must fail for the same reason"
     );
 
     drop(guard);
 }
 
-/// A symlink planted in the fixed lock slot must be refused.
-///
-/// Opening follows it, so every locker lands on whatever it points at at
-/// that moment. Let the target be replaced by its own directory's save --
-/// an ordinary rename there -- and a locker from before the rename holds
-/// the old inode while one from after holds the new, so two processes run
-/// the read-modify-write cycle this lock exists to serialise.
-#[cfg(unix)]
-#[test]
-fn a_symlinked_lock_slot_is_refused() {
-    let dir = TempDir::new("symlinked-lock-slot");
-    let elsewhere = TempDir::new("symlinked-lock-slot-target");
-    let target = elsewhere.join("someone-elses.sav");
-    std::fs::write(&target, b"").unwrap();
-
-    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
-    std::os::unix::fs::symlink(&target, file.lock_path()).unwrap();
-
-    match file.lock() {
-        Err(SaveFileError::LockPathIsAlias { path }) => assert_eq!(path, file.lock_path()),
-        other => panic!(
-            "a symlinked lock slot must be refused, got {:?}",
-            other.map(|_| "a guard")
-        ),
-    }
-}
-
-/// A dangling symlink in the lock slot must be refused before anything
-/// opens it.
-///
-/// The open carries `create`, so following one would create its target
-/// outside the save directory -- a side effect no later check can undo,
-/// which is why the refusal has to come first. The same ordering is what
-/// keeps a slot pointing at a FIFO from parking the open until some reader
-/// turns up.
-#[cfg(unix)]
-#[test]
-fn a_dangling_symlinked_lock_slot_is_refused_without_creating_its_target() {
-    let dir = TempDir::new("dangling-lock-slot");
-    let elsewhere = TempDir::new("dangling-lock-slot-target");
-    let target = elsewhere.join("never-created.sav");
-
-    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
-    std::os::unix::fs::symlink(&target, file.lock_path()).unwrap();
-
-    match file.lock() {
-        Err(SaveFileError::LockPathIsAlias { path }) => assert_eq!(path, file.lock_path()),
-        other => panic!(
-            "a dangling symlinked lock slot must be refused, got {:?}",
-            other.map(|_| "a guard")
-        ),
-    }
-    assert!(
-        !target.exists(),
-        "the refusal must precede the open, which would otherwise have created {} \
-         outside the save directory",
-        target.display()
-    );
-}
-
-/// A lock slot that is not a plain file must be refused rather than
+/// A sidecar lock slot that is not a plain file must be refused rather than
 /// opened: it cannot carry a lock, and opening a FIFO there would block.
 /// A directory stands in, being the one such entry `std` can create.
+#[cfg(not(unix))]
 #[test]
 fn a_lock_slot_that_is_not_a_plain_file_is_refused() {
     let dir = TempDir::new("non-file-lock-slot");
     let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
-    std::fs::create_dir(file.lock_path()).unwrap();
+    std::fs::create_dir(file.lock_target()).unwrap();
 
     match file.lock() {
-        Err(SaveFileError::LockPathNotAPlainFile { path }) => assert_eq!(path, file.lock_path()),
+        Err(SaveFileError::LockPathNotAPlainFile { path }) => assert_eq!(path, file.lock_target()),
         other => panic!(
             "a lock slot that is not a plain file must be refused, got {:?}",
             other.map(|_| "a guard")
@@ -1154,119 +1065,46 @@ fn a_lock_slot_that_is_not_a_plain_file_is_refused() {
     }
 }
 
-/// One lock file serves every save in a directory, so it is created under
-/// whichever umask its first saver had. A later saver who cannot write
-/// that file must still be able to lock it -- otherwise a second user in a
-/// shared directory, or the same user after a run under different
-/// privileges, is shut out of a perfectly valid save for good.
+/// A save directory this user may not write must still be lockable: the lock
+/// is the directory's own inode, and `flock(2)` wants an open descriptor,
+/// not a writable one. A sidecar file could not even be created there.
 ///
 /// A privileged runner bypasses the mode outright, so it is CI's
-/// unprivileged runners that actually drive the fallback here; the
-/// property asserted holds either way.
+/// unprivileged runners that actually drive the read-only case; the property
+/// asserted holds either way.
 #[cfg(unix)]
 #[test]
-fn a_lock_file_this_user_cannot_write_is_still_lockable() {
+fn a_save_directory_this_user_cannot_write_is_still_lockable() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = TempDir::new("read-only-lock-file");
+    let dir = TempDir::new("read-only-save-directory");
     let first = SaveFile::at(dir.join("first.sav"));
     let second = SaveFile::at(dir.join("second.sav"));
-
-    std::fs::write(first.lock_path(), b"").unwrap();
-    std::fs::set_permissions(first.lock_path(), std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::write(first.path(), b"").unwrap();
+    std::fs::set_permissions(&dir.path, std::fs::Permissions::from_mode(0o555)).unwrap();
 
     let guard = first
         .lock()
-        .expect("a lock file this user cannot write must still be lockable");
+        .expect("a save directory this user cannot write must still be lockable");
 
-    let probe = SaveFile::open_lock_file(&second.lock_path())
+    let probe = second
+        .open_lock_target()
         .expect("a second saver must still open the shared lock");
     match probe.try_lock() {
         Err(std::fs::TryLockError::WouldBlock) => {}
-        other => panic!("a read-only lock handle must still exclude a second saver, got {other:?}"),
+        other => {
+            panic!("a read-only directory handle must still exclude a second saver, got {other:?}")
+        }
     }
     drop(probe);
     drop(guard);
+
+    std::fs::set_permissions(&dir.path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// A hard link in the lock slot must still be accepted.
-///
-/// Unlike a symlink it is a name of its own: renaming any of the inode's
-/// other names leaves this slot naming the inode this guard holds, so a
-/// later locker still lands on it and is still excluded. Hard-linking
-/// backup tools snapshot directories this way, and refusing them would
-/// cost availability for a hazard that is not there.
-#[cfg(unix)]
+/// An ordinary save must lock both before and after it exists on disk.
 #[test]
-fn a_hard_linked_lock_slot_is_still_accepted() {
-    let dir = TempDir::new("hard-linked-lock-slot");
-    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
-
-    std::fs::write(file.lock_path(), b"").unwrap();
-    std::fs::hard_link(file.lock_path(), dir.join("backup-snapshot")).unwrap();
-
-    let guard = file
-        .lock()
-        .expect("a second name for the lock file's own inode must not refuse the lock");
-    drop(guard);
-}
-
-/// An ordinary lock file an earlier run left behind must still be usable:
-/// the slot check must reject aliases, not every pre-existing file.
-#[cfg(unix)]
-#[test]
-fn an_ordinary_pre_existing_lock_file_is_still_accepted() {
-    let dir = TempDir::new("pre-existing-lock-slot");
-    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
-    std::fs::write(file.lock_path(), b"left by an earlier run").unwrap();
-
-    let guard = file
-        .lock()
-        .expect("an ordinary lock file from an earlier run must be reusable");
-    drop(guard);
-}
-
-/// The refusal must compare filesystem identity, not canonical path text.
-///
-/// `canonicalize` is not a canonical *entry*: on a case-folding Linux
-/// directory it is `realpath`, which keeps the caller's own spelling, so a
-/// save configured as `.EMERALD.LOCK` names the same entry as
-/// `.emerald.lock` yet canonicalises to a different string -- and a
-/// text comparison would admit it, after which its write renames a fresh
-/// inode over the file every locker holds.
-///
-/// A hard link reproduces exactly that shape -- one inode, two canonical
-/// paths -- on any Unix host, so the property is pinned without needing a
-/// case-folding volume to test on.
-#[cfg(unix)]
-#[test]
-fn a_save_sharing_the_lock_files_inode_is_refused_despite_a_different_canonical_path() {
-    let dir = TempDir::new("save-hard-linked-to-the-lock");
-    let file = SaveFile::at(dir.join("linked.sav"));
-
-    std::fs::write(dir.join(LOCK_FILE_NAME), b"").unwrap();
-    std::fs::hard_link(dir.join(LOCK_FILE_NAME), file.path()).unwrap();
-    assert_ne!(
-        std::fs::canonicalize(file.path()).unwrap(),
-        std::fs::canonicalize(file.lock_path()).unwrap(),
-        "the two names must canonicalise differently, or this does not exercise the \
-         boundary a path-text comparison misses"
-    );
-
-    match file.lock() {
-        Err(SaveFileError::LockPathIsSave { .. }) => {}
-        other => panic!(
-            "a save on the lock file's own inode must be refused, got {:?}",
-            other.map(|_| "a guard")
-        ),
-    }
-}
-
-/// The refusal must catch only the save that *is* the lock file. An
-/// ordinary save sharing the directory holds that lock rather than being
-/// refused by it, before and after it exists on disk.
-#[test]
-fn an_ordinary_save_beside_the_lock_file_still_locks() {
+fn an_ordinary_save_locks_before_and_after_it_exists() {
     let dir = TempDir::new("ordinary-save-beside-lock");
     let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
     let (store, _, _) = saved_store();
@@ -1292,112 +1130,21 @@ fn the_lock_file_name_fits_the_posix_minimum_component_limit() {
     );
 }
 
-/// A `umask 077` creator leaves `0600`, which no later owner can even read.
+/// Locking must leave nothing beside the save on Unix: the directory's own
+/// inode carries the lock, so no sidecar and no staging entry is created.
 #[cfg(unix)]
 #[test]
-fn a_freshly_created_lock_file_is_lockable_by_every_owner() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = TempDir::new("lock-mode");
-    let file = SaveFile::at(dir.path.join("a.sav"));
+fn locking_creates_no_entry_beside_the_save() {
+    let dir = TempDir::new("lock-leaves-no-entry");
+    let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
+
     let guard = file.lock().expect("a guard");
-    let mode = std::fs::metadata(dir.path.join(LOCK_FILE_NAME))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(
-        mode & 0o666,
-        0o666,
-        "lock mode {mode:o} shuts later owners out"
-    );
-    let leftovers: Vec<_> = std::fs::read_dir(&dir.path)
+    let entries: Vec<_> = std::fs::read_dir(&dir.path)
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
-        .filter(|name| name != LOCK_FILE_NAME)
         .collect();
-    assert!(leftovers.is_empty(), "staging left {leftovers:?} behind");
+    assert!(entries.is_empty(), "locking left {entries:?} behind");
     drop(guard);
-}
-
-/// Only the creator widens; an existing slot keeps its owner's mode.
-#[cfg(unix)]
-#[test]
-fn a_pre_existing_lock_file_keeps_its_mode() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = TempDir::new("lock-mode-kept");
-    let lock_path = dir.path.join(LOCK_FILE_NAME);
-    std::fs::write(&lock_path, b"").unwrap();
-    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let file = SaveFile::at(dir.path.join("a.sav"));
-    let guard = file.lock().expect("a guard");
-    let mode = std::fs::metadata(&lock_path).unwrap().permissions().mode();
-    assert_eq!(
-        mode & 0o777,
-        0o600,
-        "an existing slot's mode was rewritten to {mode:o}"
-    );
-    drop(guard);
-}
-
-/// Staging must never unlink an entry it did not create.
-#[cfg(unix)]
-#[test]
-fn a_file_already_bearing_the_lock_staging_name_survives_a_lock() {
-    let dir = TempDir::new("lock-stage-collision");
-    let bystander = dir.path.join(format!(".lk{}", std::process::id()));
-    std::fs::write(&bystander, b"a save that happens to bear the staging name").unwrap();
-    let file = SaveFile::at(dir.path.join("a.sav"));
-    let guard = file.lock().expect("a guard");
-    assert_eq!(
-        std::fs::read(&bystander).unwrap(),
-        b"a save that happens to bear the staging name"
-    );
-    assert!(dir.path.join(LOCK_FILE_NAME).exists());
-    drop(guard);
-}
-
-/// Leftover staging names never stand between a saver and an existing lock.
-#[cfg(unix)]
-#[test]
-fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
-    let dir = TempDir::new("lock-stage-exhausted");
-    let pid = std::process::id();
-    std::fs::write(dir.path.join(LOCK_FILE_NAME), b"").unwrap();
-    std::fs::write(dir.path.join(format!(".lk{pid}")), b"").unwrap();
-    for n in 1..=u8::MAX {
-        std::fs::write(dir.path.join(format!(".lk{pid}{n:02x}")), b"").unwrap();
-    }
-    let file = SaveFile::at(dir.path.join("a.sav"));
-    let guard = file
-        .lock()
-        .expect("the existing lock is opened without staging");
-    drop(guard);
-}
-
-/// Leftover staging names beside an absent slot are skipped, never unlinked.
-#[cfg(unix)]
-#[test]
-fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
-    let dir = TempDir::new("lock-staging-names-taken");
-    let pid = std::process::id();
-    let leftovers: Vec<PathBuf> = (0..16u8)
-        .map(|attempt| match attempt {
-            0 => dir.path.join(format!(".lk{pid}")),
-            n => dir.path.join(format!(".lk{pid}{n:02x}")),
-        })
-        .collect();
-    for leftover in &leftovers {
-        std::fs::write(leftover, b"leftover").unwrap();
-    }
-    let file = SaveFile::at(dir.path.join(SAVE_FILE_NAME));
-    let guard = file.lock().expect("a first save finds a free staging name");
-    drop(guard);
-    for leftover in &leftovers {
-        assert_eq!(
-            std::fs::read(leftover).unwrap(),
-            b"leftover",
-            "{leftover:?} was disturbed"
-        );
-    }
 }
 
 /// A directory exactly `total_len` bytes long, from components under 255 bytes.
@@ -1422,8 +1169,8 @@ fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {
     path
 }
 
-/// The fixed lock name must not push a host-valid save path past `PATH_MAX`;
-/// the limit is Linux's, so the test is too.
+/// A lock name must not push a host-valid save path past `PATH_MAX`; the
+/// limit is Linux's, so the test is too.
 #[cfg(target_os = "linux")]
 #[test]
 fn locks_a_save_whose_directory_leaves_room_for_the_save_but_not_the_lock_name() {
@@ -1445,35 +1192,45 @@ fn locks_a_save_whose_directory_leaves_room_for_the_save_but_not_the_lock_name()
     drop(guard);
 }
 
-/// The name staging draws is `.lk` plus eleven hex digits, never a pid name.
-#[cfg(unix)]
+/// Two spellings of one save directory must contend for one lock.
+///
+/// A directory near `PATH_MAX` has no room for a sidecar name that a shorter
+/// symlinked spelling of that same directory has room for, so a sidecar
+/// splits one directory across two lock identities and lets two processes
+/// run `SaveSlot::store`'s read-modify-write cycle at once, one overwriting
+/// the other's progress. Every spelling of a directory is one inode.
+#[cfg(target_os = "linux")]
 #[test]
-fn the_drawn_lock_staging_name_is_eleven_hex_digits() {
-    let pid_name = format!(".lk{}", std::process::id());
-    for _ in 0..64 {
-        let name = SaveFile::staging_name();
-        let digits = name.strip_prefix(".lk").expect("a .lk staging name");
-        assert_eq!(digits.len(), 11, "{name} is not eleven digits wide");
-        assert!(
-            digits.bytes().all(|b| b.is_ascii_hexdigit()),
-            "{name} is not hexadecimal"
-        );
-        assert_ne!(name, pid_name);
-    }
-}
+fn two_spellings_of_one_save_directory_contend_for_one_lock() {
+    const LONGEST_PATH: usize = 4095;
+    let deep_root = TempDir::new("aliased-directory-deep");
+    let short_root = TempDir::new("aliased-directory-short");
+    let deep = directory_of_length(&deep_root.path, LONGEST_PATH - LOCK_FILE_NAME.len());
+    let short = short_root.join("d");
+    std::os::unix::fs::symlink(&deep, &short).unwrap();
 
-/// Staging cleanup unlinks only the inode it created.
-#[cfg(unix)]
-#[test]
-fn lock_staging_cleanup_spares_an_entry_it_did_not_create() {
-    let dir = TempDir::new("lock-stage-not-mine");
-    let staged = dir.path.join(SaveFile::staging_name());
-    let mine = std::fs::File::create(&staged).unwrap();
-    std::fs::remove_file(&staged).unwrap();
-    std::fs::write(&staged, b"a stranger's file under the staging name").unwrap();
-    SaveFile::remove_only_own_staging(&staged, &mine);
-    assert_eq!(
-        std::fs::read(&staged).expect("the stranger's file survives"),
-        b"a stranger's file under the staging name"
+    let long_spelling = SaveFile::at(deep.join("a"));
+    let short_spelling = SaveFile::at(short.join("a"));
+    std::fs::write(long_spelling.path(), [0u8; 1]).expect("the host accepts the long save path");
+    assert!(
+        short_spelling.path().exists(),
+        "both spellings must reach the one save"
     );
+    assert!(
+        std::fs::File::create(deep.join(LOCK_FILE_NAME))
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::InvalidFilename),
+        "the long spelling must have no room for a sidecar the short spelling has \
+         room for, or the two spellings were never at risk of taking two locks"
+    );
+
+    let guard = long_spelling.lock().expect("the long spelling locks");
+    let probe = short_spelling
+        .open_lock_target()
+        .expect("the short spelling's locked entry opens");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("the short spelling took a second lock on one directory: {other:?}"),
+    }
+    drop(probe);
+    drop(guard);
 }
