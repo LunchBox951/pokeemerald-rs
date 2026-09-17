@@ -55,6 +55,26 @@ fn short_one_shot_song() -> Song {
     Song::new(voices, vec![events], 150)
 }
 
+/// `tracks` copies of one voice sustaining the same looping note, unlike
+/// [`looping_song`]'s one-shot wave, which falls silent between repeats.
+/// `Wait` must outlast every test using this song, or `Goto` restarts the
+/// untied note early, doubling the voice.
+fn sustained_song(tracks: usize) -> Song {
+    let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; 64]));
+    let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+    let track = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(200),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![track; tracks], 150)
+}
+
 fn finite_reverbed_song() -> Song {
     let voices = vec![Instrument::DirectSound(ToneData::new(
         loud_wave(),
@@ -171,10 +191,21 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
     const FULL_VOLUME: u32 = 64;
     const VOLUME_PER_STEP: u32 = 4;
     const FADE_FRAMES: u32 = 64;
+    // A faded sample is now `dry * gain` truncated through several integer
+    // `>>` stages (`sequencer::track_volume`, `voice::channel_volume`)
+    // instead of one exact float multiply (issue #1243); `1.5/128` covers
+    // this fixture's worst observed truncation (`1.4375/128` at `volX ==
+    // 4`) with headroom.
+    const TRUNCATION_TOLERANCE: f32 = 1.5 / 128.0;
+    // (frame, left, right) mix units at representative steps, independently
+    // derived from those same integer stages rather than observed from this
+    // player: catches a wrong stage, or a reintroduced post-mix scale, that
+    // TRUNCATION_TOLERANCE's headroom alone would miss.
+    const EXACT_MIX_UNITS: [(u32, u8, u8); 3] = [(4, 36, 37), (32, 19, 19), (60, 1, 1)];
 
-    let mut plain = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+    let mut plain = MusicPlayer::start(sustained_song(1), AudioOutput::null(RING_CAPACITY_FRAMES))
         .expect("null backend never errors");
-    let mut fading = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+    let mut fading = MusicPlayer::start(sustained_song(1), AudioOutput::null(RING_CAPACITY_FRAMES))
         .expect("null backend never errors");
     drain_everything(&mut plain);
     drain_everything(&mut fading);
@@ -200,13 +231,22 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
         let gain = volume as f32 / FULL_VOLUME as f32;
         for (i, (&dry, &wet)) in plain_frame.iter().zip(&fading_frame).enumerate() {
             assert!(
-                (wet - dry * gain).abs() < 1e-6,
-                "frame {frame}, sample {i}: expected {dry} * {gain} = {}, got {wet}",
+                (wet - dry * gain).abs() < TRUNCATION_TOLERANCE,
+                "frame {frame}, sample {i}: expected about {dry} * {gain} = {}, got {wet}",
                 dry * gain
             );
             if dry != 0.0 {
                 any_audible = true;
             }
+        }
+        if let Some(&(_, left_units, right_units)) =
+            EXACT_MIX_UNITS.iter().find(|&&(f, ..)| f == frame)
+        {
+            assert_eq!(
+                (fading_frame[0], fading_frame[1]),
+                (f32::from(left_units) / 128.0, f32::from(right_units) / 128.0),
+                "frame {frame}: exact fade level check (independent of TRUNCATION_TOLERANCE) failed"
+            );
         }
 
         assert_eq!(
@@ -222,6 +262,69 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
     assert!(
         fading_frame.iter().all(|&s| s == 0.0),
         "the last fade frame must be silent"
+    );
+}
+
+/// Renders `song` for `frames` game frames past the prefill, fading from the
+/// first frame when `fade_speed` is given, and returns the last frame's
+/// first sample.
+fn first_sample_after_frames(song: Song, frames: u32, fade_speed: Option<u16>) -> f32 {
+    let mut player = MusicPlayer::start(song, AudioOutput::null(RING_CAPACITY_FRAMES))
+        .expect("null backend never errors");
+    drain_everything(&mut player);
+    if let Some(speed) = fade_speed {
+        player.fade_out(speed);
+    }
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    for _ in 0..frames {
+        player.advance_frame();
+        player.drain_null_for_test(&mut frame);
+    }
+    frame[0]
+}
+
+/// Upstream scales each voice, then sums, then clips (`FadeOutBody`,
+/// `m4a.c:750`-`:757`; `TrkVolPitSet`, `m4a.c:765`-`:788`); four full-volume
+/// tracks overflow signed 8-bit together, so halving their volume must
+/// relieve that clipping, not just halve its clipped remainder.
+#[test]
+fn a_fade_scales_each_voice_before_the_mixer_clips_their_sum() {
+    const CLIPPING_TRACKS: u8 = 4;
+    const FADE_SPEED: u16 = 1;
+    const HALF_VOLUME_FRAME: u32 = 8;
+    const FULL_SCALE: f32 = 127.0 / 128.0;
+
+    let one_voice = first_sample_after_frames(sustained_song(1), 1, None);
+    let unclipped_sum = one_voice * f32::from(CLIPPING_TRACKS);
+    assert!(
+        unclipped_sum > FULL_SCALE,
+        "the test needs voices whose sum overflows the mix: \
+         {CLIPPING_TRACKS} x {one_voice} = {unclipped_sum}"
+    );
+
+    // Per-voice volume truncation costs at most one mix unit per voice.
+    let tolerance = f32::from(CLIPPING_TRACKS) / 128.0;
+    let unfaded = first_sample_after_frames(sustained_song(usize::from(CLIPPING_TRACKS)), 1, None);
+    assert!(
+        (unfaded - FULL_SCALE).abs() < tolerance,
+        "the unfaded frame must sit at clipped full scale, got {unfaded}"
+    );
+
+    let faded = first_sample_after_frames(
+        sustained_song(usize::from(CLIPPING_TRACKS)),
+        HALF_VOLUME_FRAME,
+        Some(FADE_SPEED),
+    );
+    let expected = unclipped_sum * 0.5;
+    assert!(
+        expected < FULL_SCALE,
+        "at half volume the faded voices must fit in the mix without clipping"
+    );
+    assert!(
+        (faded - expected).abs() < tolerance,
+        "half-volume fade of {CLIPPING_TRACKS} clipping voices: expected about {expected}, \
+         got {faded} (scaling the clipped frame instead would give {})",
+        FULL_SCALE * 0.5
     );
 }
 

@@ -65,8 +65,10 @@ const DEFAULT_LFO_SPEED: u8 = 22;
 /// `m4a_1.s:851`).
 const MAX_PATTERN_DEPTH: usize = 3;
 
-/// Fixed `volX` input to `TrkVolPitSet` (`m4a.c:772`).
-const TRACK_VOLUME_SCALE: u32 = 0x40;
+/// Default `volX` input to `TrkVolPitSet` (`m4a.c:772`) absent an active
+/// fade; `FadeOutBody` overwrites every track's `volX` while fading
+/// (`m4a.c:750`-`:757`).
+const TRACK_VOLUME_SCALE: u8 = 0x40;
 
 /// Safety bound on commands processed for one track in one tick, so a
 /// malformed loop with no `Wait` cannot hang the mixer.
@@ -139,6 +141,9 @@ struct TrackState {
     ended: bool,
     voice: usize,
     vol: u8,
+    /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`); a fade
+    /// step writes it here for every existing track (`m4a.c:750`-`:757`).
+    vol_x: u8,
     pan: i8,
     bend: i8,
     bend_range: u8,
@@ -176,6 +181,7 @@ impl TrackState {
             ended: false,
             voice: 0,
             vol: DEFAULT_TRACK_VOLUME,
+            vol_x: TRACK_VOLUME_SCALE,
             pan: 0,
             bend: 0,
             bend_range: DEFAULT_BEND_RANGE,
@@ -353,6 +359,46 @@ impl Sequencer {
         );
         for frame in out.chunks_mut(Self::FRAME_SAMPLES) {
             self.render_frame(frame);
+        }
+    }
+
+    /// Like [`Self::render_frame`], but applies an active fade's `volX` to
+    /// every surviving track's volume after this frame's tick, matching
+    /// `FadeOutBody`'s immediate write (`m4a.c:750`-`:757`) ahead of
+    /// `TrkVolPitSet`'s own deferred, post-tick propagation
+    /// (`m4a_1.s:1361`-`:1400`).
+    pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
+        let changed_tracks =
+            fade_vol_x.map_or_else(Vec::new, |vol_x| self.mark_fade_volume_x(vol_x));
+        self.advance_frame();
+        self.propagate_fade_volume(&changed_tracks);
+        self.mixer.mix_frame(out);
+    }
+
+    /// Writes `vol_x` into every changed, not-yet-ended track; returns which changed.
+    fn mark_fade_volume_x(&mut self, vol_x: u8) -> Vec<usize> {
+        let mut changed = Vec::new();
+        for (track_id, track) in self.tracks.iter_mut().enumerate() {
+            if !track.ended && track.vol_x != vol_x {
+                track.vol_x = vol_x;
+                changed.push(track_id);
+            }
+        }
+        changed
+    }
+
+    /// Refreshes derived channel volumes for `changed_tracks`, skipping any
+    /// that ended during the tick just run (`ply_fine`'s flag clear,
+    /// `m4a_1.s:750`-`:777`).
+    fn propagate_fade_volume(&mut self, changed_tracks: &[usize]) {
+        let Self { tracks, mixer, .. } = self;
+        for &track_id in changed_tracks {
+            let Some(track) = tracks.get(track_id) else {
+                continue;
+            };
+            if !track.ended {
+                Self::apply_track_volume(track, mixer, track_id);
+            }
         }
     }
 
@@ -934,7 +980,7 @@ fn resolve_instrument(instrument: &Instrument, key: u8) -> Option<(&Instrument, 
 }
 
 fn track_volume(track: &TrackState) -> (u8, u8) {
-    let mut volume = (u32::from(track.vol) * TRACK_VOLUME_SCALE) >> 5;
+    let mut volume = (u32::from(track.vol) * u32::from(track.vol_x)) >> 5;
     if track.modulation_target == ModulationTarget::AMPLITUDE {
         let modulation_scale = u32::try_from(i32::from(track.modulation) + 128).unwrap_or(0);
         volume = (volume * modulation_scale) >> 7;
@@ -2148,6 +2194,51 @@ mod tests {
             "VOL must lower the held note ({soft_r},{soft_l} vs {loud_r},{loud_l})",
         );
         assert!(soft_r > 0 && soft_l > 0);
+    }
+
+    /// A slow, nonzero release survives past the `Fine` frame so the voice
+    /// can still be inspected there, unlike `Adsr::flat()`'s `release: 0`,
+    /// which retires (and drops) the voice within that very frame.
+    fn slow_release_song(track: Vec<Event>) -> Song {
+        let adsr = Adsr {
+            attack: 255,
+            decay: 255,
+            sustain: 255,
+            release: 250,
+        };
+        let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, adsr))];
+        Song::new(voices, vec![track], 150)
+    }
+
+    /// Upstream marks every existing track's `volX` before that frame's
+    /// track pass (`FadeOutBody`, `m4a.c:750`-`:757`), but only propagates it
+    /// into a channel afterward (`TrkVolPitSet`/`ChnVolSetAsm`,
+    /// `m4a_1.s:1361`-`:1400`); `ply_fine` clears a track's flags first
+    /// (`m4a_1.s:750`-`:777`), so a track ending via `Fine` on the same tick
+    /// as a fade step never receives that step.
+    #[test]
+    fn a_track_that_ends_via_fine_this_tick_never_receives_that_ticks_fade_step() {
+        let track = vec![Event::Voice(0), tied_note(60), Event::Wait(1), Event::Fine];
+        let mut seq = Sequencer::new(slow_release_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        // Frame 1 starts the note at full (unfaded) volume.
+        seq.render_frame_with_fade(&mut out, None);
+        let before = seq.mixer.voices()[0].base_volume();
+
+        // Frame 2 reaches this track's `Fine` and a fade step in the same
+        // tick.
+        seq.render_frame_with_fade(&mut out, Some(32));
+        assert!(
+            seq.tracks[0].ended,
+            "sanity: Fine must end the track this frame"
+        );
+        assert_eq!(
+            seq.mixer.voices()[0].base_volume(),
+            before,
+            "a track ending via Fine this tick must not receive that tick's fade step"
+        );
     }
 
     #[test]
