@@ -82,10 +82,8 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     assert_eq!(rng.draws(), 8);
 }
 
-// Re-pin (issue #877): a failed run used to strand the all-spent enemy's
-// forced Struggle at `UnsupportedMoveEffect`, since execution itself was
-// not yet modelled (issue #837). It now runs at the enemy's own turn-order
-// slot right after the failed run, just like an ordinary move would.
+// After a failed run, the all-spent enemy's forced Struggle executes at its
+// own turn-order slot like an ordinary move.
 #[test]
 fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
     let dex = Dex::new();

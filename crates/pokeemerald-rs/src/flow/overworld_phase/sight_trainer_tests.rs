@@ -1454,12 +1454,10 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
     let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
-    // Drain slot 0 through the same accessor the turn engine spends PP
-    // with, rather than reaching into the struct. A second known move
-    // (Leer, Treecko's own real level-5 learnset, left untouched) keeps
-    // this a genuine `NoPpRemaining(0)` abort rather than issue #877's
-    // all-spent forced-Struggle diversion -- the headless driver always
-    // picks slot 0.
+    // Drain slot 0 through the accessor the turn engine spends PP with. A
+    // second known move (Leer, Treecko's level-5 learnset, left untouched)
+    // keeps this a `NoPpRemaining(0)` abort rather than the all-spent
+    // forced-Struggle diversion; the headless driver always picks slot 0.
     let ivs = Ivs {
         hp: battle::MAX_IV,
         attack: battle::MAX_IV,

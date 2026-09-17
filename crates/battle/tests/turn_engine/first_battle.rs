@@ -196,10 +196,8 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
     assert_eq!(enemy_move, Some(GROWL));
 }
 
-// Re-pin (issue #877): the all-spent enemy's forced Struggle used to stop
-// the turn at `UnsupportedMoveEffect` the moment it had to act, since
-// execution itself was not yet modelled. It now executes at the enemy's own
-// turn-order slot, still forced with no selection draw.
+// The all-spent enemy's forced Struggle draws nothing at selection and
+// executes at its own turn-order slot.
 #[test]
 fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent() {
     let dex = Dex::new();

@@ -319,9 +319,7 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     }
 }
 
-/// Before issue #877, `Battle::new`'s per-slot admission screen rejected a
-/// wild moveset naming Struggle outright (`UnsupportedMoveEffect`); now that
-/// execution supports it, the same construction succeeds.
+/// `Battle::new` admits a wild moveset that names Struggle directly.
 #[test]
 fn a_wild_moveset_may_now_include_struggle_directly() {
     let dex = Dex::new();
@@ -380,11 +378,9 @@ fn a_directly_chosen_struggle_deducts_pp_normally() {
     );
 }
 
-/// Review fix (issue #877): `Cmd_attackcanceler`'s no-PP abort exempts
-/// Struggle (`gCurrentMove != MOVE_STRUGGLE`, `battle_script_commands.c:934`).
-/// A directly known Struggle slot the wild rejection loop lands on despite
-/// being spent -- the loop ignores PP entirely -- must still execute, not
-/// fail through `FailedNoPp` like an ordinary spent move.
+/// `Cmd_attackcanceler`'s no-PP abort exempts Struggle
+/// (`battle_script_commands.c:934`), so a spent, directly known Struggle
+/// slot the wild rejection loop lands on still executes.
 #[test]
 fn a_directly_known_struggle_at_zero_pp_still_executes() {
     let dex = Dex::new();
@@ -550,14 +546,9 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     assert!(battle.outcome().is_none());
 }
 
-// Re-pin (issue #877): a single-move player whose only move was fully spent
-// used to hit a pre-draw `NoPpRemaining(0)` rejection here. Upstream instead
-// diverts a `B_ACTION_USE_MOVE` choice to a forced Struggle the moment every
-// known move is unusable (`AreAllMovesUnusable`,
-// `pokeemerald/src/battle_util.c:1125`-`:1139`), so the pick still draws
-// nothing but the turn now plays out: the opponent is chosen, and the
-// player's forced Struggle executes at its ordinary turn-order slot with no
-// PP deducted (`HITMARKER_NO_PPDEDUCT`, `:100`-`:104`).
+// A player whose every known move is unusable is diverted to a forced
+// Struggle that draws nothing and spends no PP (`AreAllMovesUnusable`,
+// `pokeemerald/src/battle_util.c:1125-1139`; `HITMARKER_NO_PPDEDUCT`, `:100-104`).
 #[test]
 fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     let dex = Dex::new();

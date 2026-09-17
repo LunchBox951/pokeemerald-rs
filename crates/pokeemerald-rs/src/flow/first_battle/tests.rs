@@ -193,10 +193,8 @@ fn advance_first_battle_clears_stat_stages_after_growl_modifies_them() {
     );
 }
 
-// Re-pin (issue #877): a lead whose only move was fully spent used to abort
-// the turn outright (`battle::BattleError::NoPpRemaining`). Upstream instead
-// forces Struggle at selection (`AreAllMovesUnusable`), which this slice now
-// executes, so the fight plays on instead of aborting.
+// A lead whose only move is spent is forced to Struggle at selection
+// (`AreAllMovesUnusable`) and the fight plays to an outcome.
 #[test]
 fn advance_first_battle_forces_struggle_and_fights_to_an_outcome_when_the_lead_has_no_pp() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
