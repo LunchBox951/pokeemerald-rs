@@ -103,6 +103,32 @@
 //! open there. On Windows, `$POKEEMERALD_PACK` is trusted to name a path
 //! only the player controls. The default destination, their own user-data
 //! directory, is one.
+//!
+//! The directory levels [`create_directories`] has to make on the way to
+//! the destination are pinned the same way, on Unix, and for the same
+//! reason: a failed import's cleanup runs an arbitrary interval after they
+//! were created, long enough for another account to rename one away and
+//! put an unrelated directory at the same name. [`undo_created_directories`]
+//! removes a level only relative to the parent handle that level was
+//! created through, and only once that parent's own lookup of the name
+//! still identifies the directory this run made (`fstat`'s device and
+//! inode, compared before every `unlinkat`). A name that now resolves to
+//! something else is left standing rather than guessed at — harmless
+//! litter, not a directory some other process is about to write into. Off
+//! Unix, created levels are still addressed by path, like the destination
+//! itself.
+//!
+//! That identity is captured by reopening the level `mkdirat` just made,
+//! which is itself two syscalls, not one — `mkdirat` returns no descriptor
+//! of its own. An account that can write the parent can still win a swap
+//! landed in exactly that gap, the same way it can win one against
+//! [`Dest::open`]'s single `open`; no portable directory-creation call
+//! closes that further. What the reopen refuses outright is a *symlink*
+//! landed there instead (`O_NOFOLLOW`): `mkdirat` never produces one, so
+//! one sitting at the name the instant it is reopened is always somebody
+//! else's, and following it would hand a subsequent level's `mkdirat` an
+//! attacker-chosen directory to descend into rather than merely recording
+//! a wrong identity for this one.
 
 mod dest;
 
@@ -697,6 +723,46 @@ fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
     missing
 }
 
+/// A directory level [`create_directories`] made, and what
+/// [`sync_created_directories`] and [`undo_created_directories`] use to find
+/// it again.
+///
+/// On Unix this is the parent [`create_directories`] created the level
+/// through, pinned open, plus the level's own basename and the identity
+/// (`fstat`'s device and inode) captured the moment it was made -- so a
+/// later rename that leaves a different directory at the same name is not
+/// mistaken for this one. See the module docs. Off Unix there is no
+/// descriptor to pin (`rustix` is Unix-only), so this stays the path alone,
+/// re-resolved each time, as it always was.
+#[derive(Debug)]
+#[cfg(unix)]
+struct CreatedDirectory {
+    /// Where this level was created. Kept so both platform arms expose the
+    /// same field for `tests::created_paths` to compare; removal never
+    /// re-resolves it, which is the whole point.
+    #[allow(
+        dead_code,
+        reason = "read only by tests::created_paths, not by production Unix code"
+    )]
+    path: PathBuf,
+    /// The directory this level was created in.
+    parent: std::os::fd::OwnedFd,
+    /// This level's own basename inside `parent`.
+    name: std::ffi::OsString,
+    /// This level's own device, captured right after it was created.
+    dev: u64,
+    /// This level's own inode, captured right after it was created.
+    ino: u64,
+}
+
+/// [`CreatedDirectory`]'s off-Unix shape: see its own docs for why.
+#[derive(Debug)]
+#[cfg(not(unix))]
+struct CreatedDirectory {
+    /// Where this level was created.
+    path: PathBuf,
+}
+
 /// Create the levels `dir` is missing, outermost first, and answer with the
 /// ones this run made — the levels [`sync_created_directories`] persists
 /// and [`undo_created_directories`] may take back.
@@ -706,17 +772,151 @@ fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
 /// exists afterwards, so pairing it with an earlier [`directories_to_create`]
 /// claims levels another process created in between — and a failed import
 /// would then remove a directory that process is about to write into.
-/// `create_dir` per level asks the question of the syscall instead: an
-/// existing level is somebody else's, and only a create that succeeded is
-/// recorded.
+/// Creating one level at a time asks the question of the syscall instead:
+/// an existing level is somebody else's, and only a create that succeeded
+/// is recorded.
 ///
 /// A failure hands back the levels made before it, which are this run's to
 /// take back like any other.
-fn create_directories(dir: &Path) -> Result<Vec<PathBuf>, (Vec<PathBuf>, io::Error)> {
+///
+/// On Unix, every level is both created and recorded by descriptor: the
+/// parent of the outermost missing level is the one path this resolves --
+/// it already exists, which is why [`directories_to_create`]'s own walk
+/// stopped there -- and each level after it is made with `mkdirat` against
+/// the directory the previous level's own creation (or discovery) just
+/// opened. Nothing past that first parent is ever looked up by path again.
+///
+/// Opening a directory to hold as `mkdirat`'s target needs read permission
+/// on it, where a plain path-based `mkdir` needed only write and search --
+/// [`Dest::open`] already asks this of the final destination directory
+/// itself, and this asks it of every already-existing level leading up to
+/// one too. A level this run creates is unaffected: it is made at the
+/// ordinary default mode, not reopened read-restricted.
+#[cfg(unix)]
+fn create_directories(
+    dir: &Path,
+) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+    let levels = directories_to_create(dir);
+    let Some(first) = levels.first() else {
+        return Ok(Vec::new());
+    };
+    // A bare relative name has no parent, and `""` is not a directory any OS
+    // accepts, so it is the current directory — the same rule
+    // [`pack_directory`] resolves the destination with.
+    let start = first
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut parent_fd = match dest::open_directory(start) {
+        Ok(fd) => fd,
+        Err(source) => return Err((Vec::new(), source)),
+    };
+
+    let mut created = Vec::new();
+    for level in levels {
+        // `directories_to_create`'s own walk is lexical (`Path::parent`),
+        // not filesystem-aware, so a `$POKEEMERALD_PACK` spelled through a
+        // `..` produces a level that is its own ancestor rather than a new
+        // name -- `Path::file_name` is `None` for one, and there is nothing
+        // to make or pin: a plain reopen finds exactly the directory this
+        // loop already stood in one level up, the same one path-based
+        // `create_dir_all` would have found without ever tripping on it.
+        let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
+            parent_fd = match dest::open_directory(&level) {
+                Ok(fd) => fd,
+                Err(source) => return Err((created, source)),
+            };
+            continue;
+        };
+        match rustix::fs::mkdirat(
+            &parent_fd,
+            &name,
+            rustix::fs::Mode::RWXU | rustix::fs::Mode::RWXG | rustix::fs::Mode::RWXO,
+        ) {
+            Ok(()) => {
+                // The identity comes from a lookup, not from a descriptor
+                // `mkdirat` never hands back -- and it is captured whether
+                // or not the reopen just below succeeds, so a mundane
+                // failure there (too many open files) cannot un-record a
+                // level that really was made and leave it stuck forever.
+                // `mkdirat` just said this name is a fresh directory, so
+                // anything other than one sitting there the instant this
+                // looks again is somebody else's swap; refused the same
+                // way, without following it as a symlink might.
+                let found =
+                    rustix::fs::statat(&parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+                let (dev, ino) = match found {
+                    Ok(found)
+                        if rustix::fs::FileType::from_raw_mode(found.st_mode)
+                            == rustix::fs::FileType::Directory =>
+                    {
+                        (found.st_dev, found.st_ino)
+                    }
+                    Ok(_) => {
+                        return Err((
+                            created,
+                            io::Error::other("directory level was replaced during creation"),
+                        ));
+                    }
+                    Err(source) => return Err((created, source.into())),
+                };
+                // Continues the descent through a fresh handle -- refusing
+                // a symlink here too, for the same reason.
+                let descend = dest::open_created_directory_at(&parent_fd, &name);
+                created.push(CreatedDirectory {
+                    path: level,
+                    parent: parent_fd,
+                    name,
+                    dev,
+                    ino,
+                });
+                parent_fd = match descend {
+                    Ok(fd) => fd,
+                    Err(source) => return Err((created, source)),
+                };
+            }
+            // A level that stands as a directory now is no failure, whoever
+            // made it — `create_dir_all`'s own rule. It is simply not this
+            // run's to record, though anything nested under it still has to
+            // be created through it. This one keeps following a final
+            // symlink, matching what `Path::is_dir` (and so the pre-fd
+            // version of this same check) always tolerated here.
+            Err(mkdir_err) => {
+                let already_a_directory =
+                    rustix::fs::statat(&parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
+                        |stat| {
+                            rustix::fs::FileType::from_raw_mode(stat.st_mode)
+                                == rustix::fs::FileType::Directory
+                        },
+                    );
+                if already_a_directory {
+                    match dest::open_directory_at(&parent_fd, &name) {
+                        Ok(fd) => parent_fd = fd,
+                        // The open's own failure is the real diagnosis now;
+                        // the `mkdir` collision only ever proved the name
+                        // was taken, which it still is.
+                        Err(source) => return Err((created, source)),
+                    }
+                } else {
+                    return Err((created, mkdir_err.into()));
+                }
+            }
+        }
+    }
+    Ok(created)
+}
+
+/// [`create_directories`]'s off-Unix arm: no descriptor to pin, so this
+/// stays exactly what it was before the Unix arm started pinning --
+/// [`fs::create_dir`] per level, addressed by path.
+#[cfg(not(unix))]
+fn create_directories(
+    dir: &Path,
+) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
     let mut created = Vec::new();
     for level in directories_to_create(dir) {
         match fs::create_dir(&level) {
-            Ok(()) => created.push(level),
+            Ok(()) => created.push(CreatedDirectory { path: level }),
             // A level that stands as a directory now is no failure, whoever
             // made it — `create_dir_all`'s own rule. It is simply not this
             // run's to record.
@@ -735,14 +935,25 @@ fn create_directories(dir: &Path) -> Result<Vec<PathBuf>, (Vec<PathBuf>, io::Err
 /// prefix of the chain rather than a deep directory hanging from a name
 /// that never reached the disk.
 ///
-/// Best-effort throughout ([`dest::sync_directory`]): a weaker durability
-/// guarantee is not something to fail a finished import over.
-fn sync_created_directories(created: &[PathBuf]) {
+/// Best-effort throughout: a weaker durability guarantee is not something
+/// to fail a finished import over.
+#[cfg(unix)]
+fn sync_created_directories(created: &[CreatedDirectory]) {
+    for dir in created {
+        let _ = rustix::fs::fsync(&dir.parent);
+    }
+}
+
+/// [`sync_created_directories`]'s off-Unix arm, through
+/// [`dest::sync_directory`] since no descriptor is pinned to sync directly.
+#[cfg(not(unix))]
+fn sync_created_directories(created: &[CreatedDirectory]) {
     for dir in created {
         // A bare relative name has no parent, and `""` is not a directory
         // any OS accepts, so it is the current directory — the same rule
         // [`pack_directory`] resolves the destination with.
         let parent = dir
+            .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
@@ -763,16 +974,57 @@ fn sync_created_directories(created: &[PathBuf]) {
 /// that will not go is one the level above it is not empty of either, and
 /// a directory something else has since been put in is no longer this
 /// run's to take.
-fn undo_created_directories(created: &[PathBuf]) {
+///
+/// On Unix, "this run created" is asked of the pinned parent, not of the
+/// path: a rollback can run an arbitrary interval after the create (module
+/// docs), so `dir.name` is looked up in `dir.parent` and compared against
+/// the device and inode `create_directories` captured, without following a
+/// final symlink. Only a match is removed, by that same lookup
+/// (`unlinkat`), never a name that now resolves to something else -- that
+/// is left standing as harmless litter rather than taken on the strength of
+/// its spelling alone.
+#[cfg(unix)]
+fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
-        if fs::remove_dir(dir).is_err() {
+        match rustix::fs::statat(
+            &dir.parent,
+            &dir.name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) if stat.st_dev == dir.dev && stat.st_ino == dir.ino => {
+                match rustix::fs::unlinkat(&dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR) {
+                    Ok(()) => {}
+                    // Already gone is already taken care of.
+                    Err(err) if err == rustix::io::Errno::NOENT => {}
+                    // Refused for real (it holds something): the levels
+                    // above hold it too and are not this run's to take back.
+                    Err(_) => break,
+                }
+            }
+            // Gone already -- nothing to remove here, and the level above is
+            // unaffected by that.
+            Err(err) if err == rustix::io::Errno::NOENT => {}
+            // Some other entry sits at the name now, or it could not be
+            // examined at all: not this run's directory either way, so it
+            // is left alone, and the levels above are left too.
+            _ => break,
+        }
+    }
+}
+
+/// [`undo_created_directories`]'s off-Unix arm: no identity to check, so
+/// this stays exactly what it was before the Unix arm started pinning.
+#[cfg(not(unix))]
+fn undo_created_directories(created: &[CreatedDirectory]) {
+    for dir in created.iter().rev() {
+        if fs::remove_dir(&dir.path).is_err() {
             // A partial `create_dir_all` never made this level -- it is
             // missing, unnameable, or the non-directory component it tripped
             // on -- and the outer levels it did create still get taken back.
             // A level that still stands as a directory refused removal for
             // real (it holds something), so the levels above hold it too and
             // are not this run's to take back.
-            match fs::symlink_metadata(dir) {
+            match fs::symlink_metadata(&dir.path) {
                 Ok(meta) if meta.is_dir() => break,
                 _ => {}
             }

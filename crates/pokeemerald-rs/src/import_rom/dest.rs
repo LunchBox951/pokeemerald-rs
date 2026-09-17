@@ -68,32 +68,84 @@ fn next_temp_name(sequence: &AtomicU64) -> OsString {
     ))
 }
 
-/// Get `path`'s own directory entries onto the storage device, or give up.
+/// Open `path` as a directory, pinned.
 ///
-/// [`Dest::publish`] syncs the destination through the handle it already
-/// holds; this is for the directories *above* it, which the import creates
-/// but never pins — a newly created directory hangs from a name in its
-/// parent, and that name is durable only once the parent is synced.
-///
-/// Best-effort for the reason [`Dest::publish`]'s sync is: the pack's bytes
-/// are on the disk either way, and not every platform will open a directory
-/// at all. A failure here is a weaker guarantee, not a failed import.
+/// The one place [`Dest::open`] and `import_rom`'s own directory-level
+/// creation resolve a directory component by path rather than through an
+/// already-open handle: [`Dest::open`] because it is the first handle
+/// there is, and `create_directories` because the parent of the outermost
+/// level it has to make is, by construction, the first ancestor that
+/// already exists. Everything either of them does afterward walks down
+/// from the descriptor this hands back, by basename
+/// (`openat`/`mkdirat`/`renameat`/`unlinkat`), never by re-resolving a
+/// path.
 #[cfg(unix)]
-pub(super) fn sync_directory(path: &Path) {
-    if let Ok(dir) = rustix::fs::open(
+pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
-    ) {
-        let _ = rustix::fs::fsync(&dir);
-    }
+    )?)
+}
+
+/// Open `name`, inside the already-pinned directory `parent`, as a
+/// directory of its own -- following a final symlink.
+///
+/// `import_rom::create_directories`'s own way of walking down through a
+/// level it found *already standing* (another process won the create race,
+/// or `name` is the lexical `..` a `$POKEEMERALD_PACK` can spell) without
+/// ever re-resolving a path: the returned handle becomes the next level's
+/// `parent`. Follows a final symlink, like [`std::path::Path::is_dir`] does
+/// and this tolerance always has -- unlike [`Dest::name_is_directory`]'s
+/// refusal check, nothing here is deciding whether to publish over `name`.
+/// For a level this run just made itself, see
+/// [`open_created_directory_at`] instead.
+#[cfg(unix)]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`] for a level `import_rom::create_directories` just
+/// made with `mkdirat` -- refusing a final symlink instead of following
+/// one.
+///
+/// `mkdirat` cannot itself have produced a symlink, so one sitting at
+/// `name` the instant this reopens it is always somebody else's swap
+/// landed in the gap between the two calls (`mkdirat` hands back no
+/// descriptor of its own to avoid it). Opening through it would hand a
+/// subsequent level's own `mkdirat` an attacker-chosen directory to
+/// descend into, which is worse than merely recording the wrong identity
+/// for this one -- see the module docs.
+#[cfg(unix)]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
 }
 
 /// Get `path`'s own directory entries onto the storage device, or give up.
 ///
-/// The path-based spelling of the Unix arm above, and the same best-effort
-/// contract. Windows will not open a directory as a file, so this is a
-/// no-op there — exactly as it is for [`Dest::publish`]'s own sync.
+/// `import_rom::sync_created_directories`'s off-Unix arm: no descriptor is
+/// pinned there, so a level created is still addressed by path. Windows
+/// will not open a directory as a file, so this is a no-op there --
+/// exactly as it is for [`Dest::publish`]'s own sync.
 #[cfg(not(unix))]
 pub(super) fn sync_directory(path: &Path) {
     let _ = File::open(path).and_then(|dir| dir.sync_all());
@@ -126,15 +178,8 @@ impl Dest {
     /// Whatever `open(2)` reports: the directory is gone, is not a
     /// directory, or is not searchable by this user.
     pub(super) fn open(dir: &Path) -> io::Result<Self> {
-        let dir = rustix::fs::open(
-            dir,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )?;
         Ok(Self {
-            dir,
+            dir: open_directory(dir)?,
             temp_sequence: AtomicU64::new(0),
         })
     }

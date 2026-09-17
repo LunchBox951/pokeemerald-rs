@@ -15,7 +15,7 @@ use rom_import::{ImportError, ImportedPack};
 use super::dest::{not_a_directory_error, Dest};
 use super::{
     create_directories, directories_to_create, import_to, import_to_with, pack_directory,
-    pack_name, ImportOutcome, ImportRomError,
+    pack_name, CreatedDirectory, ImportOutcome, ImportRomError,
 };
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
@@ -54,6 +54,13 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// The paths [`create_directories`] recorded, in order -- the one field
+/// both platform arms of [`CreatedDirectory`] carry, and what these tests
+/// care about: which levels it claims, not how it pins them.
+fn created_paths(created: &[CreatedDirectory]) -> Vec<PathBuf> {
+    created.iter().map(|dir| dir.path.clone()).collect()
 }
 
 /// Every file directly inside `dir`, sorted, as plain names.
@@ -183,7 +190,7 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     fs::create_dir(&one).expect("the outer level is created");
 
     let created = create_directories(&two).expect("the missing level is created");
-    assert_eq!(created, std::slice::from_ref(&two));
+    assert_eq!(created_paths(&created), std::slice::from_ref(&two));
     assert!(two.is_dir());
 
     let again = create_directories(&two).expect("an existing destination is not a failure");
@@ -201,7 +208,7 @@ fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
     let (created, _source) = create_directories(&outer.join(overlong))
         .expect_err("the overlong component cannot be created");
 
-    assert_eq!(created, std::slice::from_ref(&outer));
+    assert_eq!(created_paths(&created), std::slice::from_ref(&outer));
     assert!(outer.is_dir());
 }
 
@@ -315,6 +322,59 @@ fn a_failed_import_removes_the_directory_it_created() {
     // that would look like a half-installed game.
     assert!(!created.exists());
     assert!(file_names(&dir.path).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_import_does_not_remove_a_directory_it_did_not_create() {
+    // `undo_created_directories` looks `created`/`new` up in the pinned
+    // parent and compares its device and inode against what
+    // `create_directories` captured, rather than trusting the path
+    // spelling again. Between the pin and the failure, another account
+    // renames the level this run made out from under the name and puts its
+    // own there -- the level it is about to write into. That replacement's
+    // identity does not match the record, so it is left untouched;
+    // removing it anyway would be the harm `create_directories` refuses
+    // `create_dir_all` over, arriving by the other door.
+    let dir = TempDir::new("undo-swapped");
+    let created = dir.join("new");
+    let moved = dir.join("moved");
+    let pack_path = created.join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-swapped-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        fs::rename(&created, &moved).expect("the created level is renamed away");
+        fs::create_dir(&created).expect("somebody else's level takes the name");
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::Import { .. }));
+    assert!(
+        created.is_dir(),
+        "the cleanup took back a directory this run never created"
+    );
+    // The directory this run actually made is left standing too -- harmless
+    // litter, not chased down under its new name.
+    assert!(moved.is_dir());
+}
+
+#[test]
+fn a_pack_directory_spelled_through_dotdot_still_imports() {
+    // `directories_to_create` walks lexically (`Path::parent`), so a
+    // destination spelled through `..` produces a level whose
+    // `Path::file_name` is `None` -- it names no new component to create,
+    // only an already-real ancestor `create_directories`'s Unix arm has to
+    // recognize rather than mistake for an unnameable failure.
+    let dir = TempDir::new("dotdot-level");
+    let pack_path = dir.join("missing").join("..").join("pokeemerald.pack");
+
+    let source = SourceRom::new("dotdot-level-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("a dotdot-spelled destination still imports");
+    assert_eq!(outcome.pack_path(), pack_path);
 }
 
 #[test]
