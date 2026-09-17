@@ -304,6 +304,17 @@ fn the_host_helpers_agree_with_the_rule_they_are_built_from() {
     }
 }
 
+/// Whether a real user pack at `candidate` could stop resolution short of the
+/// repo rung, as the plain-developer-checkout test must ask it of whatever
+/// machine runs the suite.
+///
+/// [`Path::is_file`] would answer this wrong: it folds an unreadable
+/// candidate into "absent", while [`super::resolve`] stops on one and hands
+/// it back (`crates/pack-format/src/path.rs:187-191`).
+fn a_user_pack_may_stop_resolution(candidate: &Path) -> bool {
+    super::probe(candidate) != Probe::Missing
+}
+
 #[test]
 fn the_default_path_is_the_repo_path_in_a_plain_developer_checkout() {
     // CI and a developer machine both run with no `POKEEMERALD_PACK`, no
@@ -312,10 +323,65 @@ fn the_default_path_is_the_repo_path_in_a_plain_developer_checkout() {
     if std::env::var_os(PACK_PATH_ENV).is_some() {
         return;
     }
-    if super::user_pack_path().is_some_and(|p| p.is_file()) {
+    if super::user_pack_path().is_some_and(|p| a_user_pack_may_stop_resolution(&p)) {
+        return;
+    }
+    // Rung 3 must agree too: a portable-install candidate beside the test
+    // binary that is present or unreadable also stops resolution short of
+    // the repo path, mirroring `default_pack_path`'s own exe-dir rung
+    // (`crates/pack-format/src/path.rs:104-107`, `:193-198`).
+    let exe_candidate = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(OUTPUT_RELATIVE_PATH)));
+    if exe_candidate.is_some_and(|candidate| super::probe(&candidate) != Probe::Missing) {
         return;
     }
     assert_eq!(default_pack_path(), repo_pack_path());
+}
+
+/// The guard above must answer the same question resolution does. `is_file`
+/// does not: it folds a candidate that cannot be examined into "absent",
+/// while [`super::resolve`] hands such a candidate back
+/// (`crates/pack-format/src/path.rs:187-191`), so a guard built on `is_file`
+/// lets the assertion run on a machine where rung 2 wins instead.
+#[cfg(unix)]
+#[test]
+fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_pack() {
+    use super::probe;
+
+    let home = std::env::temp_dir().join(format!("pack-format-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let app = home.join(".local").join("share").join("pokeemerald-rs");
+    std::fs::create_dir_all(&app).expect("scratch directories");
+    // A self-referential symlink where the pack file goes: `metadata` fails
+    // with `ELOOP`, which is neither `NotFound` nor `NotADirectory`, so the
+    // real probe reports `Unreadable`. Chosen over a mode-0 parent because a
+    // privileged user (this sandbox runs as uid 0) walks straight through
+    // that one, and this test must mean the same thing under any uid.
+    let candidate = app.join("pokeemerald.pack");
+    std::os::unix::fs::symlink("pokeemerald.pack", &candidate).expect("the loop links");
+
+    let guard_skips = a_user_pack_may_stop_resolution(&candidate);
+    // `default_pack_path`'s own core, driven with the same `HOME` and the
+    // same real probe.
+    let resolved = resolve(
+        &env_of(&[("HOME", home.to_str().expect("a UTF-8 scratch path"))]),
+        Some(Path::new("/opt/game")),
+        &probe,
+        DataDirRule::Xdg,
+    );
+
+    let _ = std::fs::remove_file(&candidate);
+    let _ = std::fs::remove_dir_all(&home);
+
+    if guard_skips {
+        return;
+    }
+    assert_eq!(
+        resolved,
+        repo_pack_path(),
+        "the guard did not skip, so resolution must agree there is no user pack"
+    );
 }
 
 #[test]
