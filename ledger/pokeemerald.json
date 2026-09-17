@@ -26810,7 +26810,7 @@
     "src/m4a.c": {
       "artifacts": {
         "CgbModVol": {
-          "reason": "CgbModVol's envelope-goal/sustain-goal resolution re-implemented as cgb_envelope::cgb_envelope_goal + CgbEnvelope::new/set_goal (S-3 slice 2).",
+          "reason": "CgbModVol's envelope-goal/sustain-goal resolution re-implemented as cgb_envelope::cgb_envelope_goal + CgbEnvelope::new/latch_goal, folded in only at note-on and each envelopeCounter==0 boundary via step_with_goal/step_frame; a live track-volume write (CgbVoice::set_track_volume) queues the routing state alone and never latches directly (issue #1210, S-3 slice 2).",
           "rust_target": "crates/audio/src/cgb_envelope.rs",
           "spec": "S-3",
           "status": "rewritten"
