@@ -180,7 +180,7 @@ where
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
-    let (generation, staged_dir, generation_dir) = loop {
+    let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
             scene.name(),
@@ -194,15 +194,26 @@ where
             continue;
         }
         match std::fs::create_dir(&staged_dir) {
-            Ok(()) => break (generation, staged_dir, generation_dir),
+            // Claimed as tightly after creation as `std` allows (see
+            // `StagedDirClaim`); a failure here still leaves `staged_dir`
+            // behind, since `create_dir`'s own success is this call's only
+            // proof of ownership past this point.
+            Ok(()) => match claim_staged_dir(&staged_dir) {
+                Ok(claim) => break (generation, staged_dir, generation_dir, claim),
+                Err(error) => {
+                    let source = RecordSnapshotError::Write(staged_dir.clone(), error.to_string());
+                    let cleanup_error = std::fs::remove_dir_all(&staged_dir)
+                        .err()
+                        .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
+                    return Err(fold_cleanup_error(source, &staged_dir, cleanup_error));
+                }
+            },
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
                 return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
             }
         }
     };
-    let staged_dir_claim = claim_staged_dir(&staged_dir)
-        .map_err(|e| RecordSnapshotError::Write(staged_dir.clone(), e.to_string()))?;
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
@@ -214,6 +225,12 @@ where
         after_rgb_staged()?;
         std::fs::write(&staged_meta, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
+        // The promoting rename frees the staging name, so the claim can no
+        // longer answer for it past this point regardless of whether the
+        // rename itself goes on to succeed; on Windows the hold has to be
+        // given up first, since it denies the rename the same as anything
+        // else.
+        staged_dir_claim.release_hold();
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
         renamed = true;
@@ -231,70 +248,218 @@ where
 
     // Neither staging name is removed once it may no longer be exclusively
     // ours: `generation_dir`'s was never claimed, and `staged_dir`'s claim
-    // (still checked, since a failure can replace it before any rename) is
-    // only trusted while `!renamed` -- the rename itself frees the name.
-    if result.is_err() && !renamed && staged_dir_is_still_claimed(&staged_dir_claim, &staged_dir) {
-        let _ = std::fs::remove_dir_all(&staged_dir);
+    // is only trusted while `!renamed` -- the rename attempt gives up the
+    // claim's hold before it runs, whether or not it goes on to succeed.
+    if result.is_err() && !renamed {
+        result.map_err(|source| clean_up_staged_dir(&staged_dir, staged_dir_claim, source))
+    } else {
+        result
     }
-    result
 }
 
-/// Identity [`claim_staged_dir`] captures for `staged_dir` when this call
-/// creates it, so [`staged_dir_is_still_claimed`] can tell a replacement
-/// apart from the directory this call still owns.
+/// Binds cleanup to the directory object this call created, not to whatever
+/// its name may later answer to (see [`claim_staged_dir`]). On Unix the
+/// held descriptor is what makes the recorded `(dev, ino)` trustworthy: a
+/// deleted-but-still-open inode cannot be handed to a new directory, so a
+/// re-stat that still matches cannot be a reused number fooling the check.
+///
+/// `create_dir` returns no handle, so the open that claims the directory is
+/// a second, non-atomic step, on every platform this module supports;
+/// [`remove_staged_dir`]'s own re-verify-then-`remove_dir_all` is a second
+/// such pair, by path both times, on Unix specifically (see the `windows`
+/// variant below for why that second gap does not apply there). Neither
+/// gap closes further without an atomic create-and-open for directories,
+/// which neither `std` nor POSIX provides (unlike a file's `create_new`),
+/// short of `openat`/`unlinkat` from a crate this workspace does not
+/// already carry.
 #[cfg(unix)]
 struct StagedDirClaim {
     dev: u64,
     ino: u64,
+    _hold: std::fs::File,
 }
 
-/// As [`StagedDirClaim`] above, but path-based metadata off unix carries no
-/// inode to re-read, so the directory's creation time stands in instead.
-#[cfg(not(unix))]
+/// As [`StagedDirClaim`] above. Windows has no by-handle identity to read
+/// back on demand (unlike Unix's `(dev, ino)`), so the hold is the proof
+/// instead: opened with no sharing at all, it denies any other opener a
+/// rename or delete of the directory it names for as long as it stays
+/// open, so nothing needs to be re-read to know the name still means the
+/// same object -- closing the second gap Unix has, since there is no
+/// separate re-verify step to race against the removal that follows it.
+/// [`StagedDirClaim::release_hold`] gives the hold up right before the
+/// promoting rename, which needs exactly the access the hold denies; past
+/// that release, ownership can no longer be confirmed at all, and
+/// `remove_staged_dir` drops the hold the same way immediately before its
+/// own `remove_dir_all`, so that release is this platform's only gap.
+#[cfg(windows)]
 struct StagedDirClaim {
-    created: std::time::SystemTime,
+    hold: Option<std::fs::File>,
 }
 
-/// Reads back the identity that will prove ownership of `path` (a freshly
-/// created `staged_dir`) at cleanup time.
+/// As [`StagedDirClaim`] above, for targets with neither an inode nor a
+/// sharing hold to lean on; ownership can never be confirmed here.
+#[cfg(not(any(unix, windows)))]
+struct StagedDirClaim;
+
+impl StagedDirClaim {
+    /// Gives up the hold the promoting rename needs (Windows only; see
+    /// [`StagedDirClaim`]). A no-op everywhere else.
+    #[cfg(unix)]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+
+    #[cfg(windows)]
+    fn release_hold(&mut self) {
+        self.hold.take();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+}
+
+/// Opens `path` (a freshly created `staged_dir`) and records the identity
+/// that will prove ownership of it at cleanup time.
 #[cfg(unix)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let meta = std::fs::symlink_metadata(path)?;
+    let hold = std::fs::File::open(path)?;
+    let meta = hold.metadata()?;
     Ok(StagedDirClaim {
         dev: meta.dev(),
         ino: meta.ino(),
+        _hold: hold,
     })
 }
 
-/// As [`claim_staged_dir`] above, for the creation-time fallback (see
-/// [`StagedDirClaim`]).
-#[cfg(not(unix))]
+/// As [`claim_staged_dir`] above, for the sharing hold (see
+/// [`StagedDirClaim`]). `FILE_FLAG_BACKUP_SEMANTICS` is the documented
+/// `CreateFileW` flag that lets a directory be opened at all; `share_mode`
+/// `0` is what then denies every other opener, matching
+/// `staging::create_new_exclusive`'s use of the same flag for a file.
+#[cfg(windows)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
-    Ok(StagedDirClaim {
-        created: std::fs::symlink_metadata(path)?.created()?,
-    })
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(0)
+        .open(path)?;
+    Ok(StagedDirClaim { hold: Some(hold) })
 }
 
-/// Whether `path` still names the very directory `claim` was taken from,
-/// rather than one that took its name back after a failure freed it.
+/// As [`claim_staged_dir`] above, for targets with no ownership proof to
+/// record (see [`StagedDirClaim`]).
+#[cfg(not(any(unix, windows)))]
+fn claim_staged_dir(_path: &Path) -> std::io::Result<StagedDirClaim> {
+    Ok(StagedDirClaim)
+}
+
+/// Removes `staged_dir` if `claim` still names the very directory this
+/// publish created there, folding a cleanup failure into `source` rather
+/// than discarding it. A directory the check finds replaced is left alone
+/// in silence -- it belongs to whoever holds it now.
+fn clean_up_staged_dir(
+    staged_dir: &Path,
+    claim: StagedDirClaim,
+    source: RecordSnapshotError,
+) -> RecordSnapshotError {
+    match remove_staged_dir(staged_dir, claim) {
+        Ok(()) | Err(None) => source,
+        Err(Some(cleanup_error)) => fold_cleanup_error(source, staged_dir, Some(cleanup_error)),
+    }
+}
+
+/// Appends `cleanup_error`, if any, to `source` rather than discarding it;
+/// `source` alone otherwise.
+fn fold_cleanup_error(
+    source: RecordSnapshotError,
+    path: &Path,
+    cleanup_error: Option<std::io::Error>,
+) -> RecordSnapshotError {
+    let Some(cleanup_error) = cleanup_error else {
+        return source;
+    };
+    RecordSnapshotError::Write(
+        path.to_path_buf(),
+        format!(
+            "{source}; additionally failed to remove the abandoned staging directory {}: {cleanup_error}",
+            path.display()
+        ),
+    )
+}
+
+/// Removes `staged_dir` when `claim` still proves ownership of it. `Err(None)`
+/// means it does not (definitely replaced, or already gone) and nothing was
+/// touched; `Err(Some(_))` means ownership could not be confirmed, or the
+/// removal itself failed, and must be reported rather than swallowed.
 #[cfg(unix)]
-fn staged_dir_is_still_claimed(claim: &StagedDirClaim, path: &Path) -> bool {
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "one signature for every platform; the Windows implementation must own `claim` to drop its hold before removing"
+)]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
     use std::os::unix::fs::MetadataExt as _;
 
-    std::fs::symlink_metadata(path).is_ok_and(|found| {
-        found.file_type().is_dir() && (claim.dev, claim.ino) == (found.dev(), found.ino())
-    })
+    match std::fs::symlink_metadata(staged_dir) {
+        Ok(found)
+            if found.file_type().is_dir()
+                && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
+        {
+            std::fs::remove_dir_all(staged_dir).map_err(Some)
+        }
+        Ok(_) => Err(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(None),
+        Err(error) => Err(Some(error)),
+    }
 }
 
-/// As [`staged_dir_is_still_claimed`] above, for the creation-time fallback
-/// (see [`StagedDirClaim`]).
-#[cfg(not(unix))]
-fn staged_dir_is_still_claimed(claim: &StagedDirClaim, path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .and_then(|found| found.created())
-        .is_ok_and(|created| created == claim.created)
+/// As [`remove_staged_dir`] above: on Windows there is no path to re-verify,
+/// since `claim`'s hold is itself the proof (see [`StagedDirClaim`]) -- for
+/// as long as it stayed held, no rename or delete of `staged_dir` could
+/// have succeeded, so the name still means the directory this publish
+/// created. A claim whose hold is already gone cannot prove that, and is
+/// reported rather than guessed at.
+#[cfg(windows)]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    mut claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    let Some(hold) = claim.hold.take() else {
+        return Err(Some(std::io::Error::other(
+            "the staging directory's sharing hold was already released for the promoting rename, so its ownership can no longer be confirmed",
+        )));
+    };
+    // The hold itself denies the removal below; give it up first.
+    drop(hold);
+    std::fs::remove_dir_all(staged_dir).map_err(Some)
+}
+
+/// As [`remove_staged_dir`] above, for targets with no ownership proof to
+/// check (see [`StagedDirClaim`]): cleanup can never be confirmed safe, so
+/// it never runs.
+#[cfg(not(any(unix, windows)))]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    _claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    Err(Some(std::io::Error::other(format!(
+        "this target has no way to confirm ownership of the staging directory {}, so it was left in place",
+        staged_dir.display()
+    ))))
 }
 
 /// Hex width of the pointer staging suffix, matching [`crate::extract`]'s

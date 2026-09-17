@@ -792,6 +792,12 @@ fn failed_publication_leaves_a_generation_directory_it_never_created() {
 /// it over during the staged write. The recursive removal that follows a
 /// failure must then leave that writer's directory alone, exactly as
 /// `staging::StagedFile::remove_after` leaves a replaced staging file alone.
+///
+/// Not run on Windows: there, `claim_staged_dir`'s exclusive hold denies
+/// exactly the rename this test's adversary depends on for as long as this
+/// publish still owns the name, so the replacement it stages cannot happen
+/// there -- the adversary's own `rename` call fails outright instead.
+#[cfg(not(windows))]
 #[test]
 fn failed_publication_leaves_a_staging_directory_another_writer_replaced() {
     let output_dir = scratch_path("replaced-staging-out");
@@ -838,5 +844,125 @@ fn failed_publication_leaves_a_staging_directory_another_writer_replaced() {
         replaced.display()
     );
 
+    drop(out_guard);
+}
+
+/// Failure cleanup must remove only the directory this publish created, even
+/// once its original name has been freed and reused. `claim_staged_dir`
+/// keeps a descriptor open on the directory it claims for exactly this
+/// reason: while it stays open the kernel cannot hand the inode number back
+/// out, so a directory that later reuses the freed name cannot also reuse
+/// the freed inode a path-only re-stat would otherwise mistake for it.
+///
+/// Unix only: this exercises inode reuse specifically, which has no Windows
+/// analogue -- there, `claim_staged_dir`'s exclusive hold denies the
+/// `rename` this test's adversary needs, the same as in
+/// `failed_publication_leaves_a_staging_directory_another_writer_replaced`.
+#[cfg(unix)]
+#[test]
+fn failed_publication_leaves_a_staging_directory_replaced_after_the_original_was_freed() {
+    let output_dir = scratch_path("reclaimed-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let replaced = std::cell::RefCell::new(PathBuf::new());
+    let take_the_staging_name = || {
+        let staged_name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        let staged_dir = output_dir.join(staged_name);
+        // Another writer takes the staging name over: it carries this
+        // publish's directory off and drops it, then puts its own tree at
+        // the name it freed.
+        let carried_off = output_dir.join("carried-off");
+        std::fs::rename(&staged_dir, &carried_off).unwrap();
+        std::fs::remove_dir_all(&carried_off).unwrap();
+        std::fs::create_dir(&staged_dir).unwrap();
+        std::fs::write(staged_dir.join("bystander"), b"not ours").unwrap();
+        *replaced.borrow_mut() = staged_dir;
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_staging_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let replaced = replaced.borrow().clone();
+    assert_eq!(
+        std::fs::read(replaced.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish never created",
+        replaced.display()
+    );
+
+    drop(out_guard);
+}
+
+/// Cleanup that cannot read the staging directory's ownership leaves that
+/// directory behind, and must report it rather than let an unreadable answer
+/// pass for "replaced" -- the contract `staging::StagedFile::remove_after`
+/// already keeps for the pointer's staging file, and the one this publish's
+/// own cleanup claims to mirror. `output_dir` itself, not `staged_dir`, is
+/// what this test breaks, so it exercises both platforms: neither identity
+/// check holds anything on `output_dir`, only on `staged_dir` beneath it.
+#[test]
+fn failed_publication_reports_a_staging_directory_whose_ownership_it_cannot_read() {
+    let output_dir = scratch_path("unreadable-claim-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let carried_off = scratch_path("unreadable-claim-carried-off");
+    let carried_guard = ScratchGuard(carried_off.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged = std::cell::RefCell::new(PathBuf::new());
+    let break_the_staging_path = || {
+        let name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        *staged.borrow_mut() = output_dir.join(&name);
+        // The staging directory survives under `carried_off`, but a
+        // non-directory now stands where its path's parent did, so reading
+        // its ownership fails with something other than plain absence.
+        std::fs::rename(&output_dir, &carried_off).unwrap();
+        std::fs::write(&output_dir, b"not a directory").unwrap();
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        break_the_staging_path,
+    )
+    .unwrap_err();
+
+    let staged = staged.borrow().clone();
+    let staged_name = staged.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        carried_off.join(&staged_name).is_dir(),
+        "the staging directory must still be there for the report to be about anything"
+    );
+    assert!(
+        error.to_string().contains(&staged_name),
+        "the error must name the staging directory left behind by a cleanup that could not confirm ownership: {error}"
+    );
+
+    drop(carried_guard);
     drop(out_guard);
 }
