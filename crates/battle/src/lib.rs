@@ -227,10 +227,8 @@
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
 //! [`secondary::EFFECT_POISON_HIT`] is the one resolved; the other 30 are
 //! not, including [`paralyze::EFFECT_PARALYZE`]'s on-hit sibling
-//! `EFFECT_PARALYZE_HIT`), `EFFECT_RECOIL` for any move but Struggle (issue
-//! #877 special-cases Struggle's own certain quarter-HP recoil rather than
-//! adding a general recoil pipeline — Take Down and Submission stay
-//! refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
+//! `EFFECT_PARALYZE_HIT`), `EFFECT_RECOIL` for any move but Struggle (Take Down and
+//! Submission stay refused), OHKO, Counter, Bide, Leech Seed and the rest of the end-of-turn
 //! residual family, and so on.
 //!
 //! Paralysis reaches past its own pipeline, so read those two owners before

@@ -49,13 +49,8 @@ fn every_move_event_names_the_move_that_was_used() {
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
 
-// This test was re-pinned twice, each with a recorded reason
-// (`test-ratchet`). It first pinned an all-spent moveset forcing Struggle
-// at selection time rather than failing at PP deduction. It then (issue
-// #837) pinned the turn stopping the moment that forced fallback had to
-// act, since Struggle execution itself was not yet modelled. Issue #877
-// lands that execution, so the turn now resolves fully: the first mover's
-// hit still commits, and the forced Struggle that follows it executes too.
+// The first mover's hit commits, and the forced Struggle that follows it in
+// turn order executes in the same turn.
 
 #[test]
 fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
