@@ -222,9 +222,10 @@ impl PlayerState {
     /// Same-map steps test impassability, elevation, then visible object
     /// occupancy. Connection landings omit neighbouring behaviour attributes and
     /// object events because [`ConnectedMapData`] does not expose them.
-    /// A blocked attempt still leaves the player facing the attempted direction.
-    /// Standing on a forced-movement behavior blocks every manual step instead
-    /// (see [`is_forced_movement`](super::metatile_behavior::is_forced_movement)).
+    /// A blocked attempt still leaves the player facing the attempted direction,
+    /// except a forced-movement standing tile, which blocks every manual step
+    /// without turning the player (see
+    /// [`is_forced_movement`](super::metatile_behavior::is_forced_movement)).
     ///
     /// # Elevation adoption
     ///
@@ -253,10 +254,10 @@ impl PlayerState {
 
         // Checked before the turn branch: upstream never reads the keypad at
         // all while forced movement is armed on the standing tile
-        // (`field_player_avatar.c:344-347`).
+        // (`field_player_avatar.c:344-347`), so a denied poll here must not
+        // turn the avatar either.
         if is_forced_movement(standing_behavior) {
             self.movement_streak_active = true;
-            self.facing = direction;
             return StepOutcome::Blocked {
                 direction,
                 collision: Collision::Impassable,
@@ -1954,5 +1955,43 @@ mod tests {
              ended, so a would-be turn must fail closed too"
         );
         assert_eq!(player.position(), (2, 2));
+    }
+
+    /// Upstream never reaches `MovePlayerAvatarUsingKeypadInput` while forced
+    /// movement is armed (`field_player_avatar.c:342-349`), so the denied
+    /// keypad direction cannot reach the avatar's facing either -- and facing
+    /// is player-visible through the sprite frame
+    /// (`crates/pokeemerald-rs/src/overworld/avatar.rs:196-201`)
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn a_forced_movement_tile_does_not_turn_the_player() {
+        let runtime = slide_east_runtime();
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.facing(),
+            Direction::East,
+            "fixture precondition: the player stands on the slide tile facing east"
+        );
+
+        let _ = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+
+        assert_eq!(
+            player.facing(),
+            Direction::East,
+            "a denied forced-movement poll must not turn the avatar: upstream never \
+             reads the keypad while forced movement is armed"
+        );
     }
 }

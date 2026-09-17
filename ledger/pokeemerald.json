@@ -26378,7 +26378,7 @@
           "status": "rewritten"
         },
         "PlayerStep": {
-          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step; the WALK_IN_PLACE_FAST turn-in-place case of TryInterruptObjectEventSpecialAnim's non-interruptible window is now modeled via the eight-frame turn_frames_remaining busy timer (issue #976), so ordinary movement input stays gated for the turn's duration unless a dialog or the start menu takes the field lock first, in which case PlayerState::clear_turn_lock ends the window immediately, matching upstream's PlayerFreeze (field_player_avatar.c:1039-1046, event_object_lock.c's Task_FreezePlayer).",
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step; the WALK_IN_PLACE_FAST turn-in-place case of TryInterruptObjectEventSpecialAnim's non-interruptible window is now modeled via the eight-frame turn_frames_remaining busy timer (issue #976), so ordinary movement input stays gated for the turn's duration unless a dialog or the start menu takes the field lock first, in which case PlayerState::clear_turn_lock ends the window immediately, matching upstream's PlayerFreeze (field_player_avatar.c:1039-1046, event_object_lock.c's Task_FreezePlayer). Forced-movement classification is modeled too (issue #926): PlayerState::step reads the standing tile via is_forced_movement and refuses every manual poll, including a would-be turn, matching upstream never reading the keypad while GetForcedMovementByMetatileBehavior is armed (field_player_avatar.c:342-349, :407-427); the ForcedMovement_* dispatch and its per-behavior physics (slip/slide/current/mat/muddy-slope movement) stay unported and deferred, still in v1 scope.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27144,13 +27144,13 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsEastwardCurrent": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsIce_2": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27162,7 +27162,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsMuddySlope": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27186,43 +27186,43 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsNorthwardCurrent": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSecretBaseJumpMat": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSecretBaseSpinMat": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideEast": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideNorth": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideSouth": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideWest": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27240,37 +27240,37 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsSouthwardCurrent": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsTrickHouseSlipperyFloor": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkEast": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkNorth": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkSouth": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkWest": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27282,7 +27282,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsWaterfall": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27300,7 +27300,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsWestwardCurrent": {
-          "reason": "Folded into is_forced_movement's OR-classifier (crates/engine/src/overworld/metatile_behavior.rs), which reproduces this single-behavior-ID equality test exactly; PlayerState denies manual keypad steps while standing on a forced-movement tile instead of porting the ForcedMovement_* dispatch physics, which stays deferred (issue #926; see PlayerStep's own ledger entry).",
+          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
