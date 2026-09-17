@@ -28027,7 +28027,7 @@
           "status": "rewritten"
         },
         "ScrCmd_waitstate": {
-          "reason": "waitstate re-expresses upstream's global CONTEXT_WAITING pause as ScriptContext's existing native-step mode polling ScriptHost::waiting",
+          "reason": "waitstate re-expresses upstream's global CONTEXT_WAITING pause as ScriptContext::setup_gate polling ScriptHost::waiting; a release resumes bytecode dispatch within the same run() call instead of switching mode for the next one, matching ScriptContext_Enable/ScriptContext_RunScript (src/script.c:220-259)",
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"
