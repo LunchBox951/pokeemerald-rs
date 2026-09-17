@@ -49,10 +49,6 @@
 //!
 //! # Fidelity differences
 //!
-//! - For [`assets::MetatileLayerType::Normal`], BG3 is transparent. Upstream
-//!   `DrawMetatile` writes the fixed screen entry `0x3014` there -- tile
-//!   `0x14` in palette bank 3 -- behind the normally opaque middle layer, so
-//!   the two differ only where that layer has a transparent pixel.
 //! - Walking does not alternate the leading foot between steps.
 
 use assets::{
