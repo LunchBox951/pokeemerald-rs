@@ -4,9 +4,9 @@
 //! `cpal` calls `Source::fill` (and, on the common resampled path,
 //! `Resampler::fill`) on the OS audio thread under a hard deadline. A buffer
 //! larger than the size the device advertised is exactly the moment the
-//! callback must stay allocation-free: pre-sizing off the thread already
-//! covers the advertised sizes, so an in-callback grow only ever fires when
-//! the deadline is least forgiving.
+//! callback must stay allocation-free: pre-sizing off the thread covers
+//! every realistic advertised size, and anything past it is chunked, so an
+//! in-callback grow would only ever fire when the deadline is least forgiving.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
