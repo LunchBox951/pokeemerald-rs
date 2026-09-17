@@ -1354,6 +1354,101 @@ fn a_pre_existing_lock_file_keeps_its_mode() {
     drop(guard);
 }
 
+/// Staging must never unlink an entry it did not create.
+#[cfg(unix)]
+#[test]
+fn a_file_already_bearing_the_lock_staging_name_survives_a_lock() {
+    let dir = TempDir::new("lock-stage-collision");
+    let bystander = dir.path.join(format!(".lk{}", std::process::id()));
+    std::fs::write(&bystander, b"a save that happens to bear the staging name").unwrap();
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file.lock().expect("a guard");
+    assert_eq!(
+        std::fs::read(&bystander).unwrap(),
+        b"a save that happens to bear the staging name"
+    );
+    assert!(dir.path.join(LOCK_FILE_NAME).exists());
+    drop(guard);
+}
+
+/// Leftover staging names never stand between a saver and an existing lock.
+#[cfg(unix)]
+#[test]
+fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
+    let dir = TempDir::new("lock-stage-exhausted");
+    let pid = std::process::id();
+    std::fs::write(dir.path.join(LOCK_FILE_NAME), b"").unwrap();
+    std::fs::write(dir.path.join(format!(".lk{pid}")), b"").unwrap();
+    for n in 1..=u8::MAX {
+        std::fs::write(dir.path.join(format!(".lk{pid}{n:02x}")), b"").unwrap();
+    }
+    let file = SaveFile::at(dir.path.join("a.sav"));
+    let guard = file
+        .lock()
+        .expect("the existing lock is opened without staging");
+    drop(guard);
+}
+
+/// Leftover staging names beside an absent slot are skipped, never unlinked.
+#[cfg(unix)]
+#[test]
+fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
+    let dir = TempDir::new("lock-staging-names-taken");
+    let pid = std::process::id();
+    let leftovers: Vec<PathBuf> = (0..16u8)
+        .map(|attempt| match attempt {
+            0 => dir.path.join(format!(".lk{pid}")),
+            n => dir.path.join(format!(".lk{pid}{n:02x}")),
+        })
+        .collect();
+    for leftover in &leftovers {
+        std::fs::write(leftover, b"leftover").unwrap();
+    }
+    let file = SaveFile::at(dir.path.join(SAVE_FILE_NAME));
+    let guard = file.lock().expect("a first save finds a free staging name");
+    drop(guard);
+    for leftover in &leftovers {
+        assert_eq!(
+            std::fs::read(leftover).unwrap(),
+            b"leftover",
+            "{leftover:?} was disturbed"
+        );
+    }
+}
+
+/// The name staging draws is `.lk` plus eleven hex digits, never a pid name.
+#[cfg(unix)]
+#[test]
+fn the_drawn_lock_staging_name_is_eleven_hex_digits() {
+    let pid_name = format!(".lk{}", std::process::id());
+    for _ in 0..64 {
+        let name = SaveFile::staging_name();
+        let digits = name.strip_prefix(".lk").expect("a .lk staging name");
+        assert_eq!(digits.len(), 11, "{name} is not eleven digits wide");
+        assert!(
+            digits.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{name} is not hexadecimal"
+        );
+        assert_ne!(name, pid_name);
+    }
+}
+
+/// Staging cleanup unlinks only the inode it created.
+#[cfg(unix)]
+#[test]
+fn lock_staging_cleanup_spares_an_entry_it_did_not_create() {
+    let dir = TempDir::new("lock-stage-not-mine");
+    let staged = dir.path.join(SaveFile::staging_name());
+    let mine = std::fs::File::create(&staged).unwrap();
+    std::fs::remove_file(&staged).unwrap();
+    std::fs::write(&staged, b"a stranger's file under the staging name").unwrap();
+    SaveFile::remove_only_own_staging(&staged, &mine);
+    assert_eq!(
+        std::fs::read(&staged).expect("the stranger's file survives"),
+        b"a stranger's file under the staging name"
+    );
+}
+
 /// A directory exactly `total_len` bytes long, from components under 255 bytes.
 #[cfg(target_os = "linux")]
 fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {

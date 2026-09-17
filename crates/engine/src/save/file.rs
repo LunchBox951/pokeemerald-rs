@@ -641,6 +641,8 @@ impl SaveFile {
 
     /// Opens this directory's lock file, creating it when the slot is free.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+        // An existing slot is opened first, so staging happens only for a
+        // first save and leftover staging names can never block a valid lock.
         match Self::open_existing_lock(path) {
             Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => {}
             result => return result,
@@ -657,8 +659,8 @@ impl SaveFile {
     /// it, so one run under `sudo` never shuts a user out of their own save:
     /// `LockFileEx` and a local `flock(2)` want an open handle, not a
     /// writable one, and these contents are never read or written. A denial
-    /// is retried briefly, since a creator widens a fresh slot's mode just
-    /// after publishing it.
+    /// is retried briefly, since a creator on a filesystem without hard links
+    /// publishes the slot before widening it.
     ///
     /// On NFS `flock(2)` is emulated as a whole-file write lock, which needs
     /// the writable handle; there the read-only fallback reports its own
@@ -691,22 +693,71 @@ impl SaveFile {
     }
 
     /// Creates the lock slot, or returns `None` when it already exists. The
-    /// exclusive create never follows a symlink, and the fresh inode is
-    /// widened to `0666` through its own descriptor, so a `umask 077` creator
-    /// never leaves a lock the directory's other owners cannot open.
+    /// file is staged at `0666` and published by `link(2)`, so a `umask 077`
+    /// creator never exposes a `0600` lock; without hard links it is created
+    /// in place and widened after.
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
         use std::os::unix::fs::PermissionsExt;
-
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create_new(true);
-        match options.open(path) {
-            Ok(file) => {
-                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
-                Ok(Some(file))
+        // The staging name is unguessable, so nothing can be renamed onto it
+        // on purpose, and a taken name just means the next draw.
+        let (staged, file) = 'stage: {
+            for _ in 0..=u8::MAX {
+                let candidate = path.with_file_name(Self::staging_name());
+                match options.open(&candidate) {
+                    Ok(file) => break 'stage (candidate, file),
+                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(other) => return Err(other),
+                }
             }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "every staging name beside the lock slot is taken",
+            ));
+        };
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+        let linked = std::fs::hard_link(&staged, path);
+        Self::remove_only_own_staging(&staged, &file);
+        match linked {
+            Ok(()) => Ok(Some(file)),
             Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
-            Err(other) => Err(other),
+            Err(_) => {
+                let created = options.open(path);
+                match created {
+                    Ok(file) => {
+                        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+                        Ok(Some(file))
+                    }
+                    Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+                    Err(other) => Err(other),
+                }
+            }
+        }
+    }
+
+    /// An 11-hex-digit name from this process's random hasher keys: within
+    /// the 14-byte minimum component limit, and not guessable by a peer.
+    #[cfg(unix)]
+    fn staging_name() -> String {
+        use std::hash::{BuildHasher, Hasher};
+        let draw = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish();
+        format!(".lk{:011x}", draw & 0xFFF_FFFF_FFFF)
+    }
+
+    /// Unlinks the staging entry only while it is still the inode `file` holds.
+    #[cfg(unix)]
+    fn remove_only_own_staging(staged: &Path, file: &std::fs::File) {
+        use std::os::unix::fs::MetadataExt;
+        let same = match (std::fs::symlink_metadata(staged), file.metadata()) {
+            (Ok(entry), Ok(held)) => entry.dev() == held.dev() && entry.ino() == held.ino(),
+            _ => false,
+        };
+        if same {
+            let _ = std::fs::remove_file(staged);
         }
     }
 
