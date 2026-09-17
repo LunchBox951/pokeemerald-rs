@@ -2,7 +2,9 @@
 //!
 //! Raising effects target the user and skip the accuracy check. Lowering effects
 //! target the defender and spend one accuracy draw before checking ability
-//! protection. Ability protection is checked before the stage floor.
+//! protection, except a Soundproof block on a sound move (see
+//! `SOUND_STAT_DROP_MOVES`), which precedes the draw. Ability protection is
+//! checked before the stage floor.
 //!
 //! # Random draws
 //!
@@ -11,8 +13,9 @@
 //! effect roll (`data/battle_scripts_1.s:489-508`).
 //!
 //! A lowering effect consumes exactly one accuracy draw whether it misses,
-//! changes a stage, reaches the floor, or is blocked by an ability. Its shared
-//! script checks accuracy before stage resolution and has no later random step
+//! changes a stage, reaches the floor, or is blocked by an ability, except a
+//! Soundproof block, which consumes none. Its shared script checks accuracy
+//! before stage resolution and has no later random step
 //! (`data/battle_scripts_1.s:534-553`).
 //!
 //! # Model boundary
@@ -70,6 +73,17 @@ pub const KEEN_EYE: AbilityId = AbilityId(51);
 
 /// The Hyper Cutter ability ID.
 pub const HYPER_CUTTER: AbilityId = AbilityId(52);
+
+/// The Soundproof ability ID.
+pub const SOUNDPROOF: AbilityId = AbilityId(43);
+
+/// The move IDs of Emerald's sound-based moves that reach this resolver, taken
+/// from `sSoundMovesTable` (`src/battle_util.c:686-692`).
+const SOUND_STAT_DROP_MOVES: [MoveId; 3] = [
+    MoveId(45),  // Growl
+    MoveId(103), // Screech
+    MoveId(319), // Metal Sound
+];
 
 /// A battle stat that a move effect can raise or lower.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -312,13 +326,17 @@ pub fn set_stage(mon: &mut BattlePokemon, stat: ChangedStat, stage: StatStage) {
 pub enum StatChangeOutcome {
     /// The lowering move missed its defender.
     Miss,
-    /// The defender's ability blocked a lowering effect after its accuracy check.
+    /// The defender's ability blocked a lowering effect.
     AbilityProtected {
         /// The attempted stat change.
         change: StatChangeEffect,
         /// The ability that blocked the change.
         ability: AbilityId,
     },
+    /// The defender's Soundproof blocked the move itself
+    /// (`BattleScript_SoundproofProtected`, `data/battle_scripts_1.s:4158-4164`),
+    /// not a named stat drop, so this outcome carries no stat.
+    SoundproofProtected,
     /// The move connected and produced a stage result.
     Applied {
         /// The resolved stat change.
@@ -352,10 +370,34 @@ fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
         || (ability == HYPER_CUTTER && stat == ChangedStat::Attack)
 }
 
+/// Whether `defender`'s Soundproof blocks `move_id` outright, before PP and
+/// accuracy (`ABILITYEFFECT_MOVES_BLOCK`, `battle_util.c:2659-2675`).
+fn soundproof_blocks(move_id: MoveId, change: StatChangeEffect, defender: &BattlePokemon) -> bool {
+    change.direction == StatChangeDirection::Lower
+        && defender.ability() == SOUNDPROOF
+        && SOUND_STAT_DROP_MOVES.contains(&move_id)
+}
+
+/// Whether `defender`'s Soundproof blocks `move_id` outright; `false` for
+/// every other move, including ones with no stat change at all.
+///
+/// # Errors
+///
+/// Propagates a missing move entry from `dex`.
+pub fn soundproof_block(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    let effect = dex.move_data(move_id)?.effect;
+    Ok(stat_change_for_effect(effect)
+        .is_some_and(|change| soundproof_blocks(move_id, change, defender)))
+}
+
 /// Resolves a stat-changing move without mutating either battler.
 ///
 /// Raising effects consume no RNG. Lowering effects consume one accuracy draw
-/// before any ability or stage-boundary outcome.
+/// before any ability or stage-boundary outcome, except a Soundproof block.
 ///
 /// # Errors
 ///
@@ -374,6 +416,10 @@ pub fn resolve_stat_change_move(
         stat_change_for_effect(mv.effect).ok_or(BattleError::UnsupportedMoveEffect(move_id))?;
 
     if change.direction == StatChangeDirection::Lower {
+        if soundproof_blocks(move_id, change, defender) {
+            return Ok(StatChangeOutcome::SoundproofProtected);
+        }
+
         if !accuracy_check(
             mv.accuracy,
             mv.effect,
