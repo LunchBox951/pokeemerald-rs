@@ -536,16 +536,8 @@ impl SaveFile {
         Ok((slot.dev(), slot.ino()) == (held.dev(), held.ino()))
     }
 
-    /// As the `unix` [`SaveFile::names_its_own_entry`], rejecting a
-    /// symlinked slot outright.
-    ///
-    /// Windows exposes no *stable* by-handle identity, so the entry cannot
-    /// be compared against the open handle; refusing a slot that is a
-    /// symlink at all covers the same ground more bluntly. Creating one
-    /// there demands a privilege an ordinary user does not hold, and
-    /// [`SaveFile::deny_delete_sharing`] already stops an aliased target
-    /// from being replaced while any guard holds it -- the step that would
-    /// otherwise split two lockers across two inodes.
+    /// As the `unix` [`SaveFile::names_its_own_entry`], refusing any
+    /// symlinked slot, since Windows has no stable by-handle identity.
     ///
     /// # Errors
     ///
@@ -559,23 +551,10 @@ impl SaveFile {
         Ok(!slot.is_symlink())
     }
 
-    /// Whether this save path names the same directory entry as the lock
-    /// file `file`, opened at `lock`.
-    ///
-    /// Compares filesystem identity, not path text. A volume's aliases --
-    /// ASCII and non-ASCII case folding, Unicode normalisation, symlinks,
-    /// hard links -- cannot be enumerated from `std`, and canonical text
-    /// does not stand in for identity: on a case-folding Linux directory
-    /// `canonicalize` is `realpath`, which keeps the caller's own spelling,
-    /// so `.EMERALD.LOCK` and `.emerald.lock` name one entry yet compare
-    /// unequal. `st_dev` and `st_ino`, taken from the open lock handle
-    /// rather than from its path, answer the question directly.
-    ///
-    /// Callers open the lock file first, so a save path aliasing it resolves
-    /// to a file that exists by the time this runs.
-    ///
-    /// A save that does not exist is not the lock file. Any other failure to
-    /// inspect it is reported rather than assumed distinct.
+    /// Whether this save path is the inode of the open lock file `file` at
+    /// `lock`, by `st_dev`/`st_ino` rather than path text, since
+    /// `canonicalize` keeps a case-folding directory's spelling. A missing
+    /// save is not the lock file.
     ///
     /// # Errors
     ///
@@ -594,18 +573,9 @@ impl SaveFile {
         Ok((save.dev(), save.ino()) == (held.dev(), held.ino()))
     }
 
-    /// As the `unix` [`SaveFile::resolves_to`], comparing canonical paths.
-    ///
-    /// Windows exposes no *stable* by-handle identity accessor, but its
-    /// `canonicalize` resolves through `GetFinalPathNameByHandle`, which
-    /// reports the entry's own stored spelling rather than the caller's.
-    /// One entry under two spellings therefore canonicalises to one path,
-    /// so this recognises the aliases a Windows volume folds together.
-    ///
-    /// It does not recognise a hard link, whose own name canonicalises to
-    /// itself; this is the early, friendly error for a direct alias, and
-    /// [`SaveFile::deny_delete_sharing`] is what makes the refusal complete
-    /// by stopping any alias from replacing the held entry at all.
+    /// As the `unix` [`SaveFile::resolves_to`], comparing canonical paths:
+    /// Windows `canonicalize` reports the entry's stored spelling, and
+    /// [`SaveFile::deny_delete_sharing`] covers the hard link it misses.
     #[cfg(not(unix))]
     fn resolves_to(&self, lock: &Path, _file: &std::fs::File) -> Result<bool, SaveFileError> {
         let Some(_) = self.metadata_following_links()? else {
@@ -664,15 +634,9 @@ impl SaveFile {
     }
 
     /// Opens the slot read-write, then read-only when this user cannot write
-    /// it, so one run under `sudo` never shuts a user out of their own save:
-    /// `LockFileEx` and a local `flock(2)` want an open handle, not a
-    /// writable one, and these contents are never read or written. A denial
-    /// is retried briefly, since a creator on a filesystem without hard links
-    /// publishes the slot before widening it.
-    ///
-    /// On NFS `flock(2)` is emulated as a whole-file write lock, which needs
-    /// the writable handle; there the read-only fallback reports its own
-    /// failure rather than passing for exclusion.
+    /// it, so a run under `sudo` never shuts the owner out; a denial is
+    /// retried briefly for a creator that publishes before widening. NFS
+    /// emulates `flock(2)` as a write lock, so the read-only open fails there.
     fn open_existing_lock(path: &Path) -> std::io::Result<std::fs::File> {
         const RETRIES: u32 = 5;
         let mut attempt = 0;

@@ -759,13 +759,9 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// The longest basename `parent` accepts as a save file, found by growing
-/// one byte at a time until the host itself refuses one.
-///
-/// The ceiling is `PATH_MAX`, not [`staging::MAX_COMPONENT_LEN`], which that
-/// module documents as a guess: a FUSE mount negotiates a component limit far
-/// above 255, and stopping at the guess would report a length this host still
-/// accepts as its longest.
+/// The longest basename `parent` accepts as a save file, grown one byte at a
+/// time up to `PATH_MAX` until the host refuses one; a FUSE mount accepts
+/// components past [`staging::MAX_COMPONENT_LEN`].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn longest_valid_save_basename(parent: &Path) -> usize {
     (1..4096)
@@ -829,11 +825,8 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// Two distinct saves in one directory deliberately share the directory's
-/// one lock. That trade -- made because a volume's aliases cannot be
-/// enumerated, so any basename-derived name splits some one save across two
-/// locks -- is only sound if the shared lock genuinely excludes and
-/// genuinely releases, so both halves are pinned here.
+/// Two saves in one directory share its one lock, which must both exclude
+/// and release.
 #[test]
 fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
     let dir = TempDir::new("directory-lock-serialises");
@@ -863,11 +856,8 @@ fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
     drop(released);
 }
 
-/// The lock path must be one fixed name per directory, never derived from
-/// the save's basename.
-///
-/// A volume's aliases cannot be enumerated from `std`, and `K` (U+212A)
-/// against `k` also differs in encoded length; a fixed name has no spelling to split.
+/// The lock path is one fixed name per directory, never derived from the
+/// save's basename, whose aliases (`K` U+212A against `k`) `std` cannot enumerate.
 #[test]
 fn the_lock_path_is_one_fixed_name_per_directory() {
     let dir = TempDir::new("lock-path-fixed");
@@ -996,13 +986,8 @@ fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
     );
 }
 
-/// A save configured at the lock path itself must be refused, not locked.
-///
-/// Locking it would hand out a guard on that save's own data file, and its
-/// next write renames a fresh inode over that file: every later locker
-/// would open the replacement and exclude nobody, which is exactly the
-/// replaced-inode hazard the lock is sited on a sibling to avoid. Refusing
-/// fails closed instead.
+/// A save configured at the lock path is refused, since its next write would
+/// rename a fresh inode over the file every locker holds.
 #[test]
 fn a_save_configured_at_the_lock_path_is_refused_rather_than_locked() {
     let dir = TempDir::new("save-at-the-lock-path");
@@ -1017,14 +1002,8 @@ fn a_save_configured_at_the_lock_path_is_refused_rather_than_locked() {
     }
 }
 
-/// The refusal must recognise the lock file by the entry it is, not by the
-/// name it is spelled with.
-///
-/// A case-folding or normalising volume resolves byte-different names to
-/// one entry, and `std` cannot enumerate those aliases, so comparing
-/// basenames bytewise would let an aliased spelling through. A symlink
-/// stands in for that aliasing here because it is the one alias a
-/// case-sensitive test host also supports.
+/// The refusal recognises the lock file by entry, not spelling; a symlink
+/// stands in for a case-folding alias on a case-sensitive host.
 #[cfg(unix)]
 #[test]
 fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
@@ -1048,15 +1027,8 @@ fn a_save_that_only_resolves_to_the_lock_path_is_refused_too() {
     }
 }
 
-/// Windows has no stable by-handle identity, so a hard link to the lock
-/// file canonicalises to itself and no path comparison can recognise it.
-/// The lock handle therefore denies `FILE_SHARE_DELETE`, which closes the
-/// hazard rather than detecting it: while the guard is held, nothing can
-/// rename over that entry or unlink it, so an aliasing save's publishing
-/// rename fails loudly instead of quietly replacing the locked inode.
-///
-/// That denial must not cost the contention path it protects: a second
-/// locker must still open the very same file and block on it.
+/// A held lock denies `FILE_SHARE_DELETE`, so no rename can replace the
+/// entry, while a second locker still opens the same file and blocks.
 #[cfg(windows)]
 #[test]
 fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
@@ -1089,13 +1061,8 @@ fn a_held_lock_refuses_replacement_while_still_admitting_a_second_locker() {
     drop(guard);
 }
 
-/// A symlink planted in the fixed lock slot must be refused.
-///
-/// Opening follows it, so every locker lands on whatever it points at at
-/// that moment. Let the target be replaced by its own directory's save --
-/// an ordinary rename there -- and a locker from before the rename holds
-/// the old inode while one from after holds the new, so two processes run
-/// the read-modify-write cycle this lock exists to serialise.
+/// A symlink in the lock slot is refused: lockers would land on whatever it
+/// points at, which a rename there splits across two inodes.
 #[cfg(unix)]
 #[test]
 fn a_symlinked_lock_slot_is_refused() {
@@ -1116,14 +1083,8 @@ fn a_symlinked_lock_slot_is_refused() {
     }
 }
 
-/// A dangling symlink in the lock slot must be refused before anything
-/// opens it.
-///
-/// The open carries `create`, so following one would create its target
-/// outside the save directory -- a side effect no later check can undo,
-/// which is why the refusal has to come first. The same ordering is what
-/// keeps a slot pointing at a FIFO from parking the open until some reader
-/// turns up.
+/// A dangling symlink in the lock slot is refused before the open, whose
+/// `create` would otherwise make its target outside the save directory.
 #[cfg(unix)]
 #[test]
 fn a_dangling_symlinked_lock_slot_is_refused_without_creating_its_target() {
@@ -1167,15 +1128,8 @@ fn a_lock_slot_that_is_not_a_plain_file_is_refused() {
     }
 }
 
-/// One lock file serves every save in a directory, so it is created under
-/// whichever umask its first saver had. A later saver who cannot write
-/// that file must still be able to lock it -- otherwise a second user in a
-/// shared directory, or the same user after a run under different
-/// privileges, is shut out of a perfectly valid save for good.
-///
-/// A privileged runner bypasses the mode outright, so it is CI's
-/// unprivileged runners that actually drive the fallback here; the
-/// property asserted holds either way.
+/// A lock file this user cannot write is still lockable, through the
+/// read-only open; only CI's unprivileged runners reach that path.
 #[cfg(unix)]
 #[test]
 fn a_lock_file_this_user_cannot_write_is_still_lockable() {
@@ -1202,13 +1156,8 @@ fn a_lock_file_this_user_cannot_write_is_still_lockable() {
     drop(guard);
 }
 
-/// A hard link in the lock slot must still be accepted.
-///
-/// Unlike a symlink it is a name of its own: renaming any of the inode's
-/// other names leaves this slot naming the inode this guard holds, so a
-/// later locker still lands on it and is still excluded. Hard-linking
-/// backup tools snapshot directories this way, and refusing them would
-/// cost availability for a hazard that is not there.
+/// A hard link in the lock slot is accepted: it is a name of the inode the
+/// guard holds, so later lockers still land on it.
 #[cfg(unix)]
 #[test]
 fn a_hard_linked_lock_slot_is_still_accepted() {
@@ -1239,18 +1188,8 @@ fn an_ordinary_pre_existing_lock_file_is_still_accepted() {
     drop(guard);
 }
 
-/// The refusal must compare filesystem identity, not canonical path text.
-///
-/// `canonicalize` is not a canonical *entry*: on a case-folding Linux
-/// directory it is `realpath`, which keeps the caller's own spelling, so a
-/// save configured as `.EMERALD.LOCK` names the same entry as
-/// `.emerald.lock` yet canonicalises to a different string -- and a
-/// text comparison would admit it, after which its write renames a fresh
-/// inode over the file every locker holds.
-///
-/// A hard link reproduces exactly that shape -- one inode, two canonical
-/// paths -- on any Unix host, so the property is pinned without needing a
-/// case-folding volume to test on.
+/// The refusal compares inode identity, not canonical text; a hard link
+/// gives one inode two canonical paths on any Unix host.
 #[cfg(unix)]
 #[test]
 fn a_save_sharing_the_lock_files_inode_is_refused_despite_a_different_canonical_path() {
@@ -1506,13 +1445,8 @@ fn directory_of_length(root: &Path, total_len: usize) -> PathBuf {
     path
 }
 
-/// A directory leaving no room for the fixed lock name must fail closed.
-///
-/// The name is 13 bytes where the save's own basename may be one, so a
-/// host-valid save path can sit inside `PATH_MAX` while its lock path does
-/// not. Locking some other entry instead would hand this save a second lock
-/// identity that every ordinary spelling of the directory ignores, so the
-/// refusal is the whole point: no guard, and nothing created.
+/// A directory with no room for the 13-byte lock name fails closed: no
+/// guard, nothing created, no second lock identity.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_directory_with_no_room_for_the_lock_name_is_refused_rather_than_locked() {
@@ -1550,14 +1484,8 @@ fn a_directory_with_no_room_for_the_lock_name_is_refused_rather_than_locked() {
     );
 }
 
-/// Two spellings of one save directory must contend for one lock.
-///
-/// A short symlinked spelling of a directory spelled near `PATH_MAX` reaches
-/// the same entries, so both spellings must land on the one `.emerald.lock`
-/// inode. Locking anything else when the name does not fit -- the directory's
-/// own inode, say -- gives the long spelling a second identity the short one
-/// never takes, and two processes then run `SaveSlot::store`'s
-/// read-modify-write cycle at once, one overwriting the other's progress.
+/// Two spellings of one save directory contend for the one `.emerald.lock`
+/// inode; the spelling the name does not fit beside fails closed.
 #[cfg(target_os = "linux")]
 #[test]
 fn two_spellings_of_one_save_directory_contend_for_one_lock() {
