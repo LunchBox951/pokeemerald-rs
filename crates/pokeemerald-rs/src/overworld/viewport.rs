@@ -242,11 +242,11 @@ fn metatile_layers(
 
 type MetatileQuad = [ScreenEntry; 4];
 
+/// `DrawMetatile`'s fixed BG3 screen entry for a `Normal` metatile
+/// (`pokeemerald/src/field_camera.c:287-292`).
+const NORMAL_BG3_ENTRY: ScreenEntry = ScreenEntry::from_raw(0x3014);
+
 /// Routes a metatile's two halves to bottom, middle, and top backgrounds.
-///
-/// `Normal` reproduces `DrawMetatile`'s fixed `0x3014` write to all four BG3
-/// cells (`pokeemerald/src/field_camera.c:287-292`) instead of leaving that
-/// layer transparent.
 fn route_layers(
     entries: [ScreenEntry; TILES_PER_METATILE],
     layer_type: MetatileLayerType,
@@ -257,7 +257,7 @@ fn route_layers(
     match layer_type {
         MetatileLayerType::Split => (bottom_half, [blank; 4], top_half),
         MetatileLayerType::Covered => (bottom_half, top_half, [blank; 4]),
-        MetatileLayerType::Normal => ([ScreenEntry::from_raw(0x3014); 4], bottom_half, top_half),
+        MetatileLayerType::Normal => ([NORMAL_BG3_ENTRY; 4], bottom_half, top_half),
     }
 }
 
