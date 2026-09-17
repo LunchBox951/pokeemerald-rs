@@ -465,9 +465,11 @@ fn storing_takes_the_inter_process_lock() {
         .lock()
         .expect("the scratch save must be lockable");
     let lock_released = Arc::new(AtomicBool::new(false));
+    let store_finished = Arc::new(AtomicBool::new(false));
 
     let contender = {
         let lock_released = Arc::clone(&lock_released);
+        let store_finished = Arc::clone(&store_finished);
         let mut slot = temp.slot();
         std::thread::spawn(move || {
             slot.store(
@@ -476,11 +478,17 @@ fn storing_takes_the_inter_process_lock() {
                 SaveLineage::Continued,
             )
             .unwrap();
+            store_finished.store(true, Ordering::SeqCst);
             lock_released.load(Ordering::SeqCst)
         })
     };
-    // This gives the contender a chance to block before the lock is released.
-    std::thread::yield_now();
+    // A store that skips the lock finishes in milliseconds; a store that takes
+    // it cannot finish at all while the guard is held, however long this waits.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        !store_finished.load(Ordering::SeqCst),
+        "SaveSlot::store completed while another locker still held SaveFile::lock"
+    );
     lock_released.store(true, Ordering::SeqCst);
     drop(guard);
 
