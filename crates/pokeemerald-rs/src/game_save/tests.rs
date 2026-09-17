@@ -465,13 +465,16 @@ fn storing_takes_the_inter_process_lock() {
         .lock()
         .expect("the scratch save must be lockable");
     let lock_released = Arc::new(AtomicBool::new(false));
+    let store_started = Arc::new(AtomicBool::new(false));
     let store_finished = Arc::new(AtomicBool::new(false));
 
     let contender = {
         let lock_released = Arc::clone(&lock_released);
+        let store_started = Arc::clone(&store_started);
         let store_finished = Arc::clone(&store_finished);
         let mut slot = temp.slot();
         std::thread::spawn(move || {
+            store_started.store(true, Ordering::SeqCst);
             slot.store(
                 &SaveBlock1::default(),
                 &SaveBlock2::default(),
@@ -482,8 +485,18 @@ fn storing_takes_the_inter_process_lock() {
             lock_released.load(Ordering::SeqCst)
         })
     };
-    // A store that skips the lock finishes in milliseconds; a store that takes
-    // it cannot finish at all while the guard is held, however long this waits.
+    // The timer starts only once the contender is running and calling `store`,
+    // so an unscheduled thread cannot pass this vacuously. A store that skips
+    // the lock then finishes in milliseconds; one that takes it cannot finish
+    // at all while the guard is held, however long this waits.
+    let scheduled = std::time::Instant::now();
+    while !store_started.load(Ordering::SeqCst) {
+        assert!(
+            scheduled.elapsed() < std::time::Duration::from_secs(10),
+            "the contender never started"
+        );
+        std::thread::yield_now();
+    }
     std::thread::sleep(std::time::Duration::from_millis(300));
     assert!(
         !store_finished.load(Ordering::SeqCst),
