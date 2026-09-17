@@ -737,15 +737,15 @@ impl SaveFile {
         }
     }
 
-    /// An 11-hex-digit name from this process's random hasher keys: within
-    /// the 14-byte minimum component limit, and not guessable by a peer.
+    /// A 10-hex-digit name from this process's random hasher keys: as long
+    /// as the lock name, so it fits wherever that fits, and not guessable.
     #[cfg(unix)]
     fn staging_name() -> String {
         use std::hash::{BuildHasher, Hasher};
         let draw = std::collections::hash_map::RandomState::new()
             .build_hasher()
             .finish();
-        format!(".lk{:011x}", draw & 0xFFF_FFFF_FFFF)
+        format!(".lk{:010x}", draw & 0xFF_FFFF_FFFF)
     }
 
     /// Unlinks the staging entry only while it is still the inode `file` holds.

@@ -1416,15 +1416,17 @@ fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
     }
 }
 
-/// The name staging draws is `.lk` plus eleven hex digits, never a pid name.
+/// The name staging draws is `.lk` plus ten hex digits, no longer than the
+/// lock name and never a pid name.
 #[cfg(unix)]
 #[test]
-fn the_drawn_lock_staging_name_is_eleven_hex_digits() {
+fn the_drawn_lock_staging_name_is_no_longer_than_the_lock_name() {
     let pid_name = format!(".lk{}", std::process::id());
     for _ in 0..64 {
         let name = SaveFile::staging_name();
         let digits = name.strip_prefix(".lk").expect("a .lk staging name");
-        assert_eq!(digits.len(), 11, "{name} is not eleven digits wide");
+        assert_eq!(digits.len(), 10, "{name} is not ten digits wide");
+        assert_eq!(name.len(), LOCK_FILE_NAME.len());
         assert!(
             digits.bytes().all(|b| b.is_ascii_hexdigit()),
             "{name} is not hexadecimal"
