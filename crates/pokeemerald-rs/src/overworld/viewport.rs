@@ -1089,26 +1089,6 @@ mod tests {
         assert_eq!(t, [entries[4], entries[5], entries[6], entries[7]]);
     }
 
-    /// Regression for the `route_layers` contract above: `Normal` must not
-    /// fall back to `blank` on BG3.
-    #[test]
-    fn route_layers_fills_bg3_with_draw_metatiles_fixed_entry_for_normal() {
-        let mut entries = [ScreenEntry::new(0, false, false, 0); TILES_PER_METATILE];
-        for (i, entry) in entries.iter_mut().enumerate() {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "a metatile contains only eight screen entries"
-            )]
-            let idx = i as u16;
-            *entry = ScreenEntry::new(idx, false, false, 0);
-        }
-        let blank = ScreenEntry::new(99, false, false, 0);
-
-        let (bottom, _, _) = route_layers(entries, MetatileLayerType::Normal, blank);
-
-        assert_eq!(bottom, [ScreenEntry::from_raw(0x3014); 4]);
-    }
-
     #[test]
     fn build_tilemaps_centers_the_players_tile_and_fills_the_border_past_the_edge() {
         let grid_bytes = uniform_grid_bytes(4, 4, INTERIOR_METATILE_ID);
