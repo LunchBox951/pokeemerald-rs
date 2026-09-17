@@ -641,6 +641,14 @@ impl SaveFile {
 
     /// Opens this directory's lock file, creating it when the slot is free.
     fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+        Self::open_lock_file_with(path, Self::create_lock_file)
+    }
+
+    /// As [`SaveFile::open_lock_file`], creating an absent slot through `create`.
+    fn open_lock_file_with(
+        path: &Path,
+        create: impl FnOnce(&Path) -> std::io::Result<Option<std::fs::File>>,
+    ) -> std::io::Result<std::fs::File> {
         // An existing slot is opened first, so staging happens only for a
         // first save and leftover staging names can never block a valid lock.
         match Self::open_existing_lock(path) {
@@ -649,7 +657,7 @@ impl SaveFile {
         }
         // Creation is exclusive and never follows a symlink, so a slot
         // swapped in after the vetting cannot make this create a file elsewhere.
-        match Self::create_lock_file(path)? {
+        match create(path)? {
             Some(file) => Ok(file),
             None => Self::open_existing_lock(path),
         }
@@ -698,6 +706,16 @@ impl SaveFile {
     /// in place and widened after.
     #[cfg(unix)]
     fn create_lock_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+        Self::create_lock_file_with(path, Self::staging_name)
+    }
+
+    /// As the `unix` [`SaveFile::create_lock_file`], drawing staging names
+    /// from `draw`.
+    #[cfg(unix)]
+    fn create_lock_file_with(
+        path: &Path,
+        mut draw: impl FnMut() -> String,
+    ) -> std::io::Result<Option<std::fs::File>> {
         use std::os::unix::fs::PermissionsExt;
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create_new(true);
@@ -705,7 +723,7 @@ impl SaveFile {
         // on purpose, and a taken name just means the next draw.
         let (staged, file) = 'stage: {
             for _ in 0..=u8::MAX {
-                let candidate = path.with_file_name(Self::staging_name());
+                let candidate = path.with_file_name(draw());
                 match options.open(&candidate) {
                     Ok(file) => break 'stage (candidate, file),
                     Err(exists) if exists.kind() == std::io::ErrorKind::AlreadyExists => {}

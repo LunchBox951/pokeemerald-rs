@@ -1359,34 +1359,64 @@ fn a_pre_existing_lock_file_keeps_its_mode() {
 #[test]
 fn a_file_already_bearing_the_lock_staging_name_survives_a_lock() {
     let dir = TempDir::new("lock-stage-collision");
-    let bystander = dir.path.join(format!(".lk{}", std::process::id()));
+    let taken = SaveFile::staging_name();
+    let bystander = dir.path.join(&taken);
     std::fs::write(&bystander, b"a save that happens to bear the staging name").unwrap();
-    let file = SaveFile::at(dir.path.join("a.sav"));
-    let guard = file.lock().expect("a guard");
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    let mut draws = vec![taken, SaveFile::staging_name()].into_iter();
+
+    let created = SaveFile::create_lock_file_with(&lock_path, || draws.next().unwrap())
+        .expect("a second draw finds a free staging name");
+
+    assert!(created.is_some(), "the slot was created");
     assert_eq!(
         std::fs::read(&bystander).unwrap(),
         b"a save that happens to bear the staging name"
     );
-    assert!(dir.path.join(LOCK_FILE_NAME).exists());
-    drop(guard);
+    assert!(lock_path.exists());
+    assert!(
+        draws.next().is_none(),
+        "the taken name was drawn and skipped"
+    );
+}
+
+/// A pool of taken staging names exhausts creation rather than unlinking one.
+#[cfg(unix)]
+#[test]
+fn creation_gives_up_when_every_drawn_staging_name_is_taken() {
+    let dir = TempDir::new("lock-stage-exhausted");
+    let taken = SaveFile::staging_name();
+    let leftover = dir.path.join(&taken);
+    std::fs::write(&leftover, b"leftover").unwrap();
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    let mut draws = 0usize;
+
+    let error = SaveFile::create_lock_file_with(&lock_path, || {
+        draws += 1;
+        taken.clone()
+    })
+    .expect_err("no free staging name");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(draws, usize::from(u8::MAX) + 1);
+    assert_eq!(std::fs::read(&leftover).unwrap(), b"leftover");
+    assert!(!lock_path.exists());
 }
 
 /// Leftover staging names never stand between a saver and an existing lock.
 #[cfg(unix)]
 #[test]
 fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
-    let dir = TempDir::new("lock-stage-exhausted");
-    let pid = std::process::id();
-    std::fs::write(dir.path.join(LOCK_FILE_NAME), b"").unwrap();
-    std::fs::write(dir.path.join(format!(".lk{pid}")), b"").unwrap();
-    for n in 1..=u8::MAX {
-        std::fs::write(dir.path.join(format!(".lk{pid}{n:02x}")), b"").unwrap();
-    }
-    let file = SaveFile::at(dir.path.join("a.sav"));
-    let guard = file
-        .lock()
-        .expect("the existing lock is opened without staging");
-    drop(guard);
+    let dir = TempDir::new("lock-stage-existing");
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    std::fs::write(&lock_path, b"").unwrap();
+
+    let opened = SaveFile::open_lock_file_with(&lock_path, |_| {
+        panic!("an existing slot is opened without staging")
+    })
+    .expect("the existing lock is opened without staging");
+
+    drop(opened);
 }
 
 /// Leftover staging names beside an absent slot are skipped, never unlinked.
@@ -1394,22 +1424,25 @@ fn an_existing_lock_is_opened_even_when_every_staging_name_is_taken() {
 #[test]
 fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
     let dir = TempDir::new("lock-staging-names-taken");
-    let pid = std::process::id();
-    let leftovers: Vec<PathBuf> = (0..16u8)
-        .map(|attempt| match attempt {
-            0 => dir.path.join(format!(".lk{pid}")),
-            n => dir.path.join(format!(".lk{pid}{n:02x}")),
-        })
-        .collect();
+    let leftovers: Vec<String> = (0..16).map(|_| SaveFile::staging_name()).collect();
     for leftover in &leftovers {
-        std::fs::write(leftover, b"leftover").unwrap();
+        std::fs::write(dir.path.join(leftover), b"leftover").unwrap();
     }
-    let file = SaveFile::at(dir.path.join(SAVE_FILE_NAME));
-    let guard = file.lock().expect("a first save finds a free staging name");
-    drop(guard);
+    let lock_path = dir.path.join(LOCK_FILE_NAME);
+    let mut draws = leftovers
+        .iter()
+        .cloned()
+        .chain(std::iter::once(SaveFile::staging_name()));
+
+    let file = SaveFile::open_lock_file_with(&lock_path, |path| {
+        SaveFile::create_lock_file_with(path, || draws.next().unwrap())
+    })
+    .expect("a first save finds a free staging name");
+
+    file.lock().expect("the created slot locks");
     for leftover in &leftovers {
         assert_eq!(
-            std::fs::read(leftover).unwrap(),
+            std::fs::read(dir.path.join(leftover)).unwrap(),
             b"leftover",
             "{leftover:?} was disturbed"
         );
