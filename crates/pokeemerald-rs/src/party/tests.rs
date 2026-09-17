@@ -2263,6 +2263,43 @@ fn a_from_scratch_record_carries_create_mons_nickname_and_language() {
     assert_eq!(create_mon_nickname(TREECKO), TREECKO_NICKNAME);
 }
 
+/// `SetBoxMonData(MON_DATA_SPECIES)` raises `hasSpecies` for a nonzero
+/// species (`pokeemerald/src/pokemon.c:4220-4227`); occupancy reads that bit, not growth.
+#[test]
+fn a_from_scratch_record_sets_the_header_has_species_bit() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    assert_ne!(mon.species().0, 0, "the fixture must hold a real species");
+
+    let built = to_save_pokemon(&dex, &mon);
+
+    assert!(
+        built.box_data.has_species(),
+        "a record carrying a nonzero growth species must raise the header's \
+         hasSpecies bit, or Emerald reads the slot as empty"
+    );
+}
+
+/// A merge over a record a pre-#1208 build saved with `hasSpecies` wrongly
+/// clear must repair the bit, not just carry it forward, matching how this
+/// branch already re-files growth species every save.
+#[test]
+fn merge_into_save_pokemon_heals_a_stale_clear_has_species_bit() {
+    let dex = Dex::new();
+    let mon = treecko_fixture();
+    let mut stale = to_save_pokemon(&dex, &mon);
+    stale.box_data.set_has_species(false);
+
+    let mut offset = hp_hidden_by_load(&dex, &stale, &mon);
+    let merged = merge_into_save_pokemon(&dex, &mon, &stale, &mut offset);
+
+    assert!(
+        merged.box_data.has_species(),
+        "a merge over a stale record must set hasSpecies, or the slot stays \
+         checksum-valid but empty to Emerald-compatible readers"
+    );
+}
+
 /// A ten-glyph species name (encoded length eleven, with the `EOS`
 /// terminator) fills the ten-byte nickname field exactly, matching
 /// `SetBoxMonData`'s fixed-width copy (`pokeemerald/src/pokemon.c:4185-4190`,

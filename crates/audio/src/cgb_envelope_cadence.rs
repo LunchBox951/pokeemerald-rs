@@ -35,20 +35,20 @@ fn extra_iteration_pre_decrements_a_freshly_armed_sustain_counter() {
         release: 0,
     };
     let mut env = CgbEnvelope::new(adsr, 10, 0, 0);
-    env.step_frame(true); // lands sustain_goal = 5, counter armed 7, pre-decremented to 6
+    env.step_frame(true, 10); // lands sustain_goal = 5, counter armed 7, pre-decremented to 6
     assert_eq!(env.volume(), 5);
 
-    env.set_goal(adsr, 20); // sustain_goal 5 -> 10, live goal change
-
+    // A live goal change (10 -> 20, sustain_goal 5 -> 10) only takes effect
+    // at the next real boundary, not immediately.
     for frame in 1..6 {
-        env.step_frame(false);
+        env.step_frame(false, 20);
         assert_eq!(
             env.volume(),
             5,
             "must not re-snap before the pre-decremented counter elapses (frame {frame})"
         );
     }
-    env.step_frame(false); // 6th further frame: the pre-decremented counter reaches 0
+    env.step_frame(false, 20); // 6th further frame: the pre-decremented counter reaches 0
     assert_eq!(
         env.volume(),
         10,
@@ -70,10 +70,10 @@ fn extra_iteration_can_fire_the_first_release_decrement_on_the_note_off_frame() 
         release: 1,
     };
     let mut env = CgbEnvelope::new(adsr, 4, 0, 0);
-    env.step_frame(false);
+    env.step_frame(false, 4);
     assert_eq!(env.volume(), 4);
     env.note_off();
-    env.step_frame(true); // note-off frame, doubled
+    env.step_frame(true, 4); // note-off frame, doubled
     assert_eq!(
         env.volume(),
         3,
@@ -95,11 +95,11 @@ fn extra_iteration_is_skipped_the_frame_release_enters_the_pseudo_echo_tail() {
         release: 0,
     };
     let mut env = CgbEnvelope::new(adsr, 8, 128, 2);
-    env.step_frame(false);
+    env.step_frame(false, 8);
     assert_eq!(env.volume(), 8);
     env.note_off();
-    env.step_frame(true); // doubled frame: must enter the tail, not also tick it
-                          // floor = (8*128+255)>>8 = 4
+    env.step_frame(true, 8); // doubled frame: must enter the tail, not also tick it
+                             // floor = (8*128+255)>>8 = 4
     assert_eq!(env.volume(), 4);
     assert!(
         env.is_active(),
@@ -107,9 +107,9 @@ fn extra_iteration_is_skipped_the_frame_release_enters_the_pseudo_echo_tail() {
     );
     // If the extra iteration had also ticked the tail here, it would
     // already be one frame short of its full 2-frame length.
-    env.step_frame(false);
+    env.step_frame(false, 8);
     assert!(env.is_active(), "tail must still hold after 1 of 2 ticks");
-    env.step_frame(false);
+    env.step_frame(false, 8);
     assert!(!env.is_active(), "2-frame tail exhausts on the 2nd tick");
 }
 
@@ -126,25 +126,25 @@ fn extra_iteration_is_skipped_while_already_in_the_pseudo_echo_tail() {
         release: 0,
     };
     let mut env = CgbEnvelope::new(adsr, 8, 128, 5);
-    env.step_frame(false);
+    env.step_frame(false, 8);
     env.note_off();
-    env.step_frame(false); // enters the tail, echo_length untouched (5)
+    env.step_frame(false, 8); // enters the tail, echo_length untouched (5)
     assert!(env.is_active());
 
     // Already in the tail: a doubled frame must consume exactly one tail
     // frame, not two.
-    env.step_frame(true);
+    env.step_frame(true, 8);
     assert!(
         env.is_active(),
         "one doubled frame must not exhaust a 5-frame tail after just 1 tick"
     );
     // 3 more undoubled ticks: post-decrement 3, 2, 1 -- still held.
     for _ in 0..3 {
-        env.step_frame(false);
+        env.step_frame(false, 8);
         assert!(env.is_active());
     }
     // 5th tail tick overall (post-decrement 0) retires.
-    env.step_frame(false);
+    env.step_frame(false, 8);
     assert!(!env.is_active());
 }
 
@@ -152,9 +152,9 @@ fn extra_iteration_is_skipped_while_already_in_the_pseudo_echo_tail() {
 fn extra_iteration_is_skipped_the_frame_the_voice_retires() {
     // A `release == 0` note-off with no echo floor retires outright via
     // `oscillator_off` (`m4a.c:1053`), a goto that -- like the pseudo-echo
-    // entry above -- bypasses the doubling check. `step()`'s `Phase::Retired`
-    // arm is already a no-op regardless of this gate (see `step_frame`'s
-    // body), so this test pins the resulting state -- an already-dead
+    // entry above -- bypasses the doubling check. `step_with_goal`'s
+    // `Phase::Retired` arm is already a no-op regardless of this gate (see
+    // `step_frame`'s body), so this test pins the resulting state -- an already-dead
     // envelope neither revives nor mis-steps -- rather than discriminating
     // the `Phase::Retired` check itself.
     let adsr = CgbAdsr {
@@ -164,9 +164,9 @@ fn extra_iteration_is_skipped_the_frame_the_voice_retires() {
         release: 0,
     };
     let mut env = CgbEnvelope::new(adsr, 4, 0, 0);
-    env.step_frame(false);
+    env.step_frame(false, 4);
     env.note_off();
-    env.step_frame(true); // doubled frame: release==0, no echo -> retires
+    env.step_frame(true, 4); // doubled frame: release==0, no echo -> retires
     assert!(!env.is_active());
     assert_eq!(env.volume(), 0);
 }
