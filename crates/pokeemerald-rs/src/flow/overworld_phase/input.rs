@@ -65,19 +65,17 @@ pub(super) fn advance_or_skip_for_preempt(
         // warp or interaction preempts movement on (module docs on
         // `advance_player_one_frame`) -- a no-op here since the caller only
         // reaches this arm when the player was already at rest, but called
-        // anyway so that contract stays unconditional. This path latches
-        // nothing of its own, so "at rest => no latched landing" has to hold
-        // on its own here rather than being restored by anything downstream:
-        // `step`'s own drain-frame `take_if` does run on a preempted frame
-        // (the player is at rest, so its `in_transit` guard passes), but the
-        // preempting warp or interaction claims the frame before either the
-        // door check or the wild-encounter roll can look at what it
-        // returned.
+        // anyway so that contract stays unconditional. Every preempt the
+        // caller can pass needs the player at rest at the *start* of that
+        // call (`step`'s own "Warp timing" section), and `step` consumes any
+        // ready landing there, before this function runs -- so a preempted
+        // frame arrives with nothing latched, and this path latching nothing
+        // of its own keeps it that way.
         debug_assert!(
             pending_landing.is_none(),
-            "at rest implies `pending_landing` is None: a landing latched here would be taken \
-             on a frame the preempting warp or interaction has already claimed, and so would \
-             never reach a door check or an encounter roll"
+            "a preempted frame implies `pending_landing` is None: every preempt needs the \
+             player at rest when the call began, and `step` takes a ready landing there, \
+             ahead of this function"
         );
         player.tick();
         return None;
