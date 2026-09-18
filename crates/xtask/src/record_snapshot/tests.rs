@@ -1078,7 +1078,8 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
 }
 
 /// A staging directory that allows only creation and search, as a `0444`
-/// umask leaves it, is still claimable wherever the hold needs no read.
+/// umask leaves it, is still claimable: by a search-only hold where the
+/// target has one, by identity alone elsewhere.
 #[cfg(unix)]
 #[test]
 fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed() {
@@ -1095,14 +1096,12 @@ fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed
     let claim = super::claim_staged_dir(&staged);
     std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    if !unreadable {
+    if unreadable {
+        claim
+            .as_ref()
+            .expect("a search-only staging directory is still claimable");
+    } else {
         eprintln!("skipped: running privileged, so a 0o333 directory is still readable");
-    }
-    if let Err(error) = &claim {
-        assert!(
-            !unreadable || !super::HOLD_NEEDS_NO_READ,
-            "holding a search-only staging directory must need no read permission: {error}"
-        );
     }
     drop(claim);
     drop(guard);

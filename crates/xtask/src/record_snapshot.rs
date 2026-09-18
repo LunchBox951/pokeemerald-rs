@@ -294,7 +294,7 @@ fn create_and_claim_staged_dir(
 struct StagedDirClaim {
     dev: u64,
     ino: u64,
-    _hold: std::fs::File,
+    _hold: Option<std::fs::File>,
 }
 
 /// As [`StagedDirClaim`] above. Windows has no by-handle identity to read
@@ -348,49 +348,29 @@ impl StagedDirClaim {
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let hold = open_directory_hold(path)?;
-    let meta = hold.metadata()?;
-    Ok(StagedDirClaim {
-        dev: meta.dev(),
-        ino: meta.ino(),
-        _hold: hold,
-    })
+    match open_directory_hold(path) {
+        Ok(hold) => {
+            let meta = hold.metadata()?;
+            Ok(StagedDirClaim {
+                dev: meta.dev(),
+                ino: meta.ino(),
+                _hold: Some(hold),
+            })
+        }
+        // A directory that allows creation and search but not reading refuses
+        // the only open this target has; its identity still names it, without
+        // the inode pin a held descriptor adds.
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let meta = std::fs::symlink_metadata(path)?;
+            Ok(StagedDirClaim {
+                dev: meta.dev(),
+                ino: meta.ino(),
+                _hold: None,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
-
-/// Whether [`open_directory_hold`] asks no read permission of the directory.
-#[cfg(test)]
-#[cfg(any(
-    all(
-        any(target_os = "linux", target_os = "android"),
-        any(
-            target_arch = "x86_64",
-            target_arch = "x86",
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "riscv64"
-        )
-    ),
-    target_vendor = "apple"
-))]
-const HOLD_NEEDS_NO_READ: bool = true;
-#[cfg(test)]
-#[cfg(all(
-    unix,
-    not(any(
-        all(
-            any(target_os = "linux", target_os = "android"),
-            any(
-                target_arch = "x86_64",
-                target_arch = "x86",
-                target_arch = "aarch64",
-                target_arch = "arm",
-                target_arch = "riscv64"
-            )
-        ),
-        target_vendor = "apple"
-    ))
-))]
-const HOLD_NEEDS_NO_READ: bool = false;
 
 /// Opens a directory for identity and holding alone: `O_PATH`, which asks no
 /// read permission of a directory that allows only creation and search, on
@@ -415,35 +395,19 @@ fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-/// As above on Apple targets through POSIX `O_SEARCH`, the `O_EXEC` bit of
-/// XNU's `bsd/sys/fcntl.h` since Ventura (xnu-8792); an earlier kernel
-/// ignores the bit and makes this an ordinary read open.
-#[cfg(target_vendor = "apple")]
-fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    const APPLE_O_EXEC: i32 = 0x4000_0000;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(APPLE_O_EXEC)
-        .open(path)
-}
-
-/// As above where `std` offers only a read open of a directory.
+/// As above where `std` offers only a read open of a directory; XNU refuses
+/// `O_EXEC` on one with `EISDIR`, so Apple targets take this arm too.
 #[cfg(all(
     unix,
-    not(any(
-        all(
-            any(target_os = "linux", target_os = "android"),
-            any(
-                target_arch = "x86_64",
-                target_arch = "x86",
-                target_arch = "aarch64",
-                target_arch = "arm",
-                target_arch = "riscv64"
-            )
-        ),
-        target_vendor = "apple"
+    not(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "x86",
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "riscv64"
+        )
     ))
 ))]
 fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
