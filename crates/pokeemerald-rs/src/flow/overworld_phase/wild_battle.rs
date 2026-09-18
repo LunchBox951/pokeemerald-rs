@@ -43,7 +43,8 @@ impl OverworldPhase {
     ///
     /// The turn itself, and writing the player's mon back when the battle
     /// ends, are [`wild_encounter::advance_wild_battle`]'s; this is only the
-    /// frame-ownership gate and the outcome log.
+    /// frame-ownership gate, the outcome log, and the return-to-field
+    /// animation reset (issue #865).
     pub(super) fn advance_wild_battle_frame(&mut self) -> bool {
         if self.wild_battle.is_none() {
             return false;
@@ -63,6 +64,13 @@ impl OverworldPhase {
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
+        }
+        // Every return to the field re-inits the tileset animation cadence
+        // upstream (`InitTilesetAnimations`, `src/overworld.c:523-530`,
+        // `src/tileset_anims.c:600-615`; issue #865) -- a loss's `white_out`
+        // warp above already zeroed `tick` by the time this runs.
+        if self.wild_battle.is_none() {
+            self.tick = 0;
         }
         true
     }

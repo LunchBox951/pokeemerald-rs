@@ -743,6 +743,65 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
     assert_eq!(composed.pixel(4, 150), Some(marker));
 }
 
+/// Selecting SAVE must not blank the screen for a frame (issue #955):
+/// upstream never removes the item window before `SaveConfirmSaveCallback`
+/// has a replacement message ready (`start_menu.c:978-993`).
+#[test]
+fn selecting_save_keeps_the_item_window_until_its_message_exists() {
+    use rendering::{Framebuffer, Rgb888};
+
+    let marker = Rgb888 {
+        r: 10,
+        g: 20,
+        b: 30,
+    };
+    let mut base = Framebuffer::new();
+    base.fill(marker);
+    let item_pixel = (
+        usize::try_from(MENU_TILEMAP_LEFT * 8 + 4).unwrap(),
+        usize::try_from(MENU_TILEMAP_TOP * 8 + 4).unwrap(),
+    );
+
+    let mut menu = synthetic_start_menu();
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    assert_eq!(menu.selected(), StartMenuItem::Save);
+
+    assert_eq!(
+        menu.tick(pressed(Buttons::A), &mut target),
+        StartMenuOutcome::Open
+    );
+    let dialog = menu.save.as_ref().expect("SAVE installs its dialog");
+    assert!(
+        dialog.message().is_none(),
+        "the install tick must not have run ShowInitialPrompt yet"
+    );
+    assert_ne!(
+        menu.compose_over(base.clone())
+            .pixel(item_pixel.0, item_pixel.1),
+        Some(marker),
+        "the frame that selects SAVE must still draw the item window, not a \
+         bare overworld frame"
+    );
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert!(
+        menu.save
+            .as_ref()
+            .expect("still saving")
+            .message()
+            .is_some(),
+        "the next tick must have run ShowInitialPrompt and built the message"
+    );
+    assert_eq!(
+        menu.compose_over(base).pixel(item_pixel.0, item_pixel.1),
+        Some(marker),
+        "once the confirm message exists the item window must be gone"
+    );
+}
+
 /// Pins the palette split every window here draws with (correctness issue
 /// caught in review): the content fill and `FONT_NORMAL` glyph colours must
 /// come from the message-box palette (bank 15,
