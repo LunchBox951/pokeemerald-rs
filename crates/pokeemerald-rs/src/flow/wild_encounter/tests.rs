@@ -928,8 +928,9 @@ fn a_fired_encounter_consumes_the_frames_field_input() {
     assert!(field_input_consumed(false, resolved), "so does a warp");
     assert!(field_input_consumed(true, resolved));
     assert!(
-        !field_input_consumed(false, Some(WarpTrigger::Unsupported)),
-        "a warp this port cannot resolve did nothing, and must not swallow the A press too"
+        field_input_consumed(false, Some(WarpTrigger::Unsupported)),
+        "an unresolvable warp still *fired* upstream -- TryStartWarpEventScript returned \
+         TRUE; only this port's destination lookup failed, so it owns this frame's A press too"
     );
 }
 
