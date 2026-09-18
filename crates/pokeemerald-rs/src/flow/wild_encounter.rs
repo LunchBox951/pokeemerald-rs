@@ -90,6 +90,12 @@ pub(super) const fn arrow_poll_open(in_transit: bool, field_event_fired: bool) -
 /// `TryStartWarpEventScript` call `SetupWarp` and return `TRUE` for any matching warp,
 /// resolvable or not, before `TryStartInteractionScript` runs
 /// (`field_control_avatar.c:688-749`, `:817-820`, `:172`).
+///
+/// No frame through `OverworldPhase::step` carries both a warp trigger and an
+/// interaction today: each warp source excludes the interaction lookup by
+/// construction (`overworld_phase/step.rs:655`, `:664`, `:800`), so the
+/// `Unsupported` arm is encoded and pinned on this helper rather than
+/// behaviourally, as the coord-event arm is.
 pub(super) const fn field_input_consumed(
     field_event_fired: bool,
     warp_trigger: Option<WarpTrigger>,
