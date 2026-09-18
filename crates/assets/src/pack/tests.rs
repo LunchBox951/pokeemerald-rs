@@ -498,13 +498,52 @@ fn unsupported_version_is_rejected() {
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(99));
-    // Same two audiences as the missing-pack diagnostic: a stale pack is
-    // rebuilt by whichever route built it in the first place.
+    // Same two audiences as the missing-pack diagnostic: an incompatible
+    // pack (99 postdates this build's FORMAT_VERSION) is rebuilt by
+    // whichever route built it in the first place.
     assert_eq!(
         err.to_string(),
-        "asset pack: unsupported format version `99`: the pack predates this build's \
-         format; players rebuild it with `pokeemerald-rs --import-rom <path to your \
-         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+        "asset pack: unsupported format version `99`: the pack uses a newer format than \
+         this build supports; players rebuild it with `pokeemerald-rs --import-rom <path \
+         to your Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn a_pack_newer_than_this_build_is_not_described_as_older() {
+    let newer = PackError::UnsupportedVersion(FORMAT_VERSION + 1).to_string();
+    assert!(
+        newer.contains(&(FORMAT_VERSION + 1).to_string()),
+        "the diagnostic must name the version found: {newer}"
+    );
+    assert!(
+        !newer.contains("predates"),
+        "a pack newer than this build must not be reported as older: {newer}"
+    );
+    assert_ne!(
+        newer,
+        PackError::UnsupportedVersion(FORMAT_VERSION - 1).to_string(),
+        "an older and a newer pack stand in opposite relations to this build"
+    );
+}
+
+#[test]
+fn a_pack_older_than_this_build_is_described_as_predating_it() {
+    let path = write_synthetic_pack("older-version");
+    let mut bytes = synthetic_pack();
+    let older = FORMAT_VERSION - 1;
+    bytes[8..12].copy_from_slice(&older.to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    let err = AssetPack::load(&path).unwrap_err();
+    assert_eq!(err, PackError::UnsupportedVersion(older));
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "asset pack: unsupported format version `{older}`: the pack predates this \
+             build's format; players rebuild it with `pokeemerald-rs --import-rom <path \
+             to your Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+        )
     );
     let _ = std::fs::remove_file(path);
 }

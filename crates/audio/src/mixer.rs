@@ -273,6 +273,22 @@ impl Mixer {
         }
     }
 
+    /// Stop every voice on `track` outright, matching `TrackStop`
+    /// (`m4a_1.s:1469`-`:1506`) rather than [`Self::release_track`]'s
+    /// graceful note-off.
+    pub fn stop_track(&mut self, track: usize) {
+        for voice in self.direct_sound_slots.iter_mut().flatten() {
+            if voice.track() == Some(track) {
+                voice.stop();
+            }
+        }
+        for voice in self.cgb_slots.iter_mut().flatten() {
+            if voice.track() == track {
+                voice.stop();
+            }
+        }
+    }
+
     /// Apply updated track volume and panning to every live voice on `track`.
     pub fn set_track_volume(&mut self, track: usize, vol_mr: u8, vol_ml: u8) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
