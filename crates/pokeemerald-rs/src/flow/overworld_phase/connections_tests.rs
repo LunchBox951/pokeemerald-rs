@@ -231,7 +231,8 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 ///
 /// **`(10, 19)` is also the Route 101 rescue coord-event trigger tile (issue
 /// #231).** That is deliberate and left alone: this phase is built with no
-/// `party_lead`, so the trigger fires on the crossing's drain frame and
+/// `party_lead`, so the trigger fires on the call after the crossing's
+/// drain frame and
 /// `super::first_battle_trigger`'s own `begin_first_battle` takes its
 /// documented "no party mon yet" arm -- it consumes the trigger
 /// (`VAR_ROUTE101_STATE` goes to `2`, upstream's mid-cutscene ordering) and
