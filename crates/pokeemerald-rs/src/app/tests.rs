@@ -426,6 +426,93 @@ fn leaving_the_title_scene_fades_the_attached_music_player_out_before_stopping_i
     );
 }
 
+/// [`looping_song_for_test`]'s sustained counterpart: one tied note on a
+/// looping wave, so the song is still sounding when the fade's terminal step
+/// lands and the master-mix reverb ring is full of its frames. Its flat
+/// envelope releases instantly, so that ring is the only thing left to sound
+/// once the terminal step stops the track.
+fn sustained_reverbed_song_for_test(reverb_level: u8) -> audio::Song {
+    use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
+    use std::sync::Arc;
+
+    let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; 64]));
+    let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+    let events = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(200),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![events], 150).with_reverb(reverb_level)
+}
+
+/// The fade's terminal step stops every track, but the master-mix reverb
+/// ring still holds the `DirectSound` frames it delayed, and upstream's mixer
+/// keeps running through the paused player (`SoundMain` and
+/// `SoundMainRAM_Reverb`, `m4a_1.s:20`-`:119`). So [`App::advance_music`]
+/// must keep rendering frames past [`crate::music::MusicPlayer::fade_finished`]
+/// until that tail has rung down, instead of polling `drained` the instant
+/// the fade reports finished and cutting the wet tail short (issue #1281).
+///
+/// Drains the whole ring each step, so what the consumer hears on a step is
+/// what that step rendered rather than prefill queued nine frames earlier.
+#[test]
+fn a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step() {
+    /// `m4aMPlayFadeOut`'s 16 volume steps at `TITLE_FADE_OUT_SPEED` frames
+    /// each: the terminal step lands on this frame.
+    const FADE_FRAMES: usize = 64;
+    /// Generous bound on the frames the reverb ring needs to ring down, so a
+    /// regression that renders forever fails here instead of hanging.
+    const TAIL_BUDGET: usize = 200;
+    /// `mus_title`'s own level (`crate::music`'s reverb tests use the same).
+    const REVERB_LEVEL: u8 = 50;
+
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
+    let music =
+        crate::music::MusicPlayer::start(sustained_reverbed_song_for_test(REVERB_LEVEL), output)
+            .expect("null backend never errors");
+    app.attach_music_for_test(music);
+
+    let mut drained = vec![
+        0.0_f32;
+        crate::music::RING_CAPACITY_FRAMES
+            * usize::from(platform::AudioOutput::CHANNELS)
+    ];
+    for _ in 0..FADE_FRAMES {
+        app.step().expect("headless step never errors");
+        app.drain_music_for_test(&mut drained);
+    }
+    assert!(
+        app.has_music_for_test(),
+        "sanity: the terminal step lands on frame {FADE_FRAMES}, with the player still attached"
+    );
+
+    let mut audible_after_terminal = false;
+    for _ in 0..TAIL_BUDGET {
+        app.step().expect("headless step never errors");
+        app.drain_music_for_test(&mut drained);
+        audible_after_terminal |= drained.iter().any(|&sample| sample != 0.0);
+        if !app.has_music_for_test() {
+            break;
+        }
+    }
+
+    assert!(
+        audible_after_terminal,
+        "advance_music must keep rendering the reverb tail the ring still holds after the \
+         terminal fade step, not stop the moment the fade reports finished"
+    );
+    assert!(
+        !app.has_music_for_test(),
+        "the tail must ring down and the player be dropped within {TAIL_BUDGET} further steps"
+    );
+}
+
 /// The ring must be fully drained, not merely silent by the fade math,
 /// before [`App::advance_music`] drops the player, or the still-buffered
 /// tail is truncated.
