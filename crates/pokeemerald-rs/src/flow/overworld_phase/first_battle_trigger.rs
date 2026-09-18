@@ -410,6 +410,9 @@ impl OverworldPhase {
     /// Whether the completed landing at `(x, y)` fires the Route 101
     /// first-battle trigger. [`OverworldPhase::step`]'s single call into
     /// this module's trigger check.
+    ///
+    /// Same retained-elevation contract as `step.rs`'s
+    /// `resolve_pre_movement_field_input` (issue #1194).
     pub(super) fn first_battle_trigger_ready(
         &self,
         runtime: &MapRuntime<'_>,
@@ -418,7 +421,7 @@ impl OverworldPhase {
         let Some((x, y)) = landed else {
             return false;
         };
-        self.first_battle_trigger_at(runtime, x, y, self.player.elevation())
+        self.first_battle_trigger_at(runtime, x, y, self.player.previous_elevation())
     }
 
     /// Start the scripted first battle in [`OverworldPhase::first_battle`]
