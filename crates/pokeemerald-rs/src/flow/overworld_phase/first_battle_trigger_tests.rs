@@ -599,15 +599,21 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// consume the trigger just the same.
 ///
 /// `crate::flow::first_battle::advance_first_battle`'s own doc comment spells
-/// the abort contract out — a turn the engine cannot play (here: a lead whose
-/// slot 0 has no PP left, `battle::BattleError::NoPpRemaining(0)` out of
-/// `Battle::take_turn`'s pre-draw validation) empties the slot, writes the
-/// lead back, and returns **`None`**, never an outcome. An earlier revision
-/// of this slice advanced `VAR_ROUTE101_STATE` only on `Some(outcome)`, which
-/// left the var at `1` on exactly this path and the coord-event tile live, so
-/// the next step onto it started the whole thing over. The var now moves at
+/// the abort contract out — a turn the engine truly cannot play (here: every
+/// slot has no PP left, so `Battle::take_turn`'s pre-draw validation rejects
+/// each in turn -- see issue #1191) empties the slot, writes the lead back,
+/// and returns **`None`**, never an outcome. An earlier revision of this
+/// slice advanced `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left
+/// the var at `1` on exactly this path and the coord-event tile live, so the
+/// next step onto it started the whole thing over. The var now moves at
 /// trigger time, upstream's own ordering (`scripts.inc:40`, mid-cutscene) —
 /// see `super::first_battle_trigger`'s "When the var advances" section.
+///
+/// Setup drains *every* slot rather than just slot 0: since #1191, the
+/// headless driver falls back to the next usable move, so a starter with
+/// slot 0 spent and slot 1 (Leer) still usable now finishes the battle
+/// instead of aborting it. Draining the whole moveset keeps this test's real
+/// subject -- an abort still consumes the trigger -- reachable.
 #[test]
 fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -620,15 +626,22 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     // Prove beginning this attempt clears stale terminal state rather than
     // letting its later abort masquerade as a completed battle.
     phase.first_battle_outcome = Some(BattleOutcome::PlayerWon);
-    // Drain slot 0 through the same accessor the turn engine spends PP with,
-    // rather than reaching into the struct -- `crate::flow::first_battle`'s
+    // Drain every slot through the same accessor the turn engine spends PP
+    // with, rather than reaching into the struct -- `crate::flow::first_battle`'s
     // own abort test does it this way too.
     let mut lead = new_game::provisional_starter();
-    let starting_pp = lead.moves()[0].pp;
-    assert!(starting_pp > 0, "a freshly built starter starts with PP");
-    for _ in 0..starting_pp {
-        lead.deduct_pp(0)
-            .expect("draining a slot that still has PP");
+    let move_count = lead.moves().len();
+    assert!(
+        move_count > 1,
+        "setup: the starter must know more than one move for this to be a real all-spent case"
+    );
+    for slot in 0..move_count {
+        let starting_pp = lead.moves()[slot].pp;
+        assert!(starting_pp > 0, "a freshly built starter starts with PP");
+        for _ in 0..starting_pp {
+            lead.deduct_pp(slot)
+                .expect("draining a slot that still has PP");
+        }
     }
     phase.party_lead = Some(lead);
 
