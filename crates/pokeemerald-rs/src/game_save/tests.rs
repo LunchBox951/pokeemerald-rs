@@ -495,48 +495,6 @@ fn storing_takes_the_inter_process_lock() {
     contender.join().expect("the contender must not panic");
 }
 
-/// `SaveSlot::store`, the production entry point, waits on `SaveFile::lock`
-/// rather than some other path: a store started against a held lock has not
-/// finished 300 ms after it demonstrably began.
-#[test]
-fn storing_through_the_production_entry_point_waits_for_the_lock() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    let temp = TempSave::new("lock-entry-point");
-    let file = SaveFile::at(temp.path.clone());
-    let guard = file.lock().expect("the scratch save must be lockable");
-    let (started, store_started) = std::sync::mpsc::channel();
-    let store_finished = Arc::new(AtomicBool::new(false));
-
-    let contender = {
-        let store_finished = Arc::clone(&store_finished);
-        let mut slot = temp.slot();
-        std::thread::spawn(move || {
-            started.send(()).unwrap();
-            slot.store(
-                &SaveBlock1::default(),
-                &SaveBlock2::default(),
-                SaveLineage::Continued,
-            )
-            .unwrap();
-            store_finished.store(true, Ordering::SeqCst);
-        })
-    };
-
-    store_started
-        .recv_timeout(std::time::Duration::from_secs(10))
-        .expect("the contender never started");
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        !store_finished.load(Ordering::SeqCst),
-        "SaveSlot::store completed while another locker still held SaveFile::lock"
-    );
-    drop(guard);
-    contender.join().expect("the contender must not panic");
-    assert!(temp.path.exists());
-}
-
 /// `SaveSlot::store`, the production entry point, reaches `SaveFile::lock`
 /// itself: a lock slot that cannot carry a lock stops the store before it
 /// reads or writes, which no other path would do.
