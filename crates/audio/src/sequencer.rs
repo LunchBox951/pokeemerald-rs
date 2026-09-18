@@ -263,6 +263,10 @@ pub struct Sequencer {
     tempo_c: u16,
     /// `MEMACC`'s accumulator area (see [`MemAccArea`]).
     mem_acc: MemAccArea,
+    /// Set by the fade's terminal step, matching `MUSICPLAYER_STATUS_PAUSE`
+    /// (`m4a.c:740`): the tracks are stopped and no longer tick, while the
+    /// mixer keeps running (`m4a_1.s:20`-`:119`).
+    paused: bool,
 }
 
 impl Sequencer {
@@ -314,6 +318,7 @@ impl Sequencer {
             tempo_i,
             tempo_c: 0,
             mem_acc: MemAccArea::default(),
+            paused: false,
         }
     }
 
@@ -327,9 +332,23 @@ impl Sequencer {
     /// the master-mix reverb tail has drained.
     #[must_use]
     pub fn is_finished(&self) -> bool {
-        self.tracks.iter().all(|t| t.ended)
-            && self.mixer.is_idle()
-            && !self.mixer.has_pending_reverb()
+        self.tracks.iter().all(|t| t.ended) && !self.is_sounding()
+    }
+
+    /// Whether mixing another frame still produces sound with no track
+    /// ticking: a voice an ended track left in release, or delayed samples
+    /// the master-mix reverb ring still holds.
+    #[must_use]
+    pub fn is_sounding(&self) -> bool {
+        !self.mixer.is_idle() || self.mixer.has_pending_reverb()
+    }
+
+    /// Whether a fade's terminal step has paused this sequencer
+    /// (`MUSICPLAYER_STATUS_PAUSE`, `m4a.c:740`). A paused sequencer stops
+    /// ticking for good; only its mixer keeps running.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.paused
     }
 
     /// Advance the sequencer by one V-blank frame and render its audio into
@@ -363,19 +382,25 @@ impl Sequencer {
     }
 
     /// Like [`Self::render_frame`], but applies an active fade's `volX` to
-    /// every surviving track's volume after this frame's tick, matching
-    /// `FadeOutBody`'s immediate write (`m4a.c:750`-`:757`) ahead of
-    /// `TrkVolPitSet`'s own deferred, post-tick propagation
-    /// (`m4a_1.s:1361`-`:1400`). The terminal step (`volX == 0`) instead
-    /// stops every track outright and skips the tick, matching
-    /// `FadeOutBody`'s own early return once paused (`m4a.c:713`-`:744`).
+    /// every surviving track's volume after this frame's tick: `FadeOutBody`
+    /// writes `volX` and only raises `MPT_FLG_VOLCHG` (`m4a.c:750`-`:757`),
+    /// leaving every volume recomputation to the single post-tick
+    /// `TrkVolPitSet` (`m4a_1.s:1361`-`:1400`), which `ply_fine`'s flag
+    /// clear (`m4a_1.s:750`-`:777`) skips for a track that ended this tick.
+    /// The step is therefore staged rather than written into the track up
+    /// front, so a mid-tick volume command such as `PAN` -- which upstream
+    /// answers with the same deferred flag -- cannot read it early.
+    ///
+    /// The terminal step (`volX == 0`) instead pauses the sequencer: every
+    /// track stops and no tick runs again, while the mixer keeps rendering
+    /// the tail.
     pub fn render_frame_with_fade(&mut self, out: &mut [f32], fade_vol_x: Option<u8>) {
         match fade_vol_x {
-            Some(0) => self.stop_all_tracks(),
+            Some(0) => self.pause(),
             Some(vol_x) => {
-                let changed_tracks = self.mark_fade_volume_x(vol_x);
+                let staged_tracks = self.tracks_staging_fade_volume(vol_x);
                 self.advance_frame();
-                self.propagate_fade_volume(&changed_tracks);
+                self.commit_fade_volume(vol_x, &staged_tracks);
             }
             None => self.advance_frame(),
         }
@@ -383,8 +408,17 @@ impl Sequencer {
     }
 
     /// Stops every not-yet-ended track's voices outright, matching
-    /// `TrackStop` (`m4a_1.s:1469`-`:1506`).
-    fn stop_all_tracks(&mut self) {
+    /// `TrackStop` (`m4a_1.s:1469`-`:1506`), and latches
+    /// `MUSICPLAYER_STATUS_PAUSE` (`m4a.c:720`-`:740`). Runs its body once:
+    /// `FadeOutBody` returns before touching the tracks again while the
+    /// player is paused (`m4a.c:713`-`:716`), yet `SoundMain` and its
+    /// `SoundMainRAM_Reverb` keep mixing every frame regardless
+    /// (`m4a_1.s:20`-`:119`).
+    fn pause(&mut self) {
+        if self.paused {
+            return;
+        }
+        self.paused = true;
         let Self { tracks, mixer, .. } = self;
         for (track_id, track) in tracks.iter().enumerate() {
             if !track.ended {
@@ -393,30 +427,32 @@ impl Sequencer {
         }
     }
 
-    /// Writes `vol_x` into every changed, not-yet-ended track; returns which changed.
-    fn mark_fade_volume_x(&mut self, vol_x: u8) -> Vec<usize> {
-        let mut changed = Vec::new();
-        for (track_id, track) in self.tracks.iter_mut().enumerate() {
-            if !track.ended && track.vol_x != vol_x {
-                track.vol_x = vol_x;
-                changed.push(track_id);
-            }
-        }
-        changed
+    /// Which not-yet-ended tracks this step's `vol_x` changes. Reads only:
+    /// the value lands on the track in [`Self::commit_fade_volume`], after
+    /// the tick.
+    fn tracks_staging_fade_volume(&self, vol_x: u8) -> Vec<usize> {
+        self.tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, track)| !track.ended && track.vol_x != vol_x)
+            .map(|(track_id, _)| track_id)
+            .collect()
     }
 
-    /// Refreshes derived channel volumes for `changed_tracks`, skipping any
-    /// that ended during the tick just run (`ply_fine`'s flag clear,
-    /// `m4a_1.s:750`-`:777`).
-    fn propagate_fade_volume(&mut self, changed_tracks: &[usize]) {
+    /// Writes the staged `vol_x` into each of `staged_tracks` and refreshes
+    /// its derived channel volumes, skipping any that ended during the tick
+    /// just run (`ply_fine`'s flag clear, `m4a_1.s:750`-`:777`).
+    fn commit_fade_volume(&mut self, vol_x: u8, staged_tracks: &[usize]) {
         let Self { tracks, mixer, .. } = self;
-        for &track_id in changed_tracks {
-            let Some(track) = tracks.get(track_id) else {
+        for &track_id in staged_tracks {
+            let Some(track) = tracks.get_mut(track_id) else {
                 continue;
             };
-            if !track.ended {
-                Self::apply_track_volume(track, mixer, track_id);
+            if track.ended {
+                continue;
             }
+            track.vol_x = vol_x;
+            Self::apply_track_volume(track, mixer, track_id);
         }
     }
 
@@ -431,6 +467,13 @@ impl Sequencer {
     /// runtime assignment in [`Self::handle_event`]) clamps to
     /// [`MAX_TEMPO_BPM`] (510) — `149 + 510` stays far under `u16::MAX`.
     fn advance_frame(&mut self) {
+        if self.paused {
+            // A paused player's sequence never resumes: its tracks were
+            // stopped and their flags cleared (`m4a.c:720`-`:740`), so
+            // `MPlayMain` has nothing left to advance whatever the caller
+            // asks for. Only `SoundMain` keeps running (`m4a_1.s:20`-`:119`).
+            return;
+        }
         debug_assert!(self.tempo_c < TEMPO_UNIT);
         debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
         self.tempo_c += self.tempo_i;
@@ -2218,15 +2261,55 @@ mod tests {
     /// can still be inspected there, unlike `Adsr::flat()`'s `release: 0`,
     /// which retires (and drops) the voice within that very frame.
     fn slow_release_song(track: Vec<Event>) -> Song {
+        slow_release_song_tracks(vec![track])
+    }
+
+    /// [`slow_release_song`] with one track per entry, so a track that ended
+    /// early can be observed beside one still playing. The wave loops, so a
+    /// released voice keeps producing samples while it decays.
+    fn slow_release_song_tracks(tracks: Vec<Vec<Event>>) -> Song {
         let adsr = Adsr {
             attack: 255,
             decay: 255,
             sustain: 255,
             release: 250,
         };
-        let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
+        let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, adsr))];
-        Song::new(voices, vec![track], 150)
+        Song::new(voices, tracks, 150)
+    }
+
+    /// `ply_fine` releases a track's voices rather than retiring them, and
+    /// `SoundMain` keeps mixing every frame regardless of
+    /// `MUSICPLAYER_STATUS_PAUSE` (`m4a_1.s:20`-`:119`), so a voice still in
+    /// release when the terminal step stops the surviving tracks rings out
+    /// instead of being cut short with them. This song carries no reverb, so
+    /// the voice is the only thing that can still sound.
+    #[test]
+    fn a_paused_sequencer_still_sounds_a_voice_an_ended_track_left_in_release() {
+        let ending = vec![Event::Voice(0), tied_note(60), Event::Wait(1), Event::Fine];
+        let surviving = vec![Event::Voice(0), tied_note(72), Event::Wait(200)];
+        let mut seq = Sequencer::new(slow_release_song_tracks(vec![ending, surviving]));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame_with_fade(&mut out, None);
+        seq.render_frame_with_fade(&mut out, None);
+        assert!(
+            seq.tracks[0].ended && !seq.tracks[1].ended,
+            "sanity: the first track must end via Fine while the second plays on"
+        );
+
+        seq.render_frame_with_fade(&mut out, Some(0));
+        assert!(
+            seq.is_sounding(),
+            "the terminal step stops the surviving track, not the voice the ended one released"
+        );
+
+        seq.render_frame_with_fade(&mut out, Some(0));
+        assert!(
+            out.iter().any(|&sample| sample != 0.0),
+            "the paused mixer must keep rendering that released voice"
+        );
     }
 
     /// Upstream marks every existing track's `volX` before that frame's
@@ -2256,6 +2339,43 @@ mod tests {
             seq.mixer.voices()[0].base_volume(),
             before,
             "a track ending via Fine this tick must not receive that tick's fade step"
+        );
+    }
+
+    /// Upstream's `ply_pan` only raises `MPT_FLG_VOLCHG`; every volume
+    /// recomputation is deferred to the single post-tick `TrkVolPitSet`
+    /// (`m4a_1.s:1361`-`:1400`), which `ply_fine`'s flag clear
+    /// (`m4a_1.s:750`-`:777`) skips for a track that ended this tick. So an
+    /// intervening volume-affecting command must not leak this tick's fade
+    /// step into the released voice either. `Pan(0)` here leaves `pan` at its
+    /// default 0, so `vol_x` is the only volume input that changed.
+    #[test]
+    fn an_intervening_pan_must_not_leak_this_ticks_fade_step_into_a_fine_ending_track() {
+        let track = vec![
+            Event::Voice(0),
+            tied_note(60),
+            Event::Wait(1),
+            Event::Pan(0),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(slow_release_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        // Frame 1 starts the note at full (unfaded) volume.
+        seq.render_frame_with_fade(&mut out, None);
+        let before = seq.mixer.voices()[0].base_volume();
+
+        // Frame 2 reaches `Pan`, then `Fine`, plus a fade step in one tick.
+        seq.render_frame_with_fade(&mut out, Some(32));
+        assert!(
+            seq.tracks[0].ended,
+            "sanity: Fine must end the track this frame"
+        );
+        assert_eq!(
+            seq.mixer.voices()[0].base_volume(),
+            before,
+            "an intervening volume command must not propagate this tick's fade step to a track \
+             ending via Fine"
         );
     }
 

@@ -290,9 +290,12 @@ impl MusicPlayer {
     /// Renders and queues one game frame of audio.
     ///
     /// Restarts a finished song with its resolved reverb instead of leaving
-    /// the stream silent. Looping BGM normally never reaches this path.
+    /// the stream silent. Looping BGM normally never reaches this path. A
+    /// song the terminal fade step paused is never restarted: upstream
+    /// leaves it stopped in `MUSICPLAYER_STATUS_PAUSE` (`m4a.c:740`) and
+    /// only keeps mixing, which is what the frames after that step render.
     pub fn advance_frame(&mut self) {
-        if self.sequencer.is_finished() {
+        if self.sequencer.is_finished() && !self.sequencer.is_paused() {
             self.sequencer = Sequencer::with_resolved_reverb(
                 self.song.clone(),
                 DEFAULT_MASTER_VOLUME,
@@ -320,9 +323,26 @@ impl MusicPlayer {
     }
 
     /// Returns whether the active fade has reached silence.
+    ///
+    /// The terminal step stops every track, so no voice sounds after it --
+    /// but the master-mix reverb ring still holds the frames it delayed, and
+    /// upstream's mixer keeps running through the pause (`SoundMain` and
+    /// `SoundMainRAM_Reverb`, `m4a_1.s:20`-`:119`). Callers that stop
+    /// rendering here must keep [`Self::advance_frame`] going while
+    /// [`Self::tail_sounding`].
     #[must_use]
     pub fn fade_finished(&self) -> bool {
         self.fade.is_some_and(|fade| fade.finished)
+    }
+
+    /// Whether another [`Self::advance_frame`] would still render sound
+    /// after the fade's terminal step: the master-mix reverb ring's delayed
+    /// samples ring down over the frames that follow it, as does any voice
+    /// an already-ended track left in release, and cutting either short
+    /// truncates the song's tail.
+    #[must_use]
+    pub fn tail_sounding(&self) -> bool {
+        self.sequencer.is_sounding()
     }
 
     /// Whether it is now safe to drop this player, which closes the output

@@ -871,3 +871,68 @@ fn a_finished_fade_silences_a_sustained_cgb_voice_on_its_terminal_frame() {
         &frame[..4]
     );
 }
+
+/// The `DirectSound` counterpart to
+/// [`a_finished_fade_silences_a_sustained_cgb_voice_on_its_terminal_frame`]:
+/// a reverbed song, whose master-mix feedback ring still holds seven frames
+/// of delayed `DirectSound` samples when the terminal fade step stops every
+/// track (`m4a.c:720`-`:735`). Upstream's mixer keeps running through the
+/// paused player (`SoundMain` and `SoundMainRAM_Reverb`, `m4a_1.s:20`-`:119`),
+/// so those delayed samples keep sounding as a decaying wet tail; stopping the
+/// tracks silences the dry voices, not the ring. The player is droppable only
+/// once that tail has rung down.
+#[test]
+fn a_finished_fade_keeps_sounding_the_reverb_tail_the_ring_still_holds() {
+    const TITLE_REVERB_LEVEL: u8 = 50;
+    const FRAMES: u32 = 96;
+
+    let mut player = MusicPlayer::start(
+        sustained_song(1).with_reverb(TITLE_REVERB_LEVEL),
+        AudioOutput::null(RING_CAPACITY_FRAMES),
+    )
+    .expect("null backend never errors");
+    drain_everything(&mut player);
+    player.fade_out(TITLE_FADE_OUT_SPEED);
+
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut audible_through_terminal = false;
+    let mut audible_after_terminal = false;
+    let mut past_terminal = false;
+    for _ in 0..FRAMES {
+        // The contract `App::advance_music` is built on -- and which
+        // `app::tests::a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step`
+        // drives through the app itself: render frames until the fade has
+        // finished and its tail is silent, then only poll `drained`.
+        if player.fade_finished() && !player.tail_sounding() {
+            let _ = player.drained();
+        } else {
+            player.advance_frame();
+        }
+        player.drain_null_for_test(&mut frame);
+        let audible = frame.iter().any(|&sample| sample != 0.0);
+        if past_terminal {
+            audible_after_terminal |= audible;
+        } else {
+            audible_through_terminal |= audible;
+        }
+        past_terminal |= player.fade_finished();
+    }
+
+    assert!(
+        past_terminal,
+        "sanity: the fade must finish within {FRAMES} frames"
+    );
+    assert!(
+        audible_through_terminal,
+        "sanity: the song must actually have been sounding through the fade"
+    );
+    assert!(
+        audible_after_terminal,
+        "the reverb ring's delayed samples must keep sounding after the terminal fade step, \
+         not be truncated when the fade finishes"
+    );
+    assert!(
+        !player.tail_sounding(),
+        "the tail must ring down within {FRAMES} frames, so the paused player can be dropped"
+    );
+}
