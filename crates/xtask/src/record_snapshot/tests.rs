@@ -914,8 +914,19 @@ fn failed_publication_leaves_a_staging_directory_replaced_after_the_original_was
 /// pass for "replaced" -- the contract `staging::StagedFile::remove_after`
 /// already keeps for the pointer's staging file, and the one this publish's
 /// own cleanup claims to mirror. `output_dir` itself, not `staged_dir`, is
-/// what this test breaks, so it exercises both platforms: neither identity
-/// check holds anything on `output_dir`, only on `staged_dir` beneath it.
+/// what this test breaks, since no identity check holds anything on
+/// `output_dir`, only on `staged_dir` beneath it.
+///
+/// Unix only: the read being broken is the `(dev, ino)` re-stat, which no
+/// other platform's cleanup performs, and Windows cannot even be put in this
+/// position. Renaming `output_dir` there is a rename of an ancestor of the
+/// directory `claim_staged_dir` still holds with no sharing at all, which
+/// Windows denies for as long as that descendant handle is open: the
+/// adversary's own `rename` fails with `ERROR_ACCESS_DENIED` before the
+/// cleanup under test is ever reached. Windows reaches the same
+/// report-rather-than-guess contract through its released hold, in
+/// `a_failed_promotion_removes_the_staging_directory_only_when_it_can_prove_ownership`.
+#[cfg(unix)]
 #[test]
 fn failed_publication_reports_a_staging_directory_whose_ownership_it_cannot_read() {
     let output_dir = scratch_path("unreadable-claim-out");
@@ -964,5 +975,104 @@ fn failed_publication_reports_a_staging_directory_whose_ownership_it_cannot_read
     );
 
     drop(carried_guard);
+    drop(out_guard);
+}
+
+/// As `a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership`
+/// above, for the staging directory. Occupying the generation name fails the
+/// promoting rename, the one failure that can only be reached after the
+/// claim's hold has been given up for that very rename: on unix the recorded
+/// `(dev, ino)` still confirms the directory, so it is removed; on Windows
+/// the hold was the whole proof, so the directory is left where it is and
+/// named in the error.
+#[test]
+fn a_failed_promotion_removes_the_staging_directory_only_when_it_can_prove_ownership() {
+    let output_dir = scratch_path("failed-promotion-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged = std::cell::RefCell::new(PathBuf::new());
+    let take_the_generation_name = || {
+        let staged_name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it renames");
+        let generation_dir = output_dir.join(
+            staged_name
+                .trim_start_matches('.')
+                .trim_end_matches(".staged"),
+        );
+        std::fs::create_dir(&generation_dir).unwrap();
+        std::fs::write(generation_dir.join("bystander"), b"not ours").unwrap();
+        *staged.borrow_mut() = output_dir.join(staged_name);
+        Ok(())
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_generation_name,
+    )
+    .unwrap_err();
+
+    let staged = staged.borrow().clone();
+    if cfg!(windows) {
+        assert!(
+            staged.is_dir(),
+            "Windows gave the hold up for the rename and has nothing left to confirm ownership with, so the staging directory must stay: {error}"
+        );
+        assert!(
+            error.to_string().contains(&staged.display().to_string()),
+            "the error must name the staging directory left behind: {error}"
+        );
+    } else {
+        assert!(
+            staged.symlink_metadata().is_err(),
+            "the claim's recorded identity still proves the staging directory is ours, so it must be removed: {error}"
+        );
+    }
+
+    drop(out_guard);
+}
+
+/// The claim is what carries `create_dir`'s exclusivity forward, so a claim
+/// that fails leaves nothing behind to remove by: while it was being taken,
+/// another writer can have carried this capture's directory off and put its
+/// own tree at the name it freed. Whatever now answers to that name is left
+/// alone and named in the reported error instead.
+#[test]
+fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
+    let output_dir = scratch_path("unclaimable-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let take_the_staging_name = |path: &std::path::Path| {
+        std::fs::rename(path, output_dir.join("carried-off")).unwrap();
+        std::fs::create_dir(path).unwrap();
+        std::fs::write(path.join("bystander"), b"not ours").unwrap();
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, take_the_staging_name) else {
+        panic!("a claim that fails must fail the capture");
+    };
+
+    assert_eq!(
+        std::fs::read(staged_dir.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "a failed claim removed {}, which it never proved was this capture's",
+        staged_dir.display()
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging directory left behind: {error}"
+    );
+
     drop(out_guard);
 }

@@ -193,25 +193,8 @@ where
         if generation_dir.exists() {
             continue;
         }
-        match std::fs::create_dir(&staged_dir) {
-            // Claimed as tightly after creation as `std` allows (see
-            // `StagedDirClaim`); a failure here still leaves `staged_dir`
-            // behind, since `create_dir`'s own success is this call's only
-            // proof of ownership past this point.
-            Ok(()) => match claim_staged_dir(&staged_dir) {
-                Ok(claim) => break (generation, staged_dir, generation_dir, claim),
-                Err(error) => {
-                    let source = RecordSnapshotError::Write(staged_dir.clone(), error.to_string());
-                    let cleanup_error = std::fs::remove_dir_all(&staged_dir)
-                        .err()
-                        .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
-                    return Err(fold_cleanup_error(source, &staged_dir, cleanup_error));
-                }
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
-            }
+        if let Some(claim) = create_and_claim_staged_dir(&staged_dir, claim_staged_dir)? {
+            break (generation, staged_dir, generation_dir, claim);
         }
     };
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
@@ -254,6 +237,40 @@ where
         result.map_err(|source| clean_up_staged_dir(&staged_dir, staged_dir_claim, source))
     } else {
         result
+    }
+}
+
+/// Creates `staged_dir` exclusively and claims it through `claim`, the pair
+/// that together make the directory this publish's to remove later (see
+/// [`StagedDirClaim`]). `Ok(None)` means the name was already taken and the
+/// caller should move on to the next one.
+///
+/// A claim that fails after the create leaves `staged_dir` exactly where it
+/// is. `create_dir`'s success proves the name was this call's only at the
+/// instant it returned, and the claim is what would have carried that proof
+/// forward; without it, the name may already answer to a directory another
+/// writer put there once it carried this one off, and removing by that name
+/// would take the replacement. The directory is named in the reported error
+/// instead, since nothing will come back for it.
+fn create_and_claim_staged_dir(
+    staged_dir: &Path,
+    claim: impl FnOnce(&Path) -> std::io::Result<StagedDirClaim>,
+) -> Result<Option<StagedDirClaim>, RecordSnapshotError> {
+    match std::fs::create_dir(staged_dir) {
+        Ok(()) => claim(staged_dir).map(Some).map_err(|error| {
+            RecordSnapshotError::Write(
+                staged_dir.to_path_buf(),
+                format!(
+                    "{error}; the staging directory {} was left where it is, since claiming it is what would have proved it still this capture's to remove",
+                    staged_dir.display()
+                ),
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(RecordSnapshotError::Write(
+            staged_dir.to_path_buf(),
+            error.to_string(),
+        )),
     }
 }
 
