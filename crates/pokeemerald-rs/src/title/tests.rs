@@ -141,7 +141,28 @@ fn image_to_tileset_rejects_payload_shorter_than_declared_dimensions() {
     );
 }
 
-fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+/// Writes `bytes` to `path` and removes it on drop, so a failed assertion
+/// or panic still cleans up the scratch file.
+struct TempPackFile {
+    path: std::path::PathBuf,
+}
+
+impl TempPackFile {
+    fn write(path: &std::path::Path, bytes: &[u8]) -> Self {
+        std::fs::write(path, bytes).expect("the scratch directory is writable");
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for TempPackFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> TempPackFile {
     let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
     let directory_size: usize = entries
         .iter()
@@ -179,19 +200,18 @@ fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> std::path::PathBuf
         std::process::id(),
         out.len()
     ));
-    std::fs::write(&path, &out).unwrap();
-    path
+    TempPackFile::write(&path, &out)
 }
 
 #[test]
 fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
     let logo = RED_BGR555_LE.repeat(256);
     let rayquaza_clouds = GREEN_BGR555_LE.repeat(16);
-    let path = write_synthetic_palette_pack(&[
+    let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
     ]);
-    let pack = AssetPack::load(&path).unwrap();
+    let pack = AssetPack::load(&fixture.path).unwrap();
     let palette = title_palette_from_refs(
         pack.palette("title/palette/pokemon_logo").unwrap(),
         pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
@@ -201,19 +221,17 @@ fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
     assert_eq!(palette.color(split).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 15).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 16), rendering::Bgr555::default());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn title_palette_never_reads_past_either_entrys_own_color_count() {
     let logo = RED_BGR555_LE;
     let rayquaza_clouds = GREEN_BGR555_LE;
-    let path = write_synthetic_palette_pack(&[
+    let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
     ]);
-    let pack = AssetPack::load(&path).unwrap();
+    let pack = AssetPack::load(&fixture.path).unwrap();
     let palette = title_palette_from_refs(
         pack.palette("title/palette/pokemon_logo").unwrap(),
         pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
@@ -223,8 +241,6 @@ fn title_palette_never_reads_past_either_entrys_own_color_count() {
     let split = u8::try_from(LOGO_PALETTE_COLORS).unwrap();
     assert_eq!(palette.color(split).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 1), rendering::Bgr555::default());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
