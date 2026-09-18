@@ -788,12 +788,19 @@ struct CreatedDirectory {
 /// the directory the previous level's own creation (or discovery) just
 /// opened. Nothing past that first parent is ever looked up by path again.
 ///
-/// Opening a directory to hold as `mkdirat`'s target needs read permission
-/// on it, where a plain path-based `mkdir` needed only write and search --
-/// [`Dest::open`] already asks this of the final destination directory
-/// itself, and this asks it of every already-existing level leading up to
-/// one too. A level this run creates is unaffected: it is made at the
-/// ordinary default mode, not reopened read-restricted.
+/// Opening a directory to hold as `mkdirat`'s target needs no more than a
+/// plain path-based `mkdir` already needed from it -- write and search --
+/// on Linux, Android, FreeBSD (`O_PATH`), and every Apple platform
+/// (POSIX's own `O_SEARCH`; see `dest::open_traversal_directory`'s own
+/// docs for where that comes from, and why it is not Linux's `O_PATH`
+/// again under another name). Every other non-Linux Unix this builds for
+/// still reopens for real, read-mode access -- unverified against any of
+/// those platforms' own documentation here -- and does need read
+/// permission on it, the same requirement [`Dest::open`] always has for
+/// the final destination directory itself, which really is read for
+/// `fsync`, not merely traversed. A level this run creates is unaffected
+/// either way: it is made at the ordinary default mode, not reopened
+/// read-restricted.
 #[cfg(unix)]
 fn create_directories(
     dir: &Path,

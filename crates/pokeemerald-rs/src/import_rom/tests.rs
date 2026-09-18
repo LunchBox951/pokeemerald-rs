@@ -197,7 +197,20 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     assert!(again.is_empty(), "a run that created nothing owns nothing");
 }
 
-#[cfg(unix)]
+// Linux, Android, FreeBSD, and Apple platforms are where `dest`'s own
+// traversal opens (`open_traversal_directory`, `open_directory_at`,
+// `open_created_directory_at`) actually ask a pinned parent for no more
+// than write and search -- see their own docs in `dest.rs` for exactly
+// which arm each of those four takes and why. Every other Unix this
+// crate builds for still falls back to a real, read-requiring open, so
+// this assertion is not a `cfg(unix)`-wide guarantee and must not claim
+// to be one.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
 #[test]
 fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -225,6 +238,60 @@ fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
             .expect("a writable, searchable parent takes a new level");
         assert_eq!(created_paths(&created), std::slice::from_ref(&level));
         assert!(level.is_dir());
+    } else {
+        // Running as a privileged user (this crate's own CI containers,
+        // in particular) makes `0o300` above no closer-off at all, so the
+        // assertion this test exists for never runs. Said out loud rather
+        // than passed vacuously and silently, so a report reading test
+        // output sees why zero assertions is the right count here, not a
+        // regression that quietly stopped asserting.
+        eprintln!(
+            "a_level_is_created_under_a_parent_that_is_writable_but_not_readable: \
+             skipped -- running privileged, 0o300 did not close the parent off"
+        );
+    }
+}
+
+// Same platform boundary as
+// `a_level_is_created_under_a_parent_that_is_writable_but_not_readable`
+// above, and for the same reason: this pins `open_traversal_directory`
+// itself, not the whole `create_directories` path, but the guarantee it
+// asserts is exactly as platform-scoped.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // `create_directories` pins its one path-resolved component -- the
+    // first ancestor of the destination that already exists -- before any
+    // `mkdirat`, so that open must ask no more of it than the path-based
+    // `mkdir` it replaced: write and search, never read.
+    let dir = TempDir::new("traversal-unreadable-parent");
+    let parent = dir.join("drop-box");
+    fs::create_dir(&parent).expect("the parent is created");
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("the parent closes");
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert.
+    let unreadable = fs::read_dir(&parent).is_err();
+    let pinned = super::dest::open_traversal_directory(&parent);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
+
+    if unreadable {
+        pinned.expect("pinning for traversal needs only write and search");
+    } else {
+        // Same privileged-sandbox caveat as
+        // `a_level_is_created_under_a_parent_that_is_writable_but_not_readable`
+        // above -- said explicitly rather than passed with nothing checked.
+        eprintln!(
+            "a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable: \
+             skipped -- running privileged, 0o300 did not close the parent off"
+        );
     }
 }
 
@@ -1387,8 +1454,17 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
         let (swapped, moved) = (swapped.clone(), moved.clone());
         std::thread::spawn(move || {
             // Wait until the descent is past the component being swapped,
-            // so the swap cannot disturb its own creation or pin.
+            // so the swap cannot disturb its own creation or pin. Bounded,
+            // not an unconditional spin: a `create_directories` that stalls
+            // or fails before reaching `probe` (a regression this test
+            // would otherwise want to catch) must not hang this thread, and
+            // so `attacker.join()`, forever -- a bounded wait turns that
+            // into the ordinary `in_time` assertion failing below instead.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !probe.exists() {
+                if std::time::Instant::now() >= deadline {
+                    return false;
+                }
                 std::hint::spin_loop();
             }
             fs::rename(&swapped, &moved).expect("the pinned level is carried off");
