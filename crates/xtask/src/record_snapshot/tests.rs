@@ -1107,6 +1107,43 @@ fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed
     drop(guard);
 }
 
+/// A claim that could pin no descriptor never licenses a removal: the
+/// identity it carries may be a reissued inode number, so cleanup reports the
+/// directory and leaves it.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_staging_directory_whose_claim_holds_no_descriptor() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = scratch_path("unpinned-claim");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".unpinned.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::write(staged.join("payload"), b"ours").unwrap();
+    let meta = std::fs::symlink_metadata(&staged).unwrap();
+    let claim = super::StagedDirClaim {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        hold: None,
+    };
+
+    let outcome = super::remove_staged_dir(&staged, claim);
+
+    let error = outcome
+        .expect_err("an unpinned claim must be reported")
+        .expect("an unpinned claim is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    assert!(
+        staged.join("payload").is_file(),
+        "cleanup removed a directory whose identity it could not pin"
+    );
+    drop(guard);
+}
+
 /// A directory another writer installs between the ownership read and the
 /// removal survives, and cleanup reports it: the deterministic form of the
 /// race below, driven through the post-check hook.

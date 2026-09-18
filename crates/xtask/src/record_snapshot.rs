@@ -294,7 +294,10 @@ fn create_and_claim_staged_dir(
 struct StagedDirClaim {
     dev: u64,
     ino: u64,
-    _hold: Option<std::fs::File>,
+    /// `None` when the directory refused every open this target has; the
+    /// identity above then names it without pinning its inode, and cleanup
+    /// reports rather than removes.
+    hold: Option<std::fs::File>,
 }
 
 /// As [`StagedDirClaim`] above. Windows has no by-handle identity to read
@@ -354,18 +357,18 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
             Ok(StagedDirClaim {
                 dev: meta.dev(),
                 ino: meta.ino(),
-                _hold: Some(hold),
+                hold: Some(hold),
             })
         }
         // A directory that allows creation and search but not reading refuses
         // the only open this target has; its identity still names it, without
-        // the inode pin a held descriptor adds.
+        // the inode pin a held descriptor adds, so cleanup will only report.
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             let meta = std::fs::symlink_metadata(path)?;
             Ok(StagedDirClaim {
                 dev: meta.dev(),
                 ino: meta.ino(),
-                _hold: None,
+                hold: None,
             })
         }
         Err(error) => Err(error),
@@ -504,6 +507,14 @@ fn remove_staged_dir_after_check(
 ) -> Result<(), Option<std::io::Error>> {
     use std::os::unix::fs::MetadataExt as _;
 
+    // Without the held descriptor a matching `(dev, ino)` may be a reissued
+    // inode number, so identity alone never licenses a removal.
+    if claim.hold.is_none() {
+        return Err(Some(std::io::Error::other(format!(
+            "the staging directory {} was left in place: it allowed no open that could pin its identity, so its removal cannot be proven safe",
+            staged_dir.display()
+        ))));
+    }
     match std::fs::symlink_metadata(staged_dir) {
         Ok(found)
             if found.file_type().is_dir()
