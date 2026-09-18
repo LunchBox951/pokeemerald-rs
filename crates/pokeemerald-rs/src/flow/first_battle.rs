@@ -72,19 +72,14 @@ pub fn start_first_battle(
     )
 }
 
-/// Tries each of the player's move slots in order and takes the turn with the first one
+/// Tries each move slot in order and takes the turn with the first one
 /// [`Battle::take_turn`] accepts.
 ///
-/// With no battle menu, the driver cannot ask the player which move to use, so it walks
-/// the moveset instead of always resubmitting slot 0. `take_turn` validates the requested
-/// slot -- PP remaining, a placeholder move, an unsupported effect, or an inadmissible
-/// ability interaction -- before consuming any shared-RNG draw or mutating battle state,
-/// so this reuses that check rather than duplicating it: a rejection that left the shared
-/// draw unchanged came from slot validation and the next slot is safe to try, while a
-/// rejection that already advanced the draw is a genuine mid-turn failure and is returned
-/// immediately instead of being retried. A Pokémon whose every slot is spent exhausts the
-/// loop and returns the last rejection unchanged; that forced-Struggle case is left to
-/// #877.
+/// A rejection that leaves the shared RNG draw unchanged came from pre-turn slot
+/// validation, which runs before any draw or mutation, so the next slot is safe to try;
+/// one that already advanced the draw is a genuine mid-turn failure and is returned
+/// immediately. An all-spent moveset exhausts the loop and returns its last rejection,
+/// leaving that forced-Struggle case to #877.
 fn take_first_usable_move_turn(
     battle: &mut Battle,
     rng: &mut Rng,

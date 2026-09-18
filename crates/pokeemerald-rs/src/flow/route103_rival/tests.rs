@@ -378,8 +378,7 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     assert_eq!(mon.moves()[HEADLESS_MOVE_SLOT].pp, 0);
 }
 
-/// Issue #1191: a spent slot 0 must not abort a battle the player can still
-/// legally play.
+/// A spent slot 0 must not abort a battle the player can still legally play.
 ///
 /// The real new-game lead (`crate::new_game::provisional_starter`, Treecko at
 /// level 5) carries POUND in slot 0 and LEER in slot 1, and PP only ever

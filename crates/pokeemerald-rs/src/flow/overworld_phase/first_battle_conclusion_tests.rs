@@ -324,9 +324,9 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
 /// `first_battle_trigger_tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`'s
 /// own PP-drain setup, since that is the one reachable way
 /// `crate::flow::first_battle::advance_first_battle` reports `None` instead
-/// of a real outcome. Since #1191 the headless driver falls back to the next
-/// usable move, so every slot -- not just slot 0 -- must be drained for the
-/// turn to remain genuinely unplayable.
+/// of a real outcome. The headless driver falls back to the next usable
+/// move when one is available, so every slot -- not just slot 0 -- must be
+/// drained for the turn to remain genuinely unplayable.
 #[test]
 fn an_aborted_first_battle_does_not_run_the_conclusion() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;

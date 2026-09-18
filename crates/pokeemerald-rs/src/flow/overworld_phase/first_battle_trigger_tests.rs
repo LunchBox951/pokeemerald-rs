@@ -601,19 +601,19 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// `crate::flow::first_battle::advance_first_battle`'s own doc comment spells
 /// the abort contract out — a turn the engine truly cannot play (here: every
 /// slot has no PP left, so `Battle::take_turn`'s pre-draw validation rejects
-/// each in turn -- see issue #1191) empties the slot, writes the lead back,
-/// and returns **`None`**, never an outcome. An earlier revision of this
-/// slice advanced `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left
-/// the var at `1` on exactly this path and the coord-event tile live, so the
-/// next step onto it started the whole thing over. The var now moves at
-/// trigger time, upstream's own ordering (`scripts.inc:40`, mid-cutscene) —
-/// see `super::first_battle_trigger`'s "When the var advances" section.
+/// each in turn) empties the slot, writes the lead back, and returns
+/// **`None`**, never an outcome. An earlier revision of this slice advanced
+/// `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left the var at `1` on
+/// exactly this path and the coord-event tile live, so the next step onto it
+/// started the whole thing over. The var now moves at trigger time,
+/// upstream's own ordering (`scripts.inc:40`, mid-cutscene) — see
+/// `super::first_battle_trigger`'s "When the var advances" section.
 ///
-/// Setup drains *every* slot rather than just slot 0: since #1191, the
-/// headless driver falls back to the next usable move, so a starter with
-/// slot 0 spent and slot 1 (Leer) still usable now finishes the battle
-/// instead of aborting it. Draining the whole moveset keeps this test's real
-/// subject -- an abort still consumes the trigger -- reachable.
+/// Setup drains *every* slot rather than just slot 0: the headless driver
+/// falls back to the next usable move, so a starter with slot 0 spent and
+/// slot 1 (Leer) still usable finishes the battle instead of aborting it.
+/// Draining the whole moveset keeps this test's real subject -- an abort
+/// still consumes the trigger -- reachable.
 #[test]
 fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
