@@ -365,12 +365,9 @@ fn the_developer_checkout_guard_agrees_with_resolution_about_an_unreadable_user_
     let guard_skips = a_user_pack_may_stop_resolution(&candidate);
     // `default_pack_path`'s own core, driven with the same `HOME` and the
     // same real probe.
-    let resolved = resolve(
-        &env_of(&[("HOME", home.to_str().expect("a UTF-8 scratch path"))]),
-        Some(Path::new("/opt/game")),
-        &probe,
-        DataDirRule::Xdg,
-    );
+    let home_env = home.clone().into_os_string();
+    let env = move |key: &str| (key == "HOME").then(|| home_env.clone());
+    let resolved = resolve(&env, Some(Path::new("/opt/game")), &probe, DataDirRule::Xdg);
 
     let _ = std::fs::remove_file(&candidate);
     let _ = std::fs::remove_dir_all(&home);
