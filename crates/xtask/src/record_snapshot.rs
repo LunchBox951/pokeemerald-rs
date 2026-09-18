@@ -280,15 +280,16 @@ fn create_and_claim_staged_dir(
 /// deleted-but-still-open inode cannot be handed to a new directory, so a
 /// re-stat that still matches cannot be a reused number fooling the check.
 ///
-/// `create_dir` returns no handle, so the open that claims the directory is
-/// a second, non-atomic step, on every platform this module supports;
-/// [`remove_staged_dir`]'s own re-verify-then-`remove_dir_all` is a second
-/// such pair, by path both times, on Unix specifically (see the `windows`
-/// variant below for why that second gap does not apply there). Neither
-/// gap closes further without an atomic create-and-open for directories,
-/// which neither `std` nor POSIX provides (unlike a file's `create_new`),
-/// short of `openat`/`unlinkat` from a crate this workspace does not
-/// already carry.
+/// Removal is bound to that object rather than to the name: on Unix
+/// [`remove_staged_dir`] renames the verified directory to a private
+/// sibling only that cleanup can be naming, reads `(dev, ino)` again
+/// there, and removes that name, so a directory put at the staging name
+/// after the check is never reached (the `windows` variant below denies
+/// that replacement outright through its hold). What stays open is the
+/// claim itself: `create_dir` returns no handle, so the open that claims
+/// the directory is a second, non-atomic step on every platform this
+/// module supports, and neither `std` nor POSIX offers an atomic
+/// create-and-open for directories (unlike a file's `create_new`).
 #[cfg(unix)]
 struct StagedDirClaim {
     dev: u64,
@@ -384,8 +385,9 @@ fn claim_staged_dir(_path: &Path) -> std::io::Result<StagedDirClaim> {
 
 /// Removes `staged_dir` if `claim` still names the very directory this
 /// publish created there, folding a cleanup failure into `source` rather
-/// than discarding it. A directory the check finds replaced is left alone
-/// in silence -- it belongs to whoever holds it now.
+/// than discarding it. A directory found replaced is left alone -- it
+/// belongs to whoever holds it now -- in silence when the check itself saw
+/// the replacement, and named in the error when it arrived after.
 fn clean_up_staged_dir(
     staged_dir: &Path,
     claim: StagedDirClaim,
@@ -418,8 +420,9 @@ fn fold_cleanup_error(
 
 /// Removes `staged_dir` when `claim` still proves ownership of it. `Err(None)`
 /// means it does not (definitely replaced, or already gone) and nothing was
-/// touched; `Err(Some(_))` means ownership could not be confirmed, or the
-/// removal itself failed, and must be reported rather than swallowed.
+/// touched; `Err(Some(_))` means ownership could not be confirmed, or another
+/// writer took the name after the check (see [`remove_verified_staged_dir`]),
+/// or the removal itself failed, and must be reported rather than swallowed.
 #[cfg(unix)]
 #[expect(
     clippy::needless_pass_by_value,
@@ -436,12 +439,112 @@ fn remove_staged_dir(
             if found.file_type().is_dir()
                 && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
         {
-            std::fs::remove_dir_all(staged_dir).map_err(Some)
+            remove_verified_staged_dir(staged_dir, &claim)
         }
         Ok(_) => Err(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(None),
         Err(error) => Err(Some(error)),
     }
+}
+
+/// Removes the directory [`remove_staged_dir`]'s check just matched, bound to
+/// that directory rather than to the name it was found under: the name is
+/// renamed to a private sibling ([`private_cleanup_path`]) that no competing
+/// writer can name, `claim`'s identity is read again there, and only that
+/// private name is removed. A writer that takes the staging name over between
+/// the check and the rename therefore loses nothing -- what the rename moved
+/// is its directory, not this one's, so it fails the second read and goes back
+/// (see [`report_foreign_staged_dir`]) instead of being removed.
+///
+/// The private name still stands between that second read and the removal,
+/// and no writer following this module's naming ever derives it; anchoring
+/// the removal to the descriptor instead would take `unlinkat`, which `std`
+/// does not expose.
+#[cfg(unix)]
+fn remove_verified_staged_dir(
+    staged_dir: &Path,
+    claim: &StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let private = private_cleanup_path(staged_dir, claim);
+    match std::fs::rename(staged_dir, &private) {
+        Ok(()) => {}
+        // The name answered to nothing by the time the rename ran, so this
+        // publish's directory had already been carried off; whatever comes
+        // back to that name is another writer's.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Some(std::io::Error::other(format!(
+                "the staging directory {} was carried off before cleanup could take hold of it, so it was left in place",
+                staged_dir.display()
+            ))));
+        }
+        Err(error) => return Err(Some(error)),
+    }
+    match std::fs::symlink_metadata(&private) {
+        Ok(found)
+            if found.file_type().is_dir()
+                && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
+        {
+            std::fs::remove_dir_all(&private).map_err(Some)
+        }
+        _ => Err(Some(report_foreign_staged_dir(staged_dir, &private))),
+    }
+}
+
+/// Puts back what [`remove_verified_staged_dir`]'s rename turned out to have
+/// moved -- a competing writer's directory, which took the staging name
+/// between the ownership check and that rename -- and says where it ended up.
+#[cfg(unix)]
+fn report_foreign_staged_dir(staged_dir: &Path, private: &Path) -> std::io::Error {
+    if restore_foreign_staged_dir(staged_dir, private) {
+        return std::io::Error::other(format!(
+            "another writer's directory stood at {} by the time cleanup took hold of it, so it was left in place",
+            staged_dir.display()
+        ));
+    }
+    std::io::Error::other(format!(
+        "another writer's directory stood at {} by the time cleanup took hold of it, and that name was taken again before it could go back, so it was left in place at {}",
+        staged_dir.display(),
+        private.display()
+    ))
+}
+
+/// Puts the directory under `private` back at `staged_dir`, reporting whether
+/// it got there. `create_dir` is what makes that name free rather than merely
+/// observed free: it refuses a name a third writer has taken, and holds it
+/// against one arriving next, so the `rename` that follows replaces this
+/// placeholder alone -- a bare "does anything answer to it" check would leave
+/// `rename` free to replace that writer's own directory.
+#[cfg(unix)]
+fn restore_foreign_staged_dir(staged_dir: &Path, private: &Path) -> bool {
+    if std::fs::create_dir(staged_dir).is_err() {
+        return false;
+    }
+    if std::fs::rename(private, staged_dir).is_ok() {
+        return true;
+    }
+    // `remove_dir` takes the placeholder back out and refuses anything else.
+    let _ = std::fs::remove_dir(staged_dir);
+    false
+}
+
+/// A sibling name for `staged_dir` that only this cleanup can be naming: the
+/// staging name plus this process's id, the claimed directory's inode, and the
+/// wall clock. Two cleanups at once hold two live directories, which cannot
+/// share an inode number; two in sequence cannot share a clock reading.
+#[cfg(unix)]
+fn private_cleanup_path(staged_dir: &Path, claim: &StagedDirClaim) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let mut name = staged_dir.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".cleanup-{}-{}-{nanos}",
+        std::process::id(),
+        claim.ino
+    ));
+    staged_dir.with_file_name(name)
 }
 
 /// As [`remove_staged_dir`] above: on Windows there is no path to re-verify,

@@ -1076,3 +1076,96 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
 
     drop(out_guard);
 }
+
+/// Failure cleanup must never delete a directory another writer put at the
+/// staging name *after* the ownership check read it. `remove_staged_dir`
+/// binds the removal to the directory that check matched by renaming it to a
+/// private name and reading its identity again there; this drives an
+/// adversary into the window between the check and that rename and asserts
+/// the directory that writer owns at the staging name is still there when
+/// cleanup returns.
+///
+/// Unix only: the Windows `remove_staged_dir` has no re-verify step to race.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const ROUNDS: usize = 20_000;
+    const IDLE: usize = usize::MAX;
+    const STOP: usize = usize::MAX - 1;
+
+    let dir = scratch_path("verify-to-delete-race");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let round = Arc::new(AtomicUsize::new(IDLE));
+    let done = Arc::new(AtomicUsize::new(IDLE));
+    let took = Arc::new(AtomicUsize::new(IDLE));
+
+    let adversary = {
+        let (dir, round, done, took) = (
+            dir.clone(),
+            Arc::clone(&round),
+            Arc::clone(&done),
+            Arc::clone(&took),
+        );
+        std::thread::spawn(move || {
+            let mut last = IDLE;
+            let mut jitter = 0usize;
+            loop {
+                let i = round.load(Ordering::Acquire);
+                if i == STOP {
+                    return;
+                }
+                if i == last || i == IDLE {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                last = i;
+                jitter = jitter.wrapping_add(7);
+                for _ in 0..(jitter % 96) {
+                    std::hint::spin_loop();
+                }
+                let staged = dir.join(format!(".s{i}.staged"));
+                if std::fs::rename(&staged, dir.join(format!("away{i}"))).is_ok()
+                    && std::fs::create_dir(&staged).is_ok()
+                    && std::fs::write(staged.join("bystander"), b"not ours").is_ok()
+                {
+                    took.store(i, Ordering::Release);
+                }
+                done.store(i, Ordering::Release);
+            }
+        })
+    };
+
+    for i in 0..ROUNDS {
+        let staged = dir.join(format!(".s{i}.staged"));
+        std::fs::create_dir(&staged).unwrap();
+        let claim = super::claim_staged_dir(&staged).unwrap();
+
+        // The adversary only starts once the claim is held, so nothing it
+        // does here can be blamed on the create-then-claim gap.
+        round.store(i, Ordering::Release);
+        let _ = super::remove_staged_dir(&staged, claim);
+        while done.load(Ordering::Acquire) != i {
+            std::hint::spin_loop();
+        }
+
+        let taken = took.load(Ordering::Acquire) == i;
+        let survived =
+            std::fs::read(staged.join("bystander")).ok().as_deref() == Some(b"not ours".as_slice());
+        let _ = std::fs::remove_dir_all(&staged);
+        let _ = std::fs::remove_dir_all(dir.join(format!("away{i}")));
+        assert!(
+            !taken || survived,
+            "round {i}: cleanup deleted {}, a directory another writer put at the staging name after the ownership check had already read it",
+            staged.display()
+        );
+    }
+
+    round.store(STOP, Ordering::Release);
+    adversary.join().unwrap();
+    drop(guard);
+}
