@@ -158,9 +158,9 @@ impl Battle {
     /// A depleted enemy slot needs only real move data, not an executable
     /// effect: [`Battle::act`] fails it as [`BattleEvent::FailedNoPp`] before
     /// running one, matching `Cmd_attackcanceler`'s no-PP jump
-    /// (`src/battle_script_commands.c:934`-`:939`). The exception is a
-    /// Soundproof-holding player: that ability's block runs even earlier
-    /// (`:932`-`:933`) and needs the move's effect to know whether it applies.
+    /// (`src/battle_script_commands.c:934`-`:939`). Soundproof's own block
+    /// runs earlier still (`:932`-`:933`), but needs only the already-checked
+    /// move data, not an executable effect, so it cannot make this unsafe.
     ///
     /// # Errors
     ///
@@ -188,13 +188,10 @@ impl Battle {
                 return Err(BattleError::PlaceholderMove(index));
             }
             dex.move_data(slot.move_id)?;
-            // `stat_change::soundproof_block` is a no-op for every ability
-            // but Soundproof, so only a Soundproof-holding player can still
-            // reach a depleted slot's effect ahead of the no-PP jump.
-            if slot.pp > 0 || player.ability() == stat_change::SOUNDPROOF {
-                ensure_executable(&dex, slot.move_id)?;
-            }
+            // Zero-PP moves stop before applying effects
+            // (`src/battle_script_commands.c:934`-`:939`).
             if slot.pp > 0 {
+                ensure_executable(&dex, slot.move_id)?;
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
                 secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }

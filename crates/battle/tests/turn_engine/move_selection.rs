@@ -327,16 +327,21 @@ fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
 }
 
 #[test]
-fn a_depleted_unsupported_slot_still_blocks_construction_against_soundproof() {
+fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
     let dex = Dex::new();
-    // Voltorb's primary ability is Soundproof (species.rs ability slot 0,
-    // even personality). `Battle::act` runs that ability's move-block
-    // ahead of the no-PP jump (`battle_script_commands.c:932`-`:933`), so
-    // unlike the depleted-slot case above, this engine cannot skip Horn
-    // Drill's effect screen: it would need that effect to know whether
-    // Soundproof applies.
-    let player = max_iv_mon(&dex, 100, 50, vec![MoveId(33)]); // Voltorb
-    let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
+    // Soundproof's pre-PP block (`battle_script_commands.c:932`-`:933`)
+    // reads only `stat_change::soundproof_block`, which needs `move_data`
+    // -- already validated -- and returns false for any effect with no
+    // stat change, so Horn Drill's unsupported EFFECT_OHKO is never
+    // executed: the slot's zero PP lands on FailedNoPp exactly as it does
+    // without Soundproof.
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(
+        player.ability(),
+        AbilityId(43),
+        "fixture sanity: the player holds Soundproof"
+    );
+    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
     for _ in 0..enemy.moves()[1].pp {
         enemy.deduct_pp(1).unwrap();
     }
@@ -346,12 +351,27 @@ fn a_depleted_unsupported_slot_still_blocks_construction_against_soundproof() {
         "fixture sanity: the slot is drained"
     );
 
-    let mut rng = SequenceRng::new([]);
+    // battle start, turn number, selection (draw 1 -> slot 1), escape roll
+    // (fails). Any effect-pipeline draw would exhaust this exact script.
+    let mut rng = SequenceRng::new([0, 0, 1, 65000]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .expect("a Soundproof player must not block a depleted unsupported slot");
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
     assert_eq!(
-        Battle::new(dex, player, enemy, false, &mut rng).err(),
-        Some(BattleError::UnsupportedMoveEffect(MoveId(32))),
-        "a Soundproof-holding player can still reach a depleted slot's effect"
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::FailedNoPp {
+                by_player: false,
+                move_id: MoveId(32),
+            },
+        ]
     );
+    assert_eq!(rng.draws(), 4);
 }
 
 #[test]
