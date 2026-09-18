@@ -620,12 +620,10 @@ fn report_foreign_staged_dir(staged_dir: &Path, private: &Path) -> std::io::Erro
 }
 
 /// Puts the entry under `private` back at `staged_dir`, reporting whether it
-/// got there. A placeholder of the entry's own kind is what makes that name
-/// free rather than merely observed free: `create_dir` or `create_new`
+/// got there. A directory goes back over a `create_dir` placeholder, which
 /// refuses a name a third writer has taken and holds it against one arriving
-/// next, so the `rename` that follows replaces this placeholder alone, and
-/// `rename` replaces only a directory with a directory and a file with a
-/// file.
+/// next, so the `rename` that follows replaces this placeholder alone; a file
+/// goes back through `link`, which refuses an existing destination itself.
 #[cfg(unix)]
 fn restore_foreign_staged_dir(staged_dir: &Path, private: &Path) -> bool {
     let foreign_is_dir =
@@ -641,18 +639,13 @@ fn restore_foreign_staged_dir(staged_dir: &Path, private: &Path) -> bool {
         let _ = std::fs::remove_dir(staged_dir);
         return false;
     }
-    if std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(staged_dir)
-        .is_err()
-    {
-        return false;
-    }
-    if std::fs::rename(private, staged_dir).is_ok() {
+    // A file goes back through `link`, which refuses an existing destination
+    // outright, so a third writer's file at the name is never replaced; a
+    // link that fails leaves the entry reported under `private`.
+    if std::fs::hard_link(private, staged_dir).is_ok() {
+        let _ = std::fs::remove_file(private);
         return true;
     }
-    let _ = std::fs::remove_file(staged_dir);
     false
 }
 
