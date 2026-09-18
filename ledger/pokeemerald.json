@@ -24593,8 +24593,14 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "CheckWonderGuardAndLevitate": {
+          "reason": "battle_script_commands.c:1426-1498. Partial: the failed-accuracy-roll reclassifier is rewritten as the pure hit::classify_accuracy_failure, consuming no RNG draw. Modelled: the MOVE_STRUGGLE/zero-power early return (:1432-1433) keeping the generic miss, the Levitate-versus-Ground branch returning first (:1435-1443) as HitOutcome::LevitateBlocked, the TYPE_MUL_NO_EFFECT scan (:1454-1469) as HitOutcome::NoEffect, and the Wonder Guard override (:1490-1497) as HitOutcome::WonderGuardBlocked, which outranks the typing immunity because Cmd_resultmessage prefers B_MSG_AVOIDED_DMG over MOVE_RESULT_DOESNT_AFFECT_FOE (:2055-2059, gMissStringIds in battle_message.c:890-897). All four damaging resolvers (hit, drain, fixed_damage, multi_hit) route their failed roll through it. Still pending: Foresight's STATUS2_FORESIGHT branch (:1447-1452), Wonder Guard's AttacksThisTurn == 2 charging-turn condition (:1490), RecordAbilityBattle, and gProtectStructs targetNotAffected wiring.",
+          "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_accuracycheck": {
-          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check), now scaled by attacker Compound Eyes (:1152-1153) and a physical-move Hustle (:1156-1157). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Sand Veil/evasion-up-item modifiers, and Foresight's ignore-evasion branch (items/status2 out of scope).",
+          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check), now scaled by attacker Compound Eyes (:1152-1153) and a physical-move Hustle (:1156-1157). The failed-roll branch's CheckWonderGuardAndLevitate call (:1185) is modelled too: hit::classify_accuracy_failure reclassifies the miss with no further draw, and the ordinary, drain, fixed-damage, and multi-hit resolvers all route their failed roll through it. NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Sand Veil/evasion-up-item modifiers, Foresight's ignore-evasion branch (items/status2 out of scope), and the double-battle B_MSG_AVOIDED_ATK miss type at :1179-1181.",
           "rust_target": "crates/battle/src/accuracy.rs",
           "spec": "S-6",
           "status": "stubbed"
