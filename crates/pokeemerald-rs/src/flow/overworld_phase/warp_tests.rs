@@ -744,9 +744,14 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
     // to the player's East facing -- so only the id-vs-direction match can
     // deny the doormat here.
     phase.step(held(Buttons::RIGHT));
-    assert!(
-        !phase.mid_step(),
-        "call 17 must have consumed the completed landing -- otherwise the \
+    // The landing call is also where a still-held direction starts the next
+    // crossing (`OverworldPhase::step`'s "Frame shape" docs), so the doormat
+    // landing is observed here as *replaced*, not as cleared -- `mid_step()`
+    // is true again on the way out of this call, for the new crossing.
+    assert_ne!(
+        phase.pending_landing,
+        Some((8, 8)),
+        "call 17 must have consumed the doormat landing -- otherwise the \
          poll never ran and this test proves nothing"
     );
 
