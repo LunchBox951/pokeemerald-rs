@@ -645,6 +645,46 @@ fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_fr
     drop(out_guard);
 }
 
+/// A pointer publication that fails after the generation was promoted leaves
+/// that generation in place and names it, so the operator knows what to
+/// remove; a directory in the pointer's slot is the failure driven here.
+#[test]
+fn a_failed_pointer_publication_names_the_generation_it_leaves_behind() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("pointer-slot-taken-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir(output_dir.join(format!("{}.generation", scene.name()))).unwrap();
+
+    let error =
+        super::publish_generation(scene, &output_dir, b"rgb-bytes", b"meta-bytes", || Ok(()))
+            .unwrap_err();
+
+    let retained: Vec<PathBuf> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains("generation-"))
+        })
+        .collect();
+    assert_eq!(
+        retained.len(),
+        1,
+        "exactly one promoted generation is left: {retained:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&retained[0].display().to_string()),
+        "the error must name the retained generation {}: {error}",
+        retained[0].display()
+    );
+    drop(out_guard);
+}
+
 /// Publication must stage the pointer outside every name the generation makes
 /// guessable: links planted at all of them neither starve the capture nor take
 /// a write.

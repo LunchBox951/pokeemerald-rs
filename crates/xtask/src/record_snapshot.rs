@@ -236,7 +236,26 @@ where
     if result.is_err() && !renamed {
         result.map_err(|source| clean_up_staged_dir(&staged_dir, staged_dir_claim, source))
     } else {
-        result
+        result.map_err(|source| report_retained_generation(&generation_dir, source))
+    }
+}
+
+/// Names the promoted generation a failed pointer publication leaves behind,
+/// so the operator can find and remove it: nothing removes it here, since
+/// its name was never claimed.
+fn report_retained_generation(
+    generation_dir: &Path,
+    source: RecordSnapshotError,
+) -> RecordSnapshotError {
+    match source {
+        RecordSnapshotError::Write(path, message) => RecordSnapshotError::Write(
+            path,
+            format!(
+                "{message}; the promoted generation at {} was left in place",
+                generation_dir.display()
+            ),
+        ),
+        other => other,
     }
 }
 
