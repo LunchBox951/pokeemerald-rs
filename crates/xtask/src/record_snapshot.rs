@@ -418,7 +418,9 @@ fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
 /// [`StagedDirClaim`]). `FILE_FLAG_BACKUP_SEMANTICS` is the documented
 /// `CreateFileW` flag that lets a directory be opened at all; `share_mode`
 /// `0` is what then denies every other opener, matching
-/// `staging::create_new_exclusive`'s use of the same flag for a file.
+/// `staging::create_new_exclusive`'s use of the same flag for a file. The
+/// handle asks for no access at all: it exists to deny sharing, so an ACL
+/// that allows creating entries but not listing the directory still admits it.
 #[cfg(windows)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -426,7 +428,7 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
 
     let hold = std::fs::OpenOptions::new()
-        .read(true)
+        .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .share_mode(0)
         .open(path)?;
