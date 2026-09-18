@@ -486,7 +486,15 @@ fn remove_verified_staged_dir(
             if found.file_type().is_dir()
                 && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
         {
-            std::fs::remove_dir_all(&private).map_err(Some)
+            std::fs::remove_dir_all(&private).map_err(|error| {
+                Some(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "removing the staging directory failed after it was moved to {}, where it was left: {error}",
+                        private.display()
+                    ),
+                ))
+            })
         }
         _ => Err(Some(report_foreign_staged_dir(staged_dir, &private))),
     }

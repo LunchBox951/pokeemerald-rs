@@ -1140,6 +1140,7 @@ fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
         })
     };
 
+    let mut wins = 0usize;
     for i in 0..ROUNDS {
         let staged = dir.join(format!(".s{i}.staged"));
         std::fs::create_dir(&staged).unwrap();
@@ -1154,6 +1155,7 @@ fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
         }
 
         let taken = took.load(Ordering::Acquire) == i;
+        wins += usize::from(taken);
         let survived =
             std::fs::read(staged.join("bystander")).ok().as_deref() == Some(b"not ours".as_slice());
         let _ = std::fs::remove_dir_all(&staged);
@@ -1167,5 +1169,9 @@ fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
 
     round.store(STOP, Ordering::Release);
     adversary.join().unwrap();
+    assert!(
+        wins > 0,
+        "the adversary never took the staging name in {ROUNDS} rounds, so the window was not exercised"
+    );
     drop(guard);
 }
