@@ -537,6 +537,35 @@ fn storing_through_the_production_entry_point_waits_for_the_lock() {
     assert!(temp.path.exists());
 }
 
+/// `SaveSlot::store`, the production entry point, reaches `SaveFile::lock`
+/// itself: a lock slot that cannot carry a lock stops the store before it
+/// reads or writes, which no other path would do.
+#[test]
+fn storing_through_the_production_entry_point_takes_the_save_file_lock() {
+    let temp = TempSave::new("lock-entry-point-slot");
+    std::fs::create_dir(temp.dir.join(engine::save::LOCK_FILE_NAME))
+        .expect("the scratch lock slot must be occupiable");
+
+    let mut slot = temp.slot();
+    let refused = slot
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::Continued,
+        )
+        .expect_err("SaveSlot::store must take SaveFile::lock, which refuses this slot");
+
+    assert!(
+        matches!(refused, SaveFileError::LockPathNotAPlainFile { .. }),
+        "SaveSlot::store did not take SaveFile::lock: {refused:?}"
+    );
+    assert!(
+        !temp.path.exists(),
+        "SaveSlot::store wrote {} without SaveFile::lock",
+        temp.path.display()
+    );
+}
+
 #[test]
 fn a_session_never_overwrites_progress_saved_after_its_own_load() {
     let temp = TempSave::new("stale-session");

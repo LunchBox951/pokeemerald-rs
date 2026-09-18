@@ -794,10 +794,8 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     std::fs::File::create(&path).expect("the longest valid basename must itself be writable");
     std::fs::remove_file(&path).unwrap();
 
-    // `<save>.lock` is the name that made this save unlockable. A host that
-    // still accepts it cannot reproduce the defect, which is the host's to
-    // offer and not this test's to demand, so note it and keep asserting the
-    // property -- a save this host accepts is lockable either way.
+    // A host that accepts the derived sibling cannot reproduce the boundary;
+    // note it and assert lockability regardless.
     let derived_sibling = sibling_path(&path, ".lock");
     let boundary_reproduced = std::fs::OpenOptions::new()
         .create(true)
@@ -808,9 +806,8 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     if !boundary_reproduced {
         drop(std::fs::remove_file(&derived_sibling));
         eprintln!(
-            "note: this host accepts a {basename_len}-byte basename's `.lock` \
-             sibling, so #1189's boundary is not reproduced here; the \
-             lockability assertions below still run"
+            "note: this host accepts a {basename_len}-byte basename's derived \
+             sibling, so the boundary is not reproduced here"
         );
     }
 
