@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use crate::audio::AudioError;
 
+use super::format::FORMAT_VERSION;
+
 /// A failure while loading or querying an [`AssetPack`](crate::pack::AssetPack).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackError {
@@ -97,12 +99,16 @@ impl fmt::Display for PackError {
             }
             Self::BadMagic => write!(f, "asset pack: bad magic (not a pokeemerald-rs pack file)"),
             Self::UnsupportedVersion(version) => {
+                let diagnosis = if *version > FORMAT_VERSION {
+                    "the pack uses a newer format than this build supports"
+                } else {
+                    "the pack predates this build's format"
+                };
                 write!(
                     f,
-                    "asset pack: unsupported format version `{version}`: the pack predates \
-                     this build's format; players rebuild it with `pokeemerald-rs \
-                     --import-rom <path to your Pokemon Emerald (US) ROM>`, developers with \
-                     `cargo xtask extract`"
+                    "asset pack: unsupported format version `{version}`: {diagnosis}; players \
+                     rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon \
+                     Emerald (US) ROM>`, developers with `cargo xtask extract`"
                 )
             }
             Self::Truncated => write!(f, "asset pack: truncated or corrupt"),
