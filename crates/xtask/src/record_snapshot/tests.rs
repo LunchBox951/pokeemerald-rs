@@ -1108,6 +1108,46 @@ fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed
     drop(guard);
 }
 
+/// A directory another writer installs between the ownership read and the
+/// removal survives, and cleanup reports it: the deterministic form of the
+/// race below, driven through the post-check hook.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_directory_installed_between_the_ownership_check_and_the_removal() {
+    let dir = scratch_path("post-check-swap");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".swap.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::write(staged.join("ours"), b"ours").unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    let away = dir.join("away");
+
+    let outcome = super::remove_staged_dir_after_check(&staged, &claim, || {
+        std::fs::rename(&staged, &away).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("bystander"), b"not ours").unwrap();
+    });
+
+    assert_eq!(
+        std::fs::read(staged.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "cleanup removed the directory a writer installed after the ownership check"
+    );
+    assert!(
+        away.join("ours").is_file(),
+        "cleanup touched this call's own directory after another writer carried it off"
+    );
+    let error = outcome.expect_err("a swapped staging directory must be reported");
+    let error = error.expect("a swapped staging directory is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    drop(claim);
+    drop(guard);
+}
+
 /// Failure cleanup must never delete a directory another writer put at the
 /// staging name *after* the ownership check read it. `remove_staged_dir`
 /// binds the removal to the directory that check matched by renaming it to a

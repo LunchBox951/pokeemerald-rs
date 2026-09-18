@@ -359,21 +359,8 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
 
 /// Whether [`open_directory_hold`] asks no read permission of the directory.
 #[cfg(test)]
-#[cfg(all(
-    any(target_os = "linux", target_os = "android"),
-    any(
-        target_arch = "x86_64",
-        target_arch = "x86",
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64"
-    )
-))]
-const HOLD_NEEDS_NO_READ: bool = true;
-#[cfg(test)]
-#[cfg(all(
-    unix,
-    not(all(
+#[cfg(any(
+    all(
         any(target_os = "linux", target_os = "android"),
         any(
             target_arch = "x86_64",
@@ -382,6 +369,25 @@ const HOLD_NEEDS_NO_READ: bool = true;
             target_arch = "arm",
             target_arch = "riscv64"
         )
+    ),
+    target_vendor = "apple"
+))]
+const HOLD_NEEDS_NO_READ: bool = true;
+#[cfg(test)]
+#[cfg(all(
+    unix,
+    not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            any(
+                target_arch = "x86_64",
+                target_arch = "x86",
+                target_arch = "aarch64",
+                target_arch = "arm",
+                target_arch = "riscv64"
+            )
+        ),
+        target_vendor = "apple"
     ))
 ))]
 const HOLD_NEEDS_NO_READ: bool = false;
@@ -409,18 +415,35 @@ fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
+/// As above on Apple targets through POSIX `O_SEARCH`, the `O_EXEC` bit of
+/// XNU's `bsd/sys/fcntl.h` since Ventura (xnu-8792); an earlier kernel
+/// ignores the bit and makes this an ordinary read open.
+#[cfg(target_vendor = "apple")]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const APPLE_O_EXEC: i32 = 0x4000_0000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(APPLE_O_EXEC)
+        .open(path)
+}
+
 /// As above where `std` offers only a read open of a directory.
 #[cfg(all(
     unix,
-    not(all(
-        any(target_os = "linux", target_os = "android"),
-        any(
-            target_arch = "x86_64",
-            target_arch = "x86",
-            target_arch = "aarch64",
-            target_arch = "arm",
-            target_arch = "riscv64"
-        )
+    not(any(
+        all(
+            any(target_os = "linux", target_os = "android"),
+            any(
+                target_arch = "x86_64",
+                target_arch = "x86",
+                target_arch = "aarch64",
+                target_arch = "arm",
+                target_arch = "riscv64"
+            )
+        ),
+        target_vendor = "apple"
     ))
 ))]
 fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
@@ -502,6 +525,17 @@ fn remove_staged_dir(
     staged_dir: &Path,
     claim: StagedDirClaim,
 ) -> Result<(), Option<std::io::Error>> {
+    remove_staged_dir_after_check(staged_dir, &claim, || {})
+}
+
+/// [`remove_staged_dir`] with `after_check` run between the ownership read
+/// and the removal, so a test can install a competitor in exactly that window.
+#[cfg(unix)]
+fn remove_staged_dir_after_check(
+    staged_dir: &Path,
+    claim: &StagedDirClaim,
+    after_check: impl FnOnce(),
+) -> Result<(), Option<std::io::Error>> {
     use std::os::unix::fs::MetadataExt as _;
 
     match std::fs::symlink_metadata(staged_dir) {
@@ -509,7 +543,8 @@ fn remove_staged_dir(
             if found.file_type().is_dir()
                 && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
         {
-            remove_verified_staged_dir(staged_dir, &claim)
+            after_check();
+            remove_verified_staged_dir(staged_dir, claim)
         }
         Ok(_) => Err(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(None),
