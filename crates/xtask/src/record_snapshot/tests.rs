@@ -1224,8 +1224,46 @@ fn cleanup_leaves_a_directory_installed_between_the_ownership_check_and_the_remo
     drop(guard);
 }
 
+/// A regular file another writer installs between the ownership read and the
+/// removal goes back to the staging name too, since the restore reserves a
+/// placeholder of the foreign entry's own kind.
+#[cfg(unix)]
+#[test]
+fn cleanup_restores_a_file_installed_between_the_ownership_check_and_the_removal() {
+    let dir = scratch_path("post-check-file-swap");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".file-swap.staged");
+    std::fs::create_dir(&staged).unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    let away = dir.join("away");
+
+    let outcome = super::remove_staged_dir_after_check(&staged, &claim, || {
+        std::fs::rename(&staged, &away).unwrap();
+        std::fs::write(&staged, b"not ours").unwrap();
+    });
+
+    assert_eq!(
+        std::fs::read(&staged).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "cleanup must put a foreign file back at the staging name"
+    );
+    assert!(away.is_dir(), "cleanup touched this call's own directory");
+    let error = outcome
+        .expect_err("a swapped staging entry must be reported")
+        .expect("a swapped staging entry is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    drop(claim);
+    drop(guard);
+}
+
 /// Failure cleanup must never delete a directory another writer put at the
-/// staging name *after* the ownership check read it. `remove_staged_dir`
+/// staging name *after* the ownership check read it. The hook-driven test
+/// above pins that window by construction; this one races it as a stress
+/// companion and reports how often the adversary got in. `remove_staged_dir`
 /// binds the removal to the directory that check matched by renaming it to a
 /// private name and reading its identity again there; this drives an
 /// adversary into the window between the check and that rename and asserts
@@ -1316,9 +1354,6 @@ fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
 
     round.store(STOP, Ordering::Release);
     adversary.join().unwrap();
-    assert!(
-        wins > 0,
-        "the adversary never took the staging name in {ROUNDS} rounds, so the window was not exercised"
-    );
+    eprintln!("the adversary took the staging name in {wins} of {ROUNDS} rounds");
     drop(guard);
 }

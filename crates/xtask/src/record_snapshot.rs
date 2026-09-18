@@ -619,22 +619,40 @@ fn report_foreign_staged_dir(staged_dir: &Path, private: &Path) -> std::io::Erro
     ))
 }
 
-/// Puts the directory under `private` back at `staged_dir`, reporting whether
-/// it got there. `create_dir` is what makes that name free rather than merely
-/// observed free: it refuses a name a third writer has taken, and holds it
-/// against one arriving next, so the `rename` that follows replaces this
-/// placeholder alone -- a bare "does anything answer to it" check would leave
-/// `rename` free to replace that writer's own directory.
+/// Puts the entry under `private` back at `staged_dir`, reporting whether it
+/// got there. A placeholder of the entry's own kind is what makes that name
+/// free rather than merely observed free: `create_dir` or `create_new`
+/// refuses a name a third writer has taken and holds it against one arriving
+/// next, so the `rename` that follows replaces this placeholder alone, and
+/// `rename` replaces only a directory with a directory and a file with a
+/// file.
 #[cfg(unix)]
 fn restore_foreign_staged_dir(staged_dir: &Path, private: &Path) -> bool {
-    if std::fs::create_dir(staged_dir).is_err() {
+    let foreign_is_dir =
+        std::fs::symlink_metadata(private).is_ok_and(|found| found.file_type().is_dir());
+    if foreign_is_dir {
+        if std::fs::create_dir(staged_dir).is_err() {
+            return false;
+        }
+        if std::fs::rename(private, staged_dir).is_ok() {
+            return true;
+        }
+        // `remove_dir` takes the placeholder back out and refuses anything else.
+        let _ = std::fs::remove_dir(staged_dir);
+        return false;
+    }
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(staged_dir)
+        .is_err()
+    {
         return false;
     }
     if std::fs::rename(private, staged_dir).is_ok() {
         return true;
     }
-    // `remove_dir` takes the placeholder back out and refuses anything else.
-    let _ = std::fs::remove_dir(staged_dir);
+    let _ = std::fs::remove_file(staged_dir);
     false
 }
 
