@@ -85,12 +85,13 @@ pub(super) const fn arrow_poll_open(in_transit: bool, field_event_fired: bool) -
     !in_transit && !field_event_fired
 }
 
+/// Whether an earlier `ProcessPlayerFieldInput` step already claimed this frame; any
+/// present warp counts, even `Unsupported` (`field_control_avatar.c:688-749`, `:817-820`, `:172`).
 pub(super) const fn field_input_consumed(
     field_event_fired: bool,
     warp_trigger: Option<WarpTrigger>,
 ) -> bool {
-    let resolved_warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
-    field_event_fired || resolved_warp_fired
+    field_event_fired || warp_trigger.is_some()
 }
 
 /// Screens every possible land encounter before the map is allowed to roll.
