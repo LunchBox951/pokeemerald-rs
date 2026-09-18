@@ -348,13 +348,83 @@ impl StagedDirClaim {
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::unix::fs::MetadataExt as _;
 
-    let hold = std::fs::File::open(path)?;
+    let hold = open_directory_hold(path)?;
     let meta = hold.metadata()?;
     Ok(StagedDirClaim {
         dev: meta.dev(),
         ino: meta.ino(),
         _hold: hold,
     })
+}
+
+/// Whether [`open_directory_hold`] asks no read permission of the directory.
+#[cfg(test)]
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64"
+    )
+))]
+const HOLD_NEEDS_NO_READ: bool = true;
+#[cfg(test)]
+#[cfg(all(
+    unix,
+    not(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "x86",
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "riscv64"
+        )
+    ))
+))]
+const HOLD_NEEDS_NO_READ: bool = false;
+
+/// Opens a directory for identity and holding alone: `O_PATH`, which asks no
+/// read permission of a directory that allows only creation and search, on
+/// the Linux targets whose `fcntl.h` shares the generic value for it.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64"
+    )
+))]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const O_PATH: i32 = 0o10_000_000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_PATH)
+        .open(path)
+}
+
+/// As above where `std` offers only a read open of a directory.
+#[cfg(all(
+    unix,
+    not(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "x86",
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "riscv64"
+        )
+    ))
+))]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// As [`claim_staged_dir`] above, for the sharing hold (see

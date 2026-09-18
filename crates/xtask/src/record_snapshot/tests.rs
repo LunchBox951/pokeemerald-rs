@@ -1077,6 +1077,37 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
     drop(out_guard);
 }
 
+/// A staging directory that allows only creation and search, as a `0444`
+/// umask leaves it, is still claimable wherever the hold needs no read.
+#[cfg(unix)]
+#[test]
+fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch_path("search-only-claim");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".search-only.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o333)).unwrap();
+
+    let unreadable = std::fs::read_dir(&staged).is_err();
+    let claim = super::claim_staged_dir(&staged);
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    if !unreadable {
+        eprintln!("skipped: running privileged, so a 0o333 directory is still readable");
+    }
+    if let Err(error) = &claim {
+        assert!(
+            !unreadable || !super::HOLD_NEEDS_NO_READ,
+            "holding a search-only staging directory must need no read permission: {error}"
+        );
+    }
+    drop(claim);
+    drop(guard);
+}
+
 /// Failure cleanup must never delete a directory another writer put at the
 /// staging name *after* the ownership check read it. `remove_staged_dir`
 /// binds the removal to the directory that check matched by renaming it to a
