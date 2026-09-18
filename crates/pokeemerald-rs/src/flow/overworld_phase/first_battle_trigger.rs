@@ -412,7 +412,7 @@ impl OverworldPhase {
     /// this module's trigger check.
     ///
     /// Same retained-elevation contract as `step.rs`'s
-    /// `resolve_pre_movement_field_input` (issue #1194).
+    /// `resolve_pre_movement_field_input`.
     pub(super) fn first_battle_trigger_ready(
         &self,
         runtime: &MapRuntime<'_>,
