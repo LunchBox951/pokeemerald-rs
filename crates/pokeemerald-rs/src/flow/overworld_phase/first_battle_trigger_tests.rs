@@ -182,12 +182,11 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
 }
 
-/// Issue #1194 regression: [`engine::overworld::MapRuntime::coord_events_at`]'s
-/// wildcard only matches a *stored* transition, so a query at the landed
-/// cell's transition elevation `0` cannot match this event's ordinary
-/// stored `3`. The trigger tile's own cell elevation is overridden to `0`
-/// here to reproduce exactly that shape -- the same substitution #1127
-/// fixed for the door-warp lookup in `step.rs`.
+/// Issue #1194 regression: overrides the trigger tile's own cell to the
+/// transition elevation `0` (wildcard rule owned by
+/// [`engine::overworld::MapRuntime::coord_events_at`]'s docs) so the
+/// rescue trigger must fire at the retained elevation, not the landed
+/// cell's collision one.
 #[test]
 fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
