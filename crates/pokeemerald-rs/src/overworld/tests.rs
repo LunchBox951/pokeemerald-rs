@@ -629,6 +629,44 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     .expect("synthetic pack with an elevated cell should decode cleanly")
 }
 
+/// [`synthetic_scene_with_special_tiles`], with each entry also naming its
+/// cell's elevation, as a warp tile on a transition-elevation cell needs.
+pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
+    width: u16,
+    height: u16,
+    specials: &[((u16, u16), u8, u8)],
+) -> super::OverworldScene {
+    let behaviors: Vec<((u16, u16), u8)> = specials
+        .iter()
+        .map(|&(pos, behavior, _)| (pos, behavior))
+        .collect();
+    let mut entries =
+        synthetic_overworld_pack_entries_with_special_tiles(width, height, &behaviors);
+    for (index, &((sx, sy), _, elevation)) in specials.iter().enumerate() {
+        let metatile_id =
+            u16::try_from(index + 1).expect("a fixture never needs 65k special tiles");
+        let cell = assets::MetatileCell {
+            metatile_id,
+            collision: 0,
+            elevation,
+        }
+        .pack();
+        let grid = entries
+            .iter_mut()
+            .find(|e| e.id == "layout/map_test/map")
+            .expect("the general fixture always fabricates its own layout entry");
+        let idx = (usize::from(sy) * usize::from(width) + usize::from(sx)) * 2;
+        grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    }
+    synthetic_scene_result(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack with elevated special tiles should decode cleanly")
+}
+
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
 /// the layout's tileset symbol: writes the scratch pack, runs
 /// [`super::OverworldScene::from_pack`], and returns its result -- so
@@ -1072,6 +1110,131 @@ fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
         Some(rendering::Bgr555::from_raw(0x001F).to_rgb888()),
         "the overworld's own composed frame must drop the same late NPC the \
          954-cycle budget drops"
+    );
+}
+
+/// The combined-tileset slot and palette-bank colour behind
+/// `DrawMetatile`'s fixed BG3 screen entry `0x3014`, as the fixture below
+/// fabricates them: tile `0x14`, opaque on palette bank 3's index 1.
+const NORMAL_BG3_TILE_INDEX: usize = 0x14;
+const NORMAL_BG3_COLOR: u16 = 0x03FF;
+
+/// [`synthetic_overworld_pack_entries_for`]'s `"general"` entries with a
+/// second metatile (id `1`, layer type `layer_type`) at grid cell `pos`
+/// whose eight raw entries all name a fully transparent tile, over a
+/// tileset grown to `0x15` tiles so slot [`NORMAL_BG3_TILE_INDEX`] exists
+/// and is opaque under palette bank 3.
+fn transparent_metatile_pack_entries(
+    width: u16,
+    height: u16,
+    pos: (u16, u16),
+    layer_type: assets::MetatileLayerType,
+) -> Vec<Entry> {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+
+    // `tileset/general/tiles` grows from one 8x8 tile to `0x15` stacked
+    // vertically: tiles `1..0x14` all palette index 0 (transparent), tile
+    // `0x14` all palette index 1.
+    let tiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/tiles")
+        .expect("the general fixture always fabricates its own tiles entry");
+    tiles.meta = image_meta(
+        8,
+        u32::try_from(8 * (NORMAL_BG3_TILE_INDEX + 1)).unwrap(),
+        4,
+    );
+    tiles.payload.extend(std::iter::repeat_n(
+        0u8,
+        8 * 8 * (NORMAL_BG3_TILE_INDEX - 1),
+    ));
+    tiles.payload.extend(std::iter::repeat_n(1u8, 8 * 8));
+
+    // Metatile 1: every raw entry points at transparent tile index 1,
+    // palette bank 0, no flip.
+    let metatile: Vec<u8> = std::iter::repeat_n(1u16.to_le_bytes(), 8)
+        .flatten()
+        .collect();
+    entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatiles")
+        .expect("the general fixture always fabricates its own metatiles entry")
+        .payload
+        .extend_from_slice(&metatile);
+    let attr = (layer_type as u16) << 12;
+    entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatile-attributes")
+        .expect("the general fixture always fabricates its own metatile-attributes entry")
+        .payload
+        .extend_from_slice(&attr.to_le_bytes());
+
+    // Palette bank 3, index 1: distinct from bank 0's red and the backdrop.
+    let bank3 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/03")
+        .expect("the general fixture always fabricates a placeholder for every bank");
+    bank3.meta = 2u16.to_le_bytes().to_vec();
+    bank3.payload = {
+        let mut p = vec![0u8; 2]; // index 0, unused.
+        p.extend_from_slice(&NORMAL_BG3_COLOR.to_le_bytes());
+        p
+    };
+
+    let cell = assets::MetatileCell {
+        metatile_id: 1,
+        collision: 0,
+        elevation: 3,
+    }
+    .pack();
+    let grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/map_test/map")
+        .expect("the general fixture always fabricates its own layout entry");
+    let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
+    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+
+    entries
+}
+
+/// [`transparent_metatile_pack_entries`]'s scene, composed at rest from
+/// `(0, 0)`: world cell `(2, 2)` is viewport metatile `(9, 7)`, so screen
+/// `(148, 108)` samples it, clear of the player's own OBJ at column 7.
+fn transparent_metatile_composed_pixel(layer_type: assets::MetatileLayerType) -> rendering::Rgb888 {
+    let scene = synthetic_scene_result(
+        write_synthetic_pack(transparent_metatile_pack_entries(4, 4, (2, 2), layer_type)),
+        "gTileset_General",
+        4,
+        4,
+    )
+    .expect("the transparent-metatile fixture should decode cleanly");
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    scene
+        .compose(&player, &event_data, 0)
+        .pixel(148, 108)
+        .expect("(148, 108) is inside the native framebuffer")
+}
+
+/// Issue #1214: where a `Normal` metatile is transparent on both drawn
+/// layers, `DrawMetatile`'s fixed `0x3014` BG3 write reaches the screen, so
+/// the composed pixel is tile `0x14`'s palette-bank-3 colour. The `Covered`
+/// control -- same tiles, same cell, BG3 carrying the metatile's own
+/// transparent half instead -- pins that this pixel is otherwise the bare
+/// backdrop.
+#[test]
+fn compose_shows_draw_metatiles_fixed_bg3_entry_through_a_transparent_normal_metatile() {
+    assert_eq!(
+        transparent_metatile_composed_pixel(assets::MetatileLayerType::Covered),
+        rendering::Rgb888::BLACK,
+        "control: a metatile transparent on every layer it draws must show \
+         the backdrop -- `LoadTilesetPalette`'s forced black at colour 0"
+    );
+    assert_eq!(
+        transparent_metatile_composed_pixel(assets::MetatileLayerType::Normal),
+        rendering::Bgr555::from_raw(NORMAL_BG3_COLOR).to_rgb888(),
+        "a Normal metatile transparent on both drawn layers must show BG3's \
+         fixed entry, not the backdrop"
     );
 }
 

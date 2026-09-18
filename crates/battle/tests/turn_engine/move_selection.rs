@@ -1,7 +1,7 @@
 //! Wild move selection, unsupported moves, and PP validation.
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage,
     STRUGGLE,
@@ -459,4 +459,73 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     assert!(rejected.events().is_empty());
     assert_eq!(rng.draws(), 1, "a PP-less slot draws nothing");
     assert_eq!(battle.enemy().moves()[0].pp, enemy_pp);
+}
+
+/// `attackcanceler` blocks a Soundproof holder's sound move before its no-PP
+/// test (`battle_script_commands.c:932-939`), so a spent slot reports the block.
+#[test]
+fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(
+        player.ability(),
+        AbilityId::SOUNDPROOF,
+        "fixture sanity: the defender must hold Soundproof"
+    );
+    // Fast enough that the player's escape is a roll, not a free run.
+    let mut enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(45), MoveId(33)]); // Growl, Tackle
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+
+    // battle start, turn number, selection (draw 0 -> slot 0: Growl, spent
+    // but selectable), escape roll (fails); the block precedes any accuracy draw.
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::SoundproofProtected {
+                by_player: false,
+                move_id: MoveId(45),
+            },
+        ]
+    );
+    assert_eq!(
+        battle.player().stages().attack,
+        StatStage::new(0).unwrap(),
+        "the blocked Growl changes no stage"
+    );
+    assert_eq!(rng.draws(), 4);
+}
+
+/// Soundproof leaves through `BattleScript_SoundproofProtected`
+/// (`data/battle_scripts_1.s:4158`-`:4164`, `STRINGID_PKMNSXBLOCKSY`): the
+/// ability blocks the move itself. That is a different observable result from
+/// `BattleScript_AbilityNoStatLoss`'s prevented stat drop
+/// (`:4116`-`:4120`, `STRINGID_PKMNPREVENTSSTATLOSSWITH`), which is what
+/// [`BattleEvent::StatLossPrevented`] reports, the way Limber's move-wide block
+/// has its own statless [`BattleEvent::LimberProtected`].
+#[test]
+fn a_soundproof_block_is_not_reported_as_a_prevented_stat_loss() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(player.ability(), AbilityId::SOUNDPROOF);
+    let enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(45), MoveId(33)]); // Growl, Tackle
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::StatLossPrevented { .. })),
+        "Soundproof blocks Growl outright; replay must not report a named stat \
+         loss as prevented, got {events:?}"
+    );
 }
