@@ -189,7 +189,7 @@ where
         );
         let staged_dir = output_dir.join(format!(".{generation}.staged"));
         let generation_dir = output_dir.join(&generation);
-        // Cheap early skip only; `std::fs::create_dir`'s exclusivity is the actual guard.
+        // Cheap early skip only; [`refuse_a_taken_generation_name`] is the actual guard.
         if generation_dir.exists() {
             continue;
         }
@@ -204,33 +204,365 @@ where
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
+    let generation_rgb = generation_dir.join(format!("{}.rgb", scene.name()));
+    let generation_meta = generation_dir.join(format!("{}.meta", scene.name()));
 
+    // No payload is ever written through `generation_dir`: both reach that
+    // name inside `staged_dir`, in the rename below. `mkdir` hands back no
+    // descriptor, so a directory created at the public name and reopened by
+    // it could not be told from a competitor's substitute.
+    let mut generation_claim: Option<GenerationDirClaim> = None;
     let result = (|| {
         std::fs::write(&staged_rgb, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
         after_rgb_staged()?;
         std::fs::write(&staged_meta, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
+        let staged_hold = hold_staged_dir(&staged_dir)
+            .map_err(|e| RecordSnapshotError::Write(staged_dir.clone(), e.to_string()))?;
+        refuse_a_taken_generation_name(&generation_dir)?;
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        let claim = claim_generation_dir(&generation_dir, staged_hold).map_err(|e| {
+            RecordSnapshotError::Write(
+                generation_dir.clone(),
+                format!("the promoted generation is left in place, unremovable by this call because its ownership could not be proven: {e}"),
+            )
+        })?;
+        let claim = generation_claim.insert(claim);
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        require_generation_claim(claim, &generation_dir)?;
         staged_pointer
             .publish(&pointer_path)
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
-        Ok((
-            generation_dir.join(format!("{}.rgb", scene.name())),
-            generation_dir.join(format!("{}.meta", scene.name())),
-        ))
+        Ok((generation_rgb, generation_meta))
     })();
 
-    if result.is_err() {
-        // `staging` already cleans up its own candidate, respecting ownership.
-        let _ = std::fs::remove_dir_all(&staged_dir);
-        let _ = std::fs::remove_dir_all(&generation_dir);
+    result.map_err(|source| {
+        clean_up_generation(&staged_dir, &generation_dir, generation_claim, source)
+    })
+}
+
+/// Refuses `generation_dir` outright when anything at all already answers
+/// to that name -- a directory, a file, or a symlink -- so a competing
+/// writer's entry is reported rather than promoted over.
+///
+/// POSIX `rename(2)` replaces an empty destination directory, so the bare
+/// rename that promotes `staged_dir` cannot be trusted to keep a competing
+/// writer's directory. This check runs as tightly before that rename as
+/// `std` allows, which leaves one irreducible gap: a directory created at
+/// the name between the two calls is still replaced. Closing it needs a
+/// rename that refuses an existing destination in the same syscall --
+/// Linux `renameat2(RENAME_NOREPLACE)`, Apple `renameatx_np(RENAME_EXCL)`
+/// -- which `std` does not expose.
+fn refuse_a_taken_generation_name(generation_dir: &Path) -> Result<(), RecordSnapshotError> {
+    match std::fs::symlink_metadata(generation_dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(RecordSnapshotError::Write(
+            generation_dir.to_path_buf(),
+            "a competing writer already owns this generation name".to_owned(),
+        )),
+        Err(error) => Err(RecordSnapshotError::Write(
+            generation_dir.to_path_buf(),
+            format!("the generation name could not be read before promotion: {error}"),
+        )),
     }
-    result
+}
+
+/// Confirms `generation_dir` still names the directory `claim` was made
+/// for, refusing rather than following a symlink or any other replacement
+/// found at that name.
+fn require_generation_claim(
+    claim: &GenerationDirClaim,
+    generation_dir: &Path,
+) -> Result<(), RecordSnapshotError> {
+    match claim.still_holds(generation_dir) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(RecordSnapshotError::Write(
+            generation_dir.to_path_buf(),
+            "a competing writer replaced generation_dir after this call claimed it".to_owned(),
+        )),
+        Err(error) => Err(RecordSnapshotError::Write(
+            generation_dir.to_path_buf(),
+            format!("generation_dir's ownership could not be confirmed: {error}"),
+        )),
+    }
+}
+
+/// Cleans up after a failed publish: `staged_dir` is always attempted
+/// (ownership of that name is [`staging`]'s concern, not this function's),
+/// while `generation_dir` is only removed once `claim` still confirms this
+/// call owns it -- a directory a competing writer took back in the
+/// meantime is left exactly as found, not guessed at. Any cleanup failure
+/// is folded into `source` rather than discarded, an ownership read that
+/// could not be completed included: it leaves the generation on disk just
+/// as a failed removal would.
+///
+/// A successful promotion leaves no `staged_dir` behind, so only its
+/// absence is passed over silently.
+fn clean_up_generation(
+    staged_dir: &Path,
+    generation_dir: &Path,
+    mut generation_claim: Option<GenerationDirClaim>,
+    source: RecordSnapshotError,
+) -> RecordSnapshotError {
+    let staged_cleanup_error = std::fs::remove_dir_all(staged_dir)
+        .err()
+        .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
+    let error = fold_cleanup_error(source, staged_dir, staged_cleanup_error);
+    let Some(claim) = &mut generation_claim else {
+        return error;
+    };
+    match claim.still_holds(generation_dir) {
+        Ok(true) => {}
+        Ok(false) => return error,
+        Err(read_error) => {
+            return RecordSnapshotError::Write(
+                generation_dir.to_path_buf(),
+                format!(
+                    "{error}; additionally left {} behind: its ownership could not be confirmed: {read_error}",
+                    generation_dir.display()
+                ),
+            );
+        }
+    }
+    // The hold itself would deny this removal on Windows; give it up first
+    // (see `GenerationDirClaim`). A no-op on Unix.
+    claim.release_hold();
+    let generation_cleanup_error = std::fs::remove_dir_all(generation_dir).err();
+    fold_cleanup_error(error, generation_dir, generation_cleanup_error)
+}
+
+/// Appends `cleanup_error`, if any, to `source` rather than discarding it;
+/// `source` alone otherwise.
+fn fold_cleanup_error(
+    source: RecordSnapshotError,
+    path: &Path,
+    cleanup_error: Option<std::io::Error>,
+) -> RecordSnapshotError {
+    let Some(cleanup_error) = cleanup_error else {
+        return source;
+    };
+    RecordSnapshotError::Write(
+        path.to_path_buf(),
+        format!(
+            "{source}; additionally failed to remove {}: {cleanup_error}",
+            path.display()
+        ),
+    )
+}
+
+/// The identity a directory is recognized by once it has been renamed to
+/// another name (see [`hold_staged_dir`] and [`claim_generation_dir`]).
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DirIdentity {
+    dev: u64,
+    ino: u64,
+}
+
+/// A descriptor on `staged_dir` taken before the promoting rename and kept
+/// open across it, with the identity read through it.
+///
+/// The open descriptor is what makes that identity conclusive: an inode
+/// with a live descriptor on it cannot be freed and handed to a directory
+/// a competitor creates later, so an entry that matches after the rename
+/// is this call's own directory rather than a reused number.
+#[cfg(unix)]
+struct StagedDirHold {
+    identity: DirIdentity,
+    hold: std::fs::File,
+}
+
+/// As [`StagedDirHold`] above, for targets whose directories carry no
+/// identity a descriptor held across the rename could pin.
+#[cfg(not(unix))]
+struct StagedDirHold;
+
+/// Opens `path` and reads the identity it will still be recognizable by
+/// after the promoting rename has given it a different name.
+#[cfg(unix)]
+fn hold_staged_dir(path: &Path) -> std::io::Result<StagedDirHold> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let hold = std::fs::File::open(path)?;
+    let found = hold.metadata()?;
+    if !found.file_type().is_dir() {
+        return Err(std::io::Error::other(
+            "the staging name stopped denoting a directory before promotion",
+        ));
+    }
+    Ok(StagedDirHold {
+        identity: DirIdentity {
+            dev: found.dev(),
+            ino: found.ino(),
+        },
+        hold,
+    })
+}
+
+/// As [`hold_staged_dir`] above, for targets with nothing to hold.
+#[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for every platform; only the unix arm opens anything that could fail"
+)]
+fn hold_staged_dir(_path: &Path) -> std::io::Result<StagedDirHold> {
+    Ok(StagedDirHold)
+}
+
+/// Binds the pointer publication and the failure cleanup to the directory
+/// object this call promoted, not merely to the name it now answers to (see
+/// [`require_generation_claim`] and [`clean_up_generation`]).
+///
+/// On Unix it is [`StagedDirHold`]'s descriptor, carried over here, that
+/// keeps the recorded [`DirIdentity`] conclusive for as long as the claim
+/// lives.
+#[cfg(unix)]
+struct GenerationDirClaim {
+    identity: DirIdentity,
+    _hold: std::fs::File,
+}
+
+/// As [`GenerationDirClaim`] above. Stable `std` exposes no by-handle
+/// identity on Windows (`MetadataExt::file_index` is unstable), so this
+/// platform cannot compare the promoted directory against the staged one
+/// and the hold proves a narrower thing: opened with no sharing at all, it
+/// denies every other opener a rename or delete of whatever directory it
+/// opened, from the open onwards. A competitor that takes the name in the
+/// window between the promoting rename and that open is therefore not
+/// detected here, the one part of this guard Windows does not get.
+#[cfg(windows)]
+struct GenerationDirClaim {
+    hold: Option<std::fs::File>,
+}
+
+/// As [`GenerationDirClaim`] above, for targets with neither an inode nor a
+/// sharing hold to lean on; ownership can never be confirmed here.
+#[cfg(not(any(unix, windows)))]
+struct GenerationDirClaim;
+
+impl GenerationDirClaim {
+    /// Whether `path` still names the very directory this claim was made
+    /// for. A symlink or any other non-matching entry is refused, not
+    /// followed.
+    #[cfg(unix)]
+    fn still_holds(&self, path: &Path) -> std::io::Result<bool> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let found = std::fs::symlink_metadata(path)?;
+        let found_identity = DirIdentity {
+            dev: found.dev(),
+            ino: found.ino(),
+        };
+        Ok(found.file_type().is_dir() && found_identity == self.identity)
+    }
+
+    /// As above: for as long as the hold lives, it denies every other
+    /// opener, so the name cannot have come to mean anything else.
+    #[cfg(windows)]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature for every platform; only the unix arm can fail to read an identity"
+    )]
+    fn still_holds(&self, _path: &Path) -> std::io::Result<bool> {
+        Ok(self.hold.is_some())
+    }
+
+    /// As above, for targets with no ownership proof to check.
+    #[cfg(not(any(unix, windows)))]
+    #[expect(
+        clippy::unnecessary_wraps,
+        clippy::unused_self,
+        reason = "one signature for every platform; this target can never confirm ownership"
+    )]
+    fn still_holds(&self, _path: &Path) -> std::io::Result<bool> {
+        Ok(false)
+    }
+
+    /// Gives up the hold so the directory it names can be removed (Windows
+    /// only; see [`GenerationDirClaim`]). A no-op everywhere else.
+    #[cfg(unix)]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+
+    #[cfg(windows)]
+    fn release_hold(&mut self) {
+        self.hold.take();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+}
+
+/// Turns `staged`'s descriptor into the claim on the just-promoted `path`,
+/// refusing unless the entry now found there is the very directory that
+/// descriptor names -- a competing writer can have taken the name back by
+/// renaming this call's directory away, and the rename that promoted it
+/// says nothing about what the name means afterwards.
+///
+/// A symlink or any other replacement is refused rather than followed: the
+/// check reads `symlink_metadata`, whose answer for a symlink is the link's
+/// own and never its target's.
+#[cfg(unix)]
+fn claim_generation_dir(path: &Path, staged: StagedDirHold) -> std::io::Result<GenerationDirClaim> {
+    let claim = GenerationDirClaim {
+        identity: staged.identity,
+        _hold: staged.hold,
+    };
+    if !claim.still_holds(path)? {
+        return Err(std::io::Error::other(
+            "a competing writer took the generation name between this call's promotion and its claim",
+        ));
+    }
+    Ok(claim)
+}
+
+/// As [`claim_generation_dir`] above, for the sharing hold (see
+/// [`GenerationDirClaim`]). `FILE_FLAG_BACKUP_SEMANTICS` is the documented
+/// `CreateFileW` flag that lets a directory be opened at all; `share_mode`
+/// `0` is what then denies every other opener, matching
+/// `staging::create_new_exclusive`'s use of the same flag for a file.
+/// `staged` is unusable here: with no by-handle identity to compare it
+/// against, the hold, and not a comparison, is this platform's proof.
+#[cfg(windows)]
+fn claim_generation_dir(
+    path: &Path,
+    _staged: StagedDirHold,
+) -> std::io::Result<GenerationDirClaim> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    let hold = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(0)
+        .open(path)?;
+    Ok(GenerationDirClaim { hold: Some(hold) })
+}
+
+/// As [`claim_generation_dir`] above, for targets with no ownership proof
+/// to record.
+#[cfg(not(any(unix, windows)))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "one signature for every platform; this target opens nothing that could fail"
+)]
+fn claim_generation_dir(
+    _path: &Path,
+    _staged: StagedDirHold,
+) -> std::io::Result<GenerationDirClaim> {
+    Ok(GenerationDirClaim)
 }
 
 /// Hex width of the pointer staging suffix, matching [`crate::extract`]'s
