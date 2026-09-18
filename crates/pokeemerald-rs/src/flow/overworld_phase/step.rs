@@ -625,6 +625,17 @@ impl OverworldPhase {
     /// arrow-warp preempt, the at-rest animated-door preempt (issue #851),
     /// the same-frame interaction, and a fresh `START` press's menu, already
     /// built if it claims the frame.
+    ///
+    /// All four of those (not just the `START` menu -- `start_menu_may_open`'s
+    /// own sixth gate) are suppressed while
+    /// [`engine::overworld::PlayerState::forced_movement_armed`] holds: upstream's
+    /// `FieldGetPlayerInput` computes `forcedMove` from the standing behavior
+    /// and returns before `TryArrowWarp`, `TryStartInteractionScript`,
+    /// `TryDoorWarp`, or `pressedStartButton` read anything
+    /// (`field_control_avatar.c:92-113`, issue #926) -- this is that same
+    /// early return, reached before [`Self::step`] ever calls
+    /// [`PlayerState::step`](engine::overworld::PlayerState::step), whose own
+    /// guard is a movement-only concern.
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,
@@ -637,7 +648,7 @@ impl OverworldPhase {
         // `PlayerGetElevation()`'s retained `previousElevation`, not the
         // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
         let previous_elevation = self.player.previous_elevation();
-        let at_rest = !self.player.in_transit();
+        let at_rest = !self.player.in_transit() && !self.player.forced_movement_armed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -649,11 +660,12 @@ impl OverworldPhase {
         // NPC interaction, resolved before `advance_or_skip_for_preempt`
         // can turn or step the player (contract: `step`'s "NPC dialog
         // routing" section). Skipped when `arrow_trigger` already fired, as
-        // `TryArrowWarp` returns ahead of the interaction check. The tokens
+        // `TryArrowWarp` returns ahead of the interaction check, and while
+        // forced movement is armed, as `FieldGetPlayerInput` never reaches
+        // `TryStartInteractionScript` either (method doc). The tokens
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
-        let interaction = arrow_trigger
-            .is_none()
+        let interaction = (arrow_trigger.is_none() && !self.player.forced_movement_armed())
             .then(|| self.interaction_tokens_this_frame(buttons, runtime))
             .flatten();
 

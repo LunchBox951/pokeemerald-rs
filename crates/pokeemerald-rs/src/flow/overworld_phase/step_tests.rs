@@ -1270,3 +1270,53 @@ fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
          same-frame interaction -- not open the menu ahead of it"
     );
 }
+
+/// Upstream leaves `input->pressedStartButton` unset on the `T_TILE_CENTER`
+/// CB1 that first reports the player at rest on a forced-movement tile:
+/// `FieldGetPlayerInput` computes `forcedMove` from the *standing* behavior
+/// and skips the whole button block when it is set
+/// (`pokeemerald/src/field_control_avatar.c:92-113`), so
+/// `ProcessPlayerFieldInput` never reaches its `ShowStartMenu` branch
+/// (`:180-186`). This port's counterpart of that CB1 is the first
+/// pre-movement stage that sees the player at rest on the landing tile
+/// (`warp_tests::walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`'s
+/// own doc comment pins that mapping), so a fresh START there must be
+/// refused the same way (issue #926).
+#[test]
+fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_MUDDY_SLOPE,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the forced-movement tile"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "forced movement is armed on the standing tile, so upstream never sets \
+         pressedStartButton on that frame at all"
+    );
+}

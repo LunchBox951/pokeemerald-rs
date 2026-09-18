@@ -36,6 +36,7 @@ pub struct PlayerState {
     transit_frames: Option<u8>,
     turn_frames_remaining: u8,
     transit_direction: Option<Direction>,
+    forced_movement_armed: bool,
 }
 
 /// The result of one directional-input poll.
@@ -108,7 +109,15 @@ impl Landing {
 impl PlayerState {
     /// Creates a stationary player on `position`.
     ///
-    /// Collision and render elevations both start at `elevation`.
+    /// Collision and render elevations both start at `elevation`. Starts
+    /// controllable even when `position` is a forced-movement tile: a
+    /// warp arrival or a resumed save places the avatar here without this
+    /// `PlayerState` ever observing a step onto it, and upstream's own
+    /// `ForcedMovement_*` physics -- which would actually move a genuinely
+    /// forced player clear of the tile -- stay unported, so arming the
+    /// guard on a placement instead of an observed landing would trap the
+    /// avatar forever with no keypad fallback (issue #926; see
+    /// [`forced_movement_armed`](Self::forced_movement_armed)).
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
@@ -121,6 +130,7 @@ impl PlayerState {
             transit_frames: None,
             turn_frames_remaining: 0,
             transit_direction: None,
+            forced_movement_armed: false,
         }
     }
 
@@ -165,6 +175,24 @@ impl PlayerState {
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
     pub const fn clear_turn_lock(&mut self) {
         self.turn_frames_remaining = 0;
+    }
+
+    /// Returns whether the standing tile currently holds field input the way
+    /// upstream's `forcedMove` does: `FieldGetPlayerInput` computes it from
+    /// the standing behavior and skips the whole button block --
+    /// `TryArrowWarp`, `TryStartInteractionScript`, `TryDoorWarp`, and
+    /// `pressedStartButton` alike -- while it is set
+    /// (`field_control_avatar.c:92-113`), ahead of and independent of
+    /// [`step`](Self::step)'s own collision-blocked fallthrough (issue #926).
+    ///
+    /// `True` only once *this* `PlayerState` has itself completed a step
+    /// onto a forced-movement tile ([`try_start_resolved_step`](Self::try_start_resolved_step)),
+    /// never merely because [`new`](Self::new) placed it there: a warp
+    /// arrival or a resumed save that lands on such a tile starts
+    /// controllable instead (see `new`'s doc for why).
+    #[must_use]
+    pub const fn forced_movement_armed(&self) -> bool {
+        self.forced_movement_armed
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -242,9 +270,9 @@ impl PlayerState {
     /// occupancy. Connection landings omit neighbouring behaviour attributes and
     /// object events because [`ConnectedMapData`] does not expose them.
     /// A blocked attempt still leaves the player facing the attempted direction,
-    /// except a forced-movement standing tile (see
-    /// [`is_forced_movement`](super::metatile_behavior::is_forced_movement)),
-    /// which blocks every manual step without turning the player -- unless
+    /// except an armed forced-movement standing tile (see
+    /// [`forced_movement_armed`](Self::forced_movement_armed)), which blocks
+    /// every manual step without turning the player -- unless
     /// [`forced_movement_direction`] is itself collision-blocked, in which case
     /// this poll is honoured as an ordinary manual step instead, matching
     /// upstream's fallthrough to `MovePlayerAvatarUsingKeypadInput`
@@ -277,7 +305,7 @@ impl PlayerState {
             .unwrap_or(MB_NORMAL);
 
         // Checked before the turn branch; see `step`'s doc for the contract.
-        if is_forced_movement(standing_behavior) {
+        if self.forced_movement_armed {
             let forced_step_blocked =
                 forced_movement_direction(standing_behavior, self.movement_direction).is_some_and(
                     |forced_direction| {
@@ -434,6 +462,12 @@ impl PlayerState {
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
+        // Arms (or disarms) the guard from the tile this step itself landed
+        // on -- see `forced_movement_armed`'s doc for why a placement must
+        // not. A connection landing's behavior always reads `MB_NORMAL`
+        // (`Landing::across_connection`), so crossing into a connected map
+        // never arms it either; unchanged, already-documented limitation.
+        self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
         Ok(())
     }
 
@@ -2163,7 +2197,19 @@ mod tests {
     #[test]
     fn a_collision_blocked_forced_direction_still_honours_manual_input() {
         let runtime = blocked_slide_east_runtime();
-        let mut player = PlayerState::new((2, 2), 3, Direction::West);
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground, \
+             which is what arms the guard (issue #926's placement/resume finding)"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
@@ -2178,26 +2224,30 @@ mod tests {
         assert_eq!(player.position(), (1, 2));
     }
 
-    /// A passable forced direction is the unchanged, still-deferred case: the
-    /// slide physics are not ported, so this port keeps failing the poll
-    /// closed exactly as before (`a_forced_movement_tile_does_not_honour_the_callers_direction`
-    /// pins the same fixture). This test only pins that the new
-    /// collision-blocked branch did not accidentally widen to the passable case.
+    /// A warp arrival or a resumed save places the avatar with
+    /// [`PlayerState::new`] straight onto its saved tile, so that tile can be
+    /// a forced-movement metatile whose own forced direction is passable
+    /// (unlike the sibling collision-blocked test above) -- the case
+    /// [`forced_movement_direction`]'s deferred physics gap would otherwise
+    /// fail closed on forever, with no keypad fallback at all. Per
+    /// [`PlayerState::new`]'s doc, a placement never arms the guard, so this
+    /// player is controllable from the very first poll `(behavioral-fidelity)`.
     #[test]
-    fn a_passable_forced_direction_still_fails_the_manual_poll_closed() {
+    fn a_player_placed_on_a_forced_movement_tile_is_not_immobile_forever() {
         let runtime = slide_east_runtime();
         let mut player = PlayerState::new((2, 2), 3, Direction::East);
 
-        assert_eq!(
-            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-            StepOutcome::Blocked {
-                direction: Direction::West,
-                collision: super::super::collision::Collision::Impassable,
-            },
-            "the forced eastward step onto (3, 2) is clear, so the slide-physics gap \
-             stays deferred and the manual poll is still refused"
+        for _ in 0..60 {
+            let _ = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+        }
+
+        assert_ne!(
+            player.position(),
+            (2, 2),
+            "a player placed on a forced-movement tile must not stay stuck on it \
+             for a whole second of polls"
         );
-        assert_eq!(player.position(), (2, 2));
     }
 
     /// Ice and the Trick House Puzzle 8 floor continue the player's current
@@ -2247,20 +2297,38 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        let mut player = PlayerState::new((2, 2), 3, Direction::East);
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the ice tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+            "fixture precondition: releasing input ends the movement streak"
+        );
 
-        // The forced direction (facing, east) is collision-blocked, so this
-        // falls through to ordinary keypad handling: a westward poll while
-        // still facing east turns in place first, exactly like any other
-        // direction change from standstill -- not the unconditional,
-        // never-turns `Blocked` a still-armed forced tile would otherwise
-        // produce.
+        // The forced direction (movement_direction, east) is
+        // collision-blocked, so this falls through to ordinary keypad
+        // handling: a westward poll while still facing east turns in place
+        // first, exactly like any other direction change from standstill --
+        // not the unconditional, never-turns `Blocked` a still-armed forced
+        // tile would otherwise produce.
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Turned(Direction::West),
-            "the player's own eastward facing is the ice tile's forced direction \
-             and it is blocked at (3, 2), so this poll must reach ordinary keypad \
-             handling and turn instead of failing closed without turning"
+            "the player's own eastward movement direction is the ice tile's forced \
+             direction and it is blocked at (3, 2), so this poll must reach \
+             ordinary keypad handling and turn instead of failing closed without \
+             turning"
         );
     }
 
@@ -2312,7 +2380,25 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        let mut player = PlayerState::new((2, 2), 3, Direction::East);
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the ice tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+            "fixture precondition: releasing input ends the movement streak"
+        );
+
         player.face(Direction::North);
         assert_eq!(
             player.facing(),
@@ -2377,7 +2463,19 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        let mut player = PlayerState::new((2, 2), 3, Direction::East);
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the mat tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
