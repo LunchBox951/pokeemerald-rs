@@ -456,6 +456,11 @@ fn compose_pixel(
     // (`mgba/src/gba/renderers/video-software.c:903-912`)
     // `(behavioral-fidelity)`.
     let (partition_control, _) = effects.windows.classify_with_region(wx, wy, false);
+    // The backdrop's brighten/darken variant is chosen from that same
+    // OBJWIN-independent span, not from `window.effects` below
+    // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
+    let span_backdrop =
+        effects::backdrop_variant(&effects.color, partition_control.effects, effects.backdrop);
 
     let mut front = None;
     let mut next = None;
@@ -509,17 +514,10 @@ fn compose_pixel(
     }
 
     let Some((_, front_color, front_kind, front_semi_transparent)) = front else {
-        // Nothing drawn: the backdrop itself is shown, subject only to
-        // brighten/darken (effects::resolve_pixel_color never alpha-blends
+        // Nothing drawn: the backdrop itself is shown, already resolved to
+        // its span variant (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
-        return effects::resolve_pixel_color(
-            &effects.color,
-            window.effects,
-            any_target2,
-            (effects.backdrop, LayerKind::Backdrop, false),
-            None,
-            effects.backdrop,
-        );
+        return span_backdrop;
     };
     let next = next.map(|(_, color, kind, _)| (color, kind));
     effects::resolve_pixel_color(
@@ -528,7 +526,7 @@ fn compose_pixel(
         any_target2,
         (front_color, front_kind, front_semi_transparent),
         next,
-        effects.backdrop,
+        span_backdrop,
     )
 }
 
@@ -2457,5 +2455,137 @@ mod tests {
             "WIN0 outranks OBJWIN, so the OBJWIN sprite is skipped there and the \
              OBJ stays at priority 3, behind BG0's priority 1"
         );
+    }
+
+    #[test]
+    fn objwin_mask_never_changes_the_uncovered_backdrop_variant() {
+        // The backdrop variant is chosen once per static span
+        // (`effects::backdrop_variant`), not per OBJWIN-masked pixel: WINOUT
+        // enables effects here while OBJWIN doesn't, so both columns brighten.
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]); // columns 4..8 opaque
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
+
+        // WINOUT enables color effects; OBJWIN enables nothing at all.
+        let mut winout = WindowLayerEnable::NONE;
+        winout.effects = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE),
+                winout,
+            },
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [false; 4],
+                    obj: false,
+                    backdrop: true,
+                },
+                target2: LayerTargets::default(),
+                eva: 0,
+                evb: 0,
+                evy: 16,
+            },
+            backdrop: Rgb888::BLACK,
+            ..FrameEffects::default()
+        };
+
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(white),
+            "outside the OBJWIN mask the WINOUT span brightens the backdrop"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(white),
+            "the OBJWIN mask must not re-select the backdrop variant"
+        );
+    }
+
+    #[test]
+    fn forced_alpha_blends_against_the_span_backdrop_variant() {
+        // A semi-transparent OBJ forces alpha with no second target below
+        // it, blending against the span's backdrop variant
+        // (`effects::backdrop_variant`), not the raw backdrop.
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent)];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        // EVA = 0, EVB = 16 shows the second target alone, so the displayed
+        // pixel is whichever backdrop variant mgba blended against.
+        for (effect, backdrop, expected) in [
+            (ColorEffect::Brighten, Rgb888::BLACK, white),
+            (ColorEffect::Darken, white, Rgb888::BLACK),
+        ] {
+            let effects = FrameEffects {
+                color: EffectsConfig {
+                    effect,
+                    target1: LayerTargets {
+                        bg: [false; 4],
+                        obj: false,
+                        backdrop: true,
+                    },
+                    target2: LayerTargets {
+                        bg: [false; 4],
+                        obj: false,
+                        backdrop: true,
+                    },
+                    eva: 0,
+                    evb: 16,
+                    evy: 16,
+                },
+                backdrop,
+                ..FrameEffects::default()
+            };
+
+            let fb = compose_frame_with_effects(&sprites, &[], &effects);
+            assert_eq!(
+                fb.pixel(0, 0),
+                Some(expected),
+                "forced alpha blends against the span's backdrop variant, not the raw backdrop"
+            );
+        }
     }
 }

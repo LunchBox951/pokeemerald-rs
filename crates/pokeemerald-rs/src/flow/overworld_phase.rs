@@ -191,11 +191,10 @@ pub(crate) struct OverworldPhase {
     /// background tile animation keeps running even while [`Self::dialog`]
     /// or an open start menu freezes movement, mirroring upstream's
     /// `UpdateTilesetAnimations` running every `VBlank` regardless of
-    /// message-box state) and reset to 0 in
-    /// [`Self::load_default`]/[`Self::warp_to`] only, matching upstream's
-    /// own `InitTilesetAnimations` reset points (full map loads,
-    /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
-    /// `tileset_anims`'s own module docs). A connection crossing
+    /// message-box state) and reset to 0 wherever upstream calls
+    /// `InitTilesetAnimations`: full map loads
+    /// ([`Self::load_default`]/[`Self::warp_to`]) and a non-loss wild-battle
+    /// return ([`Self::advance_wild_battle_frame`], issue #865). A connection crossing
     /// ([`Self::cross_connection`]) deliberately does *not* reset it:
     /// upstream's seamless camera transition re-inits only the secondary
     /// tileset counter, which this port does not model.
@@ -1160,3 +1159,7 @@ mod step_tests;
 mod test_support;
 #[cfg(test)]
 mod warp_tests;
+/// `wild_battle`'s tests -- the same per-area split as the rest of this
+/// list.
+#[cfg(test)]
+mod wild_battle_tests;
