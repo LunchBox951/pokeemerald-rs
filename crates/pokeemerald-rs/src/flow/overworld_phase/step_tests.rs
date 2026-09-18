@@ -1115,6 +1115,135 @@ fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
     );
 }
 
+/// Observed through the suppressed encounter roll, as
+/// `a_door_warp_frame_never_reaches_the_encounter_roll` does.
+#[test]
+fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE};
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const FLOOR: (u16, u16) = (7, 5);
+    const DOOR: (u16, u16) = (8, 5);
+
+    let events = assets::MapEventsTable::new()
+        .resolve(CAVE)
+        .expect("Granite Cave B1F resolves in the generated map-events table");
+    assert!(
+        events
+            .warp_events
+            .iter()
+            .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+        "fixture precondition: the door tile carries a warp event stored at elevation 3"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(FLOOR, MB_CAVE, 3), (DOOR, MB_ANIMATED_DOOR, 0)],
+        ),
+        CAVE,
+        PlayerState::new((6, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+    // Same screen override as `a_door_warp_frame_never_reaches_the_encounter_roll`.
+    phase.wild_table_screen = Some((CAVE, true));
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (7, 5));
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "fixture precondition: an unsuppressed roll really does overwrite this"
+    );
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (8, 5));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "the landed transition cell is the collision elevation; the retained \
+         previousElevation upstream looks warps up at is still 3"
+    );
+
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "the door warp must fire on the drain frame -- upstream resolves it at \
+         PlayerGetElevation()'s retained 3 (field_player_avatar.c:1192-1195) -- so \
+         ProcessPlayerFieldInput returns before CheckStandardWildEncounter and the \
+         door tile's own behavior is never recorded"
+    );
+}
+
+/// End-to-end landing check for the post-movement arrow lookup; the pack-free
+/// `post_movement_arrow_elevation_tests` in `step.rs` pins the lookup itself.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
+
+    const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
+    const DOORMAT: (u16, u16) = (7, 8);
+
+    let events = assets::MapEventsTable::new()
+        .resolve(CENTER)
+        .expect("Oldale Town's Pokémon Center resolves in the generated map-events table");
+    let doormat = events.warp_events[0];
+    assert_eq!((doormat.x, doormat.y), (7, 8));
+    assert_eq!(
+        doormat.elevation, 3,
+        "fixture precondition: the doormat's warp event is stored at elevation 3"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
+        ),
+        CENTER,
+        PlayerState::new((7, 7), 3, Direction::South),
+        None,
+    );
+
+    // The poll stays shut while the walk animation drains (`arrow_poll_open`).
+    for frame in 1..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, CENTER,
+            "the arrow warp must not fire mid-animation (frame {frame} of \
+             {WALK_FRAMES_PER_TILE})"
+        );
+    }
+    assert_eq!(phase.player.position(), (7, 8));
+    assert!(phase.player.in_transit());
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3)
+    );
+
+    // The drain frame.
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_OLDALE_TOWN"),
+        "the completed crossing's arrow warp must land -- a lookup at the \
+         collision elevation 0 misses the warp event stored at 3 and leaves \
+         the player standing on the doormat"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the warp lands the player at rest, not mid-step"
+    );
+}
+
 /// The same ordering as
 /// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`],
 /// driven through [`crate::flow::advance_scene`]'s dispatch rather than

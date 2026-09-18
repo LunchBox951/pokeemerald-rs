@@ -177,6 +177,33 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
     }
 }
 
+/// Resolve the backdrop's normal-versus-brighten/darken variant for a static
+/// `WIN0`/`WIN1`/`WINOUT` span.
+///
+/// mGBA selects this once per span, from that span's own blend-enable bit —
+/// deliberately excluding `OBJWIN`, which can mask individual pixels within
+/// the span but never re-selects the backdrop's variant
+/// (`mgba/src/gba/renderers/video-software.c:933-955`). The same selected
+/// color is reused both where no layer draws over the backdrop and as the
+/// forced-alpha second target (`mgba/src/gba/renderers/video-software.c:963-981`)
+/// `(behavioral-fidelity)`.
+#[must_use]
+pub fn backdrop_variant(
+    cfg: &EffectsConfig,
+    span_effects_enabled: bool,
+    backdrop: Rgb888,
+) -> Rgb888 {
+    if span_effects_enabled && cfg.target1.backdrop {
+        match cfg.effect {
+            ColorEffect::Brighten => brighten(backdrop, cfg.evy),
+            ColorEffect::Darken => darken(backdrop, cfg.evy),
+            ColorEffect::None | ColorEffect::AlphaBlend => backdrop,
+        }
+    } else {
+        backdrop
+    }
+}
+
 /// Resolve the displayed color for a front layer and its immediate neighbor.
 ///
 /// `front` contains its color, layer kind, and whether sprite semi-transparency

@@ -24,7 +24,11 @@ const DATA_REGISTER_COUNT: usize = 4;
 /// host. Elided lifetimes keep the command table independent of script data.
 pub type Command<H> = fn(&mut ScriptContext<'_, '_, H>, &mut H) -> bool;
 
-/// A native step that returns whether bytecode should resume on the next run.
+/// A step function that reports whether bytecode is ready to resume.
+///
+/// [`setup_native`](ScriptContext::setup_native) resumes on the next
+/// [`run`](ScriptContext::run) call; [`setup_gate`](ScriptContext::setup_gate)
+/// resumes within the same call. See each method for which applies.
 pub type NativeStep<H> = fn(&mut ScriptContext<'_, '_, H>, &mut H) -> bool;
 
 /// Failures from script stack, dispatch, target, and operand operations.
@@ -67,6 +71,7 @@ enum Mode<H> {
     Stopped,
     Bytecode,
     Native(NativeStep<H>),
+    Gate(NativeStep<H>),
 }
 
 /// Execution state for one script.
@@ -111,6 +116,13 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
     /// Enters native mode and runs `step` on the next [`run`](Self::run) call.
     pub fn setup_native(&mut self, step: NativeStep<H>) {
         self.mode = Mode::Native(step);
+    }
+
+    /// Parks bytecode dispatch behind a scheduler gate polled by `step`; a ready gate
+    /// resumes dispatch within the same [`run`](Self::run) call, since `CONTEXT_WAITING`
+    /// only short-circuits `ScriptContext_RunScript` (`pokeemerald/src/script.c`).
+    pub fn setup_gate(&mut self, step: NativeStep<H>) {
+        self.mode = Mode::Gate(step);
     }
 
     /// Stops execution and clears the cursor.
@@ -292,8 +304,9 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
     ///
     /// Returns `true` while work remains. Native mode always yields for one
     /// call; matching `RunScriptCommand` in `pokeemerald/src/script.c`, a
-    /// completed native step resumes bytecode on the next call. Exhausted
-    /// bytecode and unknown opcodes stop execution and return `false`.
+    /// completed native step resumes bytecode on the next call, while a ready
+    /// gate resumes it in this one ([`setup_gate`](Self::setup_gate)).
+    /// Exhausted bytecode and unknown opcodes stop execution and return `false`.
     pub fn run(&mut self, host: &mut H) -> bool {
         match self.mode {
             Mode::Stopped => false,
@@ -302,6 +315,14 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
                     self.mode = Mode::Bytecode;
                 }
                 true
+            }
+            Mode::Gate(step) => {
+                if step(self, host) {
+                    self.mode = Mode::Bytecode;
+                    self.run(host)
+                } else {
+                    true
+                }
             }
             Mode::Bytecode => loop {
                 let Some(cursor) = self.cursor else {

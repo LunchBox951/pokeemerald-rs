@@ -47,12 +47,13 @@ const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
 struct PreMovementFieldInput {
     facing: Direction,
     position: (i32, i32),
+    /// The pre-movement collision elevation, restored after a refused crossing.
     elevation: u8,
     arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
     /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
-    /// against the tile the player *faces*, not one they stand on -- see [`Self::step`]'s
-    /// "Warp timing" section.
+    /// against the tile the player *faces*, not one they stand on -- see
+    /// [`OverworldPhase::step`]'s "Warp timing" section.
     animated_door_trigger: Option<WarpTrigger>,
     interaction: Option<InteractionOutcome>,
     /// The menu a fresh `START` press built, if
@@ -475,8 +476,11 @@ impl OverworldPhase {
             // the precedence on its own.
             let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
             let landed = stepped_onto.filter(|_| !first_battle_triggered);
-            let door_warp = landed
-                .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
+            // Retained previous elevation, not collision -- contract noted at
+            // `resolve_pre_movement_field_input`'s `previous_elevation` local.
+            let door_warp = landed.and_then(|(x, y)| {
+                trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
+            });
             // The roll happens only on a completed step no warp path has
             // claimed (`roll_eligible_landing`) and only on a fightable map
             // (`wild_table_fightable`). A fainted-lead filter used to sit
@@ -610,7 +614,9 @@ impl OverworldPhase {
                 }
                 let direction = pre.arrow_direction?;
                 let (x, y) = pre.position;
-                trigger_arrow_warp(runtime, x, y, self.player.elevation(), direction)
+                // Same retained-elevation contract as
+                // `resolve_pre_movement_field_input`.
+                trigger_arrow_warp(runtime, x, y, self.player.previous_elevation(), direction)
             })
     }
 
@@ -628,15 +634,16 @@ impl OverworldPhase {
         let facing = self.player.facing();
         let position = self.player.position();
         let elevation = self.player.elevation();
+        // `PlayerGetElevation()`'s retained `previousElevation`, not the
+        // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
+        let previous_elevation = self.player.previous_elevation();
         let at_rest = !self.player.in_transit();
         let arrow_direction = direction.filter(|held| *held == facing);
 
-        // Upstream consumes an arrow-warp press in `ProcessPlayerFieldInput`
-        // before `PlayerStep` runs, so a satisfied gate skips this frame's
-        // movement.
+        // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
         let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
             let (x, y) = position;
-            trigger_arrow_warp(runtime, x, y, elevation, d)
+            trigger_arrow_warp(runtime, x, y, previous_elevation, d)
         });
 
         // NPC interaction, resolved before `advance_or_skip_for_preempt`
@@ -657,7 +664,7 @@ impl OverworldPhase {
         let animated_door_trigger = (at_rest && arrow_trigger.is_none() && interaction.is_none())
             .then_some(arrow_direction)
             .flatten()
-            .and_then(|d| super::animated_door::trigger(runtime, position, elevation, d));
+            .and_then(|d| super::animated_door::trigger(runtime, position, previous_elevation, d));
 
         let start_menu = self
             .start_menu_may_open(
@@ -958,6 +965,271 @@ mod door_sequencing_tests {
             "upstream cannot read this frame's held direction for TryDoorWarp -- \
              heldDirection2 is only set at T_TILE_CENTER/T_NOT_MOVING \
              (field_control_avatar.c:95-112), which the drain call is not"
+        );
+    }
+}
+
+#[cfg(test)]
+mod post_movement_arrow_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::Buttons;
+
+    const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
+    const DOORMAT: (u16, u16) = (7, 8);
+
+    fn center_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
+        scene.runtime(CENTER, header, events)
+    }
+
+    /// Asserted on `resolve_warp_trigger`, since pack-free `warp_to` is a no-op.
+    #[test]
+    fn the_drain_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CENTER)
+            .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
+        let doormat = events.warp_events[0];
+        assert_eq!((doormat.x, doormat.y), (7, 8));
+        assert_eq!(
+            doormat.elevation, 3,
+            "fixture precondition: the doormat's warp event is stored at elevation 3"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
+            ),
+            CENTER,
+            PlayerState::new((7, 7), 3, Direction::South),
+            None,
+        );
+
+        // One call short of the drain.
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) - 1 {
+            phase.step(held(Buttons::DOWN));
+        }
+        assert_eq!(phase.player.position(), (7, 8));
+        assert!(phase.player.in_transit());
+
+        // The drain call, in `step`'s own order.
+        let pre: PreMovementFieldInput = {
+            let runtime = center_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::DOWN),
+                Some(Direction::South),
+                &runtime,
+            )
+        };
+        assert!(
+            pre.arrow_trigger.is_none(),
+            "fixture precondition: the pre-movement preempt sees a player in transit"
+        );
+        phase.player.tick();
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3)
+        );
+
+        let runtime = center_runtime(&phase.scene);
+        let trigger = phase.resolve_warp_trigger(&pre, &runtime, None, false);
+        assert!(
+            matches!(
+                trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_OLDALE_TOWN")
+            ),
+            "the post-movement arrow poll must resolve at PlayerGetElevation()'s \
+             retained 3 (field_player_avatar.c:1192-1195) -- a lookup at the collision \
+             elevation 0 misses the warp event stored at 3; got {trigger:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pre_movement_arrow_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::MB_NORTH_ARROW_WARP;
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::{ButtonState, Buttons};
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const ARROW: (u16, u16) = (8, 5);
+
+    fn cave_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        scene.runtime(CAVE, header, events)
+    }
+
+    /// A frame inside the turn lock, where upstream already reaches `TryArrowWarp`.
+    #[test]
+    fn a_turning_frame_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        assert!(
+            events
+                .warp_events
+                .iter()
+                .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+            "fixture precondition: the arrow tile carries a warp event stored at elevation 3"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[(ARROW, MB_NORTH_ARROW_WARP, 0)],
+            ),
+            CAVE,
+            PlayerState::new((7, 5), 3, Direction::East),
+            None,
+        );
+
+        // East never matches a north arrow; this only lands on the transition cell.
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            phase.step(held(Buttons::RIGHT));
+        }
+        assert_eq!(phase.player.position(), (8, 5));
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3)
+        );
+
+        // A neutral frame ends the streak, so the next Up frame turns in place.
+        phase.step(ButtonState::new());
+        phase.step(held(Buttons::UP));
+        assert_eq!(phase.player.facing(), Direction::North);
+        assert_eq!(phase.player.position(), (8, 5), "the Up frame only turned");
+        assert!(
+            phase.player.turn_frames_remaining() > 0,
+            "fixture precondition: the standstill turn's lock is still draining"
+        );
+
+        let pre: PreMovementFieldInput = {
+            let runtime = cave_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::UP),
+                Some(Direction::North),
+                &runtime,
+            )
+        };
+        assert!(
+            matches!(
+                pre.arrow_trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_GRANITE_CAVE_B2F")
+            ),
+            "the at-rest arrow preempt must resolve at PlayerGetElevation()'s retained \
+             3 (field_player_avatar.c:1192-1195) -- a lookup at the collision elevation \
+             0 misses the warp event stored at 3; got {:?}",
+            pre.arrow_trigger
+        );
+    }
+}
+
+#[cfg(test)]
+mod animated_door_elevation_tests {
+    use super::super::test_support::held;
+    use super::{OverworldPhase, PreMovementFieldInput};
+    use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_NORMAL};
+    use engine::overworld::{
+        Direction, MapRuntime, PlayerState, WarpTrigger, WALK_FRAMES_PER_TILE,
+    };
+    use platform::Buttons;
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const DOOR: (u16, u16) = (8, 5);
+
+    fn cave_runtime(scene: &crate::overworld::OverworldScene) -> MapRuntime<'_> {
+        let header = assets::MapHeaderTable::new()
+            .header(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        scene.runtime(CAVE, header, events)
+    }
+
+    /// A transition landing then a multi-level landing keeps collision 0 and
+    /// retained 3 (`PlayerState::adopt_elevation`).
+    #[test]
+    fn the_animated_door_poll_resolves_at_the_retained_previous_elevation() {
+        let events = assets::MapEventsTable::new()
+            .resolve(CAVE)
+            .expect("Granite Cave B1F resolves in the generated map-events table");
+        assert!(
+            events
+                .warp_events
+                .iter()
+                .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+            "fixture precondition: the door tile carries a warp event stored at elevation 3"
+        );
+
+        let mut phase = OverworldPhase::for_test(
+            crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+                10,
+                10,
+                &[
+                    (DOOR, MB_ANIMATED_DOOR, 3),
+                    ((8, 6), MB_NORMAL, 15),
+                    ((8, 7), MB_NORMAL, 0),
+                ],
+            ),
+            CAVE,
+            PlayerState::new((8, 8), 3, Direction::North),
+            None,
+        );
+
+        for _ in 0..2 * u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::UP));
+        }
+        assert_eq!(phase.player.position(), (8, 6));
+        assert!(!phase.player.in_transit());
+        assert_eq!(
+            (phase.player.elevation(), phase.player.previous_elevation()),
+            (0, 3)
+        );
+
+        let pre: PreMovementFieldInput = {
+            let runtime = cave_runtime(&phase.scene);
+            phase.resolve_pre_movement_field_input(
+                held(Buttons::UP),
+                Some(Direction::North),
+                &runtime,
+            )
+        };
+        assert!(
+            matches!(
+                pre.animated_door_trigger,
+                Some(WarpTrigger::Resolved { map, .. })
+                    if map == assets::MapId("MAP_GRANITE_CAVE_B2F")
+            ),
+            "the animated-door poll must resolve at PlayerGetElevation()'s retained 3 \
+             (field_player_avatar.c:1192-1195) -- a lookup at the collision elevation 0 \
+             misses the warp event stored at 3; got {:?}",
+            pre.animated_door_trigger
         );
     }
 }
