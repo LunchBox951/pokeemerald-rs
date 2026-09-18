@@ -266,6 +266,115 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
 }
 
 #[test]
+fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
+    let dex = Dex::new();
+    // Horn Drill (MoveId(32), EFFECT_OHKO) has no supported effect
+    // pipeline -- `unsupported_moves_are_rejected_at_the_right_boundary_
+    // for_each_side` pins the full-PP case. Drained to 0 PP,
+    // `Cmd_attackcanceler`'s no-PP jump (`battle_script_commands.c:934`-
+    // `:939`) aborts before the effect runs, so construction must accept
+    // it, exactly like a drained *supported* move already does above.
+    let player = slow_runner_rattata(&dex); // slow: the run fails
+    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
+    let tackle_pp = enemy.moves()[0].pp;
+    for _ in 0..enemy.moves()[1].pp {
+        enemy.deduct_pp(1).unwrap();
+    }
+    assert_eq!(
+        enemy.moves()[1].pp,
+        0,
+        "fixture sanity: the unsupported slot is drained"
+    );
+
+    // battle start, turn number, selection (draw 1 -> 1 % 4 == 1: the
+    // drained Horn Drill slot), escape roll (fails). No draw follows: the
+    // failed move draws zero, so any effect-pipeline draw would panic this
+    // exactly-sized script.
+    let mut rng = SequenceRng::new([0, 0, 1, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng)
+        .expect("a depleted unsupported-effect slot must not block construction");
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::FailedNoPp {
+                by_player: false,
+                move_id: MoveId(32),
+            },
+        ]
+    );
+    assert_eq!(
+        battle.enemy().moves()[1].pp,
+        0,
+        "the spent slot is left at 0, never clamped or underflowed"
+    );
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        tackle_pp,
+        "the unpicked slot is untouched"
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "no effect-pipeline draws for the failed move"
+    );
+    assert!(battle.outcome().is_none());
+}
+
+#[test]
+fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
+    let dex = Dex::new();
+    // Soundproof's pre-PP block (`battle_script_commands.c:932`-`:933`)
+    // reads only `stat_change::soundproof_block`, which needs `move_data`
+    // -- already validated -- and returns false for any effect with no
+    // stat change, so Horn Drill's unsupported EFFECT_OHKO is never
+    // executed: the slot's zero PP lands on FailedNoPp exactly as it does
+    // without Soundproof.
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(
+        player.ability(),
+        AbilityId(43),
+        "fixture sanity: the player holds Soundproof"
+    );
+    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
+    for _ in 0..enemy.moves()[1].pp {
+        enemy.deduct_pp(1).unwrap();
+    }
+    assert_eq!(
+        enemy.moves()[1].pp,
+        0,
+        "fixture sanity: the slot is drained"
+    );
+
+    // battle start, turn number, selection (draw 1 -> slot 1), escape roll
+    // (fails). Any effect-pipeline draw would exhaust this exact script.
+    let mut rng = SequenceRng::new([0, 0, 1, 65000]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .expect("a Soundproof player must not block a depleted unsupported slot");
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::FailedNoPp {
+                by_player: false,
+                move_id: MoveId(32),
+            },
+        ]
+    );
+    assert_eq!(rng.draws(), 4);
+}
+
+#[test]
 fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     let dex = Dex::new();
     let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
