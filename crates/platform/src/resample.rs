@@ -23,6 +23,7 @@
 //! spurious underrun/silence into `next` whenever the producer was momentarily
 //! one frame short, a glitch the direct path never produces.
 
+use crate::error::PlatformError;
 use crate::ring::Consumer;
 
 /// Bound (output frames) for pre-sizing the source scratch buffer: the
@@ -72,9 +73,15 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
         bound
     };
 
-    // Hard clamp: `bound`'s `.max(1.0)` floor cannot shrink below 1, so
-    // `step` alone can still exceed `source_cap`; `Self::fill_chunk` caps
-    // its own crossings identically.
+    // Hard clamp: `bound`'s `.max(1.0)` floor cannot shrink below 1, so a
+    // `step` that alone exceeds `source_cap` (before `bound` even enters
+    // it) would still leave `bound * step > source_cap` here. `Resampler::new`
+    // refuses exactly that `step` before ever calling this function (see its
+    // `MAX_SCRATCH_SOURCE_FRAMES` check), so a constructed `Resampler` never
+    // reaches this branch with `bound == 1` still over the cap; kept as a
+    // defense-in-depth bound on this pure function's own output (also
+    // exercised directly by `a_rate_ratio_past_the_source_cap_still_bounds_scratch`),
+    // and `Self::fill_chunk` caps its own crossings identically regardless.
     #[allow(clippy::cast_precision_loss)]
     let crossings = (bound as f64 * step).ceil().min(source_cap);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -129,16 +136,47 @@ impl Resampler {
     /// buffer, and bounds each chunk [`Self::fill`] processes an oversized
     /// callback in, so the real-time `fill` never drains per frame and
     /// never allocates, however large a callback the device hands it.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate /
+    /// device_rate` alone (regardless of `max_output_frames`) exceeds
+    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: even the smallest possible chunk
+    /// (`chunk_frames == 1`) would then need more source frames than the
+    /// scratch cap allows to resolve a single output frame's advance, which
+    /// would otherwise leave `self.frac >= 1.0` for [`Self::fill_chunk`] to
+    /// interpolate with — extrapolating past the source range instead of
+    /// bounding a chunk crossing count that can never fully catch up.
+    /// Refusing here, rather than degrading inside `fill_chunk`, keeps every
+    /// constructed `Resampler`'s `frac` invariant (`[0.0, 1.0)`, see the
+    /// field doc) unconditionally true.
     pub fn new(
         consumer: Consumer,
         channels: u16,
         source_rate: u32,
         device_rate: u32,
         max_output_frames: usize,
-    ) -> Self {
+    ) -> Result<Self, PlatformError> {
         let channels = usize::from(channels.max(1));
         let step = f64::from(source_rate) / f64::from(device_rate.max(1));
+
+        // `step` alone (independent of any chunk-size bound) must fit within
+        // the source-frame scratch cap: a single output frame's advance can
+        // need up to `ceil(step)` source frames to resolve, and that must
+        // happen even at the smallest possible chunk (`bound == 1`). Past
+        // this, no `bound` -- however small `scratch_layout` shrinks it --
+        // can fully resolve even one frame's advance in the one bulk drain
+        // `fill_chunk` performs per chunk, which is exactly the "hard clamp"
+        // `scratch_layout` documents. Reject it here instead of constructing
+        // a `Resampler` whose `fill` would silently extrapolate.
+        #[allow(clippy::cast_precision_loss)]
+        let source_cap = MAX_SCRATCH_SOURCE_FRAMES as f64;
+        if step > source_cap {
+            return Err(PlatformError::UnsupportedResampleRatio {
+                source_rate,
+                device_rate,
+            });
+        }
 
         // Upper bound on the source frames one chunk can consume: two priming
         // frames plus one per source-frame boundary the interpolation cursor
@@ -149,7 +187,7 @@ impl Resampler {
         // growing `scratch`), so this bound is never exceeded.
         let (bound, scratch_frames) = scratch_layout(max_output_frames, step);
 
-        Self {
+        Ok(Self {
             consumer,
             channels,
             step,
@@ -160,7 +198,7 @@ impl Resampler {
             chunk_frames: bound,
             primed: false,
             need_advance: false,
-        }
+        })
     }
 
     /// Total samples the underlying [`Consumer`] has filled with silence due
@@ -229,9 +267,15 @@ impl Resampler {
         // consumption precisely — never relying on `floor` agreeing with
         // incremental accumulation at an exact boundary (a mismatch would drop
         // a source frame or index past the scratch).
-        // Capped at `MAX_SCRATCH_SOURCE_FRAMES` (matching `scratch_layout`):
-        // an unresolved `frac_probe >= 1.0` past that carries over, worked
-        // down over later calls instead of spinning or indexing unboundedly.
+        // Capped at `MAX_SCRATCH_SOURCE_FRAMES` (matching `scratch_layout`) as
+        // a defense-in-depth bound, not a path a validly constructed
+        // `Resampler` can reach: `Resampler::new` refuses any `step` its
+        // scratch cannot carry (see its `MAX_SCRATCH_SOURCE_FRAMES` check), so
+        // `bound * step` (this chunk's worst-case crossings, `bound == steps`
+        // here) is always within the cap and this `break` never fires. Were
+        // it ever to fire regardless, the leftover `frac_probe >= 1.0` would
+        // carry over unresolved rather than spin or index unboundedly — the
+        // same shape `Self::fill_chunk`'s own advance loop below mirrors.
         let prime = if self.primed { 0 } else { 2 };
         let mut frac_probe = self.frac;
         let mut advance_probe = self.need_advance;
@@ -330,7 +374,7 @@ mod tests {
         // only builds a `Resampler` when the rates actually differ).
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0, 30.0, 40.0, 50.0]), 6);
-        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16);
+        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16).unwrap();
 
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
@@ -355,7 +399,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(64);
         assert_eq!(producer_a.push(&source), 30);
-        let mut oversized = Resampler::new(consumer_a, 1, 1, 1, 4);
+        let mut oversized = Resampler::new(consumer_a, 1, 1, 1, 4).unwrap();
         let scratch_capacity = oversized.scratch.len();
 
         let mut big_out = [0.0; 20];
@@ -368,7 +412,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(64);
         assert_eq!(producer_b.push(&source), 30);
-        let mut chunked = Resampler::new(consumer_b, 1, 1, 1, 4);
+        let mut chunked = Resampler::new(consumer_b, 1, 1, 1, 4).unwrap();
         let mut small_out = [0.0; 20];
         for chunk in small_out.chunks_mut(4) {
             chunked.fill(chunk);
@@ -427,15 +471,43 @@ mod tests {
     }
 
     #[test]
-    fn fill_never_panics_for_a_rate_ratio_past_the_source_cap() {
-        // `a_rate_ratio_past_the_source_cap_still_bounds_scratch` pins the
-        // allocation; this pins that a real `fill()` against that same
-        // extreme construction stays memory-safe too. `fill_chunk`'s advance
-        // loop caps its own crossings identically to what `scratch` was
-        // drained for, so the backlog this step implies is worked down over
-        // several calls instead of ever indexing past `scratch`.
+    fn a_rate_ratio_past_the_source_cap_never_extrapolates_past_the_source_range() {
+        // `step` here (`u32::MAX / 1`) is far past `MAX_SCRATCH_SOURCE_FRAMES`:
+        // no `chunk_frames` -- not even the floor of 1 -- could resolve a
+        // single output frame's advance from one bulk drain, which would
+        // otherwise leave `self.frac >= 1.0` for `fill_chunk` to interpolate
+        // with, extrapolating past the source data's actual range. `Resampler::new`
+        // must refuse this ratio outright: no `Resampler` is ever constructed
+        // here for `fill` to extrapolate through.
+        let (_producer, consumer) = ring_buffer(MAX_SCRATCH_SOURCE_FRAMES + 8);
+        let result = Resampler::new(consumer, 1, u32::MAX, 1, DEFAULT_MAX_OUTPUT_FRAMES);
+        assert!(
+            matches!(
+                result,
+                Err(PlatformError::UnsupportedResampleRatio {
+                    source_rate: u32::MAX,
+                    device_rate: 1,
+                })
+            ),
+            "a rate ratio past the source cap must be refused with UnsupportedResampleRatio, \
+             not constructed into a Resampler whose fill could extrapolate"
+        );
+    }
+
+    #[test]
+    fn a_rate_ratio_at_the_source_cap_still_constructs_and_never_panics() {
+        // Boundary check for `Resampler::new`'s `step > MAX_SCRATCH_SOURCE_FRAMES`
+        // refusal: a ratio landing exactly on the cap (not past it) must
+        // still construct, and a real `fill()` against it must stay
+        // memory-safe and finite, never indexing past `scratch`.
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "MAX_SCRATCH_SOURCE_FRAMES is far below u32::MAX"
+        )]
+        let source_rate = MAX_SCRATCH_SOURCE_FRAMES as u32;
         let (_producer, consumer) = ring_buffer(16);
-        let mut resampler = Resampler::new(consumer, 1, u32::MAX, 1, DEFAULT_MAX_OUTPUT_FRAMES);
+        let mut resampler = Resampler::new(consumer, 1, source_rate, 1, DEFAULT_MAX_OUTPUT_FRAMES)
+            .expect("a rate ratio exactly at the source cap must still construct");
         let mut out = [0.0_f32; 4];
         for _ in 0..8 {
             resampler.fill(&mut out);
@@ -453,10 +525,11 @@ mod tests {
         // Both caps compose: an advertised `u32::MAX` buffer maximum and an
         // advertised near-zero device rate (13379/1 -- cpal's ALSA backend
         // can report either) must not multiply into an unbounded
-        // allocation.
+        // allocation. `step` here (13379) stays comfortably under the
+        // source-frame cap, so construction succeeds.
         let huge_bound = usize::try_from(u32::MAX).unwrap();
         let (_producer, consumer) = ring_buffer(16);
-        let resampler = Resampler::new(consumer, 2, 13_379, 1, huge_bound);
+        let resampler = Resampler::new(consumer, 2, 13_379, 1, huge_bound).unwrap();
         assert!(resampler.scratch.len() <= (MAX_SCRATCH_SOURCE_FRAMES + 4) * 2);
     }
 
@@ -478,7 +551,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(64);
         assert_eq!(producer_a.push(&source), 30);
-        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap);
+        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap).unwrap();
         assert_eq!(capped.chunk_frames, DEFAULT_MAX_OUTPUT_FRAMES);
 
         let mut big_out = [0.0; 20];
@@ -486,7 +559,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(64);
         assert_eq!(producer_b.push(&source), 30);
-        let mut reference = Resampler::new(consumer_b, 1, 1, 1, 4);
+        let mut reference = Resampler::new(consumer_b, 1, 1, 1, 4).unwrap();
         let mut small_out = [0.0; 20];
         for chunk in small_out.chunks_mut(4) {
             reference.fill(chunk);
@@ -508,7 +581,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(source.len());
         assert_eq!(producer_a.push(&source), source.len());
-        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap);
+        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap).unwrap();
         assert_eq!(capped.chunk_frames, DEFAULT_MAX_OUTPUT_FRAMES);
         let scratch_capacity = capped.scratch.len();
 
@@ -522,7 +595,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(source.len());
         assert_eq!(producer_b.push(&source), source.len());
-        let mut reference = Resampler::new(consumer_b, 1, 1, 1, above_cap);
+        let mut reference = Resampler::new(consumer_b, 1, 1, 1, above_cap).unwrap();
         let mut small_out = vec![0.0; frames];
         for chunk in small_out.chunks_mut(DEFAULT_MAX_OUTPUT_FRAMES) {
             reference.fill(chunk);
@@ -539,7 +612,7 @@ mod tests {
         // midpoint.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0]), 3);
-        let mut resampler = Resampler::new(consumer, 1, 1, 2, 16);
+        let mut resampler = Resampler::new(consumer, 1, 1, 2, 16).unwrap();
 
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
@@ -557,7 +630,7 @@ mod tests {
         // source frame is emitted verbatim with no interpolation blending.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0, 30.0, 40.0]), 5);
-        let mut resampler = Resampler::new(consumer, 1, 2, 1, 16);
+        let mut resampler = Resampler::new(consumer, 1, 2, 1, 16).unwrap();
 
         let mut out = [0.0; 2];
         resampler.fill(&mut out);
@@ -572,7 +645,7 @@ mod tests {
         let (producer, consumer) = ring_buffer(16);
         // Two stereo frames: (0, 100) and (10, 200).
         assert_eq!(producer.push(&[0.0, 100.0, 10.0, 200.0]), 4);
-        let mut resampler = Resampler::new(consumer, 2, 1, 2, 16);
+        let mut resampler = Resampler::new(consumer, 2, 1, 2, 16).unwrap();
 
         let mut out = [0.0; 4]; // 2 stereo frames
         resampler.fill(&mut out);
@@ -590,7 +663,7 @@ mod tests {
         // (no silence blend) with underruns still 0.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0]), 2);
-        let mut resampler = Resampler::new(consumer, 1, 1, 2, 8);
+        let mut resampler = Resampler::new(consumer, 1, 1, 2, 8).unwrap();
 
         let mut cb1 = [0.0; 2];
         resampler.fill(&mut cb1);
@@ -619,7 +692,7 @@ mod tests {
         // queued sample even though nothing was emitted.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[7.0]), 1);
-        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16);
+        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16).unwrap();
 
         resampler.fill(&mut []);
         assert_eq!(producer.available_space(), 16 - 1);
@@ -653,7 +726,7 @@ mod tests {
         fn make() -> (Producer, Resampler) {
             let (producer, consumer) = ring_buffer(16);
             assert_eq!(producer.push(&[0.0, 10.0]), 2);
-            (producer, Resampler::new(consumer, 1, 1, 2, 8))
+            (producer, Resampler::new(consumer, 1, 1, 2, 8).unwrap())
         }
 
         let (producer_a, mut baseline) = make();

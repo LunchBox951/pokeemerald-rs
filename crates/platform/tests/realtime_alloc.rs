@@ -81,7 +81,8 @@ fn an_oversized_callback_does_not_allocate_on_the_audio_thread() {
         SOURCE_RATE,
         DEVICE_RATE,
         ADVERTISED_FRAMES,
-    );
+    )
+    .unwrap();
 
     let pcm = vec![0.25_f32; 1 << 14];
     let mut advertised = vec![0.0_f32; ADVERTISED_FRAMES * usize::from(CHANNELS)];

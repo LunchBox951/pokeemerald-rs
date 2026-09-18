@@ -158,6 +158,10 @@ impl AudioOutput {
     ///   device, or fails to build the stream. A device lost *after* the
     ///   query stays here rather than collapsing into `NoAudioDevice`: the
     ///   device was real, so losing it is a failure, not a headless run.
+    /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
+    ///   device rate pairs with [`Self::M4A_MIXER_RATE`] into a ratio the
+    ///   resampler's bounded scratch cannot carry (see
+    ///   [`crate::resample::Resampler::new`]).
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
         let host = cpal::default_host();
         let device = host
@@ -174,14 +178,17 @@ impl AudioOutput {
             // Pre-size the resampler's source-frame scratch off the real-time
             // thread, bounded by the device's largest advertised callback (in
             // frames); `Resampler::new` caps that bound itself — see
-            // `max_buffer_frames`.
+            // `max_buffer_frames`. It also refuses (as a `PlatformError`,
+            // surfaced here by `?` rather than a real-time-thread panic) any
+            // negotiated rate ratio its scratch cannot carry — see
+            // `Resampler::new`'s `UnsupportedResampleRatio` doc.
             Source::Resampled(Resampler::new(
                 consumer,
                 channels,
                 Self::M4A_MIXER_RATE,
                 device_sample_rate,
                 max_buffer_frames(&config),
-            ))
+            )?)
         };
 
         let stream_errors = Arc::new(AtomicU64::new(0));
