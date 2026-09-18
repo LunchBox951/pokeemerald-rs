@@ -118,15 +118,9 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
         self.mode = Mode::Native(step);
     }
 
-    /// Parks bytecode dispatch behind a scheduler gate polled by `step`.
-    ///
-    /// Unlike [`setup_native`](Self::setup_native), a gate that reports ready
-    /// resumes bytecode dispatch within the same [`run`](Self::run) call
-    /// instead of only switching mode for the next one. This matches
-    /// `ScriptContext_RunScript` in `pokeemerald/src/script.c`, which never
-    /// leaves bytecode mode for a wait: `CONTEXT_WAITING` only short-circuits
-    /// the call, and clearing it lets that same call's `RunScriptCommand`
-    /// reach the parked cursor.
+    /// Parks bytecode dispatch behind a scheduler gate polled by `step`; a ready gate
+    /// resumes dispatch within the same [`run`](Self::run) call, since `CONTEXT_WAITING`
+    /// only short-circuits `ScriptContext_RunScript` (`pokeemerald/src/script.c`).
     pub fn setup_gate(&mut self, step: NativeStep<H>) {
         self.mode = Mode::Gate(step);
     }
@@ -310,11 +304,9 @@ impl<'commands, 'script, H> ScriptContext<'commands, 'script, H> {
     ///
     /// Returns `true` while work remains. Native mode always yields for one
     /// call; matching `RunScriptCommand` in `pokeemerald/src/script.c`, a
-    /// completed native step resumes bytecode on the next call. A gate that
-    /// reports ready instead resumes bytecode dispatch within the same call,
-    /// matching upstream's scheduler-status wait (see
-    /// [`setup_gate`](Self::setup_gate)). Exhausted bytecode and unknown
-    /// opcodes stop execution and return `false`.
+    /// completed native step resumes bytecode on the next call, while a ready
+    /// gate resumes it in this one ([`setup_gate`](Self::setup_gate)).
+    /// Exhausted bytecode and unknown opcodes stop execution and return `false`.
     pub fn run(&mut self, host: &mut H) -> bool {
         match self.mode {
             Mode::Stopped => false,

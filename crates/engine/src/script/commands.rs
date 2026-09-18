@@ -13,9 +13,7 @@
 //! Standard-script labels and special-function identifiers are typed even when
 //! their target implementation is unavailable, so traps retain the requested
 //! identity. `waitstate` represents upstream's global waiting status with a
-//! host-owned resume flag polled through [`ScriptContext::setup_gate`], which
-//! leaves the bytecode cursor parked on the next command so a release dispatches
-//! it in the same call, as `CONTEXT_WAITING` does in `pokeemerald/src/script.c`.
+//! host-owned resume flag polled through [`ScriptContext::setup_gate`].
 
 use crate::event_data::{EventData, EventDataError, SPECIAL_VARS_START};
 use crate::rng::Rng;
@@ -1538,10 +1536,7 @@ mod tests {
         host.waiting = false;
         assert!(
             !ctx.run(&mut host),
-            "the released wait dispatches setflag and runs to `end` in the \
-             same call, as upstream's ScriptContext_Enable resumes \
-             CONTEXT_RUNNING with the cursor already parked on the command \
-             after waitstate"
+            "the released wait dispatches setflag and runs to `end` in the same call"
         );
         assert!(ctx.is_stopped());
         assert_eq!(
