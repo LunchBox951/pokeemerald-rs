@@ -3,7 +3,7 @@ use super::{
     ChangedStat, StatChangeDirection, StatChangeEffect, StatChangeMagnitude, StatChangeOutcome,
     CLEAR_BODY, EFFECT_ACCURACY_DOWN, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
     EFFECT_DEFENSE_DOWN_TWO, EFFECT_DEFENSE_UP, EFFECT_SPECIAL_ATTACK_UP, EFFECT_SPEED_DOWN,
-    HYPER_CUTTER, KEEN_EYE, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
+    HYPER_CUTTER, KEEN_EYE, SOUNDPROOF, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -41,6 +41,7 @@ const TAIL_WHIP: MoveId = MoveId(39);
 const STRING_SHOT: MoveId = MoveId(81);
 const SAND_ATTACK: MoveId = MoveId(28);
 const SCREECH: MoveId = MoveId(103);
+const METAL_SOUND: MoveId = MoveId(319);
 const GROWTH: MoveId = MoveId(74);
 const HARDEN: MoveId = MoveId(106);
 const TACKLE: MoveId = MoveId(33);
@@ -460,6 +461,54 @@ fn a_white_smoke_holders_drop_is_blocked_identically() {
 }
 
 #[test]
+fn soundproof_blocks_growl_before_accuracy() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(
+        defender.ability(),
+        SOUNDPROOF,
+        "fixture sanity: personality 0 selects slot 0, Soundproof"
+    );
+
+    let mut rng = SequenceRng::new([]);
+    let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
+    assert_eq!(
+        rng.draws(),
+        0,
+        "Soundproof blocks a sound move before its accuracy draw"
+    );
+}
+
+#[test]
+fn soundproof_blocks_screech_before_accuracy() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![SCREECH]);
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+
+    let mut rng = SequenceRng::new([]);
+    let outcome = resolve_stat_change_move(&dex, SCREECH, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
+    assert_eq!(rng.draws(), 0);
+}
+
+#[test]
+fn soundproof_blocks_metal_sound_before_accuracy() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![METAL_SOUND]);
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+
+    let mut rng = SequenceRng::new([]);
+    let outcome =
+        resolve_stat_change_move(&dex, METAL_SOUND, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
+    assert_eq!(rng.draws(), 0);
+}
+
+#[test]
 fn clear_body_blocks_even_when_already_at_the_floor() {
     let dex = Dex::new();
     let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
@@ -665,4 +714,24 @@ fn every_table_row_maps_its_canonical_move_to_the_exact_stat_and_magnitude() {
             effect.0
         );
     }
+}
+
+/// The resolution path feeds `crates/battle/src/battle/execute.rs:239-246`,
+/// which turns every [`StatChangeOutcome::AbilityProtected`] into a
+/// `StatLossPrevented` event naming a stat. Soundproof blocks the move instead
+/// (`BattleScript_SoundproofProtected`, `data/battle_scripts_1.s:4158-4164`),
+/// so it needs an outcome that carries no stat.
+#[test]
+fn soundproof_does_not_resolve_to_a_stat_scoped_ability_block() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON, 15, vec![GROWL]);
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+    let mut rng = SequenceRng::new([]);
+    let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
+    assert!(
+        !matches!(outcome, StatChangeOutcome::AbilityProtected { .. }),
+        "Soundproof's move-wide block must not resolve to the stat-scoped \
+         ability-protection outcome, got {outcome:?}"
+    );
 }

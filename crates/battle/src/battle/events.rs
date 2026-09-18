@@ -183,6 +183,16 @@ pub enum BattleEvent {
         /// The ability that prevented the change.
         ability: AbilityId,
     },
+    /// A sound move exited through `BattleScript_SoundproofProtected`
+    /// (`data/battle_scripts_1.s:4158`-`:4164`): the target's
+    /// [`AbilityId::SOUNDPROOF`] blocked the move itself, not a named stat
+    /// drop.
+    SoundproofProtected {
+        /// Whether the player used the move.
+        by_player: bool,
+        /// The move Soundproof blocked.
+        move_id: MoveId,
+    },
     /// A move raised its user's stat stage.
     StatRose {
         /// Whether the player used the move.

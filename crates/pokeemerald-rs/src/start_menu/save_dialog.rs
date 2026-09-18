@@ -1,8 +1,10 @@
 //! Save confirmation, overwrite, and completion flow.
 //!
-//! Message printing owns each frame until it finishes. This keeps the A press
-//! that advances one message from answering the next prompt in the same frame
-//! (`pokeemerald/src/start_menu.c:884-894`).
+//! A message being printed owns its frame's input, but a queued
+//! prompt-opening or store still dispatches the instant that message
+//! finishes: `RunSaveCallback` observes printer 0 inactive and calls
+//! `sSaveDialogCallback` in that same call (`pokeemerald/src/start_menu.c:884-894`).
+//! [`SaveDialog::run`]'s doc comment covers the one exception.
 
 use engine::text::format::{expand_placeholders, PlaceholderResolver};
 use engine::text::render::TextSpeed;
@@ -147,6 +149,14 @@ impl SaveDialog {
     }
 
     /// Advances the save dialog by one frame.
+    ///
+    /// A queued prompt-opening or store dispatches on the same tick its
+    /// message finishes printing, matching `RunSaveCallback` observing
+    /// printer 0 inactive and calling `sSaveDialogCallback` in that same call
+    /// (`pokeemerald/src/start_menu.c:884-894`). The result-message states
+    /// keep their own tick instead: upstream's `SaveSuccessCallback`/
+    /// `SaveErrorCallback` (`:1112-1158`) only switch to the dismissal
+    /// callback on that tick, so held A is not read until the next one.
     pub(super) fn run(
         &mut self,
         buttons: ButtonState,
@@ -155,7 +165,9 @@ impl SaveDialog {
     ) -> SaveDialogOutcome {
         if self.message_is_printing {
             self.advance_message(buttons);
-            return SaveDialogOutcome::InProgress;
+            if self.message_is_printing || !self.dispatches_on_this_message_finish() {
+                return SaveDialogOutcome::InProgress;
+            }
         }
 
         match self.state {
@@ -216,6 +228,18 @@ impl SaveDialog {
     /// Returns the open Yes/No menu for composition.
     pub(super) const fn yes_no(&self) -> Option<&YesNoMenu> {
         self.yes_no.as_ref()
+    }
+
+    /// Whether the state already queued behind the just-finished message is
+    /// automatic rather than a button-checking dismissal wait (see
+    /// [`Self::run`]'s doc comment).
+    const fn dispatches_on_this_message_finish(&self) -> bool {
+        matches!(
+            self.state,
+            SaveDialogState::OpenInitialChoice
+                | SaveDialogState::OpenOverwriteChoice(_)
+                | SaveDialogState::Store
+        )
     }
 
     fn advance_message(&mut self, buttons: ButtonState) {

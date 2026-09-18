@@ -6,12 +6,15 @@
 //! `crate::flow::overworld_phase::OverworldPhase` and reloading it -- lives
 //! in `crate::flow::save_continue_tests` and its `save_continue_*` siblings.
 
+use super::text::SaveMessage;
 use super::{
-    menu_height, synthetic_start_menu, SaveMode, SaveTarget, StartMenu, StartMenuItem,
-    StartMenuOutcome, ITEMS, MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH, YES_NO_TILEMAP_LEFT,
-    YES_NO_TILEMAP_TOP,
+    menu_height, synthetic_start_menu, SaveDialog, SaveDialogOutcome, SaveMode, SaveTarget,
+    StartMenu, StartMenuChrome, StartMenuItem, StartMenuOutcome, ITEMS, MENU_TILEMAP_LEFT,
+    MENU_TILEMAP_TOP, MENU_WIDTH, YES_NO_TILEMAP_LEFT, YES_NO_TILEMAP_TOP,
 };
 use crate::game_save::SaveFileStatus;
+use crate::overworld::dialog::confirm_printer_input;
+use crate::overworld::DialogOutcome;
 use engine::text::render::TextSpeed;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
@@ -89,6 +92,84 @@ impl SaveTarget for FakeTarget {
 /// `TextSpeed::Mid` (`crate::flow::save_continue_tests` documents the
 /// arithmetic).
 const FRAME_BUDGET: usize = 4_000;
+
+/// A held (not freshly pressed) button, for asserting a countdown ignores it.
+fn held(button: Buttons) -> ButtonState {
+    let mut state = pressed(button);
+    state.update(button);
+    state
+}
+
+/// Ticks `dialog` and a plain reference `NpcDialog` copy of the same
+/// message in lockstep, so the frame the reference reports
+/// [`DialogOutcome::Closed`] -- the same tick `RunTextPrinters` clears the
+/// real printer's `active` flag on `RENDER_FINISH`, before
+/// `RunSaveCallback` reads it (`pokeemerald/src/text.c:319-345`,
+/// `pokeemerald/src/start_menu.c:884-894`) -- pins the exact finish tick
+/// without hard-coding a message's frame count. Calls `before_finish` on
+/// every tick before the one the reference closes on.
+fn finish_message_in_lockstep(
+    dialog: &mut SaveDialog,
+    chrome: &StartMenuChrome,
+    target: &mut FakeTarget,
+    tokens: Vec<Token>,
+    buttons: ButtonState,
+    mut before_finish: impl FnMut(&SaveDialog, &FakeTarget),
+) {
+    let mut reference = chrome.message_box(tokens, target.player_text_speed());
+    for _ in 0..FRAME_BUDGET {
+        let reference_finished =
+            reference.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed;
+        assert_eq!(
+            dialog.run(buttons, chrome, target),
+            SaveDialogOutcome::InProgress
+        );
+        if reference_finished {
+            return;
+        }
+        before_finish(dialog, target);
+    }
+    panic!("the save message must finish within {FRAME_BUDGET} frames");
+}
+
+/// Drives a fresh [`SaveDialog`] up to its first (`gText_ConfirmSave`)
+/// Yes/No window.
+fn open_initial_choice(dialog: &mut SaveDialog, chrome: &StartMenuChrome, target: &mut FakeTarget) {
+    assert_eq!(
+        dialog.run(ButtonState::new(), chrome, target),
+        SaveDialogOutcome::InProgress
+    );
+    for _ in 0..FRAME_BUDGET {
+        assert_eq!(
+            dialog.run(pressed(Buttons::A), chrome, target),
+            SaveDialogOutcome::InProgress
+        );
+        if dialog.yes_no().is_some() {
+            return;
+        }
+    }
+    panic!("the initial choice must open within {FRAME_BUDGET} frames");
+}
+
+/// Drives a fresh [`SaveDialog`] through the empty-cartridge shortcut
+/// (`SaveConfirmInputCallback`'s `SAVE_STATUS_EMPTY` arm,
+/// `start_menu.c:1008-1019`) up to its `gText_SavingDontTurnOff` message just
+/// starting to print, with no overwrite prompt in between.
+fn begin_unprompted_saving_message(
+    dialog: &mut SaveDialog,
+    chrome: &StartMenuChrome,
+    target: &mut FakeTarget,
+) {
+    open_initial_choice(dialog, chrome, target);
+    assert_eq!(
+        dialog.run(pressed(Buttons::A), chrome, target),
+        SaveDialogOutcome::InProgress
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), chrome, target),
+        SaveDialogOutcome::InProgress
+    );
+}
 
 /// [`drive_reporting_outcome`], keeping only the prompt rows.
 fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec<u8> {
@@ -464,6 +545,177 @@ fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
     );
 }
 
+/// `RunSaveCallback` calls `sSaveDialogCallback` the instant it observes
+/// printer 0 inactive, so `SaveYesNoCallback` opens the Yes/No window on the
+/// exact tick `gText_ConfirmSave` finishes -- not the tick after
+/// (`start_menu.c:884-894,996-1001`).
+#[test]
+fn initial_yes_no_opens_on_the_confirm_message_finish_tick() {
+    let chrome = StartMenuChrome::synthetic();
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    let mut dialog = SaveDialog::new();
+
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress
+    );
+    finish_message_in_lockstep(
+        &mut dialog,
+        &chrome,
+        &mut target,
+        SaveMessage::ConfirmSave.tokens(),
+        ButtonState::new(),
+        |dialog, _| assert!(dialog.yes_no().is_none(), "nothing is queued yet"),
+    );
+
+    assert!(
+        dialog.yes_no().is_some(),
+        "the Yes/No window must be open on the tick the message finished"
+    );
+}
+
+/// The same same-tick dispatch applies to `SaveConfirmOverwriteCallback`
+/// opening `gText_AlreadySavedFile`'s Yes/No window
+/// (`start_menu.c:884-894,1056-1061`).
+#[test]
+fn overwrite_yes_no_opens_on_the_overwrite_message_finish_tick() {
+    let chrome = StartMenuChrome::synthetic();
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    let mut dialog = SaveDialog::new();
+
+    open_initial_choice(&mut dialog, &chrome, &mut target);
+    assert_eq!(
+        dialog.run(pressed(Buttons::A), &chrome, &mut target),
+        SaveDialogOutcome::InProgress,
+        "YES on the first prompt queues the overwrite prompt"
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress,
+        "this tick only starts gText_AlreadySavedFile printing"
+    );
+    finish_message_in_lockstep(
+        &mut dialog,
+        &chrome,
+        &mut target,
+        SaveMessage::AlreadySavedFile.tokens(),
+        ButtonState::new(),
+        |dialog, _| assert!(dialog.yes_no().is_none(), "nothing is queued yet"),
+    );
+
+    assert_eq!(
+        dialog.yes_no().map(|menu| menu.cursor),
+        Some(0),
+        "the overwrite Yes/No window (defaulting to YES) must be open on \
+         the tick the message finished"
+    );
+}
+
+/// `SaveDoSaveCallback` -- the actual `TrySavingData` dispatch -- runs on
+/// the tick `gText_SavingDontTurnOff` finishes, not the tick after
+/// (`start_menu.c:884-894,1080-1109`).
+#[test]
+fn store_runs_on_the_saving_message_finish_tick() {
+    let chrome = StartMenuChrome::synthetic();
+    let mut target = FakeTarget::new(SaveFileStatus::Empty, true);
+    let mut dialog = SaveDialog::new();
+
+    begin_unprompted_saving_message(&mut dialog, &chrome, &mut target);
+    finish_message_in_lockstep(
+        &mut dialog,
+        &chrome,
+        &mut target,
+        SaveMessage::Saving.tokens(),
+        ButtonState::new(),
+        |_, target| assert!(target.writes.is_empty(), "nothing is stored yet"),
+    );
+
+    assert_eq!(
+        target.writes,
+        vec![SaveMode::OverwriteDifferentFile { prompted: false }],
+        "the store must have run on the tick the message finished"
+    );
+}
+
+/// Unlike the prompt and store dispatches above, upstream's result path has
+/// its own real extra tick: `SaveSuccessCallback`/`SaveErrorCallback` only
+/// switch to the dismissal callback on the result message's finish tick and
+/// do not read input there, so a held A is not honored until the *next*
+/// tick (`start_menu.c:1112-1158`). A held A carried into the finish tick
+/// itself must therefore never fire `SAVE_SUCCESS`/`SAVE_ERROR` early.
+///
+/// The drive up to and through the result message uses fresh A presses
+/// (`gText_SaveError`'s own `{P}` page break needs one to turn the page,
+/// same as any other field message); only the completion check below holds
+/// A without a fresh edge, the shape of an already-held button.
+#[test]
+fn held_a_does_not_skip_the_result_transition_on_the_finish_tick() {
+    for write_succeeds in [true, false] {
+        let chrome = StartMenuChrome::synthetic();
+        let mut target = FakeTarget::new(SaveFileStatus::Empty, true);
+        target.write_succeeds = write_succeeds;
+        let mut dialog = SaveDialog::new();
+
+        begin_unprompted_saving_message(&mut dialog, &chrome, &mut target);
+        for _ in 0..FRAME_BUDGET {
+            assert_eq!(
+                dialog.run(pressed(Buttons::A), &chrome, &mut target),
+                SaveDialogOutcome::InProgress
+            );
+            if !target.writes.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            target.writes.len(),
+            1,
+            "the store must have run exactly once"
+        );
+
+        let result_tokens: Vec<Token> = if write_succeeds {
+            "STU saved the game."
+                .chars()
+                .map(Token::Char)
+                .chain(std::iter::once(Token::End))
+                .collect()
+        } else {
+            SaveMessage::SaveError.tokens()
+        };
+        // `finish_message_in_lockstep` itself asserts `InProgress` on every
+        // tick up to and including the finish tick -- the load-bearing check
+        // that the dismissal transition never fires early.
+        finish_message_in_lockstep(
+            &mut dialog,
+            &chrome,
+            &mut target,
+            result_tokens,
+            pressed(Buttons::A),
+            |_, _| {},
+        );
+
+        if write_succeeds {
+            assert_eq!(
+                dialog.run(held(Buttons::A), &chrome, &mut target),
+                SaveDialogOutcome::Success,
+                "the tick after completion must honor the already-held A"
+            );
+        } else {
+            let mut outcome = SaveDialogOutcome::InProgress;
+            for _ in 0..FRAME_BUDGET {
+                outcome = dialog.run(held(Buttons::A), &chrome, &mut target);
+                if outcome != SaveDialogOutcome::InProgress {
+                    break;
+                }
+            }
+            assert_eq!(
+                outcome,
+                SaveDialogOutcome::Error,
+                "the error countdown must still resolve once it drains"
+            );
+        }
+    }
+}
+
 /// The composed frame really draws something over the map: a start menu
 /// that rendered nothing would pass every state-machine test above while
 /// being invisible to the player.
@@ -491,6 +743,65 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
     assert_eq!(composed.pixel(4, 150), Some(marker));
 }
 
+/// Selecting SAVE must not blank the screen for a frame (issue #955):
+/// upstream never removes the item window before `SaveConfirmSaveCallback`
+/// has a replacement message ready (`start_menu.c:978-993`).
+#[test]
+fn selecting_save_keeps_the_item_window_until_its_message_exists() {
+    use rendering::{Framebuffer, Rgb888};
+
+    let marker = Rgb888 {
+        r: 10,
+        g: 20,
+        b: 30,
+    };
+    let mut base = Framebuffer::new();
+    base.fill(marker);
+    let item_pixel = (
+        usize::try_from(MENU_TILEMAP_LEFT * 8 + 4).unwrap(),
+        usize::try_from(MENU_TILEMAP_TOP * 8 + 4).unwrap(),
+    );
+
+    let mut menu = synthetic_start_menu();
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    assert_eq!(menu.selected(), StartMenuItem::Save);
+
+    assert_eq!(
+        menu.tick(pressed(Buttons::A), &mut target),
+        StartMenuOutcome::Open
+    );
+    let dialog = menu.save.as_ref().expect("SAVE installs its dialog");
+    assert!(
+        dialog.message().is_none(),
+        "the install tick must not have run ShowInitialPrompt yet"
+    );
+    assert_ne!(
+        menu.compose_over(base.clone())
+            .pixel(item_pixel.0, item_pixel.1),
+        Some(marker),
+        "the frame that selects SAVE must still draw the item window, not a \
+         bare overworld frame"
+    );
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert!(
+        menu.save
+            .as_ref()
+            .expect("still saving")
+            .message()
+            .is_some(),
+        "the next tick must have run ShowInitialPrompt and built the message"
+    );
+    assert_eq!(
+        menu.compose_over(base).pixel(item_pixel.0, item_pixel.1),
+        Some(marker),
+        "once the confirm message exists the item window must be gone"
+    );
+}
+
 /// Pins the palette split every window here draws with (correctness issue
 /// caught in review): the content fill and `FONT_NORMAL` glyph colours must
 /// come from the message-box palette (bank 15,
@@ -502,7 +813,6 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
 /// as a wrong colour here instead of silently matching by coincidence.
 #[test]
 fn standard_window_uses_message_palette_for_content_and_standard_palette_for_border() {
-    use super::StartMenuChrome;
     use assets::{Glyph, GLYPH_PIXELS};
     use engine::text::render::RevealedGlyph;
     use rendering::{Framebuffer, Rgb888};
@@ -589,7 +899,6 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
 /// Yes/No prompt ([`StartMenuChrome::from_pack`] owns the contract).
 #[test]
 fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
-    use super::StartMenuChrome;
     use assets::pack::AssetPack;
     use rendering::{Bgr555, Framebuffer};
 

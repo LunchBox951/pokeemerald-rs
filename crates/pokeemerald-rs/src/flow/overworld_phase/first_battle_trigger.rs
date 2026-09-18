@@ -116,7 +116,7 @@
 //! the wild-encounter roll, and the arrow-warp poll for that frame, and
 //! discards a same-frame interaction — exactly the "consumes the frame's
 //! field input" contract `crate::flow::wild_encounter::field_input_consumed`
-//! applies to a resolved warp or a fired encounter (pinned by
+//! applies to any fired warp or a fired encounter (pinned by
 //! `crate::flow::wild_encounter::tests::a_fired_encounter_consumes_the_frames_field_input`).
 //!
 //! **How much of that is *pinned*, and how much is only encoded.** The
