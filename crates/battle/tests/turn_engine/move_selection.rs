@@ -258,10 +258,9 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     // Sand Attack and Screech, which used to stand in for this case, are
     // executable now -- see `stat_changes.rs`). Horn Drill: power 1 but
     // EFFECT_OHKO's target-HP-based damage, which the ordinary pipeline
-    // gets wrong in both damage and draw count. Struggle used to stand in
-    // for this case too (its `EFFECT_RECOIL` half was unmodelled); issue
-    // #877 admits it -- see `a_wild_moveset_may_now_include_struggle_directly`
-    // and `a_directly_chosen_struggle_deducts_pp_normally`.
+    // gets wrong in both damage and draw count. Struggle is executable too
+    // -- see `a_wild_moveset_may_now_include_struggle_directly` and
+    // `a_directly_chosen_struggle_deducts_pp_normally`.
     for (bad_move, expected) in [
         (MoveId(114), BattleError::NonDamagingMove(MoveId(114))),
         (MoveId(32), BattleError::UnsupportedMoveEffect(MoveId(32))),
