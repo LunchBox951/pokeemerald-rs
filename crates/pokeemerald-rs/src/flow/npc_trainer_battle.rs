@@ -27,7 +27,9 @@
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, TurnError,
+};
 use engine::rng::Rng;
 
 use super::battle_finalize::finalize_battle_turn;
@@ -88,7 +90,6 @@ const DOUBLE_BATTLE_PERSONALITY_BASE: u32 = 0x80;
 const FEMALE_TRAINER_PERSONALITY_BASE: u32 = 0x78;
 const MALE_TRAINER_PERSONALITY_BASE: u32 = 0x88;
 const NAME_HASH_PERSONALITY_SHIFT: u32 = 8;
-const HEADLESS_PLAYER_MOVE_SLOT: usize = 0;
 
 #[must_use]
 fn personality_base(trainer: &TrainerData) -> u32 {
@@ -266,12 +267,39 @@ fn credit_reward_events(money: &mut u32, events: impl IntoIterator<Item = Battle
     }
 }
 
+/// Tries each move slot in order and takes the turn with the first one
+/// [`Battle::take_turn`] accepts.
+///
+/// A rejection that leaves the shared RNG draw unchanged came from pre-turn slot
+/// validation, which runs before any draw or mutation, so the next slot is safe to try;
+/// one that already advanced the draw is a genuine mid-turn failure (for example an
+/// opponent forced into an unsupported Struggle) and is returned immediately. An
+/// all-spent moveset exhausts the loop and returns its last rejection, leaving that
+/// forced-Struggle case to #877.
+fn take_first_usable_move_turn(
+    battle: &mut Battle,
+    rng: &mut Rng,
+) -> Result<Vec<BattleEvent>, TurnError> {
+    let slot_count = battle.player().moves().len();
+    let mut last_error = None;
+    for slot in 0..slot_count {
+        let rng_before = rng.state();
+        match battle.take_turn(PlayerAction::UseMove(slot), &mut SharedRng::new(rng)) {
+            Ok(events) => return Ok(events),
+            Err(error) if rng.state() == rng_before => last_error = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("a battler always carries at least one move slot"))
+}
+
 /// Advances a headless trainer battle by one turn and settles its resulting state.
 ///
-/// With no battle menu, the driver selects the first move slot. It answers pending move
-/// replacement prompts, credits any reward events, and writes back the player's lead when
-/// the battle ends. `None` can mean no active battle, an ongoing battle, or a failed turn;
-/// callers inspect `battle_slot` to distinguish an active battle.
+/// With no battle menu, the driver selects the first usable move slot (see
+/// [`take_first_usable_move_turn`]). It answers pending move replacement prompts, credits
+/// any reward events, and writes back the player's lead when the battle ends. `None` can
+/// mean no active battle, an ongoing battle, or a failed turn; callers inspect
+/// `battle_slot` to distinguish an active battle.
 pub fn advance_npc_trainer_battle(
     battle_slot: &mut Option<Battle>,
     player_lead: &mut Option<BattlePokemon>,
@@ -279,8 +307,7 @@ pub fn advance_npc_trainer_battle(
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
     let battle = battle_slot.as_mut()?;
-    let player_action = PlayerAction::UseMove(HEADLESS_PLAYER_MOVE_SLOT);
-    let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
+    let turn_failed = match take_first_usable_move_turn(battle, rng) {
         Ok(events) => {
             credit_reward_events(money, events);
             false
