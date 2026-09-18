@@ -338,6 +338,12 @@ impl Voice {
         self.envelope.note_off();
     }
 
+    /// Stop outright, matching `TrackStop`'s immediate channel clear
+    /// (`m4a_1.s:1493`) rather than [`Self::note_off`]'s graceful release.
+    pub(crate) fn stop(&mut self) {
+        self.envelope.retire();
+    }
+
     /// Update base channel volumes from the owning track.
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
         self.channel_volume.update_from_track(vol_mr, vol_ml);

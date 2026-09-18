@@ -325,16 +325,16 @@ impl StartMenu {
     /// [`crate::overworld::NpcDialog::compose_over`] does (the map keeps rendering behind an
     /// open start menu upstream too).
     pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
-        // `ClearStdWindowAndFrame(GetStartMenuWindowId(), FALSE)` +
-        // `RemoveStartMenuWindow` (`start_menu.c:980-981`): the item window
-        // is taken down the moment the save flow starts.
-        if self.save.is_none() {
+        // `SaveConfirmSaveCallback` removes the item window and shows its
+        // replacement message in the same call (`start_menu.c:978-993`).
+        let save_message = self.save.as_ref().and_then(SaveDialog::message);
+        if save_message.is_none() {
             self.draw_items(&mut base);
         }
+        if let Some(message) = save_message {
+            base = message.compose_over(base);
+        }
         if let Some(dialog) = &self.save {
-            if let Some(message) = dialog.message() {
-                base = message.compose_over(base);
-            }
             if let Some(yes_no) = dialog.yes_no() {
                 self.draw_yes_no(&mut base, yes_no);
             }

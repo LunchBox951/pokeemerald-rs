@@ -12,8 +12,8 @@
 //!
 //! Standard-script labels and special-function identifiers are typed even when
 //! their target implementation is unavailable, so traps retain the requested
-//! identity. `waitstate` represents upstream's global waiting status with the
-//! interpreter's native-step mode and a host-owned resume flag.
+//! identity. `waitstate` represents upstream's global waiting status with a
+//! host-owned resume flag polled through [`ScriptContext::setup_gate`].
 
 use crate::event_data::{EventData, EventDataError, SPECIAL_VARS_START};
 use crate::rng::Rng;
@@ -545,7 +545,7 @@ fn specialvar(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost
 
 fn waitstate(ctx: &mut ScriptContext<'_, '_, ScriptHost>, host: &mut ScriptHost) -> bool {
     host.waiting = true;
-    ctx.setup_native(step_waitstate);
+    ctx.setup_gate(step_waitstate);
     true
 }
 
@@ -1535,17 +1535,14 @@ mod tests {
 
         host.waiting = false;
         assert!(
-            ctx.run(&mut host),
-            "still yields on the call that finishes the native wait"
+            !ctx.run(&mut host),
+            "the released wait dispatches setflag and runs to `end` in the same call"
         );
-        assert!(!ctx.is_stopped());
-
-        assert!(!ctx.run(&mut host), "bytecode resumes and runs to `end`");
         assert!(ctx.is_stopped());
         assert_eq!(
             host.event_data.flag_get(flag_id),
             Ok(true),
-            "setflag after waitstate ran once unblocked"
+            "setflag after waitstate ran on the call that released the wait"
         );
     }
 }
