@@ -29,6 +29,8 @@ const INITIAL_OVERWORLD_TICK: u32 = 0;
 const SECOND_OVERWORLD_DETERMINISM_TICK: u32 = 17;
 const SMOKE_PLAYER_TILE: (i32, i32) = (5, 5);
 const SMOKE_PLAYER_GROUND_ELEVATION: u8 = 3;
+/// The GBA's native screen width in pixels, the stride
+/// [`has_detail_outside_avatar`] indexes a composed frame by.
 const NATIVE_FRAME_WIDTH: usize = 240;
 const MIN_DISTINCT_MAP_COLORS: usize = 4;
 
@@ -55,7 +57,11 @@ pub enum E2eError {
     OverworldFrameNotDeterministic,
     /// The overworld scene produced an all-black frame.
     OverworldFrameBlank,
-    /// The overworld scene did not contain enough map detail outside the avatar.
+    /// The overworld scene's composed frame did not carry enough distinct
+    /// colours outside the player avatar.
+    OverworldFrameLacksDetailOutsideAvatar,
+    /// The overworld scene's sprite-free map-only composition did not carry
+    /// enough map detail on its own.
     OverworldFrameLacksMapDetail,
 }
 
@@ -95,9 +101,13 @@ impl fmt::Display for E2eError {
                 f,
                 "composed default overworld room frame was blank (all black)"
             ),
+            Self::OverworldFrameLacksDetailOutsideAvatar => write!(
+                f,
+                "composed default overworld room frame lacked detail outside the avatar"
+            ),
             Self::OverworldFrameLacksMapDetail => write!(
                 f,
-                "composed default overworld room frame lacked map detail outside the avatar"
+                "the default overworld room's sprite-free map-only composition lacked map detail"
             ),
         }
     }
@@ -190,10 +200,11 @@ fn check_title_screen() -> Result<(), E2eError> {
 /// (`pokeemerald_rs::overworld::load_repo_default_room` -- the checkout's own
 /// pack, module docs' "Which pack")
 /// and assert the composed frame -- a standing player at a fixed room
-/// position -- is non-blank, carries map detail outside the avatar, and is
-/// deterministic across two `compose` calls, at each of two different
-/// animation ticks (issue #160; see the tick comment in the body); without a
-/// pack, do nothing.
+/// position -- is non-blank, deterministic across two `compose` calls, and
+/// detailed outside the avatar, and that a sprite-free composition of the
+/// same room and tick carries map detail on its own (issue #1216), at each
+/// of two different animation ticks (issue #160; see the tick comment in
+/// the body); without a pack, do nothing.
 ///
 /// Deliberately independent of `App`/`App::new_headless` and of
 /// [`check_title_screen`] -- it loads the overworld scene directly, so this
@@ -206,7 +217,8 @@ fn check_title_screen() -> Result<(), E2eError> {
 /// `Ok(())`, not an error -- see
 /// `pokeemerald_rs::overworld::OverworldSceneError::is_pack_missing`);
 /// [`E2eError::OverworldFrameNotDeterministic`], [`E2eError::OverworldFrameBlank`],
-/// or [`E2eError::OverworldFrameLacksMapDetail`] if a pack is present and
+/// [`E2eError::OverworldFrameLacksDetailOutsideAvatar`], or
+/// [`E2eError::OverworldFrameLacksMapDetail`] if a pack is present and
 /// loads, but composing either tick fails any of those checks.
 fn check_overworld_scene() -> Result<(), E2eError> {
     // A fresh (all-clear) event-flag store: this check only cares that the
@@ -240,28 +252,48 @@ fn check_overworld_scene() -> Result<(), E2eError> {
         SECOND_OVERWORLD_DETERMINISM_TICK,
     );
 
+    let initial_map_only_frame = scene.compose_map_only_frame(&player, INITIAL_OVERWORLD_TICK);
+    let later_map_only_frame =
+        scene.compose_map_only_frame(&player, SECOND_OVERWORLD_DETERMINISM_TICK);
+
     check_overworld_probe_frames(
         initial_frame.as_ref(),
         repeated_initial_frame.as_ref(),
         later_frame.as_ref(),
         repeated_later_frame.as_ref(),
+        initial_map_only_frame.as_ref(),
+        later_map_only_frame.as_ref(),
     )
 }
 
-/// Each tick's repeated compose must match, and each tick's frame must
-/// clear [`check_overworld_frame_content`].
+/// Each tick's repeated compose must match, each tick's composed frame must
+/// be non-blank and carry detail outside the avatar, and each tick's
+/// sprite-free map-only frame must carry map detail on its own.
+///
+/// The two content bars answer different failures and neither implies the
+/// other: the map-only frame proves the map itself composed
+/// (a sprite drawn over a flat map cannot stand in for it), while the
+/// composed frame proves the production path a player sees still paints
+/// varied pixels outside the avatar even after sprite compositing
+/// `(test-ratchet)`.
 ///
 /// # Errors
 ///
 /// [`E2eError::OverworldFrameNotDeterministic`] if either tick's repeated
-/// compose produced a different frame; otherwise whatever
-/// [`check_overworld_frame_content`] returns for the first tick that fails
-/// it.
+/// compose produced a different frame; [`E2eError::OverworldFrameBlank`] if
+/// either tick's frame is all black;
+/// [`E2eError::OverworldFrameLacksDetailOutsideAvatar`] if either tick's
+/// composed frame lacks [`MIN_DISTINCT_MAP_COLORS`] distinct colours
+/// outside the avatar; [`E2eError::OverworldFrameLacksMapDetail`] if either
+/// tick's map-only frame lacks [`MIN_DISTINCT_MAP_COLORS`] distinct
+/// colours.
 fn check_overworld_probe_frames(
     initial_frame: &[u32],
     repeated_initial_frame: &[u32],
     later_frame: &[u32],
     repeated_later_frame: &[u32],
+    initial_map_only_frame: &[u32],
+    later_map_only_frame: &[u32],
 ) -> Result<(), E2eError> {
     if initial_frame != repeated_initial_frame {
         return Err(E2eError::OverworldFrameNotDeterministic);
@@ -269,8 +301,24 @@ fn check_overworld_probe_frames(
     if later_frame != repeated_later_frame {
         return Err(E2eError::OverworldFrameNotDeterministic);
     }
-    check_overworld_frame_content(initial_frame)?;
-    check_overworld_frame_content(later_frame)?;
+    if is_blank(initial_frame) {
+        return Err(E2eError::OverworldFrameBlank);
+    }
+    if is_blank(later_frame) {
+        return Err(E2eError::OverworldFrameBlank);
+    }
+    if !has_detail_outside_avatar(initial_frame) {
+        return Err(E2eError::OverworldFrameLacksDetailOutsideAvatar);
+    }
+    if !has_detail_outside_avatar(later_frame) {
+        return Err(E2eError::OverworldFrameLacksDetailOutsideAvatar);
+    }
+    if !has_map_detail(initial_map_only_frame) {
+        return Err(E2eError::OverworldFrameLacksMapDetail);
+    }
+    if !has_map_detail(later_map_only_frame) {
+        return Err(E2eError::OverworldFrameLacksMapDetail);
+    }
 
     Ok(())
 }
@@ -279,36 +327,28 @@ fn is_blank(frame: &[u32]) -> bool {
     frame.iter().all(|&pixel| pixel == BLACK_PIXEL)
 }
 
-/// A composed overworld frame must be non-blank and carry map detail
-/// outside the avatar.
-///
-/// # Errors
-///
-/// [`E2eError::OverworldFrameBlank`] if `frame` is all black;
-/// [`E2eError::OverworldFrameLacksMapDetail`] if `frame` is non-blank but
-/// lacks [`MIN_DISTINCT_MAP_COLORS`] distinct colours outside the avatar.
-fn check_overworld_frame_content(frame: &[u32]) -> Result<(), E2eError> {
-    if is_blank(frame) {
-        return Err(E2eError::OverworldFrameBlank);
-    }
-    if !has_map_detail_outside_avatar(frame) {
-        return Err(E2eError::OverworldFrameLacksMapDetail);
-    }
-
-    Ok(())
+/// Whether `map_only_frame` carries at least [`MIN_DISTINCT_MAP_COLORS`]
+/// distinct colours. Callers must supply a sprite-free frame -- see
+/// [`pokeemerald_rs::overworld::OverworldScene::compose_map_only_frame`].
+fn has_map_detail(map_only_frame: &[u32]) -> bool {
+    let distinct_colors: std::collections::BTreeSet<_> = map_only_frame.iter().collect();
+    distinct_colors.len() >= MIN_DISTINCT_MAP_COLORS
 }
 
-/// Whether the frame carries at least [`MIN_DISTINCT_MAP_COLORS`] distinct
-/// colours *outside* the player's avatar.
+/// Whether a sprite-inclusive `frame` carries at least
+/// [`MIN_DISTINCT_MAP_COLORS`] distinct colours *outside* the player's
+/// avatar.
 ///
 /// The avatar is masked out because it draws from its own sprite sheet and
-/// palette: a frame whose map failed to compose entirely would still carry
-/// the avatar's several colours, so counting them would let this check pass
-/// on a blank map `(test-ratchet)`.
+/// palette: a frame whose every other layer collapsed would still carry the
+/// avatar's several colours, so counting them would let this check pass on
+/// an otherwise flat screen `(test-ratchet)`. The mask is the scene crate's
+/// [`PLAYER_AVATAR_SCREEN_BOX`], so a camera change moves it with the
+/// avatar.
 ///
-/// The mask is the scene crate's [`PLAYER_AVATAR_SCREEN_BOX`], so a camera
-/// change moves it with the avatar.
-fn has_map_detail_outside_avatar(frame: &[u32]) -> bool {
+/// Other sprites are not masked, so clearing this bar does not establish
+/// map detail -- [`has_map_detail`] answers that from a sprite-free frame.
+fn has_detail_outside_avatar(frame: &[u32]) -> bool {
     let mut distinct_colors = std::collections::BTreeSet::new();
     for (pixel_index, &pixel) in frame.iter().enumerate() {
         let (x, y) = (
@@ -331,10 +371,11 @@ mod tests {
         check_overworld_probe_frames, check_overworld_scene, check_title_screen, run_smoke,
         E2eError, BLACK_PIXEL, NATIVE_FRAME_WIDTH,
     };
+    use pokeemerald_rs::overworld::PLAYER_AVATAR_SCREEN_BOX;
 
     /// The GBA's native screen height in pixels: paired with
     /// [`NATIVE_FRAME_WIDTH`], gives a synthetic frame the same shape a real
-    /// composed frame would have, so [`super::has_map_detail_outside_avatar`]'s
+    /// composed frame would have, so [`super::has_detail_outside_avatar`]'s
     /// coordinate math (which indexes by `NATIVE_FRAME_WIDTH`) sees a
     /// plausible frame rather than a truncated one.
     const SYNTHETIC_FRAME_HEIGHT: usize = 160;
@@ -355,16 +396,18 @@ mod tests {
     /// probed ticks to the same content bar, not only the first.
     #[test]
     fn overworld_probe_rejects_deterministic_blank_later_frame() {
-        let detailed_initial_frame = detailed_synthetic_frame();
+        let detailed_frame = detailed_synthetic_frame();
         let blank_later_frame = vec![BLACK_PIXEL; NATIVE_FRAME_WIDTH * SYNTHETIC_FRAME_HEIGHT];
 
         assert!(
             matches!(
                 check_overworld_probe_frames(
-                    &detailed_initial_frame,
-                    &detailed_initial_frame,
+                    &detailed_frame,
+                    &detailed_frame,
                     &blank_later_frame,
                     &blank_later_frame,
+                    &detailed_frame,
+                    &detailed_frame,
                 ),
                 Err(E2eError::OverworldFrameBlank)
             ),
@@ -372,33 +415,96 @@ mod tests {
         );
     }
 
-    /// Companion to the blank case above: a later-tick frame that is
-    /// non-blank but still lacks enough distinct colours outside the avatar
-    /// must be rejected too, again despite a passing initial tick.
+    /// A colourful sprite-inclusive frame must not excuse a flat sprite-free
+    /// map-only frame: [`check_overworld_probe_frames`] judges detail from
+    /// the map-only frame, never the sprite-inclusive one.
     #[test]
-    fn overworld_probe_rejects_later_frame_without_map_detail() {
-        let detailed_initial_frame = detailed_synthetic_frame();
+    fn overworld_probe_rejects_flat_map_only_frame_despite_colourful_full_frame() {
+        let detailed_frame = detailed_synthetic_frame();
+        let flat_map_only_frame =
+            vec![BLACK_PIXEL + 1; NATIVE_FRAME_WIDTH * SYNTHETIC_FRAME_HEIGHT];
+
+        assert!(
+            matches!(
+                check_overworld_probe_frames(
+                    &detailed_frame,
+                    &detailed_frame,
+                    &detailed_frame,
+                    &detailed_frame,
+                    &detailed_frame,
+                    &flat_map_only_frame,
+                ),
+                Err(E2eError::OverworldFrameLacksMapDetail)
+            ),
+            "a flat later-tick map-only frame must be rejected for lacking map detail even though the sprite-inclusive frame it's paired with carries several colours"
+        );
+    }
+
+    /// A later-tick composed frame that is non-blank but flat outside the
+    /// avatar must be rejected even when both sprite-free map-only frames
+    /// carry map detail: sprite compositing that flattens the frame a
+    /// player actually sees is a failure the separately composed map-only
+    /// frame cannot see.
+    #[test]
+    fn overworld_probe_rejects_flat_later_full_frame_despite_detailed_map_only_frames() {
+        let detailed_frame = detailed_synthetic_frame();
         let flat_non_black_later_frame =
             vec![BLACK_PIXEL + 1; NATIVE_FRAME_WIDTH * SYNTHETIC_FRAME_HEIGHT];
 
         assert!(
             matches!(
                 check_overworld_probe_frames(
-                    &detailed_initial_frame,
-                    &detailed_initial_frame,
+                    &detailed_frame,
+                    &detailed_frame,
                     &flat_non_black_later_frame,
                     &flat_non_black_later_frame,
+                    &detailed_frame,
+                    &detailed_frame,
                 ),
-                Err(E2eError::OverworldFrameLacksMapDetail)
+                Err(E2eError::OverworldFrameLacksDetailOutsideAvatar)
             ),
-            "a later-tick frame with only one colour outside the avatar must be rejected for lacking map detail"
+            "a later-tick composed frame with only one colour outside the avatar must be rejected even though its map-only frame is detailed"
         );
     }
 
-    /// A frame with one distinct colour per pixel index outside the avatar
-    /// mask clears both [`super::is_blank`] and
-    /// [`super::has_map_detail_outside_avatar`], so tests above can use it
-    /// to isolate the tick under test.
+    /// The avatar's own colours cannot carry the composed frame's detail
+    /// bar: a frame whose every varied pixel sits inside
+    /// [`PLAYER_AVATAR_SCREEN_BOX`] is rejected, because the avatar draws
+    /// from its own sheet and palette whatever the rest of the screen did.
+    #[test]
+    fn overworld_probe_rejects_a_full_frame_detailed_only_inside_the_avatar_box() {
+        let flat_map_color = BLACK_PIXEL + 1;
+        let mut frame_detailed_only_under_the_avatar =
+            vec![flat_map_color; NATIVE_FRAME_WIDTH * SYNTHETIC_FRAME_HEIGHT];
+        let avatar = PLAYER_AVATAR_SCREEN_BOX;
+        for y in avatar.top..avatar.top + avatar.height {
+            for x in avatar.left..avatar.left + avatar.width {
+                frame_detailed_only_under_the_avatar[y * NATIVE_FRAME_WIDTH + x] =
+                    BLACK_PIXEL + 10 + u32::try_from(y % 5).expect("a row index fits in u32");
+            }
+        }
+        let detailed_frame = detailed_synthetic_frame();
+
+        assert!(
+            matches!(
+                check_overworld_probe_frames(
+                    &frame_detailed_only_under_the_avatar,
+                    &frame_detailed_only_under_the_avatar,
+                    &detailed_frame,
+                    &detailed_frame,
+                    &detailed_frame,
+                    &detailed_frame,
+                ),
+                Err(E2eError::OverworldFrameLacksDetailOutsideAvatar)
+            ),
+            "a composed frame whose only varied pixels are the avatar's must be rejected for lacking detail outside it"
+        );
+    }
+
+    /// A frame with one distinct colour per pixel index clears
+    /// [`super::is_blank`], [`super::has_map_detail`], and
+    /// [`super::has_detail_outside_avatar`], so tests above can use it to
+    /// isolate the tick under test.
     fn detailed_synthetic_frame() -> Vec<u32> {
         let distinct_colors: [u32; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
         (0..NATIVE_FRAME_WIDTH * SYNTHETIC_FRAME_HEIGHT)

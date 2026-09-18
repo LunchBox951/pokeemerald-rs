@@ -456,6 +456,23 @@ impl OverworldScene {
     /// validates those bytes, and tile animation only patches existing byte ranges.
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
+        let player_first_oam_entries = self.sprites.entries(player, event_data);
+        self.compose_with_sprite_entries(player, tick, &player_first_oam_entries)
+    }
+
+    /// [`Self::compose`] with every sprite layer empty: only the three
+    /// background layers, no player avatar or object-event sprite.
+    #[must_use]
+    pub fn compose_map_only_frame(&self, player: &PlayerState, tick: u32) -> Box<platform::Frame> {
+        crate::frame::to_platform_frame(&self.compose_with_sprite_entries(player, tick, &[]))
+    }
+
+    fn compose_with_sprite_entries(
+        &self,
+        player: &PlayerState,
+        tick: u32,
+        sprite_entries: &[rendering::OamEntry],
+    ) -> Framebuffer {
         let viewport::FrameViewport {
             bottom,
             middle,
@@ -507,9 +524,8 @@ impl OverworldScene {
             ),
         ];
 
-        let player_first_oam_entries = self.sprites.entries(player, event_data);
         let sprites = SpriteLayer::new(
-            &player_first_oam_entries,
+            sprite_entries,
             self.sprites.tiles(),
             self.sprites.tiles(),
             self.sprites.palette(),
