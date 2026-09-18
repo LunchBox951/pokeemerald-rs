@@ -822,8 +822,6 @@ fn a_save_at_the_hosts_longest_valid_basename_is_still_lockable() {
     assert_eq!(reloaded.flash_image(), store.flash_image());
 }
 
-/// Two saves in one directory share its one lock, which must both exclude
-/// and release.
 #[test]
 fn two_saves_in_one_directory_serialise_on_the_directorys_lock() {
     let dir = TempDir::new("directory-lock-serialises");
@@ -1232,7 +1230,7 @@ fn an_ordinary_save_beside_the_lock_file_still_locks() {
     drop(guard);
 }
 
-/// `_POSIX_NAME_MAX` is 14; a host at that limit still writes short saves.
+/// `_POSIX_NAME_MAX` is 14.
 #[test]
 fn the_lock_file_name_fits_the_posix_minimum_component_limit() {
     assert!(
@@ -1385,8 +1383,6 @@ fn leftover_staging_names_beside_the_lock_slot_still_admit_a_first_lock() {
     }
 }
 
-/// The name staging draws is `.lk` plus ten hex digits, no longer than the
-/// lock name and never a pid name.
 #[cfg(unix)]
 #[test]
 fn the_drawn_lock_staging_name_is_no_longer_than_the_lock_name() {
