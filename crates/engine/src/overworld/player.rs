@@ -109,15 +109,11 @@ impl Landing {
 impl PlayerState {
     /// Creates a stationary player on `position`.
     ///
-    /// Collision and render elevations both start at `elevation`. Starts
-    /// controllable even when `position` is a forced-movement tile: a
-    /// warp arrival or a resumed save places the avatar here without this
-    /// `PlayerState` ever observing a step onto it, and upstream's own
-    /// `ForcedMovement_*` physics -- which would actually move a genuinely
-    /// forced player clear of the tile -- stay unported, so arming the
-    /// guard on a placement instead of an observed landing would trap the
-    /// avatar forever with no keypad fallback (issue #926; see
-    /// [`forced_movement_armed`](Self::forced_movement_armed)).
+    /// Collision and render elevations both start at `elevation`. The
+    /// player starts controllable even on a forced-movement tile: only an
+    /// observed landing arms
+    /// [`forced_movement_armed`](Self::forced_movement_armed), so a warp
+    /// arrival or a resumed save is never trapped on placement.
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
