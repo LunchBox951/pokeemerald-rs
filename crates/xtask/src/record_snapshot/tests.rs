@@ -1117,6 +1117,54 @@ fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
     drop(out_guard);
 }
 
+/// A writer that carries this capture's staging directory off and plants a
+/// symlink at the name it freed must not have that link claimed. A claim that
+/// followed it would put every payload staged under the staging name into the
+/// directory the link points at, anywhere on the filesystem and outside
+/// `output_dir` entirely, and would record that directory's identity as this
+/// capture's own.
+#[cfg(unix)]
+#[test]
+fn a_staging_name_replaced_by_a_symlink_is_not_claimed() {
+    let output_dir = scratch_path("symlinked-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let elsewhere = output_dir.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let plant_a_symlink = |path: &std::path::Path| {
+        std::fs::remove_dir(path).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, path).unwrap();
+        super::claim_staged_dir(path)
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_symlink) else {
+        panic!("a symlink at the staging name must fail the claim, and the capture with it");
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging path: {error}"
+    );
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "the claim reached through the symlink into {}",
+        elsewhere.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&staged_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a failed claim removed the entry it never proved was this capture's"
+    );
+
+    drop(out_guard);
+}
+
 /// A staging directory that allows only creation and search, as a `0444`
 /// umask leaves it, is still claimable: by a search-only hold where the
 /// target has one, by identity alone elsewhere.

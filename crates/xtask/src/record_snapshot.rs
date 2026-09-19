@@ -366,6 +366,16 @@ impl StagedDirClaim {
 
 /// Opens `path` (a freshly created `staged_dir`) and records the identity
 /// that will prove ownership of it at cleanup time.
+///
+/// The open must land on the directory `create_dir` put there and on nothing
+/// else. A writer that carries that directory off and plants a symlink at the
+/// name it freed would otherwise hand this claim the link's target: every
+/// payload this publish writes under the staging name would land in that
+/// directory instead, wherever it is, and the identity recorded here would
+/// answer for it. So the hold is taken without following links (see
+/// [`open_directory_hold`]), what it opened must be a directory, and the name
+/// must still answer to that very object -- a planted link, having an inode
+/// of its own, fails the last check even where the first is unavailable.
 #[cfg(unix)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::unix::fs::MetadataExt as _;
@@ -373,9 +383,14 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     match open_directory_hold(path) {
         Ok(hold) => {
             let meta = hold.metadata()?;
+            let (dev, ino) = (meta.dev(), meta.ino());
+            let found = std::fs::symlink_metadata(path)?;
+            if !meta.is_dir() || (found.dev(), found.ino()) != (dev, ino) {
+                return Err(replaced_staging_name(path));
+            }
             Ok(StagedDirClaim {
-                dev: meta.dev(),
-                ino: meta.ino(),
+                dev,
+                ino,
                 hold: Some(hold),
             })
         }
@@ -383,7 +398,12 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
         // the only open this target has; its identity still names it, without
         // the inode pin a held descriptor adds, so cleanup will only report.
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            // `symlink_metadata` follows nothing, so a planted link is its
+            // own entry here and the directory check alone refuses it.
             let meta = std::fs::symlink_metadata(path)?;
+            if !meta.is_dir() {
+                return Err(replaced_staging_name(path));
+            }
             Ok(StagedDirClaim {
                 dev: meta.dev(),
                 ino: meta.ino(),
@@ -394,9 +414,23 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     }
 }
 
+/// Says that the staging name stopped answering to the directory this capture
+/// created there, which is what a claim exists to establish; the caller leaves
+/// whatever stands at the name alone (see [`create_and_claim_staged_dir`]).
+#[cfg(unix)]
+fn replaced_staging_name(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "the staging name {} no longer answers to the directory this capture created there",
+        path.display()
+    ))
+}
+
 /// Opens a directory for identity and holding alone: `O_PATH`, which asks no
 /// read permission of a directory that allows only creation and search, on
 /// the Linux targets whose `fcntl.h` shares the generic value for it.
+/// `O_NOFOLLOW` joins it so a symlink planted at the name is never followed;
+/// Linux answers that pair with a descriptor on the link itself, which
+/// [`claim_staged_dir`] then refuses for not being a directory.
 #[cfg(all(
     any(target_os = "linux", target_os = "android"),
     any(
@@ -411,16 +445,34 @@ fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     const O_PATH: i32 = 0o10_000_000;
+    const O_NOFOLLOW: i32 = 0o400_000;
     std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(O_PATH)
+        .custom_flags(O_PATH | O_NOFOLLOW)
         .open(path)
 }
 
 /// As above where `std` offers only a read open of a directory; XNU refuses
-/// `O_EXEC` on one with `EISDIR`, so Apple targets take this arm too.
+/// `O_EXEC` on one with `EISDIR`, so Apple targets take this arm. Without
+/// `O_PATH` in the pair, `O_NOFOLLOW` fails the open outright on a symlink.
+#[cfg(target_vendor = "apple")]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const O_NOFOLLOW: i32 = 0x0100;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+}
+
+/// As above on the remaining Unix targets, whose `O_NOFOLLOW` value this
+/// module does not carry and cannot ask a dependency for; there
+/// [`claim_staged_dir`]'s check that the name still answers to the opened
+/// object is the whole of what refuses a planted symlink.
 #[cfg(all(
     unix,
+    not(target_vendor = "apple"),
     not(all(
         any(target_os = "linux", target_os = "android"),
         any(
