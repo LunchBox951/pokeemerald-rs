@@ -168,7 +168,7 @@ impl PlayerState {
     /// (`field_player_avatar.c:526-532`, `:567-576`), and those physics stay
     /// unported, so nothing here may leave the two apart -- which matters
     /// because forced movement's slip direction reads the movement direction
-    /// (see [`forced_movement_direction`]).
+    /// (see `forced_movement_direction`).
     pub const fn face(&mut self, direction: Direction) {
         self.facing = direction;
         self.movement_direction = direction;
@@ -189,7 +189,7 @@ impl PlayerState {
     /// [`step`](Self::step)'s own collision-blocked fallthrough (issue #926).
     ///
     /// `True` only once *this* `PlayerState` has itself completed a step
-    /// onto a forced-movement tile ([`try_start_resolved_step`](Self::try_start_resolved_step)),
+    /// onto a forced-movement tile (`try_start_resolved_step`),
     /// never merely because [`new`](Self::new) placed it there: a warp
     /// arrival or a resumed save that lands on such a tile starts
     /// controllable instead (see `new`'s doc for why).
@@ -276,7 +276,7 @@ impl PlayerState {
     /// except an armed forced-movement standing tile (see
     /// [`forced_movement_armed`](Self::forced_movement_armed)), which blocks
     /// every manual step without turning the player -- unless
-    /// [`forced_movement_direction`] is itself collision-blocked, in which case
+    /// `forced_movement_direction` is itself collision-blocked, in which case
     /// this poll is honoured as an ordinary manual step instead, matching
     /// upstream's fallthrough to `MovePlayerAvatarUsingKeypadInput`
     /// (`field_player_avatar.c:344-348`). The `ForcedMovement_*` physics
