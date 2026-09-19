@@ -12,6 +12,7 @@ const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const TACKLE: MoveId = MoveId(33);
 const GROWL: MoveId = MoveId(45);
 const POUND: MoveId = MoveId(1);
+const LEER: MoveId = MoveId(43);
 const FIRST_MOVE_SLOT: usize = 0;
 const FIXED_PLAYER_PERSONALITY: u32 = 0;
 const SCRIPTED_OPPONENT_LEVEL: u8 = 2;
@@ -245,6 +246,38 @@ fn advance_first_battle_forces_struggle_and_fights_to_an_outcome_when_the_lead_h
         lead.current_hp()
     );
     assert_eq!(lead.stages(), battle::StatStages::default());
+}
+
+/// A spent slot 0 must not abort a first battle the player can still legally
+/// play -- the driver falls back to the next usable slot.
+#[test]
+fn advance_first_battle_falls_back_from_a_spent_slot_zero_to_the_next_usable_move() {
+    const FALLBACK_SLOT: usize = 1;
+
+    let mut rng = Rng::new(DEFAULT_RNG_SEED);
+    let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND, LEER]);
+    for _remaining_pp in 0..lead.moves()[FIRST_MOVE_SLOT].pp {
+        lead.deduct_pp(FIRST_MOVE_SLOT)
+            .expect("draining a slot that still has PP");
+    }
+    let fallback_pp_before = lead.moves()[FALLBACK_SLOT].pp;
+
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
+    let mut battle_slot = Some(battle);
+    let mut player_lead = None;
+
+    let outcome = advance_first_battle(&mut battle_slot, &mut player_lead, &mut rng);
+
+    assert_eq!(outcome, None, "Leer ends no battle: {outcome:?}");
+    let battle = battle_slot
+        .as_ref()
+        .expect("a battle with a usable move left must stay active, not abort");
+    assert_eq!(
+        battle.player().moves()[FALLBACK_SLOT].pp,
+        fallback_pp_before - 1,
+        "the driver must spend the usable slot instead of aborting on the spent one"
+    );
 }
 
 #[test]

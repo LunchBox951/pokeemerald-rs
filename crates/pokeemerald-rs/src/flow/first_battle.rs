@@ -7,19 +7,21 @@
 //! driver has no vblank interleaving, while `VBlankCB_Battle` advances the
 //! generator once per battle vblank (`battle_main.c:2085-2089`).
 //!
-//! [`advance_first_battle`] uses the first move slot because first battles
-//! forbid running. It writes the player lead back after a terminal or failed
-//! turn. Upstream's `CB2_EndFirstBattle` returns directly to the field even
-//! after a loss (`battle_setup.c:950-954`), so a fainted lead is valid here.
+//! [`advance_first_battle`] never submits [`PlayerAction::Run`] because first
+//! battles forbid running; it selects the first usable move slot instead of a
+//! fixed one, so a spent slot 0 with another legal move still plays out. It
+//! writes the player lead back after a terminal or failed turn. Upstream's
+//! `CB2_EndFirstBattle` returns directly to the field even after a loss
+//! (`battle_setup.c:950-954`), so a fainted lead is valid here.
 
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, TurnError,
+};
 use engine::rng::Rng;
 
 use super::battle_finalize::finalize_battle_turn;
 use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
-
-const HEADLESS_PLAYER_MOVE_SLOT: usize = 0;
 
 /// Emerald's scripted first-battle opponent.
 pub const FIRST_BATTLE_OPPONENT_SPECIES: assets::SpeciesId = assets::SpeciesId(288);
@@ -70,6 +72,32 @@ pub fn start_first_battle(
     )
 }
 
+/// Tries each move slot in order and takes the turn with the first one
+/// [`Battle::take_turn`] accepts.
+///
+/// A rejection that leaves the shared RNG draw unchanged came from pre-turn slot
+/// validation, which runs before any draw or mutation, so the next slot is safe to try;
+/// one that already advanced the draw is a genuine mid-turn failure and is returned
+/// immediately. An all-spent moveset never exhausts the loop -- `validate_player_action`
+/// substitutes Struggle for it (`crates/battle/src/battle.rs:491`) -- so exhausting every
+/// slot means none was executable, and that last rejection is returned.
+fn take_first_usable_move_turn(
+    battle: &mut Battle,
+    rng: &mut Rng,
+) -> Result<Vec<BattleEvent>, TurnError> {
+    let slot_count = battle.player().moves().len();
+    let mut last_error = None;
+    for slot in 0..slot_count {
+        let rng_before = rng.state();
+        match battle.take_turn(PlayerAction::UseMove(slot), &mut SharedRng::new(rng)) {
+            Ok(events) => return Ok(events),
+            Err(error) if rng.state() == rng_before => last_error = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("a battler always carries at least one move slot"))
+}
+
 /// Advances the first battle by one headless turn.
 ///
 /// Returns `None` when the slot is empty, the battle remains active, or the
@@ -83,8 +111,7 @@ pub fn advance_first_battle(
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
     let battle = battle_slot.as_mut()?;
-    let player_action = PlayerAction::UseMove(HEADLESS_PLAYER_MOVE_SLOT);
-    let turn_failed = match battle.take_turn(player_action, &mut SharedRng::new(rng)) {
+    let turn_failed = match take_first_usable_move_turn(battle, rng) {
         Ok(_) => false,
         Err(error) => {
             eprintln!("first battle: turn failed ({error:?}) -- ending the encounter");
