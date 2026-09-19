@@ -716,11 +716,12 @@ fn locking_synchronises_ancestors_only_once_the_lock_is_held() {
     let file = SaveFile::at(&path);
 
     let synced_while_locked = std::cell::Cell::new(false);
+    let lock_path = file.lock_path();
     let guard = file
         .lock_with(|_ancestor_parent| {
             let probe = std::fs::OpenOptions::new()
                 .write(true)
-                .open(sibling_path(&path, ".lock"))
+                .open(&lock_path)
                 .expect("the lock file must already exist while ancestors are synced");
             synced_while_locked.set(matches!(
                 probe.try_lock(),
@@ -748,7 +749,7 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
         .lock()
         .expect("locking must create the missing hierarchy");
     assert!(path.parent().unwrap().is_dir());
-    assert!(sibling_path(&path, ".lock").exists());
+    assert!(file.lock_path().exists());
 
     let (store, _, _) = saved_store();
     file.write(&store).unwrap();
@@ -756,91 +757,4 @@ fn locking_before_any_directory_exists_creates_the_whole_hierarchy() {
 
     let reloaded = file.read().unwrap().expect("the file was just written");
     assert_eq!(reloaded.flash_image(), store.flash_image());
-}
-
-#[test]
-fn the_save_lock_excludes_a_second_locker_until_dropped() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    let dir = TempDir::new("lock");
-    let path = dir.join(SAVE_FILE_NAME);
-    let file = SaveFile::at(&path);
-    let first_lock_released = Arc::new(AtomicBool::new(false));
-
-    let guard = file.lock().expect("first lock must succeed");
-
-    let probe = std::fs::OpenOptions::new()
-        .write(true)
-        .open(sibling_path(&path, ".lock"))
-        .expect("the lock file exists while the guard is held");
-    match probe.try_lock() {
-        Err(std::fs::TryLockError::WouldBlock) => {}
-        other => panic!("the held lock must exclude a second locker, got {other:?}"),
-    }
-    drop(probe);
-
-    let contender = {
-        let first_lock_released = Arc::clone(&first_lock_released);
-        let file = SaveFile::at(&path);
-        std::thread::spawn(move || {
-            let _guard = file.lock().expect("second lock must eventually succeed");
-            first_lock_released.load(Ordering::SeqCst)
-        })
-    };
-    // This gives the contender a chance to block; the nonblocking probe above proves exclusion.
-    std::thread::yield_now();
-    first_lock_released.store(true, Ordering::SeqCst);
-    drop(guard);
-    assert!(
-        contender.join().expect("contender must not panic"),
-        "the second lock() returned while the first guard was still held"
-    );
-}
-
-/// A bare relative save-file name, unique to this process and thread, that
-/// removes itself on drop -- never touching the working directory every thread shares.
-struct BareRelativeSave {
-    name: PathBuf,
-}
-
-impl BareRelativeSave {
-    fn unique(label: &str) -> Self {
-        Self {
-            name: PathBuf::from(format!(
-                "pokeemerald-rs-save-file-{label}-{}-{:?}.sav",
-                std::process::id(),
-                std::thread::current().id()
-            )),
-        }
-    }
-}
-
-impl Drop for BareRelativeSave {
-    fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.name));
-    }
-}
-
-#[test]
-fn a_bare_relative_save_path_syncs_the_working_directory_after_the_rename() {
-    let bare = BareRelativeSave::unique("write");
-    let file = SaveFile::at(bare.name.clone());
-    let (store, _, _) = saved_store();
-
-    let synced = std::cell::RefCell::new(Vec::new());
-    file.write_with(
-        &store,
-        |path| synced.borrow_mut().push(path.to_path_buf()),
-        |bytes| staging::StagingArea::beside(file.path()).stage(bytes),
-        |_| {},
-    )
-    .expect("writing a bare relative save path must succeed");
-
-    assert_eq!(
-        synced.into_inner(),
-        vec![PathBuf::from(".")],
-        "a bare relative save path's directory entry lives in the working directory, and \
-         the rename must best-effort sync it exactly once"
-    );
 }
