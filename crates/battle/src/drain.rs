@@ -14,7 +14,7 @@ use crate::ability::inverts_drain;
 use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
-use crate::hit::{accuracy_roll, damage_core, HitOutcome};
+use crate::hit::{accuracy_roll, classify_accuracy_failure, damage_core, HitOutcome};
 use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
@@ -97,7 +97,9 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 /// Resolves the damage half of a draining move against one target.
 ///
 /// A landed move consumes accuracy, critical-hit, and damage-variance draws in
-/// order, subject to critical-hit suppression. It omits the effect-chance draw
+/// order, subject to critical-hit suppression. A failed accuracy roll stops
+/// after that one draw, carrying [`classify_accuracy_failure`]'s verdict. It
+/// omits the effect-chance draw
 /// because the upstream drain script exits before that stage
 /// (`pokeemerald/data/battle_scripts_1.s:323-360`). The caller clamps the
 /// returned damage to the target's remaining HP before passing the HP removed
@@ -105,8 +107,9 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 ///
 /// # Errors
 ///
-/// Returns the errors from [`ensure_resolvable`], [`accuracy_roll`], or
-/// [`damage_core`]. Admission completes before any draw.
+/// Returns the errors from [`ensure_resolvable`], [`accuracy_roll`],
+/// [`classify_accuracy_failure`], or [`damage_core`]. Admission completes
+/// before any draw.
 pub fn resolve_drain_move(
     dex: &Dex,
     move_id: MoveId,
@@ -117,7 +120,7 @@ pub fn resolve_drain_move(
 ) -> Result<HitOutcome, BattleError> {
     ensure_resolvable(dex, move_id)?;
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
-        return Ok(HitOutcome::Miss);
+        return classify_accuracy_failure(dex, move_id, defender);
     }
     damage_core(
         dex,
