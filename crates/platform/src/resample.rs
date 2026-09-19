@@ -479,9 +479,8 @@ mod tests {
         // documents it re-derives `bound` against: a ratio so large that
         // `floor(MAX_SCRATCH_SOURCE_FRAMES / step)` is 0 and the `.max(1.0)`
         // floor leaves `bound == 1`, so `bound * step` is still the whole
-        // step. `Resampler::new` accepts any `u32` source/device rate pair,
-        // so `step` here is one it would actually derive. Pure-function
-        // check: never allocates the buffer this would size.
+        // step. `Resampler::new` refuses this ratio before sizing anything;
+        // this pins the helper's own bound on the input it never sees.
         let step = f64::from(u32::MAX); // source_rate = u32::MAX, device_rate = 1
         let (_bound, scratch_frames) = scratch_layout(DEFAULT_MAX_OUTPUT_FRAMES, step);
         assert!(
