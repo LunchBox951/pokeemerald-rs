@@ -72,9 +72,6 @@ pub enum BattleOutcome {
 
 /// Validates that one complete move-effect pipeline can execute a move.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    // Struggle is admitted through the ordinary-hit pipeline: `hit::
-    // ensure_resolvable` special-cases it, and `execute_hit_move` applies its
-    // quarter-HP recoil once it lands.
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
@@ -392,9 +389,8 @@ impl Battle {
         if !selectable_slot(Some(slot.move_id)) {
             return Err(BattleError::PlaceholderMove(index));
         }
-        // This pre-draw screen mirrors `Cmd_attackcanceler`'s mid-script
-        // no-PP abort, which exempts Struggle (`:934`); `Battle::act` mirrors
-        // the exemption itself once the turn actually reaches this slot.
+        // `Cmd_attackcanceler`'s no-PP abort exempts Struggle
+        // (`battle_script_commands.c:934`).
         if slot.pp == 0 && slot.move_id != STRUGGLE {
             return Err(BattleError::NoPpRemaining(index));
         }
@@ -779,10 +775,7 @@ impl Battle {
     /// Soundproof block, PP handling, then execution.
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
-    /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`)
-    /// -- this is the same slot both an ordinary move and a forced Struggle
-    /// run through, for either battler, mirroring upstream's single
-    /// `HandleAction_UseMove` entry point.
+    /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
     fn act(
         &mut self,
         player_is_attacker: bool,
@@ -836,13 +829,9 @@ impl Battle {
                 self.enemy.moves()[slot].pp
             };
             if slot_pp == 0 {
-                // `Cmd_attackcanceler`'s no-PP abort exempts Struggle
-                // (`gCurrentMove != MOVE_STRUGGLE`,
-                // `battle_script_commands.c:934`), and `Cmd_ppreduce` no-ops
-                // on an already-empty slot regardless of
-                // `HITMARKER_NO_PPDEDUCT` (`:1230`) -- so a directly chosen
-                // Struggle with no PP left still executes, spending nothing,
-                // the same as the forced all-spent substitution.
+                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+                // nothing from an empty slot (`:1230`).
                 if move_id != STRUGGLE {
                     events.push(BattleEvent::FailedNoPp {
                         by_player: player_is_attacker,
