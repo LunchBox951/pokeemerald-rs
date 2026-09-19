@@ -160,15 +160,22 @@ impl PlayerState {
 
     /// Changes facing without starting or interrupting a step.
     ///
-    /// Deliberately leaves the last polled movement direction untouched:
-    /// upstream's `SetObjectEventDirection` (a scripted look, e.g. a sight
-    /// trigger or dialogue) updates only `facingDirection`, never
-    /// `movementDirection` (`event_object_movement.c`'s movement-action
-    /// dispatch keeps the two separate outside an actual walk/turn), and
-    /// forced movement's slip direction reads the latter (see
-    /// [`forced_movement_direction`]).
+    /// Carries the movement direction with it, as upstream's
+    /// `SetObjectEventDirection` does: it writes `movementDirection`
+    /// unconditionally and `facingDirection` beside it unless
+    /// `facingDirectionLocked` is set (`event_object_movement.c:2361-2371`),
+    /// and every scripted look reaches it -- `ObjectEventTurn`
+    /// (`:1867-1875`) for a turn in place, `FaceDirection` (`:5048-5055`)
+    /// for the `MOVEMENT_ACTION_FACE_*` a sight trigger holds on the player
+    /// (`trainer_see.c:522-526`). Only `ForcedMovement_Slide` and
+    /// `ForcedMovement_MuddySlope` lock facing
+    /// (`field_player_avatar.c:526-532`, `:567-576`), and those physics stay
+    /// unported, so nothing here may leave the two apart -- which matters
+    /// because forced movement's slip direction reads the movement direction
+    /// (see [`forced_movement_direction`]).
     pub const fn face(&mut self, direction: Direction) {
         self.facing = direction;
+        self.movement_direction = direction;
     }
 
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
@@ -2332,15 +2339,16 @@ mod tests {
         );
     }
 
-    /// A scripted look (`face`) must not corrupt ice's forced direction: it
-    /// changes only `facing`, matching upstream's `SetObjectEventDirection`
-    /// leaving `movementDirection` untouched for anything but an actual walk
-    /// or turn (see [`PlayerState::face`]'s doc). Standing on the same
-    /// blocked-east ice tile as the sibling test, facing (but not moving)
-    /// north in between must not make the guard mistake north -- clear here
-    /// -- for the still-blocked-east forced direction `(behavioral-fidelity)`.
+    /// A scripted look (`face`) moves ice's forced direction with it:
+    /// upstream's `SetObjectEventDirection` writes `movementDirection` on
+    /// every scripted look, not only on a walk or turn (see
+    /// [`PlayerState::face`]'s doc). Standing on the same blocked-east ice
+    /// tile as the sibling test, facing north in between makes north -- clear
+    /// here -- the direction `ForcedMovement_Slip` would take, so the keypad
+    /// fallback the sibling test exercises must close again
+    /// `(behavioral-fidelity)`.
     #[test]
-    fn a_scripted_face_does_not_change_ices_forced_direction() {
+    fn a_scripted_face_carries_ices_forced_direction_with_it() {
         let mut bytes = Vec::new();
         for y in 0..5u16 {
             for x in 0..5u16 {
@@ -2408,11 +2416,20 @@ mod tests {
 
         assert_eq!(
             player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
-            StepOutcome::Turned(Direction::West),
-            "movement_direction is still the pre-face east, which is blocked at \
-             (3, 2), so this must still reach ordinary keypad handling and turn \
-             -- not incorrectly treat the scripted north facing (clear) as the \
-             forced direction and fail closed"
+            StepOutcome::Blocked {
+                direction: Direction::West,
+                collision: Collision::Impassable,
+            },
+            "the scripted look carried movement_direction north with it, and \
+             north is clear, so the forced direction is no longer blocked and \
+             the guard must refuse this poll -- not fall through to the keypad \
+             on the pre-face east"
+        );
+        assert_eq!(
+            player.facing(),
+            Direction::North,
+            "a refused poll on an armed forced tile leaves facing where the \
+             script put it"
         );
     }
 

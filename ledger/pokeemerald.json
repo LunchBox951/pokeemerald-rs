@@ -26348,7 +26348,7 @@
           "status": "rewritten"
         },
         "GetPlayerMovementDirection": {
-          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which this port does not model yet, so it has no way to tell them apart and no need to; revisit the fold when the bike lands (deferred, still in v1 scope)",
+          "reason": "Movement-direction accessor re-implemented as PlayerState::movement_direction, a field of its own rather than a fold into PlayerState::facing (GetPlayerFacingDirection's target): the forced-movement classification in PlayerState::step reads it for the two behaviors whose handler slips along the player's own direction instead of one fixed by the behavior id (MB_ICE and MB_TRICK_HOUSE_PUZZLE_8_FLOOR through ForcedMovement_Slip/DoForcedMovementInCurrentDirection, field_player_avatar.c:473-484). Every mutator here keeps the two directions in step -- PlayerState::new, PlayerState::step, and PlayerState::face alike, which is also why the save writes both of SavedObjectEvent's direction nibbles from one value -- as SetObjectEventDirection does (event_object_movement.c:2361-2371): it writes movementDirection unconditionally and facingDirection beside it unless facingDirectionLocked, which only ForcedMovement_Slide and ForcedMovement_MuddySlope set (field_player_avatar.c:526-532, :567-576). Those physics, and the bike speed MuddySlope reads, stay unported, so the port has no case yet where the two diverge (deferred, still in v1 scope).",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
