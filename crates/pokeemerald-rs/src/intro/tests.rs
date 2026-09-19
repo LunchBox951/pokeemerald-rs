@@ -334,8 +334,6 @@ fn temp_pack_path(name: &str) -> std::path::PathBuf {
 
 /// Owns a temporary pack path and removes it on drop, so a fallible load or
 /// a failed assertion that unwinds still cleans up the scratch file.
-///
-/// Mirrors `crate::main_menu::tests::TempPackGuard`.
 struct TempPackGuard {
     path: std::path::PathBuf,
 }
