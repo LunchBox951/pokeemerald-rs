@@ -76,6 +76,13 @@ const TRAINER_FLAGS_START: u16 = 0x500;
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
 const TRAINER_RHETT: u16 = 703;
+
+/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
+/// has no resolver, so `validate_player_move` refuses it ahead of any draw
+/// (`crates/battle/src/battle.rs:415`) while a full-PP slot keeps the
+/// all-spent Struggle diversion (`crates/battle/src/battle.rs:491`) out of
+/// the way.
+const UNEXECUTABLE_MOVE: u16 = 228;
 const RHETT_TILE: (i32, i32) = (67, 5);
 
 /// `TRAINER_ANDREW` (`include/constants/opponents.h`): used only for the
@@ -1469,40 +1476,22 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
 }
 
 /// Pins [`OverworldPhase::sight_trainer_id`]'s abort clause: a lead with no
-/// PP left in its only *selected* move fails the turn with no outcome at
-/// all, which must still clear the id.
+/// selectable move at all fails the turn with no outcome, which must still
+/// clear the id.
+///
+/// The fixture is [`UNEXECUTABLE_MOVE`]: a spent slot 0 no longer aborts
+/// anything, since the driver falls back to the next usable slot
+/// (`crate::flow::npc_trainer_battle::take_first_usable_move_turn`) and an
+/// all-spent moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`).
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
     let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
-    // Drain slot 0 through the accessor the turn engine spends PP with. A
-    // second known move (Leer, Treecko's level-5 learnset, left untouched)
-    // keeps this a `NoPpRemaining(0)` abort rather than the all-spent
-    // forced-Struggle diversion; the headless driver always picks slot 0.
-    let ivs = Ivs {
-        hp: battle::MAX_IV,
-        attack: battle::MAX_IV,
-        defense: battle::MAX_IV,
-        speed: battle::MAX_IV,
-        sp_attack: battle::MAX_IV,
-        sp_defense: battle::MAX_IV,
-    };
-    let mut drained = BattlePokemon::new(
-        &Dex::new(),
-        assets::SpeciesId(277),
-        5,
-        ivs,
-        0,
-        vec![assets::MoveId(1), assets::MoveId(43)],
-    )
-    .expect("species/moves must be in the dex");
-    let starting_pp = drained.moves()[0].pp;
-    assert!(starting_pp > 0, "a freshly built lead starts with PP");
-    for _ in 0..starting_pp {
-        drained
-            .deduct_pp(0)
-            .expect("draining a slot that still has PP");
-    }
-    seed_battle(&mut phase, TRAINER_RHETT, drained, 1);
+    seed_battle(
+        &mut phase,
+        TRAINER_RHETT,
+        lead(277, 5, UNEXECUTABLE_MOVE),
+        1,
+    );
     assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
 
     phase.step(ButtonState::new());
