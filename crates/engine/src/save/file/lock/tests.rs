@@ -2,9 +2,13 @@
 //! back [`SaveFile::lock`](super::SaveFile::lock): the basename, staging,
 //! and aliasing boundaries [`super`] enforces before a lock is granted.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::path::Path;
+use std::path::PathBuf;
 
-use crate::save::file::tests::{saved_store, sibling_path, TempDir};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::save::file::tests::sibling_path;
+use crate::save::file::tests::{saved_store, TempDir};
 use crate::save::file::{staging, SaveFile, SaveFileError, LOCK_FILE_NAME, SAVE_FILE_NAME};
 
 /// The longest basename `parent` accepts as a save file, grown one byte at a
