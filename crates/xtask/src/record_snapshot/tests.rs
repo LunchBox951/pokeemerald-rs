@@ -1308,6 +1308,44 @@ fn cleanup_restores_a_file_installed_between_the_ownership_check_and_the_removal
     drop(guard);
 }
 
+/// A foreign file goes back to the staging name through a link, which leaves
+/// the same file under cleanup's private name until that one is unlinked. An
+/// unlink that fails is reported: nothing else derives that `.cleanup-*` name,
+/// so a report that dropped it would leave the entry unfindable.
+#[cfg(unix)]
+#[test]
+fn cleanup_reports_the_private_link_it_could_not_remove() {
+    let dir = scratch_path("unremovable-private-link");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".link-leftover.staged");
+    let private = dir.join(".link-leftover.staged.cleanup-0-0-0");
+    std::fs::write(&private, b"not ours").unwrap();
+
+    let error = super::report_foreign_staged_dir_with(&staged, &private, |_| {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    });
+
+    assert_eq!(
+        std::fs::read(&staged).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "the foreign file must go back to the staging name"
+    );
+    assert!(
+        private.is_file(),
+        "a failing unlink must leave the private link where it is"
+    );
+    for path in [&staged, &private] {
+        assert!(
+            error.to_string().contains(&path.display().to_string()),
+            "the report must name {}: {error}",
+            path.display()
+        );
+    }
+
+    drop(guard);
+}
+
 /// Failure cleanup must never delete a directory another writer put at the
 /// staging name *after* the ownership check read it. The hook-driven test
 /// above pins that window by construction; this one races it as a stress
