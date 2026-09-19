@@ -198,15 +198,21 @@ where
         }
     };
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
-    let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
-    let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
+    let rgb_name = format!("{}.rgb", scene.name());
+    let meta_name = format!("{}.meta", scene.name());
+    let staged_rgb = staged_dir.join(&rgb_name);
+    let staged_meta = staged_dir.join(&meta_name);
 
     let mut renamed = false;
     let result = (|| {
-        std::fs::write(&staged_rgb, rgb_bytes)
+        // Both payloads go through the claim, not the staging pathname; see
+        // `StagedDirClaim::write_payload` for what that is worth.
+        staged_dir_claim
+            .write_payload(&staged_dir, &rgb_name, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
         after_rgb_staged()?;
-        std::fs::write(&staged_meta, meta_bytes)
+        staged_dir_claim
+            .write_payload(&staged_dir, &meta_name, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
         // The promoting rename frees the staging name, so the claim can no
         // longer answer for it past this point regardless of whether the
@@ -362,6 +368,74 @@ impl StagedDirClaim {
         reason = "one signature for every platform; only Windows has a hold to give up"
     )]
     fn release_hold(&mut self) {}
+
+    /// Writes `bytes` as `name` inside the claimed directory.
+    ///
+    /// Through the held descriptor, never through the staging pathname. The
+    /// claim answers for what that name meant at the instant it was taken,
+    /// and on Unix nothing denies another writer a `rename` of the entry
+    /// afterwards; a write by name would follow whatever stands there by
+    /// then, including a symlink out of `output_dir`. `openat` starts from
+    /// the directory the kernel resolved once, when the hold was opened, so
+    /// a name swapped after the claim reaches nothing this write touches.
+    /// `O_EXCL` then refuses a name already taken inside that directory,
+    /// which is a directory this call created and no other writer can reach
+    /// by name any more.
+    ///
+    /// `staged_dir` is the fallback's path only: a claim that pinned no
+    /// descriptor (see [`claim_staged_dir`]) has nothing to write through,
+    /// and writes by name as every publish did before the hold existed.
+    #[cfg(unix)]
+    fn write_payload(&self, staged_dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let Some(hold) = self.hold.as_ref() else {
+            return std::fs::write(staged_dir.join(name), bytes);
+        };
+        let file = rustix::fs::openat(
+            hold,
+            name,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::EXCL
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC,
+            // `File::create`'s own 0o666, which the umask masks either way.
+            rustix::fs::Mode::RUSR
+                | rustix::fs::Mode::WUSR
+                | rustix::fs::Mode::RGRP
+                | rustix::fs::Mode::WGRP
+                | rustix::fs::Mode::ROTH
+                | rustix::fs::Mode::WOTH,
+        )?;
+        std::fs::File::from(file).write_all(bytes)
+    }
+
+    /// As above. Windows needs no descriptor-relative write: the hold is
+    /// opened with no sharing at all on the staging entry itself (see
+    /// [`StagedDirClaim`]), so for as long as it lives no other opener can
+    /// rename or delete that entry, and the staging pathname cannot come to
+    /// mean anything else between the claim and these writes.
+    #[cfg(windows)]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Unix writes through the hold"
+    )]
+    fn write_payload(&self, staged_dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+        std::fs::write(staged_dir.join(name), bytes)
+    }
+
+    /// As above, for targets with no hold to write through and no sharing to
+    /// deny: the staging pathname is all there is, exactly as it was before
+    /// any of this module's claims existed.
+    #[cfg(not(any(unix, windows)))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Unix writes through the hold"
+    )]
+    fn write_payload(&self, staged_dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+        std::fs::write(staged_dir.join(name), bytes)
+    }
 }
 
 /// Opens `path` (a freshly created `staged_dir`) and records the identity
@@ -369,13 +443,17 @@ impl StagedDirClaim {
 ///
 /// The open must land on the directory `create_dir` put there and on nothing
 /// else. A writer that carries that directory off and plants a symlink at the
-/// name it freed would otherwise hand this claim the link's target: every
-/// payload this publish writes under the staging name would land in that
-/// directory instead, wherever it is, and the identity recorded here would
-/// answer for it. So the hold is taken without following links (see
-/// [`open_directory_hold`]), what it opened must be a directory, and the name
-/// must still answer to that very object -- a planted link, having an inode
-/// of its own, fails the last check even where the first is unavailable.
+/// name it freed would otherwise hand this claim the link's target, and the
+/// identity recorded here would answer for that directory instead. So the
+/// hold is taken without following links (see [`open_directory_hold`]), what
+/// it opened must be a directory, and the name must still answer to that very
+/// object -- a planted link, having an inode of its own, fails the last check
+/// even where the first is unavailable.
+///
+/// What the descriptor is then held *for* is the writes:
+/// [`StagedDirClaim::write_payload`] reaches the directory this opened
+/// rather than the name it was opened by, since this check answers only for
+/// the instant it ran and Unix denies no one a later `rename` of the entry.
 #[cfg(unix)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     use std::os::unix::fs::MetadataExt as _;

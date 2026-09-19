@@ -35,6 +35,20 @@ pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
 # `crate::record_snapshot`'s module docs.
 assets = { path = "../assets", optional = true }
 
+# `record-snapshot` writes each staged payload through the descriptor its
+# staging claim holds rather than through the staging pathname, which takes
+# `openat` -- `std` exposes it on no platform. Already this workspace's
+# answer to the same question: `pokeemerald-rs`'s `import_rom::dest` pins
+# its destination directory the same way with the same crate and version,
+# so no package enters the tree that was not already in it. Unix-only,
+# since `rustix` is, and optional behind `scenes` (below), which is what
+# compiles `mod record_snapshot` in at all.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "fs",
+], optional = true }
+
 [features]
 # Pulls in the workspace-local scene drivers `smoke`, `record-snapshot`,
 # and `scenario` need. Not selected directly by a caller -- always reached
@@ -42,7 +56,7 @@ assets = { path = "../assets", optional = true }
 # record_snapshot` is `#[cfg]`d on *this* feature rather than on
 # `record-snapshot`, so CI's `cargo test -p xtask --features smoke` leg
 # compiles and runs its synthetic-pack tests (see `main.rs`'s crate docs).
-scenes = ["dep:pokeemerald-rs", "dep:assets"]
+scenes = ["dep:pokeemerald-rs", "dep:assets", "dep:rustix"]
 smoke = ["scenes"]
 record-snapshot = ["scenes"]
 scenario = ["scenes"]

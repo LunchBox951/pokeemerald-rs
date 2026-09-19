@@ -1546,3 +1546,58 @@ fn cleanup_reports_why_a_restore_could_not_reserve_the_staging_name() {
 
     drop(guard);
 }
+
+/// The claim must protect the payload writes that follow it, not just the
+/// name at the instant it was taken. `claim_staged_dir` holds a descriptor
+/// on the directory it created, but `publish_generation` writes both
+/// payloads by pathname under `staged_dir`, so a writer that carries the
+/// claimed directory off and plants a symlink at the freed staging name
+/// redirects every later write to wherever that link points -- outside
+/// `output_dir` entirely.
+///
+/// Unix only: the adversary needs the `rename` Windows' exclusive hold
+/// denies, exactly as in the sibling replacement tests above.
+#[cfg(unix)]
+#[test]
+fn staged_payload_writes_stay_inside_the_output_directory() {
+    let output_dir = scratch_path("post-claim-escape-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let escape_dir = scratch_path("post-claim-escape-target");
+    let escape_guard = ScratchGuard(escape_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&escape_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    let plant_a_link_at_the_staging_name = || {
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        let staged_dir = output_dir.join(staged);
+        // Another writer carries the claimed directory off and leaves a
+        // symlink standing at the name this publish keeps writing through.
+        std::fs::rename(&staged_dir, output_dir.join("carried-off")).unwrap();
+        std::os::unix::fs::symlink(&escape_dir, &staged_dir).unwrap();
+        Ok(())
+    };
+
+    let _ = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        plant_a_link_at_the_staging_name,
+    );
+
+    let escaped = escape_dir.join(format!("{}.meta", scene.name()));
+    assert!(
+        !escaped.exists(),
+        "the staged meta write followed a planted link and landed at {}, outside {}",
+        escaped.display(),
+        output_dir.display()
+    );
+
+    drop(escape_guard);
+    drop(out_guard);
+}
