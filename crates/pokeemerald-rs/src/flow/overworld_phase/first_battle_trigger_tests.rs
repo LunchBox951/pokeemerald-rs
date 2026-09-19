@@ -182,6 +182,47 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
 }
 
+/// Overrides the trigger tile's own cell to the transition elevation `0`
+/// (wildcard rule owned by [`engine::overworld::MapRuntime::coord_events_at`]'s
+/// docs), so the rescue trigger must fire at the retained elevation rather
+/// than the landed cell's collision one.
+#[test]
+fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            25,
+            25,
+            trigger_tile_cell(),
+            engine::overworld::collision::ELEVATION_TRANSITION,
+        ),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert_eq!(
+        phase.player.elevation(),
+        engine::overworld::collision::ELEVATION_TRANSITION,
+        "setup: the landed cell's collision elevation must be the transition value"
+    );
+    assert_eq!(
+        phase.player.previous_elevation(),
+        ROUTE_101_TRIGGER_ELEVATION,
+        "setup: the retained elevation must still be the ordinary one the player walked in with"
+    );
+    assert!(
+        phase.first_battle.is_some(),
+        "the rescue trigger must fire at the retained elevation even though the tile's own \
+         collision elevation is the transition value"
+    );
+}
+
 /// Route 101's second rescue coord event must trigger independently of the
 /// first one: approach `(11, 19)` from the east and exercise the complete
 /// [`OverworldPhase::step`] path through the landing drain frame.
