@@ -26,6 +26,7 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((3, 4), 3, Direction::South);
 
@@ -45,6 +46,43 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     );
     assert_eq!(player.position(), (3, 0));
     assert!(player.in_transit(), "a crossing is a step like any other");
+}
+
+/// A crossing landing is a standing tile like any other, so a forced one
+/// must arm both guards through this lane too
+/// (`pokeemerald/src/field_player_avatar.c:332-349`) `(behavioral-fidelity)`.
+#[test]
+fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
+    let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_SOUTH"),
+        dimensions: (5, 5),
+        landing_position: (3, 0),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+        landing_behavior: engine::overworld::metatile_behavior::MB_SOUTHWARD_CURRENT,
+    };
+    let mut player = PlayerState::new((3, 4), 3, Direction::South);
+
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+
+    assert!(
+        player.forced_movement_armed(),
+        "the movement guard must arm from the neighbour's landing behavior"
+    );
+    assert!(
+        player.field_input_suppressed(),
+        "and so must the field-input gate the landing call reads"
+    );
 }
 
 /// The offset case: a nonzero `offset` on an east/west connection shifts
@@ -72,6 +110,7 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((5, 5), 3, Direction::East);
 
@@ -112,6 +151,7 @@ fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((5, 0), 3, Direction::North);
 
@@ -151,6 +191,7 @@ fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the
                 collision: 0,
                 elevation: 3,
             },
+            landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
         };
         let mut player = PlayerState::new((x, 0), 3, Direction::North);
         let outcome = advance_player_one_frame(
@@ -190,6 +231,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((8, 2), 3, Direction::South);
 

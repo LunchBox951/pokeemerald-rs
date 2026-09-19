@@ -47,13 +47,14 @@ pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
 /// private fixture): this crate can't import it directly (private to
 /// `engine`), but the shape this issue's [`ConnectedMapData`] consumers
 /// need is identical -- a neighbour's dimensions plus one decoded landing
-/// cell.
+/// cell and its behavior.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SingleConnectedMap {
     pub(super) id: MapId,
     pub(super) dimensions: (u16, u16),
     pub(super) landing_position: (i32, i32),
     pub(super) landing_cell: MetatileCell,
+    pub(super) landing_behavior: u8,
 }
 
 impl ConnectedMapData for SingleConnectedMap {
@@ -63,6 +64,10 @@ impl ConnectedMapData for SingleConnectedMap {
 
     fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
         (map == self.id && (x, y) == self.landing_position).then_some(self.landing_cell)
+    }
+
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+        (map == self.id && (x, y) == self.landing_position).then_some(self.landing_behavior)
     }
 }
 

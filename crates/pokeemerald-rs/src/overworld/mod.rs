@@ -750,7 +750,7 @@ pub(crate) fn load_room_from_source(
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
-fn resolve_tileset_pack_name(
+pub(crate) fn resolve_tileset_pack_name(
     tileset_symbol: &'static str,
 ) -> Result<&'static str, OverworldSceneError> {
     match tileset_symbol {

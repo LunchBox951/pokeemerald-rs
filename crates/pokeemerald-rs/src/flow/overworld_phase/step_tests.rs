@@ -1375,12 +1375,9 @@ fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
     );
 }
 
-/// The gate's other arm, `T_NOT_MOVING`, admits START/SELECT/A/B whatever
-/// `forcedMove` says (`pokeemerald/src/field_control_avatar.c:95`). A player
-/// whose forced step is collision-blocked parks there -- `DoForcedMovement`
-/// returns FALSE (`field_player_avatar.c:443-455`), `PlayerStep` falls
-/// through to the keypad (`:344-348`), nothing animates (`:901-916`) -- so
-/// the menu must open on the frame after the landing's `T_TILE_CENTER`.
+/// A player whose forced step is collision-blocked parks at `T_NOT_MOVING`,
+/// the gate arm that admits START whatever `forcedMove` says
+/// (`pokeemerald/src/field_control_avatar.c:95`).
 #[test]
 fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_menu() {
     use engine::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_MUDDY_SLOPE};

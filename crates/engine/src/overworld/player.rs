@@ -94,13 +94,18 @@ impl Landing {
         }
     }
 
-    fn across_connection(to_map: MapId, position: TilePos, cell: MetatileCell) -> Self {
-        // ConnectedMapData exposes neighbour cells, but not behaviour
-        // attributes or object events.
+    fn across_connection(
+        to_map: MapId,
+        position: TilePos,
+        cell: MetatileCell,
+        destination_behavior: u8,
+    ) -> Self {
+        // `ConnectedMapData` exposes the neighbour's cells and behaviors, but
+        // not its object events.
         Self {
             position,
             cell,
-            destination_behavior: MB_NORMAL,
+            destination_behavior,
             object_events_accessible: false,
             to_map: Some(to_map),
         }
@@ -395,10 +400,14 @@ impl PlayerState {
         let cell = maps
             .metatile_cell(crossing.target, crossing.position.0, crossing.position.1)
             .ok_or(Collision::Impassable)?;
+        let destination_behavior = maps
+            .metatile_behavior(crossing.target, crossing.position.0, crossing.position.1)
+            .unwrap_or(MB_NORMAL);
         Ok(Landing::across_connection(
             crossing.target,
             crossing.position,
             cell,
+            destination_behavior,
         ))
     }
 
@@ -461,14 +470,9 @@ impl PlayerState {
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
-        // Arms (or disarms) the guard from the tile this step itself landed
-        // on -- see `forced_movement_armed`'s doc for why a placement must
-        // not. A connection landing's behavior always reads `MB_NORMAL`
-        // (`Landing::across_connection`), so crossing into a connected map
-        // never arms it either; unchanged, already-documented limitation.
+        // The dispatch set guards movement, the wider input set holds field
+        // input (`field_player_avatar.c:144-164`, `metatile_behavior.c:338-351`).
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
-        // The input gate reads the wider `MetatileBehavior_IsForcedMovementTile`
-        // set instead (`metatile_behavior.c:338-351`), for one frame.
         self.forced_input_tile_center = is_forced_movement_input_tile(landing.destination_behavior);
         Ok(())
     }
@@ -587,6 +591,7 @@ mod tests {
         dimensions: (u16, u16),
         landing_position: TilePos,
         landing_cell: MetatileCell,
+        landing_behavior: u8,
     }
 
     impl ConnectedMapData for SingleConnectedMap {
@@ -596,6 +601,10 @@ mod tests {
 
         fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
             (map == self.id && (x, y) == self.landing_position).then_some(self.landing_cell)
+        }
+
+        fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+            (map == self.id && (x, y) == self.landing_position).then_some(self.landing_behavior)
         }
     }
 
@@ -1444,6 +1453,7 @@ mod tests {
                 collision: 0,
                 elevation: 0,
             },
+            landing_behavior: MB_NORMAL,
         };
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
@@ -1471,6 +1481,7 @@ mod tests {
                 collision: 1,
                 elevation: 3,
             },
+            landing_behavior: MB_NORMAL,
         };
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
 
@@ -1497,6 +1508,7 @@ mod tests {
                 collision: 0,
                 elevation: 4,
             },
+            landing_behavior: MB_NORMAL,
         };
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
 
@@ -1523,6 +1535,7 @@ mod tests {
                 collision: 1,
                 elevation: 4,
             },
+            landing_behavior: MB_NORMAL,
         };
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
 
@@ -1583,6 +1596,7 @@ mod tests {
                 collision: 0,
                 elevation: 3,
             },
+            landing_behavior: MB_NORMAL,
         };
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
@@ -2542,5 +2556,95 @@ mod tests {
         assert_secret_base_mat_never_yields_to_the_keypad(
             super::super::metatile_behavior::MB_SECRET_BASE_JUMP_MAT,
         );
+    }
+
+    /// `MAP_SOUTH`'s landing tile carries a southward current (Route
+    /// 132/133/134's connected water does at the seam), which upstream
+    /// classifies on the standing tile every `PlayerStep`, crossing or not
+    /// (`field_player_avatar.c:332-349`) `(behavioral-fidelity)`.
+    fn southward_current_landing_runtime() -> MapRuntime<'static> {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 0)),
+                    collision: 0,
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_SOUTHWARD_CURRENT).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_SOUTH"),
+            name: "MapSouth",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, mut header, events) = flat_runtime(1, 1, |_, _| 0);
+        header.id = MapId("MAP_SOUTH");
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            MapId("MAP_SOUTH"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    #[test]
+    fn crossing_a_connection_onto_a_current_tile_still_refuses_the_keypad() {
+        let runtime = south_connected_runtime();
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 3,
+            },
+            landing_behavior: MB_SOUTHWARD_CURRENT,
+        };
+
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+            StepOutcome::Crossed {
+                to_map: MapId("MAP_SOUTH"),
+                to_position: (2, 0),
+            }
+        );
+        assert!(
+            player.forced_movement_armed(),
+            "the tile the crossing landed on is a southward current"
+        );
+
+        let landed = southward_current_landing_runtime();
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+
+        assert_eq!(
+            player.step(Some(Direction::East), &landed, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::East,
+                collision: Collision::Impassable,
+            },
+            "the keypad must not steer off a current tile reached by a crossing"
+        );
+        assert_eq!(player.position(), (2, 0));
     }
 }
