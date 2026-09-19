@@ -49,7 +49,6 @@ struct PreMovementFieldInput {
     position: (i32, i32),
     /// The pre-movement collision elevation, restored after a refused crossing.
     elevation: u8,
-    arrow_direction: Option<Direction>,
     arrow_trigger: Option<WarpTrigger>,
     /// The pre-movement animated-door check (issue #851): [`super::animated_door`]
     /// against the tile the player *faces*, not one they stand on -- see
@@ -79,15 +78,26 @@ impl OverworldPhase {
     /// borrow" pattern -- see the module docs), then the walk-animation
     /// timer always ticks (module docs on [`super::input::advance_player_one_frame`]).
     ///
+    /// # Frame shape
+    ///
+    /// One call is one presented frame: field input is decided from the
+    /// stance the call started with, then the movement tick runs, matching
+    /// CB1 (`DoCB1_Overworld`, `src/overworld.c:1438-1457`) ahead of CB2's
+    /// `AnimateSprites` (`:1465-1469`). A completed step is observed at
+    /// `T_TILE_CENTER` from the previous frame's `heldMovementFinished`
+    /// (`src/field_control_avatar.c:116-121`,
+    /// `src/field_player_avatar.c:901-915`), so a `pending_landing` latched
+    /// by the call that drains the animation is consumed by the next one.
+    ///
     /// # Warp timing
     ///
     /// Upstream gates its two ported warp paths on two *different* things,
     /// and so does this method — one entry point each, so the timings can't
     /// drift back together (see `engine::overworld::warp`'s module docs).
     ///
-    /// **Door-shaped warps: on the frame the step finishes.** That mirrors
-    /// upstream's own gate: `input->tookStep` is set only when
-    /// `gPlayerAvatar.tileTransitionState == T_TILE_CENTER &&
+    /// **Door-shaped warps: on the call after the step's animation
+    /// finishes.** That mirrors upstream's own gate: `input->tookStep` is
+    /// set only when `gPlayerAvatar.tileTransitionState == T_TILE_CENTER &&
     /// gPlayerAvatar.runningState == MOVING`
     /// (`pokeemerald/src/field_control_avatar.c:118-119`), and every
     /// `TryStartWarpEventScript` call site is guarded by that flag
@@ -95,28 +105,30 @@ impl OverworldPhase {
     /// `TryDoorWarp`/`SetupWarp`). [`PlayerState::step`] instead reports
     /// [`engine::overworld::StepOutcome::Advanced`] at step *start* -- it commits the new tile
     /// position immediately and only then runs 16 frames of walk animation
-    /// ([`engine::overworld::WALK_FRAMES_PER_TILE`]) -- so this method
-    /// latches that landing tile in `pending_landing` and evaluates
-    /// [`trigger_door_warp`] against it on the frame [`PlayerState::tick`]
-    /// drains the animation ([`PlayerState::in_transit`] goes false), i.e. 16
-    /// frames later. Latching (rather than re-deriving the tile from
-    /// [`PlayerState::position`]) also keeps the check honest about *what
-    /// changed*: only a tile the player actually stepped onto is ever
-    /// tested, never one they were already standing on.
+    /// -- so this method latches that landing tile in `pending_landing` and
+    /// evaluates [`trigger_door_warp`] against it at the top of the first
+    /// call that begins with [`PlayerState::in_transit`] already false, the
+    /// `T_TILE_CENTER` CB1 the section above derives. Latching (rather than
+    /// re-deriving the tile from [`PlayerState::position`]) also keeps the
+    /// check honest about *what changed*: only a tile the player actually
+    /// stepped onto is ever tested, never one they were already standing
+    /// on.
     ///
-    /// **Arrow warps (issue #174): polled every frame, at the tile the
-    /// player currently stands on.** `TryArrowWarp` is *not* behind
-    /// `tookStep` upstream; its gate is `input->heldDirection &&
-    /// input->dpadDirection == playerDirection` (`:164-168`), re-evaluated
-    /// every frame — so it fires both for a step taken onto an arrow tile
-    /// while still holding its direction *and* for holding that direction
-    /// while already standing on one (the turn in place happens on the
-    /// first held frame, the warp on the next). This method reproduces
-    /// that: `arrow_direction` below is this frame's [`held_direction`],
-    /// required to equal the *pre-movement* [`PlayerState::facing`] —
-    /// upstream reads `playerDirection` before `PlayerStep` has turned the
-    /// player, so a held frame that only turns can never satisfy the gate
-    /// it is itself creating (review finding on #191) — and it feeds
+    /// **Arrow warps (issue #174): polled every frame the player is between
+    /// steps, at the tile the player currently stands on.** `TryArrowWarp`
+    /// is *not* behind `tookStep` upstream; its gate is
+    /// `input->heldDirection && input->dpadDirection == playerDirection`
+    /// (`:164-168`), re-evaluated every frame — so it fires both for a step
+    /// taken onto an arrow tile while still holding its direction *and* for
+    /// holding that direction while already standing on one (the turn in
+    /// place happens on the first held frame, the warp on the next). This
+    /// method reproduces that in
+    /// [`Self::resolve_pre_movement_field_input`]: `arrow_direction` there
+    /// is this frame's [`held_direction`], required to equal the
+    /// *pre-movement* [`PlayerState::facing`] — upstream reads
+    /// `playerDirection` before `PlayerStep` has turned the player, so a
+    /// held frame that only turns can never satisfy the gate it is itself
+    /// creating (review finding on #191) — and it feeds
     /// [`trigger_arrow_warp`] at the pre-movement position rather than at
     /// `pending_landing`. Two consequences worth naming, both properties an
     /// earlier revision of this method got wrong by routing arrows through
@@ -125,7 +137,13 @@ impl OverworldPhase {
     /// - Merely *tapping* a direction and releasing it — during the
     ///   crossing, or standing on the tile facing another way — does
     ///   **not** warp (`heldDirection` is false, or the pre-movement facing
-    ///   does not match, on the frame that matters).
+    ///   does not match, on the frame that matters). Because the poll now
+    ///   sits on the `T_TILE_CENTER` call rather than on the call that
+    ///   drained the animation, holding a direction through call 16 and
+    ///   releasing it on call 17 does not warp either, exactly as upstream
+    ///   never sets `heldDirection` on its last animation frame and sees
+    ///   the direction released on the frame after
+    ///   (`releasing_the_direction_on_the_landing_call_does_not_exit_through_the_doormat`).
     /// - Standing on the doormat a warp-in landed you on and then holding
     ///   its direction **does** — the only way out of Brendan's house, since
     ///   the tile south of that doormat is off-map and the step itself is
@@ -135,24 +153,24 @@ impl OverworldPhase {
     /// `!`[`PlayerState::in_transit`], which is not an extra: upstream only
     /// sets `heldDirection` at all while `tileTransitionState` is
     /// `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), the same "between
-    /// steps" condition. (The movement-then-poll ordering below is the
-    /// implicit one for that poll; see *Field input before movement* for
-    /// the at-rest arrow case that runs ahead of movement.)
+    /// steps" condition. [`wild_encounter::arrow_poll_open`] is that gate
+    /// plus "nothing above `:164` already claimed the frame".
     ///
     /// Door before arrow, matching upstream's own order within
     /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
-    /// frame. The pre-movement animated-door check (issue #851) is decided
-    /// later still, mirroring `TryDoorWarp`'s own later position in that
-    /// same function (`:170-178`) -- but since it, like the arrow preempt,
-    /// only ever resolves while the player is at rest, and a landing that
-    /// would feed `door_warp` above is impossible whenever that holds (this
-    /// method's "Field input before movement" section), the three can never
-    /// disagree about which one fires.
+    /// frame. The animated-door check (issue #851) is decided later still,
+    /// mirroring `TryDoorWarp`'s own later position in that same function
+    /// (`:170-178`). Since the completed-step work and the at-rest polls
+    /// now share a call, that precedence is load-bearing rather than
+    /// vacuous, and it lives in exactly two places: `landing_claimed`,
+    /// which shuts every `:164`-and-below branch off when a completed-step
+    /// event fired, and the single `door_warp.or(arrow).or(animated door)`
+    /// this method builds `warp_trigger` from.
     ///
-    /// The `runtime` both are evaluated against is this frame's, which is
-    /// correct: a warp is the only thing that changes `map_id` here, and one
-    /// can't fire mid-animation, so the map is necessarily the same one the
-    /// latched step happened on.
+    /// The `runtime` all three are evaluated against is this frame's, which
+    /// is correct: a warp is the only thing that changes `map_id` here, and
+    /// one can't fire mid-animation, so the map is necessarily the same one
+    /// the latched step happened on.
     ///
     /// No warp loop is possible from the arrow path's every-frame poll:
     /// [`engine::overworld::warp_in_facing`] lands an arrival on an arrow
@@ -178,40 +196,23 @@ impl OverworldPhase {
     ///
     /// Upstream runs `ProcessPlayerFieldInput` *before* `PlayerStep` every
     /// frame and skips the step entirely once it consumes the input
-    /// (`pokeemerald/src/overworld.c:1444-1455`). This method applies a
-    /// frame's movement in one call ([`super::input::advance_player_one_frame`]), so the
-    /// equivalent is narrower than swapping the whole method around:
-    /// `preempting_arrow_trigger` re-checks the *same* pre-movement
-    /// facing/position/held-direction the ordinary poll below uses, but
-    /// gated on the player being at rest **before** this frame's movement
-    /// (not after), and runs before [`super::input::advance_player_one_frame`] is even
-    /// called. If it fires, movement is skipped outright this frame — a
-    /// legal, walkable step in the arrow direction is caught before
-    /// [`PlayerState::step`] ever runs, matching upstream: the warp fires
-    /// and the step never happens, rather than the step landing first and
-    /// the poll finding ordinary ground once the walk animation drains.
-    /// [`PlayerState::tick`] still runs on a frame movement is skipped this
-    /// way (module docs on [`super::input::advance_player_one_frame`]) — a no-op here,
-    /// since the player was at rest — rather than special-cased away, so the
-    /// "the walk-animation timer always advances" contract stays
-    /// unconditional.
+    /// (`pokeemerald/src/overworld.c:1444-1455`). Every branch this method
+    /// resolves now sits on that side of the call: the completed step's
+    /// coordinate event, door-shaped warp and encounter roll first
+    /// (`:155-162`), then the arrow poll, the interaction lookup, the
+    /// animated door and a fresh `START` (`:164-182`), and only then
+    /// [`super::input::advance_or_skip_for_preempt`]. Any of them firing
+    /// sets `movement_preempted`, so [`PlayerState::step`] never runs on a
+    /// claimed frame -- a legal, walkable step in the arrow direction is
+    /// caught before the step is taken, and a landing that triggers a warp
+    /// or an encounter is not immediately walked off.
     ///
-    /// This is deliberately narrow, not a shortcut around the ordering fix:
-    /// the door-shaped path's own gate inherently needs a step to have
-    /// already landed (`tookStep`, the door-warp section above) — upstream
-    /// itself only ever reaches `TryStartWarpEventScript` on the frame
-    /// *after* `PlayerStep` committed that landing, and this port compresses
-    /// "the frame after" into "the same frame the walk animation drains"
-    /// specifically because [`PlayerState::step`] commits a landing
-    /// immediately rather than over upstream's own multi-frame sprite
-    /// sequence. Moving *every* check ahead of movement, unconditionally,
-    /// would push that drain-frame check one frame later than the pinned
-    /// doormat behavior requires (`walking_onto_the_doormat_holding_south_exits_through_the_front_door`
-    /// and its siblings). So only the one case upstream would actually
-    /// pre-empt — a fresh, legal step whose direction already satisfies the
-    /// arrow gate against the tile the player already stands on — moves
-    /// ahead of [`super::input::advance_player_one_frame`]; the door path, and the arrow
-    /// path's other two cases above, keep running where they always have.
+    /// [`PlayerState::tick`] still runs on a frame movement is skipped this
+    /// way (module docs on [`super::input::advance_player_one_frame`]) — a
+    /// no-op there, since every preempt needs the player at rest when the
+    /// call began — rather than special-cased away, so the "the
+    /// walk-animation timer always advances" contract stays unconditional.
+    ///
     /// Exercised by this module's
     /// `a_legal_step_in_the_arrow_direction_warps_instead_of_stepping` (the
     /// pack-free ratchet: the step never happens) and its pack-gated
@@ -396,69 +397,10 @@ impl OverworldPhase {
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
 
-            // Upstream polls `TryArrowWarp` *before* `PlayerStep` mutates the
-            // player (`field_control_avatar.c:164-168` runs ahead of
-            // movement), so the gate below must read this frame's
-            // pre-movement facing: a one-frame Down tap on the doormat while
-            // facing North only *turns* the player upstream, and reading the
-            // post-turn facing here would warp on that same tap frame. The
-            // position is captured alongside for the same reason, though it
-            // cannot differ by the time the ordinary (post-movement) poll
-            // below is reachable -- every frame that commits a new tile
-            // leaves the player `in_transit`, which closes that poll (review
-            // finding on #191). `pre_step_at_rest`, captured before movement
-            // too, is what lets `preempting_arrow_trigger` below tell "was
-            // already between steps when this frame started" apart from
-            // "the drain frame of a step that started earlier" -- the two
-            // cases `self.player.in_transit()` alone can't distinguish once
-            // movement has run.
-            let pre = self.resolve_pre_movement_field_input(buttons, direction, &runtime);
-
-            // Latched here (issue #177), tested only after `runtime`'s last
-            // borrow below -- see `advance_or_skip_for_preempt`'s own doc
-            // comment for why a crossing can't be applied to `self` right
-            // away. A free function, not a method, so this call only takes
-            // disjoint borrows of `self.player`/`self.pending_landing`/
-            // `self.save1.event_data` rather than all of `self` -- `runtime`
-            // (an immutable borrow of `self.scene`) is still needed below.
-            let maps = MapConnections {
-                pack: &self.connection_pack,
-                source: self.pack_source,
-            };
-            // `interaction` preempts movement too (issue #435), and so does
-            // a claimed fresh `START` (above) and the pre-movement
-            // animated-door check (issue #851).
-            let crossed_to = advance_or_skip_for_preempt(
-                &mut self.player,
-                &mut self.pending_landing,
-                direction,
-                &runtime,
-                &maps,
-                &self.save1.event_data,
-                pre.arrow_trigger.is_some()
-                    || pre.animated_door_trigger.is_some()
-                    || pre.interaction.is_some()
-                    || pre.start_menu.is_some(),
-            );
-
-            // Upstream's `tookStep` gate, in this port's terms: the latched
-            // landing is only tested once its walk animation has drained
-            // (doc comment above). Door first, then arrow, as upstream
-            // orders them (`:155-168`) -- `or_else` makes that at most one
-            // warp per frame. `preempting_arrow_trigger` (computed before
-            // movement above) short-circuits this whole thing when it
-            // already fired -- the frame's one warp, decided before
-            // `PlayerState::step` ever ran.
-            //
-            // The wild-encounter roll (issue #169) sits *inside* that same
-            // ordering, between the two warp checks: upstream's
-            // `ProcessPlayerFieldInput` runs `TryStartStepBasedScript` (the
-            // door-shaped warp, under `tookStep`) at `:155-161`, then
-            // `CheckStandardWildEncounter` at `:162`, then `TryArrowWarp` at
-            // `:164-168` -- and a fired encounter returns TRUE, so the arrow
-            // poll never happens on the frame a wild Pokémon appears. It is
-            // gated on the same drained landing the door check consumes: a
-            // completed step is this port's `checkStandardWildEncounter`.
+            // `in_transit` read before this call's own movement, which is
+            // what defers a completed step to the call after the one that
+            // drained its animation (the "Frame shape" section above owns
+            // the derivation).
             let stepped_onto = self.pending_landing.take_if(|_| !self.player.in_transit());
             // The Route 101 scripted first-battle coord-event trigger (issue
             // #231, `super::first_battle_trigger`'s own "Precedence" section:
@@ -481,57 +423,109 @@ impl OverworldPhase {
             let door_warp = landed.and_then(|(x, y)| {
                 trigger_door_warp(&runtime, x, y, self.player.previous_elevation())
             });
-            // The roll happens only on a completed step no warp path has
-            // claimed (`roll_eligible_landing`) and only on a fightable map
-            // (`wild_table_fightable`). A fainted-lead filter used to sit
-            // here too, for the one loss path issue #261's white-out could
-            // not yet cover (a lost Route 101 first battle -- `CB2_EndFirstBattle`
-            // has no `IsPlayerDefeated` branch); issue #251's
-            // `first_battle_conclusion` now heals that lead the instant the
-            // battle ends, on every outcome, and a pre-#251 save that
-            // *serialized* the residual state is healed at load
+            // The roll happens only on a completed step the door-shaped warp
+            // has not already claimed (`roll_eligible_landing`) and only on a
+            // fightable map (`wild_table_fightable`). A fainted-lead filter
+            // used to sit here too, for the one loss path issue #261's
+            // white-out could not yet cover (a lost Route 101 first battle --
+            // `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch); issue
+            // #251's `first_battle_conclusion` now heals that lead the
+            // instant the battle ends, on every outcome, and a pre-#251 save
+            // that *serialized* the residual state is healed at load
             // (`from_saved`'s migration, PR #291 review), so no path can
             // leave a fainted lead standing here any more and the filter
             // was removed
             // (`crate::flow::wild_encounter`'s module docs, "Lead-health
-            // eligibility"). The landed tile is the player's own tile on
-            // a drain frame, and it is what `GetPlayerPosition` would report
-            // there.
+            // eligibility"). The landed tile is the player's own tile by
+            // now, and it is what `GetPlayerPosition` would report there.
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
                 &mut self.rng,
                 self.map_id,
                 &runtime,
-                wild_encounter::roll_eligible_landing(landed, pre.arrow_trigger, door_warp)
+                wild_encounter::roll_eligible_landing(landed, door_warp)
                     .filter(|_| wild_table_fightable),
             );
-            // Both remaining `ProcessPlayerFieldInput` steps -- the arrow
-            // poll (`:164-168`) and the interaction check (`:172`) -- are
-            // reached only by falling *through* everything above, and a
-            // fired encounter (`:162`) and a fired coord event
-            // (`:155-161`, via `TryStartStepBasedScript`) each return TRUE
-            // before them. One value for "something already claimed this
-            // frame's field input", so the two consumers cannot disagree
-            // about which events count.
-            //
-            // Neither consumer can be driven to the coord-event arm over
-            // bundled data -- Route 101 declares no warp events, and no
-            // object event stands beside the rescue tiles -- so that arm is
-            // encoded and documented rather than behaviourally pinned. Both
-            // of those data facts are themselves asserted, so a change that
-            // makes it reachable fails a test first. See
-            // `super::first_battle_trigger`'s "Precedence" section.
+            // Neither consumer of `field_event_fired` can be driven to the
+            // coord-event arm over bundled data -- Route 101 declares no warp
+            // events, and no object event stands beside the rescue tiles --
+            // so that arm is encoded and documented rather than
+            // behaviourally pinned. Both of those data facts are themselves
+            // asserted, so a change that makes it reachable fails a test
+            // first. See `super::first_battle_trigger`'s "Precedence"
+            // section.
             let field_event_fired = encounter.is_some() || first_battle_triggered;
-            // Upstream `input->heldDirection && input->dpadDirection ==
-            // playerDirection` (`:164-168`) -- polled every frame,
-            // independent of `tookStep`, and *not* the door path's gate.
-            // Reaching this arm at all is already this port's counterpart to
-            // the `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
-            // `heldDirection` in the first place (`:95-112`), so the poll
-            // needs no `in_transit` test of its own beyond `landed`'s
-            // (`arrow_poll_open`; see the "Warp timing" doc section).
-            let warp_trigger =
-                self.resolve_warp_trigger(&pre, &runtime, door_warp, field_event_fired);
+            // `ProcessPlayerFieldInput` returns TRUE the moment any of the
+            // three completed-step branches above fires --
+            // `TryStartStepBasedScript` at `:155-161` (the coord event and
+            // the door-shaped warp) and `CheckStandardWildEncounter` at
+            // `:162` -- so nothing below `:164` is reached on that frame:
+            // not `TryArrowWarp` (`:164-168`), not
+            // `TryStartInteractionScript` (`:172`), not `TryDoorWarp`
+            // (`:170-178`), not `pressedStartButton` (`:182`), and not
+            // `PlayerStep` either (`src/overworld.c:1444-1455`). One value
+            // for all of them, so the pre-movement resolver and the movement
+            // branch cannot disagree about which events claim a frame.
+            let landing_claimed = field_event_fired || door_warp.is_some();
+
+            // Upstream polls `TryArrowWarp` *before* `PlayerStep` mutates the
+            // player (`field_control_avatar.c:164-168` runs ahead of
+            // movement), so the gate below must read this frame's
+            // pre-movement facing: a one-frame Down tap on the doormat while
+            // facing North only *turns* the player upstream, and reading the
+            // post-turn facing here would warp on that same tap frame. The
+            // position is captured alongside for the same reason, and for
+            // restoring the stance a refused crossing has to undo. Every
+            // branch this resolves is a CB1 branch like the completed-step
+            // work above it, in `ProcessPlayerFieldInput`'s own order.
+            let pre = self.resolve_pre_movement_field_input(
+                buttons,
+                direction,
+                &runtime,
+                landing_claimed,
+            );
+
+            // Latched here (issue #177), tested only on a later call -- see
+            // `advance_or_skip_for_preempt`'s own doc comment for why a
+            // crossing can't be applied to `self` right away. A free
+            // function, not a method, so this call only takes disjoint
+            // borrows of `self.player`/`self.pending_landing`/
+            // `self.save1.event_data` rather than all of `self` -- `runtime`
+            // (an immutable borrow of `self.scene`) is still needed below.
+            let maps = MapConnections {
+                pack: &self.connection_pack,
+                source: self.pack_source,
+            };
+            // `interaction` preempts movement too (issue #435), and so do a
+            // claimed fresh `START`, the pre-movement animated-door check
+            // (issue #851), and every completed-step event above
+            // (`landing_claimed`).
+            let crossed_to = advance_or_skip_for_preempt(
+                &mut self.player,
+                &mut self.pending_landing,
+                direction,
+                &runtime,
+                &maps,
+                &self.save1.event_data,
+                landing_claimed
+                    || pre.arrow_trigger.is_some()
+                    || pre.animated_door_trigger.is_some()
+                    || pre.interaction.is_some()
+                    || pre.start_menu.is_some(),
+            );
+
+            // At most one warp per frame, in `ProcessPlayerFieldInput`'s own
+            // order: the completed step's door-shaped warp
+            // (`TryStartStepBasedScript`, `:155-161`), then the arrow poll
+            // (`TryArrowWarp`, `:164-168`), then the animated door
+            // (`TryDoorWarp`, `:170-178`). All three are decided from this
+            // call's frame-start stance, so `or` is the whole precedence:
+            // the post-movement arrow re-poll this method used to fall
+            // through to is gone along with the drain-frame compression it
+            // existed to patch up (issue #1039).
+            let warp_trigger = door_warp
+                .or(pre.arrow_trigger)
+                .or(pre.animated_door_trigger);
 
             // Warp, interaction, battle, then the START menu, in upstream's
             // `ProcessPlayerFieldInput` order.
@@ -578,63 +572,36 @@ impl OverworldPhase {
         };
     }
 
-    /// [`Self::step`]'s one-warp-per-frame decision: `pre`'s two pre-movement
-    /// preempts, then the completed-step door check, then -- only once all
-    /// three have fallen through -- the post-movement arrow re-poll
-    /// ([`wild_encounter::arrow_poll_open`]). Pulled out of `step` itself
-    /// purely to stay under clippy's `too_many_lines` limit; every parameter
-    /// here is an owned or borrowed value already decided by that point, not
-    /// a fresh read of `self.player` beyond its current position/elevation
-    /// (unaffected by this frame's movement).
+    /// This call's pre-movement field-input decisions: the frame-start
+    /// stance ([`Self::step`]'s "Warp timing" section), the arrow-warp
+    /// poll, the same-frame interaction, the animated-door poll (issue
+    /// #851), and a fresh `START` press's menu, already built if it claims
+    /// the frame -- `TryArrowWarp` (`field_control_avatar.c:164-168`),
+    /// `TryStartInteractionScript` (`:172`), `TryDoorWarp` (`:170-178`) and
+    /// `pressedStartButton` (`:182`), in that order, each skipped once one
+    /// above it has claimed the frame.
     ///
-    /// Upstream `TryStartStepBasedScript` (the door-shaped warp, under
-    /// `tookStep`) precedes `TryArrowWarp`, which precedes `TryDoorWarp`
-    /// (`field_control_avatar.c:155-178`) -- `door_warp` first, then the
-    /// pre-movement preempts (mutually exclusive with it -- `step`'s "Door
-    /// before arrow" doc section), then the post-movement arrow re-poll.
-    /// The animated-door path has no post-movement poll: its only upstream
-    /// counterpart is the CB1 that first reports `T_TILE_CENTER`, which is
-    /// this port's *next* call's pre-movement stage, not this call's tail
-    /// (`step`'s "Warp timing" section). That also keeps `TryDoorWarp`'s
-    /// position after `TryStartInteractionScript` (`:170-178`) enforced in
-    /// exactly one place, [`Self::resolve_pre_movement_field_input`].
-    fn resolve_warp_trigger(
-        &self,
-        pre: &PreMovementFieldInput,
-        runtime: &MapRuntime<'_>,
-        door_warp: Option<WarpTrigger>,
-        field_event_fired: bool,
-    ) -> Option<WarpTrigger> {
-        pre.arrow_trigger
-            .or(pre.animated_door_trigger)
-            .or(door_warp)
-            .or_else(|| {
-                if !wild_encounter::arrow_poll_open(self.player.in_transit(), field_event_fired) {
-                    return None;
-                }
-                let direction = pre.arrow_direction?;
-                let (x, y) = pre.position;
-                // Same retained-elevation contract as
-                // `resolve_pre_movement_field_input`.
-                trigger_arrow_warp(runtime, x, y, self.player.previous_elevation(), direction)
-            })
-    }
-
-    /// This frame's pre-movement field-input decisions: the pre-movement
-    /// stance ([`Self::step`]'s "Warp timing" section), the at-rest
-    /// arrow-warp preempt, the at-rest animated-door preempt (issue #851),
-    /// the same-frame interaction, and a fresh `START` press's menu, already
-    /// built if it claims the frame.
+    /// `landing_claimed` is [`Self::step`]'s answer for the three branches
+    /// that sit *above* all four upstream -- the completed step's coordinate
+    /// event and door-shaped warp (`TryStartStepBasedScript`, `:155-161`)
+    /// and its encounter roll (`CheckStandardWildEncounter`, `:162`) -- each
+    /// of which returns TRUE out of `ProcessPlayerFieldInput` before `:164`
+    /// is ever reached. Since issue #1039 moved that completed-step work to
+    /// the start of the call after the walk animation drains, a ready
+    /// landing and an at-rest field poll land on the *same* call, so this
+    /// gate is load-bearing rather than the vacuous one it would have been
+    /// while the two were mutually exclusive.
     ///
-    /// All of them are suppressed on a forced tile's landing frame
-    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), the one
-    /// arm of `FieldGetPlayerInput`'s gate that `forcedMove` closes
-    /// (`field_control_avatar.c:93-113`).
+    /// A forced-movement tile closes the `T_TILE_CENTER` half of
+    /// `FieldGetPlayerInput`'s own gate, `(T_TILE_CENTER && !forcedMove) ||
+    /// T_NOT_MOVING` (`:95`), so it holds the four branches for the landing
+    /// call alone ([`engine::overworld::PlayerState::field_input_suppressed`]).
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,
         direction: Option<Direction>,
         runtime: &MapRuntime<'_>,
+        landing_claimed: bool,
     ) -> PreMovementFieldInput {
         let facing = self.player.facing();
         let position = self.player.position();
@@ -642,14 +609,25 @@ impl OverworldPhase {
         // `PlayerGetElevation()`'s retained `previousElevation`, not the
         // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
         let previous_elevation = self.player.previous_elevation();
-        let at_rest = !self.player.in_transit() && !self.player.field_input_suppressed();
+        // Upstream only sets `input->heldDirection`/`input->pressedAButton`
+        // /`input->pressedStartButton` at all while `tileTransitionState` is
+        // `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), and reaches none of
+        // the four branches below on a frame the completed step already
+        // claimed -- one predicate for both halves of that, plus the
+        // forced-movement tile that closes the first of those two states
+        // (method doc, issue #926).
+        let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
+            && !self.player.field_input_suppressed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
-        let arrow_trigger = at_rest.then_some(arrow_direction).flatten().and_then(|d| {
-            let (x, y) = position;
-            trigger_arrow_warp(runtime, x, y, previous_elevation, d)
-        });
+        let arrow_trigger = poll_open
+            .then_some(arrow_direction)
+            .flatten()
+            .and_then(|d| {
+                let (x, y) = position;
+                trigger_arrow_warp(runtime, x, y, previous_elevation, d)
+            });
 
         // NPC interaction, resolved before `advance_or_skip_for_preempt`
         // can turn or step the player (contract: `step`'s "NPC dialog
@@ -659,15 +637,16 @@ impl OverworldPhase {
         // `TryStartInteractionScript` either (method doc). The tokens
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
-        let interaction = (arrow_trigger.is_none() && !self.player.field_input_suppressed())
-            .then(|| self.interaction_tokens_this_frame(buttons, runtime))
-            .flatten();
+        let interaction =
+            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+                .then(|| self.interaction_tokens_this_frame(buttons, runtime))
+                .flatten();
 
         // Upstream reaches `TryDoorWarp` only after the arrow check and the
         // A-button interaction lookup have both fallen through
         // (`field_control_avatar.c:164-178`), same as its early `return
         // TRUE`s ahead of it.
-        let animated_door_trigger = (at_rest && arrow_trigger.is_none() && interaction.is_none())
+        let animated_door_trigger = (poll_open && arrow_trigger.is_none() && interaction.is_none())
             .then_some(arrow_direction)
             .flatten()
             .and_then(|d| super::animated_door::trigger(runtime, position, previous_elevation, d));
@@ -675,7 +654,10 @@ impl OverworldPhase {
         let start_menu = self
             .start_menu_may_open(
                 buttons,
-                arrow_trigger.is_some() || interaction.is_some() || animated_door_trigger.is_some(),
+                landing_claimed
+                    || arrow_trigger.is_some()
+                    || interaction.is_some()
+                    || animated_door_trigger.is_some(),
             )
             .then(|| self.build_start_menu())
             .flatten();
@@ -684,7 +666,6 @@ impl OverworldPhase {
             facing,
             position,
             elevation,
-            arrow_direction,
             arrow_trigger,
             animated_door_trigger,
             interaction,
@@ -880,20 +861,26 @@ mod door_sequencing_tests {
     /// returned FALSE: an A press on an NPC standing in a doorway talks to
     /// them, it never enters the door.
     ///
-    /// The second assertion is the ratchet: `resolve_warp_trigger` has no
-    /// animated-door poll of its own, so re-adding a post-movement one that
-    /// reads a stale or absent interaction would reintroduce the inversion.
+    /// The last assertion is the ratchet: `step` composes `warp_trigger`
+    /// out of the completed-step door check and these two fields alone, so
+    /// nothing downstream can resurrect a door the same-frame interaction
+    /// already outranked.
     #[test]
     fn an_interaction_outranks_the_animated_door_check() {
         let phase = mom_standing_in_the_house_door_phase();
         let runtime = littleroot_runtime(&phase.scene);
 
         // A fresh A press with Up held, standing at rest already facing the
-        // door -- exactly what `step` feeds the two methods below.
+        // door -- exactly what `step` feeds this method. Nothing has landed
+        // this call, so `landing_claimed` is false.
         let mut buttons = ButtonState::new();
         buttons.update(Buttons::A | Buttons::UP);
-        let pre: PreMovementFieldInput =
-            phase.resolve_pre_movement_field_input(buttons, Some(Direction::North), &runtime);
+        let pre: PreMovementFieldInput = phase.resolve_pre_movement_field_input(
+            buttons,
+            Some(Direction::North),
+            &runtime,
+            false,
+        );
 
         assert!(
             pre.interaction.is_some(),
@@ -905,19 +892,20 @@ mod door_sequencing_tests {
         );
 
         assert_eq!(
-            phase.resolve_warp_trigger(&pre, &runtime, None, false),
+            pre.arrow_trigger.or(pre.animated_door_trigger),
             None,
-            "no post-movement animated-door poll may resurrect a door the same-frame \
-             interaction already outranked -- upstream reaches TryDoorWarp only after \
-             TryStartInteractionScript falls through (field_control_avatar.c:172-178)"
+            "this call's whole warp decision is these two fields plus the completed-step \
+             door check, and no step landed here -- upstream reaches TryDoorWarp only \
+             after TryStartInteractionScript falls through (field_control_avatar.c:172-178)"
         );
     }
 
     /// The drain call of a walked approach is this port's counterpart to
     /// the CB2 that finishes the walk, where upstream processes no field
     /// input at all (`super::super::animated_door`'s module docs), so the
-    /// frame's warp decision must come back empty even though the player is
-    /// now at rest one tile below the door with Up still held.
+    /// frame's warp decision must come back empty even though the player's
+    /// walk animation ends on it one tile below the door with Up still
+    /// held.
     ///
     /// Asserted on the decision rather than through
     /// [`super::OverworldPhase::step`], because a whole-frame test cannot
@@ -952,31 +940,30 @@ mod door_sequencing_tests {
                 held(Buttons::UP),
                 Some(Direction::North),
                 &runtime,
+                false,
             )
         };
-        assert!(
-            pre.animated_door_trigger.is_none(),
-            "the pre-movement check correctly sees a player still in transit"
+        assert_eq!(
+            pre.arrow_trigger.or(pre.animated_door_trigger),
+            None,
+            "upstream cannot read this frame's held direction for TryDoorWarp -- \
+             heldDirection2 is only set at T_TILE_CENTER/T_NOT_MOVING \
+             (field_control_avatar.c:95-112), which the drain call is not"
         );
         phase.player.tick();
         assert!(
             !phase.player.in_transit(),
             "fixture precondition: this call drains the crossing"
         );
-
-        let runtime = littleroot_runtime(&phase.scene);
-        assert_eq!(
-            phase.resolve_warp_trigger(&pre, &runtime, None, false),
-            None,
-            "upstream cannot read this frame's held direction for TryDoorWarp -- \
-             heldDirection2 is only set at T_TILE_CENTER/T_NOT_MOVING \
-             (field_control_avatar.c:95-112), which the drain call is not"
+        assert!(
+            phase.pending_landing.is_some(),
+            "and the completed step stays latched for the next call's CB1 (issue #1039)"
         );
     }
 }
 
 #[cfg(test)]
-mod post_movement_arrow_elevation_tests {
+mod landing_call_arrow_elevation_tests {
     use super::super::test_support::held;
     use super::{OverworldPhase, PreMovementFieldInput};
     use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
@@ -998,9 +985,15 @@ mod post_movement_arrow_elevation_tests {
         scene.runtime(CENTER, header, events)
     }
 
-    /// Asserted on `resolve_warp_trigger`, since pack-free `warp_to` is a no-op.
+    /// Asserted on [`super::PreMovementFieldInput`], since pack-free
+    /// `warp_to` is a no-op.
+    ///
+    /// The frame identity is issue #1039's: the call whose `PlayerState::tick`
+    /// drains the walk animation is upstream's last CB2 animation frame, and
+    /// the arrow poll for the tile that step landed on belongs to the
+    /// *next* call's CB1, where the player begins at rest.
     #[test]
-    fn the_drain_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
+    fn the_landing_call_resolves_the_arrow_warp_at_the_retained_previous_elevation() {
         let events = assets::MapEventsTable::new()
             .resolve(CENTER)
             .expect("Oldale Town's Pokemon Center resolves in the generated map-events table");
@@ -1022,42 +1015,41 @@ mod post_movement_arrow_elevation_tests {
             None,
         );
 
-        // One call short of the drain.
-        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) - 1 {
+        // The whole crossing, drain call included. Nothing may have polled
+        // the doormat yet: that call is upstream's last CB2 animation frame.
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
             phase.step(held(Buttons::DOWN));
         }
         assert_eq!(phase.player.position(), (7, 8));
-        assert!(phase.player.in_transit());
-
-        // The drain call, in `step`'s own order.
-        let pre: PreMovementFieldInput = {
-            let runtime = center_runtime(&phase.scene);
-            phase.resolve_pre_movement_field_input(
-                held(Buttons::DOWN),
-                Some(Direction::South),
-                &runtime,
-            )
-        };
-        assert!(
-            pre.arrow_trigger.is_none(),
-            "fixture precondition: the pre-movement preempt sees a player in transit"
-        );
-        phase.player.tick();
         assert!(!phase.player.in_transit());
+        assert!(
+            phase.pending_landing.is_some(),
+            "the completed step is still unobserved after the drain call (issue #1039)"
+        );
         assert_eq!(
             (phase.player.elevation(), phase.player.previous_elevation()),
             (0, 3)
         );
 
+        // The landing call's CB1. `landing_claimed` is false here for the
+        // same reason `step` computes it false: the doormat is
+        // MB_SOUTH_ARROW_WARP, which `is_warp_trigger` fails closed on, and
+        // a Pokemon Center has no wild table.
         let runtime = center_runtime(&phase.scene);
-        let trigger = phase.resolve_warp_trigger(&pre, &runtime, None, false);
+        let pre: PreMovementFieldInput = phase.resolve_pre_movement_field_input(
+            held(Buttons::DOWN),
+            Some(Direction::South),
+            &runtime,
+            false,
+        );
+        let trigger = pre.arrow_trigger;
         assert!(
             matches!(
                 trigger,
                 Some(WarpTrigger::Resolved { map, .. })
                     if map == assets::MapId("MAP_OLDALE_TOWN")
             ),
-            "the post-movement arrow poll must resolve at PlayerGetElevation()'s \
+            "the landing call's arrow poll must resolve at PlayerGetElevation()'s \
              retained 3 (field_player_avatar.c:1192-1195) -- a lookup at the collision \
              elevation 0 misses the warp event stored at 3; got {trigger:?}"
         );
@@ -1139,6 +1131,7 @@ mod pre_movement_arrow_elevation_tests {
                 held(Buttons::UP),
                 Some(Direction::North),
                 &runtime,
+                false,
             )
         };
         assert!(
@@ -1224,6 +1217,7 @@ mod animated_door_elevation_tests {
                 held(Buttons::UP),
                 Some(Direction::North),
                 &runtime,
+                false,
             )
         };
         assert!(

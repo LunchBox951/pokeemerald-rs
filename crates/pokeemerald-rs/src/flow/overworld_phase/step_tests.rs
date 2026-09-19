@@ -1154,16 +1154,23 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(phase.player.position(), (7, 5));
+
+    // The floor tile's landing call -- upstream's `T_TILE_CENTER` CB1, which
+    // is also where the next crossing starts under a still-held direction
+    // (`OverworldPhase::step`'s "Frame shape" docs, issue #1039).
+    phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.wild.prev_metatile_behavior(),
         MB_CAVE,
         "fixture precondition: an unsuppressed roll really does overwrite this"
     );
+    assert_eq!(phase.player.position(), (8, 5));
 
-    for _ in 0..WALK_FRAMES_PER_TILE {
+    // The rest of the door crossing's animation.
+    for _ in 0..WALK_FRAMES_PER_TILE - 1 {
         phase.step(held(Buttons::RIGHT));
     }
-    assert_eq!(phase.player.position(), (8, 5));
+    assert!(!phase.player.in_transit());
     assert_eq!(
         (phase.player.elevation(), phase.player.previous_elevation()),
         (0, 3),
@@ -1171,21 +1178,24 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
          previousElevation upstream looks warps up at is still 3"
     );
 
+    // The door tile's own landing call.
+    phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.wild.prev_metatile_behavior(),
         MB_CAVE,
-        "the door warp must fire on the drain frame -- upstream resolves it at \
+        "the door warp must fire on the landing call -- upstream resolves it at \
          PlayerGetElevation()'s retained 3 (field_player_avatar.c:1192-1195) -- so \
          ProcessPlayerFieldInput returns before CheckStandardWildEncounter and the \
          door tile's own behavior is never recorded"
     );
 }
 
-/// End-to-end landing check for the post-movement arrow lookup; the pack-free
-/// `post_movement_arrow_elevation_tests` in `step.rs` pins the lookup itself.
+/// End-to-end landing check for the arrow lookup on the landing call; the
+/// pack-free `landing_call_arrow_elevation_tests` in `step.rs` pins the
+/// lookup itself.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
+fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
     use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
 
     const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
@@ -1212,23 +1222,31 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
         None,
     );
 
-    // The poll stays shut while the walk animation drains (`arrow_poll_open`).
-    for frame in 1..u32::from(WALK_FRAMES_PER_TILE) {
+    // The poll stays shut while the step is outstanding (`arrow_poll_open`),
+    // which includes the call that drains the walk animation (issue #1039).
+    for frame in 1..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             phase.map_id, CENTER,
-            "the arrow warp must not fire mid-animation (frame {frame} of \
-             {WALK_FRAMES_PER_TILE})"
+            "the arrow warp must not fire while the step is outstanding (frame \
+             {frame} of {WALK_FRAMES_PER_TILE})"
         );
     }
     assert_eq!(phase.player.position(), (7, 8));
-    assert!(phase.player.in_transit());
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+    assert!(
+        phase.mid_step(),
+        "but the landing is observed on the call after it"
+    );
     assert_eq!(
         (phase.player.elevation(), phase.player.previous_elevation()),
         (0, 3)
     );
 
-    // The drain frame.
+    // The landing call.
     phase.step(held(Buttons::DOWN));
 
     assert_eq!(

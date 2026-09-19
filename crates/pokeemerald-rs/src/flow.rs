@@ -526,6 +526,10 @@ pub(crate) fn advance_scene(
             // controls skip `ProcessPlayerFieldInput` while it is up; a
             // fresh `START` press is weighed inside `step`. This is the one
             // point that hands the save medium to something that writes it.
+            //
+            // `step` then `compose_frame` is the whole of one presented
+            // frame, which is the boundary `step`'s own "Frame shape"
+            // section reasons from (issue #1039).
             if phase.start_menu().is_some() {
                 phase.advance_start_menu_frame(buttons, save_slot);
             } else {
