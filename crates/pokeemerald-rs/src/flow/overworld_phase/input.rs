@@ -6,7 +6,7 @@
 //! its walk-animation timer ([`advance_player_one_frame`]), the
 //! preempt-or-move branch around it
 //! ([`advance_or_skip_for_preempt`]), and latching a completed step's
-//! landing tile for [`super::step`]'s drain-frame warp check
+//! landing tile for [`super::step`] to observe on the following call
 //! ([`latch_landing`]). Pulled out of `step` itself purely to keep both
 //! files under the `oop-boundaries` size guideline -- these are still one
 //! concept with [`super::OverworldPhase::step`], just not one file.
@@ -65,19 +65,17 @@ pub(super) fn advance_or_skip_for_preempt(
         // warp or interaction preempts movement on (module docs on
         // `advance_player_one_frame`) -- a no-op here since the caller only
         // reaches this arm when the player was already at rest, but called
-        // anyway so that contract stays unconditional. This path latches
-        // nothing of its own, so "at rest => no latched landing" has to hold
-        // on its own here rather than being restored by anything downstream:
-        // `step`'s own drain-frame `take_if` does run on a preempted frame
-        // (the player is at rest, so its `in_transit` guard passes), but the
-        // preempting warp or interaction claims the frame before either the
-        // door check or the wild-encounter roll can look at what it
-        // returned.
+        // anyway so that contract stays unconditional. Every preempt the
+        // caller can pass needs the player at rest at the *start* of that
+        // call (`step`'s own "Warp timing" section), and `step` consumes any
+        // ready landing there, before this function runs -- so a preempted
+        // frame arrives with nothing latched, and this path latching nothing
+        // of its own keeps it that way.
         debug_assert!(
             pending_landing.is_none(),
-            "at rest implies `pending_landing` is None: a landing latched here would be taken \
-             on a frame the preempting warp or interaction has already claimed, and so would \
-             never reach a door check or an encounter roll"
+            "a preempted frame implies `pending_landing` is None: every preempt needs the \
+             player at rest when the call began, and `step` takes a ready landing there, \
+             ahead of this function"
         );
         player.tick();
         return None;
@@ -100,9 +98,9 @@ pub(super) fn advance_or_skip_for_preempt(
 /// out of that method's movement branch (which is at clippy's
 /// `too_many_lines` limit) rather than inlined there.
 ///
-/// See [`super::OverworldPhase::step`]'s "Warp timing" section for why
-/// the landing is latched at step *start* and only tested for a warp once
-/// its walk animation has drained, a later frame.
+/// See [`super::OverworldPhase::step`]'s "Frame shape" section -- the one
+/// owner of this timing -- for why the landing is latched at step *start*
+/// and only observed on the call after its walk animation drains.
 ///
 /// [`StepOutcome::Crossed`] (issue #177) is deliberately *not* latched
 /// here, unlike [`StepOutcome::Advanced`]: its landing tile is expressed in
@@ -155,15 +153,14 @@ fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
 /// one-frame stutter of its own) -- see this function's own tests for the
 /// corrected contract.
 /// The returned [`StepOutcome`] is fed back to the caller (issue #163):
-/// [`super::OverworldPhase::step`] latches an `Advanced` step's
-/// landing tile and, once the 16-frame walk animation above has drained,
-/// checks it via
-/// [`engine::overworld::trigger_door_warp`]/[`super::OverworldPhase::warp_to`]
-/// -- so walking onto the bedroom's stair warp at `(7, 1)` (the map's only
-/// warp event, the same one [`crate::new_game`]'s `SPAWN_*` derives the
-/// spawn from) transitions to `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` on the
-/// frame the step *finishes*, matching upstream's `tookStep` gate (that
-/// method's own doc comment).
+/// [`super::OverworldPhase::step`] latches an `Advanced` step's landing
+/// tile and observes it on the call *after* the one this tick drains the
+/// animation on, where that method's "Frame shape" section places
+/// upstream's `tookStep` (issue #1039; that section owns the timing) -- so
+/// walking onto the bedroom's stair warp at `(7, 1)` (the map's only warp
+/// event, the same one [`crate::new_game`]'s `SPAWN_*` derives the spawn
+/// from) transitions to `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` there, via
+/// [`engine::overworld::trigger_door_warp`]/[`super::OverworldPhase::warp_to`].
 ///
 /// `maps` (issue #177) is generic, not hardcoded to
 /// [`super::connections::MapConnections`], so this function stays directly

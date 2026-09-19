@@ -6,8 +6,8 @@ use super::OverworldPhase;
 use crate::new_game;
 use assets::MapId;
 use engine::event_data::EventData;
-use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
-use platform::{ButtonState, Buttons};
+use engine::overworld::{Direction, PlayerState};
+use platform::Buttons;
 
 // -- ON_TRANSITION decoration flags -----------------------------------------
 
@@ -381,14 +381,8 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
     // Step off the spawn tile (which *is* the stair warp) and back onto it,
     // to generate a fresh landing -- the same shape as the real-pack tests
     // in `warp_tests`.
-    phase.step(held(Buttons::DOWN));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
-    phase.step(held(Buttons::UP));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
+    walk_one_tile(&mut phase, Buttons::DOWN);
+    turn_and_walk_one_tile(&mut phase, Buttons::UP);
     assert_eq!(phase.map_id, ONE_F, "the stairs must have landed on 1F");
 
     let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
