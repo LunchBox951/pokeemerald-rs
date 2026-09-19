@@ -590,12 +590,12 @@ mod tests {
 
     #[test]
     fn a_fill_larger_than_the_capped_chunk_matches_correctly_sequenced_chunks() {
-        // Adjudication probe: `chunk_frames` is the capped
-        // `DEFAULT_MAX_OUTPUT_FRAMES`, so the output must exceed *that* for
-        // `fill` to split internally at the production chunk size.
         let above_cap = DEFAULT_MAX_OUTPUT_FRAMES * 4;
         let frames = DEFAULT_MAX_OUTPUT_FRAMES + 5;
-        #[expect(clippy::cast_precision_loss, reason = "probe")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the ramp's indices are small integers, exact in f32"
+        )]
         let source: Vec<f32> = (0..(frames + 8)).map(|i| i as f32).collect();
 
         let (producer_a, consumer_a) = ring_buffer(source.len());
@@ -607,7 +607,7 @@ mod tests {
         let mut big_out = vec![0.0; frames];
         assert!(
             big_out.len() > capped.chunk_frames,
-            "the probe must cross the capped chunk boundary"
+            "the fill must cross the capped chunk boundary"
         );
         capped.fill(&mut big_out);
         assert_eq!(capped.scratch.len(), scratch_capacity);

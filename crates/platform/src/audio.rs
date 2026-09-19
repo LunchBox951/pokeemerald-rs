@@ -880,16 +880,16 @@ mod tests {
 
     #[test]
     fn capped_scratch_chunks_a_fill_larger_than_the_cap_derived_chunk() {
-        // Adjudication probe: drive `fill_i16_output` with a `data` strictly
-        // larger than the cap-derived scratch, so `data.chunks_mut` actually
-        // splits at the production chunk size.
         let above_cap = MAX_SCRATCH_CALLBACK_FRAMES * 4;
         let channels = usize::from(AudioOutput::CHANNELS);
         let capacity = i16_scratch_capacity(above_cap, channels);
         let len = capacity + 7;
 
         let (producer, consumer) = ring_buffer(len);
-        #[expect(clippy::cast_precision_loss, reason = "probe")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the remainder is below 21, exact in f32"
+        )]
         let pcm: Vec<f32> = (0..len).map(|i| ((i % 21) as f32 - 10.0) / 10.0).collect();
         assert_eq!(producer.push(&pcm), len);
 
@@ -900,7 +900,7 @@ mod tests {
 
         assert!(
             data.len() > scratch.len(),
-            "the probe must cross the cap-derived chunk boundary"
+            "the fill must cross the cap-derived chunk boundary"
         );
         assert_eq!(scratch.len(), capacity, "scratch must never grow");
         let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
