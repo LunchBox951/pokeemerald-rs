@@ -82,6 +82,18 @@ pub enum BattleEvent {
         /// Whether the hit was critical.
         is_critical: bool,
     },
+    /// Struggle's certain quarter-HP recoil, after its [`BattleEvent::Hit`]
+    /// and before either battler's [`BattleEvent::Fainted`]
+    /// (`MOVE_EFFECT_RECOIL_25`, `data/battle_scripts_1.s:897-901`,
+    /// `:3938-3949`).
+    Recoil {
+        /// Whether the player used Struggle.
+        by_player: bool,
+        /// The move that caused the recoil. Currently always [`STRUGGLE`](crate::damage::STRUGGLE).
+        move_id: MoveId,
+        /// HP removed from the user, capped at its HP before the recoil.
+        damage: u32,
+    },
     /// A battler's HP reached zero, after the event that caused it.
     Fainted {
         /// Whether the player's battler fainted.
@@ -330,8 +342,7 @@ pub enum BattleEvent {
 ///
 /// Battle state and randomness are not rolled back. [`TurnError::events`]
 /// retains events in occurrence order. An empty slice usually identifies a
-/// call rejected before the turn began, but an opponent's forced, unsupported
-/// Struggle can consume turn-order randomness before failing without an event.
+/// call rejected before the turn began.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnError {
     pub(super) events: Vec<BattleEvent>,
