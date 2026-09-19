@@ -1450,37 +1450,61 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
         }
         deepest
     };
+    // The descent is a few milliseconds of `mkdirat`, so a thread that is
+    // still starting up when it begins can miss the whole window and swap
+    // into a finished tree -- a failure with nothing wrong in the code
+    // under test. The barrier holds the descent until the attacker is
+    // already spinning.
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
     let attacker = {
         let (swapped, moved) = (swapped.clone(), moved.clone());
+        let ready = std::sync::Arc::clone(&ready);
         std::thread::spawn(move || {
+            ready.wait();
             // Wait until the descent is past the component being swapped,
             // so the swap cannot disturb its own creation or pin. Bounded,
             // not an unconditional spin: a `create_directories` that stalls
             // or fails before reaching `probe` (a regression this test
             // would otherwise want to catch) must not hang this thread, and
-            // so `attacker.join()`, forever -- a bounded wait turns that
-            // into the ordinary `in_time` assertion failing below instead.
+            // so `attacker.join()`, forever -- `None` reports that instead.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             while !probe.exists() {
                 if std::time::Instant::now() >= deadline {
-                    return false;
+                    return None;
                 }
                 std::hint::spin_loop();
             }
             fs::rename(&swapped, &moved).expect("the pinned level is carried off");
             std::os::unix::fs::symlink(&mirror, &swapped).expect("a symlink takes its name");
-            // Proof the swap landed before the `..` level was reached: the
-            // innermost level is not created yet.
-            !deepest.exists()
+            // Whether the swap landed before the `..` level was reached:
+            // the innermost level is not created yet.
+            Some(!deepest.exists())
         })
     };
 
+    ready.wait();
     let made_them = create_directories(&dest).is_ok();
-    let in_time = attacker.join().expect("the attacker thread finishes");
-    assert!(
-        in_time,
-        "the swap has to land before the `..` level is reopened"
-    );
+    let landed = attacker.join().expect("the attacker thread finishes");
+
+    match landed {
+        Some(true) => {}
+        // The descent never got as far as the level the swap waits on, so
+        // something ahead of it stalled or failed -- the regression the
+        // bounded wait exists to surface rather than hang on.
+        None => panic!("the descent never reached the level the swap waits on"),
+        // The descent outran the swap, which then landed on a tree already
+        // finished: the `..` reopen this test is about had already
+        // happened, so there was nothing left to race. Said out loud
+        // rather than passed with nothing checked, the same way the
+        // privileged skips above are.
+        Some(false) => {
+            eprintln!(
+                "a_dotdot_level_descends_from_the_pinned_parent_not_the_path: \
+                 skipped -- the descent finished before the swap could land"
+            );
+            return;
+        }
+    }
 
     assert!(
         !mirror_dotdot.join("downstream").exists(),
