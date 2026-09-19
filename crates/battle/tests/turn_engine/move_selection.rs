@@ -331,10 +331,10 @@ fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
     let dex = Dex::new();
     // Soundproof's pre-PP block (`battle_script_commands.c:932`-`:933`)
     // reads only `stat_change::soundproof_block`, which needs `move_data`
-    // -- already validated -- and returns false for any effect with no
-    // stat change, so Horn Drill's unsupported EFFECT_OHKO is never
-    // executed: the slot's zero PP lands on FailedNoPp exactly as it does
-    // without Soundproof.
+    // -- already validated -- and decides on `sSoundMovesTable` membership
+    // alone (`battle_util.c:2659`-`:2675`), so Horn Drill is not blocked and
+    // its unsupported EFFECT_OHKO is never executed: the slot's zero PP lands
+    // on FailedNoPp exactly as it does without Soundproof.
     let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
     assert_eq!(
         player.ability(),
@@ -368,6 +368,57 @@ fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
             BattleEvent::FailedNoPp {
                 by_player: false,
                 move_id: MoveId(32),
+            },
+        ]
+    );
+    assert_eq!(rng.draws(), 4);
+}
+
+/// The other half of the same boundary: a depleted slot this engine cannot
+/// execute is admitted, so Soundproof's pre-PP block must still reach it.
+/// Upstream decides that block on `sSoundMovesTable` membership alone
+/// (`battle_util.c:2659`-`:2675`), never on the move's effect, and runs it
+/// ahead of the no-PP test (`battle_script_commands.c:932`-`:939`).
+/// Supersonic is `EFFECT_CONFUSE`, which no pipeline here resolves -- at full
+/// PP it is refused at construction -- yet drained it must report the block,
+/// not the no-PP failure.
+#[test]
+fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(
+        player.ability(),
+        AbilityId::SOUNDPROOF,
+        "fixture sanity: the defender must hold Soundproof"
+    );
+    // Fast enough that the player's escape is a roll, not a free run.
+    let mut enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(48), MoveId(33)]); // Supersonic, Tackle
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    assert_eq!(
+        enemy.moves()[0].pp,
+        0,
+        "fixture sanity: the unsupported sound slot is drained"
+    );
+
+    // battle start, turn number, selection (draw 0 -> slot 0: the spent
+    // Supersonic), escape roll (fails). The block precedes every later draw.
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .expect("a depleted unsupported slot constructs even against Soundproof");
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::SoundproofProtected {
+                by_player: false,
+                move_id: MoveId(48),
             },
         ]
     );
