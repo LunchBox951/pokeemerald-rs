@@ -204,6 +204,28 @@ fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> TempPackFile {
 }
 
 #[test]
+fn temp_pack_file_removes_the_scratch_file_while_a_panic_unwinds() {
+    let observed = std::cell::RefCell::new(std::path::PathBuf::new());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fixture =
+            write_synthetic_palette_pack(&[("title/palette/pokemon_logo", &RED_BGR555_LE)]);
+        *observed.borrow_mut() = fixture.path.clone();
+        assert!(
+            fixture.path.exists(),
+            "the scratch pack is written up front"
+        );
+        panic!("simulated assertion failure inside the test body");
+    }));
+    assert!(result.is_err(), "the simulated failure must unwind");
+    let path = observed.borrow();
+    assert!(
+        !path.exists(),
+        "the Drop guard must remove {} during unwinding",
+        path.display()
+    );
+}
+
+#[test]
 fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
     let logo = RED_BGR555_LE.repeat(256);
     let rayquaza_clouds = GREEN_BGR555_LE.repeat(16);
