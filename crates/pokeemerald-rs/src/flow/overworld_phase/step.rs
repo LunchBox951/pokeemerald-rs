@@ -110,11 +110,7 @@ impl OverworldPhase {
     /// upstream's *last* animation frame and the completed step belongs to
     /// call 17's CB1. `pending_landing` is therefore consumed at the top of
     /// this method, from `in_transit` read before this call's movement:
-    /// call 16 leaves it latched, call 17 takes it. A prior revision took
-    /// it immediately after the tick that drained the animation, firing
-    /// source-map frames, coordinate events, warps, encounter rolls, and
-    /// the landing tile's own arrow poll one presented frame early
-    /// (issue #1039).
+    /// call 16 leaves it latched, call 17 takes it.
     ///
     /// # Warp timing
     ///
