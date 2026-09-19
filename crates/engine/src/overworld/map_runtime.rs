@@ -25,12 +25,9 @@ pub struct ConnectionCrossing {
 /// Provides geometry, cells, and behaviors for maps connected to the current
 /// runtime.
 ///
-/// A dimensions-only implementation may leave [`Self::metatile_cell`] at its
-/// default. Player movement then refuses the crossing because it cannot
-/// validate the landing cell. [`Self::metatile_behavior`] has no default:
-/// an implementation that can decode a landing cell must also classify it,
-/// since a crossing landing is subject to the same standing-tile rules as
-/// any other (`field_player_avatar.c:332-349`).
+/// Leaving [`Self::metatile_cell`] at its default refuses every crossing.
+/// [`Self::metatile_behavior`] has no default: a crossing landing obeys the
+/// same standing-tile rules as any other (`field_player_avatar.c:332-349`).
 pub trait ConnectedMapData {
     /// Returns `map`'s dimensions in metatiles.
     fn dimensions(&self, map: MapId) -> Option<(u16, u16)>;

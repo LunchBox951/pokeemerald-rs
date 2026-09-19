@@ -1331,11 +1331,9 @@ fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
     );
 }
 
-/// `FieldGetPlayerInput` computes `forcedMove` from
-/// `MetatileBehavior_IsForcedMovementTile`, the dispatch set plus
-/// `MB_CRACKED_FLOOR` (`pokeemerald/src/metatile_behavior.c:338-351`), so a
-/// cracked floor suppresses `pressedStartButton` on its landing frame too
-/// (`pokeemerald/src/field_control_avatar.c:93-113`, `:180-186`).
+/// `forcedMove` comes from `MetatileBehavior_IsForcedMovementTile`, which
+/// includes `MB_CRACKED_FLOOR` (`pokeemerald/src/metatile_behavior.c:338-351`),
+/// so a cracked floor suppresses START on its landing frame too.
 #[test]
 fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(

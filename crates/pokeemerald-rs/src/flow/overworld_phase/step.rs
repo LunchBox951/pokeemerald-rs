@@ -592,10 +592,9 @@ impl OverworldPhase {
     /// gate is load-bearing rather than the vacuous one it would have been
     /// while the two were mutually exclusive.
     ///
-    /// A forced-movement tile closes the `T_TILE_CENTER` half of
-    /// `FieldGetPlayerInput`'s own gate, `(T_TILE_CENTER && !forcedMove) ||
-    /// T_NOT_MOVING` (`:95`), so it holds the four branches for the landing
-    /// call alone ([`engine::overworld::PlayerState::field_input_suppressed`]).
+    /// A forced tile closes the `T_TILE_CENTER` half of that same gate
+    /// (`:95`), holding the four branches for the landing call alone
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]).
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,

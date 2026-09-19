@@ -26264,6 +26264,12 @@
           "spec": "I-4",
           "status": "stubbed"
         },
+        "FieldGetPlayerInput": {
+          "reason": "Partially modelled, as OverworldPhase::resolve_pre_movement_field_input's gate rather than a FieldInput struct. Ported: the (T_TILE_CENTER && !forcedMove) || T_NOT_MOVING button gate (:95), with forcedMove from MetatileBehavior_IsForcedMovementTile (metatile_behavior.c:338-351) reaching the four pre-movement decisions through PlayerState::field_input_suppressed, and tookStep/checkStandardWildEncounter's forcedMove exclusion (:116-122) through step.rs's landing_claimed. Deferred, still in v1 scope: the PLAYER_SPEED_FASTEST screen on the button block (:97), pressedSelectButton and pressedBButton (:101-106), heldDirection2's separate TryDoorWarp read (:112, :175), and dpadDirection itself, which this port takes straight from held_direction because upstream sets it outside the gate (:124-131, overworld.c:1454).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "GetInFrontOfPlayerPosition": {
           "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",

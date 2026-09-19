@@ -207,10 +207,8 @@ pub const MB_MUDDY_SLOPE: u8 = 0xD0;
 pub const MB_CRACKED_FLOOR: u8 = 0xD2;
 
 /// Returns whether a behavior is dispatched as forced movement, per upstream's
-/// `sForcedMovementTestFuncs` (`field_player_avatar.c:144-164`).
-///
-/// Forced-movement physics are unported, so manual steps fail closed on these
-/// tiles instead of guessing a direction.
+/// `sForcedMovementTestFuncs` (`field_player_avatar.c:144-164`). The physics
+/// are unported, so manual steps fail closed on these tiles.
 #[must_use]
 pub const fn is_forced_movement(behavior: u8) -> bool {
     matches!(
@@ -236,10 +234,9 @@ pub const fn is_forced_movement(behavior: u8) -> bool {
     )
 }
 
-/// Returns whether a behavior suppresses field input, per upstream's
+/// Returns whether a behavior suppresses field input, per
 /// `MetatileBehavior_IsForcedMovementTile` (`metatile_behavior.c:338-351`):
-/// [`is_forced_movement`]'s dispatch set plus [`MB_CRACKED_FLOOR`], which
-/// `FieldGetPlayerInput` alone consults (`field_control_avatar.c:93`).
+/// the dispatch set plus [`MB_CRACKED_FLOOR`].
 #[must_use]
 pub const fn is_forced_movement_input_tile(behavior: u8) -> bool {
     is_forced_movement(behavior) || behavior == MB_CRACKED_FLOOR
