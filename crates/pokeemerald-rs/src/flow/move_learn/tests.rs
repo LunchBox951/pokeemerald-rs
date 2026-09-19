@@ -258,16 +258,12 @@ fn settling_a_prompt_does_not_advance_the_shared_rng() {
     );
 }
 
-/// `settle_move_learn_prompts` promises to decline *every* pending prompt,
-/// but every other test in this file uses the single-prompt Torchic fixture,
-/// which a one-shot (non-looping) implementation would also satisfy. Wynaut's
-/// level-15 learnset block is four entries, so leveling from 14 to 15 chains
-/// four prompts -- each decline immediately surfaces the next question. One
-/// call must drain the whole chain, interleaved prompts included, before
-/// releasing the deferred aftermath (see
+/// Wynaut's level-15 learnset block is four entries, so levelling from 14
+/// to 15 chains four prompts and one `settle_move_learn_prompts` call must
+/// decline them all before the deferred aftermath is released.
 /// `a_multi_prompt_chain_resolves_fully_before_the_deferred_transition` in
-/// `crates/battle/tests/turn_engine/trainer_battle.rs`, which pins the same
-/// fixture one answer at a time).
+/// `crates/battle/tests/turn_engine/trainer_battle.rs` pins the same fixture
+/// one answer at a time.
 #[test]
 fn settling_drains_a_chain_of_prompts_in_one_call() {
     /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
