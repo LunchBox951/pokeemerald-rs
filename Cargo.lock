@@ -98,7 +98,10 @@ checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 
 [[package]]
 name = "assets"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
+dependencies = [
+ "pack-format",
+]
 
 [[package]]
 name = "atomic-waker"
@@ -108,7 +111,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
 dependencies = [
  "platform",
 ]
@@ -121,7 +124,10 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "battle"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
+dependencies = [
+ "assets",
+]
 
 [[package]]
 name = "bitflags"
@@ -310,9 +316,9 @@ dependencies = [
 
 [[package]]
 name = "cpal"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f77b11176c37874be37e8d691c946e31b2b8c357abce9526f6a99eb469e1028"
+checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
 dependencies = [
  "alsa",
  "block2 0.6.2",
@@ -450,7 +456,10 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "engine"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
+dependencies = [
+ "assets",
+]
 
 [[package]]
 name = "equivalent"
@@ -1159,6 +1168,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pack-format"
+version = "0.0.30+gamepatch.95"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1204,7 +1217,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
 dependencies = [
  "cpal",
  "softbuffer",
@@ -1213,10 +1226,17 @@ dependencies = [
 
 [[package]]
 name = "pokeemerald-rs"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
 dependencies = [
+ "assets",
+ "audio",
+ "battle",
+ "engine",
+ "pack-format",
  "platform",
  "rendering",
+ "rom-import",
+ "rustix 1.1.4",
 ]
 
 [[package]]
@@ -1316,7 +1336,15 @@ dependencies = [
 
 [[package]]
 name = "rendering"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
+
+[[package]]
+name = "rom-import"
+version = "0.0.30+gamepatch.95"
+dependencies = [
+ "assets",
+ "pack-format",
+]
 
 [[package]]
 name = "rustc_version"
@@ -2226,7 +2254,13 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.0.30+gamepatch.95"
+dependencies = [
+ "assets",
+ "pack-format",
+ "pokeemerald-rs",
+ "rom-import",
+]
 
 [[package]]
 name = "zerocopy"

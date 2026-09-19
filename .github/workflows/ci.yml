@@ -9,11 +9,12 @@
 #
 # `policy` owns the Ubuntu-only repository checks and the exact default format
 # command. `native` gives each supported OS one checkout and one shared Cargo
-# target directory for the exact default Clippy/build/test commands plus smoke
-# validation. On Ubuntu, that same workspace also restores the pinned upstream
-# references, extracts the real asset pack, runs the ignored real-pack
-# assertions, and repeats smoke with the pack present. No Cargo target cache is
-# used: reuse is deliberately limited to commands within one native runner.
+# target directory for the exact default-feature Clippy/build/test commands
+# plus smoke validation. Ubuntu also runs the all-feature Clippy gate, restores
+# the pinned upstream references, extracts the real asset pack, runs the ignored
+# real-pack and real-checkout assertions, and repeats smoke with the pack
+# present. No Cargo target cache is used: reuse is deliberately limited to
+# commands within one native runner.
 #
 # Branch rules require `merge-gate / <target>` from this workflow. The target
 # suffix is load-bearing: GitHub keys checks by head SHA, so distinct names keep
@@ -46,11 +47,24 @@ jobs:
           fetch-depth: 0 # version_check needs the comparison base.
       - name: Validate VERSION
         env:
-          # Compare a PR with its actual live base. Push/manual runs retain the
-          # repository-wide origin/main monotonicity check.
+          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          REPOSITORY: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
+          validation_mode="$(python3 scripts/channel_ladder.py validation-mode \
+            --event "${EVENT_NAME}" \
+            --ref "${GITHUB_REF_NAME}" \
+            --base "${PR_BASE_REF}" \
+            --head "${PR_HEAD_REF}" \
+            --head-repository "${PR_HEAD_REPO}" \
+            --repository "${REPOSITORY}")"
+
           if [[ -n "${PR_BASE_SHA}" ]]; then
             git fetch --no-tags origin \
               "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
@@ -60,10 +74,34 @@ jobs:
               echo "::error::PR base advanced from ${PR_BASE_SHA} to ${live_base}; refresh the branch and rerun CI."
               exit 1
             fi
-            python3 scripts/version_check.py \
+
+            python3 scripts/version_check.py --mode "${validation_mode}" \
               --base "${live_base}" --head HEAD --require-bump
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              push_base="${PUSH_BEFORE}"
+              if [[ -z "${push_base}" ]] || ! git cat-file -e "${push_base}^{commit}" 2>/dev/null; then
+                push_base="HEAD^1"
+              fi
+              python3 scripts/version_check.py --mode "${validation_mode}" \
+                --base "${push_base}" --head HEAD
+            else
+              next_channel="$(
+                python3 scripts/channel_ladder.py target-for "${GITHUB_REF_NAME}"
+              )"
+              git fetch --no-tags origin \
+                "+refs/heads/${next_channel}:refs/remotes/origin/${next_channel}"
+              next_head="$(git rev-parse --verify \
+                "refs/remotes/origin/${next_channel}^{commit}")"
+              python3 scripts/version_check.py --mode "${validation_mode}" \
+                --base "${next_head}" --head HEAD
+            fi
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            python3 scripts/version_check.py --mode "${validation_mode}" \
+              --base HEAD --head HEAD
           else
-            python3 scripts/version_check.py --base origin/main --head HEAD
+            echo "::error::Unsupported VERSION validation event ${EVENT_NAME}."
+            exit 1
           fi
       - name: Verify ledger
         run: python3 scripts/ledger.py verify
@@ -71,8 +109,6 @@ jobs:
         run: python3 -m unittest discover -s scripts -p "test_*.py"
       - name: Run init.sh regression tests
         run: bash init_test.sh
-      - name: Ensure rustfmt component
-        run: rustup component add rustfmt
       - name: cargo fmt --check
         run: cargo fmt --check
 
@@ -87,13 +123,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install ALSA dev headers (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: Ensure clippy component (Linux)
+        run: |
+          sudo rm -f -- \
+            /etc/apt/sources.list.d/google-chrome* \
+            /etc/apt/sources.list.d/microsoft-prod*
+          sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         if: runner.os == 'Linux'
-        run: rustup component add clippy
-      - name: cargo clippy --all-targets --workspace -- -D warnings
-        if: runner.os == 'Linux'
-        run: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
       - name: cargo test --workspace
@@ -124,6 +163,16 @@ jobs:
       - name: Run ignored real-pack assertions
         if: runner.os == 'Linux'
         run: cargo test -p pokeemerald-rs -- --ignored
+      - name: Run ignored real-pack assertions (assets)
+        if: runner.os == 'Linux'
+        run: cargo test -p assets -- --ignored
+      # `extract_dispatch_succeeds_with_local_checkout` rewrites the shared
+      # assets-pack/ output (deterministically — extraction is byte-identical
+      # across runs), so this step must stay between "Extract real asset pack"
+      # and the smoke step that reads the pack.
+      - name: Run ignored real-checkout assertions (xtask)
+        if: runner.os == 'Linux'
+        run: cargo test -p xtask --features record-snapshot,scenario -- --ignored
       - name: Smoke E2E (pack present)
         if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke

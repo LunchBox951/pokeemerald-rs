@@ -33,7 +33,7 @@ jobs:
       tag: ${{ steps.read.outputs.tag }}
       final: ${{ steps.read.outputs.final }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - name: Read VERSION and compute tag
@@ -46,7 +46,18 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "final=${final}" >> "$GITHUB_OUTPUT"
       - name: Validate version before release
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
+        env:
+          # Validate the transition THIS push made: compare against main's
+          # state before the push, not origin/main (which already includes
+          # the push and would make every check a self-comparison no-op).
+          BEFORE_SHA: ${{ github.event.before || '' }}
+        run: |
+          base="${BEFORE_SHA}"
+          if [ -z "${base}" ] || ! git cat-file -e "${base}" 2>/dev/null; then
+            base="HEAD^1"
+          fi
+          python3 scripts/version_check.py --mode cumulative \
+            --base "${base}" --head HEAD --require-bump
 
   # Linux build: `cargo build --release`, then package the binary (+ docs)
   # into a version-named tarball.
@@ -57,7 +68,7 @@ jobs:
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
@@ -85,7 +96,7 @@ jobs:
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
       - name: Package Windows archive
@@ -115,6 +126,7 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
       FINAL: ${{ needs.setup.outputs.final }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download Linux artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -125,6 +137,14 @@ jobs:
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
           path: artifacts/windows
+      # Binds refs/tags/${TAG} to GITHUB_SHA before publication; see
+      # scripts/release_tag.py for the contract (F-5, #445).
+      - name: Bind the release tag to this run's exact commit
+        run: |
+          python3 scripts/release_tag.py \
+            --remote origin \
+            --tag "${TAG}" \
+            --target "${GITHUB_SHA}"
       - name: Create GitHub Release
         env:
           GH_REPO: ${{ github.repository }}
@@ -137,5 +157,6 @@ jobs:
           gh release create "${TAG}" \
             --title "Release ${TAG}" \
             --generate-notes \
+            --verify-tag \
             ${prerelease_flag} \
             artifacts/linux/* artifacts/windows/*

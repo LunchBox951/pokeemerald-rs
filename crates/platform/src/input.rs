@@ -1,4 +1,4 @@
-//! GBA button state (S-1): bitmask, held/newly-pressed views, default keymap.
+//! GBA button state: bitmask, held/newly-pressed views, default keymap.
 //!
 //! [`Buttons`] mirrors the key-input bit layout from
 //! `pokeemerald/include/gba/io_reg.h` (`A_BUTTON`..`L_BUTTON`, `KEYS_MASK`).
@@ -6,8 +6,8 @@
 //! draws between `gMain.heldKeys` (`JOY_HELD`) and `gMain.newKeys`
 //! (`JOY_NEW`) in `pokeemerald/include/global.h`: a button is "newly
 //! pressed" only on the frame it transitions from not-held to held.
-//! [`Keymap`] is the default (non-configurable; remapping is out of scope for
-//! S-1) keyboard-to-button binding.
+//! [`Keymap`] is the default (non-configurable; remapping is out of scope)
+//! keyboard-to-button binding.
 
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
@@ -167,7 +167,7 @@ impl ButtonState {
 /// A keyboard-to-[`Buttons`] binding.
 ///
 /// Only the [`Keymap::default_keymap`] is provided — remappable/configurable
-/// input is explicitly out of scope for S-1.
+/// input is explicitly out of scope.
 #[derive(Debug, Clone)]
 pub struct Keymap {
     bindings: Vec<(KeyCode, Buttons)>,

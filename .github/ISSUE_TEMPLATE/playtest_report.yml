@@ -1,0 +1,66 @@
+name: Playtest report
+description: Record a manual playtest session's verdict against upstream Emerald.
+labels: ["needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One playtest report is one session's evidence, judged against the
+        player-visible result of upstream Emerald (behavioral-fidelity). Keep
+        it lean (lean-docs): a verdict plus what was compared, not a defect
+        writeup. File any defect found as its own bug-report issue and link
+        it below rather than describing it here. Close this issue once the
+        session's outcome is recorded — playtest records don't stay open.
+  - type: input
+    id: version
+    attributes:
+      label: VERSION
+      description: >-
+        The value from the repository's VERSION file at the time you played.
+        A release tag (e.g. v0.0.0.0) may supplement this to pin exactly what
+        you ran, but is not a substitute for it; a commit SHA is not required.
+      placeholder: "0.0.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: channel
+    attributes:
+      label: Channel
+      description: Which player channel you played (see SUPPORT.md / RELEASE.md).
+      options:
+        - stable (main)
+        - beta (stable)
+        - nightly (unstable)
+    validations:
+      required: true
+  - type: textarea
+    id: comparison-scope
+    attributes:
+      label: Comparison scope
+      description: >-
+        What you played and what you compared it against — the route,
+        scenario, or feature area exercised (name a `docs/scenarios.md`
+        scenario if one covers it), and the upstream Emerald behaviour or
+        reference used as the baseline.
+    validations:
+      required: true
+  - type: dropdown
+    id: verdict
+    attributes:
+      label: Pass/fail verdict
+      description: Did the session match upstream Emerald's behaviour within the stated scope?
+      options:
+        - Pass
+        - Fail
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes and linked defects
+      description: >-
+        A passing session with nothing to record enters `none`; a failing
+        session links at least one defect issue filed separately from this
+        report. Link defects here rather than describing them.
+    validations:
+      required: true

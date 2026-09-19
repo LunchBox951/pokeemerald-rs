@@ -16,14 +16,24 @@ pub enum PlatformError {
     Os(winit::error::OsError),
     /// `softbuffer` failed to create, resize, or present a surface.
     SoftBuffer(softbuffer::SoftBufferError),
-    /// No default audio output device is available (headless CI, no audio
+    /// No usable audio output device could be reached (headless CI, no audio
     /// hardware, no driver running, etc).
+    ///
+    /// Covers an unreachable device as well as an absent one: `cpal`'s ALSA
+    /// host hands out the logical `default` device whether or not sound
+    /// hardware exists, so `crate::audio` reports the phantom that fails its
+    /// first query here rather than as [`Self::Audio`]. See
+    /// `crate::audio::classify_query_error`.
     NoAudioDevice,
     /// The default audio output device has no stream configuration this
     /// crate can use (see `crate::audio` for the requirements).
     UnsupportedAudioConfig,
     /// `cpal` failed to query, configure, build, or drive an audio stream.
     Audio(cpal::Error),
+    /// Scripted buttons were supplied to a windowed backend. Only the
+    /// explicit null backend accepts injected input; windowed input remains
+    /// owned by the OS event loop.
+    ScriptedInputRequiresHeadless,
 }
 
 impl fmt::Display for PlatformError {
@@ -40,6 +50,9 @@ impl fmt::Display for PlatformError {
                 )
             }
             Self::Audio(err) => write!(f, "audio device error: {err}"),
+            Self::ScriptedInputRequiresHeadless => {
+                write!(f, "scripted input requires the headless platform backend")
+            }
         }
     }
 }
@@ -50,7 +63,9 @@ impl std::error::Error for PlatformError {
             Self::EventLoop(err) => Some(err),
             Self::Os(err) => Some(err),
             Self::SoftBuffer(err) => Some(err),
-            Self::NoAudioDevice | Self::UnsupportedAudioConfig => None,
+            Self::NoAudioDevice
+            | Self::UnsupportedAudioConfig
+            | Self::ScriptedInputRequiresHeadless => None,
             Self::Audio(err) => Some(err),
         }
     }

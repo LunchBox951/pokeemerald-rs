@@ -1,0 +1,588 @@
+//! The overworld's half of the field start menu (I-6, issue #232): the
+//! `START` gate that opens one, the frame ownership that freezes movement
+//! while it is up, and the `CopyPartyAndObjectsToSave`/`FromSave` sync the
+//! SAVE action's write is bracketed by (`pokeemerald/src/load_save.c:196-206`).
+//!
+//! The menu itself -- its items, its windows, and the whole
+//! `sSaveDialogCallback` chain -- lives in [`crate::start_menu`]; this
+//! module is the seam between that owned type and the phase whose save
+//! state it writes.
+//!
+//! # When `START` opens a menu
+//!
+//! Upstream's answer is five separate mechanisms, and
+//! [`OverworldPhase::start_menu_may_open`] checks all five:
+//!
+//! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
+//!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
+//!   `T_NOT_MOVING` (`src/field_control_avatar.c:95-101`) -- i.e. never
+//!   mid-step ([`OverworldPhase::mid_step`]).
+//! * A battle runs under its own main callback
+//!   (`SetMainCallback2(CB2_InitBattle)`), so `ProcessPlayerFieldInput` is
+//!   not being polled at all ([`OverworldPhase::in_battle`]).
+//! * An open message box holds `LockPlayerFieldControls`, with the same
+//!   effect ([`OverworldPhase::dialog`]).
+//! * A sight-trainer approach cutscene (S-5, issue #300,
+//!   [`super::sight_trainer_approach`]) holds upstream's own
+//!   `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+//!   `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+//!   (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+//!   `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+//!   `src/scrcmd.c:2193-2208`) -- for a stretch that is
+//!   never `in_battle()` (the fight has not started) and, for the whole
+//!   exclamation-mark/walk-up half, never `mid_step()` either (the *player*
+//!   is not moving; only the trainer is). Upstream's own gate reaches this
+//!   case through the lock, which this port has no counterpart for
+//!   ([`super::sight_trainer_approach`]'s own module docs on why); this
+//!   field is that gate's stand-in, checked here rather than folded into
+//!   [`OverworldPhase::in_battle`] because it names a different upstream
+//!   mechanism (a lock, not a callback swap) for a state that is not a
+//!   battle at all.
+//! * `pressedStartButton` follows every branch this port models:
+//!   `CheckForTrainersWantingBattle` through dive-down all `return TRUE`
+//!   ahead of it (`src/field_control_avatar.c:147-181`), and only the
+//!   unmodelled registered-`SELECT` item follows it (`:188-189`). The
+//!   `field_input_claimed` parameter of [`OverworldPhase::start_menu_may_open`]
+//!   carries that precedence; [`super::step::OverworldPhase::step`] resolves
+//!   those branches and so is the caller that can answer it.
+//!
+//! Those five gates are why this port needs no "do not save here" policy
+//! of its own: the states a save must never be taken in -- mid-battle,
+//! mid-step (#230's review), mid-approach, and now mid-higher-priority-event
+//! -- are exactly the states upstream's own start menu cannot open in. The
+//! guard moved from the writer to the door.
+//!
+//! # What the write is bracketed by
+//!
+//! `HandleSavingData` calls `CopyPartyAndObjectsToSave` before every
+//! `WriteSaveSectorOrSlot` (`src/save.c:736-739`), and `LoadGameSave` calls
+//! `CopyPartyAndObjectsFromSave` after every successful load
+//! (`src/save.c:887`). Here that is
+//! [`OverworldPhase::copy_party_and_objects_to_save`], called by
+//! [`PhaseSaveTarget::try_saving_data`], and
+//! [`OverworldPhase::copy_party_and_objects_from_save`], called by
+//! [`OverworldPhase::from_saved`].
+
+use std::cell::RefCell;
+
+use engine::save::SavedObjectEvent;
+use engine::text::render::TextSpeed;
+use engine::text::Token;
+use platform::{ButtonState, Buttons};
+
+use crate::game_save::{SaveFileStatus, SaveSlot, StoreOutcome};
+use crate::party;
+use crate::start_menu::{self, SaveMode, SaveTarget, StartMenu, StartMenuOutcome};
+
+use super::OverworldPhase;
+
+impl OverworldPhase {
+    /// Drive the field start menu for one frame, returning whether it owned
+    /// the frame -- `true` freezes movement for it exactly as
+    /// [`OverworldPhase::advance_dialog_frame`] does for a message box.
+    ///
+    /// Runs only while a menu is already open, as `ShowStartMenu`'s
+    /// `LockPlayerFieldControls` (`src/start_menu.c:581-591`) stops
+    /// `DoCB1_Overworld` polling `ProcessPlayerFieldInput` and `PlayerStep`
+    /// (`src/overworld.c:1444-1455`); a fresh press is [`OverworldPhase::step`]'s
+    /// to weigh, so `field_input_claimed` is always `false` here.
+    ///
+    /// `save_slot` is this session's save medium, threaded in from
+    /// [`crate::app::App`] rather than reached for `(oop-boundaries)`; it
+    /// is untouched unless the player actually completes the SAVE flow.
+    pub(in crate::flow) fn advance_start_menu_frame(
+        &mut self,
+        buttons: ButtonState,
+        save_slot: &mut SaveSlot,
+    ) -> bool {
+        // Taken out for the frame so the menu can be driven against a
+        // `&mut OverworldPhase` (it needs the live save blocks to write,
+        // and the player name to print) without borrowing the phase twice.
+        let open_menu = self.start_menu.take();
+        if open_menu.is_none()
+            && (!self.start_menu_may_open(buttons, false) || !self.try_open_start_menu())
+        {
+            return false;
+        }
+
+        self.take_field_lock();
+
+        // Background tile animation keeps running while a menu owns the
+        // frame, exactly as it does while a message box does
+        // ([`OverworldPhase::tick`]'s own docs: upstream's
+        // `UpdateTilesetAnimations` runs every `VBlank` regardless of what
+        // owns field input). [`OverworldPhase::step`] normally bumps this,
+        // and this method runs *instead of* it -- including on the frame
+        // the menu opens on, which `ShowStartMenu` consumes upstream too
+        // (`ProcessPlayerFieldInput` returns TRUE).
+        self.advance_tileset_anim_tick();
+
+        let Some(mut menu) = open_menu else {
+            return true;
+        };
+        let mut target = PhaseSaveTarget {
+            phase: RefCell::new(self),
+            save_slot,
+        };
+        let outcome = menu.tick(buttons, &mut target);
+        // `sStartMenuCursorPos` is EWRAM: every write to it outlives this
+        // `StartMenu`, which upstream never keeps a handle to once its
+        // `gMenuCallback` chain finishes. Reading it back every frame
+        // (rather than only when the menu is about to close) keeps this
+        // port's session-lifetime copy honest even if a future outcome
+        // ends the menu from inside a branch this match does not expect.
+        self.start_menu_cursor = menu.cursor_position();
+        if outcome == StartMenuOutcome::Open {
+            self.start_menu = Some(menu);
+        }
+        true
+    }
+
+    /// Whether a fresh `START` press may open the menu this frame (module
+    /// docs' five upstream gates).
+    ///
+    /// `field_input_claimed` is the caller's own answer to upstream's
+    /// remaining branches -- `TryArrowWarp`, `TryStartInteractionScript`,
+    /// `TryDoorWarp`, and `TrySetupDiveDownScript`
+    /// (`src/field_control_avatar.c:164-181`) -- each of which returns
+    /// `TRUE`, and so reaches `pressedStartButton` at `:182` before this
+    /// port ever could, on a frame it fires. Only
+    /// [`super::step::OverworldPhase::step`] is in a position to answer that
+    /// honestly (module docs); every other caller passes `false`.
+    ///
+    /// A pure decision rather than an inline condition, for the same
+    /// reason [`crate::flow`]'s own `menu_action` is one: inside
+    /// [`Self::advance_start_menu_frame`] a refused press and a failed
+    /// pack load are indistinguishable to a pack-less test, and these
+    /// five gates are the whole of this slice's "a save must not be
+    /// takeable here" story.
+    pub(in crate::flow) fn start_menu_may_open(
+        &self,
+        buttons: ButtonState,
+        field_input_claimed: bool,
+    ) -> bool {
+        buttons.is_newly_pressed(Buttons::START)
+            && !field_input_claimed
+            && !self.in_battle()
+            && !self.mid_step()
+            && self.dialog.is_none()
+            && self.sight_approach.is_none()
+    }
+
+    /// Build a fresh `START` press's menu without committing it, so the
+    /// caller can weigh a real pack load against this frame's movement:
+    /// upstream never runs `PlayerStep` on a frame `ProcessPlayerFieldInput`
+    /// claims (`src/field_control_avatar.c:147-187`), and a load that fails
+    /// claims nothing. Callers check [`Self::start_menu_may_open`] first; a
+    /// discarded result costs nothing.
+    ///
+    /// `Self::synthetic_start_menu` lets a test choose a menu that really
+    /// builds, or a build that really fails, with no local pack involved.
+    ///
+    /// Bordered with `self.save2.options_window_frame_type` -- see
+    /// `crate::start_menu::chrome::StartMenuChrome::from_pack` for which
+    /// frame that is and why.
+    pub(super) fn build_start_menu(&self) -> Option<StartMenu> {
+        #[cfg(test)]
+        match self.synthetic_start_menu {
+            super::SyntheticStartMenu::Builds => {
+                return Some(crate::start_menu::synthetic_start_menu_at(
+                    self.start_menu_cursor,
+                ));
+            }
+            super::SyntheticStartMenu::Fails => return None,
+            super::SyntheticStartMenu::RealPack => {}
+        }
+        match start_menu::open(
+            self.pack_source,
+            self.start_menu_cursor,
+            self.save2.options_window_frame_type,
+        ) {
+            Ok(opened) => Some(opened),
+            // The same "log-or-ignore is fine" policy [`crate::flow`]
+            // applies to every other pack load: a missing pack must not
+            // wedge the field, it must leave `START` inert.
+            Err(err) => {
+                eprintln!("{err} -- the start menu did not open");
+                None
+            }
+        }
+    }
+
+    /// Build and commit a fresh press's menu; returns whether it opened.
+    pub(super) fn try_open_start_menu(&mut self) -> bool {
+        match self.build_start_menu() {
+            Some(menu) => {
+                self.start_menu = Some(menu);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the start menu currently owns the phase -- read by
+    /// [`OverworldPhase::compose_frame`] to draw it over the map.
+    pub(in crate::flow) const fn start_menu(&self) -> Option<&StartMenu> {
+        self.start_menu.as_ref()
+    }
+
+    /// Test-only: open a pack-free
+    /// [`crate::start_menu::synthetic_start_menu_at`] directly, so the save
+    /// round-trip can drive the *real* [`StartMenu::tick`] state machine in
+    /// CI, where no asset pack exists for [`crate::start_menu::open`]
+    /// to read (`crate::flow::save_continue_tests`' own module docs on the
+    /// two substitutions those tests make). Nothing but the chrome differs:
+    /// the menu, its items, its flow, and the write it performs are the
+    /// production ones -- including the seed, taken from
+    /// [`Self::start_menu_cursor`] exactly as
+    /// [`Self::advance_start_menu_frame`] takes it for a real menu.
+    #[cfg(test)]
+    pub(in crate::flow) fn open_synthetic_start_menu(&mut self) {
+        self.start_menu = Some(crate::start_menu::synthetic_start_menu_at(
+            self.start_menu_cursor,
+        ));
+    }
+
+    /// `CopyPartyAndObjectsToSave` (`src/load_save.c:196-200`): mirror the
+    /// live party and the player object event into the save blocks, just
+    /// before they are written.
+    ///
+    /// **Party** (`SavePlayerParty`): this port's `gPlayerParty` is the
+    /// single [`OverworldPhase::party_lead`] the battle paths borrow, live
+    /// at [`OverworldPhase::party_lead_slot`] -- `SetBattlePartyIds`'s
+    /// `gBattlerPartyIndexes[0]`, not always slot 0
+    /// (`pokeemerald/src/battle_controllers.c:585-606`). Saving rewrites
+    /// that slot from the lead while retaining an existing valid count and
+    /// every other dormant serialized slot. The encoder uses the lead's own
+    /// original-trainer id (the box header's XOR key), which need not be
+    /// the current player's id. No lead means an empty party -- *unless the
+    /// slot was retained undecodable (below)* -- and the selected slot is
+    /// then zeroed rather than left holding a stale mon, upstream's
+    /// `ZeroPlayerPartyMons` shape.
+    ///
+    /// The selected slot is *merged*, not rebuilt (issue #344). The block
+    /// this phase holds is the one a continue was loaded from, so
+    /// `player_party[party_lead_slot]` is still the record
+    /// [`OverworldPhase::copy_party_and_objects_from_save`] decoded the
+    /// lead out of -- the backing state for every field the battle model
+    /// does not carry. Rebuilding the record from the lead alone wrote all
+    /// of them back as zero, which cost a loaded save its held item, EVs,
+    /// friendship, status and mail on an ordinary SAVE;
+    /// [`party::merge_into_save_pokemon`] overlays the battler onto those
+    /// retained bytes and falls back to a fresh record only when the slot
+    /// holds a different Pokémon -- a new game's empty slot, or a lead
+    /// swapped in since the load.
+    ///
+    /// A no-lead selected slot is *not* always an empty one (issue #353): a
+    /// load whose secure region would not decode also leaves
+    /// [`OverworldPhase::party_lead`] `None`, and
+    /// [`OverworldPhase::undecodable_lead_retained`] is what tells the two
+    /// apart here, rather than re-probing the slot's bytes at save time
+    /// (which would just fail the same checksum again and give no way to
+    /// decide "erase" from "keep"). A retained-undecodable slot writes
+    /// nothing: `player_party[0]` and `player_party_count` are left exactly
+    /// as [`OverworldPhase::copy_party_and_objects_from_save`] found them
+    /// (that fallback decode never leaves slot 0, so the retained slot is
+    /// always slot 0 -- see [`party::select_active_battler`]'s own docs),
+    /// so a checksum failure on slot 0's secure region no longer costs the
+    /// player the whole record -- nickname, OT name, language, markings,
+    /// and the secure bytes themselves -- on the very next ordinary SAVE.
+    /// Upstream never rebuilds a party record from a partial model either:
+    /// `SavePlayerParty` (`pokeemerald/src/load_save.c:160-168`) copies
+    /// whatever bytes `gPlayerParty` holds, with no decode step of its own
+    /// to fail. A genuinely empty slot (`player_party_count == 0` at load)
+    /// still gets [`OverworldPhase::undecodable_lead_retained`] `false` and
+    /// so still takes the zero-and-default arm below, matching upstream's
+    /// `ZeroPlayerPartyMons`.
+    ///
+    /// # `player_party_count` on a retained-undecodable slot
+    ///
+    /// Left exactly as loaded, not zeroed. Upstream's `SavePlayerParty`
+    /// writes `gSaveBlock1Ptr->playerPartyCount = gPlayerPartyCount`
+    /// unconditionally (`load_save.c:160-168`) and its `LoadPlayerParty`
+    /// (`:170-178`) reads that same count straight back with no validation
+    /// step that could reject a slot. Upstream *does* reach the state this
+    /// arm is about -- a nonzero count over a slot 0 whose secure bytes do
+    /// not check out -- and it reaches it by the Bad Egg path: when
+    /// `CalculateBoxMonChecksum` disagrees with the stored checksum,
+    /// `GetBoxMonData`/`SetBoxMonData` set `boxMon->isBadEgg = TRUE`
+    /// (`pokeemerald/src/pokemon.c:3742-3744` and `:4167-4169`) and leave
+    /// that mon sitting in `gPlayerParty` with `gPlayerPartyCount`
+    /// unchanged (this port's [`party::PartyError::Substructures`] names
+    /// the same upstream behaviour). What upstream then does with it is
+    /// *preserve* it: the wholesale `gSaveBlock1Ptr->playerParty[i] =
+    /// gPlayerParty[i]` copy round-trips a Bad Egg's bytes with the count
+    /// intact, and `LoadPlayerParty` performs no validation, so the count
+    /// rides through the next load too. That is a stronger justification
+    /// for retention than an absent state would be: keeping both the
+    /// bytes and the count *is* upstream's answer to a slot whose checksum
+    /// failed. This port's decode is a real decode and can refuse
+    /// (`party::from_save_pokemon`'s own docs); when it does, the
+    /// upstream-shaped answer is the count upstream's copy would have
+    /// carried through: whatever was already there. See
+    /// [`OverworldPhase::copy_party_and_objects_from_save`] for where the
+    /// count is read back on the next load, still unconditionally.
+    ///
+    /// **Object events** (`SaveObjectEvents`): only the player's facing,
+    /// the one field this port models
+    /// ([`engine::save::SavedObjectEvent`]'s own docs). Both direction
+    /// nibbles are written from the same value because
+    /// `SetObjectEventDirection` keeps them in step for a turn in place
+    /// (`src/event_object_movement.c:1867-1875`), which is the only way
+    /// this port's avatar changes direction.
+    pub(super) fn copy_party_and_objects_to_save(&mut self) {
+        let slot = self.party_lead_slot;
+        if let Some(lead) = &self.party_lead {
+            self.save1.player_party[slot] = party::merge_into_save_pokemon(
+                &battle::Dex::new(),
+                lead,
+                &self.save1.player_party[slot],
+                &mut self.lead_hp_hidden_by_load,
+            );
+            if self.save1.player_party_count == 0 {
+                self.save1.player_party_count = 1;
+            }
+        } else if self.undecodable_lead_retained {
+            // Leave `player_party[0]`/`player_party_count` exactly as
+            // `copy_party_and_objects_from_save` found them (this method's
+            // own docs, issue #353): a slot this port could not decode is
+            // not this port's to rebuild.
+        } else {
+            self.save1.player_party[slot] = engine::save::Pokemon::default();
+            self.save1.player_party_count = 0;
+        }
+        let facing = self.player.facing().to_dir_id();
+        self.save1.player_object_event = SavedObjectEvent {
+            facing_direction: facing,
+            movement_direction: facing,
+        };
+    }
+
+    /// `CopyPartyAndObjectsFromSave`'s party half (`LoadPlayerParty`,
+    /// `src/load_save.c:170-178`): rebuild the battle-facing lead from the
+    /// saved party, selecting which slot is active exactly as
+    /// `SetBattlePartyIds` does ([`party::select_active_battler`]).
+    ///
+    /// The object-event half is not here: a facing has to be known before
+    /// the [`engine::overworld::PlayerState`] is built, so
+    /// [`OverworldPhase::from_saved`] reads it directly (see
+    /// `super::saved_facing`).
+    ///
+    /// A stored party count of zero means no lead, exactly as it does
+    /// upstream. A party with no slot that will decode into a usable
+    /// battler -- checksum-valid sector bytes that are not a mon any
+    /// battle code could run -- is logged and leaves the lead empty:
+    /// fabricating a replacement starter would hand the player a different
+    /// Pokémon than the one they saved, which is strictly worse than an
+    /// honest empty party.
+    ///
+    /// Which of those two `None` reasons applies is recorded in
+    /// [`OverworldPhase::undecodable_lead_retained`] (issue #353), not left
+    /// for [`OverworldPhase::copy_party_and_objects_to_save`] to work out
+    /// again later: the failed decode already consumed the one piece of
+    /// evidence (the checksum mismatch) that could tell "empty" and
+    /// "undecodable" apart, so the save half reads this flag instead of
+    /// re-attempting the same decode. Set here and nowhere else in
+    /// production -- see that field's own docs for the one deliberate
+    /// exception, a new game's provisional-starter grant.
+    pub(super) fn copy_party_and_objects_from_save(&mut self) {
+        if self.save1.player_party_count == 0 {
+            self.party_lead = None;
+            self.party_lead_slot = 0;
+            self.lead_hp_hidden_by_load = 0;
+            self.undecodable_lead_retained = false;
+            return;
+        }
+        let dex = battle::Dex::new();
+        let stored_count =
+            usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
+        match party::select_active_battler(&dex, &self.save1.player_party[..stored_count]) {
+            Ok((slot, lead)) => {
+                self.lead_hp_hidden_by_load =
+                    party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);
+                self.party_lead = Some(lead);
+                self.party_lead_slot = slot;
+                self.undecodable_lead_retained = false;
+            }
+            Err(err) => {
+                eprintln!(
+                    "continue: {err} -- slot 0's record and stored party count are \
+                     retained; resuming with an empty party"
+                );
+                self.party_lead = None;
+                self.party_lead_slot = 0;
+                self.lead_hp_hidden_by_load = 0;
+                // The slot's stored bytes are still real save data (issue
+                // #353): retained so `copy_party_and_objects_to_save`'s
+                // no-lead arm leaves them untouched instead of erasing them
+                // on the next ordinary SAVE. Every `PartyError` lands here,
+                // not just a failed secure-region checksum -- an unknown
+                // species and an unbuildable moveset are this port's limits,
+                // not proof the bytes are junk, so they are retained the
+                // same way (see `undecodable_lead_retained`'s own docs).
+                self.undecodable_lead_retained = true;
+            }
+        }
+    }
+}
+
+/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid; upstream
+/// treats them exactly like [`OPTIONS_TEXT_SPEED_MID`]
+/// (`pokeemerald/include/constants/global.h:127-129`).
+const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+/// The saved value `GetPlayerTextSpeedDelay` repairs an out-of-range
+/// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
+/// (`pokeemerald/src/menu.c:483-484`).
+const OPTIONS_TEXT_SPEED_MID: u8 = 1;
+
+/// [`OverworldPhase`] + [`SaveSlot`] as the [`SaveTarget`] the start menu's
+/// SAVE flow writes through -- upstream's `gSaveFileStatus`,
+/// `gDifferentSaveFile`, `gSaveBlock2Ptr->playerName`, and `TrySavingData`,
+/// each resolved from an owned value rather than a global
+/// `(oop-boundaries)`.
+///
+/// `phase` is a [`RefCell`] rather than a bare `&mut` because
+/// [`SaveTarget::player_text_speed`] must repair an out-of-range
+/// `optionsTextSpeed` in place (see its own docs) from behind the trait's
+/// `&self` receiver; every other accessor still only reads through it.
+struct PhaseSaveTarget<'a> {
+    phase: RefCell<&'a mut OverworldPhase>,
+    save_slot: &'a mut SaveSlot,
+}
+
+impl SaveTarget for PhaseSaveTarget<'_> {
+    fn boot_status(&self) -> SaveFileStatus {
+        self.save_slot.boot_status()
+    }
+
+    fn different_save_file(&self) -> bool {
+        self.phase.borrow().different_save_file
+    }
+
+    /// `gSaveBlock2Ptr->playerName`, decoded back into printable tokens.
+    ///
+    /// A name that will not decode (bytes from a font this codec does not
+    /// implement) prints as nothing rather than as mojibake -- the same
+    /// "never silently mis-render" contract [`engine::text::decode`] itself
+    /// keeps.
+    fn player_name(&self) -> Vec<Token> {
+        let mut tokens =
+            engine::text::decode(&self.phase.borrow().save2.player_name).unwrap_or_default();
+        // `decode` stops at the terminator but keeps it; a name is spliced
+        // into a longer message, so its `End` must not truncate that.
+        tokens.retain(|token| *token != Token::End);
+        tokens
+    }
+
+    /// `gSaveBlock2Ptr->optionsTextSpeed`, clamped the same way
+    /// `GetPlayerTextSpeedDelay` clamps it for delay selection
+    /// (`src/menu.c:481-487`, mirrored by [`TextSpeed::from_raw_option`]).
+    /// Upstream's own write-back -- repairing an out-of-range value to
+    /// `OPTIONS_TEXT_SPEED_MID` in `gSaveBlock2Ptr` itself (`:483-484`) --
+    /// is mirrored here, at the same call: every message the save-flow
+    /// prints reaches this before the player answers a prompt, so a
+    /// cancelled flow is repaired exactly as a completed one is.
+    fn player_text_speed(&self) -> TextSpeed {
+        let mut phase = self.phase.borrow_mut();
+        if phase.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
+            phase.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
+        }
+        TextSpeed::from_raw_option(phase.save2.options_text_speed)
+    }
+
+    /// `TrySavingData(mode)` (`src/save.c:765-783`), preceded by
+    /// `CopyPartyAndObjectsToSave` exactly as `HandleSavingData` does
+    /// (`:736-739`).
+    ///
+    /// Every refusal and I/O failure collapses into upstream's own
+    /// `SAVE_STATUS_ERROR`, i.e. `false` -- the flow then shows
+    /// `gText_SaveError` and the player learns the save did not happen.
+    /// Each one is logged first, because the on-screen message cannot say
+    /// *which* of them it was.
+    ///
+    /// `gDifferentSaveFile = FALSE` is *not* one of those outcomes' jobs:
+    /// upstream clears it inside the `SAVE_OVERWRITE_DIFFERENT_FILE` branch
+    /// itself, on the statement after the `TrySavingData` call and before
+    /// `saveStatus` is ever looked at (`src/start_menu.c:1093-1096`) -- so a
+    /// failed overwrite clears it too. See the clear below for what that
+    /// buys the player.
+    ///
+    /// # What the mode does and does not select
+    ///
+    /// It selects the *medium entry point*, and nothing about the bytes.
+    /// `SAVE_NORMAL` and `SAVE_OVERWRITE_DIFFERENT_FILE` differ upstream
+    /// only by the Hall of Fame erase this port has no counterpart for
+    /// ([`SaveMode::OverwriteDifferentFile`]'s docs); what separates a new
+    /// game's write from a continue's is
+    /// [`OverworldPhase::save_lineage`] -- the *session's* property, read
+    /// here for every arm alike. Deriving it from `mode` instead is what
+    /// leaked the replaced trainer's deferred bytes on a `SAVE_NORMAL`
+    /// retry (#232 review round two).
+    fn try_saving_data(&mut self, mode: SaveMode) -> bool {
+        let phase: &mut OverworldPhase = self.phase.get_mut();
+        phase.copy_party_and_objects_to_save();
+        // Fixed at NEW GAME/CONTINUE time and never re-derived from the
+        // flow's state: the WARNING below is retired by the first dispatch,
+        // this is not.
+        let lineage = phase.save_lineage();
+        let (block1, block2) = (&phase.save1, &phase.save2);
+        let outcome = match mode {
+            SaveMode::Normal | SaveMode::OverwriteDifferentFile { prompted: true } => {
+                self.save_slot.store(block1, block2, lineage)
+            }
+            // The one write with no prompt behind it -- see
+            // `SaveSlot::store_unless_foreign_save` for why it is still
+            // checked against the image on disk.
+            SaveMode::OverwriteDifferentFile { prompted: false } => self
+                .save_slot
+                .store_unless_foreign_save(block1, block2, lineage),
+        };
+        // `gDifferentSaveFile = FALSE` (`src/start_menu.c:1096`), in
+        // upstream's own position: inside the `if (gDifferentSaveFile ==
+        // TRUE)` branch, immediately after the `TrySavingData` call
+        // (`:1095`) and *unconditionally* -- `saveStatus` is not consulted
+        // until `:1103`. So the flag tracks "this session already answered
+        // the overwrite question", not "this session has a file on disk":
+        // once the player has consented (or the empty-cartridge shortcut
+        // has stood in for that consent), a retry after a failed write asks
+        // the ordinary `gText_AlreadySavedFile` question rather than
+        // re-issuing the WARNING. Matching the outcome instead would make
+        // this port re-prompt where upstream does not.
+        //
+        // The refusal arms below are no exception, and the port-specific
+        // one loses nothing by it: a retried `RefusedExistingSave` reaches
+        // the medium as `SAVE_NORMAL` -- but only *after* the player has
+        // answered `gText_AlreadySavedFile`, so the foreign file still is
+        // not clobbered without the player being asked, which is the whole
+        // point of `SaveSlot::store_unless_foreign_save`'s guard. And that
+        // retry is still a *new game's* write: `lineage` above does not
+        // move with this flag, so the replaced adventure's deferred bytes
+        // are dropped either way (#232 review round two).
+        if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
+            self.phase.get_mut().different_save_file = false;
+        }
+        match outcome {
+            Ok(StoreOutcome::Written) => true,
+            Ok(StoreOutcome::RefusedExistingSave) => {
+                eprintln!(
+                    "save: a saved game this session never loaded appeared on disk -- \
+                     refusing to overwrite it without asking; the game was not saved"
+                );
+                false
+            }
+            Ok(StoreOutcome::RefusedStaleSession) => {
+                eprintln!(
+                    "save: the save on disk changed since this session loaded it \
+                     (another instance saved?) -- refusing to overwrite newer \
+                     progress with stale state; the game was not saved"
+                );
+                false
+            }
+            Err(err) => {
+                eprintln!("save: {err} -- the game was not saved");
+                false
+            }
+        }
+    }
+}

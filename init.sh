@@ -5,15 +5,37 @@
 # the Rust rewrite has the upstream C source available for reference. Both
 # directories are gitignored and are never committed back to this repo.
 #
+# Both references are pinned to a fixed commit SHA (below), not to the
+# remotes' moving default branches: a fresh bootstrap always checks out
+# exactly that revision, so two independent clean checkouts of the same
+# pokeemerald-rs commit see byte-identical upstream trees (issue #136). To
+# deliberately move a pin (e.g. to pick up new upstream behaviour), bump the
+# matching *_REF constant in a dedicated commit/PR so the change is reviewed
+# and recorded; existing checkouts then need `rm -rf pokeemerald mgba &&
+# ./init.sh` (see the mismatch error below).
+#
 # Behaviour:
-#   * In the main checkout: clones from GitHub.
+#   * In the main checkout: clones from GitHub and checks out the pinned SHA;
+#                            an existing checkout is verified against the pin
+#                            and the script fails loudly on a mismatch rather
+#                            than silently reusing a stale tree.
 #   * In a git worktree:    creates symlinks to the main checkout's pokeemerald/
 #                           and mgba/ directories (no extra disk, no clone).
+#
+# POKEEMERALD_REMOTE/MGBA_REMOTE/POKEEMERALD_REF/MGBA_REF may be overridden via
+# the environment; this is intended for this script's own regression test
+# (init_test.sh), which points them at local synthetic remotes/refs. Ordinary
+# use should never need to set them.
 
 set -euo pipefail
 
-POKEEMERALD_REMOTE="https://github.com/pret/pokeemerald.git"
-MGBA_REMOTE="https://github.com/mgba-emu/mgba.git"
+POKEEMERALD_REMOTE="${POKEEMERALD_REMOTE:-https://github.com/pret/pokeemerald.git}"
+MGBA_REMOTE="${MGBA_REMOTE:-https://github.com/mgba-emu/mgba.git}"
+
+# Pinned upstream revisions (audited 2026-07-26, issue #136). Update
+# deliberately, in their own commit, when the project's upstream basis moves.
+POKEEMERALD_REF="${POKEEMERALD_REF:-83df84e40623b79281f2397faa611cbf044170bd}"
+MGBA_REF="${MGBA_REF:-c034660f007c543233f1cadeb0ca13c71afd8f41}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_dir"
@@ -23,22 +45,276 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: python3 is required (byte-verifies the pinned reference trees)" >&2
+    exit 1
+fi
+
+# q <path> — shell-escape a path for the copy-pasteable recovery commands
+# (single-quote wrapping breaks on embedded apostrophes).
+q() { printf '%q' "$1"; }
+
 git_dir_abs="$(cd "$(git rev-parse --git-dir)" && pwd)"
 git_common_dir_abs="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 
+# verify_pinned <dir> <ref> — assert an existing reference checkout really is
+# the pinned tree: HEAD at the pin AND a clean worktree/index (HEAD equality
+# alone says nothing about edited, staged, or untracked files feeding the
+# extraction pipeline). A tree without verifiable git metadata (tarball
+# extraction, removed .git) is a hard error: the gate fails closed.
+verify_pinned() {
+    local dir="$1"
+    local ref="$2"
+
+    # Detect real git metadata via git itself: a linked worktree's .git is a
+    # FILE (gitdir: pointer), so a `.git` directory test would misclassify
+    # it as an unverifiable tarball and accept it unchecked. Requiring the
+    # repo's toplevel to be $dir itself keeps a genuine tarball (which would
+    # resolve to the ENCLOSING product repo) on the fail-closed path.
+    local top dir_abs
+    top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    dir_abs="$(cd "$dir" && pwd -P)"
+    if [[ -z "$top" || "$(cd "$top" && pwd -P)" != "$dir_abs" ]]; then
+        echo "error: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
+        echo "  an unverifiable tree must not feed the extraction pipeline (fail closed)" >&2
+        echo "  to restore a verifiable pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    local actual
+    actual="$(git -C "$dir" rev-parse HEAD)"
+    if [[ "$actual" != "$ref" ]]; then
+        echo "error: $dir is at $actual, but init.sh pins it to $ref" >&2
+        echo "  to update: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
+        exit 1
+    fi
+    # A sparse checkout hides sparse-excluded tracked paths from status
+    # (skip-worktree), so HEAD + clean-status can both pass while required
+    # files are physically absent. Reject it outright.
+    if [[ "$(git -C "$dir" config --bool core.sparseCheckout 2>/dev/null || echo false)" == "true" ]]; then
+        echo "error: $dir is a sparse checkout; tracked paths may be missing from disk" >&2
+        echo "  to restore the full pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    # Reject repo-local machinery that can rewrite what status compares.
+    # (Boundary note: an attacker with write access to this .git can defeat
+    # any git-mediated check in principle; these guards close the known
+    # config-level evasions so accidental or drive-by divergence cannot
+    # hide, which is the pin gate's actual job.)
+    if [[ -n "$(git -C "$dir" for-each-ref refs/replace 2>/dev/null)" ]]; then
+        echo "error: $dir has git replacement refs (refs/replace); verification would see substituted objects" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    # Repo-LOCAL filter config only: a host-global filter (git-lfs is
+    # ubiquitous) is harmless here because its only non-tracked attribute
+    # bindings — the global attributesFile and info/attributes — are
+    # neutralized/rejected, and tracked .gitattributes is covered by the
+    # clean-tree check itself.
+    if [[ -n "$(git -C "$dir" config --local --get-regexp '^filter\.' 2>/dev/null || true)" ]]; then
+        echo "error: $dir configures content filters (filter.*); they can map tampered bytes back to the committed blob" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    local attrs
+    attrs="$(git -C "$dir" rev-parse --git-path info/attributes)"
+    [[ "$attrs" == /* ]] || attrs="$dir/$attrs"
+    if [[ -s "$attrs" ]]; then
+        echo "error: $dir has local attribute overrides ($attrs); they can alter content comparison" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    # assume-unchanged / skip-worktree index bits hide tracked-file edits
+    # from status entirely (and skip-worktree needs no sparse config).
+    local hidden
+    hidden="$(git -C "$dir" ls-files -v | grep -E '^[a-z]|^S' || true)"
+    if [[ -n "$hidden" ]]; then
+        echo "error: $dir has index-hidden paths (assume-unchanged/skip-worktree); edits there evade the clean check:" >&2
+        printf '%s\n' "$hidden" | head -10 >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    local dirty
+    # autocrlf off for the comparison: a CRLF-converted tree must read as
+    # dirty (not silently normalized clean) or platforms diverge on bytes.
+    # --ignored + a neutralized excludes file: the extraction pipeline reads
+    # the filesystem, not the index, so a git-ignored file (host-global
+    # excludes, .git/info/exclude) diverges the pack while reading clean.
+    # --untracked-files=all overrides any status.showUntrackedFiles=no;
+    # --no-replace-objects compares against the REAL blobs even if a
+    # replacement ref slipped past; fsmonitor off so no hook can assert
+    # "nothing changed" on git's behalf.
+    dirty="$(git --no-replace-objects -C "$dir" \
+        -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
+        -c core.fsmonitor=false -c core.attributesFile=/dev/null \
+        -c core.checkStat=default \
+        status --porcelain --ignored --untracked-files=all)"
+    if [[ -n "$dirty" ]]; then
+        echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
+        printf '%s\n' "$dirty" | head -20 >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+    verify_tree_bytes "$dir" "$ref"
+}
+
+# verify_tree_bytes <dir> <ref> — every tracked file's on-disk bytes must
+# equal its pinned blob. `git status` trusts machinery a config controls —
+# clean filters, the stat cache, fsmonitor — so tracked CONTENT is verified
+# by hashing raw bytes against the pinned tree's blob IDs. The only
+# sanctioned divergence is an eol=crlf path (per the tracked .gitattributes,
+# itself byte-verified by the same pass) whose bytes are exactly the CRLF
+# rendering of the committed blob — git only converts existing LFs, so an
+# unterminated final line stays unterminated, and the rendering is fully
+# blob-determined (nothing can be laundered through it). Implemented in
+# python for byte-exact, quoting-proof path handling (ls-tree -z).
+verify_tree_bytes() {
+    local dir="$1"
+    local ref="$2"
+    if ! python3 - "$dir" "$ref" <<'PYEOF'
+import hashlib
+import os
+import subprocess
+import sys
+
+d, ref = sys.argv[1], sys.argv[2]
+
+
+def run(*args):
+    r = subprocess.run(
+        ["git", "--no-replace-objects", "-C", d, *args], capture_output=True
+    )
+    if r.returncode != 0:
+        sys.stderr.write("error: git %s failed in %s\n" % (args[0], d))
+        sys.exit(1)
+    return r.stdout
+
+
+entries = []
+for rec in run("ls-tree", "-r", "-z", ref).split(b"\x00"):
+    if not rec:
+        continue
+    meta, path = rec.split(b"\t", 1)
+    mode, typ, oid = meta.split(b" ")
+    if typ == b"blob":
+        entries.append((mode.decode(), oid.decode(), path))
+
+
+def blob_oid(data, want):
+    algo = hashlib.sha1 if len(want) == 40 else hashlib.sha256
+    h = algo(b"blob %d\x00" % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+# eol attribute per path, batched, NUL-delimited (no quoting ambiguity)
+attr = subprocess.run(
+    ["git", "-C", d, "check-attr", "--stdin", "-z", "eol"],
+    input=b"\x00".join(p for _, _, p in entries) + b"\x00",
+    capture_output=True,
+)
+eol = {}
+fields = attr.stdout.split(b"\x00")
+for i in range(0, len(fields) - 2, 3):
+    eol[fields[i]] = fields[i + 2].decode(errors="replace")
+
+cat = subprocess.Popen(
+    ["git", "--no-replace-objects", "-C", d, "cat-file", "--batch"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+)
+
+
+def blob_content(oid):
+    cat.stdin.write(oid.encode() + b"\n")
+    cat.stdin.flush()
+    header = cat.stdout.readline().split()
+    if len(header) < 3 or header[1] != b"blob":
+        sys.stderr.write("error: cannot read blob %s\n" % oid)
+        sys.exit(1)
+    data = cat.stdout.read(int(header[2]))
+    cat.stdout.read(1)  # record terminator
+    return data
+
+
+bad = []
+droot = d.encode()
+for mode, oid, path in entries:
+    fs = os.path.join(droot, path)
+    if mode == "120000":
+        try:
+            target = os.readlink(fs)
+        except OSError:
+            bad.append(path)
+            continue
+        if target != blob_content(oid):
+            bad.append(path)
+        continue
+    try:
+        with open(fs, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        bad.append(path)
+        continue
+    if blob_oid(data, oid) == oid:
+        continue
+    if eol.get(path) == "crlf" and data == blob_content(oid).replace(
+        b"\n", b"\r\n"
+    ):
+        continue
+    bad.append(path)
+
+if bad:
+    sys.stderr.write(
+        "error: %s tracked content differs byte-for-byte from the pinned tree at %s:\n"
+        % (d, ref)
+    )
+    for p in bad[:20]:
+        sys.stderr.write("  %s\n" % p.decode(errors="replace"))
+    sys.exit(1)
+PYEOF
+    then
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
+        exit 1
+    fi
+}
+
 if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
-    # Worktree: symlink the main checkout's reference directories rather than
-    # re-cloning them. This works with both git-cloned and tarball-extracted
-    # sources and avoids duplicating gigabytes of read-only data per worktree.
+    # Worktree: symlink the main checkout's reference directories rather
+    # than re-cloning them — no extra disk per worktree. The linked trees
+    # must be verifiable git checkouts at the pins.
+    # The main checkout's trees are verified against the pins first — an
+    # unvalidated symlink would silently reintroduce the drift the pins
+    # exist to prevent.
     main_repo="$(dirname "$git_common_dir_abs")"
     for name in pokeemerald mgba; do
+        case "$name" in
+            pokeemerald) ref="$POKEEMERALD_REF" ;;
+            mgba)        ref="$MGBA_REF" ;;
+        esac
         src="$main_repo/$name"
         if [[ ! -d "$src" ]]; then
             echo "error: $src missing; run init.sh in the main checkout ($main_repo) first." >&2
             exit 1
         fi
-        if [[ -L "$name" || -d "$name" ]]; then
-            echo "skip: $name already present"
+        verify_pinned "$src" "$ref"
+        if [[ -L "$name" ]]; then
+            # A pre-existing link is only valid if it resolves to the tree
+            # just validated — a rogue or stale symlink must not be
+            # laundered by mere existence.
+            resolved="$(cd "$name" 2>/dev/null && pwd -P || true)"
+            expected="$(cd "$src" && pwd -P)"
+            if [[ "$resolved" != "$expected" ]]; then
+                echo "error: $name is a symlink to '${resolved:-<broken>}', not the validated $src" >&2
+                echo "  to fix: rm -- $(q "$name") && ./init.sh" >&2
+                exit 1
+            fi
+            echo "skip: $name already linked to $src"
+        elif [[ -d "$name" ]]; then
+            # A real directory (e.g. its own clone) is acceptable only if it
+            # itself passes the pin check.
+            verify_pinned "$name" "$ref"
+            echo "skip: $name already present at the pinned revision"
         else
             ln -s "$src" "$name"
             echo "linked $name -> $src"
@@ -48,19 +324,49 @@ if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
     exit 0
 fi
 
-clone_if_missing() {
+# clone_and_pin clones $source into $target and checks it out at the pinned
+# $ref, or — if $target already holds a checkout — verifies it is already at
+# $ref. A pre-existing checkout at any other revision is a hard error: silently
+# reusing it would let independent bootstraps of the same pokeemerald-rs
+# commit drift onto different upstream trees (issue #136).
+clone_and_pin() {
     local source="$1"
     local target="$2"
-    if [[ -d "$target/.git" ]]; then
-        echo "skip: $target already present"
+    local ref="$3"
+
+    # Any existing directory is an existing checkout to validate — testing
+    # for a `.git` DIRECTORY would misroute a linked worktree (.git file)
+    # into the clone below, which fails on the non-empty destination.
+    if [[ -d "$target" ]]; then
+        verify_pinned "$target" "$ref"
+        echo "skip: $target already at pinned revision $ref"
         return
     fi
+
     echo "cloning $source -> $target"
-    git clone "$source" "$target"
+    # Persist LF-only conversion settings into the new repo's config: an
+    # inherited core.autocrlf=true (git-for-windows default) would check the
+    # tree out with CRLF while status still reports clean, giving two
+    # platforms byte-different trees that both pass the pin gate.
+    # --no-checkout: never materialize the remote's moving default-branch
+    # tip — only the pinned revision is ever checked out, so a broken tip
+    # cannot fail the bootstrap of a valid pin.
+    git clone --quiet --no-checkout \
+        -c core.autocrlf=false -c core.eol=lf \
+        "$source" "$target"
+    echo "checking out pinned revision $ref in $target"
+    if ! git -C "$target" -c advice.detachedHead=false checkout --quiet "$ref"; then
+        echo "error: failed to check out pinned revision $ref in $target" >&2
+        echo "  the upstream repository may have rewritten history; update the *_REF constant in init.sh" >&2
+        exit 1
+    fi
+    # Re-verify the freshly materialized tree with the same gate an existing
+    # checkout gets — a hook or attribute filter could have dirtied it.
+    verify_pinned "$target" "$ref"
 }
 
 echo "main checkout detected; cloning from GitHub"
-clone_if_missing "$POKEEMERALD_REMOTE" "pokeemerald"
-clone_if_missing "$MGBA_REMOTE" "mgba"
+clone_and_pin "$POKEEMERALD_REMOTE" "pokeemerald" "$POKEEMERALD_REF"
+clone_and_pin "$MGBA_REMOTE" "mgba" "$MGBA_REF"
 
 echo "done."

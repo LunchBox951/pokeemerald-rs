@@ -1,0 +1,1317 @@
+//! `BATTLE_TYPE_TRAINER` (issue #237): the scripted Route 103 rival battle's
+//! five deltas from a wild encounter — running refused, a party opponent, the
+//! forced post-faint send-out, `x1.5` experience, and prize money — pinned
+//! end to end through the public `battle` API, the same way every other
+//! `turn_engine/` module pins its family of behaviour. Per-script AI draw
+//! accounting is pinned next to the AI itself
+//! (`crates/battle/src/battle/trainer_ai.rs`); construction is pinned in
+//! `crates/pokeemerald-rs/src/flow/route103_rival/tests.rs`.
+//!
+//! The trainers used here are the real ones. `TRAINER_MAY_ROUTE_103_MUDKIP`
+//! (`include/constants/opponents.h:533`) is the rival a player who chose
+//! Mudkip fights: `sParty_MayRoute103Mudkip`
+//! (`src/data/trainer_parties.h:6916`-`:6921`) is a single `.iv = 0`,
+//! level-5 **Treecko** — the type-advantaged answer to the player's Water
+//! starter — and her `aiFlags` are `AI_SCRIPT_CHECK_BAD_MOVE |
+//! AI_SCRIPT_TRY_TO_FAINT | AI_SCRIPT_CHECK_VIABILITY`
+//! (`src/data/trainers.h:6352`-`:6362`). A level-5 Treecko's
+//! `GiveBoxMonInitialMoveset` moveset is Pound + Leer (both level-1 entries
+//! of `sTreeckoLevelUpLearnset`, `level_up_learnsets.h:3572`-`:3574`;
+//! Absorb is level 6).
+//!
+//! Two-mon parties do not exist on Route 103, so the forced-replacement
+//! fixtures below use hand-built parties instead — pinning behaviour only
+//! against a one-mon party would pin nothing. A forced post-faint send-out
+//! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
+//! falling back to party order; see `TrainerContext::send_out_next`'s docs
+//! (issue #1040).
+
+use crate::common::{max_iv_mon, SequenceRng};
+use assets::trainers::TrainerId;
+use assets::{MoveId, SpeciesId};
+use battle::status1::poison_residual_damage;
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
+    MoveLearnDecision, PlayerAction, PpBonuses, Status1,
+};
+
+/// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
+const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
+/// `TRAINER_BRENDAN_ROUTE_103_TREECKO` — the one Route 103 entry whose third
+/// `aiFlags` bit is `AI_SCRIPT_SETUP_FIRST_TURN` rather than
+/// `AI_SCRIPT_CHECK_VIABILITY` (`src/data/trainers.h:6280`-`:6290`).
+const BRENDAN_ROUTE_103_TREECKO: TrainerId = TrainerId(523);
+
+const TREECKO: u16 = 277;
+const TORCHIC: u16 = 280;
+const MUDKIP: u16 = 283;
+const ZIGZAGOON: u16 = 288;
+const PICHU: u16 = 172;
+/// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
+const CHANSEY: u16 = 113;
+/// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
+/// [`CHANSEY`].
+const KANGASKHAN: u16 = 115;
+
+const POUND: MoveId = MoveId(1);
+const SCRATCH: MoveId = MoveId(10);
+const TACKLE: MoveId = MoveId(33);
+const LEER: MoveId = MoveId(43);
+const GROWL: MoveId = MoveId(45);
+const ABSORB: MoveId = MoveId(71);
+/// `MOVE_PURSUIT`, Treecko's level-16 learnset move -- still unexecutable
+/// after issue #321 (see `battle::hit`'s allow-list docs).
+const PURSUIT: MoveId = MoveId(228);
+/// `MOVE_PECK` (`include/constants/moves.h:68`) — Torchic's level-16
+/// learnset entry.
+const PECK: MoveId = MoveId(64);
+const SAND_ATTACK: MoveId = MoveId(28);
+const FIRE_SPIN: MoveId = MoveId(83);
+const QUICK_ATTACK: MoveId = MoveId(98);
+const SLASH: MoveId = MoveId(163);
+/// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
+/// move with far more power than Tackle's, for a most-damage-fallback
+/// fixture proving that power difference no longer matters once base
+/// damage comes from one shared, stale move.
+const MEGA_KICK: MoveId = MoveId(25);
+/// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
+const WATER_GUN: MoveId = MoveId(55);
+
+/// The rival's real party: one level-5 Treecko knowing Pound and Leer.
+fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
+    vec![max_iv_mon(dex, TREECKO, 5, vec![POUND, LEER])]
+}
+
+#[test]
+fn running_from_a_trainer_is_refused_before_any_draw_and_leaves_the_battle_usable() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0]); // Battle::new_trainer's turn-number draw
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .unwrap();
+    assert_eq!(rng.draws(), 1, "no speed tie for these two");
+
+    let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
+    assert_eq!(
+        failure.error(),
+        BattleError::NoRunningFromTrainer,
+        "a trainer battle's refusal is its own error, not first_battle's"
+    );
+    assert!(
+        failure.events().is_empty(),
+        "a pre-draw rejection reports no events"
+    );
+    assert_eq!(
+        rng.draws(),
+        1,
+        "the refusal is checked ahead of the turn-number draw -- the shared \
+         stream must not move at all"
+    );
+    assert!(battle.outcome().is_none(), "the battle is still usable");
+    assert_eq!(
+        battle.run_tries(),
+        0,
+        "runTries is only bumped by a real TryRunFromBattle attempt"
+    );
+}
+
+#[test]
+fn the_route_103_rival_battle_exposes_its_trainer_context() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0]);
+    let battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .unwrap();
+
+    let context = battle.trainer().expect("a trainer battle has a context");
+    assert_eq!(context.id(), MAY_ROUTE_103_MUDKIP);
+    assert_eq!(context.bench_len(), 0, "the Route 103 party is one mon");
+    // TRAINER_CLASS_RIVAL's gTrainerMoneyTable value is 15, the party's last
+    // mon is level 5, moneyMultiplier is 1: 4 * 5 * 1 * 15.
+    assert_eq!(context.money(), 300);
+    assert_eq!(battle.enemy().species(), SpeciesId(TREECKO));
+    assert_eq!(battle.enemy().level(), 5);
+    let known: Vec<MoveId> = battle.enemy().moves().iter().map(|m| m.move_id).collect();
+    assert_eq!(known, vec![POUND, LEER]);
+}
+
+#[test]
+fn a_wild_battle_has_no_trainer_context() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 2, vec![TACKLE, GROWL]);
+    let mut rng = SequenceRng::new([0]);
+    let battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    assert!(battle.trainer().is_none());
+}
+
+/// Beating the rival's only mon must end the battle in victory, with the
+/// `x1.5` trainer experience bonus and the prize money, in
+/// `Cmd_getexp`-then-`Cmd_getmoneyreward` order.
+#[test]
+fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle() {
+    let dex = Dex::new();
+    // A level-50 Rattata one-shots a level-5 Treecko with Slash and easily
+    // outspeeds it, so the rival's chosen action never executes.
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+
+    // Battle::new_trainer: 1 turn number.
+    // take_turn: 1 turn number, 2-5 simulatedRNG, 6 AI_CV_DefenseDown is
+    // skipped (healthy user, default Defense stage) so the next draw is the
+    // tie-break, 7 accuracy, 8 crit, 9 damage roll, 10 effect chance.
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let tail: Vec<&BattleEvent> = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                BattleEvent::Fainted { .. }
+                    | BattleEvent::ExpGained(_)
+                    | BattleEvent::MoneyGained(_)
+                    | BattleEvent::Ended(_)
+            )
+        })
+        .collect();
+    // Treecko's expYield is 65: 65*5/7 = 46, then the trainer bonus
+    // 46*150/100 = 69.
+    assert_eq!(
+        tail,
+        vec![
+            &BattleEvent::Fainted { by_player: false },
+            &BattleEvent::ExpGained(69),
+            &BattleEvent::MoneyGained(300),
+            &BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// The same KO against a *wild* Treecko pays the unboosted award — the pin
+/// that proves the `x1.5` really came from `BATTLE_TYPE_TRAINER` and not
+/// from the species/level.
+#[test]
+fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let enemy = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
+
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::ExpGained(46)),
+        "a wild KO pays expYield * level / 7 with no bonus: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::MoneyGained(_))),
+        "a wild battle pays no prize money"
+    );
+}
+
+/// Coincidence, not a party-order rule: nothing is ever super effective
+/// against a pure Normal-type player, so this fixture always reaches the
+/// damage fallback. Scratch and Tackle are both Normal, so they score
+/// identically there too, and the tie-break keeps the earlier bench member,
+/// Torchic.
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    // A three-mon party. Route 103's is one mon, so this is a synthetic
+    // party against a real trainer id.
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE, GROWL]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    assert_eq!(battle.trainer().unwrap().bench_len(), 2);
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(TORCHIC),
+            bench_remaining: 1,
+        }),
+        "the second party member comes out, not the third: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::Ended(_) | BattleEvent::MoneyGained(_))),
+        "the battle is not over while the trainer still has mons"
+    );
+    assert_eq!(battle.outcome(), None);
+    assert_eq!(battle.enemy().species(), SpeciesId(TORCHIC));
+    assert!(
+        !battle.enemy().is_fainted()
+            && battle.enemy().current_hp() == battle.enemy().stats().max_hp,
+        "the replacement comes out at full HP"
+    );
+
+    // Second KO: the third mon comes out.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(events.contains(&BattleEvent::TrainerSentOut {
+        species: SpeciesId(MUDKIP),
+        bench_remaining: 0,
+    }));
+
+    // Third KO: bench empty, so this one ends the battle and pays out.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(!events
+        .iter()
+        .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })));
+    assert!(events.contains(&BattleEvent::MoneyGained(300)));
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// Fire-type player: the type/super-effective pass picks the Grass member
+/// for worst typing, rejects it for lacking a super-effective move, then
+/// picks the Water member with Water Gun instead of the party-order Grass
+/// member (`pokeemerald/src/battle_ai_switch_items.c:690`-`:738`).
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TORCHIC, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE, GROWL]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN, TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(MUDKIP),
+            bench_remaining: 1,
+        }),
+        "the super-effective Mudkip comes out, not the party-order Treecko: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(MUDKIP));
+}
+
+/// Proves the most-damage fallback independently of party order: a pure
+/// Normal-type player is never hit super effectively, so the type pass
+/// declines both bench members. Upstream's most-damage pass then scores
+/// every candidate off the *same* base damage (the fainted Zigzagoon's
+/// stats against a stale move, `pokeemerald/src/battle_ai_switch_items.c:772`-`:779`),
+/// so only each candidate's own move's STAB and type effectiveness can
+/// still differ the outcome: Water Gun earns no STAB from a Normal-type
+/// Zigzagoon, but Tackle does, so the party-order-second Pichu is sent out
+/// over the party-order-first Mudkip.
+#[test]
+fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_party_order() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        }),
+        "Tackle's STAB from the Normal-type Zigzagoon sends out Pichu, not the party-order Mudkip: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}
+
+/// Two Normal moves against the same defender score identically once base
+/// damage comes from the one stale move rather than each candidate's own
+/// (`pokeemerald/src/battle_ai_switch_items.c:772`-`:779`,
+/// `battle_script_commands.c:1306`-`:1311`,`:1536`-`:1552`), so the strict
+/// `bestDmg < gBattleMoveDamage` comparison keeps the earlier party member
+/// regardless of Mega Kick's vastly higher power.
+#[test]
+fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![MEGA_KICK]),
+    ];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        }),
+        "Mega Kick's power cannot outscore Tackle when both are Normal: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}
+
+/// EXP is applied to the owned player before trainer continuation, so a
+/// replacement fights the levelled-up mon rather than its stale snapshot.
+#[test]
+fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
+    let old_player = player.clone();
+    let mut lead = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    lead.apply_damage(lead.current_hp() - 1);
+    let party = vec![lead, max_iv_mon(&dex, PICHU, 5, vec![TACKLE])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let old_stats = battle.player().stats();
+
+    let first = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let exp_index = first
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .expect("the faint awards EXP");
+    let send_out_index = first
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .expect("the trainer sends out the replacement");
+    assert!(
+        exp_index < send_out_index,
+        "EXP precedes send-out: {first:?}"
+    );
+    assert_eq!(battle.player().level(), 6);
+    assert_ne!(battle.player().stats(), old_stats);
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+
+    let expected_damage = |attacker: &BattlePokemon| {
+        let mut hit_rng = SequenceRng::new([u16::MAX; 4]);
+        match battle::hit::resolve_hit(
+            &Dex::new(),
+            SLASH,
+            attacker,
+            battle.enemy(),
+            false,
+            &mut hit_rng,
+        )
+        .unwrap()
+        .outcome
+        {
+            HitOutcome::Hit { damage, .. } => damage,
+            other => panic!("the deterministic Slash should hit: {other:?}"),
+        }
+    };
+    let updated_damage = expected_damage(battle.player());
+    let stale_damage = expected_damage(&old_player);
+    assert_ne!(
+        updated_damage, stale_damage,
+        "the level-up must affect damage"
+    );
+
+    let second = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        second.contains(&BattleEvent::Hit {
+            by_player: true,
+            move_id: SLASH,
+            damage: updated_damage,
+            is_critical: false,
+        }),
+        "the next turn uses the updated level and stats: {second:?}"
+    );
+}
+
+/// Level-up move learning is **unscreened**, exactly as upstream's
+/// `GiveMoveToMon` teaches (issue #252): a Treecko crossing to level 16
+/// learns Pursuit even though `EFFECT_PURSUIT` has no resolver in this
+/// crate ([`battle::hit`]'s module docs — the engine re-targets and
+/// re-powers Pursuit outside the script, so it is deliberately absent from
+/// the plain-hit allow-list despite pointing at `BattleScript_EffectHit`).
+/// This is the successor to the old
+/// `a_crossed_level_does_not_learn_the_learnset_move_yet` deferral pin,
+/// flipped to the upstream behaviour it deferred.
+///
+/// The unexecutable move used to be Absorb, taught at level 6; issue #321's
+/// `drain` pipeline made that one executable, so the pin moved up the same
+/// learnset to the next move the engine still refuses.
+///
+/// The fail-closed half that survives is the *other* one this crate always
+/// had, and this test pins both halves together so neither can drift: the
+/// unexecutable move sits in the player's moveset — which
+/// [`Battle::new`]/[`Battle::new_trainer`] deliberately do not screen, only
+/// the opposing side's — and is refused when it is **selected**, by
+/// `validate_player_move`, ahead of the turn's first RNG draw, with a
+/// recoverable error that leaves the battle usable.
+#[test]
+fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    assert!(
+        player
+            .apply_experience(&dex, level_16 - player.experience())
+            .unwrap()
+            .is_none(),
+        "an empty slot never asks the player anything"
+    );
+
+    assert_eq!(player.level(), 16, "the thresholds were crossed");
+    assert_eq!(player.experience(), level_16);
+    assert!(
+        battle::initial_moveset(SpeciesId(TREECKO), 16).contains(&PURSUIT),
+        "fixture sanity: level 16 is the learnset entry that holds Pursuit"
+    );
+    assert_eq!(
+        player
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SLASH, ABSORB, QUICK_ATTACK, PURSUIT],
+        "each crossed level's move is taught into the next empty slot with \
+         no effect-coverage screen, exactly as upstream's GiveMoveToMon \
+         hands them out"
+    );
+    assert_eq!(
+        player.moves()[3].pp,
+        dex.move_data(PURSUIT).unwrap().pp,
+        "a freshly learned move's PP starts at the move's own base PP"
+    );
+
+    // The fail-closed half: unexecutable *in the player's moveset* is fine;
+    // unexecutable *as this turn's pick* is refused, before any draw.
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .expect("construction never screens the player's moveset");
+    let draws_before = rng.draws();
+
+    let failure = battle
+        .take_turn(PlayerAction::UseMove(3), &mut rng)
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        BattleError::UnsupportedMoveEffect(PURSUIT),
+        "EFFECT_PURSUIT has no resolver, so selecting it is refused -- \
+         pinning *why*, so this breaks loudly the day EFFECT_PURSUIT lands"
+    );
+    assert!(
+        failure.events().is_empty(),
+        "a pre-draw rejection reports no events"
+    );
+    assert_eq!(
+        rng.draws(),
+        draws_before,
+        "validate_player_move runs ahead of the turn-number draw -- the \
+         shared stream must not move at all"
+    );
+    assert!(battle.outcome().is_none(), "the refusal is recoverable");
+    assert!(
+        battle.take_turn(PlayerAction::UseMove(0), &mut rng).is_ok(),
+        "and another action can still be chosen this turn"
+    );
+}
+
+/// A single crossed level learns that level's move into the first empty
+/// slot — the ordinary case `MonTryLearningNewMove`/`GiveMoveToMon` models
+/// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2955`).
+#[test]
+fn a_single_crossed_level_learns_its_learnset_move() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL]);
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    assert!(
+        mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
+            .is_none(),
+        "an empty slot never asks the player anything"
+    );
+
+    assert_eq!(mon.level(), 16, "exactly one level crossed");
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, GROWL, PECK],
+        "Peck (Torchic's level-16 entry) lands in the first empty slot"
+    );
+    assert_eq!(
+        mon.moves()[2].pp,
+        dex.move_data(PECK).unwrap().pp,
+        "a freshly learned move's PP starts at the move's own base PP"
+    );
+}
+
+/// `GiveMoveToBoxMon`'s `MON_ALREADY_KNOWS_MOVE` branch
+/// (`pokemon.c:2951`-`:2952`): a mon that already knows the crossed
+/// level's learnset move neither duplicates it nor spends a slot on it.
+#[test]
+fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, PECK]);
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    assert!(
+        mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
+            .is_none(),
+        "an already-known move is skipped without asking"
+    );
+
+    assert_eq!(mon.level(), 16, "exactly one level crossed");
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, PECK],
+        "level 16's Peck is already known -- no duplicate, no slot spent"
+    );
+}
+
+/// A multi-level jump processes every crossed level in ascending order,
+/// exactly as upstream's own one-level-at-a-time `Cmd_getexp` loop does
+/// (`battle_script_commands.c` case 3 → case 4 → case 5, looping back to
+/// case 3 until the whole award is spent, each level's write capped at the
+/// next threshold by `Task_GiveExpToMon`,
+/// `battle_controller_player.c:1154`-`:1181`). Torchic crosses four
+/// learnset levels here — 16 Peck, 19 Sand Attack, 25 Fire Spin, 28 Quick
+/// Attack — with one slot already taken, so the first three land *in
+/// learnset order* (no skips: Sand Attack and Fire Spin are not executable
+/// by this crate's turn engine and are taught anyway) and the fourth runs
+/// out of slots and stops the level-up on a player decision (issue #304)
+/// **at level 28**: the rest of the award is unconsumed while the question
+/// is open, so the prompt never shows a mon past the level it names.
+#[test]
+fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 13, vec![SCRATCH]);
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_28 = assets::experience_for_level(growth_rate, 28).unwrap();
+    let level_29 = assets::experience_for_level(growth_rate, 29).unwrap();
+
+    let pending = mon
+        .apply_experience(&dex, level_29 - mon.experience())
+        .unwrap()
+        .expect("the fourth entry has no slot left, so the walk asks");
+
+    assert_eq!(
+        mon.level(),
+        28,
+        "the award pauses at the prompted level; level 29 waits on the answer"
+    );
+    assert_eq!(
+        mon.experience(),
+        level_28,
+        "consumed exactly up to level 28's threshold (Task_GiveExpToMon's cap)"
+    );
+    assert_eq!(
+        mon.stats().max_hp,
+        max_iv_mon(&dex, TORCHIC, 28, vec![SCRATCH]).stats().max_hp,
+        "stats are level 28's while the question is open, not level 29's"
+    );
+    let learned: Vec<MoveId> = mon.moves().iter().map(|slot| slot.move_id).collect();
+    assert_eq!(
+        learned,
+        vec![SCRATCH, PECK, SAND_ATTACK, FIRE_SPIN],
+        "every crossed level's move lands, in ascending level order, until \
+         the slots run out -- nothing is skipped for want of a modelled effect"
+    );
+    assert_eq!(
+        pending.move_id(),
+        QUICK_ATTACK,
+        "level 28's Quick Attack is the first entry with no slot left, so \
+         it is the one the player is asked about (MON_HAS_MAX_MOVES)"
+    );
+    assert_eq!(pending.level(), 28);
+    assert!(
+        !learned.contains(&QUICK_ATTACK),
+        "and nothing is bumped until that question is answered"
+    );
+    assert_eq!(
+        mon.resolve_move_learn(&dex, MoveLearnDecision::Decline)
+            .unwrap()
+            .next,
+        None,
+        "declining resumes the level-up, which finds no further entry to offer"
+    );
+    assert_eq!(
+        mon.level(),
+        29,
+        "the answer releases the award's remainder (Cmd_getexp case 5)"
+    );
+    assert_eq!(mon.experience(), level_29);
+}
+
+/// A full moveset **asks** rather than silently declining — the
+/// four-known-moves yes/no box (`BattleScript_AskToLearnMove`,
+/// `battle_script_commands.c:5368`-`:5370`), which issue #304 turned from a
+/// recorded divergence into real state the caller has to answer. Both
+/// answers are pinned: declining leaves the moveset alone, replacing swaps
+/// exactly the chosen slot.
+#[test]
+fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
+    let original_moves = vec![SCRATCH, GROWL, TACKLE, LEER];
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, original_moves.clone());
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    let pending = mon
+        .apply_experience(&dex, level_16 - mon.experience())
+        .unwrap()
+        .expect("four filled slots must raise the replacement question");
+    assert_eq!(pending.move_id(), PECK);
+
+    assert_eq!(
+        mon.level(),
+        16,
+        "the level still rises while the question is open"
+    );
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        original_moves,
+        "and nothing about the moveset moves until it is answered"
+    );
+
+    // Declining: unchanged, exactly what the pre-#304 silent decline did.
+    let mut declined = mon.clone();
+    assert!(declined
+        .resolve_move_learn(&dex, MoveLearnDecision::Decline)
+        .unwrap()
+        .learned
+        .is_none());
+    assert_eq!(
+        declined
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        original_moves
+    );
+
+    // Replacing: only the chosen slot changes, at the new move's base PP.
+    mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(2))
+        .unwrap();
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, GROWL, PECK, LEER],
+        "TACKLE was the slot named, so TACKLE is the move forgotten"
+    );
+    assert_eq!(mon.moves()[2].pp, dex.move_data(PECK).unwrap().pp);
+}
+
+/// The decision surface, reached the way a player reaches it: through an
+/// NPC trainer battle's own experience award (issue #304). The prompt is
+/// reported as an event, held on the battle, blocks another turn until it is
+/// answered, and the answer performs `RemoveMonPPBonus` + `SetMonMoveSlot`.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    // One experience point short of level 16, so the battle's own award is
+    // what crosses the threshold -- and three PP Ups on the slot about to be
+    // given up, so the clear is observable.
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let player = player
+        .with_pp_bonuses(&dex, PpBonuses::from_bits(0b0000_1100))
+        .unwrap();
+    let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    // However many Scratches the level-5 Treecko survives; the award lands
+    // on the turn it faints.
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() || battle.outcome().is_some() {
+            break;
+        }
+    }
+    let exp_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .unwrap_or_else(|| panic!("the faint awards EXP: {events:?}"));
+    let prompt_index = events
+        .iter()
+        .position(|event| event == &BattleEvent::MoveLearnPrompt { move_id: PECK })
+        .expect("crossing level 16 with four moves must ask about Peck");
+    assert!(
+        exp_index < prompt_index,
+        "the award is applied before the question is asked: {events:?}"
+    );
+    // The knockout would end the battle -- the bench is empty -- but the
+    // open question holds everything after the faint back, exactly as
+    // upstream finishes the level-up script before
+    // BattleScript_HandleFaintedMon (`battle_util.c:1894`-`:1951`): no
+    // money, no outcome, no Ended event until the answer.
+    assert_eq!(
+        battle.outcome(),
+        None,
+        "the battle's end waits on the answer"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::MoneyGained(_) | BattleEvent::Ended(_))),
+        "nothing after the faint runs while the question is open: {events:?}"
+    );
+    assert_eq!(
+        battle.pending_move_learn().map(|pending| pending.move_id()),
+        Some(PECK)
+    );
+
+    assert_eq!(
+        battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap_err()
+            .error(),
+        BattleError::MoveLearnPending(PECK),
+        "an unanswered prompt refuses the next turn"
+    );
+
+    let dex = Dex::new();
+    let money = battle.trainer().expect("a trainer battle").money();
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Replace(1))
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveReplaced {
+                learned: PECK,
+                forgotten: GROWL,
+                slot: 1,
+            },
+            // The last prompt resolved releases the deferred aftermath, in
+            // upstream's order: Cmd_getmoneyreward after Cmd_getexp, then
+            // the battle's end.
+            BattleEvent::MoneyGained(money),
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert!(battle.pending_move_learn().is_none());
+    assert_eq!(
+        battle
+            .player()
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, PECK, TACKLE, LEER]
+    );
+    assert_eq!(
+        battle.player().pp_bonuses().get(1),
+        0,
+        "the forgotten move took its PP Ups with it (RemoveMonPPBonus)"
+    );
+    assert_eq!(
+        battle.player().max_pp(&dex, 1).unwrap(),
+        dex.move_data(PECK).unwrap().pp
+    );
+    assert_eq!(
+        battle
+            .resolve_move_learn(MoveLearnDecision::Decline)
+            .unwrap_err(),
+        BattleError::NoMoveLearnPending,
+        "answering twice is a caller bug, not a second decision"
+    );
+}
+
+/// A knockout that raises a prompt with a bench still waiting holds the
+/// forced send-out back too: upstream completes the level-up script — yes/no
+/// box included — in `HandleFaintedMonActions`' case 1 before case 4 runs
+/// `BattleScript_HandleFaintedMon`'s replacement
+/// (`battle_util.c:1894`-`:1951`). The `TrainerSentOut` event arrives with
+/// the answer, and the battle then plays on normally.
+#[test]
+fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on() {
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() {
+            break;
+        }
+    }
+    assert!(
+        events.contains(&BattleEvent::MoveLearnPrompt { move_id: PECK }),
+        "the first knockout's award must ask about Peck: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::TrainerSentOut { .. })),
+        "the replacement waits on the answer: {events:?}"
+    );
+    assert!(
+        battle.enemy().is_fainted(),
+        "the fainted mon is still on the field while the question is open"
+    );
+
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined { move_id: PECK },
+            BattleEvent::TrainerSentOut {
+                species: SpeciesId(TREECKO),
+                bench_remaining: 0,
+            },
+        ]
+    );
+    assert_eq!(battle.outcome(), None, "the battle is still going");
+    assert!(
+        !battle.enemy().is_fainted(),
+        "the replacement is on the field now"
+    );
+    assert!(
+        battle.take_turn(PlayerAction::UseMove(0), &mut rng).is_ok(),
+        "and the next turn is takeable again"
+    );
+}
+
+/// A chain of prompts resolves *fully* before the deferred aftermath runs:
+/// Wynaut's four level-15 learnset entries each ask in turn
+/// (`BattleScript_TryLearnMoveLoop`), and only the last answer releases the
+/// money payout and the battle's end.
+#[test]
+fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
+    /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
+    /// Counter, Mirror Coat, Safeguard, Destiny Bond (in table order).
+    const WYNAUT: u16 = 360;
+    const LEVEL_15_BLOCK: [MoveId; 4] = [MoveId(68), MoveId(243), MoveId(219), MoveId(194)];
+
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(WYNAUT)).unwrap().growth_rate;
+    let level_15 = assets::experience_for_level(growth_rate, 15).unwrap();
+    let mut player = max_iv_mon(&dex, WYNAUT, 14, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    assert!(player
+        .apply_experience(&dex, level_15 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    for _ in 0..8 {
+        let _ = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        battle.pending_move_learn().map(|pending| pending.move_id()),
+        Some(LEVEL_15_BLOCK[0]),
+        "the knockout's award must reach level 15's first entry"
+    );
+    let money = battle.trainer().expect("a trainer battle").money();
+
+    // The first three answers each surface the next question and nothing
+    // else -- no money, no outcome, no end.
+    for pair in LEVEL_15_BLOCK.windows(2) {
+        let answered = battle
+            .resolve_move_learn(MoveLearnDecision::Decline)
+            .unwrap();
+        assert_eq!(
+            answered,
+            vec![
+                BattleEvent::MoveLearnDeclined { move_id: pair[0] },
+                BattleEvent::MoveLearnPrompt { move_id: pair[1] },
+            ]
+        );
+        assert_eq!(battle.outcome(), None);
+    }
+
+    // The last answer releases the whole deferred aftermath, in order.
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[3]
+            },
+            BattleEvent::MoneyGained(money),
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert!(battle.pending_move_learn().is_none());
+}
+
+/// Every knocked-out party member pays its own boosted award, so the exp a
+/// multi-mon trainer hands over is the sum of them — pinned alongside the
+/// send-out because the two share the same faint path.
+#[test]
+fn each_knocked_out_party_member_pays_its_own_boosted_award() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
+    ];
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let first = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    // Treecko expYield 65 -> 46 -> 69.
+    assert!(first.contains(&BattleEvent::ExpGained(69)), "{first:?}");
+    let second = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    // Torchic expYield 65 as well, so the same award -- but it must be paid
+    // a *second* time rather than folded into the first.
+    assert!(second.contains(&BattleEvent::ExpGained(69)), "{second:?}");
+}
+
+/// A replacement must not act on the turn it came out: upstream settles the
+/// send-out in `HandleFaintedMonActions`, *after* both battlers' actions.
+#[test]
+fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
+    ];
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let player_hp_before = battle.player().current_hp();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: false,
+                ..
+            }
+        )),
+        "neither the fainted lead nor its replacement may land a hit: {events:?}"
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        player_hp_before,
+        "the player must take no damage on the send-out turn"
+    );
+}
+
+/// `AI_SetupFirstTurn` is the third flag `TRAINER_BRENDAN_ROUTE_103_TREECKO`
+/// carries instead of `AI_SCRIPT_CHECK_VIABILITY`. Both trainers must be
+/// constructible — the pin that this port reproduces the upstream table's
+/// inconsistency rather than normalising it.
+#[test]
+fn both_route_103_ai_flag_shapes_construct_and_play() {
+    for trainer in [MAY_ROUTE_103_MUDKIP, BRENDAN_ROUTE_103_TREECKO] {
+        let dex = Dex::new();
+        let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+        let party = vec![max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
+        let mut rng = SequenceRng::new([0; 32]);
+        let mut battle = Battle::new_trainer(dex, player, trainer, party, &mut rng)
+            .unwrap_or_else(|e| panic!("trainer {} must construct: {e}", trainer.0));
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert!(events.contains(&BattleEvent::Ended(BattleOutcome::PlayerWon)));
+    }
+}
+
+/// Losing a trainer battle is the ordinary defeat outcome: no money, no
+/// send-out, and the same deferred white-out the wild path documents.
+#[test]
+fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
+    let dex = Dex::new();
+    // A level-1 Magikarp (species 129) knowing only Tackle, against a
+    // level-100 Treecko: the rival's Pound ends it in one hit.
+    let player = max_iv_mon(&dex, 129, 1, vec![TACKLE]);
+    let party = vec![max_iv_mon(&dex, TREECKO, 100, vec![POUND, LEER])];
+
+    let mut rng = SequenceRng::new([0; 32]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        if battle.outcome().is_some() {
+            break;
+        }
+        events.extend(
+            battle
+                .take_turn(PlayerAction::UseMove(0), &mut rng)
+                .unwrap(),
+        );
+    }
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+    assert!(events.contains(&BattleEvent::Fainted { by_player: true }));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::MoneyGained(_))),
+        "a loss pays nothing"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&BattleEvent::Ended(BattleOutcome::PlayerLost))
+    );
+}
+
+/// The three construction screens `Battle::new_trainer` runs ahead of its
+/// first draw, and the fact that a rejection leaves the shared stream
+/// untouched.
+///
+/// Slash is the pin that the AI screen is genuinely *narrower* than the
+/// execution screen rather than a duplicate of it: `EFFECT_HIGH_CRITICAL` is
+/// an ordinary hit script the turn engine runs happily
+/// ([`battle::is_ordinary_hit_effect`]), but `AI_CheckViability` routes it
+/// to `AI_CV_HighCrit` (`data/battle_ai_scripts.s:1449`), a branch this slice
+/// does not model — and one that draws, so admitting it would desynchronise
+/// the shared stream rather than merely mis-score.
+#[test]
+fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    assert!(
+        battle::is_ordinary_hit_effect(dex.move_data(SLASH).unwrap().effect),
+        "Slash must be executable, or this test proves nothing"
+    );
+    let party = vec![max_iv_mon(&dex, TORCHIC, 34, vec![SCRATCH, SLASH])];
+
+    let mut rng = SequenceRng::new([]);
+    let error =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap_err();
+    assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
+}
+
+/// A trainer whose `aiFlags` set a script this slice does not run is refused
+/// outright rather than silently playing a *different* AI.
+/// `TRAINER_WINONA_1` (`include/constants/opponents.h:274`) carries
+/// `AI_SCRIPT_RISKY` on top of the three Route 103 scripts
+/// (`src/data/trainers.h:3252`).
+#[test]
+fn a_trainer_with_an_unmodelled_ai_script_is_rejected_before_any_draw() {
+    const WINONA_1: TrainerId = TrainerId(270);
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([]);
+    let error = Battle::new_trainer(dex, player, WINONA_1, rival_treecko(&Dex::new()), &mut rng)
+        .unwrap_err();
+    assert_eq!(
+        error,
+        BattleError::UnsupportedAiFlags(assets::trainers::AiFlags::RISKY),
+        "the error names only the unmodelled bit"
+    );
+}
+
+#[test]
+fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([]);
+    assert_eq!(
+        Battle::new_trainer(
+            dex.clone(),
+            player.clone(),
+            MAY_ROUTE_103_MUDKIP,
+            Vec::new(),
+            &mut rng
+        )
+        .unwrap_err(),
+        BattleError::EmptyTrainerParty(MAY_ROUTE_103_MUDKIP)
+    );
+    assert_eq!(
+        Battle::new_trainer(
+            dex,
+            player,
+            TrainerId(60_000),
+            rival_treecko(&Dex::new()),
+            &mut rng
+        )
+        .unwrap_err(),
+        BattleError::UnknownTrainer(TrainerId(60_000))
+    );
+}
+
+/// The replacement selector only runs once `HandleAction_ActionFinished` has
+/// cleared `gCurrentMove` (`pokeemerald/src/battle_util.c:657`-`:670`), ahead
+/// of `BattleTurnPassed`'s own residual pass
+/// (`pokeemerald/src/battle_main.c:3956`-`:3969`) -- see the ledger's
+/// `GetMostSuitableMonToSwitchInto` entry for what a cleared versus stale
+/// base damage does to the most-damage pass's outcome.
+#[test]
+fn a_residual_poison_knockout_scores_replacements_with_no_move_resolving() {
+    let dex = Dex::new();
+    // Chansey: pure Normal, so nothing on the bench is super effective and
+    // the selector always reaches the most-damage pass; slower than
+    // Kangaskhan, so the turn's last action -- and so the stale move -- is
+    // the player's own Mega Kick. Level 100 keeps the knockout's award from
+    // deferring the send-out behind a level-up prompt.
+    let player = max_iv_mon(&dex, CHANSEY, 100, vec![MEGA_KICK]);
+    let mut lead = max_iv_mon(&dex, KANGASKHAN, 100, vec![GROWL]);
+    lead.set_status1(Status1::Poisoned);
+    let residual = poison_residual_damage(lead.stats().max_hp);
+    lead.apply_damage(lead.stats().max_hp - residual);
+    let party = vec![
+        lead,
+        max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
+        max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let tick_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                BattleEvent::HurtByPoison {
+                    by_player: false,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("the lead must fall to the residual, not the hit: {events:?}"));
+    let sent_out_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .unwrap_or_else(|| panic!("the bench replaces the fallen lead: {events:?}"));
+    assert!(
+        tick_index < sent_out_index,
+        "the send-out is the residual pass's, not the action phase's: {events:?}"
+    );
+    assert_eq!(
+        events[sent_out_index],
+        BattleEvent::TrainerSentOut {
+            species: SpeciesId(PICHU),
+            bench_remaining: 1,
+        },
+        "a cleared gCurrentMove scores every candidate off the floor base, \
+         so Tackle's STAB keeps party-order-first Pichu: {events:?}"
+    );
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+}

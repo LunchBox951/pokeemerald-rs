@@ -1,55 +1,32 @@
-//! An OAM-equivalent regular (non-affine) sprite entry (S-2 slice 2).
+//! Sprite attributes equivalent to the GBA's object attribute memory (OAM).
 //!
-//! Ports the regular-OBJ attribute semantics of `pokeemerald/src/sprite.c`
-//! and `struct OamData` (`pokeemerald/include/gba/types.h`): each sprite has
-//! a screen position, a tile index into OBJ tile memory, a 4bpp palette bank
-//! or flat 8bpp palette, independent horizontal/vertical flip, one of the
-//! twelve regular square/wide/tall shape-size combinations (`8x8` ..
-//! `64x64`), a priority (`0..=3`), and an enabled/disabled state.
-//!
-//! Affine attributes (`OamData::affineMode`/`matrixNum`/the rotation-scale
-//! parameter) are not modelled — affine rendering is out of scope for this
-//! slice (issue #64). Every [`OamEntry`] here is a regular (non-transformed)
-//! sprite.
-//!
-//! Position wrapping is verified against `mgba/src/gba/renderers/software-obj.c`:
-//! the X coordinate is a 9-bit hardware field that is sign-extended
-//! (`x = (uint32_t)GetX << 23; x >>= 23;`), so raw values `256..511` decode
-//! to screen positions `-256..-1` rather than being clamped; the Y coordinate
-//! is a plain 8-bit field, but a sprite whose footprint would extend past
-//! scanline 255 wraps back to scanline 0 (`if (Y + height - 256 >= 0) { inY
-//! += 256; }`), so a sprite positioned near the bottom of OBJ Y-space can be
-//! drawn simultaneously at the bottom and top of the screen
-//! `(behavioral-fidelity)`.
-//!
-//! Compositing [`OamEntry`] values into pixels is
-//! [`SpriteLayer`](crate::sprite::SpriteLayer)'s job, not this module's.
+//! [`OamEntry`] stores a sprite's position, tile and palette selection,
+//! dimensions, priority, display mode, and optional affine transform.
+//! [`SpriteLayer`](crate::sprite::SpriteLayer) composites entries into pixels.
 
 use crate::tile::BitDepth;
 
-/// The three regular (non-affine) GBA OBJ shapes. Shape value `3` is
-/// hardware-reserved and has no representable dimensions, so it is not
-/// modelled — every [`ObjShape`] is a valid, sized shape.
+/// A sprite footprint's width-to-height relationship.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjShape {
-    /// Equal width and height (`8x8`, `16x16`, `32x32`, `64x64`).
+    /// Equal width and height.
     Square,
-    /// Wider than tall (`16x8`, `32x8`, `32x16`, `64x32`).
+    /// Wider than tall.
     Horizontal,
-    /// Taller than wide (`8x16`, `8x32`, `16x32`, `32x64`).
+    /// Taller than wide.
     Vertical,
 }
 
-/// Pixel `(width, height)` for a regular OBJ `(shape, size)` pair.
-///
-/// Transcribed from the standard GBA OBJ shape/size table (independently
-/// verified against `mgba/src/gba/video.c`'s `GBAVideoObjSizes[shape*4 +
-/// size]`) — a data table, not upstream source, so porting it verbatim is
-/// the intended (`no-verbatim`) use: translating a table of constants is
-/// fine. `size` is masked to 2 bits, so this never panics.
+const OBJ_SIZE_MASK: u8 = 0b11;
+const OBJ_PRIORITY_MASK: u8 = 0b11;
+const PALETTE_BANK_MASK: u8 = 0b1111;
+const AFFINE_MATRIX_INDEX_MASK: u8 = 0b1_1111;
+const TILE_INDEX_MASK: u16 = 0b11_1111_1111;
+
+/// Returns the pixel dimensions for a shape and two-bit size index.
 #[must_use]
 pub const fn obj_dimensions(shape: ObjShape, size: u8) -> (usize, usize) {
-    match (shape, size & 0x3) {
+    match (shape, size & OBJ_SIZE_MASK) {
         (ObjShape::Square, 0) => (8, 8),
         (ObjShape::Square, 1) => (16, 16),
         (ObjShape::Square, 2) => (32, 32),
@@ -65,14 +42,48 @@ pub const fn obj_dimensions(shape: ObjShape, size: u8) -> (usize, usize) {
     }
 }
 
-/// One regular (non-affine) OAM-equivalent sprite entry.
+/// How a sprite contributes to the composed frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ObjMode {
+    /// Draws opaque texels without forcing an effect.
+    #[default]
+    Normal,
+    /// Forces alpha blending with an eligible pixel behind the sprite.
+    SemiTransparent,
+    /// Contributes only to the object-window mask and does not draw color.
+    Window,
+}
+
+/// A sprite's transform and bounding-box mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AffineMode {
+    /// Uses horizontal and vertical flip instead of an affine matrix.
+    Regular,
+    /// Applies a matrix within the sprite's ordinary bounding box.
+    /// Horizontal and vertical flip fields are ignored.
+    Affine {
+        /// Index into the 32 [`AffineMatrix`](crate::affine::AffineMatrix) slots.
+        matrix_num: u8,
+    },
+    /// Applies a matrix within a bounding box twice the sprite's dimensions.
+    /// Horizontal and vertical flip fields are ignored.
+    AffineDoubleSize {
+        /// Index into the 32 [`AffineMatrix`](crate::affine::AffineMatrix) slots.
+        matrix_num: u8,
+    },
+}
+
+/// One regular or affine sprite entry.
 ///
-/// Screen position wraps the way GBA OBJ hardware wraps it (see the module
-/// docs): `x` is a 9-bit sign-extended field (`-256..255`) and `y` is a
-/// plain 8-bit field (`0..255`) whose footprint wraps modulo 256 during
-/// compositing. `priority`, `size`, and `palette_bank` are masked to their
-/// hardware bit widths on construction, so `new` never panics.
+/// Construction masks packed fields to their hardware widths. The raw 9-bit
+/// X coordinate is sign-extended to `-256..=255`. The Y coordinate remains an
+/// unsigned 8-bit value whose sprite footprint wraps at the coordinate-space
+/// boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flip, enabled, mosaic, and half_tile_offset are independent packed sprite attributes"
+)]
 pub struct OamEntry {
     x: i16,
     y: u8,
@@ -85,27 +96,29 @@ pub struct OamEntry {
     size: u8,
     priority: u8,
     enabled: bool,
+    affine: AffineMode,
+    mode: ObjMode,
+    mosaic: bool,
+    half_tile_offset: bool,
 }
 
 impl OamEntry {
-    /// GBA OBJ Y-coordinate space wraps modulo 256 (an 8-bit field) — see
-    /// the module docs.
+    const X_FIELD_BITS: u32 = 9;
+    const X_RAW_MASK: u16 = (1 << Self::X_FIELD_BITS) - 1;
+    const X_SIGN_BIT: u16 = 1 << (Self::X_FIELD_BITS - 1);
+    const X_SPACE: i16 = 1 << Self::X_FIELD_BITS;
     pub(crate) const Y_SPACE: i32 = 256;
-    /// The 9-bit raw X-coordinate field's value range.
-    const X_RAW_MASK: u16 = 0x1FF;
-    /// The raw-to-signed sign-extension threshold: raw values at or above
-    /// this decode as negative.
-    const X_SIGN_BIT: u16 = 0x100;
 
-    /// Build a sprite entry from its decoded fields.
+    /// Builds a sprite entry from its fields.
     ///
-    /// `x_raw` is the raw 9-bit hardware X field (`0..=511`); values `256..=511`
-    /// sign-extend to screen positions `-256..=-1` (masked first, so any `u16`
-    /// is accepted). `tile_index` is masked to 10 bits, `palette_bank` and
-    /// `size` to 4 and 2 bits respectively (`size` is only meaningful within
-    /// its low 2 bits), and `priority` to 2 bits (`0..=3`).
+    /// `x_raw`, `tile_index`, `palette_bank`, `size`, and `priority` are masked
+    /// to 9, 10, 4, 2, and 2 bits respectively. The entry starts in regular
+    /// transform mode and normal display mode, with mosaic disabled.
     #[must_use]
-    #[allow(clippy::too_many_arguments)] // Mirrors OamData's field count 1:1.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument represents an independent sprite attribute"
+    )]
     pub const fn new(
         x_raw: u16,
         y: u8,
@@ -119,29 +132,78 @@ impl OamEntry {
         priority: u8,
         enabled: bool,
     ) -> Self {
-        let masked = x_raw & Self::X_RAW_MASK;
-        // `masked` is `0..=511`, so both branches round-trip through `i16`
-        // (whose range is +-32767) without truncating, wrapping, or losing
-        // a sign bit that was ever actually there.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let x = if masked & Self::X_SIGN_BIT != 0 {
-            (masked as i32 - 512) as i16
+        let masked_x = x_raw & Self::X_RAW_MASK;
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "the 9-bit masked value always fits in i16"
+        )]
+        let unsigned_x = masked_x as i16;
+        let x = if masked_x >= Self::X_SIGN_BIT {
+            unsigned_x - Self::X_SPACE
         } else {
-            masked as i16
+            unsigned_x
         };
         Self {
             x,
             y,
-            tile_index: tile_index & 0x03FF,
-            palette_bank: palette_bank & 0x0F,
+            tile_index: tile_index & TILE_INDEX_MASK,
+            palette_bank: palette_bank & PALETTE_BANK_MASK,
             bit_depth,
             h_flip,
             v_flip,
             shape,
-            size: size & 0x03,
-            priority: priority & 0x03,
+            size: size & OBJ_SIZE_MASK,
+            priority: priority & OBJ_PRIORITY_MASK,
             enabled,
+            affine: AffineMode::Regular,
+            mode: ObjMode::Normal,
+            mosaic: false,
+            half_tile_offset: false,
         }
+    }
+
+    /// Replaces the transform mode, masking its matrix index to five bits.
+    #[must_use]
+    pub const fn with_affine(mut self, mode: AffineMode) -> Self {
+        self.affine = match mode {
+            AffineMode::Regular => AffineMode::Regular,
+            AffineMode::Affine { matrix_num } => AffineMode::Affine {
+                matrix_num: matrix_num & AFFINE_MATRIX_INDEX_MASK,
+            },
+            AffineMode::AffineDoubleSize { matrix_num } => AffineMode::AffineDoubleSize {
+                matrix_num: matrix_num & AFFINE_MATRIX_INDEX_MASK,
+            },
+        };
+        self
+    }
+
+    /// Replaces the display mode.
+    #[must_use]
+    pub const fn with_mode(mut self, mode: ObjMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Enables or disables mosaic sampling for this sprite.
+    #[must_use]
+    pub const fn with_mosaic(mut self, mosaic: bool) -> Self {
+        self.mosaic = mosaic;
+        self
+    }
+
+    /// Records that this 8bpp sprite's packed OAM tile number had its low
+    /// bit set.
+    ///
+    /// A packed 8bpp OAM tile number counts 32-byte units, but
+    /// [`tile_index`](Self::tile_index) counts whole (64-byte) tiles, so
+    /// constructing this entry from a packed number divides it by two and
+    /// discards that low bit. Passing `true` here keeps the 32-byte offset
+    /// the bit represented; `Tileset::obj_pixel_index` owns what that
+    /// offset means when sampling. Has no effect on 4bpp sprites.
+    #[must_use]
+    pub const fn with_half_tile_offset(mut self, half_tile_offset: bool) -> Self {
+        self.half_tile_offset = half_tile_offset;
+        self
     }
 
     /// Decoded screen X position (`-256..=255`).
@@ -150,27 +212,26 @@ impl OamEntry {
         self.x
     }
 
-    /// Raw screen Y position (`0..=255`); wraps modulo 256 during
-    /// compositing (see the module docs).
+    /// Raw screen Y position (`0..=255`).
     #[must_use]
     pub const fn y(self) -> u8 {
         self.y
     }
 
-    /// The tile index into OBJ tile memory (`0..1024`) of this sprite's
-    /// top-left tile.
+    /// Native tile index (`0..=1023`) of the sprite's top-left tile.
     ///
-    /// This index counts *native tiles of this sprite's bit depth* in the
-    /// [`Tileset`](crate::tile::Tileset) it is paired with. Hardware `attr2`
-    /// counts 32-byte units regardless of depth, so when real OBJ assets are
-    /// wired in, a hardware 8bpp base index `N` corresponds to native tile
-    /// `N / 2` here.
+    /// The index counts [`Tileset`](crate::tile::Tileset) tiles at this
+    /// sprite's bit depth. A packed 8bpp OAM index counts 32-byte units and
+    /// must therefore be divided by two before construction; pass the
+    /// discarded low bit to
+    /// [`with_half_tile_offset`](Self::with_half_tile_offset) so its 32-byte
+    /// offset is not lost.
     #[must_use]
     pub const fn tile_index(self) -> u16 {
         self.tile_index
     }
 
-    /// The 4bpp palette bank (`0..16`); unused for 8bpp sprites.
+    /// The 4bpp palette bank (`0..=15`), unused for 8bpp sprites.
     #[must_use]
     pub const fn palette_bank(self) -> u8 {
         self.palette_bank
@@ -182,15 +243,13 @@ impl OamEntry {
         self.bit_depth
     }
 
-    /// Whether the sprite is drawn mirrored horizontally (flips the whole
-    /// sprite footprint, not each tile independently).
+    /// Whether the whole sprite is mirrored horizontally.
     #[must_use]
     pub const fn h_flip(self) -> bool {
         self.h_flip
     }
 
-    /// Whether the sprite is drawn mirrored vertically (flips the whole
-    /// sprite footprint, not each tile independently).
+    /// Whether the whole sprite is mirrored vertically.
     #[must_use]
     pub const fn v_flip(self) -> bool {
         self.v_flip
@@ -202,27 +261,113 @@ impl OamEntry {
         self.priority
     }
 
-    /// Whether this sprite participates in compositing at all. A disabled
-    /// sprite contributes no pixels.
+    /// Whether the sprite participates in compositing.
     #[must_use]
     pub const fn enabled(self) -> bool {
         self.enabled
     }
 
-    /// This sprite's pixel `(width, height)`, from its shape/size pair.
+    /// The sprite texture's pixel `(width, height)`.
+    ///
+    /// An affine sprite's on-screen [`bounding_box`](Self::bounding_box) may
+    /// be larger.
     #[must_use]
     pub const fn dimensions(self) -> (usize, usize) {
         obj_dimensions(self.shape, self.size)
+    }
+
+    /// The sprite's transform mode.
+    #[must_use]
+    pub const fn affine(self) -> AffineMode {
+        self.affine
+    }
+
+    /// The sprite's display mode.
+    #[must_use]
+    pub const fn mode(self) -> ObjMode {
+        self.mode
+    }
+
+    /// Whether mosaic sampling is enabled for the sprite.
+    #[must_use]
+    pub const fn mosaic(self) -> bool {
+        self.mosaic
+    }
+
+    /// Whether [`tile_index`](Self::tile_index) carries a 32-byte half-tile
+    /// offset, set via [`with_half_tile_offset`](Self::with_half_tile_offset).
+    #[must_use]
+    pub const fn half_tile_offset(self) -> bool {
+        self.half_tile_offset
+    }
+
+    /// Returns the footprint-local offset for a covered scanline in `0..160`.
+    ///
+    /// A footprint crossing the 8-bit Y-space boundary has one contiguous
+    /// range whose origin is shifted into negative coordinates. It is not
+    /// clipped independently at the top and bottom.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "bounding-box height is at most 128, scanlines are 0..160, and dy is checked nonnegative before conversion"
+    )]
+    pub(crate) fn vertical_offset(self, y: usize) -> Option<usize> {
+        let (_, height) = self.bounding_box();
+        let mut y0 = i32::from(self.y);
+        if y0 + height as i32 > Self::Y_SPACE {
+            y0 -= Self::Y_SPACE;
+        }
+        let dy = y as i32 - y0;
+        if dy < 0 || dy as usize >= height {
+            None
+        } else {
+            Some(dy as usize)
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn covers_scanline(self, y: usize) -> bool {
+        self.vertical_offset(y).is_some()
+    }
+
+    /// Returns the on-screen bounding-box `(width, height)`.
+    ///
+    /// Double-size affine sprites use twice the texture dimensions; other
+    /// modes use the texture dimensions unchanged.
+    #[must_use]
+    pub const fn bounding_box(self) -> (usize, usize) {
+        let (w, h) = self.dimensions();
+        match self.affine {
+            AffineMode::AffineDoubleSize { .. } => (w * 2, h * 2),
+            AffineMode::Regular | AffineMode::Affine { .. } => (w, h),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{obj_dimensions, OamEntry, ObjShape};
+    use super::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
     use crate::tile::BitDepth;
 
+    // The packed field widths the hardware requires, pinned here instead of
+    // read back from the production masks so that widening a mask fails these
+    // tests rather than moving with them.
+    const TILE_INDEX_FIELD_BITS: u16 = 10;
+    const PALETTE_BANK_FIELD_BITS: u8 = 4;
+    const OBJ_SIZE_FIELD_BITS: u8 = 2;
+    const OBJ_PRIORITY_FIELD_BITS: u8 = 2;
+    const AFFINE_MATRIX_INDEX_FIELD_BITS: u8 = 5;
+
+    const MAX_TILE_INDEX: u16 = (1 << TILE_INDEX_FIELD_BITS) - 1;
+    const MAX_PALETTE_BANK: u8 = (1 << PALETTE_BANK_FIELD_BITS) - 1;
+    const MAX_OBJ_SIZE: u8 = (1 << OBJ_SIZE_FIELD_BITS) - 1;
+    const MAX_OBJ_PRIORITY: u8 = (1 << OBJ_PRIORITY_FIELD_BITS) - 1;
+    const MAX_AFFINE_MATRIX_INDEX: u8 = (1 << AFFINE_MATRIX_INDEX_FIELD_BITS) - 1;
+
     #[test]
-    fn obj_dimensions_matches_the_gba_obj_size_table() {
+    fn obj_dimensions_matches_the_shape_size_table() {
         assert_eq!(obj_dimensions(ObjShape::Square, 0), (8, 8));
         assert_eq!(obj_dimensions(ObjShape::Square, 3), (64, 64));
         assert_eq!(obj_dimensions(ObjShape::Horizontal, 0), (16, 8));
@@ -233,10 +378,17 @@ mod tests {
 
     #[test]
     fn obj_dimensions_masks_size_to_2_bits() {
-        // size=7 masks to 3, same as size=3.
+        let first_bit_outside_size_field = MAX_OBJ_SIZE + 1;
         assert_eq!(
-            obj_dimensions(ObjShape::Square, 7),
-            obj_dimensions(ObjShape::Square, 3)
+            obj_dimensions(
+                ObjShape::Square,
+                MAX_OBJ_SIZE | first_bit_outside_size_field
+            ),
+            (64, 64)
+        );
+        assert_eq!(
+            obj_dimensions(ObjShape::Square, first_bit_outside_size_field),
+            (8, 8)
         );
     }
 
@@ -250,7 +402,7 @@ mod tests {
             false,
             false,
             ObjShape::Square,
-            0, // 8x8
+            0,
             0,
             enabled,
         )
@@ -258,18 +410,17 @@ mod tests {
 
     #[test]
     fn new_decodes_the_9bit_x_field_as_sign_extended() {
-        // Raw 0 -> x=0. Raw 256 (bit 8 set) -> x=-256. Raw 511 -> x=-1.
         assert_eq!(entry(0, 0, true).x(), 0);
         assert_eq!(entry(256, 0, true).x(), -256);
         assert_eq!(entry(511, 0, true).x(), -1);
-        // Raw 496 -> masked 496 (0x1F0), bit 8 set -> 496-512 = -16.
         assert_eq!(entry(496, 0, true).x(), -16);
     }
 
     #[test]
     fn new_masks_x_raw_to_9_bits_before_sign_extension() {
-        // 0x300 (768) & 0x1FF = 0x100 (256) -> x = -256, same as raw 256.
-        assert_eq!(entry(0x300, 0, true).x(), entry(256, 0, true).x());
+        let high_bit_outside_x_field = OamEntry::X_RAW_MASK + 1;
+        let raw_x = high_bit_outside_x_field | OamEntry::X_SIGN_BIT;
+        assert_eq!(entry(raw_x, 0, true).x(), entry(256, 0, true).x());
     }
 
     #[test]
@@ -287,9 +438,94 @@ mod tests {
             0xFF,
             true,
         );
-        assert_eq!(e.tile_index(), 0x03FF);
-        assert_eq!(e.palette_bank(), 0x0F);
-        assert_eq!(e.priority(), 0x03);
-        assert_eq!(e.dimensions(), obj_dimensions(ObjShape::Square, 0x03));
+        assert_eq!(e.tile_index(), MAX_TILE_INDEX);
+        assert_eq!(e.palette_bank(), MAX_PALETTE_BANK);
+        assert_eq!(e.priority(), MAX_OBJ_PRIORITY);
+        assert_eq!(e.dimensions(), (64, 64));
+    }
+
+    #[test]
+    fn new_defaults_to_regular_affine_mode() {
+        assert_eq!(entry(0, 0, true).affine(), AffineMode::Regular);
+    }
+
+    #[test]
+    fn with_affine_masks_matrix_num_to_5_bits() {
+        let e = entry(0, 0, true).with_affine(AffineMode::Affine { matrix_num: 0xFF });
+        assert_eq!(
+            e.affine(),
+            AffineMode::Affine {
+                matrix_num: MAX_AFFINE_MATRIX_INDEX
+            }
+        );
+
+        let e = entry(0, 0, true).with_affine(AffineMode::AffineDoubleSize { matrix_num: 0xFF });
+        assert_eq!(
+            e.affine(),
+            AffineMode::AffineDoubleSize {
+                matrix_num: MAX_AFFINE_MATRIX_INDEX
+            }
+        );
+    }
+
+    #[test]
+    fn bounding_box_matches_dimensions_for_regular_and_plain_affine() {
+        let regular = entry(0, 0, true);
+        assert_eq!(regular.bounding_box(), regular.dimensions());
+
+        let affine = entry(0, 0, true).with_affine(AffineMode::Affine { matrix_num: 3 });
+        assert_eq!(affine.bounding_box(), affine.dimensions());
+    }
+
+    #[test]
+    fn new_defaults_to_normal_obj_mode_and_no_mosaic() {
+        let e = entry(0, 0, true);
+        assert_eq!(e.mode(), ObjMode::Normal);
+        assert!(!e.mosaic());
+    }
+
+    #[test]
+    fn with_mode_and_with_mosaic_are_independent_builders() {
+        let e = entry(0, 0, true)
+            .with_mode(ObjMode::SemiTransparent)
+            .with_mosaic(true);
+        assert_eq!(e.mode(), ObjMode::SemiTransparent);
+        assert!(e.mosaic());
+
+        let window = entry(0, 0, true).with_mode(ObjMode::Window);
+        assert_eq!(window.mode(), ObjMode::Window);
+        assert!(!window.mosaic());
+    }
+
+    #[test]
+    fn new_defaults_half_tile_offset_to_false_and_with_half_tile_offset_sets_it() {
+        let e = entry(0, 0, true);
+        assert!(!e.half_tile_offset());
+
+        let with_offset = e.with_half_tile_offset(true);
+        assert!(with_offset.half_tile_offset());
+        // Independent of the entry's other builders.
+        assert_eq!(with_offset.mode(), ObjMode::Normal);
+        assert!(!with_offset.mosaic());
+    }
+
+    #[test]
+    fn bounding_box_doubles_for_affine_double_size() {
+        let e = OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            1,
+            0,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 });
+        assert_eq!(e.dimensions(), (16, 16));
+        assert_eq!(e.bounding_box(), (32, 32));
     }
 }

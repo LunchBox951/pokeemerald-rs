@@ -1,14 +1,14 @@
-//! Audio output device (S-1): opens the default output device — or a
+//! Audio output device: opens the default output device — or a
 //! headless-friendly null backend for tests/CI, since CI runners have no
 //! audio device — and streams PCM pulled from a [`crate::ring`] ring buffer
-//! that the future `audio` crate (M4A sequence engine, S-3) fills from its
-//! own thread.
+//! that its caller fills with the `audio` crate's rendered M4A output (in
+//! practice the integration crate's frame-driven music player).
 //!
-//! `cpal` is owner-approved for exactly this crate and exactly this use
-//! (Discussion #78): open the default output device, one stream, a
-//! ring-buffer callback. No decoding, no effects — see [`Resampler`] below
-//! for the one deliberate exception (bridging a sample-rate mismatch is
-//! format adaptation, not an effect).
+//! `cpal` is owner-approved for exactly this crate and exactly this use:
+//! open the default output device, one stream, a ring-buffer callback. No
+//! decoding, no effects — see [`Resampler`] below for the one deliberate
+//! exception (bridging a sample-rate mismatch is format adaptation, not an
+//! effect).
 //!
 //! ## Design
 //!
@@ -16,25 +16,25 @@
 //!   samples (cpal's most portable format, and natural headroom for
 //!   downstream mixing). If the device's negotiated stream format is `i16`
 //!   instead (common on Linux/ALSA), the device callback converts on the
-//!   way out; the ring buffer and the `audio` crate's producer API never
-//!   need to know.
+//!   way out; the ring buffer and its producers never need to know.
 //! - **Sample rate**: [`AudioOutput::M4A_MIXER_RATE`] (13379 Hz, the rate
 //!   upstream's M4A engine actually renders PCM at — see the const's docs) is
 //!   always the ring buffer's nominal rate; the `audio` crate renders at this
 //!   rate unconditionally. Real output devices are 44.1/48 kHz and virtually
 //!   never advertise 13379 Hz, so a [`crate::resample::Resampler`] linearly
 //!   interpolating from nominal to the device's actual rate inside the
-//!   callback (see [`Source::Resampled`]) is the common path. Direct 1:1
-//!   streaming (see [`Source::Direct`]) only happens when a device supports
+//!   callback (see `Source::Resampled`) is the common path. Direct 1:1
+//!   streaming (see `Source::Direct`) only happens when a device supports
 //!   13379 Hz exactly, or for the null backend.
 //! - **Channels**: fixed at [`AudioOutput::CHANNELS`] (stereo), matching the
 //!   GBA's Direct Sound A/B stereo output. A device with no stereo output
 //!   config at all is out of scope and reported as
 //!   [`PlatformError::UnsupportedAudioConfig`].
-//! - **Underruns**: [`Source::fill`] always fills its output buffer
+//! - **Underruns**: `Source::fill` always fills its output buffer
 //!   completely; any shortfall is silence, counted via
-//!   [`crate::ring::Consumer::fill`]'s single-lock bulk drain (see
-//!   `crate::ring` and `crate::resample`) for later use by V-5 audio checks.
+//!   [`crate::ring::Consumer::fill`]'s non-blocking bulk drain (see
+//!   `crate::ring` and `crate::resample`) so audio-health checks can
+//!   observe shortfalls.
 //! - **Stream health**: underruns cover the producer-outran-consumer case,
 //!   but a `cpal` stream can also fail asynchronously (device disconnect,
 //!   driver error) on its own callback thread. Those are counted separately
@@ -43,7 +43,9 @@
 //!
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
-//! touch `cpal` directly. The ring buffer and resampler — the logic that
+//! touch `cpal` directly. Both take their cpal calls behind
+//! [`OutputDevice`], so each stage's error mapping is testable against a
+//! fake that opens no device. The ring buffer and resampler — the logic that
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
@@ -59,7 +61,7 @@ use crate::ring::{ring_buffer, Consumer, Producer};
 /// Either play ring-buffer samples straight through, or bridge a sample-rate
 /// mismatch via [`Resampler`] — see the module docs.
 ///
-/// Both variants bottom out in [`crate::ring::Consumer::fill`]'s single-lock
+/// Both variants bottom out in [`crate::ring::Consumer::fill`]'s non-blocking
 /// bulk drain, so the underrun-safe behaviour tested against the null backend
 /// below is exactly what the real device callback runs.
 enum Source {
@@ -84,8 +86,7 @@ enum Backend {
 }
 
 /// An owned audio-output subsystem: opens (at most) one output stream and
-/// exposes a [`Producer`] handle the future `audio` crate fills from another
-/// thread.
+/// exposes a [`Producer`] handle its caller fills with rendered PCM.
 ///
 /// No global state: every [`AudioOutput`] owns its own device/stream (or
 /// null stand-in) and ring buffer. Dropping it tears the backend down
@@ -106,12 +107,15 @@ pub struct AudioOutput {
     /// stream's error closure; a nonzero value means the stream is unhealthy.
     /// Always zero for the null backend, which owns no `cpal` stream.
     stream_errors: Arc<AtomicU64>,
+    /// `max_buffer_frames` of the negotiated config; `0` for the null backend
+    /// and for a device advertising no concrete range.
+    max_callback_frames: usize,
 }
 
 impl AudioOutput {
     /// The rate upstream's M4A engine actually renders PCM at — the nominal
-    /// producer contract for the ring buffer and the future `audio` crate
-    /// (S-3), which render against exactly this rate.
+    /// producer contract for the ring buffer and the `audio` crate, which
+    /// renders at exactly this rate.
     ///
     /// Derived from `pokeemerald/src/m4a.c`: `m4aSoundInit` selects
     /// `SOUND_MODE_FREQ_13379` (m4a.c:79), and `SoundInit` calls
@@ -145,11 +149,15 @@ impl AudioOutput {
     /// # Errors
     ///
     /// - [`PlatformError::NoAudioDevice`] if there is no default output
-    ///   device (headless CI, no audio hardware, no driver running).
+    ///   device, or the one the host named cannot be reached at all
+    ///   (headless CI, no audio hardware, no driver running) — see
+    ///   [`classify_query_error`].
     /// - [`PlatformError::UnsupportedAudioConfig`] if the device has no
     ///   usable stereo output configuration.
-    /// - [`PlatformError::Audio`] if `cpal` fails to query the device or
-    ///   build the stream.
+    /// - [`PlatformError::Audio`] if `cpal` fails to query a reachable
+    ///   device, or fails to build the stream. A device lost *after* the
+    ///   query stays here rather than collapsing into `NoAudioDevice`: the
+    ///   device was real, so losing it is a failure, not a headless run.
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
         let host = cpal::default_host();
         let device = host
@@ -186,6 +194,7 @@ impl AudioOutput {
             channels,
             running: false,
             stream_errors,
+            max_callback_frames: max_buffer_frames(&config),
         })
     }
 
@@ -206,6 +215,7 @@ impl AudioOutput {
             channels: Self::CHANNELS,
             running: false,
             stream_errors: Arc::new(AtomicU64::new(0)),
+            max_callback_frames: 0,
         }
     }
 
@@ -268,8 +278,22 @@ impl AudioOutput {
         self.channels
     }
 
-    /// A cloneable producer handle for the future `audio` crate to fill
-    /// from another thread. See [`crate::ring::Producer`].
+    /// The largest callback buffer the device advertises, in frames at
+    /// [`Self::device_sample_rate`], or `None` when it advertises no concrete
+    /// range. It bounds one callback period only, not the periods the host
+    /// keeps queued behind it, so a caller waiting for the tail to sound
+    /// derives its wait from this bound rather than sleeping it verbatim.
+    /// Always `None` for the null backend.
+    #[must_use]
+    pub fn max_callback_frames(&self) -> Option<usize> {
+        match self.max_callback_frames {
+            0 => None,
+            frames => Some(frames),
+        }
+    }
+
+    /// A cloneable producer handle for filling the ring buffer with
+    /// rendered PCM. See [`crate::ring::Producer`].
     #[must_use]
     pub fn producer(&self) -> Producer {
         self.producer.clone()
@@ -294,6 +318,13 @@ impl AudioOutput {
     #[must_use]
     pub fn stream_errors(&self) -> u64 {
         self.stream_errors.load(Ordering::Relaxed)
+    }
+
+    /// Records one asynchronous stream error as the `cpal` error closure in
+    /// `build_stream` does, so a null-backend test can stand in for a device.
+    #[doc(hidden)]
+    pub fn record_stream_error_for_test(&self) {
+        self.stream_errors.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
@@ -336,20 +367,19 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 /// (`f32`/`i16`) — a `u16`-only config whose rate range happens to cover the
 /// target must never win, or `AudioOutput::open` would hard-fail instead of
 /// resampling on an available openable format. Each openable candidate is then
-/// scored by `(format rank, distance)`, where `distance` is how far `target`
+/// scored by `(distance, format rank)`, where `distance` is how far `target`
 /// must be clamped to land inside the candidate's `[min, max]` range, and the
 /// minimum is chosen:
 ///
-/// - **Format rank is primary** ([`sample_format_rank`]: `f32` before `i16`).
-///   `f32` is the ring buffer's native format, and the 13379 Hz target is
-///   resampled on real hardware either way (see the module docs), so an `f32`
-///   config is preferred even over an `i16` config that sits nearer the
-///   target — the extra resample distance costs nothing the direct path saves.
-/// - **Distance is secondary**: within one format the nearest achievable rate
-///   wins, regardless of the order the device enumerated its ranges. A range
-///   that covers `target` has distance `0`, so exact support is naturally
-///   preferred over resampling within the same format. Ties (equal rank and
-///   distance) keep device-enumeration order.
+/// - **Distance is primary**: the nearest achievable rate wins, regardless of
+///   format or the order the device enumerated its ranges. A range that
+///   covers `target` has distance `0`, so an exact-rate candidate always
+///   beats one that needs resampling — exact support is what lets
+///   `AudioOutput::open` build [`Source::Direct`] instead of a [`Resampler`]
+///   (see the module docs), so it must not lose to a mere format preference.
+/// - **Format rank is the tie-break** ([`sample_format_rank`]: `f32` before
+///   `i16`) between candidates equally far from `target`. Ties (equal
+///   distance and rank) keep device-enumeration order.
 ///
 /// Returns the chosen candidate's index into `candidates` and the rate to
 /// open it at, or `None` if no openable candidate exists.
@@ -362,19 +392,20 @@ fn select_config(
         .map(|i| {
             let (format, min, max) = candidates[i];
             let rate = target.clamp(min, max);
-            (i, rate, sample_format_rank(format), rate.abs_diff(target))
+            (i, rate, rate.abs_diff(target), sample_format_rank(format))
         })
-        .min_by_key(|&(_, _, rank, distance)| (rank, distance))
+        .min_by_key(|&(_, _, distance, rank)| (distance, rank))
         .map(|(i, rate, _, _)| (i, rate))
 }
 
 /// Pick a stereo output configuration for [`AudioOutput::M4A_MIXER_RATE`],
 /// delegating the selection policy to [`select_config`] and mapping the
 /// chosen candidate back to a concrete [`cpal::SupportedStreamConfig`].
-fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, PlatformError> {
+fn negotiate<D: OutputDevice>(device: &D) -> Result<cpal::SupportedStreamConfig, PlatformError> {
     let candidates: Vec<cpal::SupportedStreamConfigRange> = device
         .supported_output_configs()
-        .map_err(PlatformError::from)?
+        .map_err(classify_query_error)?
+        .into_iter()
         .filter(|c| c.channels() == AudioOutput::CHANNELS)
         .collect();
 
@@ -386,6 +417,31 @@ fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, Platf
     let (index, rate) = select_config(&tuples, AudioOutput::M4A_MIXER_RATE)
         .ok_or(PlatformError::UnsupportedAudioConfig)?;
     Ok(candidates[index].with_sample_rate(rate))
+}
+
+/// Map a failure of the *device query* stage, the first thing
+/// [`AudioOutput::open`] asks of the device the host named.
+///
+/// A host names a device it cannot actually reach: `cpal`'s ALSA backend
+/// hands out the logical `default` device whether or not any sound hardware
+/// or sound server exists, so a headless Linux box with `libasound`
+/// installed gets past the device lookup and only fails here. For every
+/// caller that is the same fact [`PlatformError::NoAudioDevice`] states, so
+/// it is reported as such.
+///
+/// Only this stage collapses that way. A device that answered the query is
+/// real, so [`build_stream`] losing it afterwards stays on the plain
+/// [`From<cpal::Error>`] mapping to [`PlatformError::Audio`] — a caller that
+/// tolerates a headless run must still hear about a device that vanished
+/// mid-setup. `a_lost_device_after_the_query_stays_an_audio_error` pins that
+/// split against a real device.
+fn classify_query_error(err: cpal::Error) -> PlatformError {
+    match err.kind() {
+        cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
+            PlatformError::NoAudioDevice
+        }
+        _ => PlatformError::Audio(err),
+    }
 }
 
 /// The device's largest advertised callback size in frames, or `0` if the
@@ -417,11 +473,78 @@ fn f32_to_i16(sample: f32) -> i16 {
 /// so pre-sizing still spares the real-time thread an allocation.
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
 
+/// Fill `data` (interleaved `i16`) from `source`, converting through the
+/// fixed `scratch` buffer in `scratch.len()`-bounded chunks rather than
+/// resizing it — so a `data` larger than `scratch` still never allocates.
+/// `scratch` is never resized here, regardless of how `data` compares to it.
+fn fill_i16_output(source: &mut Source, scratch: &mut [f32], data: &mut [i16]) {
+    for dst_chunk in data.chunks_mut(scratch.len()) {
+        let buf = &mut scratch[..dst_chunk.len()];
+        source.fill(buf);
+        for (dst, &sample) in dst_chunk.iter_mut().zip(buf.iter()) {
+            *dst = f32_to_i16(sample);
+        }
+    }
+}
+
+/// The two `cpal` calls [`AudioOutput::open`] makes against a device,
+/// behind a seam.
+///
+/// Which of the two failed is the whole distinction [`classify_query_error`]
+/// draws: a query failure means the device was never reachable, a build
+/// failure means a reachable device was lost. Naming both calls lets tests
+/// force either failure with no audio device present, which the module
+/// docs' headless rule requires.
+///
+/// [`negotiate`] collects the query's configurations anyway, so the seam
+/// hands back a `Vec` rather than `cpal`'s associated iterator type: it
+/// costs nothing and spares every implementor an associated type.
+trait OutputDevice {
+    fn supported_output_configs(
+        &self,
+    ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error>;
+
+    fn build_output_stream<T, D, E>(
+        &self,
+        config: cpal::StreamConfig,
+        data_callback: D,
+        error_callback: E,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<cpal::Stream, cpal::Error>
+    where
+        T: cpal::SizedSample,
+        D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
+        E: FnMut(cpal::Error) + Send + 'static;
+}
+
+impl OutputDevice for cpal::Device {
+    fn supported_output_configs(
+        &self,
+    ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
+        DeviceTrait::supported_output_configs(self).map(Iterator::collect)
+    }
+
+    fn build_output_stream<T, D, E>(
+        &self,
+        config: cpal::StreamConfig,
+        data_callback: D,
+        error_callback: E,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<cpal::Stream, cpal::Error>
+    where
+        T: cpal::SizedSample,
+        D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
+        E: FnMut(cpal::Error) + Send + 'static,
+    {
+        DeviceTrait::build_output_stream(self, config, data_callback, error_callback, timeout)
+    }
+}
+
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
 /// the counter [`AudioOutput::stream_errors`] reads.
-fn build_stream(
-    device: &cpal::Device,
+fn build_stream<D: OutputDevice>(
+    device: &D,
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
@@ -445,31 +568,23 @@ fn build_stream(
             None,
         )?,
         cpal::SampleFormat::I16 => {
-            // Pre-size the `f32` scratch buffer here, off the real-time
-            // callback thread, so steady-state callbacks never allocate. The
-            // device's largest supported buffer (in frames) bounds any
-            // `data.len()` cpal will hand us; multiply by the channel count
-            // for interleaved samples. A device that reports no buffer-size
-            // range gets a generous fallback. The in-callback `resize` below
-            // then only reallocates in the last-resort case where cpal hands
-            // us a buffer larger than anything advertised.
+            // Fix the `f32` scratch buffer's length here, off the real-time
+            // callback thread, so the callback never resizes it. The
+            // device's largest supported buffer (in frames) bounds the
+            // scratch size; multiply by the channel count for interleaved
+            // samples. A device that reports no buffer-size range gets a
+            // generous fallback. The callback below processes `data` in
+            // `scratch`-sized chunks instead, so a `data` cpal hands us
+            // larger than anything advertised still never grows `scratch`.
             let max_frames = max_buffer_frames(config);
             let channels = usize::from(config.channels());
             let scratch_capacity = max_frames
                 .saturating_mul(channels)
                 .max(DEFAULT_SCRATCH_SAMPLES);
-            let mut scratch: Vec<f32> = Vec::with_capacity(scratch_capacity);
+            let mut scratch: Vec<f32> = vec![0.0; scratch_capacity];
             device.build_output_stream(
                 stream_config,
-                move |data: &mut [i16], _| {
-                    if scratch.len() != data.len() {
-                        scratch.resize(data.len(), 0.0);
-                    }
-                    source.fill(&mut scratch);
-                    for (dst, &sample) in data.iter_mut().zip(scratch.iter()) {
-                        *dst = f32_to_i16(sample);
-                    }
-                },
+                move |data: &mut [i16], _| fill_i16_output(&mut source, &mut scratch, data),
                 err_fn,
                 None,
             )?
@@ -491,6 +606,113 @@ fn build_stream(
 mod tests {
     use super::*;
 
+    /// A device whose every `cpal` call fails with one chosen kind.
+    ///
+    /// Only the failure arms are needed: both boundary tests below drive a
+    /// stage that fails, and `cpal::Stream` has no public constructor to
+    /// return from a success arm anyway.
+    struct FailingDevice(cpal::ErrorKind);
+
+    impl OutputDevice for FailingDevice {
+        fn supported_output_configs(
+            &self,
+        ) -> Result<Vec<cpal::SupportedStreamConfigRange>, cpal::Error> {
+            Err(cpal::Error::new(self.0))
+        }
+
+        fn build_output_stream<T, D, E>(
+            &self,
+            _config: cpal::StreamConfig,
+            _data_callback: D,
+            _error_callback: E,
+            _timeout: Option<std::time::Duration>,
+        ) -> Result<cpal::Stream, cpal::Error>
+        where
+            T: cpal::SizedSample,
+            D: FnMut(&mut [T], &cpal::OutputCallbackInfo) + Send + 'static,
+            E: FnMut(cpal::Error) + Send + 'static,
+        {
+            Err(cpal::Error::new(self.0))
+        }
+    }
+
+    /// On the ALSA backend a headless box reaches the logical `default`
+    /// device and only fails once queried, so an unreachable device arrives
+    /// as a `cpal` error from [`negotiate`]'s query rather than as an absent
+    /// `default_output_device`.
+    #[test]
+    fn an_unreachable_device_or_host_fails_the_query_as_no_audio_device() {
+        for kind in [
+            cpal::ErrorKind::DeviceNotAvailable,
+            cpal::ErrorKind::HostUnavailable,
+        ] {
+            let Err(err) = negotiate(&FailingDevice(kind)) else {
+                panic!("the fake device always fails the query");
+            };
+            assert!(
+                matches!(err, PlatformError::NoAudioDevice),
+                "{kind:?} must read as no audio device, got: {err:?}"
+            );
+        }
+    }
+
+    /// The other half: a device that answered is real, so every other way
+    /// the query can fail stays an audio error a caller must report.
+    #[test]
+    fn any_other_query_failure_stays_an_audio_error() {
+        for kind in [
+            cpal::ErrorKind::UnsupportedConfig,
+            cpal::ErrorKind::PermissionDenied,
+            cpal::ErrorKind::DeviceBusy,
+            cpal::ErrorKind::BackendError,
+        ] {
+            let Err(err) = negotiate(&FailingDevice(kind)) else {
+                panic!("the fake device always fails the query");
+            };
+            assert!(
+                matches!(err, PlatformError::Audio(_)),
+                "{kind:?} must stay an audio error, got: {err:?}"
+            );
+        }
+    }
+
+    /// The stream-build stage is deliberately *not* routed through
+    /// [`classify_query_error`]: a device that answered the query is real,
+    /// so losing it before the build is a failure, not a headless run.
+    ///
+    /// Driven through the production [`build_stream`], so it pins that call
+    /// site's mapping rather than the `From` impl's, and forces the exact
+    /// `DeviceNotAvailable` the query stage folds into `NoAudioDevice`. Both
+    /// sample-format arms are covered, since each makes its own build call.
+    #[test]
+    fn a_lost_device_after_the_query_stays_an_audio_error() {
+        for format in [cpal::SampleFormat::F32, cpal::SampleFormat::I16] {
+            let config = cpal::SupportedStreamConfig::new(
+                AudioOutput::CHANNELS,
+                48_000,
+                cpal::SupportedBufferSize::Unknown,
+                format,
+            );
+            let (_producer, consumer) = ring_buffer(64);
+
+            // `cpal::Stream` is not `Debug`, so the failure is matched out
+            // by hand rather than via `expect_err`.
+            let Err(err) = build_stream(
+                &FailingDevice(cpal::ErrorKind::DeviceNotAvailable),
+                &config,
+                Source::Direct(consumer),
+                Arc::new(AtomicU64::new(0)),
+            ) else {
+                panic!("the fake device always fails the build");
+            };
+
+            assert!(
+                matches!(err, PlatformError::Audio(_)),
+                "a {format:?} build-stage failure must stay an audio error, got: {err:?}"
+            );
+        }
+    }
+
     #[test]
     fn null_backend_reports_the_m4a_mixer_rate() {
         let output = AudioOutput::null(256);
@@ -499,6 +721,7 @@ mod tests {
         assert_eq!(output.sample_rate(), 13_379);
         assert_eq!(output.sample_rate(), AudioOutput::M4A_MIXER_RATE);
         assert_eq!(output.device_sample_rate(), AudioOutput::M4A_MIXER_RATE);
+        assert_eq!(output.max_callback_frames(), None);
         assert_eq!(output.channels(), AudioOutput::CHANNELS);
         assert!(!output.is_running());
         // The null backend owns no cpal stream, so it never records errors.
@@ -562,6 +785,36 @@ mod tests {
     }
 
     #[test]
+    fn fill_i16_output_processes_data_larger_than_scratch_in_bounded_chunks() {
+        // `scratch` here is deliberately smaller than `data`, standing in
+        // for a callback larger than the device advertised: every sample
+        // must still be converted, processed in `scratch.len()`-sized
+        // chunks, without ever resizing `scratch`.
+        let (producer, consumer) = ring_buffer(64);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..20, exactly representable in f32"
+        )]
+        let pcm: Vec<f32> = (0..20_i32).map(|i| (i as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), 20);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; 6];
+        let scratch_capacity = scratch.len();
+        let mut data = vec![0_i16; 20];
+
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        assert_eq!(
+            scratch.len(),
+            scratch_capacity,
+            "fill_i16_output must never grow scratch"
+        );
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
     fn sample_format_rank_prefers_f32_then_i16() {
         assert!(
             sample_format_rank(cpal::SampleFormat::F32)
@@ -598,17 +851,16 @@ mod tests {
     }
 
     #[test]
-    fn select_config_prefers_f32_over_a_nearer_i16() {
-        // Policy: format rank is primary, distance secondary. f32 does not
-        // cover the target and must be resampled from 44100; i16 covers 13379
-        // exactly (distance 0). f32 still wins — it is the ring buffer's native
-        // format and the target is resampled on real hardware either way, so
-        // the extra resample distance costs nothing the direct path would save.
+    fn select_config_prefers_an_exact_i16_rate_over_a_resampled_f32() {
+        // An exact-rate config reaches Source::Direct with no resampling, so
+        // it must win over an off-rate config even in the ring buffer's
+        // preferred format: i16 at 13379 exactly (distance 0) beats f32 at
+        // 44100 (distance 30721) despite f32 ranking ahead on format alone.
         let candidates = [
-            (cpal::SampleFormat::F32, 44_100, 48_000), // rank 0, distance 30721
-            (cpal::SampleFormat::I16, 8_000, 48_000),  // rank 1, distance 0
+            (cpal::SampleFormat::F32, 44_100, 48_000), // distance 30721
+            (cpal::SampleFormat::I16, 8_000, 48_000),  // covers 13379 exactly
         ];
-        assert_eq!(select_config(&candidates, 13_379), Some((0, 44_100)));
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 13_379)));
     }
 
     #[test]
