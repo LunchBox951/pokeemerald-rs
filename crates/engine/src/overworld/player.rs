@@ -168,19 +168,9 @@ impl PlayerState {
         self.turn_frames_remaining = 0;
     }
 
-    /// Returns whether the standing tile currently holds field input the way
-    /// upstream's `forcedMove` does: `FieldGetPlayerInput` computes it from
-    /// the standing behavior and skips the whole button block --
-    /// `TryArrowWarp`, `TryStartInteractionScript`, `TryDoorWarp`, and
-    /// `pressedStartButton` alike -- while it is set
-    /// (`field_control_avatar.c:92-113`), ahead of and independent of
-    /// [`step`](Self::step)'s own collision-blocked fallthrough (issue #926).
-    ///
-    /// `True` only once *this* `PlayerState` has itself completed a step
-    /// onto a forced-movement tile (`try_start_resolved_step`),
-    /// never merely because [`new`](Self::new) placed it there: a warp
-    /// arrival or a resumed save that lands on such a tile starts
-    /// controllable instead (see `new`'s doc for why).
+    /// Returns whether the standing tile holds field input as upstream's
+    /// `forcedMove` does (`field_control_avatar.c:92-113`). Armed only by a
+    /// completed step onto a forced-movement tile, never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
@@ -488,14 +478,10 @@ impl PlayerState {
 }
 
 /// Returns the direction a standing behavior's `ForcedMovement_*` handler
-/// would test for collision, per `field_player_avatar.c:486-580`. `None`
-/// means the handler never collision-checks at all: the Secret Base mats
-/// start a custom task and unconditionally return `TRUE` (`:555-565`), so
-/// they never fall through to the keypad. Ice and the Trick House Puzzle 8
-/// floor continue `movement_direction` rather than a direction fixed by the
-/// id (`ForcedMovement_Slip`, `:473-484`); muddy slope's narrower
-/// northward-at-top-speed exception is not modelled, since bike speed isn't
-/// ported.
+/// tests for collision (`field_player_avatar.c:486-580`); `None` for the
+/// Secret Base mats, which never collision-check (`:555-565`). Ice and the
+/// Trick House Puzzle 8 floor continue `movement_direction`
+/// (`ForcedMovement_Slip`, `:473-484`).
 fn forced_movement_direction(
     standing_behavior: u8,
     movement_direction: Direction,
