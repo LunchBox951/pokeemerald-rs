@@ -554,9 +554,9 @@ impl OverworldPhase {
     /// there -- so a later frame's `self.scene.runtime(self.map_id, ...)`
     /// never renders one map's layout against another map's collision/event
     /// data -- `pending_landing` is re-latched onto `to_position` so the
-    /// door-warp drain-frame check (`OverworldPhase::step`'s "Warp timing"
-    /// section) evaluates against the *entered* map once this step's walk
-    /// animation finishes, and `tick` keeps running -- upstream's
+    /// door-warp check (`OverworldPhase::step`'s "Frame shape" section)
+    /// evaluates against the *entered* map on the call after this step's
+    /// walk animation drains, and `tick` keeps running -- upstream's
     /// `LoadMapFromCameraTransition` re-inits only the secondary tileset
     /// counter (`InitSecondaryTilesetAnimation`, `overworld.c:815`), never
     /// the primary one `tick` models (see the body comment). Unlike
@@ -629,8 +629,8 @@ impl OverworldPhase {
         // Re-latch onto the entered map's own coordinate space (doc comment
         // above) -- the crossing step's landing tile, in the same role
         // `OverworldPhase::step`'s ordinary `Advanced` branch already
-        // latches for a door check 16 frames from now, once the walk
-        // animation drains.
+        // latches for a door check on the call after the walk animation
+        // drains.
         self.pending_landing = Some(to_position);
         // Deliberately no `self.tick = 0` here: `LoadMapFromCameraTransition`
         // (`src/overworld.c:784-825`) never calls `InitTilesetAnimations` --

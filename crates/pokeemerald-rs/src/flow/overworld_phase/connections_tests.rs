@@ -231,7 +231,8 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 ///
 /// **`(10, 19)` is also the Route 101 rescue coord-event trigger tile (issue
 /// #231).** That is deliberate and left alone: this phase is built with no
-/// `party_lead`, so the trigger fires on the crossing's drain frame and
+/// `party_lead`, so the trigger fires on the call after the crossing's
+/// drain frame and
 /// `super::first_battle_trigger`'s own `begin_first_battle` takes its
 /// documented "no party mon yet" arm -- it consumes the trigger
 /// (`VAR_ROUTE101_STATE` goes to `2`, upstream's mid-cutscene ordering) and
@@ -284,14 +285,22 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
         phase.pending_landing,
         Some((10, 19)),
         "the crossing step's landing tile re-latches in the *entered* map's coordinate \
-         space, so the drain-frame door check evaluates against Route 101"
+         space, so the landing call's door check evaluates against Route 101"
     );
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
     }
     assert_eq!(
+        phase.pending_landing,
+        Some((10, 19)),
+        "call 16 only drains the walk animation -- the landing is still outstanding \
+         (issue #1039)"
+    );
+    phase.step(ButtonState::new());
+    assert_eq!(
         phase.pending_landing, None,
-        "the drain frame consumed the latched landing (Route 101's south edge is no door)"
+        "call 17's field input consumed the latched landing (Route 101's south edge is \
+         no door)"
     );
 
     assert_eq!(
@@ -445,6 +454,10 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
             phase.step(ButtonState::new());
         }
     }
+    // The last of those four landings is still outstanding: its `tookStep`
+    // ordering belongs to the call after the animation drains (issue #1039),
+    // and no fifth held frame follows it here to supply one.
+    phase.step(ButtonState::new());
     assert_eq!(phase.player.position(), (10, 0));
     assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
     assert_eq!(
@@ -468,8 +481,15 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     }
     assert_eq!(
         phase.wild.immunity_steps(),
+        0,
+        "call 16 only drains the crossing step's walk animation -- its \
+         CheckStandardWildEncounter ordering has not run yet (issue #1039)"
+    );
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.wild.immunity_steps(),
         1,
-        "the crossing step's own landing then spends the first of the four it was just \
+        "call 17's field input then spends the first of the four the crossing had just \
          granted -- upstream reaches CheckStandardWildEncounter for that step too, the \
          crossing having happened inside it"
     );

@@ -194,8 +194,10 @@ fn advance_first_battle_clears_stat_stages_after_growl_modifies_them() {
     );
 }
 
+// A lead whose only move is spent is forced to Struggle at selection
+// (`AreAllMovesUnusable`) and the fight plays to an outcome.
 #[test]
-fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
+fn advance_first_battle_forces_struggle_and_fights_to_an_outcome_when_the_lead_has_no_pp() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
     let starting_pp = lead.moves()[FIRST_MOVE_SLOT].pp;
@@ -205,28 +207,43 @@ fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
             .expect("draining a slot that still has PP");
     }
     assert_eq!(lead.moves()[FIRST_MOVE_SLOT].pp, 0);
+    let lead_max_hp = lead.stats().max_hp;
 
     let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("construction must succeed");
     let mut battle_slot = Some(battle);
     let mut player_lead = None;
-
-    let outcome = advance_first_battle(&mut battle_slot, &mut player_lead, &mut rng);
+    let mut turn_count = 0;
+    let outcome = loop {
+        if let Some(outcome) = advance_first_battle(&mut battle_slot, &mut player_lead, &mut rng) {
+            break outcome;
+        }
+        turn_count += 1;
+        assert!(
+            turn_count < MAX_HEADLESS_TURNS,
+            "the headless driver must terminate"
+        );
+    };
 
     assert!(
-        outcome.is_none(),
-        "an aborted turn has no battle outcome: {outcome:?}"
+        matches!(outcome, BattleOutcome::PlayerWon | BattleOutcome::WildFled),
+        "a level-50 Treecko's forced Struggle is never going to lose to a \
+         level-2 Zigzagoon: got {outcome:?}"
     );
-    assert!(
-        battle_slot.is_none(),
-        "an aborted battle must empty its slot"
-    );
-    let lead = player_lead.expect("an aborted battle writes the player lead back");
+    assert!(battle_slot.is_none(), "a terminal battle empties its slot");
+    let lead = player_lead.expect("a terminal battle writes the player lead back");
     assert_eq!(lead.species(), TREECKO);
     assert_eq!(
         lead.moves()[FIRST_MOVE_SLOT].pp,
         0,
-        "the drained PP persists into the overworld copy"
+        "a fully spent slot is never restored mid-battle, and a forced \
+         Struggle spends no PP of its own \
+         (`pokeemerald/src/battle_util.c:100`-`:104`)"
+    );
+    assert!(
+        lead.current_hp() < lead_max_hp,
+        "Struggle's own recoil must have cost the lead some HP: {}/{lead_max_hp}",
+        lead.current_hp()
     );
     assert_eq!(lead.stages(), battle::StatStages::default());
 }

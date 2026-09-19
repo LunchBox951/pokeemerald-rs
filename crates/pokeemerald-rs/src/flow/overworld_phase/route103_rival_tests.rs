@@ -810,6 +810,9 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
     for _ in 0..engine::overworld::WALK_FRAMES_PER_TILE {
         route_101.step(held(Buttons::RIGHT));
     }
+    // The completed step is observed on the call after the walk animation
+    // drains (`OverworldPhase::step`'s "Frame shape" docs, issue #1039).
+    route_101.step(held(Buttons::RIGHT));
     assert!(
         route_101.first_battle.is_some(),
         "setup: the rescue trigger must fire"

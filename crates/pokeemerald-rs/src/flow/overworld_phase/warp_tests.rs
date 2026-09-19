@@ -25,13 +25,18 @@ use platform::{ButtonState, Buttons};
 /// with `save1.location`/`save1.pos` kept coherent with the new map
 /// ([`OverworldPhase::warp_to`]'s own doc comment).
 ///
-/// The transition is also asserted to happen on the frame the step
-/// *finishes*, not the frame it starts: upstream gates
+/// The transition is also asserted to happen on the frame *after* the
+/// step's animation finishes, not the frame it starts: upstream gates
 /// `TryStartWarpEventScript` on `input->tookStep`, set only at
 /// `T_TILE_CENTER` while `runningState == MOVING`
-/// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`). Here that
-/// is [`WALK_FRAMES_PER_TILE`] (16) frames after the step began
-/// ([`OverworldPhase::step`]'s "Warp timing" section).
+/// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`), and
+/// `T_TILE_CENTER` needs `PlayerCheckIfAnimFinishedOrInactive`
+/// (`field_player_avatar.c:901-915`) to see a `heldMovementFinished` that
+/// only the *previous* frame's CB2 `AnimateSprites` could have set
+/// (`main.c:188-195`, `overworld.c:1438-1469`). So the animation's last
+/// frame is call [`WALK_FRAMES_PER_TILE`] (16), and the warp fires on
+/// call 17 ([`OverworldPhase::step`]'s "Frame shape" and "Warp timing"
+/// sections, issue #1039).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
@@ -56,9 +61,11 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         "the warp must not fire on the frame the step begins"
     );
 
-    // Frames 2..=15: drain the walk animation with no input held. The
-    // map must stay put for every one of them.
-    for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
+    // Frames 2..=16: drain the walk animation with no input held. The
+    // map must stay put for every one of them, including frame 16, which
+    // is upstream's *last* animation frame rather than its `tookStep`
+    // frame (issue #1039).
+    for frame in 2..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(ButtonState::new());
         assert_eq!(
             phase.map_id, bedroom,
@@ -66,20 +73,25 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
              {WALK_FRAMES_PER_TILE})"
         );
         assert!(
-            phase.player.in_transit(),
-            "the walk animation must still be draining on frame {frame}"
+            phase.mid_step(),
+            "the step must still be outstanding on frame {frame}"
         );
     }
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
 
-    // Frame 16: `PlayerState::tick` drains the animation -- upstream's
-    // `tookStep` frame, and the one the warp fires on.
+    // Frame 17: the first call whose start-of-frame field input observes
+    // the completed step -- upstream's `tookStep` frame, and the one the
+    // warp fires on.
     phase.step(ButtonState::new());
 
     let destination = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     assert_eq!(
         phase.map_id, destination,
         "the completed step onto the stair warp must rebind to the 1F map \
-         on the 16th frame"
+         on the 17th frame"
     );
     assert_eq!(
         phase.player.position(),
@@ -145,12 +157,18 @@ fn stepping_onto_an_ordinary_tile_does_not_warp() {
     // The spawn tile IS the warp tile; step south, away from it, onto
     // ordinary bedroom floor (already exercised, collision-wise, by
     // `overworld_movement_input_turns_the_player`). Drive the whole
-    // 16-frame walk animation, since the trigger check only runs on the
-    // frame it drains (`OverworldPhase::step`'s "Warp timing" section).
+    // 16-frame walk animation *and* the 17th call that observes the
+    // completed step, since the trigger check runs at the start of that
+    // call (`OverworldPhase::step`'s "Warp timing" section, issue #1039).
     phase.step(held(Buttons::DOWN));
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
     }
+    assert!(
+        !phase.player.in_transit(),
+        "16 frames must fully drain the step this test relies on completing"
+    );
+    phase.step(ButtonState::new());
 
     assert_eq!(
         phase.map_id, starting_map,
@@ -162,8 +180,8 @@ fn stepping_onto_an_ordinary_tile_does_not_warp() {
         "the step itself must still have landed"
     );
     assert!(
-        !phase.player.in_transit(),
-        "16 frames must fully drain the step this test relies on completing"
+        !phase.mid_step(),
+        "the 17th call must have consumed the completed landing"
     );
 }
 
@@ -370,11 +388,13 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
         "the arrow warp must not fire on the frame the step begins"
     );
 
-    // Frames 2..16: keep Down held (upstream polls the *currently held*
+    // Frames 2..=16: keep Down held (upstream polls the *currently held*
     // direction, so releasing it would be a different test) while the walk
-    // animation drains. The player is mid-crossing throughout, so the poll
-    // stays closed and the map must not change.
-    for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
+    // animation drains. The step is still outstanding throughout --
+    // including frame 16, which is upstream's last animation frame rather
+    // than the frame its CB1 observes the landing (issue #1039) -- so the
+    // poll stays closed and the map must not change.
+    for frame in 2..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             phase.map_id, ONE_F,
@@ -382,17 +402,17 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
         );
     }
 
-    // Frame 16: the walk animation drains, the player is at rest on the
-    // doormat, Down is still held and still equals their facing -- so
-    // `TryArrowWarp`'s gate opens and the doormat's own
-    // MB_SOUTH_ARROW_WARP behavior matches it.
+    // Frame 17: the first call whose start-of-frame field input sees the
+    // player at rest on the doormat, with Down still held and still equal
+    // to their facing -- so `TryArrowWarp`'s gate opens and the doormat's
+    // own MB_SOUTH_ARROW_WARP behavior matches it.
     phase.step(held(Buttons::DOWN));
 
     let destination = assets::MapId("MAP_LITTLEROOT_TOWN");
     assert_eq!(
         phase.map_id, destination,
-        "the doormat's arrow-warp trigger must fire on the first at-rest \
-         frame with South still held"
+        "the doormat's arrow-warp trigger must fire on the first call whose \
+         field input observes the completed step with South still held"
     );
     assert_eq!(
         phase.player.position(),
@@ -435,21 +455,101 @@ fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
         "the step onto the doormat must still commit"
     );
 
-    // Down released from frame 2 onward, including the frame the crossing
-    // completes -- the same 16-step count as the holding sibling, so the
-    // released-button case lands exactly on the drain frame.
+    // Down released from frame 2 onward, through the frame the crossing
+    // completes and on into the 17th call that observes it -- the same
+    // frame count as the holding sibling, so the released-button case
+    // lands exactly on the landing call.
     for _ in 2..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(ButtonState::new());
     }
-
     assert!(
         !phase.player.in_transit(),
         "the crossing must have fully drained -- otherwise this test proves nothing"
+    );
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.mid_step(),
+        "the 17th call must have consumed the completed landing -- otherwise \
+         this test proves nothing"
     );
     assert_eq!(
         phase.map_id, ONE_F,
         "a released direction must not warp: upstream needs heldDirection on \
          the frame the check runs, not merely a completed step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the player stays standing on the doormat"
+    );
+}
+
+/// Issue #1039 regression, the frame-boundary half: the arrow-warp poll
+/// belongs to the call whose *start-of-frame* field input observes the
+/// completed step, not to the call that drains the walk animation.
+///
+/// Upstream's `T_TILE_CENTER` needs `PlayerCheckIfAnimFinishedOrInactive`
+/// (`field_player_avatar.c:901-915`) to see a `heldMovementFinished` that
+/// only the previous frame's CB2 `AnimateSprites` could have set
+/// (`main.c:188-195`, `overworld.c:1438-1469`), so call 16 is the last
+/// animation frame and `input->heldDirection` is still false on it
+/// (`field_control_avatar.c:95-112`). A player who holds South all the way
+/// through call 16 and releases it on call 17 therefore has no held
+/// direction on the only call whose `TryArrowWarp` gate is open
+/// (`:164-168`), and must stay standing on the doormat.
+///
+/// Same setup and same button pattern as
+/// [`walking_onto_the_doormat_holding_south_exits_through_the_front_door`]
+/// up to and including call 16; the only difference is the release on call
+/// 17. A regression that polls the arrow warp after movement on the drain
+/// call -- the pre-#1039 shape -- exits the house here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn releasing_the_direction_on_the_landing_call_does_not_exit_through_the_doormat() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    let mut phase = one_f_phase((8, 7), Direction::South);
+
+    // Calls 1..=16: Down held for the whole crossing, exactly as the
+    // exiting sibling holds it. Call 16 drains the animation, and the map
+    // must still not have changed on it.
+    for frame in 1..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "the warp must not fire while the step is still outstanding \
+             (frame {frame} of {WALK_FRAMES_PER_TILE})"
+        );
+    }
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the crossing must have landed on the doormat"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+    assert!(
+        phase.mid_step(),
+        "but the completed step is still outstanding -- it is call 17's \
+         field input that observes it (issue #1039)"
+    );
+
+    // Call 17: the poll's only open frame, and Down is released on it.
+    phase.step(ButtonState::new());
+
+    assert!(
+        !phase.mid_step(),
+        "call 17 must have consumed the completed landing -- otherwise this \
+         test proves nothing"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "no direction is held on the frame the arrow-warp gate is open, so \
+         the doormat must not exit the house"
     );
     assert_eq!(
         phase.player.position(),
@@ -612,9 +712,9 @@ fn arriving_on_the_doormat_does_not_immediately_warp_back_out() {
 /// tests cover the predicate directly; this is the phase-level version:
 /// landing on the doormat by walking sideways past it must not exit).
 ///
-/// Right is held for the whole crossing *and* past it, so the every-frame
-/// poll really does run with a direction held that equals the player's
-/// facing -- only the id-vs-direction match denies it.
+/// Right is held for the whole crossing *and* through the landing call
+/// after it, so the poll really does run with a direction held that equals
+/// the player's facing -- only the id-vs-direction match denies it.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_onto_the_doormat_facing_east_does_not_exit() {
@@ -625,15 +725,34 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
 
     phase.step(held(Buttons::RIGHT));
     assert_eq!(phase.player.position(), (8, 8));
-    // 15 more frames: the crossing drains on the last of them, and Right is
-    // still held on that frame -- so the arrow poll really does run, with a
-    // held direction that equals the player's facing.
+    // 15 more frames: the crossing's animation drains on the last of them.
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::RIGHT));
     }
     assert!(
         !phase.player.in_transit(),
-        "the crossing must have fully drained on the last frame Right was polled"
+        "the crossing's animation must have fully drained by frame \
+         {WALK_FRAMES_PER_TILE}"
+    );
+    assert!(
+        phase.mid_step(),
+        "but call 17's field input is what observes the landing (issue #1039)"
+    );
+    assert_eq!(phase.player.position(), (8, 8));
+
+    // Call 17: the poll's open frame, with Right still held and still equal
+    // to the player's East facing -- so only the id-vs-direction match can
+    // deny the doormat here.
+    phase.step(held(Buttons::RIGHT));
+    // The landing call is also where a still-held direction starts the next
+    // crossing (`OverworldPhase::step`'s "Frame shape" docs), so the doormat
+    // landing is observed here as *replaced*, not as cleared -- `mid_step()`
+    // is true again on the way out of this call, for the new crossing.
+    assert_ne!(
+        phase.pending_landing,
+        Some((8, 8)),
+        "call 17 must have consumed the doormat landing -- otherwise the \
+         poll never ran and this test proves nothing"
     );
 
     assert_eq!(
@@ -641,7 +760,6 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
         "the doormat must not fire while facing East -- only South matches \
          its MB_SOUTH_ARROW_WARP behavior"
     );
-    assert_eq!(phase.player.position(), (8, 8));
 }
 
 /// The issue #194 acceptance test: upstream runs `ProcessPlayerFieldInput`

@@ -16,11 +16,11 @@
 //! Every script is exact-length, so a pipeline that draws one time too many
 //! panics rather than quietly desynchronising.
 
-use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
-use assets::{MoveId, SpeciesId};
+use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
+use assets::MoveId;
 use battle::{
-    Battle, BattleEvent, BattleOutcome, BattlePokemon, ChangedStat, Dex, PlayerAction, StatStage,
-    StatStages, Volatiles,
+    Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
+    Volatiles,
 };
 
 /// `MOVE_TACKLE`.
@@ -51,18 +51,6 @@ const TENTACOOL: u16 = 72;
 /// `SPECIES_MACHOP`: bulky and slow enough at level 20 to survive a charged
 /// Shock Wave and still move second.
 const MACHOP: u16 = 66;
-
-/// A mon with an explicit personality, for the one fixture that needs
-/// ability slot 1 (`personality & 1`).
-fn mon_with_personality(
-    dex: &Dex,
-    species: u16,
-    level: u8,
-    personality: u32,
-    moves: Vec<MoveId>,
-) -> BattlePokemon {
-    BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, personality, moves).unwrap()
-}
 
 /// The `gHpDealt`-not-`gBattleMoveDamage` contract, driven through a real
 /// turn: an overkill Absorb heals half the HP the target **actually lost**
@@ -162,7 +150,7 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
     player.apply_damage(30);
     // Personality 1 is odd, so `CreateBoxMon`'s `abilityNum = personality &
     // 1` selects Tentacool's slot-1 ability, Liquid Ooze.
-    let enemy = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
     let enemy_max_hp = enemy.stats().max_hp;
     assert_eq!(enemy.ability(), battle::LIQUID_OOZE);
     assert_eq!(enemy_max_hp, 20, "Tentacool's level-5 maximum HP");
@@ -228,7 +216,7 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     player.stages_mut().attack = StatStage::new(2).unwrap();
     player.volatiles_mut().set_focus_energy();
     player.volatiles_mut().set_charge();
-    let mut enemy = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    let mut enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
     enemy.stages_mut().attack = StatStage::new(2).unwrap();
     enemy.volatiles_mut().set_focus_energy();
     enemy.volatiles_mut().set_charge();
@@ -291,7 +279,7 @@ fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
     // ooze recoil will take, and the player's Tentacool -- holding Liquid
     // Ooze in ability slot 1 -- is `BS_TARGET`, at its natural full HP
     // exactly as the target was in the test above.
-    let player = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    let player = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
     let mut enemy = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let enemy_max_hp = enemy.stats().max_hp;
     enemy.apply_damage(enemy_max_hp - 6);

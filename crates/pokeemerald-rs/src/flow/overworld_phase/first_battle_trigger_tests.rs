@@ -182,9 +182,51 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
 }
 
+/// Overrides the trigger tile's own cell to the transition elevation `0`
+/// (wildcard rule owned by [`engine::overworld::MapRuntime::coord_events_at`]'s
+/// docs), so the rescue trigger must fire at the retained elevation rather
+/// than the landed cell's collision one.
+#[test]
+fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            25,
+            25,
+            trigger_tile_cell(),
+            engine::overworld::collision::ELEVATION_TRANSITION,
+        ),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert_eq!(
+        phase.player.elevation(),
+        engine::overworld::collision::ELEVATION_TRANSITION,
+        "setup: the landed cell's collision elevation must be the transition value"
+    );
+    assert_eq!(
+        phase.player.previous_elevation(),
+        ROUTE_101_TRIGGER_ELEVATION,
+        "setup: the retained elevation must still be the ordinary one the player walked in with"
+    );
+    assert!(
+        phase.first_battle.is_some(),
+        "the rescue trigger must fire at the retained elevation even though the tile's own \
+         collision elevation is the transition value"
+    );
+}
+
 /// Route 101's second rescue coord event must trigger independently of the
 /// first one: approach `(11, 19)` from the east and exercise the complete
-/// [`OverworldPhase::step`] path through the landing drain frame.
+/// [`OverworldPhase::step`] path through the landing call the coord event
+/// runs on.
 #[test]
 fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_first_battle() {
     let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -197,8 +239,15 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::LEFT));
     }
-
     assert_eq!(phase.player.position(), (11, 19));
+    assert!(
+        phase.first_battle.is_none(),
+        "the call that drains the walk animation is upstream's last CB2 animation \
+         frame -- nothing has looked at the completed step yet (issue #1039)"
+    );
+
+    // Upstream's `T_TILE_CENTER` CB1, where `TryStartCoordEventScript` runs.
+    phase.step(ButtonState::new());
     assert!(
         phase.first_battle.is_some(),
         "the second rescue coord event must start the scripted first battle"
@@ -536,10 +585,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
     // `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
     // uses, continued one step further into the rescue trigger.
     for _ in 0..3 {
-        phase.step(held(Buttons::UP));
-        for _ in 1..WALK_FRAMES_PER_TILE {
-            phase.step(ButtonState::new());
-        }
+        walk_one_tile(&mut phase, Buttons::UP);
     }
 
     assert_eq!(
@@ -923,6 +969,13 @@ fn the_prevent_exit_coord_events_never_start_a_battle() {
         phase.player.position(),
         (tx, ty - 1),
         "setup: the step must land on the PreventExitSouth coord event"
+    );
+    // The landing call is where `TryStartCoordEventScript` runs, so the
+    // negative below is only worth anything once it has (issue #1039).
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.mid_step(),
+        "setup: the landing call must have consumed the completed step"
     );
     assert!(
         phase.first_battle.is_none(),

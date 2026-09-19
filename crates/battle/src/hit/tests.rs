@@ -1,4 +1,7 @@
-use super::{damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
+use super::{
+    classify_accuracy_failure, damage_core, ensure_resolvable, is_ordinary_hit_effect, resolve_hit,
+    HitOutcome,
+};
 use crate::ability::{suppresses_critical_hits, GUTS, HUGE_POWER, MARVEL_SCALE, PURE_POWER};
 use crate::accuracy::always_hits;
 use crate::damage::{base_damage, DamageInput, MoveCategory, Weather, STRUGGLE};
@@ -73,6 +76,9 @@ const MAX_IVS: Ivs = Ivs {
 
 const ACCURACY_HIT_DRAW: u16 = 0;
 const TACKLE_MISS_DRAW: u16 = 95;
+/// Slam's plain 75 threshold misses roll 75 for an attacker with no accuracy
+/// modifier.
+const SLAM_MISS_DRAW: u16 = 75;
 /// Slam's plain 75 threshold misses roll 91, but Compound Eyes raises the
 /// threshold to `75 * 130 / 100 = 97`, which the same roll clears
 /// (`battle_script_commands.c:1152-1153`).
@@ -1162,4 +1168,110 @@ fn hustle_never_touches_a_special_move() {
     .unwrap();
 
     assert_eq!(hustle_outcome.outcome, control_outcome.outcome);
+}
+
+/// `Cmd_accuracycheck` does not stop a failed roll at the generic miss: it
+/// calls `CheckWonderGuardAndLevitate` (`battle_script_commands.c:1175-1186`),
+/// whose type scan flags `MOVE_RESULT_DOESNT_AFFECT_FOE` (`:1454-1469`) so
+/// `Cmd_resultmessage` prints `STRINGID_ITDOESNTAFFECT` instead of
+/// `STRINGID_ATTACKMISSED` (`:2055-2059`).
+#[test]
+fn a_failed_accuracy_roll_against_an_immune_target_reports_the_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![TACKLE]);
+    let ghost_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    let mut rng = SequenceRng::new([TACKLE_MISS_DRAW]);
+
+    let resolution =
+        resolve_hit(&dex, TACKLE, &attacker, &ghost_defender, false, &mut rng).unwrap();
+
+    assert_eq!(resolution.outcome, HitOutcome::NoEffect);
+    assert!(!resolution.poisons_defender);
+    assert_eq!(
+        rng.draws(),
+        1,
+        "reclassifying the failed roll must not spend a critical, damage, or \
+         effect-chance draw"
+    );
+}
+
+/// The same helper lets Wonder Guard overwrite `MISS_TYPE` with
+/// `B_MSG_AVOIDED_DMG` (`battle_script_commands.c:1490-1497`), which
+/// `Cmd_resultmessage` prefers over the typing-immunity message
+/// (`:2055-2059`). Slam is Normal, so Shedinja's Ghost half makes it
+/// independently immune as well: Wonder Guard still wins.
+#[test]
+fn a_failed_accuracy_roll_against_wonder_guard_reports_wonder_guard() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 20, vec![SLAM]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 20, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new([SLAM_MISS_DRAW]);
+
+    let resolution =
+        resolve_hit(&dex, SLAM, &attacker, &shedinja_defender, false, &mut rng).unwrap();
+
+    assert_eq!(resolution.outcome, HitOutcome::WonderGuardBlocked);
+    assert_eq!(
+        rng.draws(),
+        1,
+        "reclassifying the failed roll must not spend a critical, damage, or \
+         effect-chance draw"
+    );
+}
+
+/// Levitate returns from `CheckWonderGuardAndLevitate` before its type scan
+/// (`battle_script_commands.c:1435-1443`), so a Ground move that misses a
+/// Levitate holder reports the Ground miss. No admitted ordinary-hit move is
+/// Ground-type, so the classifier is exercised directly here; the multi-hit
+/// pipeline covers it end to end with Bone Rush.
+#[test]
+fn a_failed_accuracy_roll_against_levitate_reports_levitate() {
+    let dex = Dex::new();
+    let levitate_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    assert_eq!(levitate_defender.ability(), AbilityId::LEVITATE);
+
+    assert_eq!(
+        classify_accuracy_failure(&dex, BONE_RUSH, &levitate_defender),
+        Ok(HitOutcome::LevitateBlocked)
+    );
+}
+
+/// `CheckWonderGuardAndLevitate` returns immediately for Struggle and for a
+/// zero-power move (`battle_script_commands.c:1432-1433`), leaving
+/// `MISS_TYPE = B_MSG_MISSED`. An ordinary matchup keeps the generic miss for
+/// the same reason: nothing in the helper matches.
+#[test]
+fn struggle_and_an_ordinary_matchup_keep_the_generic_miss() {
+    let dex = Dex::new();
+    let ghost_defender = mon(&dex, GASTLY, 20, vec![TACKLE]);
+    let ordinary_defender = mon(&dex, SQUIRTLE, 20, vec![TACKLE]);
+
+    assert_eq!(
+        classify_accuracy_failure(&dex, STRUGGLE, &ghost_defender),
+        Ok(HitOutcome::Miss),
+        "Struggle skips the helper entirely, so its immunity never applies"
+    );
+    assert_eq!(
+        classify_accuracy_failure(&dex, GROWL, &ordinary_defender),
+        Ok(HitOutcome::Miss),
+        "a zero-power move returns before the helper reads any typing"
+    );
+    assert_eq!(
+        classify_accuracy_failure(&dex, TACKLE, &ordinary_defender),
+        Ok(HitOutcome::Miss)
+    );
+}
+
+/// The classifier reads only move data and the defender, so it can never
+/// disturb the draw sequence the failed accuracy roll left behind.
+#[test]
+fn classifying_a_failed_roll_rejects_an_unknown_move_and_draws_nothing() {
+    let dex = Dex::new();
+    let defender = mon(&dex, SQUIRTLE, 20, vec![TACKLE]);
+
+    assert_eq!(
+        classify_accuracy_failure(&dex, UNKNOWN_MOVE, &defender),
+        Err(BattleError::UnknownMove(UNKNOWN_MOVE))
+    );
 }
