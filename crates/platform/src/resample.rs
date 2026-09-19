@@ -61,12 +61,22 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
     // source-frame ceiling: `bound` alone only caps output frames, and
     // `step` (source_rate / device_rate) is unbounded when a device
     // advertises an extreme rate.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
+    )]
     let source_cap = MAX_SCRATCH_SOURCE_FRAMES as f64;
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "bound is capped at DEFAULT_MAX_OUTPUT_FRAMES, exactly representable in f64"
+    )]
     let bound_frames = bound as f64;
     let bound = if step > 0.0 && bound_frames * step > source_cap {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "floored and clamped at 1.0, so the value is a non-negative integer below source_cap"
+        )]
         let step_limited = (source_cap / step).floor().max(1.0) as usize;
         bound.min(step_limited)
     } else {
@@ -82,9 +92,16 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
     // defense-in-depth bound on this pure function's own output (also
     // exercised directly by `a_rate_ratio_past_the_source_cap_still_bounds_scratch`),
     // and `Self::fill_chunk` caps its own crossings identically regardless.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "bound is capped at DEFAULT_MAX_OUTPUT_FRAMES, exactly representable in f64"
+    )]
     let crossings = (bound as f64 * step).ceil().min(source_cap);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "crossings is ceiled and clamped to source_cap, a non-negative integer"
+    )]
     let scratch_frames = 2 + crossings as usize + 1;
     (bound, scratch_frames)
 }
@@ -169,7 +186,10 @@ impl Resampler {
         // `fill_chunk` performs per chunk, which is exactly the "hard clamp"
         // `scratch_layout` documents. Reject it here instead of constructing
         // a `Resampler` whose `fill` would silently extrapolate.
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
+        )]
         let source_cap = MAX_SCRATCH_SOURCE_FRAMES as f64;
         if step > source_cap {
             return Err(PlatformError::UnsupportedResampleRatio {
