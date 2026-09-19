@@ -78,39 +78,16 @@ impl OverworldPhase {
     /// borrow" pattern -- see the module docs), then the walk-animation
     /// timer always ticks (module docs on [`super::input::advance_player_one_frame`]).
     ///
-    /// # Frame shape: CB1 field input, then CB2 animation (issue #1039)
+    /// # Frame shape
     ///
-    /// One call is one presented frame ([`crate::flow`] composes only after
-    /// this returns), and upstream's frame is `CallCallbacks` running CB1
-    /// then CB2 (`pokeemerald/src/main.c:188-195`). CB1 is
-    /// `DoCB1_Overworld`: `UpdatePlayerAvatarTransitionState`,
-    /// `FieldGetPlayerInput`, `ProcessPlayerFieldInput`, then `PlayerStep`
-    /// (`src/overworld.c:1438-1457`). The held movement *animation* is a
-    /// sprite callback CB2's `OverworldBasic` drives through
-    /// `AnimateSprites` (`:1465-1469`), after all of that.
-    ///
-    /// This method has the same two halves, in the same order: everything
-    /// below reads the stance the call *started* with and decides this
-    /// frame's field input, and only then does
-    /// [`super::input::advance_or_skip_for_preempt`] apply the frame's
-    /// movement and animation tick.
-    ///
-    /// The consequence that matters is *when a completed step is observed*.
-    /// `input->tookStep` and `input->checkStandardWildEncounter` are set
-    /// only at `gPlayerAvatar.tileTransitionState == T_TILE_CENTER`
-    /// (`src/field_control_avatar.c:116-121`), which
-    /// `UpdatePlayerAvatarTransitionState` derives from
-    /// `PlayerCheckIfAnimFinishedOrInactive`
-    /// (`src/field_player_avatar.c:901-915`) -- a `heldMovementFinished`
-    /// the *previous* frame's CB2 set. A `MOVE_SPEED_NORMAL` walk is 16
-    /// animation frames ([`engine::overworld::WALK_FRAMES_PER_TILE`],
-    /// `sStepTimes[MOVE_SPEED_NORMAL] == ARRAY_COUNT(sStep1Funcs) == 16`),
-    /// and this port's call 1 is upstream's first animation frame
-    /// (`super::input::advance_player_one_frame`'s own docs), so call 16 is
-    /// upstream's *last* animation frame and the completed step belongs to
-    /// call 17's CB1. `pending_landing` is therefore consumed at the top of
-    /// this method, from `in_transit` read before this call's movement:
-    /// call 16 leaves it latched, call 17 takes it.
+    /// One call is one presented frame: field input is decided from the
+    /// stance the call started with, then the movement tick runs, matching
+    /// CB1 (`DoCB1_Overworld`, `src/overworld.c:1438-1457`) ahead of CB2's
+    /// `AnimateSprites` (`:1465-1469`). A completed step is observed at
+    /// `T_TILE_CENTER` from the previous frame's `heldMovementFinished`
+    /// (`src/field_control_avatar.c:116-121`,
+    /// `src/field_player_avatar.c:901-915`), so a `pending_landing` latched
+    /// by the call that drains the animation is consumed by the next one.
     ///
     /// # Warp timing
     ///
