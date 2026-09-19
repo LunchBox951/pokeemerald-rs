@@ -17,14 +17,10 @@
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
 //!   `T_NOT_MOVING` (`src/field_control_avatar.c:95-101`) -- i.e. never
 //!   mid-step ([`OverworldPhase::mid_step`]).
-//! * `FieldGetPlayerInput` computes `forcedMove` from the *standing*
-//!   behavior before reading any button, and skips the whole block --
-//!   `pressedStartButton` included -- while it is set
-//!   (`src/field_control_avatar.c:92-113`, issue #926). An armed
-//!   forced-movement tile ([`engine::overworld::PlayerState::forced_movement_armed`])
-//!   is this port's counterpart, checked independently of `mid_step`
-//!   because the player can be armed while genuinely at rest between
-//!   polls -- the exact frame this gate exists for.
+//! * `FieldGetPlayerInput` returns on `forcedMove` before reading any
+//!   button (`src/field_control_avatar.c:92-113`); an armed tile
+//!   ([`engine::overworld::PlayerState::forced_movement_armed`]) is this
+//!   port's counterpart, and it can hold while the player is at rest.
 //! * A battle runs under its own main callback
 //!   (`SetMainCallback2(CB2_InitBattle)`), so `ProcessPlayerFieldInput` is
 //!   not being polled at all ([`OverworldPhase::in_battle`]).

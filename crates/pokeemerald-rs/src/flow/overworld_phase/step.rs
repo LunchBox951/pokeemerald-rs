@@ -626,16 +626,10 @@ impl OverworldPhase {
     /// the same-frame interaction, and a fresh `START` press's menu, already
     /// built if it claims the frame.
     ///
-    /// All four of those (not just the `START` menu -- `start_menu_may_open`'s
-    /// own sixth gate) are suppressed while
-    /// [`engine::overworld::PlayerState::forced_movement_armed`] holds: upstream's
-    /// `FieldGetPlayerInput` computes `forcedMove` from the standing behavior
-    /// and returns before `TryArrowWarp`, `TryStartInteractionScript`,
-    /// `TryDoorWarp`, or `pressedStartButton` read anything
-    /// (`field_control_avatar.c:92-113`, issue #926) -- this is that same
-    /// early return, reached before [`Self::step`] ever calls
-    /// [`PlayerState::step`](engine::overworld::PlayerState::step), whose own
-    /// guard is a movement-only concern.
+    /// All of them are suppressed while
+    /// [`engine::overworld::PlayerState::forced_movement_armed`] holds, as
+    /// `FieldGetPlayerInput` returns on `forcedMove` before any of its
+    /// button checks (`field_control_avatar.c:92-113`).
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,

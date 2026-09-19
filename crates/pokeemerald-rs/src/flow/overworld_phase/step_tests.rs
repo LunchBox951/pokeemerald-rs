@@ -1271,17 +1271,9 @@ fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
     );
 }
 
-/// Upstream leaves `input->pressedStartButton` unset on the `T_TILE_CENTER`
-/// CB1 that first reports the player at rest on a forced-movement tile:
-/// `FieldGetPlayerInput` computes `forcedMove` from the *standing* behavior
-/// and skips the whole button block when it is set
-/// (`pokeemerald/src/field_control_avatar.c:92-113`), so
-/// `ProcessPlayerFieldInput` never reaches its `ShowStartMenu` branch
-/// (`:180-186`). This port's counterpart of that CB1 is the first
-/// pre-movement stage that sees the player at rest on the landing tile
-/// (`warp_tests::walking_up_to_the_lab_door_enters_it_on_the_next_input_frame`'s
-/// own doc comment pins that mapping), so a fresh START there must be
-/// refused the same way (issue #926).
+/// `FieldGetPlayerInput` leaves `pressedStartButton` unset on a
+/// forced-movement tile (`pokeemerald/src/field_control_avatar.c:92-113`),
+/// so `ProcessPlayerFieldInput` never reaches `ShowStartMenu` (`:180-186`).
 #[test]
 fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
     let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
