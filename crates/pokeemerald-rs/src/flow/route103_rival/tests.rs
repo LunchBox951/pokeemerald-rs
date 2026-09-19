@@ -362,7 +362,10 @@ fn the_driver_never_attempts_to_run() {
 fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
     let mut rng = Rng::new(5);
-    let mut lead = player_mon(SpeciesId::MUDKIP, RIVAL_LEVEL, vec![TACKLE]);
+    // A second known move (Leer, left untouched) keeps this a `NoPpRemaining(0)`
+    // abort rather than the all-spent forced-Struggle diversion; the headless
+    // driver always picks slot 0.
+    let mut lead = player_mon(SpeciesId::MUDKIP, RIVAL_LEVEL, vec![TACKLE, LEER]);
     for _remaining_pp in 0..lead.moves()[HEADLESS_MOVE_SLOT].pp {
         lead.deduct_pp(HEADLESS_MOVE_SLOT).unwrap();
     }

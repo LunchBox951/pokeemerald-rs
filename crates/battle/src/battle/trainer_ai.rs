@@ -7,7 +7,7 @@
 use assets::trainers::AiFlags;
 use assets::{MoveEffect, MoveId, Type, TypeChart};
 
-use super::opponent_ai::{selectable_slot, EnemyAction};
+use super::opponent_ai::{all_known_moves_are_spent, selectable_slot, EnemyAction};
 use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab, BattleRng};
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
@@ -224,10 +224,6 @@ pub(crate) fn choose_trainer_action(
 
     let selected_slot = select_highest_scoring_move(enemy, scores.values, rng);
     Ok(EnemyAction::Move(selected_slot))
-}
-
-fn all_known_moves_are_spent(pokemon: &BattlePokemon) -> bool {
-    pokemon.moves().iter().all(|slot| slot.pp == 0)
 }
 
 fn move_slot_can_be_scored(pokemon: &BattlePokemon, slot: usize) -> bool {
