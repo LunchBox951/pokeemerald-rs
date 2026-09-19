@@ -332,6 +332,28 @@ fn temp_pack_path(name: &str) -> std::path::PathBuf {
     ))
 }
 
+/// Owns a temporary pack path and removes it on drop, so a fallible load or
+/// a failed assertion that unwinds still cleans up the scratch file.
+struct TempPackGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempPackGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPackGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn load_scene_from_pack(path: &std::path::Path) -> Result<IntroScene, super::IntroSceneError> {
     let pack = assets::pack::AssetPack::load(path)?;
     IntroScene::from_pack(&pack)
@@ -358,29 +380,30 @@ fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
 
 #[test]
 fn a_pack_missing_message_box_fails_to_build_a_scene() {
-    let path = temp_pack_path("no-message-box");
-    write_pack(&path, vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
-    let pack = assets::pack::AssetPack::load(&path).unwrap();
+    let temp_pack = TempPackGuard::new(temp_pack_path("no-message-box"));
+    write_pack(
+        temp_pack.path(),
+        vec![font_entry(TRANSPARENT_PALETTE_INDEX)],
+    );
+    let pack = assets::pack::AssetPack::load(temp_pack.path()).unwrap();
 
     let err = IntroScene::from_pack(&pack).unwrap_err();
     assert!(
         matches!(err, super::IntroSceneError::Pack(_)),
         "a pack with no message_box entry at all must fail with a Pack error, got {err:?}"
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
-    let path = temp_pack_path("regenerated");
+    let temp_pack = TempPackGuard::new(temp_pack_path("regenerated"));
 
     let mut entries = message_box_entries();
     entries.push(font_entry(DARK_GREY_GLYPH_PALETTE_INDEX));
-    write_pack(&path, entries);
+    write_pack(temp_pack.path(), entries);
 
-    let mut first =
-        load_scene_from_pack(&path).expect("the synthetic pack has both required entries");
+    let mut first = load_scene_from_pack(temp_pack.path())
+        .expect("the synthetic pack has both required entries");
     first.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&first),
@@ -390,10 +413,10 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
 
     let mut entries = message_box_entries();
     entries.push(font_entry(SHADOW_GLYPH_PALETTE_INDEX));
-    write_pack(&path, entries);
+    write_pack(temp_pack.path(), entries);
 
     let mut second =
-        load_scene_from_pack(&path).expect("the regenerated pack is still well-formed");
+        load_scene_from_pack(temp_pack.path()).expect("the regenerated pack is still well-formed");
     second.tick(NO_INPUT);
     assert_eq!(
         first_glyph_pixel(&second),
@@ -406,8 +429,34 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
         Some(DARK_GREY_GLYPH_COLOR),
         "an already-built scene must keep rendering its own owned bytes"
     );
+}
 
-    let _ = std::fs::remove_file(path);
+#[test]
+fn a_temp_pack_is_gone_after_a_filesystem_backed_test_body_unwinds() {
+    // Write and verify the pack outside `catch_unwind` so a setup failure
+    // here fails this test outright instead of being swallowed as if it
+    // were the deliberate panic below.
+    let path = temp_pack_path("unwind-cleanup");
+    write_pack(&path, vec![font_entry(TRANSPARENT_PALETTE_INDEX)]);
+    assert!(
+        path.is_file(),
+        "the synthetic pack must reach the disk first"
+    );
+
+    let result = std::panic::catch_unwind(|| {
+        // The shape of every filesystem-backed intro test: guard the
+        // already-written path, then run fallible loads and assertions.
+        // This stands in for one of those assertions failing.
+        let _temp_pack = TempPackGuard::new(path.clone());
+        panic!("a filesystem-backed intro test fails one of its assertions");
+    });
+
+    assert!(result.is_err(), "the deliberate panic must be observed");
+    assert!(
+        !path.exists(),
+        "a filesystem-backed intro test must not leave {} in the temp directory when its body unwinds",
+        path.display()
+    );
 }
 
 #[test]

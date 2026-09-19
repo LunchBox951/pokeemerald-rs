@@ -397,8 +397,15 @@ fn parse_key_split_range(operands: &[&str], table: &str) -> Result<KeySplitRange
     let [child_slot, exclusive_end_note] = operands else {
         return Err(invalid_operands());
     };
+    let child_slot = child_slot.parse::<u8>().map_err(|_| invalid_operands())?;
+    if usize::from(child_slot) >= super::VOICE_SLOT_COUNT {
+        return Err(VoiceGroupError::SplitChildSlotOutOfRange {
+            table: table.to_owned(),
+            slot: child_slot,
+        });
+    }
     Ok(KeySplitRange {
-        child_slot: child_slot.parse::<u8>().map_err(|_| invalid_operands())?,
+        child_slot,
         exclusive_end_note: exclusive_end_note
             .parse::<u8>()
             .map_err(|_| invalid_operands())?,

@@ -652,3 +652,26 @@ fn parse_link_order_marks_foreign_includes_as_barriers_in_file_order() {
 fn parse_link_order_on_empty_text_is_empty() {
     assert_eq!(parse_link_order(""), Vec::<LinkOrderItem>::new());
 }
+
+#[test]
+fn a_split_selecting_a_child_slot_past_the_last_voice_slot_is_rejected() {
+    for slot in ["128", "255"] {
+        let text = format!("keysplit demo, 0\n\tsplit {slot}, 1\n");
+        assert_eq!(
+            parse_keysplit_tables(&text).map(|tables| tables["demo"].table.clone()),
+            Err(VoiceGroupError::SplitChildSlotOutOfRange {
+                table: "demo".to_owned(),
+                slot: slot.parse().unwrap(),
+            })
+        );
+    }
+}
+
+#[test]
+fn a_split_selecting_the_last_voice_slot_is_accepted() {
+    let text = "keysplit demo, 0\n\tsplit 127, 1\n";
+    assert_eq!(
+        parse_keysplit_tables(text).map(|tables| tables["demo"].table.clone()),
+        Ok(vec![127])
+    );
+}
