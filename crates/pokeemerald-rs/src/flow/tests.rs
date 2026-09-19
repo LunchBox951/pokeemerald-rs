@@ -27,18 +27,27 @@ pub(super) fn pressed(button: Buttons) -> ButtonState {
 /// reference precisely so no test has to touch the process-wide
 /// environment that decides the real one.
 pub(super) struct TempSave {
+    dir: std::path::PathBuf,
     path: std::path::PathBuf,
 }
 
 impl TempSave {
+    /// A save in a directory of its own.
+    ///
+    /// [`engine::save::SaveFile::lock`] takes one lock per save *directory*,
+    /// so scratch saves sharing one directory would serialise on a single
+    /// lock -- and a test that removed it would strip the exclusion the
+    /// others were relying on.
     pub(super) fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-flow-{label}-{}-{:?}.sav",
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-flow-{label}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        drop(std::fs::remove_file(&path));
-        Self { path }
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
+        let path = dir.join("pokeemerald.sav");
+        Self { dir, path }
     }
 
     pub(super) fn slot(&self) -> SaveSlot {
@@ -54,7 +63,7 @@ impl TempSave {
 
 impl Drop for TempSave {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.path));
+        drop(std::fs::remove_dir_all(&self.dir));
     }
 }
 

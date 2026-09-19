@@ -295,7 +295,12 @@ pub struct CgbVoice {
 
 impl CgbVoice {
     /// Start a square-channel voice without fixed-rate DAC correction.
-    /// `sweep_byte` is valid only for channel 1.
+    /// `channel` must be [`CgbChannelNumber::Square1`] or `Square2`;
+    /// `sweep_byte` is silently dropped unless `channel` is `Square1`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is [`CgbChannelNumber::Wave`] or `Noise`.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -361,9 +366,20 @@ impl CgbVoice {
         echo_volume: u8,
         echo_length: u8,
     ) -> Self {
+        assert!(
+            matches!(
+                channel,
+                CgbChannelNumber::Square1 | CgbChannelNumber::Square2
+            ),
+            "square voice requires Square1 or Square2, got {channel:?}"
+        );
         let dac_correction = DacCorrection::from_fixed_rate(fixed_rate);
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
-        let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
+        // Only channel 1 has NR10 (`mgba/src/gb/audio.c:170-186`), so a
+        // channel-2 sweep byte is dropped rather than trusted.
+        let sweep = sweep_byte
+            .filter(|_| channel == CgbChannelNumber::Square1)
+            .map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let oscillator = Oscillator::Square(SquareChannel::new(duty, freq_reg, sweep));
         let muted_at_trigger = oscillator.disabled_at_trigger();
         let mut voice = Self::new(
@@ -583,6 +599,15 @@ impl CgbVoice {
         if self.envelope.note_off() {
             self.pending_retrigger = true;
         }
+    }
+
+    /// Stop outright, matching `TrackStop`'s explicit `CgbOscOff`
+    /// (`m4a_1.s:1490`-`:1493`): unlike [`Self::note_off`], this silences the
+    /// oscillator immediately rather than deferring to the next latched
+    /// envelope goal.
+    pub(crate) fn stop(&mut self) {
+        self.hardware_muted = true;
+        self.envelope.retire();
     }
 
     /// Applies [`Oscillator::retrigger`], muting the channel instead of
@@ -1968,6 +1993,42 @@ mod tests {
         retuned.begin_frame(MAX_MASTER_VOLUME, false);
         retuned.render(&mut acc_retuned, &[]);
         assert_eq!(acc_direct, acc_retuned);
+    }
+
+    #[test]
+    #[should_panic(expected = "square voice requires Square1 or Square2")]
+    fn square_voice_rejects_a_wave_channel() {
+        let _ = square_voice(CgbChannelNumber::Wave, None, TestNote::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "square voice requires Square1 or Square2")]
+    fn square_voice_rejects_a_noise_channel() {
+        let _ = square_voice(CgbChannelNumber::Noise, None, TestNote::default());
+    }
+
+    #[test]
+    fn a_square2_voice_never_carries_a_sweep() {
+        let sweeping = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(1, 1)),
+            TestNote::at_key(0),
+        );
+        assert!(
+            sweeping.sweep_frequency().is_some(),
+            "sanity: channel 1 does take the sweep byte"
+        );
+
+        let square2 = square_voice(
+            CgbChannelNumber::Square2,
+            Some(upward_sweep(1, 1)),
+            TestNote::at_key(0),
+        );
+        assert_eq!(
+            square2.sweep_frequency(),
+            None,
+            "a Square2 voice must ignore a channel-1 sweep byte"
+        );
     }
 
     fn low_freq_sweep_voice(sweep_byte: u8) -> CgbVoice {
