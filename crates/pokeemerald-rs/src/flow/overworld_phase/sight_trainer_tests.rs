@@ -291,25 +291,45 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
 }
 
 /// A player one tile beyond a trainer's own sight range must not trigger.
+///
+/// Uses the constructible [`STAND_IN_TRAINER`] (module docs, "The stand-in
+/// party") rather than Andrew's own real party, so a false-positive cone hit
+/// would be observable as a started approach instead of masked by every
+/// real trainer's own construction refusal.
 #[test]
 fn a_player_beyond_range_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     // Andrew's own range is 3; four tiles south is one past it.
     let mut phase = route_103_phase(PlayerState::new((ax, ay + 4), 3, Direction::North));
     phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
+    assert!(
+        phase.sight_approach.is_none(),
+        "a cone genuinely out of range must not start an approach, even against a party \
+         that could actually construct"
+    );
     assert!(!phase.is_sight_trainer_battle_active());
     assert!(phase.party_lead.is_some(), "the lead must be untouched");
 }
 
 /// A player off a trainer's own facing axis must not trigger, even standing
 /// right beside them.
+///
+/// See [`a_player_beyond_range_does_not_trigger`] for why [`STAND_IN_TRAINER`]
+/// stands in here too.
 #[test]
 fn a_player_off_the_facing_axis_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     let mut phase = route_103_phase(PlayerState::new((ax + 1, ay), 3, Direction::North));
     phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
+    assert!(
+        phase.sight_approach.is_none(),
+        "a cone genuinely off the facing axis must not start an approach, even against a \
+         party that could actually construct"
+    );
     assert!(!phase.is_sight_trainer_battle_active());
 }
 

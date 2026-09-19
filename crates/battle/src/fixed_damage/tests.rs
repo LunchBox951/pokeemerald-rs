@@ -364,3 +364,48 @@ fn a_rejected_move_draws_nothing() {
     );
     assert_eq!(rng.draws(), 0);
 }
+
+/// Every fixed-damage move carries `power = 1` upstream, so a failed accuracy
+/// roll passes `CheckWonderGuardAndLevitate`'s zero-power gate
+/// (`battle_script_commands.c:1432-1433`) and its type scan flags
+/// `MOVE_RESULT_DOESNT_AFFECT_FOE` against Gastly's Ghost half (`:1454-1469`).
+#[test]
+fn a_missed_fixed_damage_move_against_an_immune_target_reports_the_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 5, vec![SONIC_BOOM]);
+    let ghost_defender = mon(&dex, GASTLY, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([SONIC_BOOM_MISS_DRAW]);
+
+    let outcome =
+        resolve_fixed_damage_move(&dex, SONIC_BOOM, &attacker, &ghost_defender, &mut rng).unwrap();
+
+    assert_eq!(outcome, HitOutcome::NoEffect);
+    assert_eq!(
+        rng.draws(),
+        1,
+        "a failed roll still skips the trailing effect-chance draw"
+    );
+}
+
+/// Wonder Guard overwrites the miss result after the same type scan
+/// (`battle_script_commands.c:1490-1497`), and `Cmd_resultmessage` prefers it
+/// over the typing-immunity message (`:2055-2059`), so Sonic Boom's
+/// independent Normal-versus-Ghost immunity does not win here either.
+#[test]
+fn a_missed_fixed_damage_move_against_wonder_guard_reports_wonder_guard() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, 5, vec![SONIC_BOOM]);
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new([SONIC_BOOM_MISS_DRAW]);
+
+    let outcome =
+        resolve_fixed_damage_move(&dex, SONIC_BOOM, &attacker, &shedinja_defender, &mut rng)
+            .unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+    assert_eq!(
+        rng.draws(),
+        1,
+        "a failed roll still skips the trailing effect-chance draw"
+    );
+}

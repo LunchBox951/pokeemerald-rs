@@ -663,6 +663,64 @@ fn an_out_of_range_slot_is_rejected_even_when_every_move_is_spent() {
     assert!(battle.outcome().is_none());
 }
 
+/// `ABILITYEFFECT_MOVES_BLOCK` blocks every `sSoundMovesTable` entry on
+/// membership alone (`battle_util.c:686-692`, `:2659-2675`), not only the sound
+/// moves that lower a stat. Hyper Voice is a damaging entry, so a Soundproof
+/// defender takes no damage and the move reaches no accuracy, critical-hit,
+/// damage, or effect draw. Soundproof and Pressure are the same defender's one
+/// ability, so the blocked move's Pressure-aware cost is one
+/// (`battle_script_commands.c:1205`-`:1228`).
+#[test]
+fn a_soundproof_defender_blocks_hyper_voice_before_any_move_draw() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    assert_eq!(
+        player.ability(),
+        AbilityId::SOUNDPROOF,
+        "fixture sanity: the defender must hold Soundproof"
+    );
+    // Fast enough that the player's escape is a roll, not a free run.
+    let enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(304), MoveId(33)]); // Hyper Voice, Tackle
+    let starting_hp = player.current_hp();
+    let enemy_pp = enemy.moves()[0].pp;
+
+    // battle start, turn number, selection (draw 0 -> slot 0: Hyper Voice),
+    // escape roll (fails); the block precedes any accuracy draw, and the script
+    // ends there, so any move draw exhausts the sequence and panics.
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::SoundproofProtected {
+                by_player: false,
+                move_id: MoveId(304),
+            },
+        ]
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        starting_hp,
+        "a blocked Hyper Voice deals no damage"
+    );
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        enemy_pp - 1,
+        "the block still spends the move's PP"
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "the block precedes every accuracy, critical-hit, damage, and effect draw"
+    );
+}
+
 /// `attackcanceler` blocks a Soundproof holder's sound move before its no-PP
 /// test (`battle_script_commands.c:932-939`), so a spent slot reports the block.
 #[test]
