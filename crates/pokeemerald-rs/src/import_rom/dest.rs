@@ -81,66 +81,36 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
 }
 
 /// The raw `O_EXEC` bit ([`O_SEARCH`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html)
-/// is `O_EXEC | O_DIRECTORY`) on Apple platforms -- macOS's, and every
-/// other Apple target sharing its kernel and header, substitute for
-/// Linux's `O_PATH`.
-///
-/// This crate depends on `libc` only transitively, through `rustix` --
-/// not directly -- so even though `libc` 0.2.189's own `apple` module
-/// *does* define `O_EXEC`/`O_SEARCH` as raw constants (checked against
-/// its source), reaching them with a `use` needs a new direct dependency
-/// this slice's scope and the project's `minimal-deps` policy both rule
-/// out (see the `rustix` dependency's own `Cargo.toml` comment: adding it
-/// at all took owner approval, on PR #372, as the alternative to
-/// project-owned `unsafe` FFI). `rustix`'s `OFlags` does not re-expose
-/// them either way: its own source maps only `O_PATH` to a named flag,
-/// and Apple's headers define no `O_PATH` at all for it to map. So this
-/// is the constant straight from Apple's own header
+/// is `O_EXEC | O_DIRECTORY`) on Apple platforms -- their substitute for
+/// Linux's `O_PATH`, taken from Apple's own header
 /// (<https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h>,
-/// `O_EXEC 0x40000000`), also listed as one of the five `open(2)` access
-/// modes by that same source tree's `bsd/man/man2/open.2`.
+/// `O_EXEC 0x40000000`).
 ///
-/// The reason it is the right substitute -- not merely *a* substitute --
-/// is POSIX, not Apple: `open()`/`openat()` (IEEE Std 1003.1-2008,
-/// `<fcntl.h>`) specify `O_SEARCH` as a fifth access mode beside
-/// `O_RDONLY`/`O_WRONLY`/`O_RDWR`/`O_EXEC`, and are explicit that a
-/// descriptor opened with it is checked for *search* permission on the
-/// directory, never read, and (for `openat`) is never checked again for a
-/// component walked through it afterwards. FreeBSD's `open(2)` man page
-/// says the same thing about its own identical flag in fewer words:
-/// "execute permissions are checked at open time. The fd may not be used
-/// for any read operations like `getdirentries(2)`" -- exactly the trade
-/// this module wants: enough to `openat`/`statat`/`mkdirat`/`unlinkat` a
-/// name inside the directory, nothing that lets it list what is there.
+/// POSIX, not Apple, is what makes it the right substitute: `open()` and
+/// `openat()` (IEEE Std 1003.1-2008, `<fcntl.h>`) specify `O_SEARCH` as a
+/// fifth access mode beside `O_RDONLY`/`O_WRONLY`/`O_RDWR`/`O_EXEC`, and
+/// are explicit that a descriptor opened with it is checked for *search*
+/// permission on the directory, never read, and (for `openat`) is never
+/// checked again for a component walked through it afterwards -- exactly
+/// the trade this module wants: enough to `openat`/`statat`/`mkdirat`/
+/// `unlinkat` a name inside the directory, nothing that lets it list what
+/// is there.
 ///
-/// [`rustix::fs::OFlags::from_bits_retain`] -- the crate's own escape
-/// hatch for a bit its enum does not carry -- is what gets this into a
-/// value `open`/`openat` still accept: nothing downstream of that call
-/// masks an unrecognized bit away (`rustix`'s libc backend passes an
-/// `OFlags`'s raw bits straight through to the syscall wrapper, the same
-/// path `OFlags::LARGEFILE` takes on Linux).
+/// It is spelled as a raw bit because nothing here names it: `rustix`'s
+/// `OFlags` maps only `O_PATH`, which Apple's headers do not define, and
+/// `libc` is not a direct dependency of this crate.
+/// [`rustix::fs::OFlags::from_bits_retain`] is that crate's own escape
+/// hatch for a bit its enum does not carry, and its libc backend passes an
+/// `OFlags`'s raw bits straight through to the syscall, the same path
+/// `OFlags::LARGEFILE` takes on Linux.
 ///
-/// This has not run against a real Apple kernel in the sandbox that wrote
-/// it: only `cargo check --target x86_64-apple-darwin` (proving it
-/// compiles) was available there. The project's own CI does run the full
-/// suite on `macos-latest`
-/// (<https://github.com/LunchBox951/pokeemerald-rs/blob/dev/.github/workflows/ci.yml>),
-/// which is the authority for whether this claim actually holds on the
-/// macOS version that runner ships -- not this comment.
-///
-/// Older macOS is a real gap, not a hedge: `O_EXEC`/`O_SEARCH` are absent
-/// from `bsd/sys/fcntl.h` at XNU tag `xnu-8020.140.41` (macOS 12
-/// Monterey; checked directly against that tag's header), and present at
-/// `xnu-8792.81.2` (macOS 13 Ventura). Monterey's kernel also has no
-/// special case for the bit in its `FFLAGS` macro
-/// (`#define FFLAGS(oflags) ((oflags) + 1)`, unconditionally, at that
-/// same tag): an unrecognized high bit is simply carried through, and the
-/// low `O_ACCMODE` bits this constant leaves at `O_RDONLY`'s all-zero
-/// value make the request an ordinary read-mode open there. A
-/// write+search-only parent under macOS 12 or earlier is therefore not
-/// actually fixed by this arm -- it fails exactly as it did before this
-/// change, not worse, and pre-Ventura macOS is outside what this
-/// project's CI, or this sandbox, can check.
+/// macOS 13 Ventura (`xnu-8792`) is the floor: `bsd/sys/fcntl.h` does not
+/// define the bit before it, and an older kernel carries the unrecognized
+/// high bit through unchanged (`#define FFLAGS(oflags) ((oflags) + 1)`)
+/// while the low `O_ACCMODE` bits this constant leaves at zero make the
+/// request an ordinary read-mode open. A write-and-search-only parent
+/// therefore still needs read permission there, as it does on
+/// [`open_traversal_directory`]'s last-resort fallback.
 #[cfg(target_vendor = "apple")]
 const APPLE_O_EXEC: u32 = 0x4000_0000;
 
@@ -165,13 +135,8 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
 /// only the target path" wording Linux's man page uses. No more
 /// permission than the Linux arm above needs.
 ///
-/// Also a version floor, not a hedge, like the Apple arm below: FreeBSD's
-/// own manual shows `O_PATH` present as of the 13.1-RELEASE `open(2)`
-/// page and absent as of 13.0-RELEASE's (checked against both directly).
-/// FreeBSD predating 13.1 is outside what this project's CI, which has
-/// no FreeBSD leg at all, or this sandbox, can check; this arm is
-/// unverified there in the same way the last-resort fallback below always
-/// was.
+/// FreeBSD 13.1 is the floor: `O_PATH` is on that release's `open(2)`
+/// page and absent from 13.0's.
 #[cfg(target_os = "freebsd")]
 pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
