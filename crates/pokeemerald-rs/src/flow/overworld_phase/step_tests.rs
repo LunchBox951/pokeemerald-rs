@@ -1312,3 +1312,119 @@ fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
          pressedStartButton on that frame at all"
     );
 }
+
+/// `FieldGetPlayerInput` computes `forcedMove` from
+/// `MetatileBehavior_IsForcedMovementTile`, the dispatch set plus
+/// `MB_CRACKED_FLOOR` (`pokeemerald/src/metatile_behavior.c:338-351`), so a
+/// cracked floor suppresses `pressedStartButton` on its landing frame too
+/// (`pokeemerald/src/field_control_avatar.c:93-113`, `:180-186`).
+#[test]
+fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_CRACKED_FLOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the cracked floor"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "MB_CRACKED_FLOOR is a forced-movement tile for FieldGetPlayerInput, so \
+         upstream never sets pressedStartButton on that frame at all"
+    );
+}
+
+/// The gate's other arm, `T_NOT_MOVING`, admits START/SELECT/A/B whatever
+/// `forcedMove` says (`pokeemerald/src/field_control_avatar.c:95`). A player
+/// whose forced step is collision-blocked parks there -- `DoForcedMovement`
+/// returns FALSE (`field_player_avatar.c:443-455`), `PlayerStep` falls
+/// through to the keypad (`:344-348`), nothing animates (`:901-916`) -- so
+/// the menu must open on the frame after the landing's `T_TILE_CENTER`.
+#[test]
+fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_menu() {
+    use engine::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_MUDDY_SLOPE};
+
+    let blocked_slope_phase = || {
+        let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
+            10,
+            10,
+            &[
+                ((6, 4), MB_MUDDY_SLOPE),
+                ((6, 5), MB_IMPASSABLE_SOUTH_AND_NORTH),
+            ],
+        );
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 3), 3, Direction::South),
+            None,
+        );
+        phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::DOWN));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the muddy slope"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained"
+        );
+        phase
+    };
+
+    // Fixture precondition: the slope's forced southward step is blocked by
+    // the impassable-north tile at (6, 5), which is precisely why upstream
+    // falls through to the keypad -- the port already honours that for
+    // movement.
+    let mut steerable = blocked_slope_phase();
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        steerable.step(held(Buttons::LEFT));
+    }
+    assert_eq!(
+        steerable.player.position(),
+        (5, 4),
+        "fixture precondition: a blocked forced direction leaves the player \
+         steerable off the tile"
+    );
+
+    let mut phase = blocked_slope_phase();
+    // The landing's own T_TILE_CENTER frame, where upstream does suppress
+    // buttons on a forced tile -- consumed with no input.
+    phase.step(ButtonState::new());
+    // T_NOT_MOVING from here on: nothing is animating and the forced step
+    // never started.
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_some(),
+        "upstream's T_NOT_MOVING arm sets pressedStartButton even on a \
+         forced-movement tile, so a player stranded on a slope whose forced \
+         step is collision-blocked must still be able to open the menu"
+    );
+}

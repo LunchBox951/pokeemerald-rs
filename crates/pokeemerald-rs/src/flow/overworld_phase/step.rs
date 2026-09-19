@@ -626,10 +626,10 @@ impl OverworldPhase {
     /// the same-frame interaction, and a fresh `START` press's menu, already
     /// built if it claims the frame.
     ///
-    /// All of them are suppressed while
-    /// [`engine::overworld::PlayerState::forced_movement_armed`] holds, as
-    /// `FieldGetPlayerInput` returns on `forcedMove` before any of its
-    /// button checks (`field_control_avatar.c:92-113`).
+    /// All of them are suppressed on a forced tile's landing frame
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]), the one
+    /// arm of `FieldGetPlayerInput`'s gate that `forcedMove` closes
+    /// (`field_control_avatar.c:93-113`).
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,
@@ -642,7 +642,7 @@ impl OverworldPhase {
         // `PlayerGetElevation()`'s retained `previousElevation`, not the
         // collision above -- every lookup below queries this (`field_player_avatar.c:1192-1195`).
         let previous_elevation = self.player.previous_elevation();
-        let at_rest = !self.player.in_transit() && !self.player.forced_movement_armed();
+        let at_rest = !self.player.in_transit() && !self.player.field_input_suppressed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -659,7 +659,7 @@ impl OverworldPhase {
         // `TryStartInteractionScript` either (method doc). The tokens
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
-        let interaction = (arrow_trigger.is_none() && !self.player.forced_movement_armed())
+        let interaction = (arrow_trigger.is_none() && !self.player.field_input_suppressed())
             .then(|| self.interaction_tokens_this_frame(buttons, runtime))
             .flatten();
 

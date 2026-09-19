@@ -17,10 +17,10 @@
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
 //!   `T_NOT_MOVING` (`src/field_control_avatar.c:95-101`) -- i.e. never
 //!   mid-step ([`OverworldPhase::mid_step`]).
-//! * `FieldGetPlayerInput` returns on `forcedMove` before reading any
-//!   button (`src/field_control_avatar.c:92-113`); an armed tile
-//!   ([`engine::overworld::PlayerState::forced_movement_armed`]) is this
-//!   port's counterpart, and it can hold while the player is at rest.
+//! * `forcedMove` closes only the `T_TILE_CENTER` arm of that same gate, so
+//!   a forced tile suppresses the button on the landing frame alone
+//!   ([`engine::overworld::PlayerState::field_input_suppressed`]) and
+//!   `T_NOT_MOVING` admits it thereafter (`src/field_control_avatar.c:93-113`).
 //! * A battle runs under its own main callback
 //!   (`SetMainCallback2(CB2_InitBattle)`), so `ProcessPlayerFieldInput` is
 //!   not being polled at all ([`OverworldPhase::in_battle`]).
@@ -171,7 +171,7 @@ impl OverworldPhase {
             && !self.mid_step()
             && self.dialog.is_none()
             && self.sight_approach.is_none()
-            && !self.player.forced_movement_armed()
+            && !self.player.field_input_suppressed()
     }
 
     /// Build a fresh `START` press's menu without committing it, so the

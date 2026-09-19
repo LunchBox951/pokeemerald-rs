@@ -6,8 +6,8 @@ use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
 use super::metatile_behavior::{
-    is_forced_movement, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE, MB_NORMAL,
-    MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH, MB_SLIDE_WEST,
+    is_forced_movement, is_forced_movement_input_tile, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE,
+    MB_NORMAL, MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH, MB_SLIDE_WEST,
     MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST, MB_WALK_NORTH,
     MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
 };
@@ -37,6 +37,7 @@ pub struct PlayerState {
     turn_frames_remaining: u8,
     transit_direction: Option<Direction>,
     forced_movement_armed: bool,
+    forced_input_tile_center: bool,
 }
 
 /// The result of one directional-input poll.
@@ -127,6 +128,7 @@ impl PlayerState {
             turn_frames_remaining: 0,
             transit_direction: None,
             forced_movement_armed: false,
+            forced_input_tile_center: false,
         }
     }
 
@@ -168,12 +170,22 @@ impl PlayerState {
         self.turn_frames_remaining = 0;
     }
 
-    /// Returns whether the standing tile holds field input as upstream's
-    /// `forcedMove` does (`field_control_avatar.c:92-113`). Armed only by a
-    /// completed step onto a forced-movement tile, never by placement.
+    /// Returns whether the standing tile refuses manual steps as upstream's
+    /// `sForcedMovementTestFuncs` dispatch does (`field_player_avatar.c:412-427`).
+    /// Armed only by a step this state committed, never by placement.
     #[must_use]
     pub const fn forced_movement_armed(&self) -> bool {
         self.forced_movement_armed
+    }
+
+    /// Returns whether this frame is a landing's `T_TILE_CENTER` on a tile
+    /// `MetatileBehavior_IsForcedMovementTile` accepts -- the only state in
+    /// which `FieldGetPlayerInput` skips its whole button block, since its
+    /// other arm, `T_NOT_MOVING`, admits input whatever the tile
+    /// (`field_control_avatar.c:93-113`).
+    #[must_use]
+    pub const fn field_input_suppressed(&self) -> bool {
+        self.forced_input_tile_center
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -211,12 +223,18 @@ impl PlayerState {
     ///
     /// Also drains [`TURN_IN_PLACE_FRAMES`], independently of tile transit.
     pub fn tick(&mut self) {
+        let crossing = self.transit_frames.is_some();
         if let Some(frames) = self.transit_frames.as_mut() {
             *frames += 1;
             if *frames >= WALK_FRAMES_PER_TILE {
                 self.transit_frames = None;
                 self.transit_direction = None;
             }
+        }
+        // The landing's tile-center frame is the first whole frame it spends
+        // at rest; from the next one upstream reads `T_NOT_MOVING`.
+        if !crossing {
+            self.forced_input_tile_center = false;
         }
         self.turn_frames_remaining = self.turn_frames_remaining.saturating_sub(1);
     }
@@ -449,6 +467,9 @@ impl PlayerState {
         // (`Landing::across_connection`), so crossing into a connected map
         // never arms it either; unchanged, already-documented limitation.
         self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
+        // The input gate reads the wider `MetatileBehavior_IsForcedMovementTile`
+        // set instead (`metatile_behavior.c:338-351`), for one frame.
+        self.forced_input_tile_center = is_forced_movement_input_tile(landing.destination_behavior);
         Ok(())
     }
 
@@ -2199,6 +2220,42 @@ mod tests {
              the player off the slide tile"
         );
         assert_eq!(player.position(), (1, 2));
+    }
+
+    /// `forcedMove` closes only the `T_TILE_CENTER` arm of
+    /// `FieldGetPlayerInput`'s gate, so input suppression lasts the landing's
+    /// tile-center frame and `T_NOT_MOVING` admits the keypad from the next
+    /// one (`field_control_avatar.c:93-113`) `(behavioral-fidelity)`.
+    #[test]
+    fn forced_input_suppression_lasts_only_the_landings_tile_center_frame() {
+        let runtime = slide_east_runtime();
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert!(
+            !player.field_input_suppressed(),
+            "setup: a placed player is at rest, never at a landing's tile centre"
+        );
+
+        let _ = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert!(
+            player.field_input_suppressed(),
+            "the frame the crossing drains into is this port's T_TILE_CENTER, \
+             where upstream skips the whole button block"
+        );
+
+        player.tick();
+        assert!(
+            !player.field_input_suppressed(),
+            "T_NOT_MOVING from the next frame on: a player standing on a \
+             forced tile must still reach START, A, and the warp polls"
+        );
+        assert!(
+            player.forced_movement_armed(),
+            "the movement guard is unaffected -- it still refuses manual steps \
+             on the tile"
+        );
     }
 
     /// A warp arrival or a resumed save places the avatar with

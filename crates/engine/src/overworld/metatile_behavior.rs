@@ -203,6 +203,9 @@ pub const MB_SECRET_BASE_SPIN_MAT: u8 = 0xBC;
 /// A muddy slope that forces downhill movement.
 pub const MB_MUDDY_SLOPE: u8 = 0xD0;
 
+/// A cracked floor that collapses once stepped on.
+pub const MB_CRACKED_FLOOR: u8 = 0xD2;
+
 /// Returns whether a behavior is dispatched as forced movement, per upstream's
 /// `sForcedMovementTestFuncs` (`field_player_avatar.c:144-164`).
 ///
@@ -231,6 +234,15 @@ pub const fn is_forced_movement(behavior: u8) -> bool {
             | MB_SECRET_BASE_SPIN_MAT
             | MB_MUDDY_SLOPE
     )
+}
+
+/// Returns whether a behavior suppresses field input, per upstream's
+/// `MetatileBehavior_IsForcedMovementTile` (`metatile_behavior.c:338-351`):
+/// [`is_forced_movement`]'s dispatch set plus [`MB_CRACKED_FLOOR`], which
+/// `FieldGetPlayerInput` alone consults (`field_control_avatar.c:93`).
+#[must_use]
+pub const fn is_forced_movement_input_tile(behavior: u8) -> bool {
+    is_forced_movement(behavior) || behavior == MB_CRACKED_FLOOR
 }
 
 /// Returns whether a behavior is one of the supported door-shaped warp triggers.
@@ -539,6 +551,7 @@ mod tests {
         assert_eq!(MB_SECRET_BASE_JUMP_MAT, 0xBB);
         assert_eq!(MB_SECRET_BASE_SPIN_MAT, 0xBC);
         assert_eq!(MB_MUDDY_SLOPE, 0xD0);
+        assert_eq!(MB_CRACKED_FLOOR, 0xD2);
     }
 
     #[test]
@@ -566,6 +579,19 @@ mod tests {
         expected.sort_unstable();
         let matching: Vec<u8> = (0..=u8::MAX).filter(|b| is_forced_movement(*b)).collect();
         assert_eq!(matching, expected);
+    }
+
+    /// Upstream's input predicate is the dispatch set plus `MB_CRACKED_FLOOR`
+    /// and nothing else (`metatile_behavior.c:338-351`), so the two sets must
+    /// differ by exactly that one behavior `(behavioral-fidelity)`.
+    #[test]
+    fn the_input_predicate_is_the_dispatch_set_plus_cracked_floor() {
+        let extra: Vec<u8> = (0..=u8::MAX)
+            .filter(|b| is_forced_movement_input_tile(*b) != is_forced_movement(*b))
+            .collect();
+        assert_eq!(extra, vec![MB_CRACKED_FLOOR]);
+        assert!(is_forced_movement_input_tile(MB_CRACKED_FLOOR));
+        assert!(!is_forced_movement(MB_CRACKED_FLOOR));
     }
 
     #[test]
