@@ -417,7 +417,7 @@ fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
 /// Says that the staging name stopped answering to the directory this capture
 /// created there, which is what a claim exists to establish; the caller leaves
 /// whatever stands at the name alone (see [`create_and_claim_staged_dir`]).
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn replaced_staging_name(path: &Path) -> std::io::Error {
     std::io::Error::other(format!(
         "the staging name {} no longer answers to the directory this capture created there",
@@ -495,17 +495,37 @@ fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
 /// `staging::create_new_exclusive`'s use of the same flag for a file. The
 /// handle asks for no access at all: it exists to deny sharing, so an ACL
 /// that allows creating entries but not listing the directory still admits it.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` is what carries the Unix arm's contract
+/// here. Without it `CreateFileW` walks a reparse point a writer leaves at
+/// the staging name -- a junction needs no privilege to create -- and hands
+/// back the directory it points at: the payloads staged under the name would
+/// land there, outside `output_dir`, and the hold would deny sharing on that
+/// directory rather than on the entry cleanup later removes. With it the
+/// handle is the entry itself, and an entry that is a reparse point, or that
+/// is no directory, is refused outright; `std`'s own `symlink_metadata` opens
+/// exactly this way, so the zero-access handle answers `metadata` too. The
+/// refusal reads the raw attribute, which names every reparse tag and not
+/// only the name-surrogate ones `FileType::is_symlink` reports; a directory
+/// this capture just created is never any of them.
 #[cfg(windows)]
 fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    use std::os::windows::fs::MetadataExt as _;
     use std::os::windows::fs::OpenOptionsExt as _;
 
     const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
     let hold = std::fs::OpenOptions::new()
         .access_mode(0)
-        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
         .share_mode(0)
         .open(path)?;
+    let found = hold.metadata()?;
+    if found.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !found.is_dir() {
+        return Err(replaced_staging_name(path));
+    }
     Ok(StagedDirClaim { hold: Some(hold) })
 }
 

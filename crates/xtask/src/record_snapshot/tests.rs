@@ -1165,6 +1165,69 @@ fn a_staging_name_replaced_by_a_symlink_is_not_claimed() {
     drop(out_guard);
 }
 
+/// The Windows counterpart of the symlink test above. A junction needs no
+/// privilege to create, so the test never has to skip; claiming one would
+/// stage this capture's payloads in the directory it points at, and would
+/// leave the hold denying sharing on that directory rather than on the entry
+/// cleanup later removes.
+#[cfg(windows)]
+#[test]
+fn a_staging_name_replaced_by_a_junction_is_not_claimed() {
+    fn junction(link: &std::path::Path, target: &std::path::Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("cmd runs mklink");
+        assert!(
+            status.success(),
+            "mklink /J {} {}: {status}",
+            link.display(),
+            target.display()
+        );
+    }
+
+    let output_dir = scratch_path("junctioned-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let elsewhere = output_dir.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let plant_a_junction = |path: &std::path::Path| {
+        std::fs::remove_dir(path).unwrap();
+        junction(path, &elsewhere);
+        super::claim_staged_dir(path)
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_junction) else {
+        panic!("a junction at the staging name must fail the claim, and the capture with it");
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging path: {error}"
+    );
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "the claim reached through the junction into {}",
+        elsewhere.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&staged_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a failed claim removed the entry it never proved was this capture's"
+    );
+
+    drop(out_guard);
+}
+
 /// A staging directory that allows only creation and search, as a `0444`
 /// umask leaves it, is still claimable: by a search-only hold where the
 /// target has one, by identity alone elsewhere.
