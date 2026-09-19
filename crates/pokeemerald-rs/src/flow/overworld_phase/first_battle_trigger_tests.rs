@@ -6,8 +6,8 @@
 use super::test_support::*;
 use super::OverworldPhase;
 use crate::new_game;
-use assets::MapId;
-use battle::BattleOutcome;
+use assets::{MapId, MoveId};
+use battle::{BattleOutcome, BattlePokemon, Dex, Ivs, MAX_IV};
 use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP, MB_NORMAL, MB_TALL_GRASS,
 };
@@ -28,6 +28,12 @@ const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 
 /// `ROUTE_101_TRIGGER_TILE`'s own elevation.
 const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
+
+/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
+/// has no resolver, so `validate_player_move` refuses it ahead of any draw
+/// (`crates/battle/src/battle.rs:415`) and the driver's fallback scan finds
+/// nothing usable.
+const UNEXECUTABLE_MOVE: MoveId = MoveId(228);
 
 /// A synthetic, fully open (no collision, elevation 3 throughout) room named
 /// `MAP_ROUTE101`: the layout grid is fabricated, but `map_id` still resolves
@@ -655,10 +661,10 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// upstream's own ordering (`scripts.inc:40`, mid-cutscene) — see
 /// `super::first_battle_trigger`'s "When the var advances" section.
 ///
-/// Setup drains *every* slot rather than just slot 0: the headless driver
-/// falls back to the next usable move, so a starter with slot 0 spent and
-/// slot 1 (Leer) still usable finishes the battle instead of aborting it.
-/// Draining the whole moveset keeps this test's real subject -- an abort
+/// Setup gives the lead [`UNEXECUTABLE_MOVE`] rather than draining PP: a
+/// spent slot 0 now falls back to the next usable slot, and an all-spent
+/// moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`), so
+/// only an unexecutable moveset keeps this test's real subject -- an abort
 /// still consumes the trigger -- reachable.
 #[test]
 fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
@@ -672,23 +678,28 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     // Prove beginning this attempt clears stale terminal state rather than
     // letting its later abort masquerade as a completed battle.
     phase.first_battle_outcome = Some(BattleOutcome::PlayerWon);
-    // Drain every slot through the same accessor the turn engine spends PP
-    // with, rather than reaching into the struct -- `crate::flow::first_battle`'s
-    // own abort test does it this way too.
-    let mut lead = new_game::provisional_starter();
-    let move_count = lead.moves().len();
+    // A level-5 Treecko knowing only Pursuit: full PP, so this is a genuine
+    // pre-draw refusal rather than the all-spent Struggle diversion.
+    let lead = BattlePokemon::new(
+        &Dex::new(),
+        new_game::PROVISIONAL_STARTER_SPECIES,
+        5,
+        Ivs {
+            hp: MAX_IV,
+            attack: MAX_IV,
+            defense: MAX_IV,
+            speed: MAX_IV,
+            sp_attack: MAX_IV,
+            sp_defense: MAX_IV,
+        },
+        0,
+        vec![UNEXECUTABLE_MOVE],
+    )
+    .expect("Treecko/Pursuit must be in the dex");
     assert!(
-        move_count > 1,
-        "setup: the starter must know more than one move for this to be a real all-spent case"
+        lead.moves().iter().all(|slot| slot.pp > 0),
+        "setup: an abort here must come from the effect gate, not from spent PP"
     );
-    for slot in 0..move_count {
-        let starting_pp = lead.moves()[slot].pp;
-        assert!(starting_pp > 0, "a freshly built starter starts with PP");
-        for _ in 0..starting_pp {
-            lead.deduct_pp(slot)
-                .expect("draining a slot that still has PP");
-        }
-    }
     phase.party_lead = Some(lead);
 
     walk_one_tile_east(&mut phase);

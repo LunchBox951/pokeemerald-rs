@@ -78,8 +78,9 @@ pub fn start_first_battle(
 /// A rejection that leaves the shared RNG draw unchanged came from pre-turn slot
 /// validation, which runs before any draw or mutation, so the next slot is safe to try;
 /// one that already advanced the draw is a genuine mid-turn failure and is returned
-/// immediately. An all-spent moveset exhausts the loop and returns its last rejection,
-/// leaving that forced-Struggle case to #877.
+/// immediately. An all-spent moveset never exhausts the loop -- `validate_player_action`
+/// substitutes Struggle for it (`crates/battle/src/battle.rs:491`) -- so exhausting every
+/// slot means none was executable, and that last rejection is returned.
 fn take_first_usable_move_turn(
     battle: &mut Battle,
     rng: &mut Rng,
