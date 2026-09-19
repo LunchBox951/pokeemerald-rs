@@ -196,10 +196,13 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
     assert_eq!(enemy_move, Some(GROWL));
 }
 
+// The all-spent enemy's forced Struggle draws nothing at selection and
+// executes at its own turn-order slot.
 #[test]
 fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 5, vec![TACKLE]);
+    let player_max_hp = max_iv_mon(&dex, 19, 5, vec![TACKLE]).stats().max_hp;
     let mut enemy = max_iv_mon(&dex, 288, 50, vec![TACKLE, GROWL]); // faster
     for slot in 0..enemy.moves().len() {
         for _ in 0..enemy.moves()[slot].pp {
@@ -207,24 +210,42 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
         }
     }
 
-    // battle start + turn number only: `AreAllMovesUnusable` forces
-    // Struggle before `BattleAI_SetupAIData` ever runs, so neither the four
-    // simulatedRNG draws nor a tie-break draw happen.
-    let mut rng = SequenceRng::new([0, 0]);
+    // battle start, turn number: `AreAllMovesUnusable` forces Struggle
+    // before `BattleAI_SetupAIData` ever runs, so neither the four
+    // simulatedRNG draws nor a tie-break draw happen. Then the forced
+    // Struggle's own two draws -- accuracy and damage-variance, with no
+    // crit draw at all: first_battle suppresses it entirely.
+    let mut rng = SequenceRng::new([0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
-    let failure = battle
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(
-        failure.error(),
-        BattleError::UnsupportedMoveEffect(battle::STRUGGLE)
+        events,
+        vec![
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: battle::STRUGGLE,
+                damage: player_max_hp,
+                is_critical: false,
+            },
+            BattleEvent::Recoil {
+                by_player: false,
+                move_id: battle::STRUGGLE,
+                damage: player_max_hp / 4,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the faster, all-spent enemy is the first mover, and its forced \
+         Struggle one-shots this fixture's level-5 Rattata: {events:?}"
     );
-    assert!(
-        failure.events().is_empty(),
-        "the faster, all-spent enemy is the first mover, so nothing acted yet"
+    assert_eq!(
+        rng.draws(),
+        4,
+        "no simulatedRNG, no tie-break draw, no crit draw (first_battle)"
     );
-    assert_eq!(rng.draws(), 2, "no simulatedRNG, no tie-break draw");
 }
 
 #[test]

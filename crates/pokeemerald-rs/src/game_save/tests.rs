@@ -16,18 +16,27 @@ const OLDER_DEFERRED_BYTE: u8 = 0x11;
 const CURRENT_DEFERRED_BYTE: u8 = 0x5A;
 
 struct TempSave {
+    dir: std::path::PathBuf,
     path: std::path::PathBuf,
 }
 
 impl TempSave {
+    /// A save in a directory of its own.
+    ///
+    /// [`engine::save::SaveFile::lock`] takes one lock per save *directory*,
+    /// so scratch saves sharing one directory would serialise on a single
+    /// lock -- and a test that removed it would strip the exclusion the
+    /// others were relying on.
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-game-save-{label}-{}-{:?}.sav",
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-game-save-{label}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        drop(std::fs::remove_file(&path));
-        Self { path }
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
+        let path = dir.join("pokeemerald.sav");
+        Self { dir, path }
     }
 
     fn slot(&self) -> SaveSlot {
@@ -37,7 +46,7 @@ impl TempSave {
 
 impl Drop for TempSave {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.path));
+        drop(std::fs::remove_dir_all(&self.dir));
     }
 }
 
@@ -441,26 +450,78 @@ fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
     );
 }
 
+/// `SaveSlot::store` must run its whole read-modify-write cycle under
+/// `SaveFile::lock`, so a locker that hands the lock to a store cannot take
+/// it back before that store has written.
 #[test]
 fn storing_takes_the_inter_process_lock() {
     let temp = TempSave::new("lock-taken");
-    let mut slot = temp.slot();
-    slot.store(
-        &SaveBlock1::default(),
-        &SaveBlock2::default(),
-        SaveLineage::Continued,
-    )
-    .unwrap();
+    let file = SaveFile::at(temp.path.clone());
+    let guard = file.lock().expect("the scratch save must be lockable");
+    let (acquired, lock_acquired) = std::sync::mpsc::channel();
 
-    let mut lock_path = temp.path.clone().into_os_string();
-    lock_path.push(".lock");
-    let lock_path = std::path::PathBuf::from(lock_path);
+    let contender = {
+        let mut slot = temp.slot();
+        std::thread::spawn(move || {
+            slot.store_under(
+                &SaveBlock1::default(),
+                &SaveBlock2::default(),
+                true,
+                SaveLineage::Continued,
+                |file| {
+                    let held = file.lock()?;
+                    acquired.send(()).unwrap();
+                    Ok(held)
+                },
+            )
+            .unwrap();
+        })
+    };
+
+    drop(guard);
+    lock_acquired
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("SaveSlot::store never took SaveFile::lock");
+    // Blocks until the store's own guard drops, which happens after its write.
+    let reacquired = file
+        .lock()
+        .expect("the lock must return once the store releases it");
     assert!(
-        lock_path.exists(),
-        "SaveSlot::store must acquire SaveFile::lock, which creates {}",
-        lock_path.display()
+        temp.path.exists(),
+        "SaveSlot::store released SaveFile::lock before writing {}",
+        temp.path.display()
     );
-    drop(std::fs::remove_file(lock_path));
+    drop(reacquired);
+    contender.join().expect("the contender must not panic");
+}
+
+/// `SaveSlot::store`, the production entry point, reaches `SaveFile::lock`
+/// itself: a lock slot that cannot carry a lock stops the store before it
+/// reads or writes, which no other path would do.
+#[test]
+fn storing_through_the_production_entry_point_takes_the_save_file_lock() {
+    let temp = TempSave::new("lock-entry-point-slot");
+    std::fs::create_dir(temp.dir.join(engine::save::LOCK_FILE_NAME))
+        .expect("the scratch lock slot must be occupiable");
+
+    let mut slot = temp.slot();
+    let refused = slot
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::Continued,
+        )
+        .expect_err("SaveSlot::store must take SaveFile::lock, which refuses this slot");
+
+    assert!(
+        matches!(refused, SaveFileError::LockPathNotAPlainFile { .. }),
+        "SaveSlot::store did not take SaveFile::lock: {refused:?}"
+    );
+    assert!(
+        !temp.path.exists(),
+        "SaveSlot::store wrote {} without SaveFile::lock",
+        temp.path.display()
+    );
 }
 
 #[test]
