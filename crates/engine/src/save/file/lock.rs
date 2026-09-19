@@ -378,3 +378,6 @@ impl SaveFile {
         self.path.with_file_name(LOCK_FILE_NAME)
     }
 }
+
+#[cfg(test)]
+mod tests;
