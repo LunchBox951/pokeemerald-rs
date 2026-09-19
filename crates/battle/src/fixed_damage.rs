@@ -14,12 +14,15 @@
 //! `:1720-1729`). This ordering preserves immunity and the trailing draw while
 //! discarding every nonzero type multiplier.
 
-use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
+use assets::{MoveEffect, MoveId};
 
-use crate::damage::{aggregate_type_effectiveness, apply_dual_type_effectiveness, BattleRng};
+use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
-use crate::hit::{accuracy_roll, HitOutcome};
+use crate::hit::{
+    accuracy_roll, classify_accuracy_failure, defender_is_immune, defender_wonder_guard_blocked,
+    HitOutcome,
+};
 use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
@@ -35,8 +38,6 @@ pub const EFFECT_SONICBOOM: MoveEffect = MoveEffect(130);
 
 const DRAGON_RAGE_DAMAGE: u32 = 40;
 const SONIC_BOOM_DAMAGE: u32 = 20;
-const TYPE_EFFECTIVENESS_PROBE_DAMAGE: u32 = 1;
-
 /// The source of a fixed-damage move's damage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FixedDamage {
@@ -93,29 +94,18 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     ensure_resolvable_effect(dex, move_id, is_fixed_damage_effect)
 }
 
-fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
-    apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
-}
-
-/// Every [`FIXED_DAMAGE_EFFECTS`] move carries nonzero power (`power: 1` in
-/// each case, pinned by `four_moves_map_to_the_three_supported_effects`), so
-/// upstream's `gBattleMoves[gCurrentMove].power` gate on the Wonder Guard
-/// branch (`battle_script_commands.c:1411`) is always satisfied here.
-fn defender_wonder_guard_blocked(move_type: Type, defender: &BattlePokemon) -> bool {
-    defender.ability() == AbilityId::WONDER_GUARD
-        && aggregate_type_effectiveness(move_type, defender.types())
-            != Effectiveness::SuperEffective
-}
-
 /// Resolves one fixed-damage move against `defender`.
 ///
-/// A miss consumes one accuracy draw. A landed move consumes the accuracy and
-/// trailing effect-chance draws, including when the defender is immune.
+/// A failed accuracy roll consumes one accuracy draw and reports
+/// [`classify_accuracy_failure`]'s verdict. A landed move consumes the
+/// accuracy and trailing effect-chance draws, including when the defender is
+/// immune.
 ///
 /// # Errors
 ///
-/// Returns the errors from [`ensure_resolvable`], [`accuracy_roll`], or
-/// [`spend_effect_chance_draw`]. Admission completes before any draw.
+/// Returns the errors from [`ensure_resolvable`], [`accuracy_roll`],
+/// [`classify_accuracy_failure`], or [`spend_effect_chance_draw`]. Admission
+/// completes before any draw.
 pub fn resolve_fixed_damage_move(
     dex: &Dex,
     move_id: MoveId,
@@ -135,9 +125,13 @@ pub fn resolve_fixed_damage_move(
     let damage = damage_source.amount(attacker.level());
 
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
-        return Ok(HitOutcome::Miss);
+        return classify_accuracy_failure(dex, move_id, defender);
     }
 
+    // Every [`FIXED_DAMAGE_EFFECTS`] move carries nonzero power (`power: 1` in
+    // each case, pinned by `four_moves_map_to_the_three_supported_effects`), so
+    // upstream's `gBattleMoves[gCurrentMove].power` gate on the Wonder Guard
+    // branch (`battle_script_commands.c:1411`) is always satisfied here.
     let defender_is_immune = defender_is_immune(move_type, defender);
     let defender_wonder_guard_blocked = defender_wonder_guard_blocked(move_type, defender);
     let hit_had_effect = !defender_is_immune && !defender_wonder_guard_blocked;
