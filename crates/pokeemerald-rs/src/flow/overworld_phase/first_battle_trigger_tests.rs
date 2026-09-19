@@ -184,7 +184,8 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
 
 /// Route 101's second rescue coord event must trigger independently of the
 /// first one: approach `(11, 19)` from the east and exercise the complete
-/// [`OverworldPhase::step`] path through the landing drain frame.
+/// [`OverworldPhase::step`] path through the landing call the coord event
+/// runs on.
 #[test]
 fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_first_battle() {
     let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -197,8 +198,15 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::LEFT));
     }
-
     assert_eq!(phase.player.position(), (11, 19));
+    assert!(
+        phase.first_battle.is_none(),
+        "the call that drains the walk animation is upstream's last CB2 animation \
+         frame -- nothing has looked at the completed step yet (issue #1039)"
+    );
+
+    // Upstream's `T_TILE_CENTER` CB1, where `TryStartCoordEventScript` runs.
+    phase.step(ButtonState::new());
     assert!(
         phase.first_battle.is_some(),
         "the second rescue coord event must start the scripted first battle"
@@ -536,10 +544,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
     // `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
     // uses, continued one step further into the rescue trigger.
     for _ in 0..3 {
-        phase.step(held(Buttons::UP));
-        for _ in 1..WALK_FRAMES_PER_TILE {
-            phase.step(ButtonState::new());
-        }
+        walk_one_tile(&mut phase, Buttons::UP);
     }
 
     assert_eq!(
@@ -910,6 +915,13 @@ fn the_prevent_exit_coord_events_never_start_a_battle() {
         phase.player.position(),
         (tx, ty - 1),
         "setup: the step must land on the PreventExitSouth coord event"
+    );
+    // The landing call is where `TryStartCoordEventScript` runs, so the
+    // negative below is only worth anything once it has (issue #1039).
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.mid_step(),
+        "setup: the landing call must have consumed the completed step"
     );
     assert!(
         phase.first_battle.is_none(),
