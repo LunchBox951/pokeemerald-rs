@@ -15,7 +15,7 @@ use rom_import::{ImportError, ImportedPack};
 use super::dest::{not_a_directory_error, Dest};
 use super::{
     create_directories, directories_to_create, import_to, import_to_with, pack_directory,
-    pack_name, ImportOutcome, ImportRomError,
+    pack_name, CreatedDirectory, ImportOutcome, ImportRomError,
 };
 
 /// A pack of `bytes` the injected importer hands back, standing in for a
@@ -54,6 +54,13 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// The paths [`create_directories`] recorded, in order -- the one field
+/// both platform arms of [`CreatedDirectory`] carry, and what these tests
+/// care about: which levels it claims, not how it pins them.
+fn created_paths(created: &[CreatedDirectory]) -> Vec<PathBuf> {
+    created.iter().map(|dir| dir.path.clone()).collect()
 }
 
 /// Every file directly inside `dir`, sorted, as plain names.
@@ -183,11 +190,109 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     fs::create_dir(&one).expect("the outer level is created");
 
     let created = create_directories(&two).expect("the missing level is created");
-    assert_eq!(created, std::slice::from_ref(&two));
+    assert_eq!(created_paths(&created), std::slice::from_ref(&two));
     assert!(two.is_dir());
 
     let again = create_directories(&two).expect("an existing destination is not a failure");
     assert!(again.is_empty(), "a run that created nothing owns nothing");
+}
+
+// Linux, Android, FreeBSD, and Apple platforms are where `dest`'s own
+// traversal opens (`open_traversal_directory`, `open_directory_at`,
+// `open_created_directory_at`) actually ask a pinned parent for no more
+// than write and search -- see their own docs in `dest.rs` for exactly
+// which arm each of those four takes and why. Every other Unix this
+// crate builds for still falls back to a real, read-requiring open, so
+// this assertion is not a `cfg(unix)`-wide guarantee and must not claim
+// to be one.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // Creating a name inside a directory needs write and search on it,
+    // never read: a `0o300` parent is a destination the path-based
+    // `mkdir` this replaced always accepted, and the levels below it are
+    // this run's own to make and to read.
+    let dir = TempDir::new("unreadable-parent");
+    let parent = dir.join("drop-box");
+    fs::create_dir(&parent).expect("the parent is created");
+    let level = parent.join("pokeemerald-rs");
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("the parent closes");
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert. Asked of the
+    // outcome rather than of the uid, so it needs no libc.
+    let unreadable = fs::read_dir(&parent).is_err();
+    let created = create_directories(&level);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
+
+    if unreadable {
+        let created = created
+            .map_err(|(_, source)| source)
+            .expect("a writable, searchable parent takes a new level");
+        assert_eq!(created_paths(&created), std::slice::from_ref(&level));
+        assert!(level.is_dir());
+    } else {
+        // Running as a privileged user (this crate's own CI containers,
+        // in particular) makes `0o300` above no closer-off at all, so the
+        // assertion this test exists for never runs. Said out loud rather
+        // than passed vacuously and silently, so a report reading test
+        // output sees why zero assertions is the right count here, not a
+        // regression that quietly stopped asserting.
+        eprintln!(
+            "a_level_is_created_under_a_parent_that_is_writable_but_not_readable: \
+             skipped -- running privileged, 0o300 did not close the parent off"
+        );
+    }
+}
+
+// Same platform boundary as
+// `a_level_is_created_under_a_parent_that_is_writable_but_not_readable`
+// above, and for the same reason: this pins `open_traversal_directory`
+// itself, not the whole `create_directories` path, but the guarantee it
+// asserts is exactly as platform-scoped.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd",
+    target_vendor = "apple"
+))]
+#[test]
+fn a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // `create_directories` pins its one path-resolved component -- the
+    // first ancestor of the destination that already exists -- before any
+    // `mkdirat`, so that open must ask no more of it than the path-based
+    // `mkdir` it replaced: write and search, never read.
+    let dir = TempDir::new("traversal-unreadable-parent");
+    let parent = dir.join("drop-box");
+    fs::create_dir(&parent).expect("the parent is created");
+
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).expect("the parent closes");
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert.
+    let unreadable = fs::read_dir(&parent).is_err();
+    let pinned = super::dest::open_traversal_directory(&parent);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).expect("the parent reopens");
+
+    if unreadable {
+        pinned.expect("pinning for traversal needs only write and search");
+    } else {
+        // Same privileged-sandbox caveat as
+        // `a_level_is_created_under_a_parent_that_is_writable_but_not_readable`
+        // above -- said explicitly rather than passed with nothing checked.
+        eprintln!(
+            "a_traversal_handle_pins_a_parent_that_is_writable_but_not_readable: \
+             skipped -- running privileged, 0o300 did not close the parent off"
+        );
+    }
 }
 
 #[test]
@@ -201,7 +306,7 @@ fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
     let (created, _source) = create_directories(&outer.join(overlong))
         .expect_err("the overlong component cannot be created");
 
-    assert_eq!(created, std::slice::from_ref(&outer));
+    assert_eq!(created_paths(&created), std::slice::from_ref(&outer));
     assert!(outer.is_dir());
 }
 
@@ -315,6 +420,59 @@ fn a_failed_import_removes_the_directory_it_created() {
     // that would look like a half-installed game.
     assert!(!created.exists());
     assert!(file_names(&dir.path).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_import_does_not_remove_a_directory_it_did_not_create() {
+    // `undo_created_directories` looks `created`/`new` up in the pinned
+    // parent and compares its device and inode against what
+    // `create_directories` captured, rather than trusting the path
+    // spelling again. Between the pin and the failure, another account
+    // renames the level this run made out from under the name and puts its
+    // own there -- the level it is about to write into. That replacement's
+    // identity does not match the record, so it is left untouched;
+    // removing it anyway would be the harm `create_directories` refuses
+    // `create_dir_all` over, arriving by the other door.
+    let dir = TempDir::new("undo-swapped");
+    let created = dir.join("new");
+    let moved = dir.join("moved");
+    let pack_path = created.join("pokeemerald.pack");
+
+    let source = SourceRom::new("undo-swapped-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        fs::rename(&created, &moved).expect("the created level is renamed away");
+        fs::create_dir(&created).expect("somebody else's level takes the name");
+        Err(ImportError::EmptyPack)
+    })
+    .unwrap_err();
+
+    assert!(matches!(err, ImportRomError::Import { .. }));
+    assert!(
+        created.is_dir(),
+        "the cleanup took back a directory this run never created"
+    );
+    // The directory this run actually made is left standing too -- harmless
+    // litter, not chased down under its new name.
+    assert!(moved.is_dir());
+}
+
+#[test]
+fn a_pack_directory_spelled_through_dotdot_still_imports() {
+    // `directories_to_create` walks lexically (`Path::parent`), so a
+    // destination spelled through `..` produces a level whose
+    // `Path::file_name` is `None` -- it names no new component to create,
+    // only an already-real ancestor `create_directories`'s Unix arm has to
+    // recognize rather than mistake for an unnameable failure.
+    let dir = TempDir::new("dotdot-level");
+    let pack_path = dir.join("missing").join("..").join("pokeemerald.pack");
+
+    let source = SourceRom::new("dotdot-level-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("a dotdot-spelled destination still imports");
+    assert_eq!(outcome.pack_path(), pack_path);
 }
 
 #[test]
@@ -1245,5 +1403,111 @@ fn discard_reports_a_name_that_is_gone_and_one_it_could_not_remove() {
     assert!(
         !dest.discard(OsStr::new("a-directory")),
         "a name that survives must report as still there"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
+    // A `..` level used to be reopened by its whole path, walking every
+    // component before it again -- including one this run already created
+    // and pinned. Another account could swap that component for a symlink
+    // into a tree of its own after the pin, landing the reopen there; the
+    // level *after* the `..` would then be created inside the attacker's
+    // tree, through an `mkdirat` the pinned descent was supposed to keep
+    // out of reach.
+    const LEVELS: usize = 128;
+
+    let dir = TempDir::new("dotdot-swap");
+    let names: Vec<String> = (0..LEVELS).map(|level| format!("l{level:03}")).collect();
+    let mut dest = dir.path.clone();
+    for name in &names {
+        dest.push(name);
+    }
+    dest.push("..");
+    dest.push("downstream");
+
+    // The attacker's tree mirrors the levels below the swapped component,
+    // so the reopened path resolves through it instead of failing.
+    let mirror = dir.join("attacker");
+    let mut mirror_leaf = mirror.clone();
+    for name in &names[1..] {
+        mirror_leaf.push(name);
+    }
+    fs::create_dir_all(&mirror_leaf).expect("the attacker's mirror is built");
+    let mirror_dotdot = mirror_leaf
+        .parent()
+        .expect("the mirror has a parent")
+        .to_path_buf();
+
+    let swapped = dir.join(&names[0]);
+    let moved = dir.join("carried-off");
+    let probe = swapped.join(&names[1]).join(&names[2]);
+    let deepest = {
+        let mut deepest = moved.clone();
+        for name in &names[1..] {
+            deepest.push(name);
+        }
+        deepest
+    };
+    // The descent is a few milliseconds of `mkdirat`, so a thread that is
+    // still starting up when it begins can miss the whole window and swap
+    // into a finished tree -- a failure with nothing wrong in the code
+    // under test. The barrier holds the descent until the attacker is
+    // already spinning.
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let attacker = {
+        let (swapped, moved) = (swapped.clone(), moved.clone());
+        let ready = std::sync::Arc::clone(&ready);
+        std::thread::spawn(move || {
+            ready.wait();
+            // Wait until the descent is past the component being swapped,
+            // so the swap cannot disturb its own creation or pin. Bounded,
+            // not an unconditional spin: a `create_directories` that stalls
+            // or fails before reaching `probe` (a regression this test
+            // would otherwise want to catch) must not hang this thread, and
+            // so `attacker.join()`, forever -- `None` reports that instead.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !probe.exists() {
+                if std::time::Instant::now() >= deadline {
+                    return None;
+                }
+                std::hint::spin_loop();
+            }
+            fs::rename(&swapped, &moved).expect("the pinned level is carried off");
+            std::os::unix::fs::symlink(&mirror, &swapped).expect("a symlink takes its name");
+            // Whether the swap landed before the `..` level was reached:
+            // the innermost level is not created yet.
+            Some(!deepest.exists())
+        })
+    };
+
+    ready.wait();
+    let made_them = create_directories(&dest).is_ok();
+    let landed = attacker.join().expect("the attacker thread finishes");
+
+    match landed {
+        Some(true) => {}
+        // The descent never got as far as the level the swap waits on, so
+        // something ahead of it stalled or failed -- the regression the
+        // bounded wait exists to surface rather than hang on.
+        None => panic!("the descent never reached the level the swap waits on"),
+        // The descent outran the swap, which then landed on a tree already
+        // finished: the `..` reopen this test is about had already
+        // happened, so there was nothing left to race. Said out loud
+        // rather than passed with nothing checked, the same way the
+        // privileged skips above are.
+        Some(false) => {
+            eprintln!(
+                "a_dotdot_level_descends_from_the_pinned_parent_not_the_path: \
+                 skipped -- the descent finished before the swap could land"
+            );
+            return;
+        }
+    }
+
+    assert!(
+        !mirror_dotdot.join("downstream").exists(),
+        "a level after `..` was created inside the attacker's tree (run succeeded: {made_them})"
     );
 }
