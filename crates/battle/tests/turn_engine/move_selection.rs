@@ -318,7 +318,6 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     }
 }
 
-/// `Battle::new` admits a wild moveset that names Struggle directly.
 #[test]
 fn a_wild_moveset_may_now_include_struggle_directly() {
     let dex = Dex::new();
