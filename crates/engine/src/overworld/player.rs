@@ -402,7 +402,7 @@ impl PlayerState {
             .ok_or(Collision::Impassable)?;
         let destination_behavior = maps
             .metatile_behavior(crossing.target, crossing.position.0, crossing.position.1)
-            .unwrap_or(MB_NORMAL);
+            .ok_or(Collision::Impassable)?;
         Ok(Landing::across_connection(
             crossing.target,
             crossing.position,
@@ -2646,5 +2646,50 @@ mod tests {
             "the keypad must not steer off a current tile reached by a crossing"
         );
         assert_eq!(player.position(), (2, 0));
+    }
+
+    /// A resolver that can decode a landing cell but not classify it has
+    /// broken `ConnectedMapData`'s contract; the crossing fails closed.
+    #[derive(Debug, Clone, Copy)]
+    struct UnclassifiedConnectedMap(SingleConnectedMap);
+
+    impl ConnectedMapData for UnclassifiedConnectedMap {
+        fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+            self.0.dimensions(map)
+        }
+
+        fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+            self.0.metatile_cell(map, x, y)
+        }
+
+        fn metatile_behavior(&self, _map: MapId, _x: i32, _y: i32) -> Option<u8> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_crossing_whose_landing_tile_cannot_be_classified_is_refused() {
+        let runtime = south_connected_runtime();
+        let maps = UnclassifiedConnectedMap(SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 3,
+            },
+            landing_behavior: MB_NORMAL,
+        });
+
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: Collision::Impassable,
+            }
+        );
+        assert_eq!(player.position(), (2, 4));
     }
 }
