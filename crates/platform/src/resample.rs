@@ -57,10 +57,8 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
         max_output_frames.min(DEFAULT_MAX_OUTPUT_FRAMES)
     };
 
-    // Re-derive `bound` downward when `bound * step` would still exceed the
-    // source-frame ceiling: `bound` alone only caps output frames, and
-    // `step` (source_rate / device_rate) is unbounded when a device
-    // advertises an extreme rate.
+    // `step` is unbounded when a device advertises an extreme rate, so the
+    // output-frame cap alone does not bound source frames.
     #[expect(
         clippy::cast_precision_loss,
         reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
@@ -83,15 +81,8 @@ fn scratch_layout(max_output_frames: usize, step: f64) -> (usize, usize) {
         bound
     };
 
-    // Hard clamp: `bound`'s `.max(1.0)` floor cannot shrink below 1, so a
-    // `step` that alone exceeds `source_cap` (before `bound` even enters
-    // it) would still leave `bound * step > source_cap` here. `Resampler::new`
-    // refuses exactly that `step` before ever calling this function (see its
-    // `MAX_SCRATCH_SOURCE_FRAMES` check), so a constructed `Resampler` never
-    // reaches this branch with `bound == 1` still over the cap; kept as a
-    // defense-in-depth bound on this pure function's own output (also
-    // exercised directly by `a_rate_ratio_past_the_source_cap_still_bounds_scratch`),
-    // and `Self::fill_chunk` caps its own crossings identically regardless.
+    // `Resampler::new` refuses a `step` that exceeds the cap on its own, so
+    // this clamp is the pure function's own bound, not a reachable branch.
     #[expect(
         clippy::cast_precision_loss,
         reason = "bound is capped at DEFAULT_MAX_OUTPUT_FRAMES, exactly representable in f64"
@@ -177,15 +168,9 @@ impl Resampler {
         let channels = usize::from(channels.max(1));
         let step = f64::from(source_rate) / f64::from(device_rate.max(1));
 
-        // `step` alone (independent of any chunk-size bound) must fit within
-        // the source-frame scratch cap: a single output frame's advance can
-        // need up to `ceil(step)` source frames to resolve, and that must
-        // happen even at the smallest possible chunk (`bound == 1`). Past
-        // this, no `bound` -- however small `scratch_layout` shrinks it --
-        // can fully resolve even one frame's advance in the one bulk drain
-        // `fill_chunk` performs per chunk, which is exactly the "hard clamp"
-        // `scratch_layout` documents. Reject it here instead of constructing
-        // a `Resampler` whose `fill` would silently extrapolate.
+        // One output frame's advance can need `ceil(step)` source frames, so
+        // no chunk size can resolve a `step` past the scratch cap without
+        // extrapolating.
         #[expect(
             clippy::cast_precision_loss,
             reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
