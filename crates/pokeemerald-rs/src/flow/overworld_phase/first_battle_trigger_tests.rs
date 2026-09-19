@@ -651,9 +651,9 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// consume the trigger just the same.
 ///
 /// `crate::flow::first_battle::advance_first_battle`'s own doc comment spells
-/// the abort contract out — a turn the engine truly cannot play (here: every
-/// slot has no PP left, so `Battle::take_turn`'s pre-draw validation rejects
-/// each in turn) empties the slot, writes the lead back, and returns
+/// the abort contract out — a turn the engine truly cannot play (here: the
+/// lead's only move is unexecutable, so `Battle::take_turn`'s pre-draw
+/// validation rejects it) empties the slot, writes the lead back, and returns
 /// **`None`**, never an outcome. An earlier revision of this slice advanced
 /// `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left the var at `1` on
 /// exactly this path and the coord-event tile live, so the next step onto it
