@@ -1,10 +1,13 @@
 //! Persists a [`SaveStore`] flash image as one host file.
 //!
 //! This module resolves save paths, performs exact-length reads, and provides
-//! locking and atomic writes. Save contents and slot validation remain owned by
+//! atomic writes. Save contents and slot validation remain owned by
 //! [`SaveStore`]; the sibling entry a write is staged into is owned by the
-//! private `staging` submodule.
+//! private `staging` submodule, and the inter-process lock slot -- its
+//! validation, identity, staging, and platform-sharing rules -- is owned by
+//! the private `lock` submodule.
 
+mod lock;
 mod staging;
 
 use std::ffi::{OsStr, OsString};
@@ -21,6 +24,10 @@ pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
 
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
+
+/// The one lock file [`SaveFile::lock`] uses in any save directory. At most
+/// `_POSIX_NAME_MAX` (14) bytes, so it fits every host that accepts a save.
+pub const LOCK_FILE_NAME: &str = ".emerald.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
 #[derive(Debug)]
@@ -55,6 +62,21 @@ pub enum SaveFileError {
         /// The underlying I/O failure.
         source: std::io::Error,
     },
+    /// The configured save path is the directory's own lock file.
+    LockPathIsSave {
+        /// The lock path the save path resolves to.
+        path: PathBuf,
+    },
+    /// The lock slot leads somewhere else instead of being a file itself.
+    LockPathIsAlias {
+        /// The lock path that does not name the file it opens.
+        path: PathBuf,
+    },
+    /// The lock slot is occupied by something other than a plain file.
+    LockPathNotAPlainFile {
+        /// The lock path that is not a plain file.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -86,6 +108,26 @@ impl std::fmt::Display for SaveFileError {
             Self::Lock { path, source } => {
                 write!(f, "save file: locking {} failed: {source}", path.display())
             }
+            Self::LockPathIsAlias { path } => write!(
+                f,
+                "save file: the lock slot {} does not name the file it opens -- each \
+                 locker would follow it to whatever it led to at the time, so they \
+                 would not exclude one another",
+                path.display()
+            ),
+            Self::LockPathNotAPlainFile { path } => write!(
+                f,
+                "save file: the lock slot {} is not a plain file -- a directory, socket, \
+                 or device there cannot carry a lock, and opening a FIFO would wait for \
+                 a reader that never comes",
+                path.display()
+            ),
+            Self::LockPathIsSave { path } => write!(
+                f,
+                "save file: this save resolves to {}, the lock file every save in that \
+                 directory holds -- writing it would replace the inode they lock",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -106,7 +148,11 @@ impl std::error::Error for SaveFileError {
             | Self::Read { source, .. }
             | Self::Write { source, .. }
             | Self::Lock { source, .. } => Some(source),
-            Self::NoDataDirectory | Self::BadLength { .. } => None,
+            Self::NoDataDirectory
+            | Self::LockPathIsSave { .. }
+            | Self::LockPathIsAlias { .. }
+            | Self::LockPathNotAPlainFile { .. }
+            | Self::BadLength { .. } => None,
         }
     }
 }
@@ -374,52 +420,6 @@ impl SaveFile {
         drop(std::fs::File::open(path).and_then(|directory| directory.sync_all()));
     }
 
-    /// Acquires an advisory inter-process lock for this save path.
-    ///
-    /// The lock lives on a sibling `.lock` file, not the save file itself:
-    /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
-    /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards.
-    ///
-    /// Hold the returned guard across the complete read-modify-write cycle.
-    ///
-    /// On a first save, creates the missing hierarchy and best-effort
-    /// synchronises every ancestor while the lock is held.
-    ///
-    /// # Errors
-    ///
-    /// [`SaveFileError::CreateDirectory`] if the parent directory could not
-    /// be created; [`SaveFileError::Lock`] if the lock file could not be
-    /// created or locked.
-    pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
-        self.lock_with(Self::sync_directory_best_effort)
-    }
-
-    /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
-    /// rather than always [`SaveFile::sync_directory_best_effort`].
-    fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
-        let first_save = !self.exists();
-        let parent = self.create_parent_directory()?;
-        let path = self.lock_path();
-        let lock_error = |source: std::io::Error| SaveFileError::Lock {
-            path: path.clone(),
-            source,
-        };
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(lock_error)?;
-        file.lock().map_err(lock_error)?;
-        if first_save {
-            if let Some(parent) = parent {
-                Self::sync_ancestor_chain(parent, sync_directory);
-            }
-        }
-        Ok(SaveFileGuard { _lock_file: file })
-    }
-
     /// Creates the save file's parent directory and any missing ancestors;
     /// on a first save, best-effort synchronises every ancestor.
     fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
@@ -491,12 +491,6 @@ impl SaveFile {
                 | Component::ParentDir,
             ) => None,
         }
-    }
-
-    fn lock_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".lock");
-        PathBuf::from(name)
     }
 }
 
