@@ -631,6 +631,38 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     assert_eq!(rng.draws(), 6);
 }
 
+/// The all-spent diversion stands in for a slot upstream's bounded move
+/// cursor could have named (`src/battle_controller_player.c:552`-`:597`), so
+/// an index past the moveset stays a rejected action, not a free Struggle.
+#[test]
+fn an_out_of_range_slot_is_rejected_even_when_every_move_is_spent() {
+    let dex = Dex::new();
+    let mut drained = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    for _ in 0..drained.moves()[0].pp {
+        drained.deduct_pp(0).unwrap();
+    }
+    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy_hp = enemy.current_hp();
+
+    let mut rng = SequenceRng::new([0]); // only the battle-start draw
+    let mut battle = Battle::new(dex, drained, enemy, false, &mut rng).unwrap();
+    let player_hp = battle.player().current_hp();
+    let rejected = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap_err();
+
+    assert_eq!(rejected.error(), BattleError::InvalidMoveSlot(1));
+    assert!(rejected.events().is_empty());
+    assert_eq!(rng.draws(), 1, "a rejected slot draws nothing");
+    assert_eq!(battle.enemy().current_hp(), enemy_hp);
+    assert_eq!(
+        battle.player().current_hp(),
+        player_hp,
+        "no Struggle recoil lands for an action that never validated"
+    );
+    assert!(battle.outcome().is_none());
+}
+
 /// `attackcanceler` blocks a Soundproof holder's sound move before its no-PP
 /// test (`battle_script_commands.c:932-939`), so a spent slot reports the block.
 #[test]

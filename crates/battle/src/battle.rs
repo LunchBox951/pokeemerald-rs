@@ -477,8 +477,14 @@ impl Battle {
             // `AreAllMovesUnusable` (`pokeemerald/src/battle_util.c:1125`-
             // `:1139`) runs before the chosen slot is even looked at: an
             // all-spent moveset always forces Struggle, regardless of which
-            // index was picked.
-            PlayerAction::UseMove(_) if all_known_moves_are_spent(&self.player) => {
+            // index was picked. Upstream's move cursor can only name a slot
+            // that exists (`src/battle_controller_player.c:552`-`:597`), so
+            // an index past the moveset stays the caller error it is on
+            // every other path rather than buying a free Struggle.
+            PlayerAction::UseMove(slot) if all_known_moves_are_spent(&self.player) => {
+                if slot >= self.player.moves().len() {
+                    return Err(BattleError::InvalidMoveSlot(slot));
+                }
                 Ok(ValidatedPlayerAction::UseMove {
                     slot: None,
                     move_id: STRUGGLE,
