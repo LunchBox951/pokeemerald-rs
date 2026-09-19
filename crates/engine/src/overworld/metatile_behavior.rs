@@ -149,6 +149,90 @@ pub const fn is_south_blocked(behavior: u8) -> bool {
     )
 }
 
+/// A waterfall that forces movement while surfing.
+pub const MB_WATERFALL: u8 = 0x13;
+
+/// Ice that forces sliding movement.
+pub const MB_ICE: u8 = 0x20;
+
+/// A conveyor tile that forces eastward movement.
+pub const MB_WALK_EAST: u8 = 0x40;
+
+/// A conveyor tile that forces westward movement.
+pub const MB_WALK_WEST: u8 = 0x41;
+
+/// A conveyor tile that forces northward movement.
+pub const MB_WALK_NORTH: u8 = 0x42;
+
+/// A conveyor tile that forces southward movement.
+pub const MB_WALK_SOUTH: u8 = 0x43;
+
+/// A slide tile that forces eastward movement.
+pub const MB_SLIDE_EAST: u8 = 0x44;
+
+/// A slide tile that forces westward movement.
+pub const MB_SLIDE_WEST: u8 = 0x45;
+
+/// A slide tile that forces northward movement.
+pub const MB_SLIDE_NORTH: u8 = 0x46;
+
+/// A slide tile that forces southward movement.
+pub const MB_SLIDE_SOUTH: u8 = 0x47;
+
+/// The Trick House Puzzle 8 floor, dispatched as a forced-movement behavior.
+pub const MB_TRICK_HOUSE_PUZZLE_8_FLOOR: u8 = 0x48;
+
+/// A current that forces eastward movement while surfing.
+pub const MB_EASTWARD_CURRENT: u8 = 0x50;
+
+/// A current that forces westward movement while surfing.
+pub const MB_WESTWARD_CURRENT: u8 = 0x51;
+
+/// A current that forces northward movement while surfing.
+pub const MB_NORTHWARD_CURRENT: u8 = 0x52;
+
+/// A current that forces southward movement while surfing.
+pub const MB_SOUTHWARD_CURRENT: u8 = 0x53;
+
+/// A Secret Base jump mat that forces movement onto its paired mat.
+pub const MB_SECRET_BASE_JUMP_MAT: u8 = 0xBB;
+
+/// A Secret Base spin mat that forces movement in a spun direction.
+pub const MB_SECRET_BASE_SPIN_MAT: u8 = 0xBC;
+
+/// A muddy slope that forces downhill movement.
+pub const MB_MUDDY_SLOPE: u8 = 0xD0;
+
+/// Returns whether a behavior is dispatched as forced movement, per upstream's
+/// `sForcedMovementTestFuncs` (`field_player_avatar.c:144-164`).
+///
+/// Forced-movement physics are unported, so manual steps fail closed on these
+/// tiles instead of guessing a direction.
+#[must_use]
+pub const fn is_forced_movement(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_WATERFALL
+            | MB_ICE
+            | MB_WALK_EAST
+            | MB_WALK_WEST
+            | MB_WALK_NORTH
+            | MB_WALK_SOUTH
+            | MB_SLIDE_EAST
+            | MB_SLIDE_WEST
+            | MB_SLIDE_NORTH
+            | MB_SLIDE_SOUTH
+            | MB_TRICK_HOUSE_PUZZLE_8_FLOOR
+            | MB_EASTWARD_CURRENT
+            | MB_WESTWARD_CURRENT
+            | MB_NORTHWARD_CURRENT
+            | MB_SOUTHWARD_CURRENT
+            | MB_SECRET_BASE_JUMP_MAT
+            | MB_SECRET_BASE_SPIN_MAT
+            | MB_MUDDY_SLOPE
+    )
+}
+
 /// Returns whether a behavior is one of the supported door-shaped warp triggers.
 ///
 /// Arrival-facing door aliases are not triggers.
@@ -433,5 +517,62 @@ mod tests {
         assert!(!is_land_wild_encounter(MB_LONG_GRASS_SOUTH_EDGE));
         assert!(!is_land_wild_encounter(MB_POND_WATER));
         assert!(!is_land_wild_encounter(MB_DEEP_WATER));
+    }
+
+    #[test]
+    fn forced_movement_ids_have_expected_encoded_values() {
+        assert_eq!(MB_WATERFALL, 0x13);
+        assert_eq!(MB_ICE, 0x20);
+        assert_eq!(MB_WALK_EAST, 0x40);
+        assert_eq!(MB_WALK_WEST, 0x41);
+        assert_eq!(MB_WALK_NORTH, 0x42);
+        assert_eq!(MB_WALK_SOUTH, 0x43);
+        assert_eq!(MB_SLIDE_EAST, 0x44);
+        assert_eq!(MB_SLIDE_WEST, 0x45);
+        assert_eq!(MB_SLIDE_NORTH, 0x46);
+        assert_eq!(MB_SLIDE_SOUTH, 0x47);
+        assert_eq!(MB_TRICK_HOUSE_PUZZLE_8_FLOOR, 0x48);
+        assert_eq!(MB_EASTWARD_CURRENT, 0x50);
+        assert_eq!(MB_WESTWARD_CURRENT, 0x51);
+        assert_eq!(MB_NORTHWARD_CURRENT, 0x52);
+        assert_eq!(MB_SOUTHWARD_CURRENT, 0x53);
+        assert_eq!(MB_SECRET_BASE_JUMP_MAT, 0xBB);
+        assert_eq!(MB_SECRET_BASE_SPIN_MAT, 0xBC);
+        assert_eq!(MB_MUDDY_SLOPE, 0xD0);
+    }
+
+    #[test]
+    fn forced_movement_predicate_matches_exactly_the_dispatch_table_set() {
+        let mut expected = [
+            MB_WATERFALL,
+            MB_ICE,
+            MB_WALK_EAST,
+            MB_WALK_WEST,
+            MB_WALK_NORTH,
+            MB_WALK_SOUTH,
+            MB_SLIDE_EAST,
+            MB_SLIDE_WEST,
+            MB_SLIDE_NORTH,
+            MB_SLIDE_SOUTH,
+            MB_TRICK_HOUSE_PUZZLE_8_FLOOR,
+            MB_EASTWARD_CURRENT,
+            MB_WESTWARD_CURRENT,
+            MB_NORTHWARD_CURRENT,
+            MB_SOUTHWARD_CURRENT,
+            MB_SECRET_BASE_JUMP_MAT,
+            MB_SECRET_BASE_SPIN_MAT,
+            MB_MUDDY_SLOPE,
+        ];
+        expected.sort_unstable();
+        let matching: Vec<u8> = (0..=u8::MAX).filter(|b| is_forced_movement(*b)).collect();
+        assert_eq!(matching, expected);
+    }
+
+    #[test]
+    fn ordinary_ground_and_doors_are_not_forced_movement() {
+        assert!(!is_forced_movement(MB_NORMAL));
+        assert!(!is_forced_movement(MB_TALL_GRASS));
+        assert!(!is_forced_movement(MB_NON_ANIMATED_DOOR));
+        assert!(!is_forced_movement(MB_SECRET_BASE_BREAKABLE_DOOR));
     }
 }

@@ -5,7 +5,12 @@ use assets::{MapId, MetatileCell};
 use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
-use super::metatile_behavior::MB_NORMAL;
+use super::metatile_behavior::{
+    is_forced_movement, MB_EASTWARD_CURRENT, MB_ICE, MB_MUDDY_SLOPE, MB_NORMAL,
+    MB_NORTHWARD_CURRENT, MB_SLIDE_EAST, MB_SLIDE_NORTH, MB_SLIDE_SOUTH, MB_SLIDE_WEST,
+    MB_SOUTHWARD_CURRENT, MB_TRICK_HOUSE_PUZZLE_8_FLOOR, MB_WALK_EAST, MB_WALK_NORTH,
+    MB_WALK_SOUTH, MB_WALK_WEST, MB_WATERFALL, MB_WESTWARD_CURRENT,
+};
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
 
@@ -26,10 +31,12 @@ pub struct PlayerState {
     collision_elevation: u8,
     render_elevation: u8,
     facing: Direction,
+    movement_direction: Direction,
     movement_streak_active: bool,
     transit_frames: Option<u8>,
     turn_frames_remaining: u8,
     transit_direction: Option<Direction>,
+    forced_movement_armed: bool,
 }
 
 /// The result of one directional-input poll.
@@ -71,6 +78,8 @@ struct Landing {
     cell: MetatileCell,
     destination_behavior: u8,
     object_events_accessible: bool,
+    /// The connected map entered, or `None` for a same-map landing.
+    to_map: Option<MapId>,
 }
 
 impl Landing {
@@ -80,10 +89,11 @@ impl Landing {
             cell,
             destination_behavior,
             object_events_accessible: true,
+            to_map: None,
         }
     }
 
-    fn across_connection(position: TilePos, cell: MetatileCell) -> Self {
+    fn across_connection(to_map: MapId, position: TilePos, cell: MetatileCell) -> Self {
         // ConnectedMapData exposes neighbour cells, but not behaviour
         // attributes or object events.
         Self {
@@ -91,6 +101,7 @@ impl Landing {
             cell,
             destination_behavior: MB_NORMAL,
             object_events_accessible: false,
+            to_map: Some(to_map),
         }
     }
 }
@@ -98,7 +109,11 @@ impl Landing {
 impl PlayerState {
     /// Creates a stationary player on `position`.
     ///
-    /// Collision and render elevations both start at `elevation`.
+    /// Collision and render elevations both start at `elevation`. The
+    /// player starts controllable even on a forced-movement tile: only an
+    /// observed landing arms
+    /// [`forced_movement_armed`](Self::forced_movement_armed), so a warp
+    /// arrival or a resumed save is never trapped on placement.
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
@@ -106,10 +121,12 @@ impl PlayerState {
             collision_elevation: elevation,
             render_elevation: elevation,
             facing,
+            movement_direction: facing,
             movement_streak_active: false,
             transit_frames: None,
             turn_frames_remaining: 0,
             transit_direction: None,
+            forced_movement_armed: false,
         }
     }
 
@@ -138,14 +155,47 @@ impl PlayerState {
     }
 
     /// Changes facing without starting or interrupting a step.
+    ///
+    /// Carries the movement direction with it, as upstream's
+    /// `SetObjectEventDirection` does: it writes `movementDirection`
+    /// unconditionally and `facingDirection` beside it unless
+    /// `facingDirectionLocked` is set (`event_object_movement.c:2361-2371`),
+    /// and every scripted look reaches it -- `ObjectEventTurn`
+    /// (`:1867-1875`) for a turn in place, `FaceDirection` (`:5048-5055`)
+    /// for the `MOVEMENT_ACTION_FACE_*` a sight trigger holds on the player
+    /// (`trainer_see.c:522-526`). Only `ForcedMovement_Slide` and
+    /// `ForcedMovement_MuddySlope` lock facing
+    /// (`field_player_avatar.c:526-532`, `:567-576`), and those physics stay
+    /// unported, so nothing here may leave the two apart -- which matters
+    /// because forced movement's slip direction reads the movement direction
+    /// (see `forced_movement_direction`).
     pub const fn face(&mut self, direction: Direction) {
         self.facing = direction;
+        self.movement_direction = direction;
     }
 
     /// Ends a standstill turn's busy window early, as `PlayerFreeze` does
     /// the instant the field lock engages (`field_player_avatar.c:1039-1046`).
     pub const fn clear_turn_lock(&mut self) {
         self.turn_frames_remaining = 0;
+    }
+
+    /// Returns whether the standing tile currently holds field input the way
+    /// upstream's `forcedMove` does: `FieldGetPlayerInput` computes it from
+    /// the standing behavior and skips the whole button block --
+    /// `TryArrowWarp`, `TryStartInteractionScript`, `TryDoorWarp`, and
+    /// `pressedStartButton` alike -- while it is set
+    /// (`field_control_avatar.c:92-113`), ahead of and independent of
+    /// [`step`](Self::step)'s own collision-blocked fallthrough (issue #926).
+    ///
+    /// `True` only once *this* `PlayerState` has itself completed a step
+    /// onto a forced-movement tile (`try_start_resolved_step`),
+    /// never merely because [`new`](Self::new) placed it there: a warp
+    /// arrival or a resumed save that lands on such a tile starts
+    /// controllable instead (see `new`'s doc for why).
+    #[must_use]
+    pub const fn forced_movement_armed(&self) -> bool {
+        self.forced_movement_armed
     }
 
     /// Returns frames elapsed in the current tile crossing, or zero at rest.
@@ -222,7 +272,15 @@ impl PlayerState {
     /// Same-map steps test impassability, elevation, then visible object
     /// occupancy. Connection landings omit neighbouring behaviour attributes and
     /// object events because [`ConnectedMapData`] does not expose them.
-    /// A blocked attempt still leaves the player facing the attempted direction.
+    /// A blocked attempt still leaves the player facing the attempted direction,
+    /// except an armed forced-movement standing tile (see
+    /// [`forced_movement_armed`](Self::forced_movement_armed)), which blocks
+    /// every manual step without turning the player -- unless
+    /// `forced_movement_direction` is itself collision-blocked, in which case
+    /// this poll is honoured as an ordinary manual step instead, matching
+    /// upstream's fallthrough to `MovePlayerAvatarUsingKeypadInput`
+    /// (`field_player_avatar.c:344-348`). The `ForcedMovement_*` physics
+    /// themselves (slip/slide/current/mat/muddy-slope movement) stay unported.
     ///
     /// # Elevation adoption
     ///
@@ -245,92 +303,129 @@ impl PlayerState {
             return StepOutcome::Idle;
         };
 
+        let standing_behavior = runtime
+            .metatile_behavior(self.position.0, self.position.1)
+            .unwrap_or(MB_NORMAL);
+
+        // Checked before the turn branch; see `step`'s doc for the contract.
+        if self.forced_movement_armed {
+            let forced_step_blocked =
+                forced_movement_direction(standing_behavior, self.movement_direction).is_some_and(
+                    |forced_direction| {
+                        self.forced_direction_blocked(
+                            forced_direction,
+                            runtime,
+                            maps,
+                            event_data,
+                            standing_behavior,
+                        )
+                    },
+                );
+            if !forced_step_blocked {
+                self.movement_streak_active = true;
+                return StepOutcome::Blocked {
+                    direction,
+                    collision: Collision::Impassable,
+                };
+            }
+        }
+
         if direction != self.facing && !self.movement_streak_active {
             self.facing = direction;
+            self.movement_direction = direction;
             self.turn_frames_remaining = TURN_IN_PLACE_FRAMES;
             return StepOutcome::Turned(direction);
         }
 
         self.movement_streak_active = true;
         self.facing = direction;
+        self.movement_direction = direction;
 
+        match self.resolve_landing(direction, runtime, maps) {
+            Ok(landing) => {
+                let from = self.position;
+                let to = landing.position;
+                let to_map = landing.to_map;
+                match self.try_start_resolved_step(
+                    direction,
+                    runtime,
+                    event_data,
+                    standing_behavior,
+                    landing,
+                ) {
+                    Ok(()) => match to_map {
+                        Some(to_map) => StepOutcome::Crossed {
+                            to_map,
+                            to_position: to,
+                        },
+                        None => StepOutcome::Advanced { from, to },
+                    },
+                    Err(collision) => StepOutcome::Blocked {
+                        direction,
+                        collision,
+                    },
+                }
+            }
+            Err(collision) => StepOutcome::Blocked {
+                direction,
+                collision,
+            },
+        }
+    }
+
+    /// Resolves `direction`'s destination tile, read-only: a same-map cell,
+    /// a connected map's landing cell, or [`Collision::Impassable`] when
+    /// neither exists (an unconnected map edge, or a connection whose
+    /// landing cell [`ConnectedMapData`] cannot supply).
+    fn resolve_landing(
+        &self,
+        direction: Direction,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+    ) -> Result<Landing, Collision> {
         let (dx, dy) = direction.delta();
         let target = (self.position.0 + dx, self.position.1 + dy);
-
-        let standing_behavior = runtime
-            .metatile_behavior(self.position.0, self.position.1)
-            .unwrap_or(MB_NORMAL);
 
         if let Some(cell) = runtime.metatile_cell(target.0, target.1) {
             let target_behavior = runtime
                 .metatile_behavior(target.0, target.1)
                 .unwrap_or(MB_NORMAL);
-            let from = self.position;
-            let landing = Landing::on_current_map(target, cell, target_behavior);
-            return match self.try_start_resolved_step(
-                direction,
-                runtime,
-                event_data,
-                standing_behavior,
-                landing,
-            ) {
-                Ok(()) => StepOutcome::Advanced { from, to: target },
-                Err(collision) => StepOutcome::Blocked {
-                    direction,
-                    collision,
-                },
-            };
+            return Ok(Landing::on_current_map(target, cell, target_behavior));
         }
 
-        if let Some(crossing) = runtime.resolve_connection(direction, target.0, target.1, maps) {
-            let Some(cell) =
-                maps.metatile_cell(crossing.target, crossing.position.0, crossing.position.1)
-            else {
-                return StepOutcome::Blocked {
-                    direction,
-                    collision: Collision::Impassable,
-                };
-            };
-            let landing = Landing::across_connection(crossing.position, cell);
-            return match self.try_start_resolved_step(
-                direction,
-                runtime,
-                event_data,
-                standing_behavior,
-                landing,
-            ) {
-                Ok(()) => StepOutcome::Crossed {
-                    to_map: crossing.target,
-                    to_position: crossing.position,
-                },
-                Err(collision) => StepOutcome::Blocked {
-                    direction,
-                    collision,
-                },
-            };
-        }
-
-        StepOutcome::Blocked {
-            direction,
-            collision: Collision::Impassable,
-        }
+        let crossing = runtime
+            .resolve_connection(direction, target.0, target.1, maps)
+            .ok_or(Collision::Impassable)?;
+        let cell = maps
+            .metatile_cell(crossing.target, crossing.position.0, crossing.position.1)
+            .ok_or(Collision::Impassable)?;
+        Ok(Landing::across_connection(
+            crossing.target,
+            crossing.position,
+            cell,
+        ))
     }
 
-    fn try_start_resolved_step(
-        &mut self,
+    /// Returns why `landing` would deny a step in `direction` from the
+    /// standing tile, or `None` if it would succeed. Read-only: shared by
+    /// [`try_start_resolved_step`](Self::try_start_resolved_step)'s mutating
+    /// commit and [`forced_direction_blocked`](Self::forced_direction_blocked)'s
+    /// probe, so the two can never disagree about what collides.
+    fn landing_collision(
+        &self,
         direction: Direction,
+        standing_behavior: u8,
+        landing: &Landing,
         runtime: &MapRuntime<'_>,
         event_data: &EventData,
-        standing_behavior: u8,
-        landing: Landing,
-    ) -> Result<(), Collision> {
+    ) -> Option<Collision> {
         if landing.cell.collision != 0
             || directionally_impassable(standing_behavior, landing.destination_behavior, direction)
         {
-            return Err(Collision::Impassable);
+            return Some(Collision::Impassable);
         }
         if elevation_mismatch(self.collision_elevation, landing.cell.elevation) {
-            return Err(Collision::ElevationMismatch);
+            return Some(Collision::ElevationMismatch);
         }
         if landing.object_events_accessible
             && visible_object_event_at(
@@ -342,7 +437,23 @@ impl PlayerState {
             )
             .is_some()
         {
-            return Err(Collision::ObjectEvent);
+            return Some(Collision::ObjectEvent);
+        }
+        None
+    }
+
+    fn try_start_resolved_step(
+        &mut self,
+        direction: Direction,
+        runtime: &MapRuntime<'_>,
+        event_data: &EventData,
+        standing_behavior: u8,
+        landing: Landing,
+    ) -> Result<(), Collision> {
+        if let Some(collision) =
+            self.landing_collision(direction, standing_behavior, &landing, runtime, event_data)
+        {
+            return Err(collision);
         }
 
         let origin_elevation = runtime
@@ -354,7 +465,62 @@ impl PlayerState {
         self.adopt_elevation(origin_elevation, landing.cell.elevation);
         self.transit_direction = Some(direction);
         self.transit_frames = Some(0);
+        // Arms (or disarms) the guard from the tile this step itself landed
+        // on -- see `forced_movement_armed`'s doc for why a placement must
+        // not. A connection landing's behavior always reads `MB_NORMAL`
+        // (`Landing::across_connection`), so crossing into a connected map
+        // never arms it either; unchanged, already-documented limitation.
+        self.forced_movement_armed = is_forced_movement(landing.destination_behavior);
         Ok(())
+    }
+
+    /// Returns whether a step in `direction` from the current tile would be
+    /// collision-blocked, without mutating state: [`resolve_landing`](Self::resolve_landing)
+    /// and [`landing_collision`](Self::landing_collision) run the same checks
+    /// [`try_start_resolved_step`](Self::try_start_resolved_step) commits from,
+    /// so the forced-movement guard in [`step`](Self::step) can test the
+    /// forced direction before committing to either outcome -- the same way
+    /// upstream's `DoForcedMovement` runs `CheckForPlayerAvatarCollision`
+    /// before moving (`field_player_avatar.c:443-470`).
+    fn forced_direction_blocked(
+        &self,
+        direction: Direction,
+        runtime: &MapRuntime<'_>,
+        maps: &impl ConnectedMapData,
+        event_data: &EventData,
+        standing_behavior: u8,
+    ) -> bool {
+        match self.resolve_landing(direction, runtime, maps) {
+            Ok(landing) => self
+                .landing_collision(direction, standing_behavior, &landing, runtime, event_data)
+                .is_some(),
+            Err(_) => true,
+        }
+    }
+}
+
+/// Returns the direction a standing behavior's `ForcedMovement_*` handler
+/// would test for collision, per `field_player_avatar.c:486-580`. `None`
+/// means the handler never collision-checks at all: the Secret Base mats
+/// start a custom task and unconditionally return `TRUE` (`:555-565`), so
+/// they never fall through to the keypad. Ice and the Trick House Puzzle 8
+/// floor continue `movement_direction` rather than a direction fixed by the
+/// id (`ForcedMovement_Slip`, `:473-484`); muddy slope's narrower
+/// northward-at-top-speed exception is not modelled, since bike speed isn't
+/// ported.
+fn forced_movement_direction(
+    standing_behavior: u8,
+    movement_direction: Direction,
+) -> Option<Direction> {
+    match standing_behavior {
+        MB_WALK_EAST | MB_SLIDE_EAST | MB_EASTWARD_CURRENT => Some(Direction::East),
+        MB_WALK_WEST | MB_SLIDE_WEST | MB_WESTWARD_CURRENT => Some(Direction::West),
+        MB_WALK_NORTH | MB_SLIDE_NORTH | MB_NORTHWARD_CURRENT => Some(Direction::North),
+        MB_WALK_SOUTH | MB_SLIDE_SOUTH | MB_SOUTHWARD_CURRENT | MB_WATERFALL | MB_MUDDY_SLOPE => {
+            Some(Direction::South)
+        }
+        MB_ICE | MB_TRICK_HOUSE_PUZZLE_8_FLOOR => Some(movement_direction),
+        _ => None,
     }
 }
 
@@ -362,7 +528,7 @@ impl PlayerState {
 mod tests {
     use super::*;
     use crate::overworld::map_runtime::MapRuntime;
-    use crate::overworld::metatile_behavior::MB_IMPASSABLE_SOUTH_AND_NORTH;
+    use crate::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_SLIDE_EAST};
     use assets::{
         BattleScene, MapConnection, MapEvents, MapHeader, MapType, MetatileAttributeTable,
         MetatileCell, ObjectEvent, RegionMapSectionId, Weather,
@@ -1829,5 +1995,524 @@ mod tests {
             "the player must stop on the tile adjacent to Mom"
         );
         assert_eq!(player.facing(), Direction::North);
+    }
+
+    fn slide_east_runtime() -> MapRuntime<'static> {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: 0,
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_SLIDE_EAST).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// Upstream dispatches forced movement from the metatile the player is
+    /// already standing on before it ever reads the keypad
+    /// (`field_player_avatar.c:342-347`, `:407-427`).
+    #[test]
+    fn a_forced_movement_tile_does_not_honour_the_callers_direction() {
+        let runtime = slide_east_runtime();
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::West,
+                collision: super::super::collision::Collision::Impassable,
+            },
+            "a forced-movement metatile must not accept the caller's westward step"
+        );
+        assert_eq!(player.position(), (2, 2));
+    }
+
+    /// The forced-movement check must run ahead of the turn-vs-step branch:
+    /// once the movement streak ends, an ordinary direction change would
+    /// otherwise turn in place (`StepOutcome::Turned`) without ever
+    /// consulting the standing tile, letting a forced-movement tile be
+    /// steered exactly like ordinary ground.
+    #[test]
+    fn a_forced_movement_tile_denies_even_a_turn_after_the_streak_ends() {
+        let runtime = slide_east_runtime();
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+            "fixture precondition: releasing input ends the movement streak"
+        );
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::West,
+                collision: super::super::collision::Collision::Impassable,
+            },
+            "forced movement stays armed on this tile even once the streak has \
+             ended, so a would-be turn must fail closed too"
+        );
+        assert_eq!(player.position(), (2, 2));
+    }
+
+    /// Upstream never reaches `MovePlayerAvatarUsingKeypadInput` while forced
+    /// movement is armed (`field_player_avatar.c:342-349`), so the denied
+    /// keypad direction cannot reach the avatar's facing either -- and facing
+    /// is player-visible through the sprite frame
+    /// (`crates/pokeemerald-rs/src/overworld/avatar.rs:196-201`)
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn a_forced_movement_tile_does_not_turn_the_player() {
+        let runtime = slide_east_runtime();
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.facing(),
+            Direction::East,
+            "fixture precondition: the player stands on the slide tile facing east"
+        );
+
+        let _ = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+
+        assert_eq!(
+            player.facing(),
+            Direction::East,
+            "a denied forced-movement poll must not turn the avatar: upstream never \
+             reads the keypad while forced movement is armed"
+        );
+    }
+
+    /// A slide-east tile whose eastward destination is impassable.
+    fn blocked_slide_east_runtime() -> MapRuntime<'static> {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: u8::from((x, y) == (3, 2)),
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_SLIDE_EAST).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// Forced movement yields to the keypad when the forced step itself is
+    /// collision-blocked: `DoForcedMovement` runs `CheckForPlayerAvatarCollision`
+    /// first and returns FALSE for any ordinary collision
+    /// (`field_player_avatar.c:443-462`), and a FALSE from
+    /// `TryDoMetatileBehaviorForcedMovement` is exactly the case in which
+    /// `PlayerStep` calls `MovePlayerAvatarUsingKeypadInput`
+    /// (`field_player_avatar.c:344-348`). So standing on a slide-east tile whose
+    /// eastward neighbour is impassable, the player is still steerable
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn a_collision_blocked_forced_direction_still_honours_manual_input() {
+        let runtime = blocked_slide_east_runtime();
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the slide tile is entered like ordinary ground, \
+             which is what arms the guard (issue #926's placement/resume finding)"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (1, 2),
+            },
+            "the forced eastward step is blocked by the impassable tile at (3, 2), \
+             so upstream falls through to the keypad and the westward poll moves \
+             the player off the slide tile"
+        );
+        assert_eq!(player.position(), (1, 2));
+    }
+
+    /// A warp arrival or a resumed save places the avatar with
+    /// [`PlayerState::new`] straight onto its saved tile, so that tile can be
+    /// a forced-movement metatile whose own forced direction is passable
+    /// (unlike the sibling collision-blocked test above) -- the case
+    /// [`forced_movement_direction`]'s deferred physics gap would otherwise
+    /// fail closed on forever, with no keypad fallback at all. Per
+    /// [`PlayerState::new`]'s doc, a placement never arms the guard, so this
+    /// player is controllable from the very first poll `(behavioral-fidelity)`.
+    #[test]
+    fn a_player_placed_on_a_forced_movement_tile_is_not_immobile_forever() {
+        let runtime = slide_east_runtime();
+        let mut player = PlayerState::new((2, 2), 3, Direction::East);
+
+        for _ in 0..60 {
+            let _ = player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS);
+            player.tick();
+        }
+
+        assert_ne!(
+            player.position(),
+            (2, 2),
+            "a player placed on a forced-movement tile must not stay stuck on it \
+             for a whole second of polls"
+        );
+    }
+
+    /// Ice and the Trick House Puzzle 8 floor continue the player's current
+    /// movement direction rather than a direction fixed by the behavior id
+    /// (`ForcedMovement_Slip`, `field_player_avatar.c:473-484`), modelled here
+    /// via `movement_direction`. Facing east on an ice tile whose eastward
+    /// neighbour is impassable must still yield to a manual westward poll
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn ice_yields_to_the_keypad_when_the_players_own_facing_direction_is_blocked() {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: u8::from((x, y) == (3, 2)),
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_ICE).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the ice tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+            "fixture precondition: releasing input ends the movement streak"
+        );
+
+        // The forced direction (movement_direction, east) is
+        // collision-blocked, so this falls through to ordinary keypad
+        // handling: a westward poll while still facing east turns in place
+        // first, exactly like any other direction change from standstill --
+        // not the unconditional, never-turns `Blocked` a still-armed forced
+        // tile would otherwise produce.
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Turned(Direction::West),
+            "the player's own eastward movement direction is the ice tile's forced \
+             direction and it is blocked at (3, 2), so this poll must reach \
+             ordinary keypad handling and turn instead of failing closed without \
+             turning"
+        );
+    }
+
+    /// A scripted look (`face`) moves ice's forced direction with it:
+    /// upstream's `SetObjectEventDirection` writes `movementDirection` on
+    /// every scripted look, not only on a walk or turn (see
+    /// [`PlayerState::face`]'s doc). Standing on the same blocked-east ice
+    /// tile as the sibling test, facing north in between makes north -- clear
+    /// here -- the direction `ForcedMovement_Slip` would take, so the keypad
+    /// fallback the sibling test exercises must close again
+    /// `(behavioral-fidelity)`.
+    #[test]
+    fn a_scripted_face_carries_ices_forced_direction_with_it() {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: u8::from((x, y) == (3, 2)),
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(MB_ICE).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the ice tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        assert_eq!(
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Idle,
+            "fixture precondition: releasing input ends the movement streak"
+        );
+
+        player.face(Direction::North);
+        assert_eq!(
+            player.facing(),
+            Direction::North,
+            "setup: the scripted look takes effect"
+        );
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::West,
+                collision: Collision::Impassable,
+            },
+            "the scripted look carried movement_direction north with it, and \
+             north is clear, so the forced direction is no longer blocked and \
+             the guard must refuse this poll -- not fall through to the keypad \
+             on the pre-face east"
+        );
+        assert_eq!(
+            player.facing(),
+            Direction::North,
+            "a refused poll on an armed forced tile leaves facing where the \
+             script put it"
+        );
+    }
+
+    /// Shared fixture/assertion for the two Secret Base mats: neither calls
+    /// `DoForcedMovement` at all -- both start a custom task and return TRUE
+    /// unconditionally (`ForcedMovement_MatJump`/`ForcedMovement_MatSpin`,
+    /// `field_player_avatar.c:555-565`) -- so unlike every other
+    /// forced-movement behavior, they must keep failing every manual poll
+    /// closed even when every direction off the tile is collision-free
+    /// `(behavioral-fidelity)`.
+    fn assert_secret_base_mat_never_yields_to_the_keypad(mat_behavior: u8) {
+        let mut bytes = Vec::new();
+        for y in 0..5u16 {
+            for x in 0..5u16 {
+                let raw = MetatileCell {
+                    metatile_id: u16::from((x, y) == (2, 2)),
+                    collision: 0,
+                    elevation: 3,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let attrs = [
+            u16::from(MB_NORMAL).to_le_bytes(),
+            u16::from(mat_behavior).to_le_bytes(),
+        ]
+        .concat();
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((1, 2), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 2),
+                to: (2, 2),
+            },
+            "fixture precondition: the mat tile is entered like ordinary ground, \
+             which is what arms the guard"
+        );
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+
+        assert_eq!(
+            player.step(Some(Direction::West), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::West,
+                collision: super::super::collision::Collision::Impassable,
+            },
+            "the mat has no derivable forced direction to collision-test, so it \
+             must never fall through to the keypad"
+        );
+        assert_eq!(player.position(), (2, 2));
+    }
+
+    #[test]
+    fn the_secret_base_spin_mat_never_yields_to_the_keypad_even_when_every_direction_is_clear() {
+        assert_secret_base_mat_never_yields_to_the_keypad(
+            super::super::metatile_behavior::MB_SECRET_BASE_SPIN_MAT,
+        );
+    }
+
+    #[test]
+    fn the_secret_base_jump_mat_never_yields_to_the_keypad_even_when_every_direction_is_clear() {
+        assert_secret_base_mat_never_yields_to_the_keypad(
+            super::super::metatile_behavior::MB_SECRET_BASE_JUMP_MAT,
+        );
     }
 }

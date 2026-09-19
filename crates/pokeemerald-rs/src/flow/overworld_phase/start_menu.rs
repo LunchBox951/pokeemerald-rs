@@ -10,13 +10,21 @@
 //!
 //! # When `START` opens a menu
 //!
-//! Upstream's answer is five separate mechanisms, and
-//! [`OverworldPhase::start_menu_may_open`] checks all five:
+//! Upstream's answer is six separate mechanisms, and
+//! [`OverworldPhase::start_menu_may_open`] checks all six:
 //!
 //! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
 //!   `T_NOT_MOVING` (`src/field_control_avatar.c:95-101`) -- i.e. never
 //!   mid-step ([`OverworldPhase::mid_step`]).
+//! * `FieldGetPlayerInput` computes `forcedMove` from the *standing*
+//!   behavior before reading any button, and skips the whole block --
+//!   `pressedStartButton` included -- while it is set
+//!   (`src/field_control_avatar.c:92-113`, issue #926). An armed
+//!   forced-movement tile ([`engine::overworld::PlayerState::forced_movement_armed`])
+//!   is this port's counterpart, checked independently of `mid_step`
+//!   because the player can be armed while genuinely at rest between
+//!   polls -- the exact frame this gate exists for.
 //! * A battle runs under its own main callback
 //!   (`SetMainCallback2(CB2_InitBattle)`), so `ProcessPlayerFieldInput` is
 //!   not being polled at all ([`OverworldPhase::in_battle`]).
@@ -139,7 +147,7 @@ impl OverworldPhase {
     }
 
     /// Whether a fresh `START` press may open the menu this frame (module
-    /// docs' five upstream gates).
+    /// docs' six upstream gates).
     ///
     /// `field_input_claimed` is the caller's own answer to upstream's
     /// remaining branches -- `TryArrowWarp`, `TryStartInteractionScript`,
@@ -154,7 +162,7 @@ impl OverworldPhase {
     /// reason [`crate::flow`]'s own `menu_action` is one: inside
     /// [`Self::advance_start_menu_frame`] a refused press and a failed
     /// pack load are indistinguishable to a pack-less test, and these
-    /// five gates are the whole of this slice's "a save must not be
+    /// six gates are the whole of this slice's "a save must not be
     /// takeable here" story.
     pub(in crate::flow) fn start_menu_may_open(
         &self,
@@ -167,6 +175,7 @@ impl OverworldPhase {
             && !self.mid_step()
             && self.dialog.is_none()
             && self.sight_approach.is_none()
+            && !self.player.forced_movement_armed()
     }
 
     /// Build a fresh `START` press's menu without committing it, so the
