@@ -180,7 +180,7 @@ where
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
-    let (generation, staged_dir, generation_dir) = loop {
+    let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
             scene.name(),
@@ -193,26 +193,30 @@ where
         if generation_dir.exists() {
             continue;
         }
-        match std::fs::create_dir(&staged_dir) {
-            Ok(()) => break (generation, staged_dir, generation_dir),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
-            }
+        if let Some(claim) = create_and_claim_staged_dir(&staged_dir, claim_staged_dir)? {
+            break (generation, staged_dir, generation_dir, claim);
         }
     };
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
     let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
     let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
 
+    let mut renamed = false;
     let result = (|| {
         std::fs::write(&staged_rgb, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
         after_rgb_staged()?;
         std::fs::write(&staged_meta, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
+        // The promoting rename frees the staging name, so the claim can no
+        // longer answer for it past this point regardless of whether the
+        // rename itself goes on to succeed; on Windows the hold has to be
+        // given up first, since it denies the rename the same as anything
+        // else.
+        staged_dir_claim.release_hold();
         std::fs::rename(&staged_dir, &generation_dir)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        renamed = true;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
@@ -225,12 +229,590 @@ where
         ))
     })();
 
-    if result.is_err() {
-        // `staging` already cleans up its own candidate, respecting ownership.
-        let _ = std::fs::remove_dir_all(&staged_dir);
-        let _ = std::fs::remove_dir_all(&generation_dir);
+    // Neither staging name is removed once it may no longer be exclusively
+    // ours: `generation_dir`'s was never claimed, and `staged_dir`'s claim
+    // is only trusted while `!renamed` -- the rename attempt gives up the
+    // claim's hold before it runs, whether or not it goes on to succeed.
+    if result.is_err() && !renamed {
+        result.map_err(|source| clean_up_staged_dir(&staged_dir, staged_dir_claim, source))
+    } else {
+        result.map_err(|source| report_retained_generation(&generation_dir, source))
     }
-    result
+}
+
+/// Names the promoted generation a failed pointer publication leaves behind,
+/// so the operator can find and remove it: nothing removes it here, since
+/// its name was never claimed.
+fn report_retained_generation(
+    generation_dir: &Path,
+    source: RecordSnapshotError,
+) -> RecordSnapshotError {
+    match source {
+        RecordSnapshotError::Write(path, message) => RecordSnapshotError::Write(
+            path,
+            format!(
+                "{message}; the promoted generation at {} was left in place",
+                generation_dir.display()
+            ),
+        ),
+        other => other,
+    }
+}
+
+/// Creates `staged_dir` exclusively and claims it through `claim`, the pair
+/// that together make the directory this publish's to remove later (see
+/// [`StagedDirClaim`]). `Ok(None)` means the name was already taken and the
+/// caller should move on to the next one.
+///
+/// A claim that fails after the create leaves `staged_dir` exactly where it
+/// is. `create_dir`'s success proves the name was this call's only at the
+/// instant it returned, and the claim is what would have carried that proof
+/// forward; without it, the name may already answer to a directory another
+/// writer put there once it carried this one off, and removing by that name
+/// would take the replacement. The directory is named in the reported error
+/// instead, since nothing will come back for it.
+fn create_and_claim_staged_dir(
+    staged_dir: &Path,
+    claim: impl FnOnce(&Path) -> std::io::Result<StagedDirClaim>,
+) -> Result<Option<StagedDirClaim>, RecordSnapshotError> {
+    match std::fs::create_dir(staged_dir) {
+        Ok(()) => claim(staged_dir).map(Some).map_err(|error| {
+            RecordSnapshotError::Write(
+                staged_dir.to_path_buf(),
+                format!(
+                    "{error}; the staging directory {} was left where it is, since claiming it is what would have proved it still this capture's to remove",
+                    staged_dir.display()
+                ),
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(RecordSnapshotError::Write(
+            staged_dir.to_path_buf(),
+            error.to_string(),
+        )),
+    }
+}
+
+/// Binds cleanup to the directory object this call created, not to whatever
+/// its name may later answer to (see [`claim_staged_dir`]). On Unix the
+/// held descriptor is what makes the recorded `(dev, ino)` trustworthy: a
+/// deleted-but-still-open inode cannot be handed to a new directory, so a
+/// re-stat that still matches cannot be a reused number fooling the check.
+///
+/// Removal is bound to that object rather than to the name: on Unix
+/// [`remove_staged_dir`] renames the verified directory to a private
+/// sibling only that cleanup can be naming, reads `(dev, ino)` again
+/// there, and removes that name, so a directory put at the staging name
+/// after the check is never reached (the `windows` variant below denies
+/// that replacement outright through its hold). What stays open is the
+/// claim itself: `create_dir` returns no handle, so the open that claims
+/// the directory is a second, non-atomic step on every platform this
+/// module supports, and neither `std` nor POSIX offers an atomic
+/// create-and-open for directories (unlike a file's `create_new`).
+#[cfg(unix)]
+struct StagedDirClaim {
+    dev: u64,
+    ino: u64,
+    /// `None` when the directory refused every open this target has; the
+    /// identity above then names it without pinning its inode, and cleanup
+    /// reports rather than removes.
+    hold: Option<std::fs::File>,
+}
+
+/// As [`StagedDirClaim`] above. Windows has no by-handle identity to read
+/// back on demand (unlike Unix's `(dev, ino)`), so the hold is the proof
+/// instead: opened with no sharing at all, it denies any other opener a
+/// rename or delete of the directory it names for as long as it stays
+/// open, so nothing needs to be re-read to know the name still means the
+/// same object -- closing the second gap Unix has, since there is no
+/// separate re-verify step to race against the removal that follows it.
+/// [`StagedDirClaim::release_hold`] gives the hold up right before the
+/// promoting rename, which needs exactly the access the hold denies; past
+/// that release, ownership can no longer be confirmed at all, and
+/// `remove_staged_dir` drops the hold the same way immediately before its
+/// own `remove_dir_all`, so that release is this platform's only gap.
+#[cfg(windows)]
+struct StagedDirClaim {
+    hold: Option<std::fs::File>,
+}
+
+/// As [`StagedDirClaim`] above, for targets with neither an inode nor a
+/// sharing hold to lean on; ownership can never be confirmed here.
+#[cfg(not(any(unix, windows)))]
+struct StagedDirClaim;
+
+impl StagedDirClaim {
+    /// Gives up the hold the promoting rename needs (Windows only; see
+    /// [`StagedDirClaim`]). A no-op everywhere else.
+    #[cfg(unix)]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+
+    #[cfg(windows)]
+    fn release_hold(&mut self) {
+        self.hold.take();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    #[expect(
+        clippy::unused_self,
+        reason = "one signature for every platform; only Windows has a hold to give up"
+    )]
+    fn release_hold(&mut self) {}
+}
+
+/// Opens `path` (a freshly created `staged_dir`) and records the identity
+/// that will prove ownership of it at cleanup time.
+///
+/// The open must land on the directory `create_dir` put there and on nothing
+/// else. A writer that carries that directory off and plants a symlink at the
+/// name it freed would otherwise hand this claim the link's target: every
+/// payload this publish writes under the staging name would land in that
+/// directory instead, wherever it is, and the identity recorded here would
+/// answer for it. So the hold is taken without following links (see
+/// [`open_directory_hold`]), what it opened must be a directory, and the name
+/// must still answer to that very object -- a planted link, having an inode
+/// of its own, fails the last check even where the first is unavailable.
+#[cfg(unix)]
+fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    match open_directory_hold(path) {
+        Ok(hold) => {
+            let meta = hold.metadata()?;
+            let (dev, ino) = (meta.dev(), meta.ino());
+            let found = std::fs::symlink_metadata(path)?;
+            if !meta.is_dir() || (found.dev(), found.ino()) != (dev, ino) {
+                return Err(replaced_staging_name(path));
+            }
+            Ok(StagedDirClaim {
+                dev,
+                ino,
+                hold: Some(hold),
+            })
+        }
+        // A directory that allows creation and search but not reading refuses
+        // the only open this target has; its identity still names it, without
+        // the inode pin a held descriptor adds, so cleanup will only report.
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            // `symlink_metadata` follows nothing, so a planted link is its
+            // own entry here and the directory check alone refuses it.
+            let meta = std::fs::symlink_metadata(path)?;
+            if !meta.is_dir() {
+                return Err(replaced_staging_name(path));
+            }
+            Ok(StagedDirClaim {
+                dev: meta.dev(),
+                ino: meta.ino(),
+                hold: None,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Says that the staging name stopped answering to the directory this capture
+/// created there, which is what a claim exists to establish; the caller leaves
+/// whatever stands at the name alone (see [`create_and_claim_staged_dir`]).
+#[cfg(any(unix, windows))]
+fn replaced_staging_name(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "the staging name {} no longer answers to the directory this capture created there",
+        path.display()
+    ))
+}
+
+/// Opens a directory for identity and holding alone: `O_PATH`, which asks no
+/// read permission of a directory that allows only creation and search, on
+/// the Linux targets whose `fcntl.h` shares the generic value for it.
+/// `O_NOFOLLOW` joins it so a symlink planted at the name is never followed;
+/// Linux answers that pair with a descriptor on the link itself, which
+/// [`claim_staged_dir`] then refuses for not being a directory.
+#[cfg(all(
+    any(target_os = "linux", target_os = "android"),
+    any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64"
+    )
+))]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const O_PATH: i32 = 0o10_000_000;
+    const O_NOFOLLOW: i32 = 0o400_000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_PATH | O_NOFOLLOW)
+        .open(path)
+}
+
+/// As above where `std` offers only a read open of a directory; XNU refuses
+/// `O_EXEC` on one with `EISDIR`, so Apple targets take this arm. Without
+/// `O_PATH` in the pair, `O_NOFOLLOW` fails the open outright on a symlink.
+#[cfg(target_vendor = "apple")]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const O_NOFOLLOW: i32 = 0x0100;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)
+}
+
+/// As above on the remaining Unix targets, whose `O_NOFOLLOW` value this
+/// module does not carry and cannot ask a dependency for; there
+/// [`claim_staged_dir`]'s check that the name still answers to the opened
+/// object is the whole of what refuses a planted symlink.
+#[cfg(all(
+    unix,
+    not(target_vendor = "apple"),
+    not(all(
+        any(target_os = "linux", target_os = "android"),
+        any(
+            target_arch = "x86_64",
+            target_arch = "x86",
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "riscv64"
+        )
+    ))
+))]
+fn open_directory_hold(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
+/// As [`claim_staged_dir`] above, for the sharing hold (see
+/// [`StagedDirClaim`]). `FILE_FLAG_BACKUP_SEMANTICS` is the documented
+/// `CreateFileW` flag that lets a directory be opened at all; `share_mode`
+/// `0` is what then denies every other opener, matching
+/// `staging::create_new_exclusive`'s use of the same flag for a file. The
+/// handle asks for no access at all: it exists to deny sharing, so an ACL
+/// that allows creating entries but not listing the directory still admits it.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` is what carries the Unix arm's contract
+/// here. Without it `CreateFileW` walks a reparse point a writer leaves at
+/// the staging name -- a junction needs no privilege to create -- and hands
+/// back the directory it points at: the payloads staged under the name would
+/// land there, outside `output_dir`, and the hold would deny sharing on that
+/// directory rather than on the entry cleanup later removes. With it the
+/// handle is the entry itself, and an entry that is a reparse point, or that
+/// is no directory, is refused outright; `std`'s own `symlink_metadata` opens
+/// exactly this way, so the zero-access handle answers `metadata` too. The
+/// refusal reads the raw attribute, which names every reparse tag and not
+/// only the name-surrogate ones `FileType::is_symlink` reports; a directory
+/// this capture just created is never any of them.
+#[cfg(windows)]
+fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
+    use std::os::windows::fs::MetadataExt as _;
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+    let hold = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(0)
+        .open(path)?;
+    let found = hold.metadata()?;
+    if found.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !found.is_dir() {
+        return Err(replaced_staging_name(path));
+    }
+    Ok(StagedDirClaim { hold: Some(hold) })
+}
+
+/// As [`claim_staged_dir`] above, for targets with no ownership proof to
+/// record (see [`StagedDirClaim`]).
+#[cfg(not(any(unix, windows)))]
+fn claim_staged_dir(_path: &Path) -> std::io::Result<StagedDirClaim> {
+    Ok(StagedDirClaim)
+}
+
+/// Removes `staged_dir` if `claim` still names the very directory this
+/// publish created there, folding a cleanup failure into `source` rather
+/// than discarding it. A directory found replaced is left alone -- it
+/// belongs to whoever holds it now -- in silence when the check itself saw
+/// the replacement, and named in the error when it arrived after.
+fn clean_up_staged_dir(
+    staged_dir: &Path,
+    claim: StagedDirClaim,
+    source: RecordSnapshotError,
+) -> RecordSnapshotError {
+    match remove_staged_dir(staged_dir, claim) {
+        Ok(()) | Err(None) => source,
+        Err(Some(cleanup_error)) => fold_cleanup_error(source, staged_dir, Some(cleanup_error)),
+    }
+}
+
+/// Appends `cleanup_error`, if any, to `source` rather than discarding it;
+/// `source` alone otherwise.
+fn fold_cleanup_error(
+    source: RecordSnapshotError,
+    path: &Path,
+    cleanup_error: Option<std::io::Error>,
+) -> RecordSnapshotError {
+    let Some(cleanup_error) = cleanup_error else {
+        return source;
+    };
+    RecordSnapshotError::Write(
+        path.to_path_buf(),
+        format!(
+            "{source}; additionally failed to remove the abandoned staging directory {}: {cleanup_error}",
+            path.display()
+        ),
+    )
+}
+
+/// Removes `staged_dir` when `claim` still proves ownership of it. `Err(None)`
+/// means it does not (definitely replaced, or already gone) and nothing was
+/// touched; `Err(Some(_))` means ownership could not be confirmed, or another
+/// writer took the name after the check (see [`remove_verified_staged_dir`]),
+/// or the removal itself failed, and must be reported rather than swallowed.
+#[cfg(unix)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "one signature for every platform; the Windows implementation must own `claim` to drop its hold before removing"
+)]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    remove_staged_dir_after_check(staged_dir, &claim, || {})
+}
+
+/// [`remove_staged_dir`] with `after_check` run between the ownership read
+/// and the removal, so a test can install a competitor in exactly that window.
+#[cfg(unix)]
+fn remove_staged_dir_after_check(
+    staged_dir: &Path,
+    claim: &StagedDirClaim,
+    after_check: impl FnOnce(),
+) -> Result<(), Option<std::io::Error>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // Without the held descriptor a matching `(dev, ino)` may be a reissued
+    // inode number, so identity alone never licenses a removal.
+    if claim.hold.is_none() {
+        return Err(Some(std::io::Error::other(format!(
+            "the staging directory {} was left in place: it allowed no open that could pin its identity, so its removal cannot be proven safe",
+            staged_dir.display()
+        ))));
+    }
+    match std::fs::symlink_metadata(staged_dir) {
+        Ok(found)
+            if found.file_type().is_dir()
+                && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
+        {
+            after_check();
+            remove_verified_staged_dir(staged_dir, claim)
+        }
+        Ok(_) => Err(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(None),
+        Err(error) => Err(Some(error)),
+    }
+}
+
+/// Removes the directory [`remove_staged_dir`]'s check just matched, bound to
+/// that directory rather than to the name it was found under: the name is
+/// renamed to a private sibling ([`private_cleanup_path`]) that no competing
+/// writer can name, `claim`'s identity is read again there, and only that
+/// private name is removed. A writer that takes the staging name over between
+/// the check and the rename therefore loses nothing -- what the rename moved
+/// is its directory, not this one's, so it fails the second read and goes back
+/// (see [`report_foreign_staged_dir`]) instead of being removed.
+///
+/// The private name still stands between that second read and the removal,
+/// and no writer following this module's naming ever derives it; anchoring
+/// the removal to the descriptor instead would take `unlinkat`, which `std`
+/// does not expose.
+#[cfg(unix)]
+fn remove_verified_staged_dir(
+    staged_dir: &Path,
+    claim: &StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let private = private_cleanup_path(staged_dir, claim);
+    match std::fs::rename(staged_dir, &private) {
+        Ok(()) => {}
+        // The name answered to nothing by the time the rename ran, so this
+        // publish's directory had already been carried off; whatever comes
+        // back to that name is another writer's.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Some(std::io::Error::other(format!(
+                "the staging directory {} was carried off before cleanup could take hold of it, so it was left in place",
+                staged_dir.display()
+            ))));
+        }
+        Err(error) => return Err(Some(error)),
+    }
+    match std::fs::symlink_metadata(&private) {
+        Ok(found)
+            if found.file_type().is_dir()
+                && (claim.dev, claim.ino) == (found.dev(), found.ino()) =>
+        {
+            std::fs::remove_dir_all(&private).map_err(|error| {
+                Some(std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "removing the staging directory failed after it was moved to {}, where it was left: {error}",
+                        private.display()
+                    ),
+                ))
+            })
+        }
+        _ => Err(Some(report_foreign_staged_dir(staged_dir, &private))),
+    }
+}
+
+/// Puts back what [`remove_verified_staged_dir`]'s rename turned out to have
+/// moved -- a competing writer's directory, which took the staging name
+/// between the ownership check and that rename -- and says where it ended up.
+#[cfg(unix)]
+fn report_foreign_staged_dir(staged_dir: &Path, private: &Path) -> std::io::Error {
+    report_foreign_staged_dir_with(staged_dir, private, |path: &Path| {
+        std::fs::remove_file(path)
+    })
+}
+
+/// [`report_foreign_staged_dir`] with the unlink of the private link it makes
+/// of a restored file given in, so a test can fail exactly that step.
+#[cfg(unix)]
+fn report_foreign_staged_dir_with(
+    staged_dir: &Path,
+    private: &Path,
+    remove_private: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Error {
+    match restore_foreign_staged_dir(staged_dir, private, remove_private) {
+        ForeignRestore::Restored => std::io::Error::other(format!(
+            "another writer's directory stood at {} by the time cleanup took hold of it, so it was left in place",
+            staged_dir.display()
+        )),
+        // The name is answerable again, but cleanup's own link to the same
+        // file is not: nothing else names that entry, so only this does.
+        ForeignRestore::RestoredLeavingLink(error) => std::io::Error::other(format!(
+            "another writer's file stood at {} by the time cleanup took hold of it, so it was left in place, but cleanup's own link to it at {} could not be removed and stands there still: {error}",
+            staged_dir.display(),
+            private.display()
+        )),
+        ForeignRestore::Abandoned => std::io::Error::other(format!(
+            "another writer's directory stood at {} by the time cleanup took hold of it, and that name was taken again before it could go back, so it was left in place at {}",
+            staged_dir.display(),
+            private.display()
+        )),
+    }
+}
+
+/// Where [`restore_foreign_staged_dir`] left the entry it was given.
+#[cfg(unix)]
+enum ForeignRestore {
+    /// Back at the staging name, with nothing of cleanup's own beside it.
+    Restored,
+    /// Back at the staging name, but the private link cleanup made of it
+    /// outlived the restore, with this error explaining why.
+    RestoredLeavingLink(std::io::Error),
+    /// Still under the private name.
+    Abandoned,
+}
+
+/// Puts the entry under `private` back at `staged_dir`, reporting where it
+/// ended up. A directory goes back over a `create_dir` placeholder, which
+/// refuses a name a third writer has taken and holds it against one arriving
+/// next, so the `rename` that follows replaces this placeholder alone; a file
+/// goes back through `link`, which refuses an existing destination itself.
+#[cfg(unix)]
+fn restore_foreign_staged_dir(
+    staged_dir: &Path,
+    private: &Path,
+    remove_private: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> ForeignRestore {
+    let foreign_is_dir =
+        std::fs::symlink_metadata(private).is_ok_and(|found| found.file_type().is_dir());
+    if foreign_is_dir {
+        if std::fs::create_dir(staged_dir).is_err() {
+            return ForeignRestore::Abandoned;
+        }
+        if std::fs::rename(private, staged_dir).is_ok() {
+            return ForeignRestore::Restored;
+        }
+        // `remove_dir` takes the placeholder back out and refuses anything else.
+        let _ = std::fs::remove_dir(staged_dir);
+        return ForeignRestore::Abandoned;
+    }
+    // A file goes back through `link`, which refuses an existing destination
+    // outright, so a third writer's file at the name is never replaced; a
+    // link that fails leaves the entry reported under `private`.
+    if std::fs::hard_link(private, staged_dir).is_ok() {
+        // The file answers to both names now. Dropping the private one is
+        // what finishes the restore, and an unlink that fails leaves an
+        // entry no other report would ever name.
+        return match remove_private(private) {
+            Ok(()) => ForeignRestore::Restored,
+            Err(error) => ForeignRestore::RestoredLeavingLink(error),
+        };
+    }
+    ForeignRestore::Abandoned
+}
+
+/// A sibling name for `staged_dir` that only this cleanup can be naming: the
+/// staging name plus this process's id, the claimed directory's inode, and the
+/// wall clock. Two cleanups at once hold two live directories, which cannot
+/// share an inode number; two in sequence cannot share a clock reading.
+#[cfg(unix)]
+fn private_cleanup_path(staged_dir: &Path, claim: &StagedDirClaim) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let mut name = staged_dir.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".cleanup-{}-{}-{nanos}",
+        std::process::id(),
+        claim.ino
+    ));
+    staged_dir.with_file_name(name)
+}
+
+/// As [`remove_staged_dir`] above: on Windows there is no path to re-verify,
+/// since `claim`'s hold is itself the proof (see [`StagedDirClaim`]) -- for
+/// as long as it stayed held, no rename or delete of `staged_dir` could
+/// have succeeded, so the name still means the directory this publish
+/// created. A claim whose hold is already gone cannot prove that, and is
+/// reported rather than guessed at.
+#[cfg(windows)]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    mut claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    let Some(hold) = claim.hold.take() else {
+        return Err(Some(std::io::Error::other(
+            "the staging directory's sharing hold was already released for the promoting rename, so its ownership can no longer be confirmed",
+        )));
+    };
+    // The hold itself denies the removal below; give it up first.
+    drop(hold);
+    std::fs::remove_dir_all(staged_dir).map_err(Some)
+}
+
+/// As [`remove_staged_dir`] above, for targets with no ownership proof to
+/// check (see [`StagedDirClaim`]): cleanup can never be confirmed safe, so
+/// it never runs.
+#[cfg(not(any(unix, windows)))]
+fn remove_staged_dir(
+    staged_dir: &Path,
+    _claim: StagedDirClaim,
+) -> Result<(), Option<std::io::Error>> {
+    Err(Some(std::io::Error::other(format!(
+        "this target has no way to confirm ownership of the staging directory {}, so it was left in place",
+        staged_dir.display()
+    ))))
 }
 
 /// Hex width of the pointer staging suffix, matching [`crate::extract`]'s
