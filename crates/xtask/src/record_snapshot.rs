@@ -703,11 +703,27 @@ fn report_foreign_staged_dir_with(
             staged_dir.display(),
             private.display()
         )),
-        ForeignRestore::Abandoned => std::io::Error::other(format!(
+        // Only the name being taken again is a competing writer; every other
+        // failure names itself, since guessing that cause would send the
+        // operator after a writer that was never there.
+        ForeignRestore::NameTaken => std::io::Error::other(format!(
             "another writer's directory stood at {} by the time cleanup took hold of it, and that name was taken again before it could go back, so it was left in place at {}",
             staged_dir.display(),
             private.display()
         )),
+        ForeignRestore::NotRestored { error, placeholder } => {
+            let placeholder = placeholder.map_or_else(String::new, |placeholder| {
+                format!(
+                    "; cleanup's own empty placeholder stands at {} and could not be taken back out: {placeholder}",
+                    staged_dir.display()
+                )
+            });
+            std::io::Error::other(format!(
+                "another writer's entry stood at {} by the time cleanup took hold of it, and putting it back under that name failed, so it was left in place at {}: {error}{placeholder}",
+                staged_dir.display(),
+                private.display()
+            ))
+        }
     }
 }
 
@@ -719,15 +735,28 @@ enum ForeignRestore {
     /// Back at the staging name, but the private link cleanup made of it
     /// outlived the restore, with this error explaining why.
     RestoredLeavingLink(std::io::Error),
-    /// Still under the private name.
-    Abandoned,
+    /// Still under the private name, because a third writer holds the
+    /// staging name now.
+    NameTaken,
+    /// Still under the private name for the reason carried here, which is
+    /// not a taken name.
+    NotRestored {
+        /// Why the entry could not go back.
+        error: std::io::Error,
+        /// Why the placeholder reserved for it could not be taken back out
+        /// again, when one was reserved and stayed behind.
+        placeholder: Option<std::io::Error>,
+    },
 }
 
 /// Puts the entry under `private` back at `staged_dir`, reporting where it
-/// ended up. A directory goes back over a `create_dir` placeholder, which
-/// refuses a name a third writer has taken and holds it against one arriving
-/// next, so the `rename` that follows replaces this placeholder alone; a file
-/// goes back through `link`, which refuses an existing destination itself.
+/// ended up and why. A directory goes back over a `create_dir` placeholder,
+/// which refuses a name a third writer has taken and holds it against one
+/// arriving next, so the `rename` that follows replaces this placeholder
+/// alone; a file goes back through `link`, which refuses an existing
+/// destination itself. Every failure here is the caller's only account of
+/// what happened to another writer's entry, so each one is carried out rather
+/// than collapsed into the one cause that reads like a competing writer.
 #[cfg(unix)]
 fn restore_foreign_staged_dir(
     staged_dir: &Path,
@@ -737,29 +766,47 @@ fn restore_foreign_staged_dir(
     let foreign_is_dir =
         std::fs::symlink_metadata(private).is_ok_and(|found| found.file_type().is_dir());
     if foreign_is_dir {
-        if std::fs::create_dir(staged_dir).is_err() {
-            return ForeignRestore::Abandoned;
+        if let Err(error) = std::fs::create_dir(staged_dir) {
+            return taken_or_not_restored(error);
         }
-        if std::fs::rename(private, staged_dir).is_ok() {
+        let Err(error) = std::fs::rename(private, staged_dir) else {
             return ForeignRestore::Restored;
-        }
-        // `remove_dir` takes the placeholder back out and refuses anything else.
-        let _ = std::fs::remove_dir(staged_dir);
-        return ForeignRestore::Abandoned;
+        };
+        // `remove_dir` takes the placeholder back out and refuses anything
+        // else; a removal that fails leaves cleanup's own empty directory
+        // standing at the staging name, which only this report names.
+        return ForeignRestore::NotRestored {
+            error,
+            placeholder: std::fs::remove_dir(staged_dir).err(),
+        };
     }
     // A file goes back through `link`, which refuses an existing destination
     // outright, so a third writer's file at the name is never replaced; a
     // link that fails leaves the entry reported under `private`.
-    if std::fs::hard_link(private, staged_dir).is_ok() {
+    match std::fs::hard_link(private, staged_dir) {
         // The file answers to both names now. Dropping the private one is
         // what finishes the restore, and an unlink that fails leaves an
         // entry no other report would ever name.
-        return match remove_private(private) {
+        Ok(()) => match remove_private(private) {
             Ok(()) => ForeignRestore::Restored,
             Err(error) => ForeignRestore::RestoredLeavingLink(error),
-        };
+        },
+        Err(error) => taken_or_not_restored(error),
     }
-    ForeignRestore::Abandoned
+}
+
+/// Sorts a restore failure into the one cause that is a competing writer and
+/// everything else, which carries its own error (see [`ForeignRestore`]).
+#[cfg(unix)]
+fn taken_or_not_restored(error: std::io::Error) -> ForeignRestore {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        ForeignRestore::NameTaken
+    } else {
+        ForeignRestore::NotRestored {
+            error,
+            placeholder: None,
+        }
+    }
 }
 
 /// A sibling name for `staged_dir` that only this cleanup can be naming: the

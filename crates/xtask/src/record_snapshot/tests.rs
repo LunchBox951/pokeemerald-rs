@@ -1506,3 +1506,43 @@ fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
     eprintln!("the adversary took the staging name in {wins} of {ROUNDS} rounds");
     drop(guard);
 }
+
+/// A restore that fails for a reason other than the staging name being taken
+/// must say so. `restore_foreign_staged_dir` reserves the placeholder with
+/// `create_dir`, whose failure is the only thing standing between the foreign
+/// entry and its own name; a report that folds every such failure into the
+/// one cause it names sends the operator after a competing writer that was
+/// never there and drops the error that was.
+#[cfg(unix)]
+#[test]
+fn cleanup_reports_why_a_restore_could_not_reserve_the_staging_name() {
+    let dir = scratch_path("restore-reservation-failure");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    // Nothing can be created under a regular file, so the placeholder's
+    // `create_dir` fails with an error that is not "the name is taken".
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, b"").unwrap();
+    let staged = blocker.join(".reservation.staged");
+    let private = dir.join(".reservation.staged.cleanup-0-0-0");
+    std::fs::create_dir(&private).unwrap();
+    let reservation_failure = std::fs::create_dir(&staged)
+        .expect_err("a name under a regular file must not be creatable")
+        .to_string();
+
+    let error =
+        super::report_foreign_staged_dir_with(&staged, &private, |path: &std::path::Path| {
+            std::fs::remove_file(path)
+        });
+
+    assert!(
+        error.to_string().contains(&reservation_failure),
+        "the report must carry why the restore failed ({reservation_failure}): {error}"
+    );
+    assert!(
+        !error.to_string().contains("was taken again"),
+        "the report must not blame a competing writer for a failure that was not one: {error}"
+    );
+
+    drop(guard);
+}
