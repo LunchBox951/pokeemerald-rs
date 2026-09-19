@@ -159,6 +159,17 @@ impl Battle {
     /// when selected. The scripted first battle suppresses critical hits,
     /// forbids running, and uses its dedicated opponent AI.
     ///
+    /// A depleted enemy slot needs only real move data, not an executable
+    /// effect: [`Battle::act`] fails it as [`BattleEvent::FailedNoPp`] before
+    /// running one, matching `Cmd_attackcanceler`'s no-PP jump
+    /// (`src/battle_script_commands.c:934`-`:939`). Soundproof's own block
+    /// runs earlier still (`:932`-`:933`), but needs only the already-checked
+    /// move data, not an executable effect, so it cannot make this unsafe.
+    /// Struggle is that jump's one exemption (`:934`) and so the only move a
+    /// depleted slot still executes; it has an executable pipeline of its own,
+    /// so the relaxation still reaches [`Battle::execute_move`] with nothing
+    /// unresolvable.
+    ///
     /// # Errors
     ///
     /// Returns [`BattleError::FaintedBattler`] for a fainted participant or
@@ -177,11 +188,18 @@ impl Battle {
         if enemy.is_fainted() {
             return Err(BattleError::FaintedBattler(false));
         }
-        for slot in enemy.moves() {
-            ensure_executable(&dex, slot.move_id)?;
-            // Zero-PP moves stop before applying effects
-            // (`src/battle_script_commands.c:934`-`:939`).
+        for (index, slot) in enemy.moves().iter().enumerate() {
+            // A depleted slot must still be real move data -- not the
+            // empty-slot placeholder or an id outside the dex -- but its
+            // effect need not be executable; see the no-PP note above.
+            if slot.move_id == MOVE_NONE {
+                return Err(BattleError::PlaceholderMove(index));
+            }
+            dex.move_data(slot.move_id)?;
+            // Zero-PP moves stop before applying effects, Struggle
+            // excepted (`src/battle_script_commands.c:934`-`:939`).
             if slot.pp > 0 {
+                ensure_executable(&dex, slot.move_id)?;
                 paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
                 secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
             }
