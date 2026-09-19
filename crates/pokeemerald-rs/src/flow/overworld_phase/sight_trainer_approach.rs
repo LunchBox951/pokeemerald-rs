@@ -458,17 +458,12 @@ impl OverworldPhase {
                 }
                 if let Some(approach) = &mut self.sight_approach {
                     let facing = approach.stop_facing_player();
-                    // `CancelPlayerForcedMovement` still has no counterpart
-                    // here: it is `ForcedMovement_None`
-                    // (`field_player_avatar.c:1218-1221`, `:429-441`), which
-                    // clears `PLAYER_AVATAR_FLAG_FORCED_MOVE` and resyncs
-                    // `movementDirection` to `facingDirection` -- never
-                    // `PLAYER_AVATAR_FLAG_CONTROLLABLE`, the flag
-                    // `PlayerState::forced_movement_armed` models, so the
-                    // armed tile survives the look upstream too -- and the
-                    // resync is what `PlayerState::face` below already does.
-                    // The player's own face action finishes in the frame it
-                    // is applied --
+                    // `CancelPlayerForcedMovement` has no counterpart here:
+                    // it never clears `PLAYER_AVATAR_FLAG_CONTROLLABLE`, the
+                    // flag `PlayerState::forced_movement_armed` models
+                    // (`field_player_avatar.c:1218-1221`, `:429-441`), so an
+                    // armed tile survives the look upstream too. The player's
+                    // own face action finishes in the frame it is applied --
                     // `PlayerState::face`'s own docs -- so
                     // `TRSEE_PLAYER_FACE_WAIT` has nothing left to wait for
                     // once the guard above has already let the held walk

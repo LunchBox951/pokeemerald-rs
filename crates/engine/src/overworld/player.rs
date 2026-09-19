@@ -154,21 +154,9 @@ impl PlayerState {
         self.facing
     }
 
-    /// Changes facing without starting or interrupting a step.
-    ///
-    /// Carries the movement direction with it, as upstream's
-    /// `SetObjectEventDirection` does: it writes `movementDirection`
-    /// unconditionally and `facingDirection` beside it unless
-    /// `facingDirectionLocked` is set (`event_object_movement.c:2361-2371`),
-    /// and every scripted look reaches it -- `ObjectEventTurn`
-    /// (`:1867-1875`) for a turn in place, `FaceDirection` (`:5048-5055`)
-    /// for the `MOVEMENT_ACTION_FACE_*` a sight trigger holds on the player
-    /// (`trainer_see.c:522-526`). Only `ForcedMovement_Slide` and
-    /// `ForcedMovement_MuddySlope` lock facing
-    /// (`field_player_avatar.c:526-532`, `:567-576`), and those physics stay
-    /// unported, so nothing here may leave the two apart -- which matters
-    /// because forced movement's slip direction reads the movement direction
-    /// (see `forced_movement_direction`).
+    /// Changes facing without starting or interrupting a step, carrying the
+    /// movement direction with it as upstream's `SetObjectEventDirection`
+    /// does (`event_object_movement.c:2361-2371`).
     pub const fn face(&mut self, direction: Direction) {
         self.facing = direction;
         self.movement_direction = direction;
@@ -2335,14 +2323,11 @@ mod tests {
         );
     }
 
-    /// A scripted look (`face`) moves ice's forced direction with it:
-    /// upstream's `SetObjectEventDirection` writes `movementDirection` on
-    /// every scripted look, not only on a walk or turn (see
-    /// [`PlayerState::face`]'s doc). Standing on the same blocked-east ice
-    /// tile as the sibling test, facing north in between makes north -- clear
-    /// here -- the direction `ForcedMovement_Slip` would take, so the keypad
-    /// fallback the sibling test exercises must close again
-    /// `(behavioral-fidelity)`.
+    /// A scripted look (`face`) moves ice's forced direction with it.
+    /// Standing on the same blocked-east ice tile as the sibling test, facing
+    /// north in between makes north -- clear here -- the direction
+    /// `ForcedMovement_Slip` would take, so the keypad fallback the sibling
+    /// test exercises must close again `(behavioral-fidelity)`.
     #[test]
     fn a_scripted_face_carries_ices_forced_direction_with_it() {
         let mut bytes = Vec::new();

@@ -27150,13 +27150,13 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsEastwardCurrent": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsIce_2": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27168,7 +27168,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsMuddySlope": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27192,43 +27192,43 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsNorthwardCurrent": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSecretBaseJumpMat": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSecretBaseSpinMat": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideEast": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideNorth": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideSouth": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsSlideWest": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27246,37 +27246,37 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsSouthwardCurrent": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsTrickHouseSlipperyFloor": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkEast": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkNorth": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkSouth": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWalkWest": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27288,7 +27288,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsWaterfall": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27306,7 +27306,7 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsWestwardCurrent": {
-          "reason": "Folded into is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
