@@ -1,9 +1,9 @@
 use super::{
-    ensure_resolvable, is_stat_change_effect, resolve_stat_change_move, stat_change_for_effect,
-    ChangedStat, StatChangeDirection, StatChangeEffect, StatChangeMagnitude, StatChangeOutcome,
-    CLEAR_BODY, EFFECT_ACCURACY_DOWN, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
-    EFFECT_DEFENSE_DOWN_TWO, EFFECT_DEFENSE_UP, EFFECT_SPECIAL_ATTACK_UP, EFFECT_SPEED_DOWN,
-    HYPER_CUTTER, KEEN_EYE, SOUNDPROOF, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
+    ensure_resolvable, is_stat_change_effect, resolve_stat_change_move, soundproof_block,
+    stat_change_for_effect, ChangedStat, StatChangeDirection, StatChangeEffect,
+    StatChangeMagnitude, StatChangeOutcome, CLEAR_BODY, EFFECT_ACCURACY_DOWN, EFFECT_ATTACK_DOWN,
+    EFFECT_DEFENSE_DOWN, EFFECT_DEFENSE_DOWN_TWO, EFFECT_DEFENSE_UP, EFFECT_SPECIAL_ATTACK_UP,
+    EFFECT_SPEED_DOWN, HYPER_CUTTER, KEEN_EYE, SOUNDPROOF, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -42,6 +42,7 @@ const STRING_SHOT: MoveId = MoveId(81);
 const SAND_ATTACK: MoveId = MoveId(28);
 const SCREECH: MoveId = MoveId(103);
 const METAL_SOUND: MoveId = MoveId(319);
+const HYPER_VOICE: MoveId = MoveId(304);
 const GROWTH: MoveId = MoveId(74);
 const HARDEN: MoveId = MoveId(106);
 const TACKLE: MoveId = MoveId(33);
@@ -506,6 +507,80 @@ fn soundproof_blocks_metal_sound_before_accuracy() {
         resolve_stat_change_move(&dex, METAL_SOUND, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(outcome, StatChangeOutcome::SoundproofProtected);
     assert_eq!(rng.draws(), 0);
+}
+
+/// `ABILITYEFFECT_MOVES_BLOCK` looks a move up in `sSoundMovesTable` and blocks
+/// it on membership alone (`battle_util.c:2659-2675`), so the guard must not
+/// ask the stat-change table first: Hyper Voice is an ordinary damaging hit
+/// that maps to no stat change.
+#[test]
+fn soundproof_blocks_hyper_voice_although_it_changes_no_stat() {
+    let dex = Dex::new();
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+    assert_eq!(
+        stat_change_for_effect(dex.move_data(HYPER_VOICE).unwrap().effect),
+        None,
+        "fixture sanity: Hyper Voice is an ordinary hit, not a stat change"
+    );
+
+    assert!(soundproof_block(&dex, HYPER_VOICE, &defender).unwrap());
+}
+
+/// Only Soundproof reaches the sound-move block; another ability takes the hit.
+#[test]
+fn a_defender_without_soundproof_lets_a_sound_move_through() {
+    let dex = Dex::new();
+    let defender = mon(&dex, ZIGZAGOON, 15, vec![TACKLE]);
+    assert_ne!(defender.ability(), SOUNDPROOF);
+
+    assert!(!soundproof_block(&dex, HYPER_VOICE, &defender).unwrap());
+}
+
+/// The guard blocks exactly `sSoundMovesTable` (`battle_util.c:686-692`),
+/// anchored by canonical move name so a transposed ID fails here.
+#[test]
+fn soundproof_blocks_exactly_the_upstream_sound_moves() {
+    const UPSTREAM_SOUND_MOVES: [&str; 10] = [
+        "GROWL",
+        "ROAR",
+        "SING",
+        "SUPERSONIC",
+        "SCREECH",
+        "SNORE",
+        "UPROAR",
+        "METAL SOUND",
+        "GRASSWHISTLE",
+        "HYPER VOICE",
+    ];
+
+    let dex = Dex::new();
+    let move_names = MoveNames::new();
+    let defender = mon(&dex, VOLTORB, 15, vec![TACKLE]);
+    assert_eq!(defender.ability(), SOUNDPROOF);
+
+    let mut listed = Vec::with_capacity(UPSTREAM_SOUND_MOVES.len());
+    for name in UPSTREAM_SOUND_MOVES {
+        let move_id = (FIRST_MOVE_ID..=LAST_EMERALD_MOVE_ID)
+            .map(MoveId)
+            .find(|&move_id| move_names.name(move_id) == Ok(name))
+            .unwrap_or_else(|| panic!("canonical move name {name:?} is absent from the table"));
+        assert!(
+            soundproof_block(&dex, move_id, &defender).unwrap(),
+            "{name} ({move_id:?}) is in sSoundMovesTable, so Soundproof blocks it"
+        );
+        listed.push(move_id);
+    }
+
+    for move_id in (FIRST_MOVE_ID..=LAST_EMERALD_MOVE_ID).map(MoveId) {
+        if listed.contains(&move_id) {
+            continue;
+        }
+        assert!(
+            !soundproof_block(&dex, move_id, &defender).unwrap(),
+            "{move_id:?} is outside sSoundMovesTable, so Soundproof lets it through"
+        );
+    }
 }
 
 #[test]
