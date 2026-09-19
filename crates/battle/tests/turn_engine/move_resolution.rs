@@ -2,7 +2,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
+use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
 
 #[test]
 fn every_move_event_names_the_move_that_was_used() {
@@ -49,55 +49,68 @@ fn every_move_event_names_the_move_that_was_used() {
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
 
-// This test was re-pinned after upstream showed that an all-spent moveset
-// forces Struggle at selection time rather than failing at PP deduction
-// (`test-ratchet`). Because this slice cannot execute Struggle, the turn
-// stops only when that fallback would act; an earlier mover's events and
-// state changes must remain committed.
+// The first mover's hit commits, and the forced Struggle that follows it in
+// turn order executes in the same turn.
 
 #[test]
-fn a_turn_that_stops_partway_still_reports_what_already_happened() {
+fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
     let dex = Dex::new();
     // Rattata (speed 13) moves first; Bulbasaur (speed 11) second, with
     // every slot spent -- upstream forces Struggle for it at selection
-    // time (drawing nothing), and this slice cannot execute Struggle, so
-    // the turn stops when that fallback would act: after the player's
-    // hit has already committed.
+    // time (drawing nothing), and its own turn-order slot runs right
+    // after the first mover's.
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
     let enemy_hp = enemy.current_hp();
+    let player_hp = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]).current_hp();
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // 1 (battle start) + turn number + 4 (the player's hit). No
-    // selection draw: the forced-Struggle pick bypasses the rejection
-    // loop. The script is exhausted, so a stray draw would panic.
-    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0]);
+    // 1 (battle start) + turn number + 4 (the player's ordinary hit) + 3
+    // (the enemy's forced Struggle: accuracy, crit, damage-variance -- no
+    // trailing effect-chance draw and no selection draw for the forced
+    // pick). The script is exhausted, so a stray draw would panic.
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let failure = battle
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(
-        failure.error(),
-        BattleError::UnsupportedMoveEffect(STRUGGLE)
+        events,
+        vec![
+            BattleEvent::Hit {
+                by_player: true,
+                move_id: MoveId(33),
+                damage: 7,
+                is_critical: false,
+            },
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: STRUGGLE,
+                damage: 6,
+                is_critical: false,
+            },
+            BattleEvent::Recoil {
+                by_player: false,
+                move_id: STRUGGLE,
+                damage: 1,
+            },
+        ],
+        "the first mover's ordinary hit and the forced Struggle that \
+         follows it must both commit"
     );
-    assert_eq!(
-        failure.events(),
-        [BattleEvent::Hit {
-            by_player: true,
-            move_id: MoveId(33),
-            damage: 7,
-            is_critical: false,
-        }],
-        "the first mover's hit committed and must not be discarded"
-    );
-    // ...and it really did commit: HP and PP moved, so dropping the event
-    // would have left the caller unable to explain the new state.
-    assert_eq!(battle.enemy().current_hp(), enemy_hp - 7);
+    // ...and both really did commit: HP and PP moved on both sides.
+    assert_eq!(battle.enemy().current_hp(), enemy_hp - 7 - 1);
+    assert_eq!(battle.player().current_hp(), player_hp - 6);
     assert_eq!(battle.player().moves()[0].pp, 34);
-    assert_eq!(rng.draws(), 6);
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        0,
+        "the forced pick spends no PP"
+    );
+    assert_eq!(rng.draws(), 9);
     assert!(battle.outcome().is_none());
 }
 

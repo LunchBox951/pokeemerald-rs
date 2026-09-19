@@ -82,10 +82,13 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     assert_eq!(rng.draws(), 8);
 }
 
+// After a failed run, the all-spent enemy's forced Struggle executes at its
+// own turn-order slot like an ordinary move.
 #[test]
-fn a_failed_run_reports_the_attempt_even_when_the_enemy_cannot_act() {
+fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
     let dex = Dex::new();
     let player = slow_runner_rattata(&dex); // slow: the run fails
+    let player_max_hp = player.stats().max_hp;
     let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
@@ -93,25 +96,42 @@ fn a_failed_run_reports_the_attempt_even_when_the_enemy_cannot_act() {
 
     // battle start, turn number, escape roll (fails) -- no selection
     // draw, the all-spent enemy's forced-Struggle pick bypasses the
-    // rejection loop. The fallback then has to act, which stops the turn.
-    let mut rng = SequenceRng::new([0, 0, 65000]);
+    // rejection loop -- then the forced Struggle's three draws (accuracy,
+    // crit, damage-variance).
+    let mut rng = SequenceRng::new([0, 0, 65000, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
     assert_eq!(
-        failure.error(),
-        BattleError::UnsupportedMoveEffect(STRUGGLE)
-    );
-    assert_eq!(
-        failure.events(),
-        [BattleEvent::RunAttempt {
-            by_player: true,
-            success: false,
-        }],
-        "the run was attempted and burned the turn; that must be reported"
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: STRUGGLE,
+                damage: player_max_hp,
+                is_critical: false,
+            },
+            BattleEvent::Recoil {
+                by_player: false,
+                move_id: STRUGGLE,
+                damage: player_max_hp / 4,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the failed run and the forced Struggle that follows it must both commit"
     );
     assert_eq!(battle.run_tries(), 1, "the attempt committed");
-    assert_eq!(rng.draws(), 3);
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        0,
+        "the forced pick spends no PP"
+    );
+    assert_eq!(rng.draws(), 6);
 }
 
 #[test]

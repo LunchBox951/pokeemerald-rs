@@ -19,8 +19,12 @@ pub(crate) fn selectable_slot(slot_move: Option<MoveId>) -> bool {
     slot_move.is_some_and(|move_id| move_id != MOVE_NONE)
 }
 
-fn all_known_moves_are_spent(enemy: &BattlePokemon) -> bool {
-    enemy.moves().iter().all(|slot| slot.pp == 0)
+/// Whether every known move slot is out of PP: `AreAllMovesUnusable`'s
+/// `MOVE_LIMITATION_PP`/`MOVE_LIMITATION_ZEROMOVE` case
+/// (`pokeemerald/src/battle_util.c:1098`, `:1101`), shared by the player, the
+/// wild AI, and the trainer AI's own forced-Struggle diversion.
+pub(crate) fn all_known_moves_are_spent(pokemon: &BattlePokemon) -> bool {
+    pokemon.moves().iter().all(|slot| slot.pp == 0)
 }
 
 fn draw_move_slot(rng: &mut impl BattleRng) -> usize {
