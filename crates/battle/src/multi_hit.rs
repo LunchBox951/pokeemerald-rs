@@ -1,7 +1,7 @@
 //! Admission and epilogue draws for variable-count multi-hit moves.
 //!
-//! [`resolve_multi_hit`] validates the move, checks accuracy once, and rolls
-//! the hit limit. [`crate::battle::Battle`] owns the
+//! [`resolve_multi_hit`] validates the move, checks accuracy once, and either
+//! classifies the failed roll or rolls the hit limit. [`crate::battle::Battle`] owns the
 //! interruptible loop so it can read both battlers' live HP before each hit
 //! and avoid drawing work for hits that will not run. After that loop,
 //! [`spend_multi_hit_effect_chance_draw`] spends one trailing draw for the
@@ -12,7 +12,7 @@ use assets::{MoveEffect, MoveId};
 use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
-use crate::hit::accuracy_roll;
+use crate::hit::{accuracy_roll, classify_accuracy_failure, HitOutcome};
 use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
@@ -69,30 +69,48 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     ensure_resolvable_effect(dex, move_id, is_multi_hit_effect)
 }
 
+/// [`resolve_multi_hit`]'s verdict for one multi-hit move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MultiHitAdmission {
+    /// The accuracy roll failed, carrying `Cmd_accuracycheck`'s classified
+    /// verdict rather than an unconditional [`HitOutcome::Miss`].
+    Failed(HitOutcome),
+    /// The move landed and may attempt up to `hit_limit` hits.
+    Admitted {
+        /// The rolled hit limit, from [`MIN_HITS`] through [`MAX_HITS`].
+        hit_limit: u8,
+    },
+}
+
 /// Admits a multi-hit move with one accuracy draw, then rolls its hit limit.
 ///
-/// Returns `None` after the accuracy draw on a miss. A successful admission
-/// returns the hit limit after one or two additional count draws. The caller
-/// must process hits against live battle state before spending the trailing
-/// draw with [`spend_multi_hit_effect_chance_draw`].
+/// A failed accuracy roll returns [`MultiHitAdmission::Failed`] after that one
+/// draw, classified by [`classify_accuracy_failure`] and so never rolling a
+/// hit count. A successful admission returns
+/// [`MultiHitAdmission::Admitted`] after one or two additional count draws.
+/// The caller must process hits against live battle state before spending the
+/// trailing draw with [`spend_multi_hit_effect_chance_draw`].
 ///
 /// # Errors
 ///
-/// Returns any error from [`ensure_resolvable`] without consuming RNG.
+/// Returns any error from [`ensure_resolvable`] without consuming RNG, or any
+/// error from [`classify_accuracy_failure`] after the accuracy draw.
 pub fn resolve_multi_hit(
     dex: &Dex,
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
     rng: &mut impl BattleRng,
-) -> Result<Option<u8>, BattleError> {
+) -> Result<MultiHitAdmission, BattleError> {
     ensure_resolvable(dex, move_id)?;
     let move_lands = accuracy_roll(dex, move_id, attacker, defender, rng)?;
     if !move_lands {
-        return Ok(None);
+        return Ok(MultiHitAdmission::Failed(classify_accuracy_failure(
+            dex, move_id, defender,
+        )?));
     }
     let hit_limit = roll_hit_count(rng);
-    Ok(Some(hit_limit))
+    Ok(MultiHitAdmission::Admitted { hit_limit })
 }
 
 /// Spends the move's single effect-chance draw after its hit loop finishes.

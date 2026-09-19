@@ -10,7 +10,7 @@ use crate::error::BattleError;
 use crate::fixed_damage::resolve_fixed_damage_move;
 use crate::flag_move::{resolve_flag_move, FlagMoveOutcome};
 use crate::hit::{damage_before_roll, HitOutcome};
-use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
+use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw, MultiHitAdmission};
 use crate::stat_change::set_stage;
 
 use super::{Battle, BattleEvent};
@@ -196,16 +196,16 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let rolled = {
+        let admission = {
             let (attacker, defender) = self.battlers(attacker_is_player);
             resolve_multi_hit(&self.dex, move_id, attacker, defender, rng)?
         };
-        let Some(rolled) = rolled else {
-            events.push(BattleEvent::Missed {
-                by_player: attacker_is_player,
-                move_id,
-            });
-            return Ok(());
+        let rolled = match admission {
+            MultiHitAdmission::Failed(outcome) => {
+                events.push(hit_failure_event(outcome, attacker_is_player, move_id));
+                return Ok(());
+            }
+            MultiHitAdmission::Admitted { hit_limit } => hit_limit,
         };
 
         let result =

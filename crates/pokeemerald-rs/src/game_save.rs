@@ -7,7 +7,8 @@
 //! disables saving for the session like `TrySavingData` (`save.c:765-771, 871-879`).
 
 use engine::save::{
-    BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
+    BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveFileGuard, SaveStatus,
+    SaveStore,
 };
 
 /// The save status used to choose the boot menu — upstream `gSaveFileStatus`'s
@@ -252,9 +253,22 @@ impl SaveSlot {
         refuse_foreign: bool,
         lineage: SaveLineage,
     ) -> Result<StoreOutcome, SaveFileError> {
+        self.store_under(block1, block2, refuse_foreign, lineage, SaveFile::lock)
+    }
+
+    /// As [`SaveSlot::store_impl`], taking the read-modify-write lock through
+    /// `lock`, which the whole cycle then runs under.
+    fn store_under(
+        &mut self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        refuse_foreign: bool,
+        lineage: SaveLineage,
+        lock: impl FnOnce(&SaveFile) -> Result<SaveFileGuard, SaveFileError>,
+    ) -> Result<StoreOutcome, SaveFileError> {
         let clear_base = lineage.clears_base();
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
-        let _read_modify_write_lock = file.lock()?;
+        let _read_modify_write_lock = lock(file)?;
         let mut store = file.read()?.unwrap_or_else(SaveStore::new);
         let disk_status = SaveFileStatus::from_store(store.load().status);
         let disk_counter = store.save_counter();

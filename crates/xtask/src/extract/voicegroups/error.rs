@@ -35,6 +35,10 @@ pub(crate) enum VoiceGroupError {
     InvalidSplitOperands {
         table: String,
     },
+    SplitChildSlotOutOfRange {
+        table: String,
+        slot: u8,
+    },
     SplitOutOfOrder {
         table: String,
     },
@@ -138,6 +142,12 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "keysplit table `{table}`: malformed `split` line (index/ending_note not a valid \
                  u8)"
+            ),
+            Self::SplitChildSlotOutOfRange { table, slot } => write!(
+                f,
+                "keysplit table `{table}`: `split` selects child slot {slot}, past the last voice \
+                 slot {}",
+                super::VOICE_SLOT_COUNT - 1
             ),
             Self::SplitOutOfOrder { table } => write!(
                 f,

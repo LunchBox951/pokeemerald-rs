@@ -536,3 +536,56 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
     );
     assert_eq!(rng.draws(), script.len());
 }
+
+/// `Cmd_accuracycheck` calls `CheckWonderGuardAndLevitate` inside its
+/// failed-roll branch (`battle_script_commands.c:1175-1186`), whose Levitate
+/// arm replaces the generic miss with the Ground-miss result
+/// (`:1435-1443`). A multi-hit move that misses a Levitate holder must
+/// therefore reach the caller as [`BattleEvent::LevitateBlocked`], not
+/// [`BattleEvent::Missed`], and must not roll a hit count.
+#[test]
+fn a_missed_ground_multi_hit_move_reports_levitate_rather_than_a_generic_miss() {
+    let dex = Dex::new();
+    // Bone Rush (Ground, MULTI_HIT, 80 accuracy) into Gastly, whose only
+    // ability is Levitate; Rattata L10 outspeeds Gastly L5.
+    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(198)]);
+    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let enemy_hp_before = enemy.current_hp();
+    // Battle start, turn number, and the enemy's pick; then the player's sole
+    // accuracy draw (80 -> 81 > 80, a miss) with no hit-count, critical, or
+    // trailing effect-chance draw behind it; then the enemy's ordinary
+    // Tackle (4).
+    let script = [0, 0, 0, 80, 0, 1, 0, 0];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::LevitateBlocked {
+            by_player: true,
+            move_id: MoveId(198),
+        },
+        "a failed accuracy roll must still report Levitate: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|event| matches!(
+            event,
+            BattleEvent::Missed {
+                by_player: true,
+                ..
+            }
+        )),
+        "the generic miss must not survive reclassification: {events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), enemy_hp_before);
+    assert_eq!(
+        rng.draws(),
+        script.len(),
+        "reclassifying the miss adds no draw"
+    );
+    // `ppreduce` runs before `accuracycheck`, so a miss still costs PP.
+    assert_eq!(battle.player().moves()[0].pp, 9);
+}

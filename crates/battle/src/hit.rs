@@ -2,9 +2,10 @@
 //!
 //! Resolution consumes accuracy, critical-hit, damage-variance, and trailing
 //! effect-chance draws in that order. Accuracy bypasses and critical-hit
-//! suppression omit their respective draws. A miss stops immediately, while a
-//! type immunity still consumes the damage and effect-chance draws. Struggle
-//! skips the trailing effect-chance draw.
+//! suppression omit their respective draws. A failed accuracy roll stops
+//! immediately, classified by [`classify_accuracy_failure`], while a type
+//! immunity on a landed roll still consumes the damage and effect-chance
+//! draws. Struggle skips the trailing effect-chance draw.
 
 use assets::{AbilityId, Effectiveness, MoveEffect, MoveId, Type};
 
@@ -159,6 +160,90 @@ pub fn accuracy_roll(
     ))
 }
 
+/// Whether `defender`'s typing gives `move_type` no effect at all.
+///
+/// This is the `TYPE_MUL_NO_EFFECT` scan shared by `Cmd_typecalc` and
+/// `CheckWonderGuardAndLevitate` (`battle_script_commands.c:1454-1469`), which
+/// flags `MOVE_RESULT_DOESNT_AFFECT_FOE` when either defender type carries an
+/// immunity row.
+#[must_use]
+pub(crate) fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
+    aggregate_type_effectiveness(move_type, defender.types()) == Effectiveness::NoEffect
+}
+
+/// Whether `defender`'s Levitate blocks a Ground `move_type`.
+///
+/// Levitate outranks the type scan in both `Cmd_typecalc`
+/// (`battle_script_commands.c:1375-1383`) and `CheckWonderGuardAndLevitate`
+/// (`:1435-1443`), each of which returns as soon as it matches. Callers apply
+/// the Struggle exemption themselves.
+#[must_use]
+pub(crate) fn defender_levitate_blocked(move_type: Type, defender: &BattlePokemon) -> bool {
+    move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE
+}
+
+/// Whether `defender`'s Wonder Guard blocks a not-strictly-super-effective
+/// `move_type`.
+///
+/// Both `Cmd_typecalc` (`battle_script_commands.c:1409-1418`) and
+/// `CheckWonderGuardAndLevitate` (`:1490-1497`) read
+/// `ModulateDmgByType`'s effectiveness flags rather than floored running
+/// damage, so [`aggregate_type_effectiveness`] is the right input. Callers
+/// apply the Struggle and zero-power exemptions themselves.
+#[must_use]
+pub(crate) fn defender_wonder_guard_blocked(move_type: Type, defender: &BattlePokemon) -> bool {
+    defender.ability() == AbilityId::WONDER_GUARD
+        && aggregate_type_effectiveness(move_type, defender.types())
+            != Effectiveness::SuperEffective
+}
+
+/// Classifies a failed accuracy roll without consuming an RNG draw.
+///
+/// `Cmd_accuracycheck` does not end a failed roll as a generic miss: after
+/// setting `MOVE_RESULT_MISSED` it calls `CheckWonderGuardAndLevitate`
+/// (`battle_script_commands.c:1175-1186`). That helper returns early for
+/// Struggle and zero-power moves (`:1432-1433`), reports Levitate against a
+/// Ground move (`:1435-1443`), flags `MOVE_RESULT_DOESNT_AFFECT_FOE` for a
+/// typing immunity (`:1454-1469`), and lets Wonder Guard overwrite
+/// `MISS_TYPE` with `B_MSG_AVOIDED_DMG` (`:1490-1497`). `Cmd_resultmessage`
+/// then prefers Wonder Guard's message over the typing-immunity one
+/// (`:2055-2059`, with `gMissStringIds` in `battle_message.c:890-897`), so the
+/// observable order is Levitate, then Wonder Guard, then typing immunity, then
+/// the generic miss.
+///
+/// The helper reads only move data and the defender, so classification adds no
+/// draw to the single accuracy draw that failed.
+///
+/// # Errors
+///
+/// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`, or
+/// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
+/// battle calculations.
+pub fn classify_accuracy_failure(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<HitOutcome, BattleError> {
+    let move_data = dex.move_data(move_id)?;
+    if move_id == STRUGGLE || move_data.power == 0 {
+        return Ok(HitOutcome::Miss);
+    }
+    let move_type = move_data
+        .move_type
+        .battle_type()
+        .ok_or(BattleError::UnsupportedMoveType(move_id))?;
+
+    if defender_levitate_blocked(move_type, defender) {
+        Ok(HitOutcome::LevitateBlocked)
+    } else if defender_wonder_guard_blocked(move_type, defender) {
+        Ok(HitOutcome::WonderGuardBlocked)
+    } else if defender_is_immune(move_type, defender) {
+        Ok(HitOutcome::NoEffect)
+    } else {
+        Ok(HitOutcome::Miss)
+    }
+}
+
 /// Damage after critical-hit, STAB, and type rules but before damage variance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RawDamage {
@@ -272,13 +357,9 @@ pub fn damage_before_roll(
     } else {
         damage_after_critical
     };
-    let levitate_blocked = move_id != STRUGGLE
-        && move_type == Type::Ground
-        && defender.ability() == AbilityId::LEVITATE;
-    let wonder_guard_blocked = move_id != STRUGGLE
-        && defender.ability() == AbilityId::WONDER_GUARD
-        && aggregate_type_effectiveness(move_type, defender.types())
-            != Effectiveness::SuperEffective;
+    let levitate_blocked = move_id != STRUGGLE && defender_levitate_blocked(move_type, defender);
+    let wonder_guard_blocked =
+        move_id != STRUGGLE && defender_wonder_guard_blocked(move_type, defender);
     let damage = if move_id == STRUGGLE {
         damage_after_charge
     } else if levitate_blocked || wonder_guard_blocked {
@@ -365,8 +446,8 @@ pub struct HitResolution {
 /// # Errors
 ///
 /// Returns the errors from [`ensure_resolvable`], [`accuracy_roll`],
-/// [`damage_core`], or [`spend_effect_chance_draw`]. Admission completes
-/// before any draw.
+/// [`classify_accuracy_failure`], [`damage_core`], or
+/// [`spend_effect_chance_draw`]. Admission completes before any draw.
 pub fn resolve_hit(
     dex: &Dex,
     move_id: MoveId,
@@ -379,7 +460,7 @@ pub fn resolve_hit(
 
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
         return Ok(HitResolution {
-            outcome: HitOutcome::Miss,
+            outcome: classify_accuracy_failure(dex, move_id, defender)?,
             poisons_defender: false,
         });
     }
