@@ -12,7 +12,9 @@ pub use bag::{Bag, ItemSlot};
 pub use block::{
     Coords16, PlayerGender, SaveBlock1, SaveBlock2, SaveError, SavedObjectEvent, WarpData,
 };
-pub use file::{default_save_path, SaveFile, SaveFileError, SAVE_PATH_ENV};
+pub use file::{
+    default_save_path, SaveFile, SaveFileError, SaveFileGuard, LOCK_FILE_NAME, SAVE_PATH_ENV,
+};
 pub use pokemon::{
     BoxPokemon, Pokemon, PokemonError, PokemonSubstructures, BOX_NICKNAME_LEN, SUBSTRUCTURE_LEN,
 };

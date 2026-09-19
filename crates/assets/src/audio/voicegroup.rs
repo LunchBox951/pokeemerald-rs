@@ -148,19 +148,38 @@ fn check_key_split_table_len(len: usize) -> Result<(), AudioError> {
     Ok(())
 }
 
+/// Rejects table entries that select a child slot no voicegroup can define.
+///
+/// A voicegroup has at most [`VOICE_SLOT_COUNT`] slots (`0..VOICE_SLOT_COUNT`),
+/// so an entry of `VOICE_SLOT_COUNT..=255` can never resolve a child and is
+/// rejected here rather than left to silently drop the note at playback.
+fn check_key_split_table_entries(table: &[u8]) -> Result<(), AudioError> {
+    if let Some((entry_index, &slot)) = table
+        .iter()
+        .enumerate()
+        .find(|&(_, &slot)| usize::from(slot) >= VOICE_SLOT_COUNT)
+    {
+        return Err(AudioError::KeySplitTableEntryOutOfRange { entry_index, slot });
+    }
+    Ok(())
+}
+
 impl KeySplitVoice {
     /// Builds a key split whose table entries select slots in `children`.
     ///
     /// # Errors
     ///
     /// Returns [`AudioError::KeySplitTableTooLong`] when the table exceeds
-    /// [`VOICE_SLOT_COUNT`] entries.
+    /// [`VOICE_SLOT_COUNT`] entries, or [`AudioError::KeySplitTableEntryOutOfRange`]
+    /// when a table entry selects a child slot index of [`VOICE_SLOT_COUNT`] or
+    /// higher, which no voicegroup can define.
     pub fn new(
         starting_note: u8,
         table: Vec<u8>,
         children: VoiceGroupId,
     ) -> Result<Self, AudioError> {
         check_key_split_table_len(table.len())?;
+        check_key_split_table_entries(&table)?;
         Ok(Self {
             starting_note,
             table,
