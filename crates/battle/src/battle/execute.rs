@@ -2,7 +2,7 @@
 
 use assets::{AbilityId, MoveEffect, MoveId};
 
-use crate::damage::BattleRng;
+use crate::damage::{BattleRng, STRUGGLE};
 use crate::defense_curl::is_defense_curl_effect;
 use crate::drain::is_drain_effect;
 use crate::error::BattleError;
@@ -167,6 +167,13 @@ impl Battle {
                         });
                     }
                 }
+                // Struggle's certain `MOVE_EFFECT_RECOIL_25` fires from the
+                // same `seteffectwithchance` step, still ahead of the
+                // target's own `tryfaintmon` (`data/battle_scripts_1.s:265`-
+                // `:266`), so the attacker's faint is settled first.
+                if move_id == STRUGGLE {
+                    self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
+                }
                 self.settle_faint(!attacker_is_player, events);
             }
         }
@@ -183,6 +190,33 @@ impl Battle {
         let hp_lost = damage.min(target.current_hp());
         target.apply_damage(hp_lost);
         hp_lost
+    }
+
+    /// Struggle's quarter-HP recoil: a quarter of the HP just dealt, floored
+    /// to one, applied to its own user and capped at the user's remaining HP
+    /// (`MOVE_EFFECT_RECOIL_25`, `battle_script_commands.c:2636`-`:2642`;
+    /// `data/battle_scripts_1.s:3938`-`:3949` bypasses Rock Head for
+    /// Struggle specifically).
+    fn apply_struggle_recoil(
+        &mut self,
+        attacker_is_player: bool,
+        target_hp_lost: u32,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let recoil_damage = (target_hp_lost / 4).max(1);
+        let attacker = if attacker_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        let hp_lost = recoil_damage.min(attacker.current_hp());
+        attacker.apply_damage(hp_lost);
+        events.push(BattleEvent::Recoil {
+            by_player: attacker_is_player,
+            move_id: STRUGGLE,
+            damage: hp_lost,
+        });
+        self.settle_faint(attacker_is_player, events);
     }
 
     /// `tryfaintmon` for one side: reports the faint and clears the corpse's

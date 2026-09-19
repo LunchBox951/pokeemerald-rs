@@ -34,6 +34,20 @@ pub enum PlatformError {
     /// explicit null backend accepts injected input; windowed input remains
     /// owned by the OS event loop.
     ScriptedInputRequiresHeadless,
+    /// The negotiated source-to-device sample-rate ratio is too extreme for
+    /// [`crate::resample::Resampler`]'s bounded source-frame scratch to carry
+    /// in one call: even the smallest possible chunk would still need more
+    /// source frames than the scratch cap allows, which would otherwise leave
+    /// an unresolved interpolation cursor behind for `fill` to extrapolate
+    /// with. Refused up front rather than degrading into incorrect audio.
+    UnsupportedResampleRatio {
+        /// The nominal source sample rate the resampler was asked to bridge
+        /// from.
+        source_rate: u32,
+        /// The negotiated device sample rate the resampler was asked to
+        /// bridge to.
+        device_rate: u32,
+    },
 }
 
 impl fmt::Display for PlatformError {
@@ -53,6 +67,14 @@ impl fmt::Display for PlatformError {
             Self::ScriptedInputRequiresHeadless => {
                 write!(f, "scripted input requires the headless platform backend")
             }
+            Self::UnsupportedResampleRatio {
+                source_rate,
+                device_rate,
+            } => write!(
+                f,
+                "the {source_rate} Hz -> {device_rate} Hz resample ratio is too extreme for \
+                 the resampler's bounded scratch to carry"
+            ),
         }
     }
 }
@@ -65,7 +87,8 @@ impl std::error::Error for PlatformError {
             Self::SoftBuffer(err) => Some(err),
             Self::NoAudioDevice
             | Self::UnsupportedAudioConfig
-            | Self::ScriptedInputRequiresHeadless => None,
+            | Self::ScriptedInputRequiresHeadless
+            | Self::UnsupportedResampleRatio { .. } => None,
             Self::Audio(err) => Some(err),
         }
     }

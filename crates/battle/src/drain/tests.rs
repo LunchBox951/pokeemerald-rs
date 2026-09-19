@@ -16,6 +16,8 @@ const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
 const CATERPIE: SpeciesId = SpeciesId(10);
 const ANORITH: SpeciesId = SpeciesId(390);
+/// `SPECIES_SHEDINJA`: Wonder Guard in its primary (and only) ability slot.
+const SHEDINJA: SpeciesId = SpeciesId(303);
 
 const TACKLE: MoveId = MoveId(33);
 const ABSORB: MoveId = MoveId(71);
@@ -264,4 +266,36 @@ fn a_rejected_move_draws_nothing() {
         Err(BattleError::UnsupportedMoveEffect(TACKLE))
     );
     assert_eq!(rng.draws(), 0);
+}
+
+/// A failed accuracy roll runs `CheckWonderGuardAndLevitate` before the drain
+/// script resumes (`battle_script_commands.c:1175-1186`), so Wonder Guard
+/// reports its own `B_MSG_AVOIDED_DMG` result (`:1490-1497`) rather than a
+/// generic miss. Mega Drain is Grass: not very effective against Shedinja's
+/// Bug half and neutral against its Ghost half, so Wonder Guard blocks it.
+#[test]
+fn a_missed_drain_move_against_wonder_guard_reports_wonder_guard() {
+    let dex = Dex::new();
+    let mut attacker = mon(&dex, BULBASAUR, 5, vec![MEGA_DRAIN]);
+    attacker.stages_mut().accuracy = StatStage::MIN;
+    let shedinja_defender = mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(shedinja_defender.ability(), AbilityId::WONDER_GUARD);
+    let mut rng = SequenceRng::new([MEGA_DRAIN_MISS_DRAW]);
+
+    let outcome = resolve_drain_move(
+        &dex,
+        MEGA_DRAIN,
+        &attacker,
+        &shedinja_defender,
+        false,
+        &mut rng,
+    )
+    .unwrap();
+
+    assert_eq!(outcome, HitOutcome::WonderGuardBlocked);
+    assert_eq!(
+        rng.draws(),
+        1,
+        "the reclassified miss still spends no critical or damage draw"
+    );
 }

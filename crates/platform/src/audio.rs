@@ -158,6 +158,10 @@ impl AudioOutput {
     ///   device, or fails to build the stream. A device lost *after* the
     ///   query stays here rather than collapsing into `NoAudioDevice`: the
     ///   device was real, so losing it is a failure, not a headless run.
+    /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
+    ///   device rate pairs with [`Self::M4A_MIXER_RATE`] into a ratio the
+    ///   resampler's bounded scratch cannot carry (see
+    ///   [`crate::resample::Resampler::new`]).
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
         let host = cpal::default_host();
         let device = host
@@ -173,14 +177,18 @@ impl AudioOutput {
         } else {
             // Pre-size the resampler's source-frame scratch off the real-time
             // thread, bounded by the device's largest advertised callback (in
-            // frames); see `Resampler::new` and `max_buffer_frames`.
+            // frames); `Resampler::new` caps that bound itself — see
+            // `max_buffer_frames`. It also refuses (as a `PlatformError`,
+            // surfaced here by `?` rather than a real-time-thread panic) any
+            // negotiated rate ratio its scratch cannot carry — see
+            // `Resampler::new`'s `UnsupportedResampleRatio` doc.
             Source::Resampled(Resampler::new(
                 consumer,
                 channels,
                 Self::M4A_MIXER_RATE,
                 device_sample_rate,
                 max_buffer_frames(&config),
-            ))
+            )?)
         };
 
         let stream_errors = Arc::new(AtomicU64::new(0));
@@ -445,9 +453,11 @@ fn classify_query_error(err: cpal::Error) -> PlatformError {
 }
 
 /// The device's largest advertised callback size in frames, or `0` if the
-/// device advertises no concrete range (`Unknown`). Used to pre-size
-/// real-time scratch buffers off the callback thread (see [`build_stream`]'s
-/// `i16` path and [`Resampler::new`]).
+/// device advertises no concrete range (`Unknown`). This is the *raw*
+/// advertised value — [`AudioOutput::max_callback_frames`] exposes it
+/// unmodified for callers that need the device's actual claim (e.g.
+/// tail-wait timing). Consumers that pre-size real-time scratch off it cap
+/// it first — see [`MAX_SCRATCH_CALLBACK_FRAMES`] and [`Resampler::new`].
 fn max_buffer_frames(config: &cpal::SupportedStreamConfig) -> usize {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
@@ -472,6 +482,27 @@ fn f32_to_i16(sample: f32) -> i16 {
 /// Generously larger than any realistic callback buffer (8192 stereo frames)
 /// so pre-sizing still spares the real-time thread an allocation.
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
+
+/// Ceiling (in frames) applied to a device-advertised buffer maximum before
+/// it sizes the `i16` scratch buffer. A device may advertise an
+/// unconstrained callback range as an enormous concrete number instead of
+/// `Unknown` (cpal's ALSA backend hands back `u32::MAX` for exactly this),
+/// and [`fill_i16_output`] already chunks a callback past this scale, so
+/// capping the preallocation here loses nothing but reserved-but-unused
+/// memory.
+const MAX_SCRATCH_CALLBACK_FRAMES: usize = 8192;
+
+/// Capacity (interleaved `f32` samples) for the `i16` callback's fixed
+/// scratch buffer: `max_frames` capped at [`MAX_SCRATCH_CALLBACK_FRAMES`]
+/// and floored at [`DEFAULT_SCRATCH_SAMPLES`], times `channels`. Pure so the
+/// cap is unit-testable against an extreme advertised maximum without
+/// allocating the buffer it sizes.
+fn i16_scratch_capacity(max_frames: usize, channels: usize) -> usize {
+    max_frames
+        .min(MAX_SCRATCH_CALLBACK_FRAMES)
+        .saturating_mul(channels)
+        .max(DEFAULT_SCRATCH_SAMPLES)
+}
 
 /// Fill `data` (interleaved `i16`) from `source`, converting through the
 /// fixed `scratch` buffer in `scratch.len()`-bounded chunks rather than
@@ -569,18 +600,13 @@ fn build_stream<D: OutputDevice>(
         )?,
         cpal::SampleFormat::I16 => {
             // Fix the `f32` scratch buffer's length here, off the real-time
-            // callback thread, so the callback never resizes it. The
-            // device's largest supported buffer (in frames) bounds the
-            // scratch size; multiply by the channel count for interleaved
-            // samples. A device that reports no buffer-size range gets a
-            // generous fallback. The callback below processes `data` in
-            // `scratch`-sized chunks instead, so a `data` cpal hands us
+            // callback thread, so the callback never resizes it — see
+            // `i16_scratch_capacity`. The callback below processes `data`
+            // in `scratch`-sized chunks instead, so a `data` cpal hands us
             // larger than anything advertised still never grows `scratch`.
             let max_frames = max_buffer_frames(config);
             let channels = usize::from(config.channels());
-            let scratch_capacity = max_frames
-                .saturating_mul(channels)
-                .max(DEFAULT_SCRATCH_SAMPLES);
+            let scratch_capacity = i16_scratch_capacity(max_frames, channels);
             let mut scratch: Vec<f32> = vec![0.0; scratch_capacity];
             device.build_output_stream(
                 stream_config,
@@ -810,6 +836,73 @@ mod tests {
             scratch_capacity,
             "fill_i16_output must never grow scratch"
         );
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn an_extreme_advertised_maximum_does_not_inflate_i16_scratch_capacity() {
+        // `i16_scratch_capacity` is what `build_stream`'s `i16` arm sizes
+        // scratch against (see `MAX_SCRATCH_CALLBACK_FRAMES`'s docs); pin
+        // the cap for a device advertising `u32::MAX` without allocating it.
+        let huge_frames = usize::try_from(u32::MAX).unwrap();
+        let capacity = i16_scratch_capacity(huge_frames, usize::from(AudioOutput::CHANNELS));
+        assert_eq!(capacity, DEFAULT_SCRATCH_SAMPLES);
+    }
+
+    #[test]
+    fn scratch_capped_from_a_maximum_above_the_cap_still_chunks_an_oversized_fill_correctly() {
+        // Route an advertised maximum comfortably above the cap through the
+        // actual production capacity function, then drive `fill_i16_output`
+        // with scratch sized exactly as `build_stream` would -- proving the
+        // cap changes chunk granularity, never correctness.
+        let above_cap = MAX_SCRATCH_CALLBACK_FRAMES * 4;
+        let channels = usize::from(AudioOutput::CHANNELS);
+        let capacity = i16_scratch_capacity(above_cap, channels);
+        assert_eq!(capacity, DEFAULT_SCRATCH_SAMPLES);
+
+        let (producer, consumer) = ring_buffer(64);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..20, exactly representable in f32"
+        )]
+        let pcm: Vec<f32> = (0..20_i32).map(|i| (i as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), 20);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; capacity];
+        let mut data = vec![0_i16; 20];
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn capped_scratch_chunks_a_fill_larger_than_the_cap_derived_chunk() {
+        let above_cap = MAX_SCRATCH_CALLBACK_FRAMES * 4;
+        let channels = usize::from(AudioOutput::CHANNELS);
+        let capacity = i16_scratch_capacity(above_cap, channels);
+        let len = capacity + 7;
+
+        let (producer, consumer) = ring_buffer(len);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the remainder is below 21, exact in f32"
+        )]
+        let pcm: Vec<f32> = (0..len).map(|i| ((i % 21) as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), len);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; capacity];
+        let mut data = vec![0_i16; len];
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        assert!(
+            data.len() > scratch.len(),
+            "the fill must cross the cap-derived chunk boundary"
+        );
+        assert_eq!(scratch.len(), capacity, "scratch must never grow");
         let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
         assert_eq!(data, expected);
     }
