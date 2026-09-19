@@ -21,7 +21,20 @@ const CLEAR_TOWN_DOOR_LANDING_TILES: usize = 1;
 const TOWN_EAST_TO_ROUTE_COLUMN_TILES: usize = 6;
 const TOWN_NORTH_TO_ROUTE_EDGE_TILES: usize = 9;
 const CROSS_ROUTE_EDGE_TO_RESCUE_TRIGGER_TILES: usize = 1;
-const ROUTE_TRIGGER_LANDING_FRAMES: usize = 1;
+/// The frame a completed step is *observed* on, one past the last frame of
+/// its walk animation (issue #1039). `input->tookStep` and
+/// `input->checkStandardWildEncounter` need `tileTransitionState ==
+/// T_TILE_CENTER` (`pokeemerald/src/field_control_avatar.c:118-121`), which
+/// `UpdatePlayerAvatarTransitionState` derives from a `heldMovementFinished`
+/// the *previous* frame's CB2 `AnimateSprites` set
+/// (`src/field_player_avatar.c:901-915`, `src/main.c:188-195`), so a
+/// `WALK_FRAMES_PER_TILE` crossing is observed on the frame after its
+/// sixteenth. An event fired from that landing makes
+/// `ProcessPlayerFieldInput` return TRUE, and `DoCB1_Overworld` then skips
+/// `PlayerStep` for the frame (`src/overworld.c:1447-1455`) -- so the script
+/// spends one frame per landing event, holding the direction across it, and
+/// the walk that follows starts on the next frame.
+const STEP_LANDING_FRAMES: usize = 1;
 const FIRST_BATTLE_DRIVER_BUTTONS: AppButtons = AppButtons::RIGHT;
 const REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING: usize = 2;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
@@ -67,11 +80,18 @@ const SEGMENTS: &[ScenarioBlock] = &[
         REENTER_BEDROOM_STAIR_WARP_TILES,
         AppState::Overworld,
     ),
+    // The stair tile's warp is a `tookStep` warp (`TryStartStepBasedScript`,
+    // `field_control_avatar.c:155-161`): it fires from the landing above.
+    held(AppButtons::UP, STEP_LANDING_FRAMES, AppState::Overworld),
     walk(
         AppButtons::DOWN,
         HOUSE_HALL_TO_FRONT_DOOR_TILES,
         AppState::Overworld,
     ),
+    // The front door is the doormat's arrow warp (`TryArrowWarp`, `:164-168`),
+    // which reads `input->heldDirection` on that same landing frame -- so the
+    // direction stays held rather than released here.
+    held(AppButtons::DOWN, STEP_LANDING_FRAMES, AppState::Overworld),
     walk(
         AppButtons::DOWN,
         CLEAR_TOWN_DOOR_LANDING_TILES,
@@ -87,17 +107,15 @@ const SEGMENTS: &[ScenarioBlock] = &[
         TOWN_NORTH_TO_ROUTE_EDGE_TILES,
         AppState::Overworld,
     ),
-    held(
+    walk(
         AppButtons::UP,
-        WALK_FRAMES_PER_TILE * CROSS_ROUTE_EDGE_TO_RESCUE_TRIGGER_TILES
-            - ROUTE_TRIGGER_LANDING_FRAMES,
+        CROSS_ROUTE_EDGE_TO_RESCUE_TRIGGER_TILES,
         AppState::Overworld,
     ),
-    held(
-        AppButtons::UP,
-        ROUTE_TRIGGER_LANDING_FRAMES,
-        AppState::FirstBattle,
-    ),
+    // The rescue coord event is a `tookStep` script like the stair warp, so
+    // the crossing above keeps its full sixteen animation frames and the
+    // battle starts on the landing frame after them.
+    held(AppButtons::UP, STEP_LANDING_FRAMES, AppState::FirstBattle),
     held(
         FIRST_BATTLE_DRIVER_BUTTONS,
         REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING,
@@ -179,6 +197,11 @@ mod tests {
 
     const EXPECTED_TITLE_AND_MENU_FRAMES: usize = 2;
     const EXPECTED_ROUTE_WALK_TILES: usize = 25;
+    /// The three completed-step landings the route runs a field event on
+    /// rather than a step, each costing the script a frame of its own
+    /// (`super::STEP_LANDING_FRAMES`): the bedroom stair warp, the front
+    /// door's arrow warp, and the Route 101 rescue trigger.
+    const EXPECTED_STEP_LANDING_FRAMES: usize = 3;
     const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 2;
     const EXPECTED_BATTLE_CONCLUSION_FRAMES: usize = 1;
     const EXPECTED_FINAL_RELEASE_FRAMES: usize = 1;
@@ -192,6 +215,7 @@ mod tests {
         let expected_total = EXPECTED_TITLE_AND_MENU_FRAMES
             + pokeemerald_rs::intro::TRAVERSAL_FRAMES
             + WALK_FRAMES_PER_TILE * EXPECTED_ROUTE_WALK_TILES
+            + EXPECTED_STEP_LANDING_FRAMES
             + EXPECTED_FRAMES_AFTER_TRIGGER_LANDING
             + EXPECTED_BATTLE_CONCLUSION_FRAMES
             + EXPECTED_FINAL_RELEASE_FRAMES;
