@@ -373,10 +373,11 @@ impl OverworldPhase {
     /// [`OverworldPhase::from_saved`] reads it directly (see
     /// `super::saved_facing`).
     ///
-    /// A stored party count of zero means no lead, exactly as it does
-    /// upstream (issue #353's zero-count contract: stale records under a
-    /// zero count are zeroed on the next save, never resurrected into a
-    /// lead by the six-slot scan below). A party with no slot that will
+    /// A stored party count of zero means no lead. That is a deliberate port
+    /// divergence: upstream's `SetBattlePartyIds` scans all six slots
+    /// regardless of count (`battle_controllers.c:585-606`), but this port
+    /// zeroes only slot 0 on the no-lead save (issue #353) and leaves stale
+    /// records under a zero count unreachable. A party with no slot that will
     /// decode into a usable
     /// battler -- checksum-valid sector bytes that are not a mon any
     /// battle code could run -- is logged and leaves the lead empty:
