@@ -22,11 +22,12 @@ pub struct ConnectionCrossing {
     pub position: (i32, i32),
 }
 
-/// Provides geometry and cells for maps connected to the current runtime.
+/// Provides geometry, cells, and behaviors for maps connected to the current
+/// runtime.
 ///
-/// A dimensions-only implementation may leave [`Self::metatile_cell`] at its
-/// default. Player movement then refuses the crossing because it cannot
-/// validate the landing cell.
+/// Leaving [`Self::metatile_cell`] at its default refuses every crossing.
+/// [`Self::metatile_behavior`] has no default: a crossing landing obeys the
+/// same standing-tile rules as any other (`field_player_avatar.c:332-349`).
 pub trait ConnectedMapData {
     /// Returns `map`'s dimensions in metatiles.
     fn dimensions(&self, map: MapId) -> Option<(u16, u16)>;
@@ -35,6 +36,11 @@ pub trait ConnectedMapData {
     fn metatile_cell(&self, _map: MapId, _x: i32, _y: i32) -> Option<MetatileCell> {
         None
     }
+
+    /// Returns the metatile behavior at `(x, y)` in `map` when available,
+    /// the counterpart of [`MapRuntime::metatile_behavior`] across a
+    /// connection.
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8>;
 }
 
 impl<F> ConnectedMapData for F
@@ -43,6 +49,12 @@ where
 {
     fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
         self(map)
+    }
+
+    /// Always `None`: a dimensions-only implementation decodes no cell
+    /// either, so no crossing it resolves ever reaches a landing.
+    fn metatile_behavior(&self, _map: MapId, _x: i32, _y: i32) -> Option<u8> {
+        None
     }
 }
 

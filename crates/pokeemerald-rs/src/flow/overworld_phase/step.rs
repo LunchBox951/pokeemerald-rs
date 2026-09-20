@@ -591,6 +591,10 @@ impl OverworldPhase {
     /// landing and an at-rest field poll land on the *same* call, so this
     /// gate is load-bearing rather than the vacuous one it would have been
     /// while the two were mutually exclusive.
+    ///
+    /// A forced tile closes the `T_TILE_CENTER` half of that same gate
+    /// (`:95`), holding the four branches for the landing call alone
+    /// ([`engine::overworld::PlayerState::field_input_suppressed`]).
     fn resolve_pre_movement_field_input(
         &self,
         buttons: ButtonState,
@@ -608,8 +612,11 @@ impl OverworldPhase {
         // /`input->pressedStartButton` at all while `tileTransitionState` is
         // `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), and reaches none of
         // the four branches below on a frame the completed step already
-        // claimed -- one predicate for both halves of that.
-        let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed);
+        // claimed -- one predicate for both halves of that, plus the
+        // forced-movement tile that closes the first of those two states
+        // (method doc, issue #926).
+        let poll_open = wild_encounter::arrow_poll_open(self.player.in_transit(), landing_claimed)
+            && !self.player.field_input_suppressed();
         let arrow_direction = direction.filter(|held| *held == facing);
 
         // Gated on transit only, so it fires inside the turn lock (`field_player_avatar.c:901-929`).
@@ -624,12 +631,15 @@ impl OverworldPhase {
         // NPC interaction, resolved before `advance_or_skip_for_preempt`
         // can turn or step the player (contract: `step`'s "NPC dialog
         // routing" section). Skipped when `arrow_trigger` already fired, as
-        // `TryArrowWarp` returns ahead of the interaction check. The tokens
+        // `TryArrowWarp` returns ahead of the interaction check, and while
+        // forced movement is armed, as `FieldGetPlayerInput` never reaches
+        // `TryStartInteractionScript` either (method doc). The tokens
         // belong to the pre-warp map, so a same-frame warp drops them
         // rather than opening the departed map's dialog on the destination.
-        let interaction = (!landing_claimed && arrow_trigger.is_none())
-            .then(|| self.interaction_tokens_this_frame(buttons, runtime))
-            .flatten();
+        let interaction =
+            (!landing_claimed && arrow_trigger.is_none() && !self.player.field_input_suppressed())
+                .then(|| self.interaction_tokens_this_frame(buttons, runtime))
+                .flatten();
 
         // Upstream reaches `TryDoorWarp` only after the arrow check and the
         // A-button interaction lookup have both fallen through

@@ -458,13 +458,10 @@ impl OverworldPhase {
                 }
                 if let Some(approach) = &mut self.sight_approach {
                     let facing = approach.stop_facing_player();
-                    // `CancelPlayerForcedMovement` has no counterpart here
-                    // (no forced movement is modelled), and the player's own
-                    // face action finishes in the frame it is applied --
-                    // `PlayerState::face`'s own docs -- so
-                    // `TRSEE_PLAYER_FACE_WAIT` has nothing left to wait for
-                    // once the guard above has already let the held walk
-                    // finish.
+                    // `CancelPlayerForcedMovement` never clears
+                    // `PLAYER_AVATAR_FLAG_CONTROLLABLE`, the flag
+                    // `forced_movement_armed` models, so it has no counterpart
+                    // here (`field_player_avatar.c:429-441`).
                     self.player.face(facing);
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)

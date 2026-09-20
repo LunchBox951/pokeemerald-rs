@@ -12,7 +12,9 @@
 //! #177).
 
 use assets::{MapEventsTable, MapHeaderTable};
-use engine::overworld::{warp_destination_position, warp_in_facing, ConnectedMapData, TilePos};
+use engine::overworld::{
+    warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
+};
 use engine::save::WarpData;
 use std::cell::OnceCell;
 
@@ -89,6 +91,30 @@ impl ConnectedMapData for MapConnections<'_> {
         let bytes = pack.layout_map(&name).ok()?;
         let grid = layout.grid(bytes).ok()?;
         grid.cell_at(u16::try_from(x).ok()?, u16::try_from(y).ok()?)
+    }
+
+    /// The neighbour's own tilesets answer this, split at
+    /// [`NUM_METATILES_IN_PRIMARY`] exactly as
+    /// [`engine::overworld::MapRuntime::metatile_behavior`] splits the
+    /// current map's.
+    fn metatile_behavior(&self, map: assets::MapId, x: i32, y: i32) -> Option<u8> {
+        let cell = self.metatile_cell(map, x, y)?;
+        let header = MapHeaderTable::new().header(map).ok()?;
+        let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
+        let (tileset, metatile_id) = if cell.metatile_id < NUM_METATILES_IN_PRIMARY {
+            (layout.primary_tileset, cell.metatile_id)
+        } else {
+            (
+                layout.secondary_tileset,
+                cell.metatile_id - NUM_METATILES_IN_PRIMARY,
+            )
+        };
+        let name = overworld::resolve_tileset_pack_name(tileset).ok()?;
+        let attributes = self.pack()?.tileset(name).ok()?.metatile_attributes;
+        assets::MetatileAttributeTable::new(attributes)
+            .attribute_at(metatile_id)?
+            .ok()
+            .map(|attribute| attribute.behavior)
     }
 }
 

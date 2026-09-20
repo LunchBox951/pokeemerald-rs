@@ -26264,6 +26264,12 @@
           "spec": "I-4",
           "status": "stubbed"
         },
+        "FieldGetPlayerInput": {
+          "reason": "Partially modelled, as OverworldPhase::resolve_pre_movement_field_input's gate rather than a FieldInput struct. Ported: the (T_TILE_CENTER && !forcedMove) || T_NOT_MOVING button gate (:95), with forcedMove from MetatileBehavior_IsForcedMovementTile (metatile_behavior.c:338-351) reaching the four pre-movement decisions through PlayerState::field_input_suppressed, and tookStep/checkStandardWildEncounter's forcedMove exclusion (:116-122) through step.rs's landing_claimed. Deferred, still in v1 scope: the PLAYER_SPEED_FASTEST screen on the button block (:97), pressedSelectButton and pressedBButton (:101-106), heldDirection2's separate TryDoorWarp read (:112, :175), and dpadDirection itself, which this port takes straight from held_direction because upstream sets it outside the gate (:124-131, overworld.c:1454).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
         "GetInFrontOfPlayerPosition": {
           "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
@@ -26360,7 +26366,7 @@
           "status": "rewritten"
         },
         "GetPlayerMovementDirection": {
-          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which this port does not model yet, so it has no way to tell them apart and no need to; revisit the fold when the bike lands (deferred, still in v1 scope)",
+          "reason": "Movement-direction accessor re-implemented as PlayerState::movement_direction, a field of its own rather than a fold into PlayerState::facing (GetPlayerFacingDirection's target): the forced-movement classification in PlayerState::step reads it for the two behaviors whose handler slips along the player's own direction instead of one fixed by the behavior id (MB_ICE and MB_TRICK_HOUSE_PUZZLE_8_FLOOR through ForcedMovement_Slip/DoForcedMovementInCurrentDirection, field_player_avatar.c:473-484). Every mutator here keeps the two directions in step -- PlayerState::new, PlayerState::step, and PlayerState::face alike, which is also why the save writes both of SavedObjectEvent's direction nibbles from one value -- as SetObjectEventDirection does (event_object_movement.c:2361-2371): it writes movementDirection unconditionally and facingDirection beside it unless facingDirectionLocked, which only ForcedMovement_Slide and ForcedMovement_MuddySlope set (field_player_avatar.c:526-532, :567-576). Those physics, and the bike speed MuddySlope reads, stay unported, so the port has no case yet where the two diverge (deferred, still in v1 scope).",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26390,7 +26396,7 @@
           "status": "rewritten"
         },
         "PlayerStep": {
-          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step; the WALK_IN_PLACE_FAST turn-in-place case of TryInterruptObjectEventSpecialAnim's non-interruptible window is now modeled via the eight-frame turn_frames_remaining busy timer (issue #976), so ordinary movement input stays gated for the turn's duration unless a dialog or the start menu takes the field lock first, in which case PlayerState::clear_turn_lock ends the window immediately, matching upstream's PlayerFreeze (field_player_avatar.c:1039-1046, event_object_lock.c's Task_FreezePlayer).",
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step; the WALK_IN_PLACE_FAST turn-in-place case of TryInterruptObjectEventSpecialAnim's non-interruptible window is now modeled via the eight-frame turn_frames_remaining busy timer (issue #976), so ordinary movement input stays gated for the turn's duration unless a dialog or the start menu takes the field lock first, in which case PlayerState::clear_turn_lock ends the window immediately, matching upstream's PlayerFreeze (field_player_avatar.c:1039-1046, event_object_lock.c's Task_FreezePlayer). Forced-movement classification is modeled too (issue #926): PlayerState::step reads the standing tile via is_forced_movement and refuses every manual poll, including a would-be turn -- except when the forced direction is itself collision-blocked, in which case (matching upstream's TryDoMetatileBehaviorForcedMovement returning FALSE and PlayerStep falling through to MovePlayerAvatarUsingKeypadInput, field_player_avatar.c:342-349) the poll is honoured as an ordinary manual step via the forced_movement_direction/forced_direction_blocked helpers; the Secret Base jump/spin mats never fall through since their handlers never collision-check (field_player_avatar.c:555-565), matching upstream exactly. The guard only arms from a landing this PlayerState itself observed (PlayerState::forced_movement_armed, set by try_start_resolved_step from the landing tile's own behavior): a warp arrival or a resumed save that places the avatar directly onto a forced-movement tile via PlayerState::new starts controllable instead, since the ForcedMovement_* physics that would otherwise actually clear a genuinely forced avatar off that tile stay unported -- arming on a placement would trap it with no keypad fallback at all. crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step suppresses the arrow-warp poll, the animated-door check, the same-frame NPC interaction, and start_menu.rs's OverworldPhase::start_menu_may_open (its sixth gate) on a forced landing's tile-center frame alone, through PlayerState::field_input_suppressed: FieldGetPlayerInput's gate is (T_TILE_CENTER && !forcedMove) || T_NOT_MOVING, so forcedMove -- computed from the wider MetatileBehavior_IsForcedMovementTile set, not the dispatch table -- closes only the first arm, and a player at rest on a forced tile still reaches TryArrowWarp/TryStartInteractionScript/TryDoorWarp/pressedStartButton (field_control_avatar.c:93-113). The ForcedMovement_* dispatch's per-behavior physics (slip/slide/current/mat/muddy-slope movement itself) stay unported and deferred, still in v1 scope.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27131,6 +27137,12 @@
     },
     "src/metatile_behavior.c": {
       "artifacts": {
+        "MetatileBehavior_IsCrackedFloor": {
+          "reason": "Reimplemented as an arm of is_forced_movement_input_tile, reproducing this single-behavior-ID equality test exactly; the Sky Pillar collapsing-floor consumers that also read it stay unported (deferred, still in v1 scope).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsDeepSouthWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
           "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
@@ -27155,10 +27167,34 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsEastwardCurrent": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsForcedMovementTile": {
+          "reason": "Reimplemented as is_forced_movement_input_tile, reproducing this predicate's id set exactly (the sForcedMovementTestFuncs dispatch set plus MB_CRACKED_FLOOR, metatile_behavior.c:338-351); FieldGetPlayerInput's forcedMove is its only consumer (field_control_avatar.c:93), and OverworldPhase's field-input gate reads it through PlayerState::field_input_suppressed (issue #926).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsIce_2": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsLandWildEncounter": {
           "reason": "metatile_behavior.c:819-826. Fully modelled as is_land_wild_encounter, the gate StandardWildEncounter checks first on its land path. Upstream composes it from MetatileBehavior_IsEncounterTile (:135-142, TILE_FLAG_HAS_ENCOUNTERS) AND NOT MetatileBehavior_IsSurfableWaterOrUnderwater (:280-287, TILE_FLAG_SURFABLE), both indexing the ~200-entry sTileBitAttributes array (:9); re-expressed here as the derived id set rather than transcribing that array for one predicate -- exactly the eight ids flagged HAS_ENCOUNTERS without SURFABLE (MB_TALL_GRASS, MB_LONG_GRASS, MB_UNUSED_05, MB_DEEP_SAND, MB_CAVE, MB_INDOOR_ENCOUNTER, MB_ASHGRASS, MB_FOOTPRINTS; :12-20, :40-41), pinned by an exhaustive test over the whole u8 id space. The set is complete for the whole game, not a v1 subset. MetatileBehavior_IsWaterWildEncounter (:828-835) and the surfable half of the table are separately NOT modelled: surfing does not exist in this port, so a water encounter is unreachable and a predicate for it would be an untested claim.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-4",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsMuddySlope": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsNonAnimDoor": {
@@ -27179,6 +27215,48 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsNorthwardCurrent": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseJumpMat": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSecretBaseSpinMat": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideEast": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideNorth": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideSouth": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSlideWest": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSouthArrowWarp": {
           "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_south_arrow_warp (exact upstream id membership incl. the MB_WATER_SOUTH_ARROW_WARP/MB_SHOAL_CAVE_ENTRANCE aliases), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -27191,8 +27269,50 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsSouthwardCurrent": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsTrickHouseSlipperyFloor": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkEast": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkNorth": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkSouth": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWalkWest": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsWarpDoor": {
           "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWaterfall": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27205,6 +27325,12 @@
         },
         "MetatileBehavior_IsWestBlocked": {
           "reason": "Transcribed as metatile_behavior::is_west_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_WEST/_NORTHWEST/_SOUTHWEST/_WEST_AND_EAST plus MB_SECRET_BASE_BREAKABLE_DOOR (carried verbatim even though secret bases are out of scope, so the predicate is not narrower than upstream's)) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as the standing-tile predicate for a westward move and the destination predicate for an eastward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWestwardCurrent": {
+          "reason": "Reimplemented as an arm of is_forced_movement (crates/engine/src/overworld/metatile_behavior.rs), reproducing this single-behavior-ID equality test exactly; PlayerState::step reads it to refuse every manual poll on a forced-movement tile, including a would-be turn (issue #926), while the ForcedMovement_* dispatch physics stay deferred -- see PlayerStep's current ledger reason.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"

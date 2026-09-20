@@ -10,13 +10,17 @@
 //!
 //! # When `START` opens a menu
 //!
-//! Upstream's answer is five separate mechanisms, and
-//! [`OverworldPhase::start_menu_may_open`] checks all five:
+//! Upstream's answer is six separate mechanisms, and
+//! [`OverworldPhase::start_menu_may_open`] checks all six:
 //!
 //! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
 //!   `T_NOT_MOVING` (`src/field_control_avatar.c:95-101`) -- i.e. never
 //!   mid-step ([`OverworldPhase::mid_step`]).
+//! * `forcedMove` closes only the `T_TILE_CENTER` arm of that same gate, so
+//!   a forced tile suppresses the button on the landing frame alone
+//!   ([`engine::overworld::PlayerState::field_input_suppressed`]) and
+//!   `T_NOT_MOVING` admits it thereafter (`src/field_control_avatar.c:93-113`).
 //! * A battle runs under its own main callback
 //!   (`SetMainCallback2(CB2_InitBattle)`), so `ProcessPlayerFieldInput` is
 //!   not being polled at all ([`OverworldPhase::in_battle`]).
@@ -139,7 +143,7 @@ impl OverworldPhase {
     }
 
     /// Whether a fresh `START` press may open the menu this frame (module
-    /// docs' five upstream gates).
+    /// docs' six upstream gates).
     ///
     /// `field_input_claimed` is the caller's own answer to upstream's
     /// remaining branches -- `TryArrowWarp`, `TryStartInteractionScript`,
@@ -154,7 +158,7 @@ impl OverworldPhase {
     /// reason [`crate::flow`]'s own `menu_action` is one: inside
     /// [`Self::advance_start_menu_frame`] a refused press and a failed
     /// pack load are indistinguishable to a pack-less test, and these
-    /// five gates are the whole of this slice's "a save must not be
+    /// six gates are the whole of this slice's "a save must not be
     /// takeable here" story.
     pub(in crate::flow) fn start_menu_may_open(
         &self,
@@ -167,6 +171,7 @@ impl OverworldPhase {
             && !self.mid_step()
             && self.dialog.is_none()
             && self.sight_approach.is_none()
+            && !self.player.field_input_suppressed()
     }
 
     /// Build a fresh `START` press's menu without committing it, so the
