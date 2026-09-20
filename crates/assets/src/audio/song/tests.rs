@@ -529,6 +529,58 @@ mod canonical_waits {
             vec![SongEvent::Wait(2), SongEvent::Goto(1)]
         );
     }
+
+    #[test]
+    fn a_targeted_terminal_zero_rest_keeps_an_anchor() {
+        assert_eq!(
+            canon(vec![SongEvent::Goto(1), SongEvent::Wait(0)]),
+            vec![SongEvent::Goto(1), SongEvent::Wait(0)]
+        );
+        assert_eq!(
+            canon(vec![
+                SongEvent::MemAccBranch {
+                    condition: MemAccCondition::Eq,
+                    address: 0,
+                    data: 1,
+                    target: 1,
+                },
+                SongEvent::Wait(0)
+            ]),
+            vec![
+                SongEvent::MemAccBranch {
+                    condition: MemAccCondition::Eq,
+                    address: 0,
+                    data: 1,
+                    target: 1,
+                },
+                SongEvent::Wait(0)
+            ]
+        );
+    }
+}
+
+/// A targeted terminal `Wait(0)` must retain its anchor through
+/// construction and an encode/decode round trip for both jump-carrying
+/// [`SongEvent`]s (issue #1301).
+#[test]
+fn targeted_terminal_zero_waits_survive_construction_and_round_trip() {
+    for track in [
+        vec![SongEvent::Goto(1), SongEvent::Wait(0)],
+        vec![
+            SongEvent::MemAccBranch {
+                condition: MemAccCondition::Eq,
+                address: 0,
+                data: 1,
+                target: 1,
+            },
+            SongEvent::Wait(0),
+        ],
+    ] {
+        let constructed = song(vec![track.clone()]);
+        assert_eq!(constructed.tracks()[0], track);
+        let bytes = constructed.encode();
+        assert_eq!(Song::decode(&bytes).unwrap(), constructed);
+    }
 }
 
 #[test]
