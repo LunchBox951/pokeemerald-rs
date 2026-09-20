@@ -290,11 +290,16 @@ fn convert_rhythm(pack: &AssetPack, v: &RhythmVoice) -> Result<Instrument, Music
 fn convert_indirection_children(
     pack: &AssetPack,
     group: &VoiceGroup,
-) -> Result<Vec<Instrument>, MusicError> {
+) -> Result<Vec<Option<Instrument>>, MusicError> {
+    // A nested key-split/rhythm child aborts like upstream (`m4a_1.s:1604`-`:1609`).
+    // An empty child has no upstream equivalent but resolves the same way (issue #1304).
     group
         .slots()
         .iter()
-        .map(|entry| convert_leaf_voice_entry(pack, entry))
+        .map(|entry| match entry {
+            VoiceEntry::Empty | VoiceEntry::KeySplit(_) | VoiceEntry::Rhythm(_) => Ok(None),
+            leaf => convert_leaf_voice_entry(pack, leaf).map(Some),
+        })
         .collect()
 }
 
