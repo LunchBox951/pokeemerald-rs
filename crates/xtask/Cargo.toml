@@ -35,14 +35,7 @@ pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
 # `crate::record_snapshot`'s module docs.
 assets = { path = "../assets", optional = true }
 
-# `record-snapshot` writes each staged payload through the descriptor its
-# staging claim holds rather than through the staging pathname, which takes
-# `openat` -- `std` exposes it on no platform. Already this workspace's
-# answer to the same question: `pokeemerald-rs`'s `import_rom::dest` pins
-# its destination directory the same way with the same crate and version,
-# so no package enters the tree that was not already in it. Unix-only,
-# since `rustix` is, and optional behind `scenes` (below), which is what
-# compiles `mod record_snapshot` in at all.
+# Snapshot payload writes use held directories; promotion atomically refuses replacement.
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", default-features = false, features = [
     "std",
