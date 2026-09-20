@@ -17,6 +17,24 @@ workspace = true
 # `pack-format`, so this does not drag anything new into engine's build.
 assets = { path = "../assets" }
 
+# The one external crate this package names, added with owner approval
+# extending #914's approval to this issue (`minimal-deps`; S-4, issue #1132,
+# https://github.com/LunchBox951/pokeemerald-rs/issues/1132#issuecomment-5654427839).
+# `StagedSave::remove_after`'s Windows cleanup has to delete the abandoned
+# staging file through the same handle its identity check opens, so a
+# retargeted ancestor -- or a swap the released hold no longer blocks --
+# cannot make the delete step re-resolve the staging path onto a different
+# object; no `std` API exposes `GetFileInformationByHandle` or
+# `SetFileInformationByHandle` on stable Rust. Windows-only, pinned to the
+# version already in `Cargo.lock`, and default features disabled with only
+# `Win32_Foundation` and `Win32_Storage_FileSystem` enabled, exactly the
+# feature boundary the approval sets.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
 [dev-dependencies]
 # The same workspace-local crate with its test-only seam enabled: unit tests
 # build synthetic font sheets via FontImageRef::new_for_tests. The feature is

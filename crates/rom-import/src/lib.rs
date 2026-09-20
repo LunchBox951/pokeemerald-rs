@@ -370,11 +370,11 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 
 /// Whether `a` and `b` are two names for one file on disk.
 ///
-/// Always `false` off Unix: `std` exposes no stable file identity there,
-/// and the Windows answer needs `GetFileInformationByHandle` through a
-/// crate this workspace will not add without owner approval
-/// (`minimal-deps`). The canonical-path comparison in [`overwrites_rom`]
-/// still catches every alias that is not a hard link.
+/// Always `false` off Unix: `std` exposes no stable file identity there.
+/// Issue #1132's `windows-sys` approval covers only the handle-bound cleanup
+/// delete ([`WindowsFileIdentity`]), not this alias check, which is
+/// out of scope for that slice. The canonical-path comparison in
+/// [`overwrites_rom`] still catches every alias that is not a hard link.
 #[cfg(not(unix))]
 fn is_same_file(_a: &Path, _b: &Path) -> bool {
     false
@@ -456,30 +456,135 @@ fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::
     Ok((created.dev(), created.ino()) == (found.dev(), found.ino()))
 }
 
-/// Off Unix there is no inode: creation time, size, and last write from the
-/// held handle, which an ancestor-junction retarget cannot pin, stand in.
-#[cfg(not(unix))]
-fn is_the_created_file(file: &std::fs::File, found: &std::fs::Metadata) -> std::io::Result<bool> {
-    use std::os::windows::fs::MetadataExt as _;
-
-    let created = file.metadata()?;
-    Ok((
-        created.creation_time(),
-        created.file_size(),
-        created.last_write_time(),
-    ) == (
-        found.creation_time(),
-        found.file_size(),
-        found.last_write_time(),
-    ))
-}
-
 /// Whether `path` still names the file `file` holds open, rather than a
 /// symlink, directory, or other entry that took its name in the window
 /// between the write failure and this check.
+#[cfg(unix)]
 fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
     let found = std::fs::symlink_metadata(path)?;
     Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
+}
+
+/// The identity `GetFileInformationByHandle` reads off an open handle:
+/// volume serial number and file index, the one per-object identity Windows
+/// exposes to a handle regardless of which path was used to open it (`std`'s
+/// equivalent, `MetadataExt::volume_serial_number`/`file_index`, is still
+/// gated on the unstable `windows_by_handle`, rust-lang/rust#63010).
+///
+/// Comparing this after opening `path` fresh, rather than the path metadata
+/// [`is_the_created_file`] compares on Unix, is what lets
+/// [`remove_through_verified_handle`] delete through the very handle it just
+/// verified instead of re-resolving `path` a second time for the delete
+/// itself (issue #1132; `windows-sys` approved for this purpose in
+/// <https://github.com/LunchBox951/pokeemerald-rs/issues/1132#issuecomment-5654427839>,
+/// extending <https://github.com/LunchBox951/pokeemerald-rs/issues/914#issuecomment-5602746955>).
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct WindowsFileIdentity {
+    volume_serial_number: u32,
+    file_index: u64,
+}
+
+#[cfg(windows)]
+impl WindowsFileIdentity {
+    /// Reads the identity of the object `handle` refers to.
+    fn of(handle: &std::fs::File) -> std::io::Result<Self> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
+        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            volume_serial_number: info.dwVolumeSerialNumber,
+            file_index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        })
+    }
+}
+
+/// Opens `path` for [`remove_through_verified_handle`]'s identity check and
+/// delete: `DELETE | FILE_READ_ATTRIBUTES` access, no sharing, and
+/// `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse point planted at the final
+/// component is not followed underneath the check.
+#[cfg(windows)]
+fn open_for_verified_delete(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+    };
+
+    std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+/// Marks the object `handle` refers to for deletion once every handle to it
+/// closes, through `handle` itself rather than a second lookup of its path.
+#[cfg(windows)]
+fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+    };
+
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let size = u32::try_from(std::mem::size_of::<FILE_DISPOSITION_INFO>())
+        .expect("FILE_DISPOSITION_INFO is far smaller than u32::MAX");
+    // SAFETY: `handle` has DELETE access, `FileDispositionInfo` matches `info`'s type, and `size` is that type's exact size.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            FileDispositionInfo,
+            std::ptr::addr_of!(info).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Removes the file `identity` names if `path` still reaches it, deleting
+/// through the same handle the identity check opens so no re-lookup of
+/// `path` occurs between the check and the delete. A path that now reaches a
+/// different object -- or nothing at all -- is left alone.
+#[cfg(windows)]
+fn remove_through_verified_handle(
+    path: &Path,
+    identity: WindowsFileIdentity,
+) -> std::io::Result<()> {
+    remove_through_verified_handle_with(path, identity, |_handle| {})
+}
+
+/// [`remove_through_verified_handle`] with a hook run between the identity
+/// check and the delete, so a test can land a retarget in exactly that
+/// window without a real race: a test's only other way to reach it would be
+/// two threads racing the OS, which no cheap seam makes deterministic.
+#[cfg(windows)]
+fn remove_through_verified_handle_with(
+    path: &Path,
+    identity: WindowsFileIdentity,
+    before_delete: impl FnOnce(&std::fs::File),
+) -> std::io::Result<()> {
+    let handle = match open_for_verified_delete(path) {
+        Ok(handle) => handle,
+        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(open_err) => return Err(open_err),
+    };
+    if WindowsFileIdentity::of(&handle)? != identity {
+        return Ok(());
+    }
+    before_delete(&handle);
+    delete_through_handle(&handle)
 }
 
 /// Removes the partial file `write_new_with` left at `path` after `original`,
@@ -488,11 +593,13 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
 /// Cleanup-side failures fold into `original`, keeping its `ErrorKind`; a
 /// `NotFound` means nothing was left to clean up.
 ///
-/// Bound, owned here: the identity check is by pathname, so a replacement
-/// installed between that check and the `unlink` is still removed. Stable
-/// `std` has no handle-bound removal to close the gap. Unix identity is
-/// device and inode; off Unix it is creation time, size, and last write
-/// ([`is_the_created_file`]), which can coincide where an inode cannot.
+/// On Unix the identity check is by pathname ([`still_the_created_file`]) and
+/// the removal that follows re-resolves `path`; a replacement installed in
+/// between is still removed, and there is no handle-bound removal in stable
+/// `std` to close that gap. Off Unix the removal is handle-bound
+/// ([`remove_through_verified_handle`]): the identity check and the delete
+/// share one handle, so the delete performs no re-lookup of `path` for a
+/// retargeted ancestor to land in.
 fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> std::io::Error {
     remove_after_with(path, file, original, |path| std::fs::remove_file(path))
 }
@@ -500,10 +607,7 @@ fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> s
 /// [`remove_after`] with the removal injected, so a cleanup failure is
 /// testable without a privilege the test runner might lack (the same reason
 /// [`write_new_with`]'s own doc comment gives for injecting the write).
-///
-/// `file` drops after `remove` on Unix and before it elsewhere: Windows
-/// refuses to remove an open file, so the hold is given up as late as the
-/// platform permits.
+#[cfg(unix)]
 fn remove_after_with(
     path: &Path,
     file: std::fs::File,
@@ -516,14 +620,34 @@ fn remove_after_with(
         Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return original,
         Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
     }
-    #[cfg(not(unix))]
-    drop(file);
     let removed = remove(path);
-    #[cfg(unix)]
     drop(file);
     match removed {
         Ok(()) => original,
         Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
+        Err(cleanup_err) => cleanup_failed(path, &original, &cleanup_err),
+    }
+}
+
+/// [`remove_after`] off Unix: reads `file`'s own identity, gives up the
+/// handle (Windows refuses to remove or reopen-for-delete a file this
+/// process still holds), then removes through
+/// [`remove_through_verified_handle`]. `remove` is never called: there is no
+/// path-based removal step left here to inject one into.
+#[cfg(windows)]
+fn remove_after_with(
+    path: &Path,
+    file: std::fs::File,
+    original: std::io::Error,
+    _remove: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Error {
+    let identity = match WindowsFileIdentity::of(&file) {
+        Ok(identity) => identity,
+        Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
+    };
+    drop(file);
+    match remove_through_verified_handle(path, identity) {
+        Ok(()) => original,
         Err(cleanup_err) => cleanup_failed(path, &original, &cleanup_err),
     }
 }
@@ -570,6 +694,9 @@ mod tests {
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
+
+    #[cfg(windows)]
+    use super::{remove_through_verified_handle_with, WindowsFileIdentity};
 
     #[test]
     fn import_fails_closed_on_a_missing_rom() {
@@ -912,9 +1039,9 @@ mod tests {
     fn the_output_cannot_be_replaced_or_removed_while_its_handle_lives() {
         // The Windows counterpart to the two swap regressions above: there a
         // peer plants the swap and the identity check catches it, while here
-        // `write_new`'s deny-all share mode makes the swap unattemptable,
-        // which is the whole of what `is_the_created_file`'s non-unix arm
-        // rests on. Drop that share mode and each of these three steps
+        // `write_new`'s deny-all share mode makes the swap unattemptable in
+        // the first place, before `remove_after_with`'s handle-bound check
+        // ever runs. Drop that share mode and each of these three steps
         // succeeds again, restoring the deletion of a swapped-in regular
         // file. Mirrors
         // `a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives`
@@ -968,6 +1095,27 @@ mod tests {
         );
     }
 
+    /// Points the directory junction at `link` at `target`, replacing
+    /// whatever it named before. Unlike a directory symlink this needs no
+    /// privilege, so the Windows ancestor-retarget regressions below never
+    /// have to skip.
+    #[cfg(windows)]
+    fn junction(link: &Path, target: &Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("cmd runs mklink");
+        assert!(
+            status.success(),
+            "mklink /J {} {}: {status}",
+            link.display(),
+            target.display()
+        );
+    }
+
     #[test]
     #[cfg(windows)]
     fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
@@ -975,25 +1123,7 @@ mod tests {
         // a directory junction stands in for the ancestor link a peer
         // retargets, closing the gap `write_new`'s deny-all `share_mode(0)`
         // leaves open, since that hold only ever covers `out`'s own entry
-        // and never the directories the path walks through to reach it. A
-        // junction, unlike a directory symlink, needs no privilege, so the
-        // test never has to skip.
-        fn junction(link: &Path, target: &Path) {
-            let status = std::process::Command::new("cmd")
-                .args(["/C", "mklink", "/J"])
-                .arg(link)
-                .arg(target)
-                .stdout(std::process::Stdio::null())
-                .status()
-                .expect("cmd runs mklink");
-            assert!(
-                status.success(),
-                "mklink /J {} {}: {status}",
-                link.display(),
-                target.display()
-            );
-        }
-
+        // and never the directories the path walks through to reach it.
         let dir = TempDir::new("write-cleanup-ancestor-swap");
         let target = dir.join("a");
         let elsewhere = dir.join("b");
@@ -1023,6 +1153,60 @@ mod tests {
             std::fs::read(&victim).expect("the unrelated file survives"),
             b"someone else's file",
             "cleanup must never remove a file the path only reaches through a retargeted ancestor"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
+        // The two ancestor-retarget tests above complete their swap before
+        // cleanup starts, so an implementation that re-resolves `path` for
+        // both the check and the delete would already pass them. This
+        // exercises the narrower window: `before_delete` runs the retarget
+        // after `remove_through_verified_handle_with` has already opened
+        // and identity-checked its handle, and only then may it delete. A
+        // handle-bound delete must still remove exactly the object it
+        // opened; it must never reach whatever the retargeted path now
+        // resolves to.
+        use std::io::Write as _;
+
+        let dir = TempDir::new("write-cleanup-race-window");
+        let target = dir.join("a");
+        let elsewhere = dir.join("b");
+        std::fs::create_dir(&target).expect("the link's first target");
+        std::fs::create_dir(&elsewhere).expect("the link's second target");
+        let victim = elsewhere.join("pokeemerald.pack");
+        std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+        let link = dir.join("link");
+        junction(&link, &target);
+        let out = link.join("pokeemerald.pack");
+        let created = target.join("pokeemerald.pack");
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)
+            .expect("the exclusive create succeeds");
+        file.write_all(b"half a ")
+            .expect("the partial write succeeds");
+        let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+        drop(file);
+
+        remove_through_verified_handle_with(&out, identity, |_handle| {
+            std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+            junction(&link, &elsewhere);
+        })
+        .expect("a retarget after the check must not stop the handle-bound delete");
+
+        assert!(
+            !created.exists(),
+            "the delete must remove the object identity was checked against, through its handle"
+        );
+        assert_eq!(
+            std::fs::read(&victim).expect("the unrelated file survives"),
+            b"someone else's file",
+            "a retarget landing after the check must never redirect the delete onto it"
         );
     }
 
