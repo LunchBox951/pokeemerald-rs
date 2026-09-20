@@ -64,9 +64,10 @@ def publish(release, repository, artifact_root, sha):
         for path in archives
     ))
     assets = [*archives, checksums]
-    lookup = gh("api", f"repos/{repository}/releases/tags/{release.tag}")
+    # The CLI also finds drafts; REST's release-by-tag endpoint does not.
+    lookup = gh("release", "view", release.tag, "--repo", repository, "--json", "isDraft,assets")
     if lookup.returncode:
-        if "HTTP 404" not in lookup.stderr:
+        if lookup.stderr.strip() != "release not found":
             require_success(lookup)
         notes = artifact_root / "release-notes.md"
         notes.write_text(
@@ -85,7 +86,7 @@ def publish(release, repository, artifact_root, sha):
         ))
     else:
         existing = json.loads(lookup.stdout)
-        if not existing["draft"]:
+        if not existing["isDraft"]:
             uploaded = {asset["name"] for asset in existing["assets"]
                         if asset.get("state") == "uploaded" and asset.get("size", 0) > 0}
             if not {path.name for path in assets}.issubset(uploaded):

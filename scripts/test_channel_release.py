@@ -47,9 +47,15 @@ class PublicationTest(unittest.TestCase):
         args = arguments[1:]
         self.commands.append(args)
         if args[0] == "api":
-            return subprocess.CompletedProcess(arguments, 0 if self.state else 1,
-                                               json.dumps(self.state), "HTTP 404" if not self.state else "")
+            published = self.state and not self.state["draft"]
+            return subprocess.CompletedProcess(arguments, 0 if published else 1,
+                                               json.dumps(self.state), "HTTP 404" if not published else "")
+        if args[:2] == ["release", "view"]:
+            response = {"isDraft": self.state["draft"], "assets": self.state["assets"]} if self.state else None
+            return subprocess.CompletedProcess(arguments, 0 if response else 1,
+                                               json.dumps(response), "" if response else "release not found")
         if args[:2] == ["release", "create"]:
+            self.assertIsNone(self.state, "retry must find the existing draft")
             self.assertIn("--draft", args)
             self.assertIn("--verify-tag", args)
             self.assertIn("--prerelease=true", args)
@@ -92,7 +98,7 @@ class PublicationTest(unittest.TestCase):
         self.commands.clear()
         self.publish()
         self.assertEqual(len(self.commands), 1)
-        self.assertEqual(self.commands[0][0], "api")
+        self.assertEqual(self.commands[0][:2], ["release", "view"])
 
     def test_incomplete_published_release_is_reported(self):
         self.state = {"draft": False, "assets": []}
