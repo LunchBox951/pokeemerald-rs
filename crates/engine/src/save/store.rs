@@ -227,6 +227,20 @@ struct SlotScan {
     legacy: bool,
 }
 
+/// The physical slots [`SaveStore::load`] copies each half of its result
+/// from.
+struct Resolution {
+    status: SaveStatus,
+    /// The adopted generation number: reported by `save_counter()` and used
+    /// to pick both the next save's physical slot and (absent a merge) the
+    /// slot every field is copied from.
+    counter: u32,
+    /// Set only for a legacy/full merge (see [`SaveStore::resolve`]): the
+    /// other slot's counter, to source `PokemonStorage` from instead of
+    /// `counter`'s own slot.
+    storage_from_counter: Option<u32>,
+}
+
 struct CopiedSlotPayloads {
     block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
     block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
@@ -479,34 +493,57 @@ impl SaveStore {
         }
     }
 
-    /// When both slots are intact, a slot whose `Ok` came only from the
-    /// legacy five-sector fallback never outranks one where all 14 sectors
-    /// validated, however their counters compare: the legacy slot's ids 5-13
-    /// are unverified (absent, not merely older), so preferring it on
-    /// counter recency alone could silently drop the other slot's verified
-    /// data (e.g. an imported image's real `PokemonStorage` bytes) while
-    /// still reporting `SaveStatus::Ok`.
-    fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32) {
+    /// When both slots are intact and exactly one is the legacy five-sector
+    /// fallback, the newer generation still wins, but never by discarding
+    /// the other slot's own verified data: if the full-format slot is newer,
+    /// it already has everything and wins outright as usual; if the legacy
+    /// slot is newer, its SaveBlock1/SaveBlock2 -- the player's latest
+    /// progress -- are combined with the full slot's `PokemonStorage` (its
+    /// only unique, verified contribution) rather than reverting the save to
+    /// the older generation, or dropping the full slot's storage, under a
+    /// still-reported `SaveStatus::Ok`. A legacy slot with a newer counter
+    /// than a full slot is reachable via a build downgrade (a full write,
+    /// then a pre-#1227 five-sector write into the other slot) or an
+    /// externally assembled image, not via an ordinary import.
+    fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> Resolution {
         use SlotIntegrity::{Empty, Error, Ok};
-        match (slot0.integrity, slot1.integrity) {
-            (Ok, Ok) => {
-                let counter = if slot0.legacy && !slot1.legacy {
-                    slot1.counter
-                } else if slot1.legacy && !slot0.legacy {
-                    slot0.counter
-                } else if second_counter_is_newer(slot0.counter, slot1.counter) {
-                    slot1.counter
-                } else {
-                    slot0.counter
-                };
-                (SaveStatus::Ok, counter)
-            }
-            (Ok, Error) => (SaveStatus::Error, slot0.counter),
-            (Ok, Empty) => (SaveStatus::Ok, slot0.counter),
-            (Error, Ok) => (SaveStatus::Error, slot1.counter),
-            (Empty, Ok) => (SaveStatus::Ok, slot1.counter),
-            (Empty, Empty) => (SaveStatus::Empty, 0),
-            (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0),
+        let (status, counter, storage_from_counter) = match (slot0.integrity, slot1.integrity) {
+            (Ok, Ok) => Self::resolve_both_ok(slot0, slot1),
+            (Ok, Error) => (SaveStatus::Error, slot0.counter, None),
+            (Ok, Empty) => (SaveStatus::Ok, slot0.counter, None),
+            (Error, Ok) => (SaveStatus::Error, slot1.counter, None),
+            (Empty, Ok) => (SaveStatus::Ok, slot1.counter, None),
+            (Empty, Empty) => (SaveStatus::Empty, 0, None),
+            (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0, None),
+        };
+        Resolution {
+            status,
+            counter,
+            storage_from_counter,
+        }
+    }
+
+    /// The `(Ok, Ok)` half of [`SaveStore::resolve`], split out because it is
+    /// the only combination where a slot's fields can be worth merging from
+    /// its counterpart.
+    fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Option<u32>) {
+        if slot0.legacy == slot1.legacy {
+            let counter = if second_counter_is_newer(slot0.counter, slot1.counter) {
+                slot1.counter
+            } else {
+                slot0.counter
+            };
+            return (SaveStatus::Ok, counter, None);
+        }
+        let (legacy, full) = if slot0.legacy {
+            (slot0, slot1)
+        } else {
+            (slot1, slot0)
+        };
+        if second_counter_is_newer(full.counter, legacy.counter) {
+            (SaveStatus::Ok, legacy.counter, Some(full.counter))
+        } else {
+            (SaveStatus::Ok, full.counter, None)
         }
     }
 
@@ -563,17 +600,28 @@ impl SaveStore {
     ///
     /// The resolved counter's parity selects the slot to copy, even if a
     /// checksum-valid payload has a corrupt footer counter that makes this
-    /// differ from the slot preferred during validation.
+    /// differ from the slot preferred during validation. A legacy/full merge
+    /// (see [`SaveStore::resolve`]) instead copies `PokemonStorage` from the
+    /// other slot; that copy runs first so the final, block-owning copy is
+    /// the one that recovers [`SaveStore::last_written_sector`].
     #[must_use]
     pub fn load(&mut self) -> LoadOutcome {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
-        let (status, counter) = Self::resolve(&scans[0], &scans[1]);
-        self.save_counter = counter;
-        if matches!(status, SaveStatus::Empty | SaveStatus::Corrupt) {
+        let resolution = Self::resolve(&scans[0], &scans[1]);
+        self.save_counter = resolution.counter;
+        if matches!(resolution.status, SaveStatus::Empty | SaveStatus::Corrupt) {
             self.last_written_sector = 0;
         }
+        let status = resolution.status;
+        let storage_override = resolution.storage_from_counter.map(|counter| {
+            self.copy_valid_slot_payloads(physical_slot_for_counter(counter))
+                .pokemon_storage
+        });
         let copy_slot = physical_slot_for_counter(self.save_counter);
         let mut copied = self.copy_valid_slot_payloads(copy_slot);
+        if let Some(pokemon_storage) = storage_override {
+            copied.pokemon_storage = pokemon_storage;
+        }
 
         let block2 = if copied.block2_valid {
             SaveBlock2::from_bytes(&copied.block2[..]).unwrap_or_default()
@@ -1500,15 +1548,19 @@ mod tests {
         );
     }
 
-    /// An imported image can carry a real full-14 generation (with genuine
-    /// `PokemonStorage` bytes) in one slot while a stray legacy-shaped
-    /// generation -- e.g. from a save this project's pre-#1227 code wrote
-    /// after that import, before this fix -- sits in the other slot with a
-    /// numerically newer counter. The legacy slot's newer counter must never
-    /// make `load` silently discard the full slot's verified storage bytes
-    /// while still reporting `SaveStatus::Ok`.
+    /// A full-14 slot can carry real `PokemonStorage` bytes (e.g. an
+    /// imported image) while a legacy-shaped generation with a numerically
+    /// newer counter sits in the other slot -- reachable via a build
+    /// downgrade (a full write, then a pre-#1227 five-sector write into the
+    /// other slot) or an externally assembled image. `load` must adopt the
+    /// newer legacy generation (never silently revert to the older full
+    /// slot) while still carrying the full slot's verified storage bytes
+    /// forward, rather than dropping either under a still-reported
+    /// `SaveStatus::Ok`. `migrating_a_newer_legacy_slot_keeps_its_progress_
+    /// and_the_full_slot_storage` below covers the case where the two
+    /// slots' blocks actually differ.
     #[test]
-    fn a_newer_legacy_slot_never_outranks_an_older_full_slot_with_real_storage() {
+    fn a_newer_legacy_slot_merges_its_blocks_with_the_older_full_slots_storage() {
         let mut store = SaveStore::new();
         // Slot 1 (odd counter 3): a genuine full 14-sector generation with
         // distinctive storage bytes.
@@ -1538,17 +1590,103 @@ mod tests {
         assert_eq!(
             outcome.status,
             SaveStatus::Ok,
-            "the older full slot is still a completely valid generation"
+            "both the legacy and the full slot are individually intact"
         );
         assert_eq!(
             store.save_counter(),
-            3,
-            "the verified full slot must win over the merely-newer legacy slot"
+            4,
+            "the newer legacy generation's counter is adopted, not the older full slot's"
         );
         assert_eq!(
             &store.base_pokemon_storage[..],
             &storage_bytes[..],
-            "the full slot's real storage bytes must never be silently dropped"
+            "the full slot's real storage bytes must still be carried forward"
+        );
+    }
+
+    /// Writes a complete 14-sector generation (ids 0-13, no rotation) into
+    /// `slot` under one counter, with the given opaque storage bytes.
+    fn write_full_slot(
+        store: &mut SaveStore,
+        slot: usize,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        storage: &[u8],
+        counter: u32,
+    ) {
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else if id < SECTOR_ID_PKMN_STORAGE_START {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+                &storage[offset..offset + len]
+            };
+            store.write_physical(slot, usize::from(id), &Sector::write(id, payload, counter));
+        }
+    }
+
+    /// Writes a pre-#1227 five-sector generation (ids 0-4 only, positions
+    /// 5-13 left erased) carrying the given blocks.
+    fn write_legacy_slot(
+        store: &mut SaveStore,
+        slot: usize,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        counter: u32,
+    ) {
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        for id in 0..SECTOR_ID_PKMN_STORAGE_START {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            };
+            store.write_physical(slot, usize::from(id), &Sector::write(id, payload, counter));
+        }
+    }
+
+    /// Migrating a five-sector file must not cost the player the progress it
+    /// holds. When the legacy slot carries the newer counter, its
+    /// SaveBlock1/SaveBlock2 are the player's latest state and the older
+    /// full slot's only unique contribution is its opaque `PokemonStorage`:
+    /// keeping both loses nothing, while preferring the full slot wholesale
+    /// silently reverts the save to the older generation under status Ok.
+    #[test]
+    fn migrating_a_newer_legacy_slot_keeps_its_progress_and_the_full_slot_storage() {
+        let block2 = sample_block2();
+        let older_block1 = SaveBlock1 {
+            money: 111,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 222,
+            ..sample_block1()
+        };
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        write_full_slot(&mut store, 1, &older_block1, &block2, &storage_bytes, 3);
+        write_legacy_slot(&mut store, 0, &newer_block1, &block2, 4);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(
+            outcome.block1.money, newer_block1.money,
+            "the newer legacy generation's player progress must survive migration"
+        );
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &storage_bytes[..],
+            "the older full slot's opaque storage must still be carried forward"
         );
     }
 }
