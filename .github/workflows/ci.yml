@@ -141,6 +141,12 @@ jobs:
       # this separate invocation so the optional smoke feature is also tested.
       - name: cargo test -p xtask --features smoke
         run: cargo test -p xtask --features smoke
+      - name: Verify channel data isolation
+        shell: bash
+        run: |
+          for channel in unstable stable main; do
+            POKEEMERALD_RELEASE_CHANNEL="${channel}" cargo test -p engine -p pack-format release_channel --locked
+          done
       - name: Smoke E2E (packless)
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
