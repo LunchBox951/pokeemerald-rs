@@ -26992,6 +26992,12 @@
           "spec": "S-3",
           "status": "ported"
         },
+        "gMPlayJumpTableTemplate": {
+          "reason": "gMPlayJumpTableTemplate dispatches every command byte 0xB1..=0xCE (m4a_1.s:1256-1268) to a handler slot; CommandReader::read's match on 'command' (reader.rs) reproduces the full slot range, including the table's eight unpatched ply_fine alias slots (0xB6-0xB8, 0xC6-0xC7, 0xC9-0xCB; m4a_tables.c:6-44; m4a.c:287-305), now decoded as Event::Fine alongside FINE (0xB1) itself instead of rejected as UnknownCommand. Each dispatched command's own runtime behavior is deferred to that command's separate artifact (e.g. ply_fine's channel teardown remains src/m4a_1.s#ply_fine, stubbed on mixer.rs); this row covers only the byte-to-slot dispatch shape.",
+          "rust_target": "crates/audio/src/sequence/reader.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "gNoiseTable": {
           "reason": "Noise-channel NR43 control-byte table reproduced as cgb_pitch::NOISE_TABLE, backing midi_key_to_noise_control (S-3 slice 2).",
           "rust_target": "crates/audio/src/cgb_pitch.rs",
