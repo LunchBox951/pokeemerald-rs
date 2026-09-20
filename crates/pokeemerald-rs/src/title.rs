@@ -121,6 +121,17 @@ pub enum TitleSceneError {
         /// Actual `(width, height)` in pixels.
         actual: (u32, u32),
     },
+    /// A palette index does not fit in the 4 bits a Bpp4 tile has for it.
+    ///
+    /// `ImageRef::bit_depth` is informational only -- pack payloads always
+    /// store one index byte per pixel (`assets::ImageRef` docs) -- so this
+    /// checks the index value itself rather than the declared source depth.
+    ImagePaletteIndexOutOfRange {
+        /// The pack entry ID.
+        id: &'static str,
+        /// The invalid palette index.
+        index: u8,
+    },
 }
 
 impl fmt::Display for TitleSceneError {
@@ -158,6 +169,10 @@ impl fmt::Display for TitleSceneError {
             } => write!(
                 f,
                 "title screen: sprite sheet `{id}` is {aw}x{ah}, expected {ew}x{eh}"
+            ),
+            Self::ImagePaletteIndexOutOfRange { id, index } => write!(
+                f,
+                "title screen: image `{id}` has palette index {index}, expected 0..=15 for 4bpp"
             ),
         }
     }
@@ -394,12 +409,31 @@ fn image_to_tileset(
         });
     }
 
-    let packed = pack_tile_bytes(width, height, image.pixels, bit_depth);
+    let packed = pack_tile_bytes(id, width, height, image.pixels, bit_depth)?;
     Tileset::decode(bit_depth, &packed).map_err(TitleSceneError::from)
 }
 
-fn pack_tile_bytes(width: usize, height: usize, pixels: &[u8], bit_depth: BitDepth) -> Vec<u8> {
+/// The highest palette index a 4bpp tile byte can hold in one nibble.
+const BPP4_MAX_INDEX: u8 = 0x0F;
+
+fn pack_tile_bytes(
+    id: &'static str,
+    width: usize,
+    height: usize,
+    pixels: &[u8],
+    bit_depth: BitDepth,
+) -> Result<Vec<u8>, TitleSceneError> {
     const TILE_DIM: usize = BitDepth::TILE_DIM;
+
+    // `ImageRef::bit_depth` is informational only, so a Bpp4 destination is
+    // validated by index value here rather than by declared source depth --
+    // masking an out-of-range index instead of rejecting it silently aliases
+    // it to a different, wrong colour (issue #1302).
+    if bit_depth == BitDepth::Bpp4 {
+        if let Some(&index) = pixels.iter().find(|&&index| index > BPP4_MAX_INDEX) {
+            return Err(TitleSceneError::ImagePaletteIndexOutOfRange { id, index });
+        }
+    }
 
     let tiles_wide = width / TILE_DIM;
     let tiles_high = height / TILE_DIM;
@@ -418,16 +452,17 @@ fn pack_tile_bytes(width: usize, height: usize, pixels: &[u8], bit_depth: BitDep
                 BitDepth::Bpp8 => packed.extend_from_slice(&tile_pixels),
                 BitDepth::Bpp4 => {
                     // GBA 4bpp stores the left pixel in the low nibble and
-                    // the right pixel in the high nibble.
+                    // the right pixel in the high nibble. Both indices are
+                    // already checked to fit one nibble above.
                     for pair in tile_pixels.chunks_exact(2) {
-                        packed.push((pair[0] & 0x0F) | ((pair[1] & 0x0F) << 4));
+                        packed.push(pair[0] | (pair[1] << 4));
                     }
                 }
             }
         }
     }
 
-    packed
+    Ok(packed)
 }
 
 fn crop_and_pack_tile_bytes(
@@ -457,7 +492,7 @@ fn crop_and_pack_tile_bytes(
         let start = (y0 + row) * stride + x0;
         cropped.extend_from_slice(&image.pixels[start..start + w]);
     }
-    Ok(pack_tile_bytes(w, h, &cropped, bit_depth))
+    pack_tile_bytes(id, w, h, &cropped, bit_depth)
 }
 
 fn check_sprite_sheet_dimensions(
