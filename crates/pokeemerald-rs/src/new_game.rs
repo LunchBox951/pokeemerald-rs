@@ -93,6 +93,44 @@ pub const DEFAULT_HEAL_LOCATION_Y: i16 = 2;
 
 const NO_WARP_EVENT: i8 = -1;
 
+/// The two `SaveBlock2` option fields a NEW GAME hands to
+/// [`init_save_blocks`] instead of it always picking the modeled defaults
+/// (issue #1125): `NewGameInitData` (`pokeemerald/src/new_game.c:149-207`)
+/// never touches `optionsTextSpeed`/`optionsWindowFrameType` itself, so only
+/// a boot verdict that already re-defaulted `SaveBlock2`
+/// (`SetDefaultOptions`, exactly `SaveFileStatus::boot_clears_save_block2`'s
+/// `Empty`/`Corrupt`, `pokeemerald/src/intro.c:1154-1156`) reaches this
+/// struct's [`Self::DEFAULT`]; every other verdict -- `Ok`/`Error`, and this
+/// port's own `NoFlash` (upstream has nothing to clear there either: a
+/// medium that cannot even be read leaves `SaveBlock2` exactly as untouched
+/// as an intact recovery does) -- carries its recovered `SaveBlock2`'s own
+/// two bytes into the fresh save instead (`crate::flow::new_game_options_for`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NewGameOptions {
+    /// `optionsTextSpeed`'s raw byte, repaired to `OPTIONS_TEXT_SPEED_MID`
+    /// if out of range by the time it reaches this struct
+    /// ([`crate::intro::IntroScene::from_pack_with_options`]'s own doc
+    /// comment) -- `GetPlayerTextSpeedDelay` performs that same live
+    /// write-back the moment Birch's speech first prints
+    /// (`pokeemerald/src/menu.c:481-487`).
+    pub(crate) text_speed: u8,
+    /// `optionsWindowFrameType`'s raw byte, carried through unvalidated: no
+    /// upstream call site write-back-repairs it the way `optionsTextSpeed`
+    /// is repaired (`assets::pack::AssetPack::text_window_frame`'s own docs
+    /// -- an out-of-range value just falls back to frame 0 at draw time,
+    /// nothing is written back to the live block).
+    pub(crate) window_frame_type: u8,
+}
+
+impl NewGameOptions {
+    /// `SetDefaultOptions`' own two constants: `OPTIONS_TEXT_SPEED_MID`
+    /// (`new_game.c:93`) and `WINDOW_FRAME_TYPE_0` (`:94`).
+    pub(crate) const DEFAULT: Self = Self {
+        text_speed: 1,
+        window_frame_type: 0,
+    };
+}
+
 /// Returns the heal location selected by the skipped truck-exit script.
 ///
 /// An unrecognized gender returns [`WarpData::default`] because upstream's
@@ -114,7 +152,22 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
     }
 }
 
-/// Builds fresh save blocks for every modeled new-game field.
+/// [`init_save_blocks_with_options`] at [`NewGameOptions::DEFAULT`] -- every
+/// caller that has no boot-recovered save to carry options from (most of
+/// this module's own tests, and every other standalone caller).
+///
+/// # Panics
+///
+/// See [`init_save_blocks_with_options`].
+#[must_use]
+pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
+    init_save_blocks_with_options(rng, NewGameOptions::DEFAULT)
+}
+
+/// Builds fresh save blocks for every modeled new-game field, seeding
+/// `options_text_speed`/`options_window_frame_type` from `options` rather
+/// than always defaulting them (issue #1125) -- see [`NewGameOptions`]'s own
+/// doc comment for which boot verdicts reach which value.
 ///
 /// The RNG's pre-draw state supplies the trainer ID's low half and one draw
 /// supplies its high half, preserving `SeedRngAndSetTrainerId` followed by
@@ -126,24 +179,18 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
 /// Panics if the static spawn coordinates or generated new-game IDs exceed the
 /// save model's supported ranges.
 #[must_use]
-pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
+pub(crate) fn init_save_blocks_with_options(
+    rng: &mut Rng,
+    options: NewGameOptions,
+) -> (SaveBlock1, SaveBlock2) {
     let trainer_id_low = rng.state();
     let block2 = SaveBlock2 {
         player_name: encode_default_player_name(),
         player_gender: DEFAULT_PLAYER_GENDER,
         player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         encryption_key: 0,
-        // `OPTIONS_TEXT_SPEED_MID` (`SetDefaultOptions`,
-        // `pokeemerald/src/new_game.c:91-93`): unlike every other option
-        // bit here, MID is not the zeroed representation (that's SLOW,
-        // raw `0`), so this needs an explicit value rather than falling
-        // out of a zeroed block.
-        options_text_speed: 1,
-        // `WINDOW_FRAME_TYPE_0`: a zeroed, freshly-initialized save block's
-        // own `optionsWindowFrameType` (`pokeemerald/include/global.h:520`),
-        // matching every other unmodeled option bit this block also leaves
-        // zeroed.
-        options_window_frame_type: 0,
+        options_text_speed: options.text_speed,
+        options_window_frame_type: options.window_frame_type,
     };
 
     let spawn = WarpData {
@@ -304,6 +351,46 @@ mod tests {
         assert_eq!(block1.location.warp_id, NO_WARP_EVENT);
         assert_eq!(block1.location.map_group, SPAWN_MAP_GROUP);
         assert_eq!(block1.location.map_num, SPAWN_MAP_NUM);
+    }
+
+    /// Issue #1125: `NewGameInitData` never touches `optionsTextSpeed`/
+    /// `optionsWindowFrameType` itself (`pokeemerald/src/new_game.c:149-207`),
+    /// so a boot verdict that kept its recovered `SaveBlock2` must reach this
+    /// constructor as non-default `NewGameOptions`, and every other modeled
+    /// field must still come out exactly as the default-options case above.
+    #[test]
+    fn init_save_blocks_with_options_carries_the_boot_recovered_options() {
+        let options = NewGameOptions {
+            text_speed: 2,
+            window_frame_type: 5,
+        };
+        let (block1, block2) = init_save_blocks_with_options(&mut Rng::new(0), options);
+        let (default_block1, default_block2) = init_save_blocks(&mut Rng::new(0));
+
+        assert_eq!(block2.options_text_speed, 2);
+        assert_eq!(block2.options_window_frame_type, 5);
+        // Every other modeled field must come out identical to the
+        // default-options case (same seed, same everything else) -- only
+        // the two option fields this test set differ.
+        assert_eq!(
+            block2,
+            SaveBlock2 {
+                options_text_speed: 2,
+                options_window_frame_type: 5,
+                ..default_block2
+            }
+        );
+        // `SaveBlock1` has no `PartialEq` impl, so this asserts the same
+        // "everything else identical" claim field by field instead, over
+        // the same modeled fields `init_save_blocks_matches_new_game_init_data_for_modeled_fields`
+        // above already pins.
+        assert_eq!(block1.money, default_block1.money);
+        assert_eq!(block1.player_party_count, default_block1.player_party_count);
+        assert_eq!(block1.player_party, default_block1.player_party);
+        assert_eq!(block1.bag, default_block1.bag);
+        assert_eq!(block1.pos.x, default_block1.pos.x);
+        assert_eq!(block1.pos.y, default_block1.pos.y);
+        assert_eq!(block1.location, default_block1.location);
     }
 
     #[test]

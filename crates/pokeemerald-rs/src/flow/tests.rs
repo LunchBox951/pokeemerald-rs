@@ -5,14 +5,14 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, main_menu_load_failure_message, menu_action, should_retry_overworld_load,
-    title_advance_pressed, window_frame_for, AnimatedTitle, AppScene, MainMenuAction,
-    MainMenuState,
+    advance_scene, main_menu_load_failure_message, menu_action, new_game_options_for,
+    should_retry_overworld_load, title_advance_pressed, window_frame_for, AnimatedTitle, AppScene,
+    MainMenuAction, MainMenuState,
 };
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
 use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
-use crate::new_game;
+use crate::new_game::{self, NewGameOptions};
 use assets::pack::PackError;
 use platform::{ButtonState, Buttons};
 
@@ -517,6 +517,58 @@ fn window_frame_for_reads_the_saved_blocks_own_option() {
         "a continued save's own recovered optionsWindowFrameType must not \
          be discarded for a hardcoded default"
     );
+}
+
+/// Issue #1125: a NEW GAME confirm must carry a boot-recovered save's
+/// `optionsTextSpeed`/`optionsWindowFrameType` into the fresh session
+/// (`NewGameInitData` never resets them, `pokeemerald/src/new_game.c:149-207`)
+/// for every status except `Empty`/`Corrupt` -- the two verdicts whose boot
+/// already ran `SetDefaultOptions` (`pokeemerald/src/intro.c:1154-1156`),
+/// which must still reach [`NewGameOptions::DEFAULT`] exactly as they did
+/// before this issue. `Ok`/`Error` keep an intact recovery either way; this
+/// port's own `NoFlash` has no upstream boot verdict that clears
+/// `SaveBlock2` either (`LoadGameSave` never runs for it at all), so it
+/// joins them rather than `Empty`/`Corrupt` -- the same three-way split
+/// [`window_frame_for`] already makes for the main-menu border.
+#[test]
+fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let recovered = |status: SaveFileStatus| SavedGame {
+        status,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_text_speed: 2,
+            options_window_frame_type: 12,
+            ..SaveBlock2::default()
+        },
+    };
+
+    for status in [
+        SaveFileStatus::Ok,
+        SaveFileStatus::Error,
+        SaveFileStatus::NoFlash,
+    ] {
+        let saved = recovered(status);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions {
+                text_speed: 2,
+                window_frame_type: 12,
+            },
+            "a {status:?} save's recovered options must survive into NEW GAME"
+        );
+    }
+
+    for status in [SaveFileStatus::Empty, SaveFileStatus::Corrupt] {
+        let saved = recovered(status);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions::DEFAULT,
+            "a {status:?} boot verdict must still default NEW GAME's options"
+        );
+    }
 }
 
 /// Upstream `Task_HandleMainMenuInput` reads A before the D-pad
