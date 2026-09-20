@@ -371,7 +371,10 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
     }
 }
 
-fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
+/// Whether `stat`'s drop is blocked by `ability`, shared with trainer AI's
+/// `AI_CBM_AttackDown`/`AI_CBM_DefenseDown` (`data/battle_ai_scripts.s:
+/// 277-285,308-311`).
+pub(crate) fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
     ability == CLEAR_BODY
         || ability == WHITE_SMOKE
         || (ability == KEEN_EYE && stat == ChangedStat::Accuracy)
@@ -398,6 +401,36 @@ pub fn soundproof_block(
 ) -> Result<bool, BattleError> {
     dex.move_data(move_id)?;
     Ok(soundproof_blocks(move_id, defender))
+}
+
+/// The nine moves `AI_CheckBadMove` compares against Soundproof
+/// (`data/battle_ai_scripts.s:95-103`); unlike execution's [`SOUND_MOVES`],
+/// this list omits Hyper Voice.
+const AI_SOUND_MOVES: [MoveId; 9] = [
+    MoveId(45),  // Growl
+    MoveId(46),  // Roar
+    MoveId(47),  // Sing
+    MoveId(48),  // Supersonic
+    MoveId(103), // Screech
+    MoveId(173), // Snore
+    MoveId(253), // Uproar
+    MoveId(319), // Metal Sound
+    MoveId(320), // Grass Whistle
+];
+
+/// Whether `AI_CheckBadMove` discourages `move_id` for Soundproof, ahead of
+/// its effect-specific guards (`data/battle_ai_scripts.s:92-103`).
+///
+/// # Errors
+///
+/// Propagates a missing move entry from `dex`.
+pub(crate) fn ai_soundproof_discourages(
+    dex: &Dex,
+    move_id: MoveId,
+    defender: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    dex.move_data(move_id)?;
+    Ok(defender.ability() == SOUNDPROOF && AI_SOUND_MOVES.contains(&move_id))
 }
 
 /// Resolves a stat-changing move without mutating either battler.

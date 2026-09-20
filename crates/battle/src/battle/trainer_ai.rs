@@ -5,15 +5,19 @@
 //! because unmodelled scoring branches can consume different RNG draws.
 
 use assets::trainers::AiFlags;
-use assets::{MoveEffect, MoveId, Type, TypeChart};
+use assets::{AbilityId, MoveEffect, MoveId, Type, TypeChart};
 
 use super::opponent_ai::{all_known_moves_are_spent, selectable_slot, EnemyAction};
 use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab, BattleRng};
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::hit::defender_levitate_blocked;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
-use crate::stat_change::{EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN};
+use crate::stat_change::{
+    ability_blocks_drop, ai_soundproof_discourages, ChangedStat, EFFECT_ATTACK_DOWN,
+    EFFECT_DEFENSE_DOWN,
+};
 use crate::stat_stage::StatStage;
 
 const PERCENT_SCALE: u32 = 100;
@@ -40,6 +44,8 @@ const HEAVILY_LOWERED_STAT_STAGE: i8 = -3;
 const FIRST_TURN: u8 = 0;
 
 const AI_EFFECTIVENESS_NEUTRAL: u32 = 40;
+const AI_EFFECTIVENESS_SUPER: u32 = 80;
+const AI_EFFECTIVENESS_SUPER_WITH_STAB: u32 = 120;
 const AI_EFFECTIVENESS_QUADRUPLE: u32 = 160;
 const AI_EFFECTIVENESS_QUADRUPLE_WITH_STAB: u32 = 240;
 
@@ -331,6 +337,39 @@ fn has_no_effect(
     Ok(ai_type_effectiveness(dex, move_id, attacker, defender)? == Some(0))
 }
 
+/// Unlike [`crate::hit::defender_wonder_guard_blocked`], only an
+/// exactly-super-effective hit escapes here (`data/battle_ai_scripts.s:82-84`,
+/// `src/battle_ai_script_commands.c:1528-1556`).
+fn ai_wonder_guard_blocks(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    if defender.ability() != AbilityId::WONDER_GUARD {
+        return Ok(false);
+    }
+    Ok(!matches!(
+        ai_type_effectiveness(dex, move_id, attacker, defender)?,
+        Some(AI_EFFECTIVENESS_SUPER | AI_EFFECTIVENESS_SUPER_WITH_STAB)
+    ))
+}
+
+/// Wonder Guard, then Levitate on a Ground move, once chart immunity is ruled
+/// out (`data/battle_ai_scripts.s:59-65,82-88`).
+fn hit_effect_ability_blocked(
+    dex: &Dex,
+    move_id: MoveId,
+    user: &BattlePokemon,
+    target: &BattlePokemon,
+) -> Result<bool, BattleError> {
+    if ai_wonder_guard_blocks(dex, move_id, user, target)? {
+        return Ok(true);
+    }
+    let move_type = dex.move_data(move_id)?.move_type.battle_type();
+    Ok(move_type.is_some_and(|move_type| defender_levitate_blocked(move_type, target)))
+}
+
 fn estimated_damage(
     dex: &Dex,
     move_id: MoveId,
@@ -428,10 +467,39 @@ fn score_bad_move(
     target: &BattlePokemon,
 ) -> Result<(), BattleError> {
     let effect = scoreable_effect(dex, move_id)?;
+
+    // A powered hit checks chart immunity then Wonder Guard/Levitate before
+    // the Soundproof check every effect shares (`data/battle_ai_scripts.s:51-88`).
+    if effect == ScoreableEffect::Hit {
+        if has_no_effect(dex, move_id, user, target)? {
+            scores.adjust(slot, STRONGLY_DISCOURAGE);
+            return Ok(());
+        }
+        if hit_effect_ability_blocked(dex, move_id, user, target)? {
+            scores.adjust(slot, STRONGLY_DISCOURAGE);
+            return Ok(());
+        }
+    }
+
+    // Soundproof precedes the effect-specific guards below
+    // (`data/battle_ai_scripts.s:92-103`).
+    if ai_soundproof_discourages(dex, move_id, target)? {
+        scores.adjust(slot, STRONGLY_DISCOURAGE);
+        return Ok(());
+    }
+
+    // A stat drop checks the target's stage floor, then its ability guard
+    // (`data/battle_ai_scripts.s:277-285,308-311`).
     let is_ineffective = match effect {
-        ScoreableEffect::Hit => has_no_effect(dex, move_id, user, target)?,
-        ScoreableEffect::AttackDown => target.stages().attack == StatStage::MIN,
-        ScoreableEffect::DefenseDown => target.stages().defense == StatStage::MIN,
+        ScoreableEffect::Hit => false,
+        ScoreableEffect::AttackDown => {
+            target.stages().attack == StatStage::MIN
+                || ability_blocks_drop(target.ability(), ChangedStat::Attack)
+        }
+        ScoreableEffect::DefenseDown => {
+            target.stages().defense == StatStage::MIN
+                || ability_blocks_drop(target.ability(), ChangedStat::Defense)
+        }
     };
     if is_ineffective {
         scores.adjust(slot, STRONGLY_DISCOURAGE);
@@ -592,8 +660,8 @@ fn score_first_turn_setup(
 mod tests {
     use super::{
         choose_trainer_action, ensure_scoreable, ensure_supported_flags, estimated_damage,
-        is_scoreable_effect, EFFECT_HIT, FIRST_TURN, FIRST_TURN_SETUP_BONUS_THRESHOLD,
-        PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
+        hit_effect_ability_blocked, is_scoreable_effect, EFFECT_HIT, FIRST_TURN,
+        FIRST_TURN_SETUP_BONUS_THRESHOLD, PERCENT_SCALE, STAT_DROP_DISCOURAGEMENT_THRESHOLD,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::dex::Dex;
@@ -627,13 +695,30 @@ mod tests {
     /// a single-ability species, a same-species non-Hustle control is
     /// reachable through `with_ability_slot`.
     const DELIBIRD: SpeciesId = SpeciesId(225);
+    /// `SPECIES_SHEDINJA`: Wonder Guard in its only ability slot.
+    const SHEDINJA: SpeciesId = SpeciesId(303);
+    /// `SPECIES_CORPHISH`: Hyper Cutter in slot 0 (Shell Armor is slot 1).
+    const CORPHISH: SpeciesId = SpeciesId(326);
+    /// `SPECIES_TENTACOOL`: Clear Body in slot 0 (Liquid Ooze is slot 1).
+    const TENTACOOL: SpeciesId = SpeciesId(72);
+    /// `SPECIES_VOLTORB`: Soundproof in slot 0 (Static is slot 1).
+    const VOLTORB: SpeciesId = SpeciesId(100);
+    /// `SPECIES_GASTLY`: Levitate in its only ability slot.
+    const GASTLY: SpeciesId = SpeciesId(92);
 
     const POUND: MoveId = MoveId(1);
     const SCRATCH: MoveId = MoveId(10);
+    const WING_ATTACK: MoveId = MoveId(17);
     const TACKLE: MoveId = MoveId(33);
     const LEER: MoveId = MoveId(43);
     const GROWL: MoveId = MoveId(45);
     const EMBER: MoveId = MoveId(52);
+    const WATER_GUN: MoveId = MoveId(55);
+    const EARTHQUAKE: MoveId = MoveId(89);
+    /// `MOVE_HYPER_VOICE`: absent from the AI's own Soundproof list
+    /// (`data/battle_ai_scripts.s:95-103`) despite belonging to execution's
+    /// `SOUND_MOVES` (`crates/battle/src/stat_change.rs:83-94`).
+    const HYPER_VOICE: MoveId = MoveId(304);
 
     fn route_103_flags() -> AiFlags {
         AiFlags::CHECK_BAD_MOVE
@@ -1056,5 +1141,126 @@ mod tests {
             statused_estimate < healthy_estimate,
             "the statused Marvel Scale defender's estimate must be lower than the healthy control's"
         );
+    }
+
+    /// `AI_CheckBadMove` reads `get_ability AI_TARGET` on a powered hit
+    /// (`data/battle_ai_scripts.s:59-64`): a Wonder Guard target keeps a
+    /// merely-neutral hit's -10 score, while an exactly-super-effective hit
+    /// keeps its full score, matching the same ability at execution
+    /// (`crates/battle/src/hit.rs:194-198`).
+    #[test]
+    fn wonder_guard_discourages_a_neutral_hit_but_not_a_super_effective_one() {
+        let enemy = pokemon(MUDKIP, vec![WATER_GUN, WING_ATTACK]);
+        let player = pokemon(SHEDINJA, vec![POUND]);
+        assert_eq!(player.ability(), assets::AbilityId::WONDER_GUARD);
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_FIRST_TIED_MOVE]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(action, EnemyAction::Move(1));
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    /// `AI_CBM_AttackDown` reads `get_ability AI_TARGET` after the stage
+    /// floor check (`data/battle_ai_scripts.s:277-280`): Hyper Cutter scores
+    /// the drop -10 at a stage the target could otherwise still lose,
+    /// matching the `AbilityProtected` outcome at execution
+    /// (`crates/battle/src/stat_change.rs:374-379`).
+    #[test]
+    fn hyper_cutter_discourages_an_attack_drop_at_an_unlowered_stage() {
+        let enemy = pokemon(TREECKO, vec![POUND, GROWL]);
+        let player = pokemon(CORPHISH, vec![POUND]);
+        assert_eq!(player.ability(), assets::AbilityId::HYPER_CUTTER);
+        // Both moves tie at 100 without the guard, and the tie-break draw
+        // below would already pick slot 0 -- select the SECOND tied slot so
+        // this fails without the guard instead of passing by coincidence.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(action, EnemyAction::Move(0));
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    /// `AI_CBM_DefenseDown` shares the Clear Body / White Smoke guard with
+    /// `AI_CBM_AttackDown` (`data/battle_ai_scripts.s:308-311`).
+    #[test]
+    fn clear_body_discourages_a_defense_drop_at_an_unlowered_stage() {
+        let enemy = pokemon(TREECKO, vec![POUND, LEER]);
+        let player = pokemon(TENTACOOL, vec![POUND]);
+        assert_eq!(player.ability(), crate::stat_change::CLEAR_BODY);
+        // See the SECOND-tied-slot note above: both moves tie at 100 without
+        // the guard.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(action, EnemyAction::Move(0));
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    /// The Soundproof guard (`data/battle_ai_scripts.s:92-103`) omits Hyper
+    /// Voice unlike execution's ten-move `SOUND_MOVES`
+    /// (`crates/battle/src/stat_change.rs:83-94`).
+    #[test]
+    fn soundproof_discourages_growl_but_not_hyper_voice() {
+        let enemy = pokemon(TREECKO, vec![HYPER_VOICE, GROWL]);
+        let player = pokemon(VOLTORB, vec![POUND]);
+        assert_eq!(player.ability(), assets::AbilityId::SOUNDPROOF);
+        // Both moves tie at 100 without the guard; see the SECOND-tied-slot
+        // note above.
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(action, EnemyAction::Move(0));
+        assert_eq!(rng.draws(), MAX_MON_MOVES + 1);
+    }
+
+    /// No dex move pairs `MoveEffect::HIT` with `Type::Ground`, so
+    /// `choose_trainer_action` cannot reach `CheckIfLevitateCancelsGroundMove`
+    /// (`data/battle_ai_scripts.s:86-88`) through an admitted move; this pins
+    /// the wired predicate directly instead.
+    #[test]
+    fn levitate_blocks_a_ground_move_the_chooser_cannot_reach_through_an_admitted_move() {
+        let dex = Dex::new();
+        let user = pokemon(TREECKO, vec![POUND]);
+        let target = pokemon(GASTLY, vec![POUND]);
+        assert_eq!(target.ability(), assets::AbilityId::LEVITATE);
+
+        assert!(hit_effect_ability_blocked(&dex, EARTHQUAKE, &user, &target).unwrap());
+        assert!(!hit_effect_ability_blocked(&dex, POUND, &user, &target).unwrap());
     }
 }
