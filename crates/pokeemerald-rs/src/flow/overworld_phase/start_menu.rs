@@ -399,9 +399,9 @@ impl OverworldPhase {
             return;
         }
         let dex = battle::Dex::new();
-        let stored_count =
-            usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
-        match party::select_active_battler(&dex, &self.save1.player_party[..stored_count]) {
+        // SetBattlePartyIds scans all PARTY_SIZE slots, not just the stored
+        // count (pokeemerald/src/battle_controllers.c:591-606, issue #1241).
+        match party::select_active_battler(&dex, &self.save1.player_party) {
             Ok((slot, lead)) => {
                 self.lead_hp_hidden_by_load =
                     party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);

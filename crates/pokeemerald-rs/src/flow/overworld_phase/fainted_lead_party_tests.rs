@@ -220,6 +220,135 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     );
 }
 
+/// The regression this issue fixes: a slot beyond `player_party_count`
+/// must still be reachable as the lead (issue #1241).
+#[test]
+fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
+    let dex = Dex::new();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &fainted_starter());
+    seed.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    let phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+
+    assert_eq!(
+        phase.party_lead_slot, 1,
+        "a healthy slot beyond the stored count of 1 must still be selected"
+    );
+    assert!(
+        !phase
+            .party_lead
+            .as_ref()
+            .expect("a usable member was selected")
+            .is_fainted(),
+        "the selected lead must not be the fainted slot 0"
+    );
+    assert_eq!(
+        phase.save1.player_party_count, 1,
+        "the stored party count itself must not change"
+    );
+}
+
+/// The same regression, pinned on the white-out reselect call site: seeded
+/// directly, bypassing the (already-fixed) continue scan (issue #1241).
+#[test]
+fn a_white_out_reselects_a_trailing_slot_beyond_the_stored_party_count() {
+    let dex = Dex::new();
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 1;
+    phase.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(
+        &dex,
+        &new_game::provisional_starter(),
+    ));
+    phase.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    phase.party_lead = None;
+    phase.party_lead_slot = 0;
+
+    phase.white_out();
+
+    assert_eq!(
+        phase.party_lead_slot, 1,
+        "the healthy slot beyond the stored count of 1 must be reselected after healing"
+    );
+    assert!(
+        !phase
+            .party_lead
+            .as_ref()
+            .expect("a usable member was reselected")
+            .is_fainted(),
+        "the reselected lead must not be fainted"
+    );
+}
+
+/// A trailing lead beyond the stored count is not "occupied", so it must
+/// merge back on white-out without being force-healed (issue #1241).
+#[test]
+fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_the_stored_count() {
+    const DAMAGE: u32 = 5;
+
+    let dex = Dex::new();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    // An egg in slot 0 stays ineligible even after healing, so slot 1
+    // remains selected throughout.
+    seed.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(
+        &dex,
+        &new_game::provisional_starter(),
+    ));
+    seed.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(
+        phase.party_lead_slot, 1,
+        "setup: the trailing slot was selected"
+    );
+    let slot0_before = phase.save1.player_party[0];
+
+    // Simulate the lost battle's damage on the live battler: white-out's
+    // heal must not erase this for a slot outside the stored count.
+    phase
+        .party_lead
+        .as_mut()
+        .expect("setup: a lead was selected")
+        .apply_damage(DAMAGE);
+    let hp_after_damage = phase.party_lead.as_ref().unwrap().current_hp();
+
+    phase.white_out();
+
+    assert_eq!(
+        phase.party_lead_slot, 1,
+        "the merged trailing lead is still the first usable slot"
+    );
+    let merged = phase.save1.player_party[1];
+    assert_eq!(
+        u32::from(merged.hp),
+        hp_after_damage,
+        "a trailing lead outside the stored count must merge its current battle-worn HP, not \
+         heal to full like an occupied slot would"
+    );
+    assert_eq!(
+        phase.save1.player_party[0], slot0_before,
+        "slot 0 is outside the stored count of 1 (occupied-slot healing does not touch it) and \
+         is not the selected lead, so it must round-trip untouched"
+    );
+    assert_eq!(
+        phase.save1.player_party_count, 1,
+        "merging and reselecting a trailing lead must not rewrite the stored count"
+    );
+}
+
 /// A white-out heals every occupied slot and re-selects the lead through
 /// `heal_whole_party_and_reselect_lead`, so a slot the player never sent
 /// out does not stay fainted and can become the lead again.
