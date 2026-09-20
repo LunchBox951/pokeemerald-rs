@@ -645,6 +645,46 @@ fn a_colliding_first_pointer_candidate_is_left_untouched_in_favor_of_the_next_fr
     drop(out_guard);
 }
 
+/// A pointer publication that fails after the generation was promoted leaves
+/// that generation in place and names it, so the operator knows what to
+/// remove; a directory in the pointer's slot is the failure driven here.
+#[test]
+fn a_failed_pointer_publication_names_the_generation_it_leaves_behind() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("pointer-slot-taken-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir(output_dir.join(format!("{}.generation", scene.name()))).unwrap();
+
+    let error =
+        super::publish_generation(scene, &output_dir, b"rgb-bytes", b"meta-bytes", || Ok(()))
+            .unwrap_err();
+
+    let retained: Vec<PathBuf> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains("generation-"))
+        })
+        .collect();
+    assert_eq!(
+        retained.len(),
+        1,
+        "exactly one promoted generation is left: {retained:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&retained[0].display().to_string()),
+        "the error must name the retained generation {}: {error}",
+        retained[0].display()
+    );
+    drop(out_guard);
+}
+
 /// Publication must stage the pointer outside every name the generation makes
 /// guessable: links planted at all of them neither starve the capture nor take
 /// a write.
@@ -731,4 +771,833 @@ fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() 
             "the held handle proves the staging file is still ours, so it must be removed: {error}"
         );
     }
+}
+
+/// Failure cleanup must only remove what this publish created. The generation
+/// name is derived from the scene, the process id, and a counter, so another
+/// writer with access to `output_dir` can take that name after the `exists`
+/// probe. The promoting rename then fails, and the cleanup that follows must
+/// not recursively delete a directory this publish never owned.
+#[test]
+fn failed_publication_leaves_a_generation_directory_it_never_created() {
+    let output_dir = scratch_path("unowned-generation-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    let planted = std::cell::RefCell::new(PathBuf::new());
+    let take_the_generation_name = || {
+        // Whatever name this publish staged under is the name it will rename to.
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it renames");
+        let generation = staged
+            .trim_start_matches('.')
+            .trim_end_matches(".staged")
+            .to_owned();
+        let generation_dir = output_dir.join(generation);
+        std::fs::create_dir(&generation_dir).unwrap();
+        std::fs::write(generation_dir.join("bystander"), b"not ours").unwrap();
+        *planted.borrow_mut() = generation_dir;
+        Ok(())
+    };
+
+    let error = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_generation_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let planted = planted.borrow().clone();
+    assert_eq!(
+        std::fs::read(planted.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish never created",
+        planted.display()
+    );
+
+    drop(out_guard);
+}
+
+/// Failure cleanup must remove only the staging directory this publish still
+/// owns. `create_dir` proves the name was ours when it was taken, not that it
+/// is ours when cleanup runs: the name is derived from the scene, the process
+/// id, and a counter, so another writer with access to `output_dir` can take
+/// it over during the staged write. The recursive removal that follows a
+/// failure must then leave that writer's directory alone, exactly as
+/// `staging::StagedFile::remove_after` leaves a replaced staging file alone.
+///
+/// Not run on Windows: there, `claim_staged_dir`'s exclusive hold denies
+/// exactly the rename this test's adversary depends on for as long as this
+/// publish still owns the name, so the replacement it stages cannot happen
+/// there -- the adversary's own `rename` call fails outright instead.
+#[cfg(not(windows))]
+#[test]
+fn failed_publication_leaves_a_staging_directory_another_writer_replaced() {
+    let output_dir = scratch_path("replaced-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged_name = |dir: &PathBuf| {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes")
+    };
+
+    let replaced = std::cell::RefCell::new(PathBuf::new());
+    let take_the_staging_name = || {
+        let staged_dir = output_dir.join(staged_name(&output_dir));
+        // Another writer takes the staging name over and puts its own tree there.
+        std::fs::rename(&staged_dir, output_dir.join("carried-off")).unwrap();
+        std::fs::create_dir(&staged_dir).unwrap();
+        std::fs::write(staged_dir.join("bystander"), b"not ours").unwrap();
+        *replaced.borrow_mut() = staged_dir;
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_staging_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let replaced = replaced.borrow().clone();
+    assert_eq!(
+        std::fs::read(replaced.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish no longer owned",
+        replaced.display()
+    );
+
+    drop(out_guard);
+}
+
+/// Failure cleanup must remove only the directory this publish created, even
+/// once its original name has been freed and reused. `claim_staged_dir`
+/// keeps a descriptor open on the directory it claims for exactly this
+/// reason: while it stays open the kernel cannot hand the inode number back
+/// out, so a directory that later reuses the freed name cannot also reuse
+/// the freed inode a path-only re-stat would otherwise mistake for it.
+///
+/// Unix only: this exercises inode reuse specifically, which has no Windows
+/// analogue -- there, `claim_staged_dir`'s exclusive hold denies the
+/// `rename` this test's adversary needs, the same as in
+/// `failed_publication_leaves_a_staging_directory_another_writer_replaced`.
+#[cfg(unix)]
+#[test]
+fn failed_publication_leaves_a_staging_directory_replaced_after_the_original_was_freed() {
+    let output_dir = scratch_path("reclaimed-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let replaced = std::cell::RefCell::new(PathBuf::new());
+    let take_the_staging_name = || {
+        let staged_name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        let staged_dir = output_dir.join(staged_name);
+        // Another writer takes the staging name over: it carries this
+        // publish's directory off and drops it, then puts its own tree at
+        // the name it freed.
+        let carried_off = output_dir.join("carried-off");
+        std::fs::rename(&staged_dir, &carried_off).unwrap();
+        std::fs::remove_dir_all(&carried_off).unwrap();
+        std::fs::create_dir(&staged_dir).unwrap();
+        std::fs::write(staged_dir.join("bystander"), b"not ours").unwrap();
+        *replaced.borrow_mut() = staged_dir;
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_staging_name,
+    )
+    .unwrap_err();
+    assert!(matches!(error, RecordSnapshotError::Write(_, _)), "{error}");
+
+    let replaced = replaced.borrow().clone();
+    assert_eq!(
+        std::fs::read(replaced.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "failure cleanup deleted {}, which this publish never created",
+        replaced.display()
+    );
+
+    drop(out_guard);
+}
+
+/// Cleanup that cannot read the staging directory's ownership leaves that
+/// directory behind, and must report it rather than let an unreadable answer
+/// pass for "replaced" -- the contract `staging::StagedFile::remove_after`
+/// already keeps for the pointer's staging file, and the one this publish's
+/// own cleanup claims to mirror. `output_dir` itself, not `staged_dir`, is
+/// what this test breaks, since no identity check holds anything on
+/// `output_dir`, only on `staged_dir` beneath it.
+///
+/// Unix only: the read being broken is the `(dev, ino)` re-stat, which no
+/// other platform's cleanup performs, and Windows cannot even be put in this
+/// position. Renaming `output_dir` there is a rename of an ancestor of the
+/// directory `claim_staged_dir` still holds with no sharing at all, which
+/// Windows denies for as long as that descendant handle is open: the
+/// adversary's own `rename` fails with `ERROR_ACCESS_DENIED` before the
+/// cleanup under test is ever reached. Windows reaches the same
+/// report-rather-than-guess contract through its released hold, in
+/// `a_failed_promotion_removes_the_staging_directory_only_when_it_can_prove_ownership`.
+#[cfg(unix)]
+#[test]
+fn failed_publication_reports_a_staging_directory_whose_ownership_it_cannot_read() {
+    let output_dir = scratch_path("unreadable-claim-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let carried_off = scratch_path("unreadable-claim-carried-off");
+    let carried_guard = ScratchGuard(carried_off.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged = std::cell::RefCell::new(PathBuf::new());
+    let break_the_staging_path = || {
+        let name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        *staged.borrow_mut() = output_dir.join(&name);
+        // The staging directory survives under `carried_off`, but a
+        // non-directory now stands where its path's parent did, so reading
+        // its ownership fails with something other than plain absence.
+        std::fs::rename(&output_dir, &carried_off).unwrap();
+        std::fs::write(&output_dir, b"not a directory").unwrap();
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        break_the_staging_path,
+    )
+    .unwrap_err();
+
+    let staged = staged.borrow().clone();
+    let staged_name = staged.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        carried_off.join(&staged_name).is_dir(),
+        "the staging directory must still be there for the report to be about anything"
+    );
+    assert!(
+        error.to_string().contains(&staged_name),
+        "the error must name the staging directory left behind by a cleanup that could not confirm ownership: {error}"
+    );
+
+    drop(carried_guard);
+    drop(out_guard);
+}
+
+/// As `a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership`
+/// above, for the staging directory. Occupying the generation name fails the
+/// promoting rename, the one failure that can only be reached after the
+/// claim's hold has been given up for that very rename: on unix the recorded
+/// `(dev, ino)` still confirms the directory, so it is removed; on Windows
+/// the hold was the whole proof, so the directory is left where it is and
+/// named in the error.
+#[test]
+fn a_failed_promotion_removes_the_staging_directory_only_when_it_can_prove_ownership() {
+    let output_dir = scratch_path("failed-promotion-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged = std::cell::RefCell::new(PathBuf::new());
+    let take_the_generation_name = || {
+        let staged_name = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it renames");
+        let generation_dir = output_dir.join(
+            staged_name
+                .trim_start_matches('.')
+                .trim_end_matches(".staged"),
+        );
+        std::fs::create_dir(&generation_dir).unwrap();
+        std::fs::write(generation_dir.join("bystander"), b"not ours").unwrap();
+        *staged.borrow_mut() = output_dir.join(staged_name);
+        Ok(())
+    };
+
+    let error = super::publish_generation(
+        Scene::MainMenuNewGame,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        take_the_generation_name,
+    )
+    .unwrap_err();
+
+    let staged = staged.borrow().clone();
+    if cfg!(windows) {
+        assert!(
+            staged.is_dir(),
+            "Windows gave the hold up for the rename and has nothing left to confirm ownership with, so the staging directory must stay: {error}"
+        );
+        assert!(
+            error.to_string().contains(&staged.display().to_string()),
+            "the error must name the staging directory left behind: {error}"
+        );
+    } else {
+        assert!(
+            staged.symlink_metadata().is_err(),
+            "the claim's recorded identity still proves the staging directory is ours, so it must be removed: {error}"
+        );
+    }
+
+    drop(out_guard);
+}
+
+/// The claim is what carries `create_dir`'s exclusivity forward, so a claim
+/// that fails leaves nothing behind to remove by: while it was being taken,
+/// another writer can have carried this capture's directory off and put its
+/// own tree at the name it freed. Whatever now answers to that name is left
+/// alone and named in the reported error instead.
+#[test]
+fn a_staging_directory_whose_claim_failed_is_reported_rather_than_removed() {
+    let output_dir = scratch_path("unclaimable-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let take_the_staging_name = |path: &std::path::Path| {
+        std::fs::rename(path, output_dir.join("carried-off")).unwrap();
+        std::fs::create_dir(path).unwrap();
+        std::fs::write(path.join("bystander"), b"not ours").unwrap();
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, take_the_staging_name) else {
+        panic!("a claim that fails must fail the capture");
+    };
+
+    assert_eq!(
+        std::fs::read(staged_dir.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "a failed claim removed {}, which it never proved was this capture's",
+        staged_dir.display()
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging directory left behind: {error}"
+    );
+
+    drop(out_guard);
+}
+
+/// A writer that carries this capture's staging directory off and plants a
+/// symlink at the name it freed must not have that link claimed. A claim that
+/// followed it would put every payload staged under the staging name into the
+/// directory the link points at, anywhere on the filesystem and outside
+/// `output_dir` entirely, and would record that directory's identity as this
+/// capture's own.
+#[cfg(unix)]
+#[test]
+fn a_staging_name_replaced_by_a_symlink_is_not_claimed() {
+    let output_dir = scratch_path("symlinked-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let elsewhere = output_dir.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let plant_a_symlink = |path: &std::path::Path| {
+        std::fs::remove_dir(path).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, path).unwrap();
+        super::claim_staged_dir(path)
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_symlink) else {
+        panic!("a symlink at the staging name must fail the claim, and the capture with it");
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging path: {error}"
+    );
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "the claim reached through the symlink into {}",
+        elsewhere.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&staged_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a failed claim removed the entry it never proved was this capture's"
+    );
+
+    drop(out_guard);
+}
+
+/// The Windows counterpart of the symlink test above. A junction needs no
+/// privilege to create, so the test never has to skip; claiming one would
+/// stage this capture's payloads in the directory it points at, and would
+/// leave the hold denying sharing on that directory rather than on the entry
+/// cleanup later removes.
+#[cfg(windows)]
+#[test]
+fn a_staging_name_replaced_by_a_junction_is_not_claimed() {
+    fn junction(link: &std::path::Path, target: &std::path::Path) {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("cmd runs mklink");
+        assert!(
+            status.success(),
+            "mklink /J {} {}: {status}",
+            link.display(),
+            target.display()
+        );
+    }
+
+    let output_dir = scratch_path("junctioned-staging-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let elsewhere = output_dir.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+
+    let staged_dir = output_dir.join(".main-menu-new-game.generation-0-0.staged");
+    let plant_a_junction = |path: &std::path::Path| {
+        std::fs::remove_dir(path).unwrap();
+        junction(path, &elsewhere);
+        super::claim_staged_dir(path)
+    };
+
+    let Err(error) = super::create_and_claim_staged_dir(&staged_dir, plant_a_junction) else {
+        panic!("a junction at the staging name must fail the claim, and the capture with it");
+    };
+
+    assert!(
+        error
+            .to_string()
+            .contains(&staged_dir.display().to_string()),
+        "the error must name the staging path: {error}"
+    );
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "the claim reached through the junction into {}",
+        elsewhere.display()
+    );
+    assert!(
+        std::fs::symlink_metadata(&staged_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "a failed claim removed the entry it never proved was this capture's"
+    );
+
+    drop(out_guard);
+}
+
+/// A staging directory that allows only creation and search, as a `0444`
+/// umask leaves it, is still claimable: by a search-only hold where the
+/// target has one, by identity alone elsewhere.
+#[cfg(unix)]
+#[test]
+fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch_path("search-only-claim");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".search-only.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o333)).unwrap();
+
+    let unreadable = std::fs::read_dir(&staged).is_err();
+    let claim = super::claim_staged_dir(&staged);
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    if unreadable {
+        claim
+            .as_ref()
+            .expect("a search-only staging directory is still claimable");
+    } else {
+        eprintln!("skipped: running privileged, so a 0o333 directory is still readable");
+    }
+    drop(claim);
+    drop(guard);
+}
+
+/// A claim that could pin no descriptor never licenses a removal: the
+/// identity it carries may be a reissued inode number, so cleanup reports the
+/// directory and leaves it.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_staging_directory_whose_claim_holds_no_descriptor() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let dir = scratch_path("unpinned-claim");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".unpinned.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::write(staged.join("payload"), b"ours").unwrap();
+    let meta = std::fs::symlink_metadata(&staged).unwrap();
+    let claim = super::StagedDirClaim {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        hold: None,
+    };
+
+    let outcome = super::remove_staged_dir(&staged, claim);
+
+    let error = outcome
+        .expect_err("an unpinned claim must be reported")
+        .expect("an unpinned claim is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    assert!(
+        staged.join("payload").is_file(),
+        "cleanup removed a directory whose identity it could not pin"
+    );
+    drop(guard);
+}
+
+/// A directory another writer installs between the ownership read and the
+/// removal survives, and cleanup reports it: the deterministic form of the
+/// race below, driven through the post-check hook.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_directory_installed_between_the_ownership_check_and_the_removal() {
+    let dir = scratch_path("post-check-swap");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".swap.staged");
+    std::fs::create_dir(&staged).unwrap();
+    std::fs::write(staged.join("ours"), b"ours").unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    let away = dir.join("away");
+
+    let outcome = super::remove_staged_dir_after_check(&staged, &claim, || {
+        std::fs::rename(&staged, &away).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("bystander"), b"not ours").unwrap();
+    });
+
+    assert_eq!(
+        std::fs::read(staged.join("bystander")).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "cleanup removed the directory a writer installed after the ownership check"
+    );
+    assert!(
+        away.join("ours").is_file(),
+        "cleanup touched this call's own directory after another writer carried it off"
+    );
+    let error = outcome.expect_err("a swapped staging directory must be reported");
+    let error = error.expect("a swapped staging directory is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    drop(claim);
+    drop(guard);
+}
+
+/// A regular file another writer installs between the ownership read and the
+/// removal goes back to the staging name too, since the restore reserves a
+/// placeholder of the foreign entry's own kind.
+#[cfg(unix)]
+#[test]
+fn cleanup_restores_a_file_installed_between_the_ownership_check_and_the_removal() {
+    let dir = scratch_path("post-check-file-swap");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".file-swap.staged");
+    std::fs::create_dir(&staged).unwrap();
+    let claim = super::claim_staged_dir(&staged).unwrap();
+    let away = dir.join("away");
+
+    let outcome = super::remove_staged_dir_after_check(&staged, &claim, || {
+        std::fs::rename(&staged, &away).unwrap();
+        std::fs::write(&staged, b"not ours").unwrap();
+    });
+
+    assert_eq!(
+        std::fs::read(&staged).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "cleanup must put a foreign file back at the staging name"
+    );
+    assert!(away.is_dir(), "cleanup touched this call's own directory");
+    let error = outcome
+        .expect_err("a swapped staging entry must be reported")
+        .expect("a swapped staging entry is reported, not silently skipped");
+    assert!(
+        error.to_string().contains(&staged.display().to_string()),
+        "the report must name the staging path: {error}"
+    );
+    drop(claim);
+    drop(guard);
+}
+
+/// A foreign file goes back to the staging name through a link, which leaves
+/// the same file under cleanup's private name until that one is unlinked. An
+/// unlink that fails is reported: nothing else derives that `.cleanup-*` name,
+/// so a report that dropped it would leave the entry unfindable.
+#[cfg(unix)]
+#[test]
+fn cleanup_reports_the_private_link_it_could_not_remove() {
+    let dir = scratch_path("unremovable-private-link");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let staged = dir.join(".link-leftover.staged");
+    let private = dir.join(".link-leftover.staged.cleanup-0-0-0");
+    std::fs::write(&private, b"not ours").unwrap();
+
+    let error = super::report_foreign_staged_dir_with(&staged, &private, |_| {
+        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+    });
+
+    assert_eq!(
+        std::fs::read(&staged).ok().as_deref(),
+        Some(b"not ours".as_slice()),
+        "the foreign file must go back to the staging name"
+    );
+    assert!(
+        private.is_file(),
+        "a failing unlink must leave the private link where it is"
+    );
+    for path in [&staged, &private] {
+        assert!(
+            error.to_string().contains(&path.display().to_string()),
+            "the report must name {}: {error}",
+            path.display()
+        );
+    }
+
+    drop(guard);
+}
+
+/// Failure cleanup must never delete a directory another writer put at the
+/// staging name *after* the ownership check read it. The hook-driven test
+/// above pins that window by construction; this one races it as a stress
+/// companion and reports how often the adversary got in. `remove_staged_dir`
+/// binds the removal to the directory that check matched by renaming it to a
+/// private name and reading its identity again there; this drives an
+/// adversary into the window between the check and that rename and asserts
+/// the directory that writer owns at the staging name is still there when
+/// cleanup returns.
+///
+/// Unix only: the Windows `remove_staged_dir` has no re-verify step to race.
+#[cfg(unix)]
+#[test]
+fn cleanup_leaves_a_staging_directory_replaced_after_the_ownership_check() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const ROUNDS: usize = 20_000;
+    const IDLE: usize = usize::MAX;
+    const STOP: usize = usize::MAX - 1;
+
+    let dir = scratch_path("verify-to-delete-race");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let round = Arc::new(AtomicUsize::new(IDLE));
+    let done = Arc::new(AtomicUsize::new(IDLE));
+    let took = Arc::new(AtomicUsize::new(IDLE));
+
+    let adversary = {
+        let (dir, round, done, took) = (
+            dir.clone(),
+            Arc::clone(&round),
+            Arc::clone(&done),
+            Arc::clone(&took),
+        );
+        std::thread::spawn(move || {
+            let mut last = IDLE;
+            let mut jitter = 0usize;
+            loop {
+                let i = round.load(Ordering::Acquire);
+                if i == STOP {
+                    return;
+                }
+                if i == last || i == IDLE {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                last = i;
+                jitter = jitter.wrapping_add(7);
+                for _ in 0..(jitter % 96) {
+                    std::hint::spin_loop();
+                }
+                let staged = dir.join(format!(".s{i}.staged"));
+                if std::fs::rename(&staged, dir.join(format!("away{i}"))).is_ok()
+                    && std::fs::create_dir(&staged).is_ok()
+                    && std::fs::write(staged.join("bystander"), b"not ours").is_ok()
+                {
+                    took.store(i, Ordering::Release);
+                }
+                done.store(i, Ordering::Release);
+            }
+        })
+    };
+
+    let mut wins = 0usize;
+    for i in 0..ROUNDS {
+        let staged = dir.join(format!(".s{i}.staged"));
+        std::fs::create_dir(&staged).unwrap();
+        let claim = super::claim_staged_dir(&staged).unwrap();
+
+        // The adversary only starts once the claim is held, so nothing it
+        // does here can be blamed on the create-then-claim gap.
+        round.store(i, Ordering::Release);
+        let _ = super::remove_staged_dir(&staged, claim);
+        while done.load(Ordering::Acquire) != i {
+            std::hint::spin_loop();
+        }
+
+        let taken = took.load(Ordering::Acquire) == i;
+        wins += usize::from(taken);
+        let survived =
+            std::fs::read(staged.join("bystander")).ok().as_deref() == Some(b"not ours".as_slice());
+        let _ = std::fs::remove_dir_all(&staged);
+        let _ = std::fs::remove_dir_all(dir.join(format!("away{i}")));
+        assert!(
+            !taken || survived,
+            "round {i}: cleanup deleted {}, a directory another writer put at the staging name after the ownership check had already read it",
+            staged.display()
+        );
+    }
+
+    round.store(STOP, Ordering::Release);
+    adversary.join().unwrap();
+    eprintln!("the adversary took the staging name in {wins} of {ROUNDS} rounds");
+    drop(guard);
+}
+
+/// A restore that fails for a reason other than the staging name being taken
+/// must say so. `restore_foreign_staged_dir` reserves the placeholder with
+/// `create_dir`, whose failure is the only thing standing between the foreign
+/// entry and its own name; a report that folds every such failure into the
+/// one cause it names sends the operator after a competing writer that was
+/// never there and drops the error that was.
+#[cfg(unix)]
+#[test]
+fn cleanup_reports_why_a_restore_could_not_reserve_the_staging_name() {
+    let dir = scratch_path("restore-reservation-failure");
+    let guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    // Nothing can be created under a regular file, so the placeholder's
+    // `create_dir` fails with an error that is not "the name is taken".
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, b"").unwrap();
+    let staged = blocker.join(".reservation.staged");
+    let private = dir.join(".reservation.staged.cleanup-0-0-0");
+    std::fs::create_dir(&private).unwrap();
+    let reservation_failure = std::fs::create_dir(&staged)
+        .expect_err("a name under a regular file must not be creatable")
+        .to_string();
+
+    let error =
+        super::report_foreign_staged_dir_with(&staged, &private, |path: &std::path::Path| {
+            std::fs::remove_file(path)
+        });
+
+    assert!(
+        error.to_string().contains(&reservation_failure),
+        "the report must carry why the restore failed ({reservation_failure}): {error}"
+    );
+    assert!(
+        !error.to_string().contains("was taken again"),
+        "the report must not blame a competing writer for a failure that was not one: {error}"
+    );
+
+    drop(guard);
+}
+
+/// The claim must protect the payload writes that follow it, not just the
+/// name at the instant it was taken. `claim_staged_dir` holds a descriptor
+/// on the directory it created, but `publish_generation` writes both
+/// payloads by pathname under `staged_dir`, so a writer that carries the
+/// claimed directory off and plants a symlink at the freed staging name
+/// redirects every later write to wherever that link points -- outside
+/// `output_dir` entirely.
+///
+/// Unix only: the adversary needs the `rename` Windows' exclusive hold
+/// denies, exactly as in the sibling replacement tests above.
+#[cfg(unix)]
+#[test]
+fn staged_payload_writes_stay_inside_the_output_directory() {
+    let output_dir = scratch_path("post-claim-escape-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let escape_dir = scratch_path("post-claim-escape-target");
+    let escape_guard = ScratchGuard(escape_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    std::fs::create_dir_all(&escape_dir).unwrap();
+
+    let scene = Scene::MainMenuNewGame;
+    let plant_a_link_at_the_staging_name = || {
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with('.') && name.ends_with(".staged"))
+            .expect("the publish stages before it writes");
+        let staged_dir = output_dir.join(staged);
+        // Another writer carries the claimed directory off and leaves a
+        // symlink standing at the name this publish keeps writing through.
+        std::fs::rename(&staged_dir, output_dir.join("carried-off")).unwrap();
+        std::os::unix::fs::symlink(&escape_dir, &staged_dir).unwrap();
+        Ok(())
+    };
+
+    let _ = super::publish_generation(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        plant_a_link_at_the_staging_name,
+    );
+
+    let escaped = escape_dir.join(format!("{}.meta", scene.name()));
+    assert!(
+        !escaped.exists(),
+        "the staged meta write followed a planted link and landed at {}, outside {}",
+        escaped.display(),
+        output_dir.display()
+    );
+
+    drop(escape_guard);
+    drop(out_guard);
 }

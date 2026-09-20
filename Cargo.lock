@@ -2261,6 +2261,7 @@ dependencies = [
  "pack-format",
  "pokeemerald-rs",
  "rom-import",
+ "rustix 1.1.4",
 ]
 
 [[package]]
