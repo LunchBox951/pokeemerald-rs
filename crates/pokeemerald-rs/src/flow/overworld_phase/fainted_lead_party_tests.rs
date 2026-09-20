@@ -255,6 +255,41 @@ fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
     );
 }
 
+/// A stored party count of zero means no lead, exactly as it does upstream
+/// (`copy_party_and_objects_from_save`'s own doc, issue #353's zero-count
+/// contract) -- even when a later slot's stored bytes would otherwise
+/// decode into a healthy battler. The six-record scan this issue adds
+/// never runs here at all (issue #1241).
+#[test]
+fn a_zero_stored_count_still_resumes_with_no_lead() {
+    let dex = Dex::new();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 0;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&dex, &fainted_starter());
+    seed.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    let phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+
+    assert!(
+        phase.party_lead.is_none(),
+        "a stored count of zero must resume with no lead even though slot 1 still holds a \
+         healthy, decodable record"
+    );
+    assert_eq!(
+        phase.party_lead_slot, 0,
+        "the no-lead default slot is left unchanged"
+    );
+    assert_eq!(
+        phase.save1.player_party_count, 0,
+        "a zero stored count must not be resurrected into a nonzero one"
+    );
+}
+
 /// The same regression, pinned on the white-out reselect call site: seeded
 /// directly, bypassing the (already-fixed) continue scan (issue #1241).
 #[test]
@@ -284,6 +319,35 @@ fn a_white_out_reselects_a_trailing_slot_beyond_the_stored_party_count() {
             .expect("a usable member was reselected")
             .is_fainted(),
         "the reselected lead must not be fainted"
+    );
+}
+
+/// The zero-count counterpart: a clamped stored count of zero skips
+/// `SetBattlePartyIds`'s rescan entirely and keeps the already-selected
+/// lead (the same zero-means-no-lead contract issue #353 established for
+/// continue), even though slot 1 holds a healthy, decodable record
+/// (issue #1241).
+#[test]
+fn a_white_out_with_a_zero_stored_count_skips_reselecting_the_lead() {
+    let dex = Dex::new();
+    let mut phase = new_game_phase();
+    phase.save1.player_party_count = 0;
+    // An egg-flagged backing record for the live lead's own slot stays
+    // ineligible even after the unconditional zero-count heal below
+    // (`merge_into_save_pokemon` retains the egg bit), so if the reselect
+    // ran despite the zero count, it would move on to slot 1 instead.
+    phase.save1.player_party[0] = as_egg(crate::party::to_save_pokemon(&dex, &fainted_starter()));
+    phase.save1.player_party[1] =
+        crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
+    phase.party_lead = Some(fainted_starter());
+    phase.party_lead_slot = 0;
+
+    phase.white_out();
+
+    assert_eq!(
+        phase.party_lead_slot, 0,
+        "a stored count of zero must skip the rescan entirely, leaving the existing lead \
+         selected even though slot 1 holds a healthy, decodable record"
     );
 }
 

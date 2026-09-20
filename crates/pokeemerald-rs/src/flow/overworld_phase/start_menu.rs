@@ -374,7 +374,10 @@ impl OverworldPhase {
     /// `super::saved_facing`).
     ///
     /// A stored party count of zero means no lead, exactly as it does
-    /// upstream. A party with no slot that will decode into a usable
+    /// upstream (issue #353's zero-count contract: stale records under a
+    /// zero count are zeroed on the next save, never resurrected into a
+    /// lead by the six-slot scan below). A party with no slot that will
+    /// decode into a usable
     /// battler -- checksum-valid sector bytes that are not a mon any
     /// battle code could run -- is logged and leaves the lead empty:
     /// fabricating a replacement starter would hand the player a different
