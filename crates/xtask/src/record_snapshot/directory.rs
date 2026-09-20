@@ -165,7 +165,13 @@ pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> s
 
 #[cfg(windows)]
 pub(super) fn rename_without_replacement(source: &Path, destination: &Path) -> std::io::Result<()> {
-    // Windows refuses an existing directory destination.
+    // Modern Windows rename can replace empty directories too. This refusal is
+    // not atomic with rename; closing that window belongs to #1345.
+    match std::fs::symlink_metadata(destination) {
+        Ok(_) => return Err(std::io::ErrorKind::AlreadyExists.into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     std::fs::rename(source, destination)
 }
 

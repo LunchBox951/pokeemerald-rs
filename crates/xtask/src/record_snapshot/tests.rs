@@ -1562,6 +1562,7 @@ fn promotion_never_writes_payloads_into_a_competitor_owned_generation_dir() {
     let marker_name = "competitor.marker";
     let mut takeovers = 0u32;
     let mut refusals = 0u32;
+    let mut first_refusal = None;
     let mut leaks = 0u32;
     let mut published_leaks = 0u32;
 
@@ -1627,8 +1628,9 @@ fn promotion_never_writes_payloads_into_a_competitor_owned_generation_dir() {
         if competitor.join().unwrap() {
             takeovers += 1;
         }
-        if result.is_err() {
+        if let Err(error) = &result {
             refusals += 1;
+            first_refusal.get_or_insert_with(|| error.to_string());
         }
         let generation_dir = claimed.expect("the hook must have run");
         let entries: Vec<String> = std::fs::read_dir(&generation_dir)
@@ -1654,7 +1656,7 @@ fn promotion_never_writes_payloads_into_a_competitor_owned_generation_dir() {
         "a competing writer took the generation name from this call \
          ({takeovers} takeovers, {refusals} promotions refused, {leaks} competitor-owned \
          directories that received this call's payload, {published_leaks} of those then \
-         named by the published pointer)"
+         named by the published pointer); first refusal: {first_refusal:?}"
     );
 }
 
