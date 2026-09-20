@@ -118,12 +118,15 @@
 //!
 //! [`default_pack_path`] resolves at runtime, first match wins:
 //! 1. `$POKEEMERALD_PACK`, if set and non-empty.
-//! 2. The OS user-data directory's `pokeemerald-rs/pokeemerald.pack`, if it
-//!    exists; the shipped ROM importer writes there ([`user_pack_path`]).
+//! 2. The OS user-data directory plus [`APP_DATA_SUBDIRECTORY`] and
+//!    `pokeemerald.pack`, if it exists; the shipped ROM importer writes there ([`user_pack_path`]).
 //! 3. `<directory of the running executable>/`[`OUTPUT_RELATIVE_PATH`], if
 //!    it exists, for portable installs.
 //! 4. [`repo_pack_path`], the compile-time repo path, so a developer
 //!    checkout keeps working with nothing configured.
+//!
+//! Channel builds use their isolated user path even when no pack exists yet;
+//! they never fall back to the shared developer pack. See [`default_pack_path`].
 //!
 //! Rungs 2 and 3 advance only when the candidate is *known* absent. One
 //! that cannot be examined — an unsearchable directory component — stops
@@ -149,6 +152,9 @@ pub use entry::{
     EntryShapeError,
 };
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
-pub use path::{default_pack_path, repo_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
+pub use path::{
+    default_pack_path, repo_pack_path, user_data_dir, user_pack_path, APP_DATA_SUBDIRECTORY,
+    PACK_PATH_ENV, RELEASE_CHANNEL,
+};
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};
