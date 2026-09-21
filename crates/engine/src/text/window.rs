@@ -262,20 +262,15 @@ impl MessageBoxLayout {
 
     /// Places the standard dialogue frame and interior in tilemap write order.
     ///
-    /// Upstream gives the wing-column, interior, and right-column body fills
-    /// a fixed five-row height, independent of `content_height`; only the
-    /// vertically flipped bottom border is positioned by `content_height`,
-    /// landing at `tilemap_top + content_height`. That bottom border may
-    /// therefore fall inside, on, or past the fixed body fill. The border
-    /// must remain later in the returned sequence than the fill so a
-    /// last-write-wins compositor matches `WindowFunc_DrawDialogueFrame` in
-    /// `pokeemerald/src/menu.c`.
+    /// The three body fills are a fixed five rows, independent of
+    /// `content_height`; the vertically flipped bottom border is positioned
+    /// by `content_height` instead, and must remain later in the returned
+    /// sequence so a last-write-wins compositor matches
+    /// `WindowFunc_DrawDialogueFrame` in `pokeemerald/src/menu.c:356-410`.
     ///
     /// Never panics: cells clamp onto `i32`'s bounds and extents clamp to
-    /// [`MAX_EXTENT_TILES`]. A negative `content_width` omits the
-    /// width-dependent interior fill; zero keeps upstream's one extra fill
-    /// cell. `content_height` never disables the fixed five-row body fill; a
-    /// negative value only moves the bottom border above `tilemap_top`.
+    /// [`MAX_EXTENT_TILES`]. A negative `content_width` omits the interior
+    /// fill; zero keeps upstream's one extra fill cell.
     #[must_use]
     pub fn frame_tiles(&self) -> Vec<FrameTile> {
         let rectangles = self
@@ -1197,9 +1192,7 @@ mod tests {
     fn frame_tiles_retains_upstreams_fixed_five_fill_rows_at_zero_height() {
         // Upstream's three body fills are a fixed five rows regardless of
         // `height` (`WindowFunc_DrawDialogueFrame`,
-        // `pokeemerald/src/menu.c:356-376`), so a zero `content_height` still
-        // fills all five rows; only the bottom border (not filtered for here,
-        // since it never emits an `INTERIOR` tile) moves up to `tilemap_top`.
+        // `pokeemerald/src/menu.c:356-376`).
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -1230,14 +1223,9 @@ mod tests {
 
     #[test]
     fn dialogue_body_fill_is_five_rows_independent_of_content_height() {
-        // Upstream's wing-column, interior, and right-column body fills are
-        // always five rows tall; `height` only positions the vertically
-        // flipped bottom border, which lands past the fixed body fill for a
-        // taller-than-standard layout
+        // Upstream's three body fills are a fixed five rows, independent of
+        // `height`, which only positions the bottom border
         // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:356-410`).
-        // A six-tile-tall dialogue window therefore still ends its body fill
-        // on `tilemap_top + 4`, two rows above the bottom border at
-        // `tilemap_top + 6`.
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
