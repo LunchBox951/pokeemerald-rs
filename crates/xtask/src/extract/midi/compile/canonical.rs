@@ -6,9 +6,10 @@
 //! duplicates the wire encoder: this crate never depends on `crates/assets`.
 //! The rule is the pack contract's, stated there and mirrored here by hand:
 //! adjacent `Wait`s merge, a rest over `255` ticks splits into `255`-tick
-//! chunks with the remainder last, a zero rest vanishes, and a run never
-//! merges across a `Goto` target. Targets are event indices and move with
-//! the events they name.
+//! chunks with the remainder last, an untargeted zero rest vanishes (a
+//! `Goto`-targeted one keeps a `Wait(0)` anchor), and a run never merges
+//! across a `Goto` target. Targets are event indices and move with the
+//! events they name.
 //!
 //! Why this compiler needs it at all: [`super::emit_track`] keeps a split
 //! wherever a silent controller sat between two rests, and the ROM keeps
@@ -40,6 +41,10 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             continue;
         }
         let start = out.len();
+        // A target boundary (below) always starts a fresh run at the
+        // targeted index, so checking `index` alone tells us whether this
+        // run's anchor is addressed.
+        let run_is_targeted = targets.contains(&index);
         // Find the run's extent first; the tick sum is a separate pass
         // below, wide enough that it cannot overflow no matter how long
         // the run gets.
@@ -57,6 +62,12 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             };
             *ticks
         })));
+        if run_is_targeted && out.len() == start {
+            // A zero-total run normally emits nothing, but a `Goto` targets
+            // this index, so an anchor must survive for the target to land
+            // on.
+            out.push(SongEvent::Wait(0));
+        }
         index = end;
     }
     map.push(out.len());
@@ -74,7 +85,8 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
 
 /// Sum a run of adjacent `Wait` tick counts and lazily split the total into
 /// canonical chunks: `255`-tick steps with the remainder last, nothing for a
-/// zero total (module docs).
+/// zero total. [`canonicalize_waits`] adds back a `Wait(0)` anchor when a
+/// zero-total run's source index is a `Goto` target (module docs).
 ///
 /// The running total is `u64`, not `u32`, for the same reason
 /// `crates/assets::audio::song::canonical`'s copy of this function is: a
@@ -122,6 +134,16 @@ mod tests {
         assert_eq!(
             canonicalize_waits(&[SongEvent::Wait(0), SongEvent::Fine]),
             vec![SongEvent::Fine]
+        );
+    }
+
+    /// A `Goto`-targeted terminal zero rest keeps its anchor, as
+    /// `crates/assets/src/audio/song/canonical.rs` keeps a targeted `Wait(0)`.
+    #[test]
+    fn a_targeted_terminal_zero_rest_keeps_an_anchor() {
+        assert_eq!(
+            canonicalize_waits(&[SongEvent::Goto(1), SongEvent::Wait(0)]),
+            vec![SongEvent::Goto(1), SongEvent::Wait(0)]
         );
     }
 
