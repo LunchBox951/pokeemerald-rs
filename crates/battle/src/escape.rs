@@ -2,7 +2,7 @@
 //!
 //! Upstream refuses Run at action selection for `BATTLE_TYPE_FIRST_BATTLE`
 //! (`pokeemerald/src/battle_main.c:4339`-`:4344`) and for the traps
-//! [`ensure_admissible`] checks (`:4038`-`:4062`), both via
+//! [`ensure_admissible`] checks (`:4038`-`:4070`), both via
 //! [`crate::error::BattleError::RunForbidden`] before this formula runs.
 //!
 //! A Run Away holder that clears admission also bypasses this formula:
@@ -19,11 +19,8 @@ use crate::pokemon::BattlePokemon;
 const SPEED_RATIO_SCALE: u32 = 128;
 const PREVIOUS_ATTEMPT_BONUS: u32 = 30;
 
-/// Rejects a Run selection an opposing trap ability forbids, before any draw.
-/// Run Away exempts the runner from both traps; otherwise an opposing Shadow
-/// Tag, or Arena Trap against a runner that is neither Levitate nor
-/// [`Type::Flying`], refuses the selection
-/// (`pokeemerald/src/battle_main.c:4038`-`:4062`).
+/// Rejects a Run selection an opposing trap ability forbids, before any draw
+/// (`pokeemerald/src/battle_main.c:4038`-`:4070`).
 ///
 /// # Errors
 ///
@@ -41,6 +38,9 @@ pub fn ensure_admissible(
     let runner_is_grounded =
         runner.ability() != AbilityId::LEVITATE && !runner.types().contains(&Type::Flying);
     if opponent.ability() == AbilityId::ARENA_TRAP && runner_is_grounded {
+        return Err(BattleError::RunForbidden);
+    }
+    if opponent.ability() == AbilityId::MAGNET_PULL && runner.types().contains(&Type::Steel) {
         return Err(BattleError::RunForbidden);
     }
     Ok(())
@@ -104,6 +104,10 @@ mod tests {
     const HAUNTER: SpeciesId = SpeciesId(93);
     /// `SPECIES_PIDGEY`: Normal/Flying, no Levitate.
     const PIDGEY: SpeciesId = SpeciesId(16);
+    /// `SPECIES_MAGNEMITE`: primary and only relevant ability Magnet Pull.
+    const MAGNEMITE: SpeciesId = SpeciesId(81);
+    /// `SPECIES_ARON`: Steel/Rock, Sturdy/Rock Head, no Run Away.
+    const ARON: SpeciesId = SpeciesId(382);
 
     fn mon(dex: &Dex, species: SpeciesId, personality: u32) -> BattlePokemon {
         BattlePokemon::new(dex, species, 5, MAX_IVS, personality, vec![MoveId(33)]).unwrap()
@@ -161,6 +165,25 @@ mod tests {
         let flying_runner = mon(&dex, PIDGEY, PRIMARY_ABILITY_PERSONALITY);
         assert_eq!(ensure_admissible(&levitate_runner, &arena_trap), Ok(()));
         assert_eq!(ensure_admissible(&flying_runner, &arena_trap), Ok(()));
+    }
+
+    #[test]
+    fn magnet_pull_refuses_a_steel_runner() {
+        let dex = Dex::new();
+        let magnet_pull = mon(&dex, MAGNEMITE, PRIMARY_ABILITY_PERSONALITY);
+        let steel_runner = mon(&dex, ARON, PRIMARY_ABILITY_PERSONALITY);
+        assert_eq!(
+            ensure_admissible(&steel_runner, &magnet_pull),
+            Err(BattleError::RunForbidden)
+        );
+    }
+
+    #[test]
+    fn magnet_pull_exempts_a_non_steel_runner() {
+        let dex = Dex::new();
+        let magnet_pull = mon(&dex, MAGNEMITE, PRIMARY_ABILITY_PERSONALITY);
+        let non_steel_runner = mon(&dex, CHARMANDER, PRIMARY_ABILITY_PERSONALITY);
+        assert_eq!(ensure_admissible(&non_steel_runner, &magnet_pull), Ok(()));
     }
 
     struct FixedRng(u16);
