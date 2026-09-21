@@ -392,15 +392,19 @@ impl Sequencer {
         }
     }
 
-    /// Like [`Self::render_frame`], but applies an active fade's `volX` to
-    /// every surviving track's volume after this frame's tick: `FadeOutBody`
-    /// writes `volX` and only raises `MPT_FLG_VOLCHG` (`m4a.c:750`-`:757`),
-    /// leaving every volume recomputation to the single post-tick
-    /// `TrkVolPitSet` (`m4a_1.s:1361`-`:1400`), which `ply_fine`'s flag
-    /// clear (`m4a_1.s:750`-`:777`) skips for a track that ended this tick.
-    /// The step is therefore staged rather than written into the track up
-    /// front, so a mid-tick volume command such as `PAN` -- which upstream
-    /// answers with the same deferred flag -- cannot read it early.
+    /// Like [`Self::render_frame`], but applies an active fade's `volX`
+    /// before this frame's tick, exactly where upstream's `FadeOutBody`
+    /// runs -- at the very start of `MPlayMain`, before that frame's own
+    /// track pass (`m4a_1.s:1152`-`:1169`). `FadeOutBody` only writes
+    /// `volX` and raises `MPT_FLG_VOLCHG` (`m4a.c:753`-`:757`); the same
+    /// dirty flag any `VOL`/`PAN` command raises, so it's staged through
+    /// [`Self::stage_fade_volume`] and left to [`Self::propagate_dirty_tracks`]
+    /// like every other volume input. That lets this tick's own `Fine`
+    /// (`m4a_1.s:750`-`:777`) or a successful `Note`
+    /// (`m4a_1.s:1784`-`:1787`) consume it exactly as they would a
+    /// command-driven change, instead of a bespoke post-tick step that
+    /// always reached every surviving track regardless of what the tick
+    /// did with it.
     ///
     /// The terminal step (`volX == 0`) instead pauses the sequencer: every
     /// track stops and no tick runs again, while the mixer keeps rendering
@@ -409,9 +413,8 @@ impl Sequencer {
         match fade_vol_x {
             Some(0) => self.pause(),
             Some(vol_x) => {
-                let staged_tracks = self.tracks_staging_fade_volume(vol_x);
+                self.stage_fade_volume(vol_x);
                 self.advance_frame();
-                self.commit_fade_volume(vol_x, &staged_tracks);
             }
             None => self.advance_frame(),
         }
@@ -438,32 +441,19 @@ impl Sequencer {
         }
     }
 
-    /// Which not-yet-ended tracks this step's `vol_x` changes. Reads only:
-    /// the value lands on the track in [`Self::commit_fade_volume`], after
-    /// the tick.
-    fn tracks_staging_fade_volume(&self, vol_x: u8) -> Vec<usize> {
-        self.tracks
-            .iter()
-            .enumerate()
-            .filter(|(_, track)| !track.ended && track.vol_x != vol_x)
-            .map(|(track_id, _)| track_id)
-            .collect()
-    }
-
-    /// Writes the staged `vol_x` into each of `staged_tracks` and refreshes
-    /// its derived channel volumes, skipping any that ended during the tick
-    /// just run (`ply_fine`'s flag clear, `m4a_1.s:750`-`:777`).
-    fn commit_fade_volume(&mut self, vol_x: u8, staged_tracks: &[usize]) {
-        let Self { tracks, mixer, .. } = self;
-        for &track_id in staged_tracks {
-            let Some(track) = tracks.get_mut(track_id) else {
-                continue;
-            };
-            if track.ended {
-                continue;
+    /// `FadeOutBody`'s own track pass (`m4a.c:750`-`:757`): writes `volX`
+    /// into every not-yet-ended track whose `volX` actually changes, and
+    /// raises `vol_dirty` -- the same flag a `VOL`/`PAN` command raises --
+    /// instead of recomputing anything itself. Runs before this frame's
+    /// tick, so that tick's own `Fine`/`Note` can still consume the flag,
+    /// and [`Self::propagate_dirty_tracks`] is left to push it into a
+    /// surviving track's voices once the tick finishes.
+    fn stage_fade_volume(&mut self, vol_x: u8) {
+        for track in &mut self.tracks {
+            if !track.ended && track.vol_x != vol_x {
+                track.vol_x = vol_x;
+                track.vol_dirty = true;
             }
-            track.vol_x = vol_x;
-            Self::apply_track_volume(track, mixer, track_id);
         }
     }
 
@@ -2645,6 +2635,69 @@ mod tests {
         assert_eq!(
             older_after, older_before,
             "a control consumed by a same-tick Note must not reach the track's other voices"
+        );
+    }
+
+    /// `FadeOutBody` only writes `volX` and raises `MPT_FLG_VOLCHG`
+    /// (`m4a.c:753`-`:757`) -- the same dirty flag any other volume input
+    /// raises -- and a successful `ply_note` allocation consumes that flag
+    /// deriving its own new voice, then masks it away
+    /// (`m4a_1.s:1784`-`:1787`). So a fade step landing the same tick as a
+    /// new `Note` on the same track must not also reach an older,
+    /// still-sounding voice on that track.
+    #[test]
+    fn a_note_started_the_same_tick_as_a_fade_step_consumes_it_before_older_voices_see_it() {
+        let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let track = vec![
+            Event::Voice(0),
+            tied_note(60),
+            Event::Wait(1),
+            tied_note(72),
+            Event::Wait(4),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::with_config(
+            Song::new(voices, vec![track], 150),
+            DEFAULT_MASTER_VOLUME,
+            2,
+        );
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.voice_count(),
+            1,
+            "sanity: only the first note has started"
+        );
+        let older_before = seq
+            .mixer
+            .voices()
+            .iter()
+            .find(|voice| voice.midi_key() == 60)
+            .expect("the first note's voice must exist")
+            .base_volume();
+
+        // Frame 2 reaches a new `Note`, with a fade step landing the same
+        // frame: the note consumes the fade's dirty flag deriving its own
+        // voice, so the older voice must not receive that fade step this
+        // frame.
+        seq.render_frame_with_fade(&mut out, Some(32));
+        assert_eq!(
+            seq.voice_count(),
+            2,
+            "sanity: the second note must also start"
+        );
+        let older_after = seq
+            .mixer
+            .voices()
+            .iter()
+            .find(|voice| voice.midi_key() == 60)
+            .expect("the first note's voice must still exist")
+            .base_volume();
+        assert_eq!(
+            older_after, older_before,
+            "a fade step consumed by a same-tick Note must not reach the track's other voices"
         );
     }
 

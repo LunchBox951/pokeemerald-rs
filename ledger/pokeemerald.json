@@ -26918,6 +26918,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "MPlayMain": {
+          "reason": "MPlayMain's tempo-tick loop and its single once-per-frame post-loop MPT_FLG_VOLCHG/MPT_FLG_PITCHG propagation pass reimplemented as Sequencer::advance_frame/do_tick/propagate_dirty_tracks, gated on TrackState::vol_dirty/pitch_dirty (set by VOL/PAN/pitch/ModType/LFO, consumed by Fine and by a successful Note, matching ply_note's own flag mask); FadeOutBody's pre-tick volX write is staged the same way via Sequencer::stage_fade_volume.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "RealClearChain": {
           "reason": "RealClearChain (m4a_1.s:726-748), called only from ply_fine, unlinks a channel from its track's chain and stores 0 into chan->track (m4a_1.s:744-745), an early no-op if already untracked. Voice::detach_track (voice.rs) reimplements the track-nulling half via Mixer::release_track (issue #1192); the linked-list unlink itself is not modeled, since Mixer owns voices in its own slot array rather than a track-owned chain.",
           "rust_target": "crates/audio/src/mixer.rs",
