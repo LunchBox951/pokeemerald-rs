@@ -561,7 +561,7 @@ mod canonical_waits {
 
 /// A targeted terminal `Wait(0)` must retain its anchor through
 /// construction and an encode/decode round trip for both jump-carrying
-/// [`SongEvent`]s (issue #1301).
+/// [`SongEvent`]s.
 #[test]
 fn targeted_terminal_zero_waits_survive_construction_and_round_trip() {
     for track in [

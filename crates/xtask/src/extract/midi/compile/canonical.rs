@@ -137,8 +137,8 @@ mod tests {
         );
     }
 
-    /// Mirrors `crates/assets/src/audio/song/canonical.rs`'s
-    /// `Goto`-targeted-anchor regression (issue #1301).
+    /// A `Goto`-targeted terminal zero rest keeps its anchor, as
+    /// `crates/assets/src/audio/song/canonical.rs` keeps a targeted `Wait(0)`.
     #[test]
     fn a_targeted_terminal_zero_rest_keeps_an_anchor() {
         assert_eq!(
