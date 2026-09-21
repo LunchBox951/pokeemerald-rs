@@ -20,10 +20,13 @@ use crate::layout::OUTPUT_RELATIVE_PATH;
 /// a path to the pack *file*, not its directory.
 pub const PACK_PATH_ENV: &str = "POKEEMERALD_PACK";
 
-/// This project's directory inside the OS user-data directory.
-const APP_DIR: &str = "pokeemerald-rs";
+/// Build-selected channel; ordinary source builds use `dev`.
+pub const RELEASE_CHANNEL: &str = env!("POKEEMERALD_BUILD_CHANNEL");
 
-/// The pack's file name inside [`APP_DIR`].
+/// Shared save and pack directory below the OS user-data directory.
+pub const APP_DATA_SUBDIRECTORY: &str = env!("POKEEMERALD_APP_DATA_SUBDIRECTORY");
+
+/// The pack's file name inside [`APP_DATA_SUBDIRECTORY`].
 const PACK_FILE_NAME: &str = "pokeemerald.pack";
 
 /// Which OS convention names the per-user data directory.
@@ -69,13 +72,13 @@ pub fn user_data_dir() -> Option<PathBuf> {
 }
 
 /// Where the ROM importer writes by default:
-/// [`user_data_dir`]`/pokeemerald-rs/pokeemerald.pack`.
+/// [`user_data_dir`]/[`APP_DATA_SUBDIRECTORY`]/`pokeemerald.pack`.
 ///
 /// Returned whether or not the file exists; the importer needs the path
 /// before it has written anything there.
 #[must_use]
 pub fn user_pack_path() -> Option<PathBuf> {
-    user_data_dir().map(|dir| dir.join(APP_DIR).join(PACK_FILE_NAME))
+    user_data_dir().map(|dir| dir.join(APP_DATA_SUBDIRECTORY).join(PACK_FILE_NAME))
 }
 
 /// The pack's location for this run. First match wins:
@@ -99,6 +102,9 @@ pub fn user_pack_path() -> Option<PathBuf> {
 ///
 /// Rung 4 always yields a path, so this never fails; the caller's own
 /// "no pack extracted yet" diagnostic covers a path that does not exist.
+/// Channel builds return their user path even when absent. Without a user
+/// directory they use a channel directory beside the executable, never a
+/// different channel's pack or the build machine's checkout.
 #[must_use]
 pub fn default_pack_path() -> PathBuf {
     let exe_dir = std::env::current_exe()
@@ -185,10 +191,16 @@ fn resolve(
         }
     }
     if let Some(dir) = data_dir(env, rule) {
-        let candidate = dir.join(APP_DIR).join(PACK_FILE_NAME);
-        if probe(&candidate) != Probe::Missing {
+        let candidate = dir.join(APP_DATA_SUBDIRECTORY).join(PACK_FILE_NAME);
+        if RELEASE_CHANNEL != "dev" || probe(&candidate) != Probe::Missing {
             return candidate;
         }
+    }
+    if RELEASE_CHANNEL != "dev" {
+        return exe_dir
+            .unwrap_or_else(|| Path::new("."))
+            .join(APP_DATA_SUBDIRECTORY)
+            .join(PACK_FILE_NAME);
     }
     if let Some(dir) = exe_dir {
         let candidate = dir.join(OUTPUT_RELATIVE_PATH);

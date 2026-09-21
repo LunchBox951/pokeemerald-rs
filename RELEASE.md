@@ -15,13 +15,13 @@ Promotion is direct: `dev → unstable → stable → main`. No channel accepts 
 
 The scheduled promotion App opens or reconciles one exact next-rung pull request. Only `dev → unstable` may auto-merge. `stable` and `main` always require current CODEOWNER approval and manual merge.
 
-## Official-ROM readiness
+## Nightly readiness
 
-The nightly remains dormant until the native release can extract required data from an owner-supplied, lawfully obtained official Pokémon Emerald ROM. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases.
+The nightly uses the existing CI and CodeQL gates. At 02:17 America/Toronto each night, the promotion App attempts the current `dev` candidate. Pending or failed gates leave the previous nightly in place; no earlier commit is substituted. GitHub may delay scheduled runs.
 
-An owner-local verifier runs the canonical load and extraction path from a clean checkout at the current `dev` SHA. After ordinary CI and CodeQL succeed, it records the `release-readiness` status on that exact SHA. A later `dev` commit requires new evidence. Repository workflows cannot create this owner-bound status.
+Players download the Linux or Windows archive and run its binary to import their own supported Emerald ROM, then launch the game. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases. Local ROM verification can still record evidence with `scripts/record_nightly_readiness.py`, but its `release-readiness` status is not a promotion gate.
 
-The product command and remaining implementation live in GitHub roadmap work `(constitution-vs-roadmap)`. Until that command exists and passes, no readiness status exists and no nightly promotion advances.
+Nightlies may contain unknown gameplay and save issues. Playtesting and explicit owner approval remain required before promotion to `stable` and again to `main`.
 
 ## Per-rung gates
 
@@ -36,7 +36,7 @@ The product command and remaining implementation live in GitHub roadmap work `(c
 
 - The dedicated promotion App authors the exact same-repository `dev` pull request.
 - `source-gate / unstable` proves the source and App identity.
-- Current SHA-bound `release-readiness`, `merge-gate / unstable`, dependency review, and CodeQL pass.
+- Current SHA-bound `merge-gate / unstable`, dependency review, and CodeQL pass.
 - Every review thread is resolved. No approval is required.
 - Only the scheduled App may auto-merge, using a merge commit without bypass.
 
@@ -80,7 +80,7 @@ Live rulesets are the enforcement authority:
 | Target | Additional target-specific checks | Reviews | Merge methods |
 |---|---|---|---|
 | `dev` | `merge-gate / dev` | 0 | merge, squash |
-| `unstable` | `source-gate / unstable`, `release-readiness`, `merge-gate / unstable` | 0 | merge |
+| `unstable` | `source-gate / unstable`, `merge-gate / unstable` | 0 | merge |
 | `stable` | `source-gate / stable`, `merge-gate / stable` | 1 CODEOWNER | merge |
 | `main` | `source-gate / main`, `merge-gate / main` | 1 CODEOWNER | merge |
 
@@ -91,6 +91,10 @@ A tag ruleset makes `v*` release tags immutable once created: no updates, no del
 ## Platform support and artifacts
 
 Source builds and native CI support Linux, macOS, and Windows. Published archives currently target Linux and Windows. macOS packaging and platform-specific operator playtesting are not v1 gates; CI evidence carries the same unresolved product status as the other platforms.
+
+Pushes from protected-branch promotion to `unstable` publish versioned nightly prereleases at `v<VERSION>-nightly`; `main` retains `v<VERSION>`. Each tag is bound to its exact promotion commit. Both archives and `SHA256SUMS` upload to a draft before publication; a failed upload leaves the previous release available, and rerunning the failed release job resumes the draft. Published assets are not replaced on retry. Nightlies never become GitHub's latest stable release.
+
+Release builds embed their branch name through `POKEEMERALD_RELEASE_CHANNEL`. Save and pack paths use separate `unstable`, `stable`, and `main` subdirectories; ordinary source builds retain the unqualified developer directory. [Playing](README.md#playing) owns the paths, overrides, and save-transfer risks.
 
 R-1 remains incomplete until a configured binary archive runs on a clean target machine without a Rust toolchain. GitHub Releases own detailed artifact history; [`CHANGELOG.md`](CHANGELOG.md) owns concise curated summaries.
 
