@@ -519,17 +519,9 @@ fn window_frame_for_reads_the_saved_blocks_own_option() {
     );
 }
 
-/// Issue #1125: a NEW GAME confirm must carry a boot-recovered save's
-/// `optionsTextSpeed`/`optionsWindowFrameType` into the fresh session
-/// (`NewGameInitData` never resets them, `pokeemerald/src/new_game.c:149-207`)
-/// for every status except `Empty`/`Corrupt` -- the two verdicts whose boot
-/// already ran `SetDefaultOptions` (`pokeemerald/src/intro.c:1154-1156`),
-/// which must still reach [`NewGameOptions::DEFAULT`] exactly as they did
-/// before this issue. `Ok`/`Error` keep an intact recovery either way; this
-/// port's own `NoFlash` has no upstream boot verdict that clears
-/// `SaveBlock2` either (`LoadGameSave` never runs for it at all), so it
-/// joins them rather than `Empty`/`Corrupt` -- the same three-way split
-/// [`window_frame_for`] already makes for the main-menu border.
+/// Pins [`new_game_options_for`]'s status split (issue #1125) -- see that
+/// function's own doc comment for the contract this pins, not a copy of it
+/// here.
 #[test]
 fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
     use crate::game_save::SaveFileStatus;

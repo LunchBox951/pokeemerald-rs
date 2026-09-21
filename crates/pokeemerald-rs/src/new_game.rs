@@ -95,16 +95,10 @@ const NO_WARP_EVENT: i8 = -1;
 
 /// The two `SaveBlock2` option fields a NEW GAME hands to
 /// [`init_save_blocks`] instead of it always picking the modeled defaults
-/// (issue #1125): `NewGameInitData` (`pokeemerald/src/new_game.c:149-207`)
-/// never touches `optionsTextSpeed`/`optionsWindowFrameType` itself, so only
-/// a boot verdict that already re-defaulted `SaveBlock2`
-/// (`SetDefaultOptions`, exactly `SaveFileStatus::boot_clears_save_block2`'s
-/// `Empty`/`Corrupt`, `pokeemerald/src/intro.c:1154-1156`) reaches this
-/// struct's [`Self::DEFAULT`]; every other verdict -- `Ok`/`Error`, and this
-/// port's own `NoFlash` (upstream has nothing to clear there either: a
-/// medium that cannot even be read leaves `SaveBlock2` exactly as untouched
-/// as an intact recovery does) -- carries its recovered `SaveBlock2`'s own
-/// two bytes into the fresh save instead (`crate::flow::new_game_options_for`).
+/// (issue #1125). Which boot verdicts reach [`Self::DEFAULT`] versus a
+/// carried-forward recovery is the status/option contract owned by
+/// `crate::flow::new_game_options_for` -- see that function's doc comment,
+/// not a copy of it here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NewGameOptions {
     /// `optionsTextSpeed`'s raw byte, repaired to `OPTIONS_TEXT_SPEED_MID`

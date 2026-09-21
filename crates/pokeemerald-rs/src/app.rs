@@ -450,9 +450,14 @@ impl App {
     /// leak into anything else this process loads afterwards.
     ///
     /// Persistence is deliberately disabled so a scenario always starts on
-    /// the no-save menu and never reads or writes a player's save file. No
-    /// BGM is started either -- a scenario asserts frames, not audio, and
-    /// [`App::new`] alone owns the real device.
+    /// the no-save menu and never reads or writes a player's save file --
+    /// [`SaveSlot::none`], not [`SaveSlot::disabled`]: this boots as a fresh
+    /// `Empty` medium (nothing has ever been saved), not upstream's
+    /// missing-flash-chip `NoFlash` verdict, so NEW GAME still gets the
+    /// boot-defaulted options a real never-saved boot would
+    /// ([`SaveSlot::none`]'s own doc comment). No BGM is started either --
+    /// a scenario asserts frames, not audio, and [`App::new`] alone owns
+    /// the real device.
     ///
     /// # Errors
     ///
@@ -463,7 +468,7 @@ impl App {
         Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )
     }
@@ -486,7 +491,7 @@ impl App {
         let mut app = Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )?;
         app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {

@@ -217,18 +217,26 @@ const fn window_frame_for(saved: &SavedGame) -> u8 {
 
 /// The [`NewGameOptions`] a NEW GAME confirm on `saved` hands onward to
 /// [`intro::load`] and, once the intro finishes,
-/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125):
+/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125). This is
+/// the one place that owns the status/option contract; every other site
+/// that needs it links here instead of restating it.
+///
 /// `NewGameInitData` never resets `optionsTextSpeed`/`optionsWindowFrameType`
 /// itself (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
 /// already re-defaulted `SaveBlock2` via `SetDefaultOptions` -- exactly
 /// [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s `Empty`/
 /// `Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`) -- reaches
 /// [`NewGameOptions::DEFAULT`]. Every other status, `Ok`/`Error` alike, and
-/// this port's own `NoFlash` (which upstream has no equivalent boot verdict
-/// for: `LoadGameSave` simply never touches `gSaveBlock2Ptr`, leaving it at
-/// whatever the zeroed block already held, exactly like `Ok`/`Error`'s own
-/// untouched recovery), carries `saved.block2`'s own two bytes forward
+/// this port's own `NoFlash`, carries `saved.block2`'s own two bytes forward
 /// instead -- mirroring [`window_frame_for`]'s identical boot-verdict split.
+///
+/// `NoFlash` is not a rescued block: [`crate::game_save::SaveSlot::load`]
+/// synthesizes a zero-filled `SaveBlock2` for it rather than recovering one
+/// (no readable image exists to recover from). Carrying its zero bytes
+/// forward still mirrors upstream, though, rather than diverging from it: a
+/// genuine `SAVE_STATUS_NO_FLASH` boot leaves `gSaveBlock2Ptr` equally
+/// untouched, since `LoadGameSave` returns before ever reading it
+/// (`pokeemerald/src/save.c:871-889`).
 const fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
     if saved.status.boot_clears_save_block2() {
         NewGameOptions::DEFAULT

@@ -770,20 +770,11 @@ fn write_save_with_new_game_options(temp: &TempSave, text_speed: u8, window_fram
         .expect("the fixture save must be writable");
 }
 
-/// Issue #1125: upstream keeps a recovered `SaveBlock2`'s options across NEW
-/// GAME -- boot re-defaults them only for `SAVE_STATUS_EMPTY`/`_CORRUPT`
-/// (`CB2_InitCopyrightScreenAfterBootup` -> `Sav2_ClearSetDefault`,
-/// `pokeemerald/src/intro.c:1147-1157`), and `NewGameInitData` never touches
-/// `optionsTextSpeed`/`optionsWindowFrameType` itself
-/// (`pokeemerald/src/new_game.c:149-207`) -- `CB2_NewGame` clears
-/// `SaveBlock1` and re-rolls the trainer id, nothing more
-/// (`pokeemerald/src/overworld.c:1532-1548`). So starting NEW GAME over an
-/// `Ok` save must leave the new session at that save's text speed and
-/// window frame, not back at `SetDefaultOptions`' MID/frame-0 defaults --
-/// the real end-to-end path this issue's own packless
-/// `new_game_options_for_keeps_ok_and_error_saves_own_options_and_defaults_the_rest`
-/// (`crate::flow::tests`) cannot exercise without a real intro and overworld
-/// load.
+/// The real end-to-end counterpart to `crate::flow::tests`' packless pin of
+/// `new_game_options_for`'s status split (issue #1125; see that function's
+/// own doc comment for the contract): confirms NEW GAME over an `Ok` save
+/// really does carry its options through a real intro and overworld load,
+/// which no packless test can exercise.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_new_game_over_a_saved_game_keeps_its_options() {
