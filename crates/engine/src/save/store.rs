@@ -174,6 +174,19 @@ fn second_counter_is_newer(first: u32, second: u32) -> bool {
     }
 }
 
+/// Whether `older` precedes `newer` as a wrapping serial number (RFC 1982),
+/// i.e. `newer` is reachable from `older` by fewer than half the counter
+/// space. Unlike [`second_counter_is_newer`] -- sound only for two
+/// generations already known to be adjacent -- this is the comparison
+/// [`SaveStore::scan_slot`] needs for a stale tail's counter, which can sit
+/// an arbitrary number of generations behind the legacy head that
+/// overwrote it.
+#[must_use]
+fn older_generation_precedes(older: u32, newer: u32) -> bool {
+    let delta = newer.wrapping_sub(older);
+    delta != 0 && delta < (1 << 31)
+}
+
 fn physical_slot_for_counter(counter: u32) -> usize {
     (counter % NUM_SAVE_SLOTS_U32) as usize
 }
@@ -239,6 +252,11 @@ struct Resolution {
     /// other slot's counter, to source `PokemonStorage` from instead of
     /// `counter`'s own slot.
     storage_from_counter: Option<u32>,
+    /// Whether `counter`'s own slot was accepted through the legacy
+    /// five-sector fallback: [`SaveStore::copy_valid_slot_payloads`] must
+    /// then never read that slot's physical positions 5-13, whether erased
+    /// or a stale tolerated tail (see [`SaveStore::scan_slot`]).
+    legacy: bool,
 }
 
 struct CopiedSlotPayloads {
@@ -436,17 +454,27 @@ impl SaveStore {
     }
 
     /// Scans all 14 physical positions of `slot`, matching upstream's
-    /// `GetSaveValidStatus` (`pokeemerald/src/save.c:514-585`): a slot is
-    /// intact when all 14 ids validate, or when it matches this project's
-    /// earlier five-sector format (ids 0-4 valid under one shared counter,
-    /// with no signed sector anywhere in physical positions 5-13 -- that
-    /// format never wrote there, so any signal in that range means real
-    /// data, not this format).
+    /// `GetSaveValidStatus` (`pokeemerald/src/save.c:514-585`): intact when
+    /// all 14 ids validate, or when physical positions 0-4 hold ids 0-4
+    /// under one counter (this project's pre-#1227 five-sector format).
+    ///
+    /// A signed sector in positions 5-13 disqualifies that legacy reading
+    /// unless it is a stale, strictly older, fully valid tail left behind by
+    /// a prior full generation -- and even then, only if it is not also the
+    /// one shape a genuinely torn 14-sector write can leave. Such a tail is
+    /// a storage-donor candidate only ([`SaveStore::resolve`]), never
+    /// progress ([`SaveStore::copy_valid_slot_payloads`] skips it).
     fn scan_slot(&self, slot: usize) -> SlotScan {
         let mut signature_valid = false;
         let mut valid_ids: u32 = 0;
         let mut counter = 0u32;
+        let mut head_valid_ids: u32 = 0;
+        let mut head_is_identity = true;
         let mut tail_signature_seen = false;
+        let mut tail_all_recognized_valid = true;
+        let mut tail_counter: Option<u32> = None;
+        let mut tail_consistent = true;
+        let mut tail_matches_predecessor_of_identity_head = true;
         let mut legacy_counter: Option<u32> = None;
         let mut legacy_consistent = true;
 
@@ -455,36 +483,80 @@ impl SaveStore {
             if sector.signature() != SECTOR_SIGNATURE {
                 continue;
             }
-            if i >= usize::from(SECTOR_ID_PKMN_STORAGE_START) {
+            let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
+            if in_tail {
                 tail_signature_seen = true;
             }
             signature_valid = true;
             let id = sector.id();
-            if let Some(expected_len) = sector_payload_len(id) {
-                if sector.is_valid(expected_len) {
-                    counter = sector.counter();
-                    valid_ids |= 1 << id;
-                    if id < SECTOR_ID_PKMN_STORAGE_START {
-                        match legacy_counter {
-                            None => legacy_counter = Some(counter),
-                            Some(c) if c == counter => {}
-                            Some(_) => legacy_consistent = false,
-                        }
-                    }
+            let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
+            if in_tail && !is_valid_sector {
+                tail_all_recognized_valid = false;
+            }
+            if !is_valid_sector {
+                continue;
+            }
+            counter = sector.counter();
+            valid_ids |= 1 << id;
+            if in_tail {
+                match tail_counter {
+                    None => tail_counter = Some(counter),
+                    Some(c) if c == counter => {}
+                    Some(_) => tail_consistent = false,
+                }
+                // A torn rotation-0 write also leaves its predecessor
+                // generation (rotation 12) at this exact id/position pairing.
+                if usize::from(id) != (i + 2) % NUM_SECTORS_PER_SLOT {
+                    tail_matches_predecessor_of_identity_head = false;
+                }
+            } else if id < SECTOR_ID_PKMN_STORAGE_START {
+                head_valid_ids |= 1 << id;
+                if usize::from(id) != i {
+                    head_is_identity = false;
+                }
+                match legacy_counter {
+                    None => legacy_counter = Some(counter),
+                    Some(c) if c == counter => {}
+                    Some(_) => legacy_consistent = false,
                 }
             }
         }
 
+        // Same-slot generations sit exactly 2 counters and 2 rotations
+        // apart, so this is indistinguishable from a real write torn after 5
+        // sectors; upstream reports that shape Error, never Ok.
+        let ambiguous_with_a_torn_full_write = head_is_identity
+            && tail_matches_predecessor_of_identity_head
+            && legacy_counter
+                .zip(tail_counter)
+                .is_some_and(|(legacy, tail)| legacy == tail.wrapping_add(2));
+
+        let stale_tail_is_donor_only = tail_signature_seen
+            && tail_all_recognized_valid
+            && tail_consistent
+            && legacy_counter
+                .zip(tail_counter)
+                .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
+            && !ambiguous_with_a_torn_full_write;
+
         let all_valid_mask = (1u32 << u32::from(NUM_SECTORS_PER_SLOT_U16)) - 1;
-        let legacy_intact = !tail_signature_seen
-            && legacy_consistent
-            && valid_ids & LEGACY_ERA_IDS_MASK == LEGACY_ERA_IDS_MASK;
+        let legacy_intact = legacy_consistent
+            && head_valid_ids == LEGACY_ERA_IDS_MASK
+            && (!tail_signature_seen || stale_tail_is_donor_only);
         let integrity = if !signature_valid {
             SlotIntegrity::Empty
         } else if valid_ids == all_valid_mask || legacy_intact {
             SlotIntegrity::Ok
         } else {
             SlotIntegrity::Error
+        };
+        // A stale tail is scanned after the legacy head, so the trailing
+        // `counter` above would otherwise report the tail's older counter
+        // instead of the legacy generation's own.
+        let counter = if legacy_intact {
+            legacy_counter.expect("legacy_intact requires a legacy head counter")
+        } else {
+            counter
         };
         SlotScan {
             integrity,
@@ -507,33 +579,35 @@ impl SaveStore {
     /// externally assembled image, not via an ordinary import.
     fn resolve(slot0: &SlotScan, slot1: &SlotScan) -> Resolution {
         use SlotIntegrity::{Empty, Error, Ok};
-        let (status, counter, storage_from_counter) = match (slot0.integrity, slot1.integrity) {
-            (Ok, Ok) => Self::resolve_both_ok(slot0, slot1),
-            (Ok, Error) => (SaveStatus::Error, slot0.counter, None),
-            (Ok, Empty) => (SaveStatus::Ok, slot0.counter, None),
-            (Error, Ok) => (SaveStatus::Error, slot1.counter, None),
-            (Empty, Ok) => (SaveStatus::Ok, slot1.counter, None),
-            (Empty, Empty) => (SaveStatus::Empty, 0, None),
-            (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0, None),
-        };
+        let (status, counter, storage_from_counter, legacy) =
+            match (slot0.integrity, slot1.integrity) {
+                (Ok, Ok) => Self::resolve_both_ok(slot0, slot1),
+                (Ok, Error) => (SaveStatus::Error, slot0.counter, None, slot0.legacy),
+                (Ok, Empty) => (SaveStatus::Ok, slot0.counter, None, slot0.legacy),
+                (Error, Ok) => (SaveStatus::Error, slot1.counter, None, slot1.legacy),
+                (Empty, Ok) => (SaveStatus::Ok, slot1.counter, None, slot1.legacy),
+                (Empty, Empty) => (SaveStatus::Empty, 0, None, false),
+                (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0, None, false),
+            };
         Resolution {
             status,
             counter,
             storage_from_counter,
+            legacy,
         }
     }
 
     /// The `(Ok, Ok)` half of [`SaveStore::resolve`], split out because it is
     /// the only combination where a slot's fields can be worth merging from
     /// its counterpart.
-    fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Option<u32>) {
+    fn resolve_both_ok(slot0: &SlotScan, slot1: &SlotScan) -> (SaveStatus, u32, Option<u32>, bool) {
         if slot0.legacy == slot1.legacy {
             let counter = if second_counter_is_newer(slot0.counter, slot1.counter) {
                 slot1.counter
             } else {
                 slot0.counter
             };
-            return (SaveStatus::Ok, counter, None);
+            return (SaveStatus::Ok, counter, None, slot0.legacy);
         }
         let (legacy, full) = if slot0.legacy {
             (slot0, slot1)
@@ -541,13 +615,19 @@ impl SaveStore {
             (slot1, slot0)
         };
         if second_counter_is_newer(full.counter, legacy.counter) {
-            (SaveStatus::Ok, legacy.counter, Some(full.counter))
+            (SaveStatus::Ok, legacy.counter, Some(full.counter), true)
         } else {
-            (SaveStatus::Ok, full.counter, None)
+            (SaveStatus::Ok, full.counter, None, false)
         }
     }
 
-    fn copy_valid_slot_payloads(&mut self, slot: usize) -> CopiedSlotPayloads {
+    /// `legacy` must be the slot's own [`SlotScan::legacy`] (or
+    /// [`Resolution::legacy`]): a legacy generation only ever owns physical
+    /// positions 0-4, so positions 5-13 are skipped outright rather than
+    /// read as its progress or storage -- whether they are plain erased
+    /// flash or a stale tail [`SaveStore::scan_slot`] tolerated as a
+    /// storage-donor candidate for the *other* slot, never for this one.
+    fn copy_valid_slot_payloads(&mut self, slot: usize, legacy: bool) -> CopiedSlotPayloads {
         let mut copied = CopiedSlotPayloads {
             block1: Box::new([0; SaveBlock1::PAYLOAD_LEN]),
             block2: Box::new([0; SaveBlock2::PAYLOAD_LEN]),
@@ -557,6 +637,9 @@ impl SaveStore {
         };
 
         for physical_index in 0..NUM_SECTORS_PER_SLOT_U16 {
+            if legacy && physical_index >= SECTOR_ID_PKMN_STORAGE_START {
+                continue;
+            }
             let sector = self.read_physical(slot, usize::from(physical_index));
             let id = sector.id();
 
@@ -614,11 +697,13 @@ impl SaveStore {
         }
         let status = resolution.status;
         let storage_override = resolution.storage_from_counter.map(|counter| {
-            self.copy_valid_slot_payloads(physical_slot_for_counter(counter))
+            // storage_from_counter is only ever the other, full-format slot
+            // (SaveStore::resolve_both_ok): never legacy.
+            self.copy_valid_slot_payloads(physical_slot_for_counter(counter), false)
                 .pokemon_storage
         });
         let copy_slot = physical_slot_for_counter(self.save_counter);
-        let mut copied = self.copy_valid_slot_payloads(copy_slot);
+        let mut copied = self.copy_valid_slot_payloads(copy_slot, resolution.legacy);
         if let Some(pokemon_storage) = storage_override {
             copied.pokemon_storage = pokemon_storage;
         }
@@ -1688,5 +1773,163 @@ mod tests {
             &storage_bytes[..],
             "the older full slot's opaque storage must still be carried forward"
         );
+    }
+
+    /// A legacy five-sector write over an imported full-generation slot
+    /// leaves that generation's tail sectors, still checksum-valid under
+    /// their own older counter, in positions 5-13. `scan_slot` must accept
+    /// the newer legacy progress despite that signed tail, and storage must
+    /// still come from the newest complete generation, not the stale tail.
+    #[test]
+    fn a_legacy_era_save_over_an_imported_image_keeps_its_progress_and_storage() {
+        let block2 = sample_block2();
+        // A distinct SaveBlock2 (and so encryption key) for the legacy
+        // write: reusing `block2` would hide a regression where a stale
+        // tail sector for id 0 overwrites the legacy head's own, since
+        // identical bytes make that overwrite unobservable.
+        let legacy_block2 = SaveBlock2 {
+            player_trainer_id: [0x11; TRAINER_ID_LENGTH],
+            encryption_key: 0x1111_2222,
+            ..sample_block2()
+        };
+        let counter_13_block1 = SaveBlock1 {
+            money: 13,
+            ..sample_block1()
+        };
+        let counter_14_block1 = SaveBlock1 {
+            money: 14,
+            ..sample_block1()
+        };
+        let counter_15_block1 = SaveBlock1 {
+            money: 15,
+            ..sample_block1()
+        };
+
+        let mut store = SaveStore::new();
+        // Twelve throwaway generations rotate the store to the exact
+        // physical layout that two real, ordinary rotated full saves at
+        // counters 13 and 14 leave behind, both landing in slot 1 then slot
+        // 0 by parity, exactly as `SaveStore::save` would in play.
+        for _ in 0..12 {
+            store.save(&sample_block1(), &block2);
+        }
+        assert_eq!(store.save_counter(), 12);
+
+        store.base_pokemon_storage.fill(0x0D);
+        store.save(&counter_13_block1, &block2);
+        assert_eq!(store.save_counter(), 13);
+        assert_eq!(store.last_written_sector(), 13);
+        let counter_13_storage = store.base_pokemon_storage.clone();
+
+        store.base_pokemon_storage.fill(0x0E);
+        store.save(&counter_14_block1, &block2);
+        assert_eq!(store.save_counter(), 14);
+        assert_eq!(store.last_written_sector(), 0);
+        let counter_14_storage = store.base_pokemon_storage.clone();
+        assert_ne!(&counter_13_storage[..], &counter_14_storage[..]);
+
+        // The legacy writer touches only physical positions 0-4, leaving the
+        // signed counter-13 tail from the imported full generation (slot 1,
+        // physical positions 5-13) in place underneath it. That tail
+        // includes id 0 (SaveBlock2) at physical position 13.
+        write_legacy_slot(&mut store, 1, &counter_15_block1, &legacy_block2, 15);
+
+        let outcome = store.load();
+        assert_eq!(
+            outcome.status,
+            SaveStatus::Ok,
+            "a stale, strictly-older signed tail must not disqualify the newer legacy generation"
+        );
+        assert_eq!(
+            store.save_counter(),
+            15,
+            "the legacy generation's own counter must be adopted, not the stale tail's"
+        );
+        assert_eq!(
+            outcome.block1.money, counter_15_block1.money,
+            "the counter-15 legacy generation's progress must win"
+        );
+        assert_eq!(
+            outcome.block2, legacy_block2,
+            "the legacy generation's own SaveBlock2 must win, not the stale tail's id-0 remnant"
+        );
+        assert_eq!(
+            store.last_written_sector(),
+            0,
+            "rotation must be recovered from the legacy head's own id 0, not the stale tail's"
+        );
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &counter_14_storage[..],
+            "the newest complete storage generation must win, not the stale incomplete tail"
+        );
+    }
+
+    /// A real interrupted 14-sector write at rotation 0, torn after exactly
+    /// its first 5 (logical-order) sectors, leaves precisely the same shape
+    /// behind as a legacy five-sector write over an imported image: ids 0-4
+    /// fresh under the new counter, and the slot's own predecessor
+    /// generation (2 counters and 2 rotations older) filling the rest.
+    /// Upstream reports that shape `SAVE_STATUS_ERROR`
+    /// (`pokeemerald/src/save.c:543-546`), so `scan_slot` must never accept
+    /// it as a legacy migration.
+    #[test]
+    fn an_interrupted_full_write_at_rotation_zero_is_never_mistaken_for_legacy_migration() {
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        // A genuine, complete rotation-12 generation at counter 12.
+        for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else if id < SECTOR_ID_PKMN_STORAGE_START {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+                &storage_bytes[offset..offset + len]
+            };
+            let physical = usize::from((id + 12) % NUM_SECTORS_PER_SLOT_U16);
+            store.write_physical(1, physical, &Sector::write(id, payload, 12));
+        }
+
+        // The next write to this same slot (counter 14, matching parity)
+        // tears after its first 5 sectors at rotation 0, leaving the rest of
+        // the rotation-12 generation above untouched underneath it.
+        for id in 0..SECTOR_ID_PKMN_STORAGE_START {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            };
+            store.write_physical(1, usize::from(id), &Sector::write(id, payload, 14));
+        }
+
+        let outcome = store.load();
+        assert_eq!(
+            outcome.status,
+            SaveStatus::Corrupt,
+            "an interrupted 14-sector write must never be mistaken for a legacy migration"
+        );
+    }
+
+    #[test]
+    fn stale_tail_counter_precedence_is_wraparound_aware() {
+        assert!(older_generation_precedes(3, 7));
+        assert!(!older_generation_precedes(7, 3));
+        assert!(!older_generation_precedes(5, 5));
+        // A legitimate stale tail an arbitrary number of generations behind
+        // the legacy head, including across the u32 wrap.
+        assert!(older_generation_precedes(u32::MAX, 1));
+        // A tail that is actually the *newer* side of the same wrap must
+        // never be read as older just because its raw value is smaller.
+        assert!(!older_generation_precedes(0, u32::MAX - 1));
     }
 }
