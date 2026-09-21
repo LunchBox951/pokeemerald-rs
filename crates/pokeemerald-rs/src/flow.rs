@@ -50,6 +50,7 @@ use crate::frame::to_platform_frame;
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
+use crate::new_game::NewGameOptions;
 use crate::title::TitleScene;
 
 /// The battle-turn finalization (issue #405) shared by all three headless
@@ -211,6 +212,39 @@ const fn window_frame_for(saved: &SavedGame) -> u8 {
         0
     } else {
         saved.block2.options_window_frame_type
+    }
+}
+
+/// The [`NewGameOptions`] a NEW GAME confirm on `saved` hands onward to
+/// [`intro::load`] and, once the intro finishes,
+/// [`crate::new_game::init_save_blocks_with_options`] (issue #1125). This is
+/// the one place that owns the status/option contract; every other site
+/// that needs it links here instead of restating it.
+///
+/// `NewGameInitData` never resets `optionsTextSpeed`/`optionsWindowFrameType`
+/// itself (`pokeemerald/src/new_game.c:149-207`), so only a boot verdict that
+/// already re-defaulted `SaveBlock2` via `SetDefaultOptions` -- exactly
+/// [`crate::game_save::SaveFileStatus::boot_clears_save_block2`]'s `Empty`/
+/// `Corrupt` cases (`pokeemerald/src/intro.c:1154-1156`) -- reaches
+/// [`NewGameOptions::DEFAULT`]. Every other status, `Ok`/`Error` alike, and
+/// this port's own `NoFlash`, carries `saved.block2`'s own two bytes forward
+/// instead -- mirroring [`window_frame_for`]'s identical boot-verdict split.
+///
+/// `NoFlash` is not a rescued block: [`crate::game_save::SaveSlot::load`]
+/// synthesizes a zero-filled `SaveBlock2` for it rather than recovering one
+/// (no readable image exists to recover from). Carrying its zero bytes
+/// forward still mirrors upstream, though, rather than diverging from it: a
+/// genuine `SAVE_STATUS_NO_FLASH` boot leaves `gSaveBlock2Ptr` equally
+/// untouched, since `LoadGameSave` returns before ever reading it
+/// (`pokeemerald/src/save.c:871-889`).
+const fn new_game_options_for(saved: &SavedGame) -> NewGameOptions {
+    if saved.status.boot_clears_save_block2() {
+        NewGameOptions::DEFAULT
+    } else {
+        NewGameOptions {
+            text_speed: saved.block2.options_text_speed,
+            window_frame_type: saved.block2.options_window_frame_type,
+        }
     }
 }
 
@@ -443,13 +477,15 @@ pub(crate) fn advance_scene(
                 // action mapping is pinned by a pack-less test -- see
                 // `menu_action`'s own doc comment.
                 match menu_action(state.scene.selected()) {
-                    MainMenuAction::NewGame => match intro::load(pack_source) {
-                        Ok(intro_scene) => {
-                            let frame = intro_scene.compose_frame();
-                            return (AppScene::Intro(Box::new(intro_scene)), frame);
+                    MainMenuAction::NewGame => {
+                        match intro::load(pack_source, new_game_options_for(&state.saved)) {
+                            Ok(intro_scene) => {
+                                let frame = intro_scene.compose_frame();
+                                return (AppScene::Intro(Box::new(intro_scene)), frame);
+                            }
+                            Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
                         }
-                        Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
-                    },
+                    }
                     // `ACTION_CONTINUE` (`main_menu.c:1064-1069`) ->
                     // `CB2_ContinueSavedGame`. The blocks are moved out of
                     // the menu state by cloning rather than by consuming it,
@@ -484,7 +520,7 @@ pub(crate) fn advance_scene(
             let status = intro_scene.tick(intro_printer_input(buttons));
 
             if status == IntroStatus::Finished {
-                match OverworldPhase::load(pack_source) {
+                match OverworldPhase::load(pack_source, intro_scene.new_game_options()) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();
@@ -509,7 +545,7 @@ pub(crate) fn advance_scene(
         }
         AppScene::OverworldLoadFailed(intro_scene) => {
             if should_retry_overworld_load(buttons) {
-                match OverworldPhase::load(pack_source) {
+                match OverworldPhase::load(pack_source, intro_scene.new_game_options()) {
                     Ok(phase) => {
                         log_new_game_started(&phase);
                         let frame = phase.compose_frame();
