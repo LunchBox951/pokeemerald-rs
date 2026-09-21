@@ -74,6 +74,15 @@ pub(super) enum SaveDialogOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaveDialogState {
+    /// `StartMenuSaveCallback`: the tick after the A press only installs
+    /// `SaveStartCallback` (`pokeemerald/src/start_menu.c:721-728`).
+    EnterSaveStartCallback,
+    /// `SaveStartCallback`: this tick only runs `InitSave` (`SaveMapView`,
+    /// which this port has no counterpart for, plus setting
+    /// `sSaveDialogCallback = SaveConfirmSaveCallback` and clearing
+    /// `sSavingComplete`) and installs `SaveCallback`
+    /// (`pokeemerald/src/start_menu.c:809-822,877-882`).
+    EnterSaveCallback,
     ShowInitialPrompt,
     OpenInitialChoice,
     AwaitInitialChoice,
@@ -136,10 +145,16 @@ pub(super) struct SaveDialog {
 }
 
 impl SaveDialog {
-    /// Creates a save dialog at its initial confirmation prompt.
+    /// Creates a save dialog at `StartMenuSaveCallback`, the callback the A
+    /// press on SAVE installs -- not yet the confirmation prompt. Two more
+    /// per-frame callback handoffs (`EnterSaveStartCallback`,
+    /// `EnterSaveCallback`) run before `ShowInitialPrompt`, matching
+    /// upstream's `StartMenuSaveCallback` -> `SaveStartCallback` ->
+    /// `SaveCallback` chain, one callback per tick
+    /// (`pokeemerald/src/start_menu.c:721-728,809-822`).
     pub(super) fn new() -> Self {
         Self {
-            state: SaveDialogState::ShowInitialPrompt,
+            state: SaveDialogState::EnterSaveStartCallback,
             message: None,
             message_is_printing: false,
             yes_no: None,
@@ -149,6 +164,15 @@ impl SaveDialog {
     }
 
     /// Advances the save dialog by one frame.
+    ///
+    /// The first two calls after construction only install the next
+    /// callback -- `StartMenuSaveCallback` installing `SaveStartCallback`,
+    /// then `SaveStartCallback` running `InitSave` and installing
+    /// `SaveCallback` -- and produce no message
+    /// (`pokeemerald/src/start_menu.c:721-728,809-822`). Only the third call
+    /// reaches `SaveCallback` -> `RunSaveCallback` ->
+    /// `SaveConfirmSaveCallback` and shows the confirmation prompt
+    /// (`:884-894,978-993`).
     ///
     /// A queued prompt-opening or store dispatches on the same tick its
     /// message finishes printing, matching `RunSaveCallback` observing
@@ -171,6 +195,14 @@ impl SaveDialog {
         }
 
         match self.state {
+            SaveDialogState::EnterSaveStartCallback => {
+                self.state = SaveDialogState::EnterSaveCallback;
+                SaveDialogOutcome::InProgress
+            }
+            SaveDialogState::EnterSaveCallback => {
+                self.state = SaveDialogState::ShowInitialPrompt;
+                SaveDialogOutcome::InProgress
+            }
             SaveDialogState::ShowInitialPrompt => {
                 self.show_message(SaveMessage::ConfirmSave, chrome, target);
                 self.state = SaveDialogState::OpenInitialChoice;

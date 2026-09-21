@@ -559,6 +559,26 @@ fn initial_yes_no_opens_on_the_confirm_message_finish_tick() {
         dialog.run(ButtonState::new(), &chrome, &mut target),
         SaveDialogOutcome::InProgress
     );
+    assert!(
+        dialog.message().is_none(),
+        "StartMenuSaveCallback only installs SaveStartCallback"
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress
+    );
+    assert!(
+        dialog.message().is_none(),
+        "SaveStartCallback only initializes the save and installs SaveCallback"
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress
+    );
+    assert!(
+        dialog.message().is_some(),
+        "SaveCallback must now have run SaveConfirmSaveCallback"
+    );
     finish_message_in_lockstep(
         &mut dialog,
         &chrome,
@@ -745,7 +765,13 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
 
 /// Selecting SAVE must not blank the screen for a frame (issue #955):
 /// upstream never removes the item window before `SaveConfirmSaveCallback`
-/// has a replacement message ready (`start_menu.c:978-993`).
+/// has a replacement message ready (`start_menu.c:978-993`). It also keeps
+/// the window through the two intermediate per-frame callback handoffs
+/// upstream spends before that point (`StartMenuSaveCallback` installing
+/// `SaveStartCallback`, then `SaveStartCallback` running `InitSave` and
+/// installing `SaveCallback`), so the confirmation prompt is only built on
+/// the third tick after the selecting A press, not the first
+/// (`start_menu.c:607-626,721-728,809-822,884-894,978-993`, I-6 issue #1339).
 #[test]
 fn selecting_save_keeps_the_item_window_until_its_message_exists() {
     use rendering::{Framebuffer, Rgb888};
@@ -766,21 +792,46 @@ fn selecting_save_keeps_the_item_window_until_its_message_exists() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     assert_eq!(menu.selected(), StartMenuItem::Save);
 
+    let assert_item_window_remains = |menu: &StartMenu, frame: &str| {
+        let dialog = menu.save.as_ref().expect("SAVE installs its dialog");
+        assert!(
+            dialog.message().is_none(),
+            "{frame}: no save message may exist yet"
+        );
+        assert_ne!(
+            menu.compose_over(base.clone())
+                .pixel(item_pixel.0, item_pixel.1),
+            Some(marker),
+            "{frame}: the frame must still draw the item window, not a bare \
+             overworld frame"
+        );
+    };
+
     assert_eq!(
         menu.tick(pressed(Buttons::A), &mut target),
         StartMenuOutcome::Open
     );
-    let dialog = menu.save.as_ref().expect("SAVE installs its dialog");
-    assert!(
-        dialog.message().is_none(),
-        "the install tick must not have run ShowInitialPrompt yet"
+    assert_item_window_remains(
+        &menu,
+        "the install tick (HandleStartMenuInput installs StartMenuSaveCallback)",
     );
-    assert_ne!(
-        menu.compose_over(base.clone())
-            .pixel(item_pixel.0, item_pixel.1),
-        Some(marker),
-        "the frame that selects SAVE must still draw the item window, not a \
-         bare overworld frame"
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_item_window_remains(
+        &menu,
+        "StartMenuSaveCallback's tick (installs SaveStartCallback)",
+    );
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_item_window_remains(
+        &menu,
+        "SaveStartCallback's tick (runs InitSave, installs SaveCallback)",
     );
 
     assert_eq!(
@@ -793,7 +844,8 @@ fn selecting_save_keeps_the_item_window_until_its_message_exists() {
             .expect("still saving")
             .message()
             .is_some(),
-        "the next tick must have run ShowInitialPrompt and built the message"
+        "the third tick after the press (SaveCallback) must have run \
+         SaveConfirmSaveCallback and built the message"
     );
     assert_eq!(
         menu.compose_over(base).pixel(item_pixel.0, item_pixel.1),
