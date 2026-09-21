@@ -7,9 +7,13 @@
 //! `CheckBadMove`'s target-ability guards do not read a target's true
 //! ability: Emerald's `get_ability AI_TARGET` guesses between both slots of
 //! an unrevealed two-ability species, drawing RNG fresh at each of its own
-//! call sites (`src/battle_ai_script_commands.c:1350-1391`). Battle history
-//! that would reveal an ability first is not modelled, so every target reads
-//! as unrevealed here; a single-ability species is unaffected and draws
+//! call sites (`src/battle_ai_script_commands.c:1350-1391`). One case
+//! predates the guess: a true Shadow Tag, Magnet Pull, or Arena Trap is read
+//! directly, with no draw, because those trapping abilities are checked
+//! before the AI decides whether to guess
+//! (`src/battle_ai_script_commands.c:1368-1375`). Battle history that would
+//! reveal an ability first is not modelled, so every other target reads as
+//! unrevealed here; a single-ability species is unaffected and draws
 //! nothing.
 
 use assets::trainers::AiFlags;
@@ -346,13 +350,28 @@ fn has_no_effect(
     Ok(ai_type_effectiveness(dex, move_id, attacker, defender)? == Some(0))
 }
 
+/// A trapping ability upstream reads off the target directly, ahead of the
+/// unrevealed-ability guess and with no draw
+/// (`src/battle_ai_script_commands.c:1368-1375`).
+const TRAPPING_ABILITIES: [AbilityId; 3] = [
+    AbilityId::SHADOW_TAG,
+    AbilityId::MAGNET_PULL,
+    AbilityId::ARENA_TRAP,
+];
+
 /// `Cmd_get_ability`'s target-ability read for the AI
-/// (`src/battle_ai_script_commands.c:1350-1391`). A single-ability species
-/// reads directly, with no draw. An unrevealed two-ability species draws
-/// `Random() & 1` fresh at every call rather than caching one guess, because
-/// separate `get_ability AI_TARGET` instructions in `AI_CheckBadMove` do not
-/// share a result (`data/battle_ai_scripts.s:59,93,279,309`).
+/// (`src/battle_ai_script_commands.c:1350-1391`). A true Shadow Tag, Magnet
+/// Pull, or Arena Trap is read directly, with no draw, ahead of the guess
+/// (`src/battle_ai_script_commands.c:1368-1375`). Otherwise a single-ability
+/// species reads directly, with no draw. An unrevealed two-ability species
+/// draws `Random() & 1` fresh at every call rather than caching one guess,
+/// because separate `get_ability AI_TARGET` instructions in `AI_CheckBadMove`
+/// do not share a result (`data/battle_ai_scripts.s:59,93,279,309`).
 fn ai_get_ability(target: &BattlePokemon, rng: &mut impl BattleRng) -> AbilityId {
+    let true_ability = target.ability();
+    if TRAPPING_ABILITIES.contains(&true_ability) {
+        return true_ability;
+    }
     let [first, second] = target.ability_slots();
     if second.0 == 0 {
         return first;
@@ -793,6 +812,9 @@ mod tests {
     const VOLTORB: SpeciesId = SpeciesId(100);
     /// `SPECIES_GASTLY`: Levitate in its only ability slot.
     const GASTLY: SpeciesId = SpeciesId(92);
+    /// `SPECIES_TRAPINCH`: Hyper Cutter in slot 0, Arena Trap (a trapping
+    /// ability `ai_get_ability` reads directly) in slot 1.
+    const TRAPINCH: SpeciesId = SpeciesId(332);
 
     const POUND: MoveId = MoveId(1);
     const SCRATCH: MoveId = MoveId(10);
@@ -1432,6 +1454,41 @@ mod tests {
             soundproof_rng.draws() > MAX_MON_MOVES + 1,
             "the ability guess must consume a draw beyond the four damage draws and the tie-break, got {}",
             soundproof_rng.draws()
+        );
+    }
+
+    /// `Cmd_get_ability` returns a true Shadow Tag, Magnet Pull, or Arena
+    /// Trap directly, ahead of the unrevealed-ability guess and with no draw
+    /// (`src/battle_ai_script_commands.c:1368-1375`). Trapinch's ability
+    /// slots (Hyper Cutter, Arena Trap) let a guess and the true ability
+    /// disagree: guessing slot 0 would read Hyper Cutter and discourage
+    /// Growl by -10 (as in `hyper_cutter_discourages_an_attack_drop_at_an_
+    /// unlowered_stage` above), but the true ability, Arena Trap, leaves
+    /// every guard unblocked and draws nothing at any of Pound's or Growl's
+    /// `get_ability AI_TARGET` call sites, so the two moves tie at 100 and
+    /// only the tie-break draw remains.
+    #[test]
+    fn arena_trap_is_read_without_a_draw_and_leaves_growl_scored() {
+        let enemy = pokemon(TREECKO, vec![POUND, GROWL]);
+        let player = pokemon(TRAPINCH, vec![POUND]).with_ability_slot(1);
+        assert_eq!(player.ability(), assets::AbilityId::ARENA_TRAP);
+        let mut rng = rng_with_maximum_simulated_damage([SELECT_SECOND_TIED_MOVE]);
+
+        let action = choose_trainer_action(
+            &Dex::new(),
+            &enemy,
+            &player,
+            AiFlags::CHECK_BAD_MOVE,
+            FIRST_TURN,
+            &mut rng,
+        )
+        .unwrap();
+
+        assert_eq!(action, EnemyAction::Move(1));
+        assert_eq!(
+            rng.draws(),
+            MAX_MON_MOVES + 1,
+            "a direct trapping-ability read must not consume any of Pound's or Growl's guess draws"
         );
     }
 }
