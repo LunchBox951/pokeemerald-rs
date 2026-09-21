@@ -198,8 +198,8 @@
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
 //! Scale, Compound Eyes, and Hustle (all ten above), Run Away, Shadow Tag,
-//! and Arena Trap ([`escape::ensure_admissible`], the wild-battle Run
-//! selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
+//! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
+//! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
 //! Levitate's Ground-move damage immunity ([`hit::damage_before_roll`] —
 //! grounding effects like Gravity and Smack Down are not modelled, so
 //! Levitate is otherwise unconditional; see `ensure_admissible` for its
