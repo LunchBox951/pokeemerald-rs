@@ -20,7 +20,7 @@ use super::store::{self, SaveStore};
 pub const SAVE_PATH_ENV: &str = "POKEEMERALD_RS_SAVE";
 
 /// Per-user data subdirectory containing the default save file.
-pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
+pub const SAVE_DIR_NAME: &str = pack_format::APP_DATA_SUBDIRECTORY;
 
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
