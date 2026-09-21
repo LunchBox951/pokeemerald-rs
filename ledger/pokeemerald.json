@@ -27103,7 +27103,7 @@
           "status": "rewritten"
         },
         "WindowFunc_DrawDialogueFrame": {
-          "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border, left/interior-fill/right column spanning height+1 rows, and the v-flipped bottom border reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
+          "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border; a fixed five-row-tall left wing, width + 1 interior, and right column body fill independent of height; and the v-flipped bottom border positioned at tilemapTop + height and reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
           "rust_target": "crates/engine/src/text/window.rs",
           "spec": "S-5",
           "status": "rewritten"
