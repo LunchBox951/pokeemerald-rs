@@ -662,7 +662,7 @@ mod synthetic_pack {
         ]
     }
 
-    /// Selects a silent key-split child at higher priority (issue #1304); must not evict
+    /// Selects a silent key-split child at higher priority; must not evict
     /// [`occupant_track`]'s note, since a silent child produces no note before allocation.
     fn evictor_track(key: u8) -> Vec<SongEvent> {
         vec![
@@ -689,7 +689,7 @@ mod synthetic_pack {
                 .expect("a looping 64-sample wave is well-formed"),
         );
         // `voice(1)` splits on the played key: 60 selects child 0 (`Empty`), 61 selects
-        // child 1 (a nested key split) -- the two silent cases from issue #1304.
+        // child 1 (a nested key split) -- the two silent cases.
         let top_group = VoiceGroup::new(vec![
             VoiceEntry::DirectSound(DirectSoundVoice {
                 base_key: 60,
@@ -707,7 +707,7 @@ mod synthetic_pack {
         let child_group = VoiceGroup::new(vec![
             VoiceEntry::Empty,
             VoiceEntry::KeySplit(
-                // Never resolved: nested children map straight to `None` (issue #1304),
+                // Never resolved: nested children map straight to `None`,
                 // so this target id need not exist in the pack.
                 KeySplitVoice::new(
                     0,
@@ -757,7 +757,7 @@ mod synthetic_pack {
         let render_first_frame = |name: &str| {
             let song = load_song_from_pack(&pack, name).expect("the synthetic song loads");
             // One DirectSound slot: any note reaching allocation evicts the occupant
-            // (`mixer::select_direct_sound_slot`), which the fix for issue #1304 must prevent.
+            // (`mixer::select_direct_sound_slot`), which a silent child must never do.
             let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 1);
             let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
             seq.render_frame(&mut out);

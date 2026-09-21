@@ -292,7 +292,7 @@ fn convert_indirection_children(
     group: &VoiceGroup,
 ) -> Result<Vec<Option<Instrument>>, MusicError> {
     // A nested key-split/rhythm child aborts like upstream (`m4a_1.s:1604`-`:1609`).
-    // An empty child has no upstream equivalent but resolves the same way (issue #1304).
+    // An empty child has no upstream equivalent but resolves the same way.
     group
         .slots()
         .iter()
