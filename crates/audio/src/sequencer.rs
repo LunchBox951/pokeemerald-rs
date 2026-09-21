@@ -171,6 +171,15 @@ struct TrackState {
     /// This track's own note priority (`PRIO`, `track->priority`); combined
     /// into each new note's effective priority by [`Sequencer::note_priority`].
     priority: u8,
+    /// Mirrors `MPT_FLG_VOLCHG` (`m4a_internal.h:266`): a `VOL`/`PAN`/`ModType`
+    /// command or an amplitude-target LFO step raised this since the last
+    /// [`Sequencer::propagate_dirty_tracks`] pass, and existing voices still
+    /// carry the previous value.
+    vol_dirty: bool,
+    /// Mirrors `MPT_FLG_PITCHG` (`m4a_internal.h:268`); see
+    /// [`Self::vol_dirty`]'s sibling for the pitch-affecting commands
+    /// (`KEYSH`/`BEND`/`BENDR`/`TUNE`) and a pitch-target LFO step.
+    pitch_dirty: bool,
 }
 
 impl TrackState {
@@ -205,6 +214,8 @@ impl TrackState {
             // Zeroed with the rest of a freshly cleared track (`Clear64byte`,
             // `m4a_1.s:1219`); only `PRIO` raises it again.
             priority: 0,
+            vol_dirty: false,
+            pitch_dirty: false,
         }
     }
 
@@ -481,6 +492,12 @@ impl Sequencer {
             self.tempo_c -= TEMPO_UNIT;
             self.do_tick();
         }
+        // Runs once per `advance_frame` call -- after every tick this frame's
+        // tempo crossed, not once per tick -- matching the single dirty-flag
+        // pass `MPlayMain` reaches once its own `while (tempoC >= 150)` loop
+        // finishes (`m4a_1.s:1169`..`:1175`, `:1341`..`:1360`), including a
+        // call whose accumulator never crosses 150 this frame.
+        self.propagate_dirty_tracks();
     }
 
     fn do_tick(&mut self) {
@@ -497,6 +514,35 @@ impl Sequencer {
         } = self;
         for (track_id, track) in tracks.iter_mut().enumerate() {
             Self::process_track(song, track, mixer, track_id, tempo_i, mem_acc);
+        }
+    }
+
+    /// The once-per-frame deferred recompute `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`
+    /// exist for: pushes each dirty, still-live track's resolved
+    /// volume/pitch into its voices and clears the flag, matching
+    /// `TrkVolPitSet`'s callers (`m4a_1.s:1361`..`:1432`) gating on
+    /// `MPT_FLG_EXIST` and unconditionally clearing both dirty bits
+    /// afterward (`m4a_1.s:1435`..`:1438`). A track `ply_fine` ended this
+    /// frame -- its flags already zeroed (`m4a_1.s:750`-`:777`) -- never
+    /// reaches this recompute, so a command or LFO step reached in the same
+    /// tick as `Fine` never leaks into the voice it just released. A
+    /// successful `Event::Note` also consumes the flags itself, the same
+    /// way (see its own handler); this pass is where every other dirty
+    /// control eventually lands.
+    fn propagate_dirty_tracks(&mut self) {
+        let Self { tracks, mixer, .. } = self;
+        for (track_id, track) in tracks.iter_mut().enumerate() {
+            if track.ended {
+                continue;
+            }
+            if track.vol_dirty {
+                Self::apply_track_volume(track, mixer, track_id);
+                track.vol_dirty = false;
+            }
+            if track.pitch_dirty {
+                Self::apply_track_pitch(track, mixer, track_id);
+                track.pitch_dirty = false;
+            }
         }
     }
 
@@ -521,16 +567,15 @@ impl Sequencer {
                 guard += 1;
                 if guard > MAX_COMMANDS_PER_TICK {
                     // A guarded end still honors `ply_fine`'s voice-release
-                    // cleanup, like every other end path.
-                    mixer.release_track(track_id);
-                    track.ended = true;
+                    // and dirty-flag cleanup, like every other end path.
+                    Self::finish_track(track, mixer, track_id);
                     break;
                 }
                 if track.cursor >= events.len() {
                     // A stream lacking `FINE` still ends cleanly
-                    // (`decode_track` allows it), but must still honor `ply_fine`'s voice-release cleanup.
-                    mixer.release_track(track_id);
-                    track.ended = true;
+                    // (`decode_track` allows it), but must still honor
+                    // `ply_fine`'s voice-release and dirty-flag cleanup.
+                    Self::finish_track(track, mixer, track_id);
                     break;
                 }
                 let event = events[track.cursor].clone();
@@ -546,7 +591,7 @@ impl Sequencer {
             track.wait -= 1;
             // LFO fires every wait-consuming tick, not only when `Wait` was
             // first issued (`m4a_1.s:1279`..`:1330`).
-            Self::apply_lfo(track, mixer, track_id);
+            Self::apply_lfo(track);
         }
     }
 
@@ -568,13 +613,18 @@ impl Sequencer {
             }
             Event::Goto(index) => track.cursor = index,
             Event::Voice(v) => track.voice = usize::from(v),
+            // `ply_vol`/`ply_pan` only store the operand and raise
+            // `MPT_FLG_VOLCHG` (`m4a_1.s:969`-`:990`); [`Self::propagate_dirty_tracks`]
+            // is what pushes it into the track's existing voices (a
+            // subsequent `Event::Note` this same tick consumes it instead,
+            // deriving its own new voice directly).
             Event::Volume(v) => {
                 track.vol = v;
-                Self::apply_track_volume(track, mixer, track_id);
+                track.vol_dirty = true;
             }
             Event::Pan(p) => {
                 track.pan = p;
-                Self::apply_track_volume(track, mixer, track_id);
+                track.vol_dirty = true;
             }
             // `bpm` already carries `clamp_tempo`'s bound when it came from
             // `decode_track`'s `TEMPO` arm, but this also runs on an
@@ -584,40 +634,51 @@ impl Sequencer {
             // too, guarding `tempo_c`'s accumulation against a malformed
             // pack.
             Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
+            // `ply_keysh`/`ply_bend`/`ply_bendr`/`ply_tune` only store the
+            // operand and raise `MPT_FLG_PITCHG` (`m4a_1.s:933`-`:943`,
+            // `:994`-`:1017`, `:1043`-`:1052`); see the `Volume`/`Pan` arms
+            // above for the deferred-propagation rationale.
             Event::KeyShift(k) => {
                 track.key_shift = k;
-                Self::apply_track_pitch(track, mixer, track_id);
+                track.pitch_dirty = true;
             }
             Event::Bend(b) => {
                 track.bend = b;
-                Self::apply_track_pitch(track, mixer, track_id);
+                track.pitch_dirty = true;
             }
             Event::BendRange(r) => {
                 track.bend_range = r;
-                Self::apply_track_pitch(track, mixer, track_id);
+                track.pitch_dirty = true;
             }
             Event::Tune(t) => {
                 track.tune = t;
-                Self::apply_track_pitch(track, mixer, track_id);
+                track.pitch_dirty = true;
             }
+            // `ply_mod`/`ply_lfos` only zero `modM` and raise the flag
+            // matching the *current* modulation target when depth/speed
+            // drops to zero (`clear_modM`, `m4a_1.s:1859`-`:1874`).
             Event::Modulation(depth) => {
                 track.lfo_depth = depth;
                 if depth == 0 {
-                    Self::reset_lfo(track, mixer, track_id);
+                    Self::reset_lfo(track);
                 }
             }
+            // `ply_modt` raises both flags together, but only when the
+            // target actually changes (`m4a_1.s:1027`-`:1041`): the old
+            // target's applied modulation must be cleared and the new one's
+            // picked up, both still deferred to the same recompute.
             Event::ModType(kind) => {
                 let target = ModulationTarget::from_command(kind);
                 if track.modulation_target != target {
                     track.modulation_target = target;
-                    Self::apply_track_volume(track, mixer, track_id);
-                    Self::apply_track_pitch(track, mixer, track_id);
+                    track.vol_dirty = true;
+                    track.pitch_dirty = true;
                 }
             }
             Event::LfoSpeed(speed) => {
                 track.lfo_speed = speed;
                 if speed == 0 {
-                    Self::reset_lfo(track, mixer, track_id);
+                    Self::reset_lfo(track);
                 }
             }
             Event::LfoDelay(delay) => track.lfo_delay = delay,
@@ -639,8 +700,19 @@ impl Sequencer {
                 if Self::note_on(song, &note_track, mixer, track_id, key, velocity, gate) {
                     track.lfo_delay_remaining = track.lfo_delay;
                     if track.lfo_delay != 0 {
-                        Self::reset_lfo(track, mixer, track_id);
+                        Self::reset_lfo(track);
                     }
+                    // A successful allocation already resolved the track's
+                    // current volume/pitch into the just-started channel
+                    // (`note_on`, via `note_track`), then masks the whole
+                    // flags byte with `0xF0` (`m4a_1.s:1784`-`:1787`),
+                    // clearing both dirty bits. A control (or the LFO-delay
+                    // reset just above) already spent deriving this new
+                    // voice must not still be pending for
+                    // [`Self::propagate_dirty_tracks`] to apply to the
+                    // track's other, older voices this same frame.
+                    track.vol_dirty = false;
+                    track.pitch_dirty = false;
                 }
             }
             Event::EndOfTie { key } => {
@@ -694,6 +766,13 @@ impl Sequencer {
     fn finish_track(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
         mixer.release_track(track_id);
         track.ended = true;
+        // `ply_fine` zeroes the whole flags byte, including `MPT_FLG_VOLCHG`
+        // and `MPT_FLG_PITCHG` (`m4a_1.s:771`-`:773`); `ended` alone already
+        // makes [`Self::propagate_dirty_tracks`] skip this track, but
+        // clearing here keeps the field's meaning ("recompute still owed")
+        // honest instead of merely unobserved.
+        track.vol_dirty = false;
+        track.pitch_dirty = false;
     }
 
     /// Executes `ply_memacc`'s mutation and conditional-jump table
@@ -797,20 +876,29 @@ impl Sequencer {
         }
     }
 
-    fn reset_lfo(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
+    /// `clear_modM`'s counterpart (`m4a_1.s:1859`-`:1874`): zeroes the
+    /// modulation state and raises the dirty flag matching whichever domain
+    /// it had been driving, deferred like every other volume/pitch input.
+    fn reset_lfo(track: &mut TrackState) {
         track.reset_lfo();
-        Self::apply_modulation_target(track, mixer, track_id);
+        Self::mark_modulation_dirty(track);
     }
 
-    fn apply_modulation_target(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
+    /// Marks whichever domain `track.modulation` currently drives as dirty
+    /// (`clear_modM`/`ply_modt`'s own flag choice: pitch for target `0`,
+    /// volume otherwise).
+    fn mark_modulation_dirty(track: &mut TrackState) {
         if track.modulation_target.is_pitch() {
-            Self::apply_track_pitch(track, mixer, track_id);
+            track.pitch_dirty = true;
         } else {
-            Self::apply_track_volume(track, mixer, track_id);
+            track.vol_dirty = true;
         }
     }
 
-    fn apply_lfo(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
+    /// The wait-tail LFO update (`m4a_1.s:1279`..`:1330`): only stores the
+    /// new `modM` and marks the driven domain dirty when it actually
+    /// changes, deferring the recompute like every other command here.
+    fn apply_lfo(track: &mut TrackState) {
         if track.lfo_speed == 0 || track.lfo_depth == 0 {
             return;
         }
@@ -829,7 +917,7 @@ impl Sequencer {
             return;
         }
         track.modulation = modulation;
-        Self::apply_modulation_target(track, mixer, track_id);
+        Self::mark_modulation_dirty(track);
     }
 
     fn apply_track_volume(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
@@ -2376,6 +2464,187 @@ mod tests {
             before,
             "an intervening volume command must not propagate this tick's fade step to a track \
              ending via Fine"
+        );
+    }
+
+    /// `ply_pan` only stores the operand and raises `MPT_FLG_VOLCHG`
+    /// (`m4a_1.s:979`-`:990`); the single post-tick propagation pass is what
+    /// pushes a track's volume/pan into its channels
+    /// (`m4a_1.s:1361`-`:1400`), and `ply_fine` runs first, unlinking every
+    /// channel and zeroing the flags (`m4a_1.s:750`-`:777`). So a `PAN`
+    /// reached in the same tick as `FINE` must never reach the voice
+    /// upstream leaves ringing out in release.
+    #[test]
+    fn a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
+        let track = vec![
+            Event::Voice(0),
+            tied_note(60),
+            Event::Wait(1),
+            Event::Pan(-64),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(slow_release_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        // Frame 1 starts the note at the default track pan.
+        seq.render_frame(&mut out);
+        let before = seq.mixer.voices()[0].base_volume();
+
+        // Frame 2 reaches `Pan`, then `Fine`, in one tick.
+        seq.render_frame(&mut out);
+        assert!(
+            seq.tracks[0].ended,
+            "sanity: Fine must end the track this frame"
+        );
+        assert_eq!(
+            seq.mixer.voices()[0].base_volume(),
+            before,
+            "a PAN reached in the same tick as FINE must not propagate to the released voice"
+        );
+    }
+
+    /// `ply_bend` only stores the operand and raises `MPT_FLG_PITCHG`
+    /// (`m4a_1.s:994`-`:1005`); see
+    /// [`a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice`]
+    /// for the shared deferred-propagation rationale, mirrored here for the
+    /// pitch domain instead of volume.
+    #[test]
+    fn a_bend_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
+        let track = vec![
+            Event::Voice(0),
+            Event::BendRange(2),
+            tied_note(60),
+            Event::Wait(1),
+            Event::Bend(63),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(slow_release_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        // Frame 1 starts the note at the default (unbent) pitch.
+        seq.render_frame(&mut out);
+        let before = seq.mixer.voices()[0].frequency();
+
+        // Frame 2 reaches `Bend`, then `Fine`, in one tick.
+        seq.render_frame(&mut out);
+        assert!(
+            seq.tracks[0].ended,
+            "sanity: Fine must end the track this frame"
+        );
+        assert_eq!(
+            seq.mixer.voices()[0].frequency(),
+            before,
+            "a BEND reached in the same tick as FINE must not propagate to the released voice"
+        );
+    }
+
+    /// Upstream's single dirty-flag propagation pass runs once per call to
+    /// `MPlayMain` -- after its own `while (tempoC >= 150)` loop has ticked
+    /// every track for this frame, not after each individual tick
+    /// (`m4a_1.s:1169`-`:1175`, `:1341`-`:1360`). At a fast enough tempo, two
+    /// ticks can land in the same [`Sequencer::advance_frame`] call; if the
+    /// second of those ticks reaches `Fine`, a control from the first tick
+    /// must still never propagate, exactly as if both had landed in a single
+    /// tick.
+    #[test]
+    fn a_control_from_an_earlier_tick_in_the_same_frame_as_fine_must_not_reach_the_released_voice()
+    {
+        let track = vec![
+            Event::Voice(0),
+            tied_note(60),
+            Event::Wait(1),
+            Event::Pan(-64),
+            Event::Wait(1),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(slow_release_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        // Frame 1, at the song's default tempo, runs exactly one tick:
+        // starts the note and immediately consumes the first `Wait(1)`.
+        seq.render_frame(&mut out);
+        let before = seq.mixer.voices()[0].base_volume();
+
+        // Frame 2 runs two ticks by doubling the tempo accumulator's input:
+        // the first reaches `Pan` then blocks on the second `Wait`; the
+        // second, still within this one `advance_frame` call, reaches
+        // `Fine`. A propagation pass placed after each tick (instead of
+        // once after this whole frame) would wrongly apply the first
+        // tick's `Pan` before the second tick's `Fine` ever runs.
+        seq.tempo_i = 2 * TEMPO_UNIT;
+        seq.render_frame(&mut out);
+        assert!(
+            seq.tracks[0].ended,
+            "sanity: Fine must end the track this frame"
+        );
+        assert_eq!(
+            seq.mixer.voices()[0].base_volume(),
+            before,
+            "a control from an earlier tick in the same frame as FINE must not propagate to the \
+             released voice"
+        );
+    }
+
+    /// A successful `ply_note` allocation resolves and applies the track's
+    /// current volume/pitch to the just-started channel itself, then masks
+    /// the whole flags byte with `0xF0` (`m4a_1.s:1784`-`:1787`), consuming
+    /// `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`. So a control reached earlier in the
+    /// same tick as a new `Note` on the same track is spent deriving that
+    /// new voice and must not also reach an older, still-sounding voice on
+    /// that track once [`Sequencer::propagate_dirty_tracks`] runs.
+    #[test]
+    fn a_note_started_the_same_tick_as_a_pending_control_consumes_it_before_older_voices_see_it() {
+        let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let track = vec![
+            Event::Voice(0),
+            tied_note(60),
+            Event::Wait(1),
+            Event::Pan(-64),
+            tied_note(72),
+            Event::Wait(4),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::with_config(
+            Song::new(voices, vec![track], 150),
+            DEFAULT_MASTER_VOLUME,
+            2,
+        );
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.voice_count(),
+            1,
+            "sanity: only the first note has started"
+        );
+        let older_before = seq
+            .mixer
+            .voices()
+            .iter()
+            .find(|voice| voice.midi_key() == 60)
+            .expect("the first note's voice must exist")
+            .base_volume();
+
+        // Frame 2 reaches `Pan`, then a new `Note`, in one tick: the note
+        // consumes the pending pan deriving its own voice, so the older
+        // voice must not see it this frame.
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.voice_count(),
+            2,
+            "sanity: the second note must also start"
+        );
+        let older_after = seq
+            .mixer
+            .voices()
+            .iter()
+            .find(|voice| voice.midi_key() == 60)
+            .expect("the first note's voice must still exist")
+            .base_volume();
+        assert_eq!(
+            older_after, older_before,
+            "a control consumed by a same-tick Note must not reach the track's other voices"
         );
     }
 
