@@ -211,14 +211,12 @@ pub fn backdrop_variant(
 /// backdrop is considered only when no layer is behind `front`.
 ///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
-/// window enable bit. When any second target is enabled anywhere in the frame,
-/// mGBA starts the pixel from its raw (non-brightened) palette entry and marks
-/// it for reblending; if the immediate neighbor does not actually blend, the
-/// end-of-scanline postprocess pass still brightens or darkens that surviving
-/// pixel wherever its window enables effects — it never rechecks whether the
-/// sprite itself is a configured target 1
+/// window enable bit. If it fails to blend against an immediate second target
+/// while any second target exists in the frame, mGBA still brightens or
+/// darkens the surviving pixel wherever its window enables effects, without
+/// rechecking the sprite's own target-1 bit
 /// (`mgba/src/gba/renderers/software-obj.c:159,177-192`,
-/// `mgba/src/gba/renderers/software-private.h:54-65`, and
+/// `mgba/src/gba/renderers/software-private.h:54-65`,
 /// `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
@@ -956,15 +954,8 @@ mod tests {
     #[test]
     fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_postprocesses_brightness(
     ) {
-        // mGBA clears the sprite's pre-selected brighten variant whenever any
-        // target2 exists globally and marks it `FLAG_REBLEND`
-        // (`mgba/src/gba/renderers/software-obj.c:176-192`). Because the
-        // immediate neighbor (BG2) is not a target2, no blend happens, so the
-        // pixel keeps `FLAG_REBLEND` through composition
-        // (`mgba/src/gba/renderers/software-private.h:54-65`). The
-        // end-of-scanline postprocess then still brightens that surviving
-        // pixel (`mgba/src/gba/renderers/video-software.c:982-1013`) — it is
-        // not simply raw black.
+        // See resolve_pixel_color's contract above
+        // (`mgba/src/gba/renderers/video-software.c:982-1013`).
         let cfg = EffectsConfig {
             effect: ColorEffect::Brighten,
             target1: obj_target(),
@@ -1015,12 +1006,8 @@ mod tests {
 
     #[test]
     fn resolve_forced_alpha_obj_not_target1_still_gets_reblend_brightness() {
-        // mGBA's semi-transparent-mode check alone enters the reblend path
-        // (`mgba/src/gba/renderers/software-obj.c:159,177-180`), and its
-        // end-of-scanline postprocess never rechecks the OBJ target1 bit
-        // (`mgba/src/gba/renderers/video-software.c:982-1013`), so the
-        // postpass still applies even when `cfg.target1` does not contain
-        // `LayerKind::Obj`.
+        // Covers the "without rechecking the sprite's own target-1 bit" half
+        // of resolve_pixel_color's contract (`software-obj.c:159,177-180`).
         let cfg = EffectsConfig {
             effect: ColorEffect::Brighten,
             target1: bg_target(0), // deliberately excludes LayerKind::Obj

@@ -2104,15 +2104,12 @@ mod tests {
 
     #[test]
     fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
-        // Issue #1305 end-to-end: a semi-transparent OBJ (forced alpha) that
-        // is a BLDCNT first target under BRIGHTEN sits over BG_a (priority 1,
-        // its immediate neighbour, NOT a target2) with BG_b (priority 2, a
-        // target2) enabled deeper in the frame. See
-        // effects::resolve_pixel_color's docs for why a global target2 still
-        // brightens this surviving pixel rather than leaving it raw. The
-        // control clears BG_b's target2 bit -> no target2 anywhere -> the
-        // pre-selected brighten variant survives unchanged -> the OBJ is
-        // brightened to white either way.
+        // End-to-end: a semi-transparent OBJ (forced alpha) sits over BG_a
+        // (priority 1, its immediate neighbour, NOT a target2) with BG_b
+        // (priority 2, a target2) enabled deeper in the frame. See
+        // effects::resolve_pixel_color's contract for why a global target2
+        // still brightens this surviving pixel. The control drops BG_b's
+        // target2 bit -> no target2 anywhere -> brightened either way.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
