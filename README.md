@@ -29,6 +29,8 @@ Deferring work does not exclude it from v1. Only a recorded exclusion with a per
 
 ## Playing
 
+Download the Linux or Windows archive from [Releases](https://github.com/LunchBox951/pokeemerald-rs/releases). Releases named **Nightly** follow `unstable` and contain the newest CI-passing development build. They may have unknown gameplay or save issues. Releases from `main` have passed the owner-approved promotion process. Extract the archive and run the included binary; no Rust toolchain is needed.
+
 The binary ships with no game data. It reads the art, maps, and music out of a
 Pokémon Emerald cartridge image you already own and keeps them in a local asset
 pack; nothing copyrighted is in this repository, its CI, or its releases.
@@ -45,22 +47,24 @@ pokeemerald-rs                                          # every time after
 
 The import prints `imported N entries (M bytes) to <path>` and exits. The pack
 lands in the per-user data directory, which is where the game then looks for
-it:
+it. Downloaded builds use their channel name (`unstable`, `stable`, or `main`)
+as `<channel>`:
 
 | OS | Pack path |
 |----|-----------|
-| Linux | `$XDG_DATA_HOME/pokeemerald-rs/pokeemerald.pack` if `$XDG_DATA_HOME` is absolute, else `~/.local/share/pokeemerald-rs/pokeemerald.pack` |
-| macOS | `~/Library/Application Support/pokeemerald-rs/pokeemerald.pack` |
-| Windows | `%APPDATA%\pokeemerald-rs\pokeemerald.pack`, else `%USERPROFILE%\AppData\Roaming\pokeemerald-rs\pokeemerald.pack` |
+| Linux | `$XDG_DATA_HOME/pokeemerald-rs/<channel>/pokeemerald.pack` if `$XDG_DATA_HOME` is absolute, else `~/.local/share/pokeemerald-rs/<channel>/pokeemerald.pack` |
+| macOS | `~/Library/Application Support/pokeemerald-rs/<channel>/pokeemerald.pack` |
+| Windows | `%APPDATA%\pokeemerald-rs\<channel>\pokeemerald.pack`, else `%USERPROFILE%\AppData\Roaming\pokeemerald-rs\<channel>\pokeemerald.pack` |
 
-Same three rules the save file uses, so both per-user files land under one
-directory. A relative `$XDG_DATA_HOME` is ignored rather than resolved, which
-is the Base Directory Specification's own rule: honouring one would let the
-directory you launched from choose which pack the game loads.
+The save (`pokeemerald.sav`) lives beside the pack. Channels keep separate progress and do not automatically copy existing saves. Source builds without `POKEEMERALD_RELEASE_CHANNEL` retain the previous directory without `<channel>`. An existing save in that directory stays untouched; back it up before explicitly copying it into a channel directory. Existing save migrations cover specific older formats and states, not guaranteed compatibility when returning to an older build. Trying a nightly with a copy leaves the original adventure intact.
+
+A relative `$XDG_DATA_HOME` is ignored. The directory you launch from cannot choose the default save or pack location.
 
 Set `POKEEMERALD_PACK=<file>` to put it somewhere else; both the import and the
 game honour it — with one exception: if it points at the ROM you are importing,
 the import is refused rather than replacing your cartridge image with a pack.
+`POKEEMERALD_RS_SAVE=<file>` similarly overrides the save path. Overrides are deliberate sharing: pointing different channels at the same files disables their separation.
+
 The ROM itself is read once and never copied, referenced, or logged.
 
 If something goes wrong, the message says what and what to do: a wrong or
