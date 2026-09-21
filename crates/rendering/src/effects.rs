@@ -211,10 +211,15 @@ pub fn backdrop_variant(
 /// backdrop is considered only when no layer is behind `front`.
 ///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
-/// window enable bit. If it has no immediate second target, mGBA suppresses its
-/// configured brightness variant when any second target exists elsewhere in
-/// the frame (`mgba/src/gba/renderers/software-obj.c:159,177-192`)
-/// `(behavioral-fidelity)`.
+/// window enable bit. When any second target is enabled anywhere in the frame,
+/// mGBA starts the pixel from its raw (non-brightened) palette entry and marks
+/// it for reblending; if the immediate neighbor does not actually blend, the
+/// end-of-scanline postprocess pass still brightens or darkens that surviving
+/// pixel wherever its window enables effects — it never rechecks whether the
+/// sprite itself is a configured target 1
+/// (`mgba/src/gba/renderers/software-obj.c:159,177-192`,
+/// `mgba/src/gba/renderers/software-private.h:54-65`, and
+/// `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
@@ -240,7 +245,17 @@ pub fn resolve_pixel_color(
             None if cfg.target2.backdrop => {
                 return alpha_blend(front_color, backdrop, cfg.eva, cfg.evb);
             }
-            _ if any_target2_enabled => return front_color,
+            // The reblend postprocess described above, applied here.
+            _ if any_target2_enabled => {
+                return match cfg.effect {
+                    ColorEffect::Brighten if effects_enabled => brighten(front_color, cfg.evy),
+                    ColorEffect::Darken if effects_enabled => darken(front_color, cfg.evy),
+                    ColorEffect::None
+                    | ColorEffect::AlphaBlend
+                    | ColorEffect::Brighten
+                    | ColorEffect::Darken => front_color,
+                };
+            }
             _ => {}
         }
     }
@@ -939,7 +954,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_emits_raw() {
+    fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_postprocesses_brightness(
+    ) {
+        // mGBA clears the sprite's pre-selected brighten variant whenever any
+        // target2 exists globally and marks it `FLAG_REBLEND`
+        // (`mgba/src/gba/renderers/software-obj.c:176-192`). Because the
+        // immediate neighbor (BG2) is not a target2, no blend happens, so the
+        // pixel keeps `FLAG_REBLEND` through composition
+        // (`mgba/src/gba/renderers/software-private.h:54-65`). The
+        // end-of-scanline postprocess then still brightens that surviving
+        // pixel (`mgba/src/gba/renderers/video-software.c:982-1013`) — it is
+        // not simply raw black.
         let cfg = EffectsConfig {
             effect: ColorEffect::Brighten,
             target1: obj_target(),
@@ -953,9 +978,90 @@ mod tests {
         let result =
             resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
         assert_eq!(
+            result, WHITE,
+            "a surviving reblend OBJ still receives the brightness postprocess"
+        );
+    }
+
+    #[test]
+    fn resolve_semi_transparent_obj_darkens_a_surviving_reblend_pixel() {
+        // Same reblend-fallback path as the brighten case above, but with
+        // Darken selected: the postprocess pass darkens the surviving pixel
+        // instead of leaving it raw
+        // (`mgba/src/gba/renderers/video-software.c:999-1005`), using mGBA's
+        // shifted-lane rounding (module docs above).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: HALF_WEIGHT,
+        };
+        let front = semi_transparent_obj(WHITE);
+        let non_target_neighbor = Some((Rgb888::BLACK, LayerKind::Bg(2)));
+        let result =
+            resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
+        assert_eq!(
+            result,
+            Rgb888 {
+                r: 128,
+                g: 127,
+                b: 127
+            },
+            "the surviving reblend OBJ receives mGBA's half-weight darken"
+        );
+    }
+
+    #[test]
+    fn resolve_forced_alpha_obj_not_target1_still_gets_reblend_brightness() {
+        // mGBA's semi-transparent-mode check alone enters the reblend path
+        // (`mgba/src/gba/renderers/software-obj.c:159,177-180`), and its
+        // end-of-scanline postprocess never rechecks the OBJ target1 bit
+        // (`mgba/src/gba/renderers/video-software.c:982-1013`), so the
+        // postpass still applies even when `cfg.target1` does not contain
+        // `LayerKind::Obj`.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: bg_target(0), // deliberately excludes LayerKind::Obj
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: FULL_WEIGHT,
+        };
+        let front = semi_transparent_obj(Rgb888::BLACK);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result =
+            resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
+        assert_eq!(
+            result, WHITE,
+            "the reblend postpass does not recheck the OBJ target1 bit"
+        );
+    }
+
+    #[test]
+    fn resolve_reblend_brightness_still_obeys_window_effect_enable() {
+        // The postprocess pass is gated on the applicable window's own
+        // blend-enable bit for that column
+        // (`mgba/src/gba/renderers/video-software.c:989-996`), which this
+        // module models with `effects_enabled`. A window with effects
+        // disabled must not brighten the surviving reblend pixel.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: FULL_WEIGHT,
+        };
+        let front = semi_transparent_obj(Rgb888::BLACK);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result =
+            resolve_pixel_color(&cfg, false, true, front, non_target_neighbor, Rgb888::BLACK);
+        assert_eq!(
             result,
             Rgb888::BLACK,
-            "a global target2 clears the brightness variant"
+            "the reblend postpass remains gated by the pixel's window effect enable"
         );
     }
 

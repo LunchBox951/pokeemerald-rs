@@ -351,10 +351,8 @@ pub fn compose_frame_with_effects(
 ) -> Framebuffer {
     // mgba's global "any target2" signal (software-obj.c:181-185): the
     // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
-    // A forced-alpha OBJ that fails to blend against its immediate neighbor
-    // keeps its brighten/darken variant only when this is false (see
-    // effects::resolve_pixel_color). It is a per-frame constant, so compute it
-    // once rather than per pixel.
+    // See effects::resolve_pixel_color's docs for what this drives. It is a
+    // per-frame constant, so compute it once rather than per pixel.
     let any_target2 = effects.color.target2.backdrop
         || bg_slots.iter().any(|slot| {
             slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
@@ -2105,14 +2103,16 @@ mod tests {
     }
 
     #[test]
-    fn semi_transparent_obj_variant_dropped_by_a_deeper_enabled_target2_bg() {
-        // Finding 3 end-to-end: a semi-transparent OBJ (forced alpha) that is a
-        // BLDCNT first target under BRIGHTEN sits over BG_a (priority 1, its
-        // immediate neighbour, NOT a target2) with BG_b (priority 2, a target2)
-        // enabled deeper in the frame. Because *some* target2 exists globally,
-        // mgba clears the brighten variant and the OBJ shows its raw (black)
-        // color. The control clears BG_b's target2 bit -> no target2 anywhere
-        // -> the OBJ is brightened to white.
+    fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
+        // Issue #1305 end-to-end: a semi-transparent OBJ (forced alpha) that
+        // is a BLDCNT first target under BRIGHTEN sits over BG_a (priority 1,
+        // its immediate neighbour, NOT a target2) with BG_b (priority 2, a
+        // target2) enabled deeper in the frame. See
+        // effects::resolve_pixel_color's docs for why a global target2 still
+        // brightens this surviving pixel rather than leaving it raw. The
+        // control clears BG_b's target2 bit -> no target2 anywhere -> the
+        // pre-selected brighten variant survives unchanged -> the OBJ is
+        // brightened to white either way.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -2166,8 +2166,8 @@ mod tests {
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
         assert_eq!(
             fb.pixel(0, 0),
-            Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
-            "a deeper enabled target2 BG clears the variant -> raw (black) OBJ"
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "a deeper enabled target2 BG clears the variant, but the surviving reblend OBJ is postprocessed to white"
         );
 
         // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
