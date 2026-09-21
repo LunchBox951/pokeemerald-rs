@@ -159,6 +159,32 @@ fn negative_sum_clips_to_minus_one() {
 }
 
 #[test]
+fn cgb_voice_output_is_unaffected_by_the_direct_sound_master_volume() {
+    // `CgbVoice::begin_frame`'s doc has the upstream rationale. A CGB voice
+    // must render identically at Emerald's production default
+    // (`DEFAULT_MASTER_VOLUME`, 12) and at full scale (15); only a Direct
+    // Sound voice may vary with it.
+    let mut default_mixer = Mixer::new(DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES);
+    assert!(default_mixer.add_cgb_voice(cgb_keyed_voice(0, 60)));
+    let mut at_default = vec![0.0; SAMPLES_PER_FRAME * 2];
+    default_mixer.mix_frame(&mut at_default);
+
+    let mut full_scale_mixer = Mixer::new(MAX_MASTER_VOLUME, DEFAULT_MAX_VOICES);
+    assert!(full_scale_mixer.add_cgb_voice(cgb_keyed_voice(0, 60)));
+    let mut at_full_scale = vec![0.0; SAMPLES_PER_FRAME * 2];
+    full_scale_mixer.mix_frame(&mut at_full_scale);
+
+    assert!(
+        at_default.iter().any(|&sample| sample != 0.0),
+        "sanity: the CGB voice under test must be audible"
+    );
+    assert_eq!(
+        at_default, at_full_scale,
+        "the Direct Sound master volume must not attenuate CGB output"
+    );
+}
+
+#[test]
 fn note_off_track_stops_only_the_newest_matching_voice() {
     const TRACK: usize = 0;
     const REPEATED_KEY: u8 = 60;
