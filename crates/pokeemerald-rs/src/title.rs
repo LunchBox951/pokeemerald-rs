@@ -428,7 +428,7 @@ fn pack_tile_bytes(
     // `ImageRef::bit_depth` is informational only, so a Bpp4 destination is
     // validated by index value here rather than by declared source depth --
     // masking an out-of-range index instead of rejecting it silently aliases
-    // it to a different, wrong colour (issue #1302).
+    // it to a different, wrong colour.
     if bit_depth == BitDepth::Bpp4 {
         if let Some(&index) = pixels.iter().find(|&&index| index > BPP4_MAX_INDEX) {
             return Err(TitleSceneError::ImagePaletteIndexOutOfRange { id, index });
