@@ -451,13 +451,12 @@ impl App {
     ///
     /// Persistence is deliberately disabled so a scenario always starts on
     /// the no-save menu and never reads or writes a player's save file --
-    /// [`SaveSlot::none`], not [`SaveSlot::disabled`]: this boots as a fresh
+    /// `SaveSlot::none`, not `SaveSlot::disabled`: this boots as a fresh
     /// `Empty` medium (nothing has ever been saved), not upstream's
     /// missing-flash-chip `NoFlash` verdict, so NEW GAME still gets the
-    /// boot-defaulted options a real never-saved boot would
-    /// ([`SaveSlot::none`]'s own doc comment). No BGM is started either --
-    /// a scenario asserts frames, not audio, and [`App::new`] alone owns
-    /// the real device.
+    /// boot-defaulted options a real never-saved boot would (`SaveSlot::none`'s
+    /// own doc comment). No BGM is started either -- a scenario asserts
+    /// frames, not audio, and [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///
