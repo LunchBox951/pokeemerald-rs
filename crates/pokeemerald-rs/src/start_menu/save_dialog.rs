@@ -145,13 +145,8 @@ pub(super) struct SaveDialog {
 }
 
 impl SaveDialog {
-    /// Creates a save dialog at `StartMenuSaveCallback`, the callback the A
-    /// press on SAVE installs -- not yet the confirmation prompt. Two more
-    /// per-frame callback handoffs (`EnterSaveStartCallback`,
-    /// `EnterSaveCallback`) run before `ShowInitialPrompt`, matching
-    /// upstream's `StartMenuSaveCallback` -> `SaveStartCallback` ->
-    /// `SaveCallback` chain, one callback per tick
-    /// (`pokeemerald/src/start_menu.c:721-728,809-822`).
+    /// Creates a save dialog at `StartMenuSaveCallback`, two callback ticks
+    /// before the confirmation prompt (`pokeemerald/src/start_menu.c:721-822`).
     pub(super) fn new() -> Self {
         Self {
             state: SaveDialogState::EnterSaveStartCallback,
@@ -165,14 +160,9 @@ impl SaveDialog {
 
     /// Advances the save dialog by one frame.
     ///
-    /// The first two calls after construction only install the next
-    /// callback -- `StartMenuSaveCallback` installing `SaveStartCallback`,
-    /// then `SaveStartCallback` running `InitSave` and installing
-    /// `SaveCallback` -- and produce no message
-    /// (`pokeemerald/src/start_menu.c:721-728,809-822`). Only the third call
-    /// reaches `SaveCallback` -> `RunSaveCallback` ->
-    /// `SaveConfirmSaveCallback` and shows the confirmation prompt
-    /// (`:884-894,978-993`).
+    /// The first two calls only advance through `StartMenuSaveCallback` and
+    /// `SaveStartCallback`; the prompt shows on the third
+    /// (`pokeemerald/src/start_menu.c:721-822,884-894,978-993`).
     ///
     /// A queued prompt-opening or store dispatches on the same tick its
     /// message finishes printing, matching `RunSaveCallback` observing
