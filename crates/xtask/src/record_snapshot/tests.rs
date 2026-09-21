@@ -1207,11 +1207,12 @@ fn a_staging_name_replaced_by_a_junction_is_not_claimed() {
 }
 
 /// A staging directory that allows only creation and search, as a `0444`
-/// umask leaves it, is still claimable: by a search-only hold where the
-/// target has one, by identity alone elsewhere.
+/// umask leaves it, is claimable through a search-only hold, and the claim
+/// that comes back writes its payload through that hold. A claim that cannot
+/// write must not report success.
 #[cfg(unix)]
 #[test]
-fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed() {
+fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_written() {
     use std::os::unix::fs::PermissionsExt as _;
 
     let dir = scratch_path("search-only-claim");
@@ -1221,18 +1222,25 @@ fn a_staging_directory_that_allows_only_creation_and_search_can_still_be_claimed
     std::fs::create_dir(&staged).unwrap();
     std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o333)).unwrap();
 
-    let unreadable = std::fs::read_dir(&staged).is_err();
+    if std::fs::read_dir(&staged).is_ok() {
+        eprintln!("note: running privileged, so a 0o333 directory is still readable");
+    }
     let claim = super::claim_staged_dir(&staged);
+    let written = claim
+        .as_ref()
+        .ok()
+        .map(|claim| claim.write_payload(&staged, "payload", b"held"));
     std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    if unreadable {
-        claim
-            .as_ref()
-            .expect("a search-only staging directory is still claimable");
-    } else {
-        eprintln!("skipped: running privileged, so a 0o333 directory is still readable");
-    }
-    drop(claim);
+    claim.expect("a search-only staging directory is still claimable");
+    written
+        .expect("a claim that never reported success")
+        .expect("a claim that succeeded could not write its payload");
+    assert_eq!(
+        std::fs::read(staged.join("payload")).unwrap(),
+        b"held",
+        "the payload written through the hold did not land in the claimed directory"
+    );
     drop(guard);
 }
 

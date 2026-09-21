@@ -88,25 +88,48 @@ fn unpinned_directory(path: &Path) -> std::io::Error {
     ))
 }
 
+/// `O_SEARCH` on Apple targets, which have no `O_PATH`: authorization to
+/// search a directory, without the read access `O_RDONLY` demands. The
+/// platform spells it `O_EXEC | O_DIRECTORY` (`libc`'s Apple `O_EXEC`,
+/// `0x4000_0000`); `rustix` 1.1 exposes no flag for it, so the value travels
+/// through `OFlags`' externally defined bits. [`claim_staged_dir`] always adds
+/// `DIRECTORY`.
+#[cfg(target_vendor = "apple")]
+const APPLE_SEARCH: rustix::fs::OFlags = rustix::fs::OFlags::from_bits_retain(0x4000_0000);
+
+#[cfg(unix)]
+fn open_held_dir(path: &Path, access: rustix::fs::OFlags) -> std::io::Result<std::fs::File> {
+    rustix::fs::open(
+        path,
+        access | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .map(std::fs::File::from)
+    .map_err(Into::into)
+}
+
 #[cfg(unix)]
 pub(super) fn claim_staged_dir(path: &Path) -> std::io::Result<StagedDirClaim> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let access = rustix::fs::OFlags::PATH;
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     let access = rustix::fs::OFlags::RDONLY;
-    let hold = match rustix::fs::open(
-        path,
-        access | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::empty(),
-    ) {
-        Ok(fd) => Some(std::fs::File::from(fd)),
-        Err(rustix::io::Errno::ACCESS) if std::fs::symlink_metadata(path)?.is_dir() => None,
-        Err(error) => return Err(error.into()),
+    let held = open_held_dir(path, access);
+    // A `0444` umask leaves the capture's own staging directory at mode `0333`:
+    // writable and searchable, but unreadable, so `O_RDONLY` is refused. Search
+    // access is all the hold is used for -- `openat` for payload creation and
+    // `fstat` for identity.
+    #[cfg(target_vendor = "apple")]
+    let held = match held {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            open_held_dir(path, APPLE_SEARCH)
+        }
+        held => held,
     };
-    let claim = StagedDirClaim { hold };
-    if claim.hold.is_some() {
-        claim.require_path(path)?;
-    }
+    // A claim without a hold can never write a payload, so a directory that
+    // cannot be held fails the claim instead of reporting a dead success.
+    let claim = StagedDirClaim { hold: Some(held?) };
+    claim.require_path(path)?;
     Ok(claim)
 }
 
