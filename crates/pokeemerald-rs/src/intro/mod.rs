@@ -24,6 +24,7 @@ use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
+use crate::new_game::NewGameOptions;
 use crate::textbox::{self, FrameAssets};
 
 pub use speech::NUM_PAGES;
@@ -156,6 +157,29 @@ pub enum IntroStatus {
     Finished,
 }
 
+/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid;
+/// upstream's `GetPlayerTextSpeedDelay` treats them exactly like
+/// [`NORMALIZED_TEXT_SPEED`] (`pokeemerald/include/constants/global.h:127-129`).
+/// Mirrors `start_menu.rs`'s own identically-valued, separately-scoped
+/// constant of the same name (issue #927's live-block repair) -- this one
+/// repairs the byte a NEW GAME carries forward instead.
+const MAX_VALID_TEXT_SPEED: u8 = 2;
+
+/// The value `GetPlayerTextSpeedDelay` repairs an out-of-range
+/// `optionsTextSpeed` to (`pokeemerald/src/menu.c:483-484`).
+const NORMALIZED_TEXT_SPEED: u8 = 1;
+
+/// [`Self::from_pack_with_options`]'s own repair, split out so it is
+/// unit-testable without a pack: `raw` unchanged when valid, otherwise
+/// [`NORMALIZED_TEXT_SPEED`].
+const fn normalized_text_speed(raw: u8) -> u8 {
+    if raw > MAX_VALID_TEXT_SPEED {
+        NORMALIZED_TEXT_SPEED
+    } else {
+        raw
+    }
+}
+
 /// Birch's introduction speech, rendered one page at a time.
 #[derive(Debug)]
 pub struct IntroScene {
@@ -165,12 +189,27 @@ pub struct IntroScene {
     printer: Printer<OwnedFontGlyphSheet>,
     revealed: Vec<RevealedGlyph>,
     finished: bool,
+    /// The boot-recovered options (issue #1125) this NEW GAME will hand to
+    /// [`crate::new_game::init_save_blocks_with_options`] once the intro
+    /// finishes -- see [`NewGameOptions`]'s own doc comment for which boot
+    /// verdicts carry their recovered `SaveBlock2` bytes here instead of
+    /// [`NewGameOptions::DEFAULT`].
+    new_game_options: NewGameOptions,
 }
 
 impl IntroScene {
-    /// Creates an introduction from decoded rendering assets at `speed`.
+    /// Creates an introduction from decoded rendering assets at `speed`,
+    /// carrying `new_game_options` onward to the eventual new-game handoff
+    /// (issue #1125) -- see [`NewGameOptions`]'s own doc comment. This
+    /// module's own tests, which have no boot-recovered save to carry
+    /// options from, pass [`NewGameOptions::DEFAULT`].
     #[must_use]
-    pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, speed: TextSpeed) -> Self {
+    pub(crate) fn new(
+        sheet: OwnedFontGlyphSheet,
+        frame: FrameAssets,
+        speed: TextSpeed,
+        new_game_options: NewGameOptions,
+    ) -> Self {
         let pages = speech::pages();
         // The upstream speech printer enables held-A/B acceleration (src/main_menu.c:1339).
         let printer = Printer::new(
@@ -187,6 +226,7 @@ impl IntroScene {
             printer,
             revealed: Vec::new(),
             finished: false,
+            new_game_options,
         }
     }
 
@@ -197,9 +237,51 @@ impl IntroScene {
     /// Returns [`IntroSceneError::Pack`] if an asset is missing or malformed,
     /// or [`IntroSceneError::Font`] if the font sheet cannot be decoded.
     pub fn from_pack(pack: &AssetPack) -> Result<Self, IntroSceneError> {
+        Self::from_pack_with_options(pack, NewGameOptions::DEFAULT)
+    }
+
+    /// [`Self::from_pack`], reading the printer's text speed from `options`
+    /// (`TextSpeed::from_raw_option`) and retaining `options`' two raw bytes
+    /// for the eventual [`crate::new_game::init_save_blocks_with_options`]
+    /// handoff (issue #1125) -- the pack's fixed message-box asset is
+    /// unaffected by `options.window_frame_type`, which upstream's own
+    /// `optionsWindowFrameType` never applies to Birch's speech box either.
+    ///
+    /// `options.text_speed` is repaired to `OPTIONS_TEXT_SPEED_MID` first if
+    /// out of range, exactly like the retained byte
+    /// [`NewGameOptions::text_speed`]'s own doc comment describes: Birch's
+    /// speech is the very first message a NEW GAME ever prints, so this is
+    /// the earliest point `GetPlayerTextSpeedDelay`'s own write-back
+    /// (`pokeemerald/src/menu.c:481-487`) could run upstream, and an
+    /// unrepaired out-of-range byte must not survive past it into the fresh
+    /// save `NewGameInitData` never re-validates afterward.
+    /// `options.window_frame_type` is not repaired here: no upstream call
+    /// site write-back-repairs it the way `optionsTextSpeed` is (see that
+    /// field's own doc comment).
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::from_pack`].
+    pub(crate) fn from_pack_with_options(
+        pack: &AssetPack,
+        options: NewGameOptions,
+    ) -> Result<Self, IntroSceneError> {
         let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
         let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, TextSpeed::Mid))
+        let speed = TextSpeed::from_raw_option(options.text_speed);
+        let options = NewGameOptions {
+            text_speed: normalized_text_speed(options.text_speed),
+            ..options
+        };
+        Ok(Self::new(sheet, frame, speed, options))
+    }
+
+    /// The boot-recovered options this intro will hand to
+    /// [`crate::new_game::init_save_blocks_with_options`] once it finishes
+    /// (issue #1125).
+    #[must_use]
+    pub(crate) const fn new_game_options(&self) -> NewGameOptions {
+        self.new_game_options
     }
 
     /// Returns the current page index in `0..NUM_PAGES`.
@@ -290,25 +372,35 @@ impl IntroScene {
     }
 }
 
-/// Loads an introduction from the default asset pack.
+/// Loads an introduction from the default asset pack, at
+/// [`NewGameOptions::DEFAULT`].
 ///
 /// # Errors
 ///
 /// Returns an error if the pack cannot be loaded or its rendering assets
 /// cannot be decoded.
 pub fn load_default() -> Result<IntroScene, IntroSceneError> {
-    load(crate::pack_source::PackSource::Runtime)
+    load(
+        crate::pack_source::PackSource::Runtime,
+        NewGameOptions::DEFAULT,
+    )
 }
 
-/// Loads an introduction from `source`.
+/// Loads an introduction from `source`, carrying `options` onward to the
+/// eventual new-game handoff (issue #1125) -- [`crate::flow::advance_scene`]'s
+/// `MainMenu` -> `Intro` arm derives `options` from the boot-recovered save
+/// before this call.
 ///
 /// # Errors
 ///
 /// Returns an error if the pack cannot be loaded or its rendering assets
 /// cannot be decoded.
-pub(crate) fn load(source: crate::pack_source::PackSource) -> Result<IntroScene, IntroSceneError> {
+pub(crate) fn load(
+    source: crate::pack_source::PackSource,
+    options: NewGameOptions,
+) -> Result<IntroScene, IntroSceneError> {
     let pack = source.load()?;
-    IntroScene::from_pack(&pack)
+    IntroScene::from_pack_with_options(&pack, options)
 }
 
 /// Returns a synthetic, finished introduction for flow tests.
@@ -337,7 +429,7 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; 16],
     };
-    let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant);
+    let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant, NewGameOptions::DEFAULT);
     let confirm_a = PrinterInput {
         a_pressed: true,
         b_pressed: false,
