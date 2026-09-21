@@ -401,7 +401,7 @@ impl Sequencer {
     /// [`Self::stage_fade_volume`] and left to [`Self::propagate_dirty_tracks`]
     /// like every other volume input. That lets this tick's own `Fine`
     /// (`m4a_1.s:750`-`:777`) or a successful `Note`
-    /// (`m4a_1.s:1784`-`:1787`) consume it exactly as they would a
+    /// (`m4a_1.s:1802`-`:1805`) consume it exactly as they would a
     /// command-driven change, instead of a bespoke post-tick step that
     /// always reached every surviving track regardless of what the tick
     /// did with it.
@@ -512,7 +512,7 @@ impl Sequencer {
     /// volume/pitch into its voices and clears the flag, matching
     /// `TrkVolPitSet`'s callers (`m4a_1.s:1361`..`:1432`) gating on
     /// `MPT_FLG_EXIST` and unconditionally clearing both dirty bits
-    /// afterward (`m4a_1.s:1435`..`:1438`). A track `ply_fine` ended this
+    /// afterward (`m4a_1.s:1438`..`:1441`). A track `ply_fine` ended this
     /// frame -- its flags already zeroed (`m4a_1.s:750`-`:777`) -- never
     /// reaches this recompute, so a command or LFO step reached in the same
     /// tick as `Fine` never leaks into the voice it just released. A
@@ -695,7 +695,7 @@ impl Sequencer {
                     // A successful allocation already resolved the track's
                     // current volume/pitch into the just-started channel
                     // (`note_on`, via `note_track`), then masks the whole
-                    // flags byte with `0xF0` (`m4a_1.s:1784`-`:1787`),
+                    // flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`),
                     // clearing both dirty bits. A control (or the LFO-delay
                     // reset just above) already spent deriving this new
                     // voice must not still be pending for
@@ -2577,7 +2577,7 @@ mod tests {
 
     /// A successful `ply_note` allocation resolves and applies the track's
     /// current volume/pitch to the just-started channel itself, then masks
-    /// the whole flags byte with `0xF0` (`m4a_1.s:1784`-`:1787`), consuming
+    /// the whole flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`), consuming
     /// `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`. So a control reached earlier in the
     /// same tick as a new `Note` on the same track is spent deriving that
     /// new voice and must not also reach an older, still-sounding voice on
@@ -2642,7 +2642,7 @@ mod tests {
     /// (`m4a.c:753`-`:757`) -- the same dirty flag any other volume input
     /// raises -- and a successful `ply_note` allocation consumes that flag
     /// deriving its own new voice, then masks it away
-    /// (`m4a_1.s:1784`-`:1787`). So a fade step landing the same tick as a
+    /// (`m4a_1.s:1802`-`:1805`). So a fade step landing the same tick as a
     /// new `Note` on the same track must not also reach an older,
     /// still-sounding voice on that track.
     #[test]
