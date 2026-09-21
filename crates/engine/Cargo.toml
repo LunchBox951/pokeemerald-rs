@@ -16,6 +16,7 @@ workspace = true
 # decode layer rather than redefining them; `assets` depends only on the std-only
 # `pack-format`, so this does not drag anything new into engine's build.
 assets = { path = "../assets" }
+pack-format = { path = "../pack-format" }
 
 [dev-dependencies]
 # The same workspace-local crate with its test-only seam enabled: unit tests

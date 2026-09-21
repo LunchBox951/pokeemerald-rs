@@ -25,48 +25,6 @@ READINESS_RECORDER = (
 ).read_text()
 
 
-GH_STUB = r"""#!/usr/bin/env python3
-# Minimal `gh api` stub: real pagination semantics over fixture pages.
-
-import json
-import os
-import subprocess
-import sys
-
-arguments = sys.argv[1:]
-assert arguments[0] == "api", arguments
-with open(os.environ["GH_STUB_FIXTURE"], encoding="utf-8") as handle:
-    pages = json.load(handle)
-jq_filter = arguments[arguments.index("--jq") + 1] if "--jq" in arguments else None
-paginate = "--paginate" in arguments
-slurp = "--slurp" in arguments
-if slurp and jq_filter is not None:
-    sys.exit("the `--slurp` option is not supported with `--jq` or `--template`")
-
-
-def apply_filter(document):
-    if jq_filter is None:
-        return json.dumps(document) + "\n"
-    result = subprocess.run(
-        ["jq", "-r", jq_filter],
-        input=json.dumps(document),
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        sys.exit(result.returncode)
-    return result.stdout
-
-
-if paginate and slurp:
-    sys.stdout.write(apply_filter(pages))
-elif paginate:
-    for page in pages:
-        sys.stdout.write(apply_filter(page))
-else:
-    sys.stdout.write(apply_filter(pages[0]))
-"""
 
 
 class ChannelLadderTest(unittest.TestCase):
@@ -235,93 +193,78 @@ class PromotionWorkflowContractTest(unittest.TestCase):
         self.assertIn("labels+=(--label needs-review --label needs-operator)", PROMOTE_WORKFLOW)
         self.assertIn("never auto-merges", PROMOTE_WORKFLOW)
 
-    def test_unstable_requires_sha_bound_readiness_twice(self):
-        self.assertEqual(
-            PROMOTE_WORKFLOW.count('status_creator "${source_sha}" release-readiness')
-            + PROMOTE_WORKFLOW.count('status_creator "${head_sha}" release-readiness'),
-            2,
-        )
-        self.assertEqual(
-            PROMOTE_WORKFLOW.count('"${creator}" != "${REPOSITORY_OWNER}"'),
-            2,
-        )
-        self.assertIn("sort_by(.created_at, .id) | last", PROMOTE_WORKFLOW)
-        self.assertNotIn('"github-actions[bot]"', PROMOTE_WORKFLOW)
-
-    def test_readiness_creator_comes_from_the_per_status_list(self):
-        # The combined-status endpoint omits each status's creator, so the
-        # owner check must read the list, newest first by time then id.
-        self.assertIn('"repos/${REPOSITORY}/commits/${sha}/statuses?per_page=100"', PROMOTE_WORKFLOW)
-        self.assertNotIn('"repos/${REPOSITORY}/commits/${sha}/status"', PROMOTE_WORKFLOW)
-        self.assertIn(".creator.login // empty", PROMOTE_WORKFLOW)
+    def test_nightly_uses_ci_without_owner_recorded_readiness(self):
+        self.assertNotIn("status_creator", PROMOTE_WORKFLOW)
+        self.assertNotIn("release-readiness", PROMOTE_WORKFLOW)
 
 
-class ReadinessStatusPaginationTest(unittest.TestCase):
-    """The readiness lookup must see every page of a commit's statuses."""
+class NightlyMergeTest(unittest.TestCase):
+    SHA = "d" * 40
 
-    OWNER = "LunchBox951"
-    SHA = "f55480978f7a7bcb4a5fc591ddccdfed4084161e"
-
-    def run_status_creator(self, pages):
-        """Run promote.yml's status_creator against a stubbed gh/statuses API."""
+    def run_merge(self, *, failed_check=None, merge_state="CLEAN", moved=False):
         function = re.search(
-            r"( *)status_creator\(\) \{.*?\n\1\}",
-            PROMOTE_WORKFLOW,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(function, "status_creator is missing from promote.yml")
+            r"( *)merge_unstable\(\) \{.*?\n\1\}", PROMOTE_WORKFLOW, re.DOTALL
+        ).group(0)
+        checks = [
+            {"name": name, "conclusion": "FAILURE" if name == failed_check else "SUCCESS"}
+            for name in ("merge-gate / unstable", "source-gate / unstable",
+                         "dependency-review", "codeql (actions)",
+                         "codeql (python)", "codeql (rust)")
+        ]
+        pr = {
+            "author": {"login": "promoter[bot]"}, "baseRefName": "unstable",
+            "baseRefOid": "b" * 40, "headRefName": "dev", "headRefOid": self.SHA,
+            "isDraft": False, "mergeStateStatus": merge_state, "statusCheckRollup": checks,
+        }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "fixture.json").write_text(json.dumps(pages))
-            (root / "gh").write_text(GH_STUB)
+            (root / "pr.json").write_text(json.dumps(pr))
+            (root / "gh").write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+root = Path(os.environ["GH_FIXTURE"])
+if args[:2] == ["pr", "list"]:
+    print(1250 if "[0].number" in args[-1] else 1)
+elif args[:2] == ["pr", "view"]:
+    print((root / "pr.json").read_text())
+elif args[:2] == ["api", "graphql"]:
+    print(0)
+elif args[:3] == ["api", "--method", "PUT"]:
+    (root / "merged.json").write_text(json.dumps(args))
+    print("true")
+else:
+    sys.exit("unexpected GitHub request: " + repr(args))
+""")
             (root / "gh").chmod(0o755)
+            live_head = "e" * 40 if moved else self.SHA
             script = (
                 "set -euo pipefail\n"
-                'REPOSITORY="LunchBox951/pokeemerald-rs"\n'
-                f"{function.group(0)}\n"
-                f'status_creator "{self.SHA}" release-readiness\n'
+                'APP_LOGIN="promoter[bot]"\nREPOSITORY="owner/repo"\n'
+                'REPOSITORY_OWNER="owner"\n'
+                f'branch_sha() {{ if [[ "$1" == dev ]]; then echo {live_head}; '
+                f'else echo {"b" * 40}; fi; }}\n'
+                + function + "\nmerge_unstable\n"
             )
-            result = subprocess.run(
-                ["bash", "-c", script],
-                capture_output=True,
-                text=True,
-                env={
-                    **os.environ,
-                    "PATH": f"{root}:{os.environ['PATH']}",
-                    "GH_STUB_FIXTURE": str(root / "fixture.json"),
-                },
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return result.stdout.strip()
+            result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                    env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                                         "GH_FIXTURE": str(root)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            merged = root / "merged.json"
+            return json.loads(merged.read_text()) if merged.exists() else None
 
-    def readiness(self, identifier, minute):
-        return {
-            "id": identifier,
-            "context": "release-readiness",
-            "state": "success",
-            "created_at": f"2026-09-16T00:{minute:02d}:00Z",
-            "creator": {"login": self.OWNER},
-        }
+    def test_green_candidate_merges_without_an_owner_status(self):
+        self.assertIn(f"sha={self.SHA}", self.run_merge())
 
-    def noise(self, count, start_id, minute):
-        return [
-            {
-                "id": start_id + index,
-                "context": f"buildkite/shard-{index}",
-                "state": "success",
-                "created_at": f"2026-09-16T01:{minute:02d}:00Z",
-                "creator": {"login": "some-app[bot]"},
-            }
-            for index in range(count)
-        ]
+    def test_each_required_ci_failure_keeps_the_previous_nightly(self):
+        for check in ("merge-gate / unstable", "source-gate / unstable", "dependency-review",
+                      "codeql (actions)", "codeql (python)", "codeql (rust)"):
+            with self.subTest(check=check):
+                self.assertIsNone(self.run_merge(failed_check=check))
 
-    def test_readiness_on_the_first_page_is_found(self):
-        pages = [[self.readiness(2, 30), *self.noise(50, 100, 10)]]
-        self.assertEqual(self.run_status_creator(pages), self.OWNER)
-
-    def test_readiness_behind_a_full_page_of_newer_statuses_is_found(self):
-        pages = [self.noise(100, 1000, 10), [self.readiness(2, 30)]]
-        self.assertEqual(self.run_status_creator(pages), self.OWNER)
+    def test_blocked_rules_or_a_moved_candidate_never_merge(self):
+        self.assertIsNone(self.run_merge(merge_state="BLOCKED"))
+        self.assertIsNone(self.run_merge(moved=True))
 
 
 class CiVersionWorkflowContractTest(unittest.TestCase):
