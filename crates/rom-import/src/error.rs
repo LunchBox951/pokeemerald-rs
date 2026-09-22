@@ -134,6 +134,34 @@ impl fmt::Display for Lz77Fault {
 }
 
 /// Anything that can stop a ROM import.
+/// What the destination held when cleanup looked, after a write failed
+/// part-way through.
+///
+/// Cleanup removes nothing and has no way to bind a removal to the file it
+/// identified, so this reports one moment's reading rather than the state
+/// of the name now: in a directory another account can write to, the entry
+/// can be replaced the instant after it is read, and on Windows the instant
+/// the importer's deny-all handle drops.
+///
+/// It rides *beside* [`ImportError::WriteFailed`]'s `source` rather than
+/// wrapped around it, so the I/O failure itself reaches the caller whole.
+#[derive(Debug)]
+pub enum PartialFile {
+    /// Nothing this call created is at the path: either the write failed
+    /// before the file existed, or the name belongs to something else now.
+    /// Either way there is nothing of the importer's to clear.
+    Gone,
+    /// A partial file this call created was at the path. Nothing removed
+    /// it, so a retry on the same name is refused (`AlreadyExists`) until
+    /// it is cleared -- but this reading is stale by the time a caller
+    /// acts on it, so a retry belongs at a fresh name rather than at a
+    /// deletion aimed by pathname.
+    MayRemain,
+    /// The path could not be read, so whether a partial file is there is
+    /// unknown. Carries why; the write failure itself is still `source`.
+    Unreadable(io::Error),
+}
+
 #[derive(Debug)]
 pub enum ImportError {
     /// The ROM file could not be opened or read.
@@ -322,7 +350,13 @@ pub enum ImportError {
     WriteFailed {
         /// The path the importer tried to write.
         path: PathBuf,
-        /// The underlying I/O failure.
+        /// What cleanup saw at `path` once the write had failed.
+        partial: PartialFile,
+        /// The underlying I/O failure, untouched. A caller tells a quota
+        /// failure from a device one by its
+        /// [`raw_os_error`](io::Error::raw_os_error), which only survives
+        /// if nothing rebuilds or wraps this -- so what cleanup observed
+        /// rides in `partial` instead.
         source: io::Error,
     },
     /// Every domain reader ran and produced nothing.
@@ -440,11 +474,25 @@ impl fmt::Display for ImportError {
                 "refusing to write the asset pack over the source ROM `{}`",
                 OneLinePath(path)
             ),
-            Self::WriteFailed { path, source } => write!(
-                f,
-                "could not write `{}`: {source}",
-                OneLinePath(path)
-            ),
+            Self::WriteFailed {
+                path,
+                partial,
+                source,
+            } => {
+                write!(f, "could not write `{}`: {source}", OneLinePath(path))?;
+                match partial {
+                    PartialFile::Gone => Ok(()),
+                    PartialFile::MayRemain => f.write_str(
+                        " (a partial file may remain there; retry with a fresh \
+                         destination name)",
+                    ),
+                    PartialFile::Unreadable(why) => write!(
+                        f,
+                        " (and the destination could not be read to tell whether a partial \
+                         file remains: {why})"
+                    ),
+                }
+            }
             Self::EmptyPack => f.write_str(
                 "the ROM's profile records no assets, so no pack was written",
             ),
@@ -490,7 +538,7 @@ fn write_ascii(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{HeaderFault, ImportError, Lz77Fault, SongFault};
+    use super::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 
     #[test]
     fn unsupported_revision_names_the_one_supported_rom() {
@@ -537,8 +585,23 @@ mod tests {
                 path: hostile.clone(),
             },
             ImportError::WriteFailed {
-                path: hostile,
+                path: hostile.clone(),
+                partial: PartialFile::Gone,
                 source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            },
+            // Both cleanup findings append to the same line, so each one
+            // owes the promise the plain rendering does.
+            ImportError::WriteFailed {
+                path: hostile.clone(),
+                partial: PartialFile::MayRemain,
+                source: std::io::Error::from(std::io::ErrorKind::StorageFull),
+            },
+            ImportError::WriteFailed {
+                path: hostile,
+                partial: PartialFile::Unreadable(std::io::Error::from(
+                    std::io::ErrorKind::PermissionDenied,
+                )),
+                source: std::io::Error::from(std::io::ErrorKind::StorageFull),
             },
         ];
         for case in cases {
