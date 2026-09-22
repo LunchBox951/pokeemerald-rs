@@ -241,20 +241,14 @@ struct SlotScan {
     /// Whether an `Ok` integrity came from the legacy five-sector fallback
     /// rather than all 14 sectors validating. See [`SaveStore::resolve`].
     legacy: bool,
-    /// The counter of a stale tail this slot can donate `PokemonStorage`
-    /// from: set only when a legacy head sits over a strictly older,
-    /// checksum-valid, *complete* set of ids 5-13 -- the box data a
-    /// five-sector write left untouched underneath itself. A full-format
-    /// slot never sets it; its own generation already carries storage.
-    storage_tail_counter: Option<u32>,
-}
-
-impl SlotScan {
-    /// This slot's physical index as a storage donor, when it has a tail to
-    /// donate (see [`SlotScan::storage_tail_counter`]).
-    fn storage_donor(&self, slot: usize) -> Option<usize> {
-        self.storage_tail_counter.map(|_| slot)
-    }
+    /// The counter of a complete, checksum-valid, counter-consistent set of
+    /// ids 5-13 held anywhere in this slot: the box data still salvageable
+    /// from it, whatever the slot's own integrity. A legacy head's stale
+    /// tail sets it; so does a slot whose save-block sectors are too damaged
+    /// for the slot to be `Ok` at all. Completeness is required because a
+    /// partial set would mix stale chunks with zeroed ones into a storage
+    /// image that never existed.
+    storage_counter: Option<u32>,
 }
 
 /// The physical slots [`SaveStore::load`] copies each half of its result
@@ -266,9 +260,10 @@ struct Resolution {
     /// slot every field is copied from.
     counter: u32,
     /// The *physical* index of the slot to source `PokemonStorage` from,
-    /// when that is not simply the adopted legacy generation's own head:
-    /// either the counterpart full-format slot of a legacy/full merge, or a
-    /// legacy slot's own verified stale tail (see [`SaveStore::resolve`]).
+    /// when that is not simply the adopted generation's own slot: the
+    /// counterpart full-format slot of a legacy/full merge, or whichever
+    /// slot still holds a complete verified storage generation when the
+    /// adopted one is legacy (see [`SaveStore::storage_donor`]).
     /// The scanned index is carried through rather than a counter, because
     /// [`physical_slot_for_counter`] recovers a slot only under the parity
     /// invariant [`SaveStore::save`] maintains -- which
@@ -302,7 +297,9 @@ struct SlotSurvey {
     tail_counter: Option<u32>,
     tail_consistent: bool,
     tail_matches_predecessor_of_identity_head: bool,
-    tail_valid_storage_ids: u32,
+    storage_valid_ids: u32,
+    storage_counter: Option<u32>,
+    storage_consistent: bool,
     legacy_counter: Option<u32>,
     legacy_consistent: bool,
 }
@@ -320,7 +317,9 @@ impl SlotSurvey {
             tail_counter: None,
             tail_consistent: true,
             tail_matches_predecessor_of_identity_head: true,
-            tail_valid_storage_ids: 0,
+            storage_valid_ids: 0,
+            storage_counter: None,
+            storage_consistent: true,
             legacy_counter: None,
             legacy_consistent: true,
         }
@@ -347,10 +346,18 @@ impl SlotSurvey {
         let counter = sector.counter();
         self.counter = counter;
         self.valid_ids |= 1 << id;
-        if in_tail {
-            if id >= SECTOR_ID_PKMN_STORAGE_START {
-                self.tail_valid_storage_ids |= 1 << id;
+        // Tracked over the whole slot, not just positions 5-13: a rotated
+        // full generation scatters its storage ids across every position,
+        // and a damaged slot's surviving storage is worth just as much.
+        if id >= SECTOR_ID_PKMN_STORAGE_START {
+            self.storage_valid_ids |= 1 << id;
+            match self.storage_counter {
+                None => self.storage_counter = Some(counter),
+                Some(c) if c == counter => {}
+                Some(_) => self.storage_consistent = false,
             }
+        }
+        if in_tail {
             match self.tail_counter {
                 None => self.tail_counter = Some(counter),
                 Some(c) if c == counter => {}
@@ -424,24 +431,21 @@ impl SlotSurvey {
         } else {
             self.counter
         };
-        // Only a complete tail is worth donating: a partial one would mix
-        // stale chunks with zeroed ones into a storage image that never
-        // existed. A complete tail also fills all nine tail positions, so
-        // it can never carry the id-0 remnant that would steal the legacy
-        // head's rotation in `copy_valid_slot_payloads`.
-        let storage_tail_counter = if legacy_intact
-            && stale_tail_is_donor_only
-            && self.tail_valid_storage_ids == PKMN_STORAGE_IDS_MASK
-        {
-            self.tail_counter
-        } else {
-            None
-        };
+        // Only a complete, single-generation set is worth donating. It also
+        // fills all nine tail positions when it is a legacy head's stale
+        // tail, so such a tail can never carry the id-0 remnant that would
+        // steal the head's rotation in `copy_valid_slot_payloads`.
+        let storage_counter =
+            if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK && self.storage_consistent {
+                self.storage_counter
+            } else {
+                None
+            };
         SlotScan {
             integrity,
             counter,
             legacy: legacy_intact,
-            storage_tail_counter,
+            storage_counter,
         }
     }
 }
@@ -678,7 +682,8 @@ impl SaveStore {
     /// imported into a pre-#1227 build and saved twice leaves a legacy head
     /// over an older signed tail in *both* slots -- the adopted generation
     /// instead donates storage from the newer of the two verified stale
-    /// tails ([`SlotScan::storage_tail_counter`]). Those bytes are the
+    /// storage generations ([`SlotScan::storage_counter`]) -- which may sit
+    /// in a slot too damaged to be `Ok` itself. Those bytes are the
     /// player's boxed Pokemon, still physically present in flash because
     /// that writer only ever touched positions 0-4; zeroing them here would
     /// make the next full-slot write destroy them.
@@ -690,25 +695,25 @@ impl SaveStore {
             (Ok, Error) => (
                 SaveStatus::Error,
                 slot0.counter,
-                slot0.storage_donor(0),
+                Self::storage_donor(slot0.legacy, slot0, slot1),
                 slot0.legacy,
             ),
             (Ok, Empty) => (
                 SaveStatus::Ok,
                 slot0.counter,
-                slot0.storage_donor(0),
+                Self::storage_donor(slot0.legacy, slot0, slot1),
                 slot0.legacy,
             ),
             (Error, Ok) => (
                 SaveStatus::Error,
                 slot1.counter,
-                slot1.storage_donor(1),
+                Self::storage_donor(slot1.legacy, slot0, slot1),
                 slot1.legacy,
             ),
             (Empty, Ok) => (
                 SaveStatus::Ok,
                 slot1.counter,
-                slot1.storage_donor(1),
+                Self::storage_donor(slot1.legacy, slot0, slot1),
                 slot1.legacy,
             ),
             (Empty, Empty) => (SaveStatus::Empty, 0, None, false),
@@ -735,14 +740,10 @@ impl SaveStore {
             } else {
                 slot0.counter
             };
-            // Two legacy generations have no full-format counterpart to
-            // merge storage from, so the best verified box data on the
-            // image is whichever slot's own stale tail is newer. Two
-            // full-format slots need no donor and never offer one.
             return (
                 SaveStatus::Ok,
                 counter,
-                Self::newer_storage_tail(slot0, slot1),
+                Self::storage_donor(slot0.legacy, slot0, slot1),
                 slot0.legacy,
             );
         }
@@ -761,14 +762,25 @@ impl SaveStore {
         }
     }
 
-    /// The physical index of whichever slot offers the newer stale storage
-    /// tail, if either does. Tail counters sit an arbitrary number of
-    /// generations apart, so they are compared as wrapping serial numbers.
-    fn newer_storage_tail(slot0: &SlotScan, slot1: &SlotScan) -> Option<usize> {
-        match (slot0.storage_tail_counter, slot1.storage_tail_counter) {
-            (Some(tail0), Some(tail1)) => {
-                Some(usize::from(older_generation_precedes(tail0, tail1)))
-            }
+    /// The storage donor for an adopted generation that carries none of its
+    /// own.
+    ///
+    /// A legacy generation never wrote ids 5-13, so without a donor
+    /// [`SaveStore::load`] hands back zeroed boxes and the next full write
+    /// makes that permanent. Any slot still holding a complete verified
+    /// storage generation beats that -- including one whose save-block
+    /// sectors are too damaged for the slot to be `Ok` at all, which is
+    /// exactly the single-bad-sector case two slots exist to survive. Of
+    /// two candidates the newer wins; their counters can sit an arbitrary
+    /// number of generations apart, so they are compared as wrapping serial
+    /// numbers. A full-format adopted generation needs no donor: its own
+    /// storage is already live.
+    fn storage_donor(adopted_is_legacy: bool, slot0: &SlotScan, slot1: &SlotScan) -> Option<usize> {
+        if !adopted_is_legacy {
+            return None;
+        }
+        match (slot0.storage_counter, slot1.storage_counter) {
+            (Some(left), Some(right)) => Some(usize::from(older_generation_precedes(left, right))),
             (Some(_), None) => Some(0),
             (None, Some(_)) => Some(1),
             (None, None) => None,
@@ -1961,6 +1973,61 @@ mod tests {
         );
     }
 
+    /// Two-slot redundancy exists so one bad sector cannot cost the player
+    /// anything. When the counterpart slot is `Error` only because a
+    /// save-block sector is damaged, all nine of its storage sectors can
+    /// still validate -- the boxes are intact and merely unreachable
+    /// through that slot's blocks. The accepted legacy generation wrote no
+    /// storage of its own, so without a donor `load` hands back zeroes,
+    /// `SaveFileStatus::Error` still offers CONTINUE, and the next save
+    /// rewrites those zeroes over the surviving sectors.
+    #[test]
+    fn a_damaged_full_slot_still_donates_its_intact_storage() {
+        let block2 = sample_block2();
+        let older_block1 = SaveBlock1 {
+            money: 111,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 222,
+            ..sample_block1()
+        };
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        // Slot 0: a full generation at counter 2 with one damaged
+        // SaveBlock1 chunk (id 1, at position 1 for a rotation-zero write).
+        write_full_slot(&mut store, 0, &older_block1, &block2, &storage_bytes, 2);
+        store.corrupt_byte(0, 1, 4);
+        // Slot 1: a pre-#1227 five-sector generation over erased flash, so
+        // it has no stale tail of its own to donate.
+        write_legacy_slot(&mut store, 1, &newer_block1, &block2, 3);
+
+        assert_eq!(
+            store.scan_slot(0).integrity,
+            SlotIntegrity::Error,
+            "the damaged SaveBlock chunk must still disqualify the slot itself"
+        );
+
+        let outcome = store.load();
+        assert_eq!(
+            outcome.status,
+            SaveStatus::Error,
+            "a damaged slot is still reported, exactly as upstream does"
+        );
+        assert_eq!(store.save_counter(), 3);
+        assert_eq!(
+            outcome.block1.money, newer_block1.money,
+            "progress still comes from the intact legacy generation"
+        );
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &storage_bytes[..],
+            "the damaged slot's nine intact storage sectors must be salvaged, not \
+             zeroed and then overwritten by the next save"
+        );
+    }
+
     /// Migrating a five-sector file must not cost the player the progress it
     /// holds. When the legacy slot carries the newer counter, its
     /// SaveBlock1/SaveBlock2 are the player's latest state and the older
@@ -2289,7 +2356,7 @@ mod tests {
         // Slot 1 only: positions 5-13 keep ids 6-13 and 0, never id 5.
         write_legacy_slot(&mut store, 1, &legacy_block1, &block2, 15);
         assert!(
-            store.scan_slot(1).storage_tail_counter.is_none(),
+            store.scan_slot(1).storage_counter.is_none(),
             "a tail missing a storage id must not be offered as a donor"
         );
     }
