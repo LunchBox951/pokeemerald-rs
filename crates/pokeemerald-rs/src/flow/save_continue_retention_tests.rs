@@ -1,5 +1,7 @@
-//! Issue #353's undecodable-slot retention: a party slot whose secure region
-//! fails its own checksum.
+//! Issue #353's undecodable-slot retention (a party slot whose secure region
+//! fails its own checksum) and issue #1371's matching retention for a
+//! genuinely empty slot (`player_party_count == 0`): neither case is this
+//! port's to rebuild or zero on the next ordinary save.
 
 use engine::save::{BoxPokemon, Pokemon};
 
@@ -105,10 +107,11 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 /// `load_default` call needs.
 ///
 /// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
-/// being `Some` and is checked before the retained-undecodable flag is
-/// ever consulted, so a real lead always overrides retention regardless of
-/// that flag's value -- retention cannot leak into a fresh identity's
-/// save.
+/// being `Some` and is checked first, so a real lead always overrides a
+/// stale retained slot regardless of the flag's value -- not because the
+/// no-lead arm discriminates on it (it no longer does, issue #1371), but
+/// because a `Some` lead never reaches that arm at all. Retention cannot
+/// leak into a fresh identity's save.
 #[test]
 fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     let temp = TempSave::new("newgame-overrides-retained-slot");
@@ -162,22 +165,37 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     assert_eq!(saved.player_party_count, 1);
 }
 
-/// A genuinely empty slot (`player_party_count == 0` at load) still takes
-/// the zero-and-default arm on the next save -- retention is scoped to the
-/// undecodable case alone (issue #353 review, requirement 3), never to an
-/// ordinary empty one.
+/// A genuinely empty slot (`player_party_count == 0` at load) is no
+/// different from a retained-undecodable one at save time (issue #1371):
+/// upstream's `SavePlayerParty`/`LoadPlayerParty` (`load_save.c:160-178`)
+/// round-trip all `PARTY_SIZE` records unconditionally and never derive a
+/// slot's contents from the count, and the continue path runs no zeroing
+/// step of its own -- `ZeroPlayerPartyMons` is `NewGameInitData` and
+/// battle-facility state reset (`new_game.c:143,156,181`;
+/// `battle_factory.c:289,430`; `battle_tent.c:274`; `recorded_battle.c:529`),
+/// never called from a save. So a residual slot 0 record sitting under a
+/// stored count of zero -- the shape a save predating this port's own
+/// writer, a hand-edited file, or a future encoder could leave behind --
+/// must survive a continue and an ordinary SAVE byte for byte, with the
+/// count staying zero, exactly like the retained-undecodable slot above.
+///
+/// (Corrects this test's own prior requirement -- issue #353 review,
+/// requirement 3 -- which had this exactly backwards: see issue #1371's
+/// adjudication.)
 #[test]
-fn a_genuinely_empty_party_still_saves_a_default_zeroed_slot() {
-    let temp = TempSave::new("empty-party-saves-zeroed-slot");
+fn a_genuinely_empty_partys_residual_slot_survives_an_ordinary_save() {
+    let temp = TempSave::new("empty-party-keeps-residual-slot");
     let mut slot = temp.slot();
 
     let mut seed = new_game_phase();
     // A recognizable non-default record sitting in slot 0 despite the
     // count being zero -- the shape a save predating this port's own
     // writer, or a hand-edited file, could leave behind. The save path
-    // must still zero it: an empty count is upstream's own "no lead" and
-    // must be honored the same way `ZeroPlayerPartyMons` honors it.
-    seed.save1.player_party[0] = dormant_party_member(0x1234_5678);
+    // must leave it alone: an empty count is upstream's own "no lead", and
+    // upstream's `SavePlayerParty` round-trips a no-lead slot's bytes the
+    // same as any other.
+    let residual = dormant_party_member(0x1234_5678);
+    seed.save1.player_party[0] = residual;
     seed.save1.player_party_count = 0;
 
     let mut resumed = OverworldPhase::from_saved(
@@ -192,9 +210,10 @@ fn a_genuinely_empty_party_still_saves_a_default_zeroed_slot() {
 
     let saved = slot.load().block1;
     assert_eq!(
-        saved.player_party[0],
-        Pokemon::default(),
-        "an empty slot's stale record is zeroed on the next save, not retained"
+        saved.player_party[0], residual,
+        "upstream's SavePlayerParty writes back whatever LoadPlayerParty read, \
+         count or no count -- a genuinely empty party's residual slot must \
+         survive exactly like a retained-undecodable one"
     );
     assert_eq!(saved.player_party_count, 0);
 }
