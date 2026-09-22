@@ -2458,7 +2458,7 @@ mod tests {
     }
 
     /// `ply_pan` only stores the operand and raises `MPT_FLG_VOLCHG`
-    /// (`m4a_1.s:979`-`:990`); the single post-tick propagation pass is what
+    /// (`m4a_1.s:981`-`:990`); the single post-tick propagation pass is what
     /// pushes a track's volume/pan into its channels
     /// (`m4a_1.s:1361`-`:1400`), and `ply_fine` runs first, unlinking every
     /// channel and zeroing the flags (`m4a_1.s:750`-`:777`). So a `PAN`
