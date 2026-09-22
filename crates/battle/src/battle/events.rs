@@ -298,6 +298,16 @@ pub enum BattleEvent {
         /// Party members remaining on the bench after the replacement.
         bench_remaining: usize,
     },
+    /// The player sent out the first non-fainted reserve after an active
+    /// faint, under the headless party-order policy (no player choice, no
+    /// party-screen UI). This crate models it only for a wild battle: a
+    /// trainer battle sends no player reserves.
+    PlayerSentOut {
+        /// The replacement's species.
+        species: SpeciesId,
+        /// Usable (non-fainted) reserves remaining after the replacement.
+        reserves_remaining: usize,
+    },
     /// The full experience award after the opposing battler fainted.
     ///
     /// Application begins before this event. If the award pauses at a

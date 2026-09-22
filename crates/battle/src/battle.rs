@@ -62,7 +62,9 @@ pub enum PlayerAction {
 pub enum BattleOutcome {
     /// The opposing side has no usable Pokémon.
     PlayerWon,
-    /// The player's active Pokémon fainted.
+    /// The player's party has no usable Pokémon: the active member and every
+    /// reserve have fainted (`Cmd_checkteamslost`,
+    /// `src/battle_script_commands.c:3534`-`:3564`).
     PlayerLost,
     /// The player successfully ran away.
     PlayerRan,
@@ -97,6 +99,11 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
+    /// The player's remaining party members for a wild battle, in party
+    /// order. Empty for a trainer battle: this slice models no trainer-side
+    /// player replacement. Each index keeps standing for the same party
+    /// position across replacements (`Battle::send_out_next_player_reserve`).
+    player_reserves: Vec<BattlePokemon>,
     enemy: BattlePokemon,
     run_attempts: u8,
     random_turn_number: u16,
@@ -183,6 +190,37 @@ impl Battle {
         first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
+        Self::new_with_player_reserves(dex, player, Vec::new(), enemy, first_battle, rng)
+    }
+
+    /// Starts an ordinary wild battle or the scripted first battle with a
+    /// player party larger than the active member.
+    ///
+    /// `player_reserves` is consumed in order under a headless party-order
+    /// policy: an active faint sends out the first entry that is not itself
+    /// fainted, with no player choice and no party-screen UI
+    /// (`Cmd_checkteamslost`, `src/battle_script_commands.c:3534`-`:3564`;
+    /// `BattleScript_HandleFaintedMon`'s send-out branch,
+    /// `data/battle_scripts_1.s:2830`-`:2896`). [`Battle::new`] is this
+    /// constructor with an empty reserve list. A reserve's moves are
+    /// validated as the player selects them, exactly like the active
+    /// member's -- see the top-level docs above.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::FaintedBattler`] for a fainted active
+    /// participant or the first move or ability validation error from the
+    /// enemy's moveset. A fainted reserve is admitted: it models a player
+    /// party that already lost a member before the battle. Errors leave the
+    /// RNG untouched.
+    pub fn new_with_player_reserves(
+        dex: Dex,
+        player: BattlePokemon,
+        player_reserves: Vec<BattlePokemon>,
+        enemy: BattlePokemon,
+        first_battle: bool,
+        rng: &mut impl BattleRng,
+    ) -> Result<Self, BattleError> {
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -209,6 +247,7 @@ impl Battle {
         Ok(Self {
             dex,
             player,
+            player_reserves,
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -269,6 +308,10 @@ impl Battle {
         Ok(Self {
             dex,
             player,
+            // This slice models no trainer-side player replacement
+            // (issue #1326's boundary); a trainer battle's player party is
+            // always this one active member.
+            player_reserves: Vec::new(),
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -304,6 +347,18 @@ impl Battle {
     #[must_use]
     pub const fn player(&self) -> &BattlePokemon {
         &self.player
+    }
+
+    /// Returns every player-side battler this battle has drawn on, [`Battle::player`]
+    /// first and then the remaining reserve slots.
+    ///
+    /// Each entry's identity ([`BattlePokemon::species`],
+    /// [`BattlePokemon::personality`], [`BattlePokemon::original_trainer_id`])
+    /// and its final HP, PP, and experience state let an owning flow
+    /// reconcile it against the caller's party; this crate does not
+    /// interpret that identity itself.
+    pub fn player_members(&self) -> impl Iterator<Item = &BattlePokemon> {
+        std::iter::once(&self.player).chain(self.player_reserves.iter())
     }
 
     /// Returns the opponent's active Pokémon.
@@ -686,10 +741,11 @@ impl Battle {
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
         // `Cmd_checkteamslost` totals a whole party's HP
-        // (`src/battle_script_commands.c:3534`-`:3577`); this crate benches
-        // nothing for the player, so any player faint exhausts that side.
+        // (`src/battle_script_commands.c:3534`-`:3577`); the player side is
+        // exhausted only once its active member and every reserve have
+        // fainted.
         if is_player {
-            return true;
+            return self.usable_player_reserves() == 0;
         }
         match &self.kind {
             BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
@@ -720,25 +776,73 @@ impl Battle {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
             return Ok(());
         }
-        // A double faint sets both of `Cmd_checkteamslost`'s outcome bits at
-        // once, and BattleScript_HandleFaintedMon then skips the reward and
-        // the switch-in entirely (`data/battle_scripts_1.s:2831`-`:2832`).
-        if self.player.is_fainted() {
+        // `Cmd_checkteamslost` ORs both sides' outcome bits from independent
+        // whole-party HP totals (`src/battle_script_commands.c:3534`-
+        // `:3577`); an exhausted player party sets the loss regardless of
+        // the enemy's own total, so this precedes any enemy-side handling.
+        if self.player.is_fainted() && self.usable_player_reserves() == 0 {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
         }
         if !self.enemy.is_fainted() {
+            if self.player.is_fainted() {
+                self.send_out_next_player_reserve(events);
+            }
             return Ok(());
         }
         // Case 1 runs `BattleScript_GiveExp` to completion, the yes/no box
         // included, before case 4 replaces or pays out
-        // (`src/battle_util.c:1912`-`:1946`).
+        // (`src/battle_util.c:1912`-`:1946`). This runs against whichever
+        // member was active during the exchange, ahead of any reserve
+        // replacement below.
         self.settle_enemy_reward(events)?;
         if self.player.pending_move_learn().is_some() {
             return Ok(());
         }
         self.settle_fainted_enemy(events)?;
+        // The enemy's own faint may have already ended the battle
+        // (`BattleOutcome::PlayerWon`); only a still-open battle reaches the
+        // player's own send-out branch (`data/battle_scripts_1.s:2830`-
+        // `:2832`).
+        if self.outcome.is_none() && self.player.is_fainted() {
+            self.send_out_next_player_reserve(events);
+        }
         Ok(())
+    }
+
+    /// The player-side analogue of [`Battle::settle_fainted_enemy`]:
+    /// `Cmd_checkteamslost`'s player-side HP total
+    /// (`src/battle_script_commands.c:3534`-`:3564`) reads zero only once
+    /// every party member has fainted, so `BattleScript_HandleFaintedMon`
+    /// reaches its send-out branch first
+    /// (`data/battle_scripts_1.s:2830`-`:2896`). This crate's headless
+    /// party-order policy always takes the first non-fainted reserve, with
+    /// no player choice and no party-screen UI.
+    ///
+    /// Returns `false`, leaving `self.player` untouched, once every reserve
+    /// is fainted too.
+    fn send_out_next_player_reserve(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+        let Some(index) = self
+            .player_reserves
+            .iter()
+            .position(|reserve| !reserve.is_fainted())
+        else {
+            return false;
+        };
+        std::mem::swap(&mut self.player, &mut self.player_reserves[index]);
+        events.push(BattleEvent::PlayerSentOut {
+            species: self.player.species(),
+            reserves_remaining: self.usable_player_reserves(),
+        });
+        true
+    }
+
+    /// The number of player-side reserves that have not fainted.
+    fn usable_player_reserves(&self) -> usize {
+        self.player_reserves
+            .iter()
+            .filter(|reserve| !reserve.is_fainted())
+            .count()
     }
 
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
@@ -990,6 +1094,7 @@ mod tests {
         let battle = Battle {
             dex,
             player,
+            player_reserves: Vec::new(),
             enemy,
             run_attempts: 0,
             random_turn_number: 0,
