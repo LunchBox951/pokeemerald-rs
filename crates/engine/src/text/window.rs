@@ -226,6 +226,11 @@ pub const STANDARD_CONTENT_WIDTH: i32 = 27;
 pub const STANDARD_CONTENT_HEIGHT: i32 = 4;
 
 const DIALOGUE_WING_WIDTH: i32 = 2;
+/// The literal row count `WindowFunc_DrawDialogueFrame` gives each of the
+/// three dialogue-box body fills (wing column, interior, right column),
+/// independent of `height`; only the bottom border uses `height`
+/// (`pokeemerald/src/menu.c:356-410`).
+const DIALOGUE_FILL_ROWS: i64 = 5;
 type TileRect = (u8, TileOrientation, Cells);
 
 /// Tilemap geometry for a dialogue box's content rectangle.
@@ -238,6 +243,9 @@ pub struct MessageBoxLayout {
     /// Content width, in tiles.
     pub content_width: i32,
     /// Content height, in tiles.
+    ///
+    /// Positions only the dialogue frame's bottom border; the body fills are
+    /// `DIALOGUE_FILL_ROWS` tall.
     pub content_height: i32,
 }
 
@@ -252,14 +260,14 @@ impl MessageBoxLayout {
 
     /// Places the standard dialogue frame and interior in tilemap write order.
     ///
-    /// The fill extends through the bottom-border row. The vertically flipped
-    /// bottom border must therefore remain later in the returned sequence so a
-    /// last-write-wins compositor matches `WindowFunc_DrawDialogueFrame` in
-    /// `pokeemerald/src/menu.c`.
+    /// The vertically flipped bottom border, positioned by `content_height`,
+    /// must remain later in the returned sequence than the
+    /// `DIALOGUE_FILL_ROWS`-tall body fills so a last-write-wins compositor
+    /// matches `WindowFunc_DrawDialogueFrame` in `pokeemerald/src/menu.c`.
     ///
     /// Never panics: cells clamp onto `i32`'s bounds and extents clamp to
-    /// [`MAX_EXTENT_TILES`]. A negative `content_width`/`content_height` omits
-    /// that axis's fill; zero keeps upstream's one extra fill cell.
+    /// [`MAX_EXTENT_TILES`]. A negative `content_width` omits the interior
+    /// fill; zero keeps upstream's one extra fill cell.
     #[must_use]
     pub fn frame_tiles(&self) -> Vec<FrameTile> {
         let rectangles = self
@@ -284,9 +292,7 @@ impl MessageBoxLayout {
         let inside = left - 1;
         let corner = right - 1;
         let top_row = top - 1;
-        // Upstream fills `height + 1` rows and `width + 1` columns, one past
-        // the content on each axis (`WindowFunc_DrawDialogueFrame`).
-        let fill_bottom = top + clamp_extent(self.content_height);
+        let fill_bottom = top + DIALOGUE_FILL_ROWS - 1;
 
         [
             (tile::WING_CAP, Normal, (wing, top_row, wing, top_row)),
@@ -906,8 +912,10 @@ mod tests {
 
     #[test]
     fn frame_tiles_with_nonpositive_content_dimensions_does_not_panic() {
-        // A nonpositive `content_width`/`content_height` must not panic;
-        // only the eight fixed-size corner/cap tiles remain.
+        // A nonpositive `content_width`/`content_height` must not panic. A
+        // `content_height` of -1 pulls the bottom border above `tilemap_top`,
+        // onto the same row as the top border, so the flipped bottom-border
+        // tiles overwrite the top border's corners there.
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -922,6 +930,21 @@ mod tests {
                 normal_tile(4, 4, dialogue_frame::LEFT_CORNER),
                 normal_tile(4, 4, dialogue_frame::RIGHT_CORNER),
                 normal_tile(5, 4, dialogue_frame::RIGHT_CAP),
+                normal_tile(3, 5, dialogue_frame::WING_COLUMN),
+                normal_tile(3, 6, dialogue_frame::WING_COLUMN),
+                normal_tile(3, 7, dialogue_frame::WING_COLUMN),
+                normal_tile(3, 8, dialogue_frame::WING_COLUMN),
+                normal_tile(3, 9, dialogue_frame::WING_COLUMN),
+                normal_tile(4, 5, dialogue_frame::INTERIOR),
+                normal_tile(4, 6, dialogue_frame::INTERIOR),
+                normal_tile(4, 7, dialogue_frame::INTERIOR),
+                normal_tile(4, 8, dialogue_frame::INTERIOR),
+                normal_tile(4, 9, dialogue_frame::INTERIOR),
+                normal_tile(5, 5, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(5, 6, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(5, 7, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(5, 8, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(5, 9, dialogue_frame::RIGHT_COLUMN),
                 vertically_flipped_tile(3, 4, dialogue_frame::WING_CAP),
                 vertically_flipped_tile(4, 4, dialogue_frame::LEFT_CORNER),
                 vertically_flipped_tile(4, 4, dialogue_frame::RIGHT_CORNER),
@@ -951,12 +974,24 @@ mod tests {
                 normal_tile(i32::MAX, -1, dialogue_frame::RIGHT_CAP),
                 normal_tile(i32::MAX - 2, 0, dialogue_frame::WING_COLUMN),
                 normal_tile(i32::MAX - 2, 1, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MAX - 2, 2, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MAX - 2, 3, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MAX - 2, 4, dialogue_frame::WING_COLUMN),
                 normal_tile(i32::MAX - 1, 0, dialogue_frame::INTERIOR),
                 normal_tile(i32::MAX, 0, dialogue_frame::INTERIOR),
                 normal_tile(i32::MAX - 1, 1, dialogue_frame::INTERIOR),
                 normal_tile(i32::MAX, 1, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX - 1, 2, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 2, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX - 1, 3, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 3, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX - 1, 4, dialogue_frame::INTERIOR),
+                normal_tile(i32::MAX, 4, dialogue_frame::INTERIOR),
                 normal_tile(i32::MAX, 0, dialogue_frame::RIGHT_COLUMN),
                 normal_tile(i32::MAX, 1, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MAX, 2, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MAX, 3, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MAX, 4, dialogue_frame::RIGHT_COLUMN),
                 vertically_flipped_tile(i32::MAX - 2, 1, dialogue_frame::WING_CAP),
                 vertically_flipped_tile(i32::MAX - 1, 1, dialogue_frame::LEFT_CORNER),
                 vertically_flipped_tile(i32::MAX, 1, dialogue_frame::RIGHT_CORNER),
@@ -1046,10 +1081,19 @@ mod tests {
                 normal_tile(i32::MIN + 1, -1, dialogue_frame::RIGHT_CAP),
                 normal_tile(i32::MIN, 0, dialogue_frame::WING_COLUMN),
                 normal_tile(i32::MIN, 1, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MIN, 2, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MIN, 3, dialogue_frame::WING_COLUMN),
+                normal_tile(i32::MIN, 4, dialogue_frame::WING_COLUMN),
                 normal_tile(i32::MIN, 0, dialogue_frame::INTERIOR),
                 normal_tile(i32::MIN, 1, dialogue_frame::INTERIOR),
+                normal_tile(i32::MIN, 2, dialogue_frame::INTERIOR),
+                normal_tile(i32::MIN, 3, dialogue_frame::INTERIOR),
+                normal_tile(i32::MIN, 4, dialogue_frame::INTERIOR),
                 normal_tile(i32::MIN + 1, 0, dialogue_frame::RIGHT_COLUMN),
                 normal_tile(i32::MIN + 1, 1, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MIN + 1, 2, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MIN + 1, 3, dialogue_frame::RIGHT_COLUMN),
+                normal_tile(i32::MIN + 1, 4, dialogue_frame::RIGHT_COLUMN),
                 vertically_flipped_tile(i32::MIN, 1, dialogue_frame::WING_CAP),
                 vertically_flipped_tile(i32::MIN, 1, dialogue_frame::LEFT_CORNER),
                 vertically_flipped_tile(i32::MIN, 1, dialogue_frame::RIGHT_CORNER),
@@ -1086,7 +1130,9 @@ mod tests {
             content_width: i32::MAX,
             content_height: i32::MAX,
         };
-        let expected_fill = (i64::from(MAX_EXTENT_TILES) + 1) * (i64::from(MAX_EXTENT_TILES) + 1);
+        // The interior fill is `width + 1` columns
+        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:363-369`).
+        let expected_fill = (i64::from(MAX_EXTENT_TILES) + 1) * DIALOGUE_FILL_ROWS;
         let interior = layout
             .frame_tiles()
             .iter()
@@ -1099,8 +1145,9 @@ mod tests {
         );
     }
 
-    // Retained behaviour, not a regression: upstream fills `width + 1` columns
-    // and `height + 1` rows, so zero on either axis still paints one cell.
+    // Retained behaviour, not a regression: upstream fills `width + 1`
+    // interior columns, so zero width still paints one extra column
+    // (`pokeemerald/src/menu.c:363-369`).
     #[test]
     fn frame_tiles_retains_upstreams_one_interior_column_at_zero_width() {
         let layout = MessageBoxLayout {
@@ -1119,12 +1166,15 @@ mod tests {
             vec![
                 normal_tile(4, 5, dialogue_frame::INTERIOR),
                 normal_tile(4, 6, dialogue_frame::INTERIOR),
+                normal_tile(4, 7, dialogue_frame::INTERIOR),
+                normal_tile(4, 8, dialogue_frame::INTERIOR),
+                normal_tile(4, 9, dialogue_frame::INTERIOR),
             ]
         );
     }
 
     #[test]
-    fn frame_tiles_retains_upstreams_one_fill_row_at_zero_height() {
+    fn frame_tiles_retains_upstreams_fixed_five_fill_rows_at_zero_height() {
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -1141,7 +1191,60 @@ mod tests {
             vec![
                 normal_tile(4, 5, dialogue_frame::INTERIOR),
                 normal_tile(5, 5, dialogue_frame::INTERIOR),
+                normal_tile(4, 6, dialogue_frame::INTERIOR),
+                normal_tile(5, 6, dialogue_frame::INTERIOR),
+                normal_tile(4, 7, dialogue_frame::INTERIOR),
+                normal_tile(5, 7, dialogue_frame::INTERIOR),
+                normal_tile(4, 8, dialogue_frame::INTERIOR),
+                normal_tile(5, 8, dialogue_frame::INTERIOR),
+                normal_tile(4, 9, dialogue_frame::INTERIOR),
+                normal_tile(5, 9, dialogue_frame::INTERIOR),
             ]
         );
+    }
+
+    #[test]
+    fn dialogue_body_fill_is_five_rows_independent_of_content_height() {
+        let layout = MessageBoxLayout {
+            tilemap_left: 5,
+            tilemap_top: 5,
+            content_width: 1,
+            content_height: 6,
+        };
+        let tiles = layout.frame_tiles();
+
+        for row in 5..=9 {
+            assert!(tiles.contains(&normal_tile(3, row, dialogue_frame::WING_COLUMN)));
+            assert!(tiles.contains(&normal_tile(4, row, dialogue_frame::INTERIOR)));
+            assert!(tiles.contains(&normal_tile(5, row, dialogue_frame::INTERIOR)));
+            assert!(tiles.contains(&normal_tile(6, row, dialogue_frame::RIGHT_COLUMN)));
+        }
+        for row in 10..=11 {
+            assert!(!tiles.iter().any(|tile| {
+                !tile.v_flip
+                    && tile.row == row
+                    && matches!(
+                        tile.tile,
+                        dialogue_frame::WING_COLUMN
+                            | dialogue_frame::INTERIOR
+                            | dialogue_frame::RIGHT_COLUMN
+                    )
+            }));
+        }
+        assert!(tiles.contains(&vertically_flipped_tile(3, 11, dialogue_frame::WING_CAP)));
+
+        let body_tile_count = tiles
+            .iter()
+            .filter(|tile| {
+                !tile.v_flip
+                    && matches!(
+                        tile.tile,
+                        dialogue_frame::WING_COLUMN
+                            | dialogue_frame::INTERIOR
+                            | dialogue_frame::RIGHT_COLUMN
+                    )
+            })
+            .count();
+        assert_eq!(body_tile_count, 20);
     }
 }

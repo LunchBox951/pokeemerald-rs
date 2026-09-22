@@ -29,7 +29,9 @@ mod priority_tests;
 #[path = "mixer_cgb_envelope.rs"]
 mod cgb_envelope_cadence_tests;
 
-/// Emerald's default global mix level, on a scale from 0 to 15.
+/// Emerald's default DirectSound mix level, on a scale from 0 to 15
+/// ([`CgbVoice::begin_frame`](crate::cgb_voice::CgbVoice::begin_frame)'s doc
+/// explains why this never reaches CGB voices).
 pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 
 /// Emerald's default DirectSound voice cap.
@@ -65,7 +67,7 @@ impl Default for Mixer {
 }
 
 impl Mixer {
-    /// A mixer with an explicit master volume and voice cap.
+    /// A mixer with an explicit DirectSound master volume and voice cap.
     #[must_use]
     pub fn new(master_volume: u8, max_voices: usize) -> Self {
         Self {
@@ -128,7 +130,7 @@ impl Mixer {
         &self.cgb_slots
     }
 
-    /// The global mix level.
+    /// The DirectSound mix level.
     #[must_use]
     pub fn master_volume(&self) -> u8 {
         self.master_volume
@@ -357,7 +359,7 @@ impl Mixer {
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
         for slot in &mut self.cgb_slots {
             if let Some(voice) = slot {
-                voice.begin_frame(self.master_volume, extra_envelope_iteration);
+                voice.begin_frame(extra_envelope_iteration);
                 voice.render(&mut self.mix_buffer, &self.sweep_ticks);
                 if !voice.is_active() {
                     *slot = None;
