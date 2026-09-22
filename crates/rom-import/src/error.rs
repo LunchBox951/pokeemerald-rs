@@ -56,7 +56,9 @@ pub enum SongFault {
     /// An operand byte sat at command position with no running status to
     /// repeat.
     NoRunningStatus,
-    /// A command byte the engine's jump table leaves unused.
+    /// A named command this importer and the normalized song schema do
+    /// not model (the jump table's unpatched `ply_fine` aliases decode
+    /// as `Fine` instead, see `song.rs`).
     UnknownCommand(u8),
     /// An `XCMD` sub-command other than the pseudo-echo pair.
     UnknownExtendedCommand(u8),

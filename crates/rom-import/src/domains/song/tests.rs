@@ -9,10 +9,10 @@
 use assets::audio::{MemAccCondition, MemAccOp};
 use assets::{Song, SongEvent, VoiceGroupId};
 
-use super::{decode_track, song, write};
+use super::{decode_track, song, write, CMD_VOICE};
 use crate::error::{ImportError, SongFault};
 use crate::fixture::RomFixture;
-use crate::reader::{GbaPtr, ROM_BASE};
+use crate::reader::{GbaPtr, RomReader, ROM_BASE};
 use crate::rom::Rom;
 use crate::roots::{AudioRoots, Roots, SongRoot, VoicegroupRoot};
 
@@ -176,7 +176,7 @@ fn track_b_events() -> Vec<SongEvent> {
 /// Byte streams that each trip one fault, at `FAULTS + 0x10 * n`.
 const FAULT_STREAMS: [&[u8]; 6] = [
     &[0x3C, 0xB1],                         // an operand with no running status
-    &[0xB6, 0xB1],                         // an unused jump-table entry
+    &[0xCC, 0xB1],                         // PORT, a named command this importer doesn't model
     &[0xCD, 0x0D, 0x00, 0xB1],             // an unmodelled XCMD
     &[0xB9, 0x12, 0, 0, 0xB1],             // MEMACC op 18
     &[0xB5, 0x00, 0, 0, 0, 0],             // REPT
@@ -326,7 +326,7 @@ fn each_fault_is_named() {
     let rom = rom();
     let expected = [
         SongFault::NoRunningStatus,
-        SongFault::UnknownCommand(0xB6),
+        SongFault::UnknownCommand(0xCC),
         SongFault::UnknownExtendedCommand(0x0D),
         SongFault::UnknownMemAccOp(18),
         SongFault::Repeat,
@@ -339,6 +339,23 @@ fn each_fault_is_named() {
             matches!(err, ImportError::Song { fault: got, .. } if got == fault),
             "stream {n}: {err}"
         );
+    }
+}
+
+#[test]
+fn reserved_jump_table_slots_terminate_like_fine() {
+    // gMPlayJumpTable's unpatched ply_fine aliases must terminate like FINE, not
+    // reject as unknown commands (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
+    for opcode in [0xB6, 0xB7, 0xB8, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB] {
+        let bytes = [opcode, CMD_VOICE, 0];
+        let events = decode_track(
+            &RomReader::new(&bytes),
+            "audio/song/reserved",
+            0,
+            GbaPtr::at(ROM_BASE),
+        )
+        .unwrap();
+        assert_eq!(events, vec![SongEvent::Fine], "opcode {opcode:#04x}");
     }
 }
 

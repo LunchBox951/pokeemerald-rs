@@ -94,7 +94,7 @@ fn forward_jump_uses_executed_running_status_and_skips_invalid_fallthrough() {
         trace(&decode(&bytes), 3, false),
         vec![note(60, 80, 1), note(72, 100, 1), SongEvent::Wait(1),]
     );
-    bytes[8] = 0xB6;
+    bytes[8] = 0xCC;
     assert_eq!(
         trace(&decode(&bytes), 3, false),
         vec![note(60, 80, 1), note(72, 100, 1), SongEvent::Wait(1),]
