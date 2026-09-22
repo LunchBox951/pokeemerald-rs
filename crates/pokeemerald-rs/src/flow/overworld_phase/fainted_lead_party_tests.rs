@@ -255,11 +255,10 @@ fn continue_scans_a_trailing_slot_beyond_the_stored_party_count() {
     );
 }
 
-/// A stored party count of zero means no lead, exactly as it does upstream
-/// (`copy_party_and_objects_from_save`'s own doc, issue #353's zero-count
-/// contract) -- even when a later slot's stored bytes would otherwise
-/// decode into a healthy battler. The six-record scan this issue adds
-/// never runs here at all (issue #1241).
+/// A stored party count of zero means no lead (issue #353's zero-count
+/// contract), even when a later slot's stored bytes would decode into a
+/// healthy battler: the six-record scan does not run at a zero count
+/// (issue #1241).
 #[test]
 fn a_zero_stored_count_still_resumes_with_no_lead() {
     let dex = Dex::new();
@@ -356,6 +355,7 @@ fn a_white_out_with_a_zero_stored_count_skips_reselecting_the_lead() {
 #[test]
 fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_the_stored_count() {
     const DAMAGE: u32 = 5;
+    const STORED_STATUS: u32 = 0x40;
 
     let dex = Dex::new();
     let mut seed = new_game_phase();
@@ -366,6 +366,8 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
         &dex,
         &new_game::provisional_starter(),
     ));
+    seed.save1.player_party[0].hp = 1;
+    seed.save1.player_party[0].status = STORED_STATUS;
     seed.save1.player_party[1] =
         crate::party::to_save_pokemon(&dex, &new_game::provisional_starter());
     let mut phase = OverworldPhase::from_saved(
@@ -378,7 +380,6 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
         phase.party_lead_slot, 1,
         "setup: the trailing slot was selected"
     );
-    let slot0_before = phase.save1.player_party[0];
 
     // Simulate the lost battle's damage on the live battler: white-out's
     // heal must not erase this for a slot outside the stored count.
@@ -402,10 +403,12 @@ fn a_white_out_merges_a_full_scan_selected_trailing_lead_without_healing_it_or_t
         "a trailing lead outside the stored count must merge its current battle-worn HP, not \
          heal to full like an occupied slot would"
     );
+    let slot0 = phase.save1.player_party[0];
     assert_eq!(
-        phase.save1.player_party[0], slot0_before,
-        "slot 0 is outside the stored count of 1 (occupied-slot healing does not touch it) and \
-         is not the selected lead, so it must round-trip untouched"
+        (slot0.status, slot0.hp),
+        (0, slot0.max_hp),
+        "slot 0 is inside the stored count of 1, so occupied-slot healing heals it even though \
+         the egg stays ineligible as the lead"
     );
     assert_eq!(
         phase.save1.player_party_count, 1,
