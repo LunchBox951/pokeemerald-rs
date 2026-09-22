@@ -114,6 +114,42 @@ fn pack_4bpp_region_rejects_a_region_not_a_multiple_of_8() {
 }
 
 #[test]
+fn pack_4bpp_region_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    let mut pixels = vec![0u8; 8 * 8];
+    pixels[0] = 16;
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let err = pack_4bpp_region("bogus", image, 0, 0, 8, 8).unwrap_err();
+    assert_eq!(
+        err,
+        OverworldSceneError::ImagePaletteIndexOutOfRange {
+            label: "bogus",
+            index: 16,
+        }
+    );
+}
+
+#[test]
+fn pack_4bpp_region_packs_palette_index_15_unchanged() {
+    let pixels = vec![15u8; 8 * 8];
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let packed = pack_4bpp_region("test", image, 0, 0, 8, 8).unwrap();
+    assert_eq!(
+        packed,
+        vec![0xFFu8; rendering::BitDepth::Bpp4.tile_byte_len()]
+    );
+}
+
+#[test]
 fn pack_4bpp_region_crops_the_requested_sub_rectangle() {
     // 16x8 (2x1 tiles): left tile all pixel value 3, right tile all value 4.
     let mut pixels = vec![3u8; 16 * 8];
