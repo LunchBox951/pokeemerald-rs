@@ -224,7 +224,7 @@ impl ImportedPack {
 /// the name is stale by the time a caller acts on it, a retry belongs at a
 /// fresh name rather than at a deletion aimed by pathname. A replacement a
 /// concurrent writer put there is left alone, within the bound
-/// `remove_after` states.
+/// `classify_partial_file` states.
 ///
 /// # Errors
 ///
@@ -428,9 +428,9 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> Result<(), WriteFailure> {
 /// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
 /// precedent).
 ///
-/// A failed write hands the still-open handle to [`remove_after`], which
-/// owns the cleanup and its bound; the caller sees the I/O failure itself
-/// beside what cleanup found at the destination.
+/// A failed write hands the still-open handle to [`classify_partial_file`],
+/// which owns the cleanup and its bound; the caller sees the I/O failure
+/// itself beside what cleanup found at the destination.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
@@ -446,7 +446,7 @@ fn write_new_with(
     let mut file = options.open(out_path).map_err(WriteFailure::gone)?;
     match write(&mut file) {
         Ok(()) => Ok(()),
-        Err(error) => Err(remove_after(out_path, file, error)),
+        Err(error) => Err(classify_partial_file(out_path, file, error)),
     }
 }
 
@@ -535,7 +535,11 @@ impl WriteFailure {
 /// means nothing was left to look for. Removal is never attempted, on any
 /// platform: `std` has no removal bound to the checked identity rather than
 /// to a name.
-fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> WriteFailure {
+fn classify_partial_file(
+    path: &Path,
+    file: std::fs::File,
+    original: std::io::Error,
+) -> WriteFailure {
     let partial = match still_the_created_file(&file, path) {
         Ok(true) => PartialFile::MayRemain,
         Ok(false) => PartialFile::Gone,
@@ -821,7 +825,7 @@ mod tests {
     fn cleanup_leaves_a_directory_that_replaced_the_partial_file_alone() {
         // The write closure swaps the partial file for a non-empty
         // directory before returning its error. A directory is not a
-        // regular file, so `remove_after`'s identity check classifies it as
+        // regular file, so `classify_partial_file`'s identity check classifies it as
         // a replacement and never attempts to remove it, mirroring
         // `StagedSave::remove_after`'s `Ok(false) => return source`
         // (`crates/engine/src/save/file/staging.rs`).
@@ -869,7 +873,7 @@ mod tests {
     #[cfg(unix)]
     fn cleanup_leaves_a_file_that_replaced_the_partial_one_alone() {
         // A peer swaps its own file in at `out` during the write; cleanup
-        // must leave it (`remove_after`'s contract).
+        // must leave it (`classify_partial_file`'s contract).
         let dir = TempDir::new("write-cleanup-file-swap");
         let out = dir.join("pokeemerald.pack");
         let renamed_aside = dir.join("pokeemerald.pack.moved");
