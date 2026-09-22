@@ -310,9 +310,16 @@ impl IntroScene {
             return IntroStatus::Finished;
         }
 
-        match self.printer.tick(input) {
+        let event = self.printer.tick(input);
+        // `cleared_window` covers both the page-clear prompt's `Cleared` and a
+        // forward `FILL_WINDOW`, which does not end its frame -- checking it
+        // ahead of `event` lets a glyph decoded in the same tick as a
+        // `FILL_WINDOW` survive the clear instead of being dropped with it.
+        if self.printer.cleared_window() {
+            self.revealed.clear();
+        }
+        match event {
             TickEvent::Glyph(g) => self.revealed.push(*g),
-            TickEvent::Cleared => self.revealed.clear(),
             TickEvent::Scrolling { dy } => {
                 for g in &mut self.revealed {
                     g.y -= dy;
@@ -320,6 +327,7 @@ impl IntroScene {
             }
             TickEvent::Finished => self.advance_page(),
             TickEvent::Idle
+            | TickEvent::Cleared
             | TickEvent::AwaitingScroll
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished

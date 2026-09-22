@@ -180,9 +180,16 @@ impl NpcDialog {
             DialogState::Printing => {}
         }
 
-        match self.printer.tick(input) {
+        let event = self.printer.tick(input);
+        // `cleared_window` covers both the page-clear prompt's `Cleared` and a
+        // forward `FILL_WINDOW`, which does not end its frame -- checking it
+        // ahead of `event` lets a glyph decoded in the same tick as a
+        // `FILL_WINDOW` survive the clear instead of being dropped with it.
+        if self.printer.cleared_window() {
+            self.revealed.clear();
+        }
+        match event {
             TickEvent::Glyph(g) => self.revealed.push(*g),
-            TickEvent::Cleared => self.revealed.clear(),
             TickEvent::Scrolling { dy } => {
                 for g in &mut self.revealed {
                     g.y -= dy;
@@ -196,6 +203,7 @@ impl NpcDialog {
                 }
             }
             TickEvent::Idle
+            | TickEvent::Cleared
             | TickEvent::AwaitingScroll
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished
@@ -231,6 +239,15 @@ impl NpcDialog {
 /// Creates an asset-independent open dialog for crate tests.
 #[cfg(test)]
 pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
+    synthetic_dialog_at_speed(tokens, TextSpeed::Mid)
+}
+
+/// [`synthetic_dialog`], but at a caller-chosen [`TextSpeed`].
+///
+/// Only used within this module's own tests, which need [`TextSpeed::Instant`]
+/// to observe same-tick behaviour (e.g. `FILL_WINDOW`'s `RENDER_REPEAT`).
+#[cfg(test)]
+fn synthetic_dialog_at_speed(tokens: Vec<Token>, speed: TextSpeed) -> NpcDialog {
     use assets::fonts::FontImageRef;
     use assets::pack::ImageRef;
     use rendering::Rgb888;
@@ -257,7 +274,7 @@ pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
         height: FRAME_HEIGHT,
         palette: vec![Rgb888::BLACK; FRAME_PALETTE_SIZE],
     };
-    NpcDialog::new(sheet, frame, tokens, TextSpeed::Mid)
+    NpcDialog::new(sheet, frame, tokens, speed)
 }
 
 #[cfg(test)]
@@ -316,6 +333,47 @@ mod tests {
         let mut dialog = synthetic_dialog(vec![Token::Char('H'), Token::Char('i'), Token::End]);
         assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
         assert_eq!(dialog.revealed.len(), 1);
+    }
+
+    #[test]
+    fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
+        // `0x0F` is `EXT_CTRL_CODE_FILL_WINDOW` (`pokeemerald/src/text.c`
+        // `:1052-1056`), zero arguments per `charmap.txt:427`.
+        let mut dialog = synthetic_dialog_at_speed(
+            vec![
+                Token::Char('A'),
+                Token::Char('B'),
+                Token::ExtCtrl {
+                    sub: 0x0F,
+                    args: vec![],
+                },
+                Token::Char('C'),
+                Token::End,
+            ],
+            TextSpeed::Instant,
+        );
+
+        assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+        assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+        assert_eq!(
+            dialog.revealed_glyph_count(),
+            2,
+            "both glyphs printed before FILL_WINDOW should be on screen"
+        );
+
+        assert_eq!(dialog.tick(NO_INPUT), DialogOutcome::Continue);
+        assert_eq!(
+            dialog.revealed_glyph_count(),
+            1,
+            "FILL_WINDOW must drop the stale glyphs, but not the one printed after it \
+             in the same tick"
+        );
+        let only_glyph = dialog.revealed[0];
+        assert_eq!(
+            (only_glyph.x, only_glyph.y),
+            textbox::STANDARD_PRINTER_ORIGIN,
+            "the surviving glyph must be placed at the reset cursor, not the stale one"
+        );
     }
 
     #[test]
