@@ -157,7 +157,8 @@ impl Battle {
     /// The enemy's full moveset is validated before RNG is consumed because
     /// its action selection can choose any slot. Player moves are validated
     /// when selected. The scripted first battle suppresses critical hits,
-    /// forbids running, and uses its dedicated opponent AI.
+    /// refuses Run from Pokémon without Run Away, and uses its dedicated
+    /// opponent AI.
     ///
     /// A depleted enemy slot needs only real move data, not an executable
     /// effect: [`Battle::act`] fails it as [`BattleEvent::FailedNoPp`] before
@@ -482,7 +483,15 @@ impl Battle {
         match action {
             PlayerAction::Run => match self.kind {
                 BattleKind::Trainer(_) => Err(BattleError::NoRunningFromTrainer),
-                BattleKind::FirstBattle => Err(BattleError::RunForbidden),
+                // Run Away is admitted before this refusal
+                // (`pokeemerald/src/battle_main.c:4038`-`:4039`, `:4078`-`:4082`).
+                BattleKind::FirstBattle => {
+                    if self.player.ability() == AbilityId::RUN_AWAY {
+                        Ok(ValidatedPlayerAction::Run)
+                    } else {
+                        Err(BattleError::RunForbidden)
+                    }
+                }
                 BattleKind::Wild => {
                     ensure_admissible(&self.player, &self.enemy)?;
                     Ok(ValidatedPlayerAction::Run)

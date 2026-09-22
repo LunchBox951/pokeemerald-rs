@@ -1,11 +1,11 @@
 //! `BATTLE_TYPE_FIRST_BATTLE` (issue #187): the Route 101 intro Zigzagoon
 //! fight's three deltas from an ordinary wild encounter -- crit suppression,
-//! running forbidden, and the wild opponent's AI-branch move choice -- pinned
-//! end to end through the public `battle` API, the same way every other
-//! `turn_engine/` module pins its family of behavior. Unit-level draw-count
-//! pins for each formula in isolation live alongside the formula itself
-//! (`crate::critical`, `crate::hit`, `crate::battle`'s own doc-comment
-//! derivations).
+//! Run rejection for non-Run-Away holders, and the wild opponent's
+//! AI-branch move choice -- pinned end to end through the public `battle`
+//! API, the same way every other `turn_engine/` module pins its family of
+//! behavior. Unit-level draw-count pins for each formula in isolation live
+//! alongside the formula itself (`crate::critical`, `crate::hit`,
+//! `crate::battle`'s own doc-comment derivations).
 //!
 //! Zigzagoon (species 288) is the actual scripted first-battle opponent
 //! (`pokeemerald/src/battle_controllers.c:67`-`:72` creates it at level 2 --
@@ -18,7 +18,7 @@
 //! Tackle and Growl. Reused here rather than inventing a stand-in species.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction};
 
 const TACKLE: MoveId = MoveId(33);
@@ -440,4 +440,47 @@ fn first_battle_suppresses_the_wild_opponents_crit_draw_too() {
         "both sides survive this exchange"
     );
     assert_eq!(rng.draws(), 11);
+}
+
+#[test]
+fn run_away_holder_escapes_the_first_battle_unconditionally() {
+    // Upstream's `IsRunningFromBattleImpossible` answers `BATTLE_RUN_SUCCESS`
+    // for a Run Away holder (`pokeemerald/src/battle_main.c:4038`-`:4039`)
+    // before it ever reaches the `BATTLE_TYPE_FIRST_BATTLE` refusal
+    // (`:4078`-`:4082`), so the selection is admitted and
+    // `TryRunFromBattle`'s Run Away branch escapes with no draw and no
+    // `runTries` increment (`pokeemerald/src/battle_util.c:426`-`:446`).
+    let dex = Dex::new();
+    // Rattata's primary ability is Run Away; an even personality selects it.
+    let player = max_iv_mon(&dex, 19, 5, vec![TACKLE]);
+    assert_eq!(player.ability(), AbilityId::RUN_AWAY);
+    let enemy = max_iv_mon(&dex, 288, 2, vec![TACKLE, GROWL]);
+
+    let mut rng = SequenceRng::new([0; 7]);
+    let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1); // Battle::new's battle-start draw only.
+
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(
+        battle.run_tries(),
+        0,
+        "Run Away never advances run_tries (`battle_util.c:427`-`:447`)"
+    );
+    assert_eq!(
+        rng.draws(),
+        7,
+        "the turn draws the turn number and the enemy's first-battle AI \
+         setup, but Run Away adds no escape-specific draw"
+    );
 }
