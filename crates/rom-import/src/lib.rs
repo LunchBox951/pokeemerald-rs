@@ -497,41 +497,92 @@ fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> s
         Ok(true) => {}
         Ok(false) => return original,
         Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return original,
-        Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
+        Err(unreadable) => return cleanup_failed(path, original, &unreadable),
     }
     drop(file);
-    partial_file_retained(path, &original)
+    partial_file_retained(path, original)
 }
 
-/// Notes, in `original`'s own message, that the partial file confirmed at
-/// `path` was left in place rather than removed. Keeps `original`'s
-/// `ErrorKind` and renders `path` through [`OneLinePath`], as untrusted as
-/// anywhere else this crate renders a caller path.
-fn partial_file_retained(path: &Path, original: &std::io::Error) -> std::io::Error {
+/// A write failure carrying what cleanup observed about `path`, with the
+/// failure itself kept whole rather than rendered into the note.
+///
+/// A caller tells a quota failure from a device one by its
+/// [`raw_os_error`](std::io::Error::raw_os_error), which a message built
+/// from `to_string` no longer has. Cleanup has something to add to the
+/// diagnosis, not a different failure to report, so the note goes
+/// *alongside* `source` and `source` stays reachable through
+/// [`ImportError::WriteFailed`]'s chain.
+#[derive(Debug)]
+struct NotedWriteError {
+    /// What cleanup saw, already rendered one-line and escaped.
+    note: String,
+    /// The write failure, unchanged.
+    source: std::io::Error,
+}
+
+impl std::fmt::Display for NotedWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.source, self.note)
+    }
+}
+
+impl std::error::Error for NotedWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// `original` with `note` appended to its message, keeping its `ErrorKind`
+/// and keeping `original` itself as the returned error's source.
+fn noted_write_error(note: String, original: std::io::Error) -> std::io::Error {
+    let kind = original.kind();
     std::io::Error::new(
-        original.kind(),
+        kind,
+        NotedWriteError {
+            note,
+            source: original,
+        },
+    )
+}
+
+/// Notes, alongside `original`, that a partial file may still be sitting at
+/// `path`. Renders `path` through [`OneLinePath`], as untrusted as anywhere
+/// else this crate renders a caller path.
+///
+/// The identity check behind this note is a reading of one moment: in a
+/// destination directory another account can write to, the entry can be
+/// replaced the instant after it is read, and on Windows the moment the
+/// deny-all handle drops. So the note reports what was left without
+/// claiming the pathname still means it, and sends a retry at a fresh name
+/// rather than at a deletion the caller cannot bind to the file that
+/// actually failed -- the same pathname race [`remove_after`] refuses to
+/// run itself.
+fn partial_file_retained(path: &Path, original: std::io::Error) -> std::io::Error {
+    noted_write_error(
         format!(
-            "{original} (the partial file left at `{}` was not removed; remove it before retrying)",
+            "a partial file may remain at `{}`; retry with a fresh destination name",
             OneLinePath(path)
         ),
+        original,
     )
 }
 
 /// Folds a cleanup-side error into `original`, keeping `original`'s
-/// `ErrorKind`, when [`still_the_created_file`] cannot tell whether `path`
-/// still names the partial file. Renders `path` through [`OneLinePath`],
-/// as untrusted as anywhere else this crate renders a caller path.
+/// `ErrorKind` and its place in the source chain, when
+/// [`still_the_created_file`] cannot tell whether `path` still names the
+/// partial file. Renders `path` through [`OneLinePath`], as untrusted as
+/// anywhere else this crate renders a caller path.
 fn cleanup_failed(
     path: &Path,
-    original: &std::io::Error,
+    original: std::io::Error,
     cleanup_err: &std::io::Error,
 ) -> std::io::Error {
-    std::io::Error::new(
-        original.kind(),
+    noted_write_error(
         format!(
-            "{original} (additionally, could not tell whether the partial file `{}` survived: {cleanup_err})",
+            "additionally, could not tell whether the partial file `{}` survived: {cleanup_err}",
             OneLinePath(path)
         ),
+        original,
     )
 }
 
@@ -1045,7 +1096,7 @@ mod tests {
 
         let err = partial_file_retained(
             out,
-            &std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
         );
 
         assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
@@ -1069,7 +1120,7 @@ mod tests {
 
         let err = cleanup_failed(
             out,
-            &std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+            std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
             &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
         );
 
@@ -1082,6 +1133,43 @@ mod tests {
             text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
             "escaped name missing from {text:?}"
         );
+    }
+
+    #[test]
+    fn a_cleanup_note_keeps_the_write_error_in_its_source_chain() {
+        // `ImportError::WriteFailed`'s `source` is the I/O failure itself,
+        // and a caller reads `raw_os_error` off it to tell a quota failure
+        // from a device one. Rebuilding the error from its rendered text
+        // would leave a string where that number was, so both cleanup-side
+        // notes have to wrap the failure rather than replace it.
+        const OS_ERROR: i32 = 28;
+        let out = Path::new("packs/pokeemerald.pack");
+        let noted = [
+            partial_file_retained(out, std::io::Error::from_raw_os_error(OS_ERROR)),
+            cleanup_failed(
+                out,
+                std::io::Error::from_raw_os_error(OS_ERROR),
+                &std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            ),
+        ];
+
+        for err in noted {
+            assert_eq!(
+                err.kind(),
+                std::io::Error::from_raw_os_error(OS_ERROR).kind(),
+                "the write failure's own kind must survive: {err}"
+            );
+            let source = std::error::Error::source(&err)
+                .expect("the write failure stays in the source chain");
+            let source: &std::io::Error = source
+                .downcast_ref()
+                .expect("and stays an `io::Error` there");
+            assert_eq!(
+                source.raw_os_error(),
+                Some(OS_ERROR),
+                "the OS error number must survive the cleanup note: {err}"
+            );
+        }
     }
 
     #[test]
