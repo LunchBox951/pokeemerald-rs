@@ -282,6 +282,170 @@ struct Resolution {
     legacy: bool,
 }
 
+/// The per-position observations [`SaveStore::scan_slot`] accumulates over a
+/// slot's 14 physical sectors, and the verdict it draws from them.
+///
+/// Split from `scan_slot` so the reading of each sector and the judgement
+/// made from the whole slot stay separately legible.
+// Each flag is one independent "has this property held so far" tally over a
+// single loop, not a configuration a caller passes: grouping them into
+// sub-structs would only rename the tallies.
+#[allow(clippy::struct_excessive_bools)]
+struct SlotSurvey {
+    signature_valid: bool,
+    valid_ids: u32,
+    counter: u32,
+    head_valid_ids: u32,
+    head_is_identity: bool,
+    tail_signature_seen: bool,
+    tail_all_recognized_valid: bool,
+    tail_counter: Option<u32>,
+    tail_consistent: bool,
+    tail_matches_predecessor_of_identity_head: bool,
+    tail_valid_storage_ids: u32,
+    legacy_counter: Option<u32>,
+    legacy_consistent: bool,
+}
+
+impl SlotSurvey {
+    fn new() -> Self {
+        Self {
+            signature_valid: false,
+            valid_ids: 0,
+            counter: 0,
+            head_valid_ids: 0,
+            head_is_identity: true,
+            tail_signature_seen: false,
+            tail_all_recognized_valid: true,
+            tail_counter: None,
+            tail_consistent: true,
+            tail_matches_predecessor_of_identity_head: true,
+            tail_valid_storage_ids: 0,
+            legacy_counter: None,
+            legacy_consistent: true,
+        }
+    }
+
+    /// Folds the sector at physical position `i` into the survey.
+    fn observe(&mut self, i: usize, sector: &Sector) {
+        if sector.signature() != SECTOR_SIGNATURE {
+            return;
+        }
+        let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
+        if in_tail {
+            self.tail_signature_seen = true;
+        }
+        self.signature_valid = true;
+        let id = sector.id();
+        let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
+        if in_tail && !is_valid_sector {
+            self.tail_all_recognized_valid = false;
+        }
+        if !is_valid_sector {
+            return;
+        }
+        let counter = sector.counter();
+        self.counter = counter;
+        self.valid_ids |= 1 << id;
+        if in_tail {
+            if id >= SECTOR_ID_PKMN_STORAGE_START {
+                self.tail_valid_storage_ids |= 1 << id;
+            }
+            match self.tail_counter {
+                None => self.tail_counter = Some(counter),
+                Some(c) if c == counter => {}
+                Some(_) => self.tail_consistent = false,
+            }
+            // A torn rotation-0 write also leaves its predecessor
+            // generation (rotation 12) at this exact id/position pairing.
+            if usize::from(id) != (i + 2) % NUM_SECTORS_PER_SLOT {
+                self.tail_matches_predecessor_of_identity_head = false;
+            }
+        } else if id < SECTOR_ID_PKMN_STORAGE_START {
+            self.head_valid_ids |= 1 << id;
+            if usize::from(id) != i {
+                self.head_is_identity = false;
+            }
+            match self.legacy_counter {
+                None => self.legacy_counter = Some(counter),
+                Some(c) if c == counter => {}
+                Some(_) => self.legacy_consistent = false,
+            }
+        }
+    }
+
+    fn verdict(&self) -> SlotScan {
+        // Same-slot generations sit exactly 2 counters and 2 rotations
+        // apart, so this is indistinguishable from a real write torn after 5
+        // sectors; upstream reports that shape Error, never Ok.
+        let ambiguous_with_a_torn_full_write = self.head_is_identity
+            && self.tail_matches_predecessor_of_identity_head
+            && self
+                .legacy_counter
+                .zip(self.tail_counter)
+                .is_some_and(|(legacy, tail)| legacy == tail.wrapping_add(2));
+
+        let stale_tail_is_donor_only = self.tail_signature_seen
+            && self.tail_all_recognized_valid
+            && self.tail_consistent
+            && self
+                .legacy_counter
+                .zip(self.tail_counter)
+                .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
+            && !ambiguous_with_a_torn_full_write;
+
+        // Ids 0-4 land in positions 0-4 together only at rotation zero,
+        // where id `i` sits at position `i`; every other rotation pushes id
+        // 4 (or more) past position 4. So a non-identity head cannot be a
+        // 14-sector write torn after five sectors -- it can only have come
+        // from the five-sector writer -- and what sits behind it is stale
+        // remnant whatever its state. Damage there costs the tail its
+        // donor eligibility, never the head its progress.
+        let head_cannot_be_a_torn_full_write = !self.head_is_identity;
+        let all_valid_mask = (1u32 << u32::from(NUM_SECTORS_PER_SLOT_U16)) - 1;
+        let legacy_intact = self.legacy_consistent
+            && self.head_valid_ids == LEGACY_ERA_IDS_MASK
+            && (!self.tail_signature_seen
+                || stale_tail_is_donor_only
+                || head_cannot_be_a_torn_full_write);
+        let integrity = if !self.signature_valid {
+            SlotIntegrity::Empty
+        } else if self.valid_ids == all_valid_mask || legacy_intact {
+            SlotIntegrity::Ok
+        } else {
+            SlotIntegrity::Error
+        };
+        // A stale tail is scanned after the legacy head, so the trailing
+        // `counter` above would otherwise report the tail's older counter
+        // instead of the legacy generation's own.
+        let counter = if legacy_intact {
+            self.legacy_counter
+                .expect("legacy_intact requires a legacy head counter")
+        } else {
+            self.counter
+        };
+        // Only a complete tail is worth donating: a partial one would mix
+        // stale chunks with zeroed ones into a storage image that never
+        // existed. A complete tail also fills all nine tail positions, so
+        // it can never carry the id-0 remnant that would steal the legacy
+        // head's rotation in `copy_valid_slot_payloads`.
+        let storage_tail_counter = if legacy_intact
+            && stale_tail_is_donor_only
+            && self.tail_valid_storage_ids == PKMN_STORAGE_IDS_MASK
+        {
+            self.tail_counter
+        } else {
+            None
+        };
+        SlotScan {
+            integrity,
+            counter,
+            legacy: legacy_intact,
+            storage_tail_counter,
+        }
+    }
+}
+
 struct CopiedSlotPayloads {
     block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
     block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
@@ -482,128 +646,19 @@ impl SaveStore {
     /// under one counter (this project's pre-#1227 five-sector format).
     ///
     /// A signed sector in positions 5-13 disqualifies that legacy reading
-    /// unless it is a stale, strictly older, fully valid tail left behind by
-    /// a prior full generation -- and even then, only if it is not also the
-    /// one shape a genuinely torn 14-sector write can leave. Such a tail is
-    /// a storage-donor candidate only ([`SaveStore::resolve`]), never
-    /// progress ([`SaveStore::copy_valid_slot_payloads`] skips it).
+    /// only when the head could itself be the start of a torn 14-sector
+    /// write, which takes an identity head (rotation zero); a head at any
+    /// other rotation is accepted over whatever remnant sits behind it. An
+    /// identity head needs a stale, strictly older, fully valid tail that
+    /// is not the one shape a genuinely torn write leaves. Either way the
+    /// tail is a storage-donor candidate only ([`SaveStore::resolve`]),
+    /// never progress ([`SaveStore::copy_valid_slot_payloads`] skips it).
     fn scan_slot(&self, slot: usize) -> SlotScan {
-        let mut signature_valid = false;
-        let mut valid_ids: u32 = 0;
-        let mut counter = 0u32;
-        let mut head_valid_ids: u32 = 0;
-        let mut head_is_identity = true;
-        let mut tail_signature_seen = false;
-        let mut tail_all_recognized_valid = true;
-        let mut tail_counter: Option<u32> = None;
-        let mut tail_consistent = true;
-        let mut tail_matches_predecessor_of_identity_head = true;
-        let mut tail_valid_storage_ids: u32 = 0;
-        let mut legacy_counter: Option<u32> = None;
-        let mut legacy_consistent = true;
-
+        let mut survey = SlotSurvey::new();
         for i in 0..NUM_SECTORS_PER_SLOT {
-            let sector = self.read_physical(slot, i);
-            if sector.signature() != SECTOR_SIGNATURE {
-                continue;
-            }
-            let in_tail = i >= usize::from(SECTOR_ID_PKMN_STORAGE_START);
-            if in_tail {
-                tail_signature_seen = true;
-            }
-            signature_valid = true;
-            let id = sector.id();
-            let is_valid_sector = sector_payload_len(id).is_some_and(|len| sector.is_valid(len));
-            if in_tail && !is_valid_sector {
-                tail_all_recognized_valid = false;
-            }
-            if !is_valid_sector {
-                continue;
-            }
-            counter = sector.counter();
-            valid_ids |= 1 << id;
-            if in_tail {
-                if id >= SECTOR_ID_PKMN_STORAGE_START {
-                    tail_valid_storage_ids |= 1 << id;
-                }
-                match tail_counter {
-                    None => tail_counter = Some(counter),
-                    Some(c) if c == counter => {}
-                    Some(_) => tail_consistent = false,
-                }
-                // A torn rotation-0 write also leaves its predecessor
-                // generation (rotation 12) at this exact id/position pairing.
-                if usize::from(id) != (i + 2) % NUM_SECTORS_PER_SLOT {
-                    tail_matches_predecessor_of_identity_head = false;
-                }
-            } else if id < SECTOR_ID_PKMN_STORAGE_START {
-                head_valid_ids |= 1 << id;
-                if usize::from(id) != i {
-                    head_is_identity = false;
-                }
-                match legacy_counter {
-                    None => legacy_counter = Some(counter),
-                    Some(c) if c == counter => {}
-                    Some(_) => legacy_consistent = false,
-                }
-            }
+            survey.observe(i, &self.read_physical(slot, i));
         }
-
-        // Same-slot generations sit exactly 2 counters and 2 rotations
-        // apart, so this is indistinguishable from a real write torn after 5
-        // sectors; upstream reports that shape Error, never Ok.
-        let ambiguous_with_a_torn_full_write = head_is_identity
-            && tail_matches_predecessor_of_identity_head
-            && legacy_counter
-                .zip(tail_counter)
-                .is_some_and(|(legacy, tail)| legacy == tail.wrapping_add(2));
-
-        let stale_tail_is_donor_only = tail_signature_seen
-            && tail_all_recognized_valid
-            && tail_consistent
-            && legacy_counter
-                .zip(tail_counter)
-                .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
-            && !ambiguous_with_a_torn_full_write;
-
-        let all_valid_mask = (1u32 << u32::from(NUM_SECTORS_PER_SLOT_U16)) - 1;
-        let legacy_intact = legacy_consistent
-            && head_valid_ids == LEGACY_ERA_IDS_MASK
-            && (!tail_signature_seen || stale_tail_is_donor_only);
-        let integrity = if !signature_valid {
-            SlotIntegrity::Empty
-        } else if valid_ids == all_valid_mask || legacy_intact {
-            SlotIntegrity::Ok
-        } else {
-            SlotIntegrity::Error
-        };
-        // A stale tail is scanned after the legacy head, so the trailing
-        // `counter` above would otherwise report the tail's older counter
-        // instead of the legacy generation's own.
-        let counter = if legacy_intact {
-            legacy_counter.expect("legacy_intact requires a legacy head counter")
-        } else {
-            counter
-        };
-        // Only a complete tail is worth donating: a partial one would mix
-        // stale chunks with zeroed ones into a storage image that never
-        // existed. A complete tail also fills all nine tail positions, so
-        // it can never carry the id-0 remnant that would steal the legacy
-        // head's rotation in `copy_valid_slot_payloads`.
-        let storage_tail_counter = if legacy_intact
-            && stale_tail_is_donor_only
-            && tail_valid_storage_ids == PKMN_STORAGE_IDS_MASK
-        {
-            tail_counter
-        } else {
-            None
-        };
-        SlotScan {
-            integrity,
-            counter,
-            legacy: legacy_intact,
-            storage_tail_counter,
-        }
+        survey.verdict()
     }
 
     /// When both slots are intact and exactly one is the legacy five-sector
@@ -1818,13 +1873,27 @@ mod tests {
     }
 
     /// Writes a pre-#1227 five-sector generation (ids 0-4 only, positions
-    /// 5-13 left erased) carrying the given blocks.
+    /// 5-13 left untouched) carrying the given blocks, at rotation zero.
     fn write_legacy_slot(
         store: &mut SaveStore,
         slot: usize,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
         counter: u32,
+    ) {
+        write_legacy_slot_rotated(store, slot, block1, block2, counter, 0);
+    }
+
+    /// As [`write_legacy_slot`], at the given rotation: the pre-#1227 writer
+    /// placed id `i` at physical position `(i + rotation) % 5`, so every
+    /// rotation but zero leaves a head no 14-sector write can imitate.
+    fn write_legacy_slot_rotated(
+        store: &mut SaveStore,
+        slot: usize,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        counter: u32,
+        rotation: u16,
     ) {
         let block2_bytes = block2.to_bytes();
         let block1_bytes = block1.to_bytes(block2.encryption_key);
@@ -1836,8 +1905,60 @@ mod tests {
                 let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
                 &block1_bytes[offset..offset + len]
             };
-            store.write_physical(slot, usize::from(id), &Sector::write(id, payload, counter));
+            let physical = usize::from((id + rotation) % SECTOR_ID_PKMN_STORAGE_START);
+            store.write_physical(slot, physical, &Sector::write(id, payload, counter));
         }
+    }
+
+    /// A rotation-zero cartridge image whose older slot has one damaged
+    /// sector in its tail. The pre-#1227 build accepted such an image (its
+    /// scan only read positions 0-4), recovered rotation 0 from the newest
+    /// slot's id 0, and wrote its next five-sector generation at rotation 1
+    /// over the older slot -- leaving a legacy head that no 14-sector write
+    /// can produce, since a torn full write only ever fills positions 0-4
+    /// from rotation zero, where id `i` lands at position `i`. Withholding
+    /// that damaged tail as a storage donor is right; rejecting the intact
+    /// legacy head with it throws away the session the player just saved.
+    #[test]
+    fn a_rotated_legacy_head_survives_a_damaged_stale_tail() {
+        let block2 = sample_block2();
+        let older_block1 = SaveBlock1 {
+            money: 111,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 222,
+            ..sample_block1()
+        };
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        write_full_slot(&mut store, 0, &older_block1, &block2, &storage_bytes, 2);
+        write_full_slot(&mut store, 1, &older_block1, &block2, &storage_bytes, 1);
+        // Flash damage to one storage sector of the older slot's tail.
+        store.corrupt_byte(1, 7, 4);
+        write_legacy_slot_rotated(&mut store, 1, &newer_block1, &block2, 3, 1);
+
+        let outcome = store.load();
+        assert_eq!(
+            outcome.status,
+            SaveStatus::Ok,
+            "a complete legacy head no torn full write can imitate stays intact"
+        );
+        assert_eq!(
+            store.save_counter(),
+            3,
+            "the legacy generation the player just saved must be adopted"
+        );
+        assert_eq!(
+            outcome.block1.money, newer_block1.money,
+            "reverting to the older full slot would silently undo that session"
+        );
+        assert_eq!(
+            &store.base_pokemon_storage[..],
+            &storage_bytes[..],
+            "storage still comes from the intact full slot, never the damaged tail"
+        );
     }
 
     /// Migrating a five-sector file must not cost the player the progress it
