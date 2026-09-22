@@ -260,11 +260,8 @@ impl OverworldPhase {
     /// that slot from the lead while retaining an existing valid count and
     /// every other dormant serialized slot. The encoder uses the lead's own
     /// original-trainer id (the box header's XOR key), which need not be
-    /// the current player's id. No lead means the selected slot is left
-    /// exactly as loaded -- never zeroed or rebuilt, whether the slot was
-    /// genuinely empty or retained undecodable (below) -- matching
-    /// upstream's own `SavePlayerParty`, which has no zeroing step (issues
-    /// #353, #1371).
+    /// the current player's id. With no lead, the selected slot is left
+    /// exactly as loaded, never zeroed or rebuilt (below).
     ///
     /// The selected slot is *merged*, not rebuilt (issue #344). The block
     /// this phase holds is the one a continue was loaded from, so
@@ -279,59 +276,14 @@ impl OverworldPhase {
     /// holds a different Pokémon -- a new game's empty slot, or a lead
     /// swapped in since the load.
     ///
-    /// A no-lead selected slot is *never* rebuilt or zeroed, whether it
-    /// holds a genuinely empty party or one whose secure region would not
-    /// decode (issues #353, #1371): [`OverworldPhase::undecodable_lead_retained`]
-    /// records which of the two applies for
-    /// [`OverworldPhase::copy_party_and_objects_from_save`]'s own
-    /// diagnostics, but the save side no longer branches on it -- both
-    /// reasons `party_lead` is `None` take the same no-op arm below,
-    /// leaving `player_party[0]` and `player_party_count` exactly as that
-    /// method found them (that fallback decode never leaves slot 0, so the
-    /// retained slot is always slot 0 -- see [`party::select_active_battler`]'s
-    /// own docs). So neither a checksum failure on slot 0's secure region
-    /// nor an honest empty party costs the player a residual record --
-    /// nickname, OT name, language, markings, and the secure bytes
-    /// themselves -- on the very next ordinary SAVE. Upstream never
-    /// rebuilds or zeroes a party record from a partial model either:
-    /// `SavePlayerParty` (`pokeemerald/src/load_save.c:160-168`) copies
-    /// whatever bytes `gPlayerParty` holds, with no decode step and no
-    /// zeroing step of its own. `ZeroPlayerPartyMons` is not on this path:
-    /// it belongs to `NewGameInitData` and the battle facilities
-    /// (`pokeemerald/src/new_game.c:143,156,181`;
-    /// `battle_factory.c:289,430`; `battle_tent.c:274`;
-    /// `recorded_battle.c:529`), never a save.
-    ///
-    /// # `player_party_count` on a no-lead slot
-    ///
-    /// Left exactly as loaded, not zeroed. Upstream's `SavePlayerParty`
-    /// writes `gSaveBlock1Ptr->playerPartyCount = gPlayerPartyCount`
-    /// unconditionally (`load_save.c:160-168`) and its `LoadPlayerParty`
-    /// (`:170-178`) reads that same count straight back with no validation
-    /// step that could reject a slot. Upstream *does* reach the state this
-    /// arm is about -- a nonzero count over a slot 0 whose secure bytes do
-    /// not check out -- and it reaches it by the Bad Egg path: when
-    /// `CalculateBoxMonChecksum` disagrees with the stored checksum,
-    /// `GetBoxMonData`/`SetBoxMonData` set `boxMon->isBadEgg = TRUE`
-    /// (`pokeemerald/src/pokemon.c:3742-3744` and `:4167-4169`) and leave
-    /// that mon sitting in `gPlayerParty` with `gPlayerPartyCount`
-    /// unchanged (this port's [`party::PartyError::Substructures`] names
-    /// the same upstream behaviour). What upstream then does with it is
-    /// *preserve* it: the wholesale `gSaveBlock1Ptr->playerParty[i] =
-    /// gPlayerParty[i]` copy round-trips a Bad Egg's bytes with the count
-    /// intact, and `LoadPlayerParty` performs no validation, so the count
-    /// rides through the next load too. That is a stronger justification
-    /// for retention than an absent state would be: keeping both the
-    /// bytes and the count *is* upstream's answer to a slot whose checksum
-    /// failed. A genuinely empty slot (a stored count of zero) needs no
-    /// such justification -- upstream's own count is already zero there,
-    /// and its copy carries that through unconditionally too. This port's
-    /// decode is a real decode and can refuse (`party::from_save_pokemon`'s
-    /// own docs); when it does, the upstream-shaped answer is the count
-    /// upstream's copy would have carried through: whatever was already
-    /// there. See [`OverworldPhase::copy_party_and_objects_from_save`] for
-    /// where the count is read back on the next load, still
-    /// unconditionally.
+    /// A no-lead selected slot -- genuinely empty, or retained undecodable
+    /// ([`OverworldPhase::undecodable_lead_retained`]) -- is left exactly
+    /// as loaded, bytes and count alike: `SavePlayerParty`/`LoadPlayerParty`
+    /// round-trip all six records and the count unconditionally, with no
+    /// decode or zeroing step of their own
+    /// (`pokeemerald/src/load_save.c:160-178`). `ZeroPlayerPartyMons` is
+    /// not on this path; it belongs to `NewGameInitData` and the battle
+    /// facilities.
     ///
     /// **Object events** (`SaveObjectEvents`): only the player's facing,
     /// the one field this port models
@@ -354,12 +306,7 @@ impl OverworldPhase {
             }
         } else {
             // No lead: leave `player_party[slot]`/`player_party_count`
-            // exactly as `copy_party_and_objects_from_save` found them
-            // (this method's own docs, issues #353 and #1371). Neither
-            // reason `party_lead` can be `None` -- a slot this port could
-            // not decode, or a genuinely empty party -- is this port's to
-            // rebuild or zero: upstream's own `SavePlayerParty` has no such
-            // step either (`load_save.c:160-168`).
+            // exactly as loaded (this method's own docs).
         }
         let facing = self.player.facing().to_dir_id();
         self.save1.player_object_event = SavedObjectEvent {
@@ -378,27 +325,19 @@ impl OverworldPhase {
     /// [`OverworldPhase::from_saved`] reads it directly (see
     /// `super::saved_facing`).
     ///
-    /// A stored party count of zero means no lead (the no-lead save leaves
-    /// the slot's bytes and count untouched rather than zeroing them,
-    /// issue #1371), unlike `SetBattlePartyIds`'s count-blind scan
-    /// (`battle_controllers.c:585-606`). A party with no slot that will
-    /// decode into a usable
-    /// battler -- checksum-valid sector bytes that are not a mon any
-    /// battle code could run -- is logged and leaves the lead empty:
-    /// fabricating a replacement starter would hand the player a different
-    /// Pokémon than the one they saved, which is strictly worse than an
-    /// honest empty party.
+    /// A stored party count of zero means no lead, unlike
+    /// `SetBattlePartyIds`'s count-blind scan (`battle_controllers.c:585-606`).
+    /// A party with no slot that will decode into a usable battler --
+    /// checksum-valid sector bytes that are not a mon any battle code could
+    /// run -- is logged and leaves the lead empty: fabricating a
+    /// replacement starter would hand the player a different Pokémon than
+    /// the one they saved.
     ///
-    /// Which of those two `None` reasons applies is still recorded in
-    /// [`OverworldPhase::undecodable_lead_retained`] (issue #353), even
-    /// though [`OverworldPhase::copy_party_and_objects_to_save`] no longer
-    /// needs to consult it (issue #1371: both reasons take the same
-    /// untouched-bytes arm there) -- the failed decode already consumed the
-    /// one piece of evidence (the checksum mismatch) that could tell
-    /// "empty" and "undecodable" apart, so this diagnosis is recorded once,
-    /// here, rather than re-attempted from the save side. Set here and
-    /// nowhere else in production -- see that field's own docs for the one
-    /// deliberate exception, a new game's provisional-starter grant.
+    /// Which of those two `None` reasons applies is recorded in
+    /// [`OverworldPhase::undecodable_lead_retained`] for diagnostics; the
+    /// save side treats both the same (above). Set here and nowhere else in
+    /// production -- see that field's own docs for the one deliberate
+    /// exception, a new game's provisional-starter grant.
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
         if self.save1.player_party_count == 0 {
             self.party_lead = None;

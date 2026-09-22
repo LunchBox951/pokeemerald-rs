@@ -108,10 +108,9 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 ///
 /// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
 /// being `Some` and is checked first, so a real lead always overrides a
-/// stale retained slot regardless of the flag's value -- not because the
-/// no-lead arm discriminates on it (it no longer does, issue #1371), but
-/// because a `Some` lead never reaches that arm at all. Retention cannot
-/// leak into a fresh identity's save.
+/// stale retained slot regardless of the flag's value: a `Some` lead
+/// never reaches the no-lead arm at all. Retention cannot leak into a
+/// fresh identity's save.
 #[test]
 fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     let temp = TempSave::new("newgame-overrides-retained-slot");
@@ -165,23 +164,11 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     assert_eq!(saved.player_party_count, 1);
 }
 
-/// A genuinely empty slot (`player_party_count == 0` at load) is no
-/// different from a retained-undecodable one at save time (issue #1371):
-/// upstream's `SavePlayerParty`/`LoadPlayerParty` (`load_save.c:160-178`)
-/// round-trip all `PARTY_SIZE` records unconditionally and never derive a
-/// slot's contents from the count, and the continue path runs no zeroing
-/// step of its own -- `ZeroPlayerPartyMons` is `NewGameInitData` and
-/// battle-facility state reset (`new_game.c:143,156,181`;
-/// `battle_factory.c:289,430`; `battle_tent.c:274`; `recorded_battle.c:529`),
-/// never called from a save. So a residual slot 0 record sitting under a
-/// stored count of zero -- the shape a save predating this port's own
-/// writer, a hand-edited file, or a future encoder could leave behind --
-/// must survive a continue and an ordinary SAVE byte for byte, with the
-/// count staying zero, exactly like the retained-undecodable slot above.
-///
-/// (Corrects this test's own prior requirement -- issue #353 review,
-/// requirement 3 -- which had this exactly backwards: see issue #1371's
-/// adjudication.)
+/// A genuinely empty slot (`player_party_count == 0` at load) survives a
+/// continue and an ordinary SAVE byte for byte, count included, exactly
+/// like the retained-undecodable slot above: `SavePlayerParty`/
+/// `LoadPlayerParty` round-trip all `PARTY_SIZE` records and the count
+/// unconditionally, with no zeroing step (`pokeemerald/src/load_save.c:160-178`).
 #[test]
 fn a_genuinely_empty_partys_residual_slot_survives_an_ordinary_save() {
     let temp = TempSave::new("empty-party-keeps-residual-slot");
