@@ -771,10 +771,8 @@ fn the_audio_fixture_locates_its_one_song() {
 
 #[test]
 fn a_second_song_is_refused_by_name_instead_of_mapped_through_mus_title() {
-    // Before the fix, both ids were mapped through `voicegroup_title`
-    // regardless: two identical `audio/voicegroup/title` roots, and
-    // whichever song sorted last silently overwrote `gSongTable`. Now the
-    // pack is refused before either root is even searched for.
+    // Pins the refusal naming both offending ids, before any root is
+    // located.
     with_audio_context(
         "audio-two-songs",
         &["audio/song/mus_other", "audio/song/mus_title"],
@@ -798,9 +796,7 @@ fn a_second_song_is_refused_by_name_instead_of_mapped_through_mus_title() {
 
 #[test]
 fn no_song_at_all_is_refused_by_the_same_singleton_check() {
-    // The empty pack used to hit a dedicated `gSongTable` error only after
-    // walking the (empty) loop; it now fails the same singleton check as
-    // any other unsupported `audio/song/` id set.
+    // Pins the same `StructMismatch` on an empty `audio/song/` id set.
     with_audio_context("audio-no-song", &[], |ctx| {
         let mut report = Vec::new();
         let err = audio::locate(ctx, &mut report)
