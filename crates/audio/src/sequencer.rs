@@ -1022,7 +1022,7 @@ fn resolve_instrument(instrument: &Instrument, key: u8) -> Option<(&Instrument, 
             // `keySplitTable[key]` selects the child; pitch/pan still use
             // the played key untouched (`m4a_1.s:1589`, `:1598`).
             let &child_index = split.table.get(usize::from(key))?;
-            let leaf = split.children.get(usize::from(child_index))?;
+            let leaf = split.children.get(usize::from(child_index))?.as_ref()?;
             (leaf, key, 0)
         }
         Instrument::Rhythm(rhythm) => {
@@ -3278,7 +3278,7 @@ mod tests {
         }
         let split = Instrument::KeySplit(KeySplit {
             table,
-            children: vec![direct_sound(40), direct_sound(100)],
+            children: vec![Some(direct_sound(40)), Some(direct_sound(100))],
         });
 
         let render = |key: u8| {
@@ -3324,7 +3324,7 @@ mod tests {
         }
         let split = Instrument::KeySplit(KeySplit {
             table,
-            children: vec![direct_sound(40), direct_sound(100)],
+            children: vec![Some(direct_sound(40)), Some(direct_sound(100))],
         });
         for &key in &[30u8, 90u8] {
             let track = vec![
@@ -3465,7 +3465,7 @@ mod tests {
         let table = [0u8; KEY_SLOTS]; // every key -> child 0
         let split = Instrument::KeySplit(KeySplit {
             table,
-            children: vec![inner_rhythm],
+            children: vec![Some(inner_rhythm)],
         });
         let track = vec![
             Event::Voice(0),

@@ -104,8 +104,9 @@ pub enum Instrument {
 pub struct KeySplit {
     /// Child index for each played key.
     pub table: [u8; KEY_SLOTS],
-    /// Leaf instruments indexed by [`Self::table`].
-    pub children: Vec<Instrument>,
+    /// Leaf instruments indexed by [`Self::table`]. `None` slots (empty or
+    /// nested key-split/rhythm) produce no note and never reach allocation.
+    pub children: Vec<Option<Instrument>>,
 }
 
 /// Maps each played key directly to a rhythm child.
