@@ -7,6 +7,7 @@ use pack_format::PackEntry;
 use rendering::Rgb888;
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
+use crate::new_game::NewGameOptions;
 use crate::textbox::{FrameAssets, STANDARD_BOX_SCREEN_ORIGIN, STANDARD_PRINTER_ORIGIN};
 
 const NO_INPUT: PrinterInput = PrinterInput::none();
@@ -113,7 +114,12 @@ fn synthetic_sheet(pixels: &[u8]) -> OwnedFontGlyphSheet {
 }
 
 fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
-    IntroScene::new(synthetic_sheet(pixels), transparent_message_box(), speed)
+    IntroScene::new(
+        synthetic_sheet(pixels),
+        transparent_message_box(),
+        speed,
+        NewGameOptions::DEFAULT,
+    )
 }
 
 #[test]
@@ -274,6 +280,7 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
         synthetic_sheet(&pixels),
         solid_red_message_box(),
         TextSpeed::Mid,
+        NewGameOptions::DEFAULT,
     );
 
     let fb = scene.compose();
@@ -392,6 +399,60 @@ fn a_pack_missing_message_box_fails_to_build_a_scene() {
         matches!(err, super::IntroSceneError::Pack(_)),
         "a pack with no message_box entry at all must fail with a Pack error, got {err:?}"
     );
+}
+
+/// Issue #1125 (behavioral-fidelity review): `GetPlayerTextSpeedDelay`
+/// write-back-repairs an out-of-range `gSaveBlock2Ptr->optionsTextSpeed` to
+/// `OPTIONS_TEXT_SPEED_MID` the moment it first selects a print delay
+/// (`pokeemerald/src/menu.c:481-487`) -- and Birch's speech is the very
+/// first message a NEW GAME ever prints, so a raw byte a boot-recovered save
+/// carried past FAST must not survive `from_pack_with_options` unrepaired:
+/// upstream's `NewGameInitData` never re-validates it afterward.
+#[test]
+fn from_pack_with_options_repairs_an_out_of_range_text_speed() {
+    use super::NewGameOptions;
+
+    const RAW_OUT_OF_RANGE: u8 = 5;
+    const WINDOW_FRAME: u8 = 7;
+
+    let temp_pack = TempPackGuard::new(temp_pack_path("out-of-range-speed"));
+    let mut entries = message_box_entries();
+    entries.push(font_entry(TRANSPARENT_PALETTE_INDEX));
+    write_pack(temp_pack.path(), entries);
+    let pack = assets::pack::AssetPack::load(temp_pack.path()).unwrap();
+
+    let scene = IntroScene::from_pack_with_options(
+        &pack,
+        NewGameOptions {
+            text_speed: RAW_OUT_OF_RANGE,
+            window_frame_type: WINDOW_FRAME,
+        },
+    )
+    .expect("the synthetic pack has both required entries");
+
+    assert_eq!(
+        scene.new_game_options(),
+        NewGameOptions {
+            text_speed: 1,
+            window_frame_type: WINDOW_FRAME,
+        },
+        "an out-of-range optionsTextSpeed must be repaired to MID before a \
+         NEW GAME carries it onward, exactly like GetPlayerTextSpeedDelay's \
+         own live write-back -- optionsWindowFrameType is untouched, since \
+         nothing upstream write-back-repairs it the same way"
+    );
+}
+
+/// [`super::normalized_text_speed`]'s own boundary: every valid raw value
+/// (`0..=2`) survives unchanged, and only values above `FAST` are repaired.
+#[test]
+fn normalized_text_speed_only_repairs_values_above_fast() {
+    for valid in 0..=2u8 {
+        assert_eq!(super::normalized_text_speed(valid), valid);
+    }
+    for invalid in [3u8, 5, 7, u8::MAX] {
+        assert_eq!(super::normalized_text_speed(invalid), 1);
+    }
 }
 
 #[test]

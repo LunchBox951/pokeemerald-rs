@@ -7,10 +7,10 @@
 //! driver has no vblank interleaving, while `VBlankCB_Battle` advances the
 //! generator once per battle vblank (`battle_main.c:2085-2089`).
 //!
-//! [`advance_first_battle`] never submits [`PlayerAction::Run`] because first
-//! battles forbid running; it selects the first usable move slot instead of a
-//! fixed one, so a spent slot 0 with another legal move still plays out. It
-//! writes the player lead back after a terminal or failed turn. Upstream's
+//! [`advance_first_battle`] never submits [`PlayerAction::Run`]; it selects
+//! the first usable move slot instead of a fixed one, so a spent slot 0 with
+//! another legal move still plays out. It writes the player lead back after a
+//! terminal or failed turn. Upstream's
 //! `CB2_EndFirstBattle` returns directly to the field even after a loss
 //! (`battle_setup.c:950-954`), so a fainted lead is valid here.
 

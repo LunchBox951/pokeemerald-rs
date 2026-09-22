@@ -4,7 +4,7 @@ use crate::common::{
     max_iv_mon, max_iv_mon_with_personality, slow_runner_rattata, SequenceRng,
     SECONDARY_ABILITY_PERSONALITY,
 };
-use assets::{AbilityId, MoveId};
+use assets::{AbilityId, MoveId, Type};
 use battle::{
     Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, StatStage, STRUGGLE,
 };
@@ -541,4 +541,53 @@ fn arena_trap_exempts_a_flying_runner() {
         ],
         "Arena Trap does not apply to a Flying-type runner (`battle_main.c:4057`)"
     );
+}
+
+#[test]
+fn magnet_pull_refuses_a_steel_type_nominally_successful_run() {
+    let dex = Dex::new();
+    // Fast enough to have escaped unconditionally were the selection admitted.
+    let player = max_iv_mon(&dex, 382, 50, vec![MoveId(33)]); // Aron
+    assert!(player.types().contains(&Type::Steel));
+    let enemy = max_iv_mon(&dex, 81, 5, vec![MoveId(33)]); // Magnemite
+    assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
+
+    let mut rng = SequenceRng::new([0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
+    assert_eq!(failure.error(), BattleError::RunForbidden);
+    assert_eq!(
+        failure.events(),
+        [],
+        "`IsRunningFromBattleImpossible` refuses the selection before any \
+         event or draw (`battle_main.c:4064`-`:4070`)"
+    );
+    assert_eq!(battle.run_tries(), 0);
+    assert!(battle.outcome().is_none());
+}
+
+#[test]
+fn magnet_pull_does_not_refuse_a_non_steel_runner() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // Charmander
+    assert!(!player.types().contains(&Type::Steel));
+    let enemy = max_iv_mon(&dex, 81, 5, vec![MoveId(33)]); // Magnemite
+    assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
+
+    let mut rng = SequenceRng::new([0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ],
+        "Magnet Pull does not apply to a non-Steel-type runner (`battle_main.c:4064`)"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(battle.run_tries(), 1);
 }

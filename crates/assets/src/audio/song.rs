@@ -1,7 +1,8 @@
 //! Normalized song metadata and per-track musical event streams.
 //!
 //! [`SongEvent`] is independent of both MIDI encoding and compiled MP2K bytecode. Same-track jumps
-//! use event indices. [`Song::new`] removes zero-length waits, merges adjacent waits without
+//! use event indices. [`Song::new`] removes zero-length waits (unless a jump targets one, which
+//! keeps a `Wait(0)` anchor -- see `audio::song::canonical`), merges adjacent waits without
 //! crossing a jump target, and splits delays into `u8` chunks. [`Song::decode`] preserves the
 //! encoded wait sequence while validating its structure.
 //!
