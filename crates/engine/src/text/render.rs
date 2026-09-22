@@ -209,10 +209,13 @@ pub enum TickEvent {
     /// The frame revealed no glyph: either the reveal delay consumed it, or a
     /// `CLEAR`/`CLEAR_TO` control erased a span. Upstream ends the frame for
     /// both (`RENDER_UPDATE` and `RENDER_PRINT`, `pokeemerald/src/text.c`
-    /// `:352-360`). [`Printer::cleared_span`] distinguishes them. A
-    /// `FILL_WINDOW` control does not produce this variant: upstream returns
-    /// `RENDER_REPEAT` for it (`text.c:1052-1056`), so token handling
-    /// continues within the same frame; see [`Printer::cleared_window`].
+    /// `:352-360`). [`Printer::cleared_span`] distinguishes them. At Slow/Mid
+    /// speed a `FILL_WINDOW` control also produces this variant, the same as
+    /// any other `RENDER_REPEAT`-class token: its own reveal-delay reload is
+    /// spent before the next token starts (`text.c:941-962`); only at
+    /// Fast/Instant does its glyph, if any, reach the caller within the same
+    /// call. [`Printer::cleared_window`] distinguishes an idle `FILL_WINDOW`
+    /// tick from an ordinary delay.
     Idle,
     /// A glyph became visible.
     Glyph(Box<RevealedGlyph>),
@@ -352,9 +355,12 @@ impl<S: GlyphSource> Printer<S> {
     /// reset the cursor to the origin: set by a forward `FILL_WINDOW`
     /// (`pokeemerald/src/text.c:1052-1056`) or by the page-clear prompt's
     /// confirmation ([`TickEvent::Cleared`]). Like [`Self::cleared_span`], the
-    /// caller applies the erase itself; unlike it, `FILL_WINDOW` does not end
-    /// the frame, so a glyph decoded later in the same [`Self::tick`] call can
-    /// still be its returned event.
+    /// caller applies the erase itself; unlike it, `FILL_WINDOW` never ends
+    /// upstream's frame (it is unconditionally `RENDER_REPEAT`), so at
+    /// Fast/Instant speed a glyph decoded later in the same [`Self::tick`]
+    /// call can still be its returned event -- at Slow/Mid that call instead
+    /// returns [`TickEvent::Idle`], the same as any other `RENDER_REPEAT`
+    /// token's own reveal-delay reload.
     #[must_use]
     pub const fn cleared_window(&self) -> bool {
         self.cleared_window
