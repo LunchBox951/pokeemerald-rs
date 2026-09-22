@@ -188,31 +188,45 @@ impl OverworldPhase {
         let stored_count =
             usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
 
-        // The lead heals through its live battler and merges back into its
-        // saved slot first, so the re-scan below cannot drop its session
-        // heal, EVs, or experience; every other slot heals through its
-        // saved bytes.
+        // The lead merges its live battler back first so the re-scan keeps
+        // its session state. A lead beyond a nonzero `stored_count` is not
+        // occupied per `HealPlayerParty` (`script_pokemon_util.c:30-58`); a
+        // zero count still heals so an unsaved new game keeps slot 0 (#800).
         if let Some(lead) = self.party_lead.as_mut() {
             let slot = self.party_lead_slot;
-            self.save1.player_party[slot].status = 0;
-            self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
-            match lead.heal(&dex) {
-                Ok(()) => {
-                    self.lead_hp_hidden_by_load =
-                        crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], lead);
-                    self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
-                        &dex,
-                        lead,
-                        &self.save1.player_party[slot],
-                        &mut self.lead_hp_hidden_by_load,
-                    );
+            if stored_count == 0 || slot < stored_count {
+                self.save1.player_party[slot].status = 0;
+                self.save1.player_party[slot].hp = self.save1.player_party[slot].max_hp;
+                match lead.heal(&dex) {
+                    Ok(()) => {
+                        self.lead_hp_hidden_by_load = crate::party::hp_hidden_by_load(
+                            &dex,
+                            &self.save1.player_party[slot],
+                            lead,
+                        );
+                        self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
+                            &dex,
+                            lead,
+                            &self.save1.player_party[slot],
+                            &mut self.lead_hp_hidden_by_load,
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "{context}: couldn't fully heal the party lead's PP ({error}) -- HP \
+                             and status still cleared"
+                        );
+                    }
                 }
-                Err(error) => {
-                    eprintln!(
-                        "{context}: couldn't fully heal the party lead's PP ({error}) -- HP and \
-                         status still cleared"
-                    );
-                }
+            } else {
+                self.lead_hp_hidden_by_load =
+                    crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], lead);
+                self.save1.player_party[slot] = crate::party::merge_into_save_pokemon(
+                    &dex,
+                    lead,
+                    &self.save1.player_party[slot],
+                    &mut self.lead_hp_hidden_by_load,
+                );
             }
         }
 
@@ -256,11 +270,11 @@ impl OverworldPhase {
         }
 
         // An earlier fainted slot may now be the first usable one.
+        //
+        // SetBattlePartyIds rescans all PARTY_SIZE slots, not just the
+        // stored count (pokeemerald/src/battle_controllers.c:591-606, issue #1241).
         if stored_count > 0 {
-            match crate::party::select_active_battler(
-                &dex,
-                &self.save1.player_party[..stored_count],
-            ) {
+            match crate::party::select_active_battler(&dex, &self.save1.player_party) {
                 Ok((slot, mon)) => {
                     if slot != self.party_lead_slot || self.party_lead.is_none() {
                         self.lead_hp_hidden_by_load = crate::party::hp_hidden_by_load(

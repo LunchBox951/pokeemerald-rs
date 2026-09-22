@@ -581,6 +581,18 @@ fn a_zero_period_time_signature_is_an_error() {
 }
 
 #[test]
+fn a_zero_period_time_signature_with_no_playable_channel_is_an_error() {
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, time_signature(1, 7));
+    let midi = single_track_midi(24, body);
+
+    assert_eq!(
+        compile(&midi, &cfg()).unwrap_err(),
+        MidiError::ZeroTimeSignature
+    );
+}
+
+#[test]
 fn a_silent_controller_after_an_extended_command_selector_keeps_its_wait() {
     let mut body = Vec::new();
     push_timed(&mut body, 0, note_on(0, 60, 100));

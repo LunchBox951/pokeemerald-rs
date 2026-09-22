@@ -84,7 +84,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use error::{HeaderFault, ImportError, Lz77Fault, SongFault};
+pub use error::{HeaderFault, ImportError, Lz77Fault, PartialFile, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use one_line::{OneLine, OneLinePath};
 pub use profile::{
@@ -216,10 +216,15 @@ impl ImportedPack {
 /// than followed and truncated (`write_new`); the caller publishes the
 /// finished file over the real destination itself.
 ///
-/// A write that dies part-way removes the partial file this call created at
-/// `out_path` before returning [`ImportError::WriteFailed`], so a retry is
-/// not refused by its own leftover; a replacement a concurrent writer put
-/// there is left alone, within the bound `remove_after` states.
+/// A write that dies part-way leaves the partial file this call created at
+/// `out_path` in place and reports it as [`PartialFile::MayRemain`] on the
+/// returned [`ImportError::WriteFailed`], whose `source` stays the write's
+/// own I/O failure. Nothing is removed, so a retry on that name is refused
+/// (`AlreadyExists`) until it is cleared -- and since cleanup's reading of
+/// the name is stale by the time a caller acts on it, a retry belongs at a
+/// fresh name rather than at a deletion aimed by pathname. A replacement a
+/// concurrent writer put there is left alone, within the bound
+/// `classify_partial_file` states.
 ///
 /// # Errors
 ///
@@ -242,10 +247,7 @@ pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportEr
     }
     let profile = select_profile(&rom)?;
     let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
-    write_new(out_path, &bytes).map_err(|source| ImportError::WriteFailed {
-        path: out_path.to_path_buf(),
-        source,
-    })?;
+    write_new(out_path, &bytes).map_err(|failure| failure.at(out_path))?;
     Ok(ImportReport::new(
         out_path.to_path_buf(),
         profile.name,
@@ -415,7 +417,7 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// On Windows the handle also shares nothing (`share_mode(0)`, as
 /// `create_new_exclusive` in `crates/engine/src/save/file/staging.rs`), so
 /// no other opener can rename or delete `out_path`'s entry while it lives.
-fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_new(out_path: &Path, bytes: &[u8]) -> Result<(), WriteFailure> {
     write_new_with(out_path, |file| {
         use std::io::Write as _;
         file.write_all(bytes)
@@ -426,12 +428,13 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
 /// precedent).
 ///
-/// A failed write hands the still-open handle to [`remove_after`], which
-/// owns the cleanup and its bound; the caller sees the original error.
+/// A failed write hands the still-open handle to [`classify_partial_file`],
+/// which reads what the destination holds and removes nothing; the caller
+/// sees the I/O failure itself beside that reading.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
-) -> std::io::Result<()> {
+) -> Result<(), WriteFailure> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(windows)]
@@ -440,10 +443,10 @@ fn write_new_with(
 
         options.share_mode(0);
     }
-    let mut file = options.open(out_path)?;
+    let mut file = options.open(out_path).map_err(WriteFailure::gone)?;
     match write(&mut file) {
         Ok(()) => Ok(()),
-        Err(error) => Err(remove_after(out_path, file, error)),
+        Err(error) => Err(classify_partial_file(out_path, file, error)),
     }
 }
 
@@ -482,68 +485,72 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
     Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
 }
 
-/// Removes the partial file `write_new_with` left at `path` after `original`,
-/// but only while `path` still names that file; a replacement is left alone
-/// (mirrors `StagedSave::remove_after`, `crates/engine/src/save/file/staging.rs`).
-/// Cleanup-side failures fold into `original`, keeping its `ErrorKind`; a
-/// `NotFound` means nothing was left to clean up.
+/// A failed write, with what cleanup then saw at the destination.
 ///
-/// Bound, owned here: the identity check is by pathname, so a replacement
-/// installed between that check and the `unlink` is still removed. Stable
-/// `std` has no handle-bound removal to close the gap. Unix identity is
-/// device and inode; off Unix it is creation time, size, and last write
-/// ([`is_the_created_file`]), which can coincide where an inode cannot.
-fn remove_after(path: &Path, file: std::fs::File, original: std::io::Error) -> std::io::Error {
-    remove_after_with(path, file, original, |path| std::fs::remove_file(path))
+/// The write layer never learns the path as the caller spelled it --
+/// [`ImportError::WriteFailed`] is what renders that -- so this carries the
+/// failure and the finding and nothing else. [`WriteFailure::at`] is the
+/// one way it becomes a caller's error.
+#[derive(Debug)]
+struct WriteFailure {
+    /// What was at the destination when cleanup looked.
+    partial: PartialFile,
+    /// The I/O failure itself, untouched.
+    source: std::io::Error,
 }
 
-/// [`remove_after`] with the removal injected, so a cleanup failure is
-/// testable without a privilege the test runner might lack (the same reason
-/// [`write_new_with`]'s own doc comment gives for injecting the write).
-///
-/// `file` drops after `remove` on Unix and before it elsewhere: Windows
-/// refuses to remove an open file, so the hold is given up as late as the
-/// platform permits.
-fn remove_after_with(
+impl WriteFailure {
+    /// A failure that left nothing of the importer's behind: the open
+    /// itself was refused, so there is no partial file to have an opinion
+    /// about.
+    fn gone(source: std::io::Error) -> Self {
+        Self {
+            partial: PartialFile::Gone,
+            source,
+        }
+    }
+
+    /// The failure as the caller sees it, against the destination it was
+    /// aimed at.
+    ///
+    /// `source` crosses untouched, which is the whole point of the split:
+    /// it is the I/O failure [`ImportError::WriteFailed`] documents, and a
+    /// caller tells a quota failure from a device one by reading
+    /// `raw_os_error` off it. Anything cleanup observed is already in
+    /// `partial`, so nothing has to wrap the error to say it.
+    fn at(self, path: &Path) -> ImportError {
+        ImportError::WriteFailed {
+            path: path.to_path_buf(),
+            partial: self.partial,
+            source: self.source,
+        }
+    }
+}
+
+/// Leaves the partial file `write_new_with` created at `path` in place
+/// after `original` and classifies what is there for the caller; a
+/// replacement is left alone. A retry against `path` fails closed until the
+/// caller clears it. An identity check that cannot read `path` is
+/// [`PartialFile::Unreadable`] rather than a failure of its own; `NotFound`
+/// means nothing was left to look for. Removal is never attempted, on any
+/// platform: `std` has no removal bound to the checked identity rather than
+/// to a name.
+fn classify_partial_file(
     path: &Path,
     file: std::fs::File,
     original: std::io::Error,
-    remove: impl FnOnce(&Path) -> std::io::Result<()>,
-) -> std::io::Error {
-    match still_the_created_file(&file, path) {
-        Ok(true) => {}
-        Ok(false) => return original,
-        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => return original,
-        Err(unreadable) => return cleanup_failed(path, &original, &unreadable),
-    }
-    #[cfg(not(unix))]
+) -> WriteFailure {
+    let partial = match still_the_created_file(&file, path) {
+        Ok(true) => PartialFile::MayRemain,
+        Ok(false) => PartialFile::Gone,
+        Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => PartialFile::Gone,
+        Err(unreadable) => PartialFile::Unreadable(unreadable),
+    };
     drop(file);
-    let removed = remove(path);
-    #[cfg(unix)]
-    drop(file);
-    match removed {
-        Ok(()) => original,
-        Err(cleanup_err) if cleanup_err.kind() == std::io::ErrorKind::NotFound => original,
-        Err(cleanup_err) => cleanup_failed(path, &original, &cleanup_err),
+    WriteFailure {
+        partial,
+        source: original,
     }
-}
-
-/// Folds a cleanup-side error into `original`, keeping `original`'s
-/// `ErrorKind` (see [`remove_after`]) and rendering `path` through
-/// [`OneLinePath`] since it is the caller's own destination path,
-/// exactly as untrusted as anywhere else this crate renders it.
-fn cleanup_failed(
-    path: &Path,
-    original: &std::io::Error,
-    cleanup_err: &std::io::Error,
-) -> std::io::Error {
-    std::io::Error::new(
-        original.kind(),
-        format!(
-            "{original} (additionally, failed to remove partial file `{}`: {cleanup_err})",
-            OneLinePath(path)
-        ),
-    )
 }
 
 /// Run every domain reader over `rom` and serialize the pack.
@@ -566,7 +573,7 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 mod tests {
     use super::{
         build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
-        ImportError, ImportReport, Roots,
+        ImportError, ImportReport, PartialFile, Roots, WriteFailure,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -737,7 +744,12 @@ mod tests {
         std::fs::write(&out, b"not the importer's").expect("the existing file writes");
 
         let err = write_new(&out, b"pack bytes").unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "{:?}",
+            err.source
+        );
         assert_eq!(
             std::fs::read(&out).expect("the existing file survives"),
             b"not the importer's"
@@ -745,12 +757,9 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_write_takes_its_own_half_written_file_with_it() {
-        // A write that dies part-way — a full disk — leaves a prefix of the
-        // pack behind. Exclusive creation would make that leftover
-        // permanent: every retry hits its own debris and fails with
-        // `AlreadyExists`. The file is this call's own, so the failure
-        // removes it and the next attempt has a clean name to take.
+    fn a_failed_write_retains_its_partial_file_until_the_caller_removes_it() {
+        // A write that dies part-way -- a full disk -- leaves a prefix of
+        // the pack behind, and cleanup retains it rather than removing it.
         let dir = TempDir::new("write-fails");
         let out = dir.join("pokeemerald.pack");
 
@@ -764,15 +773,47 @@ mod tests {
         })
         .unwrap_err();
 
-        // The write's own error survives the cleanup, not a removal error.
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
-        assert!(
-            !out.exists(),
-            "a failed write must not leave a partial pack at {}",
-            out.display()
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
         );
-        // And the name is free again, so a retry gets through.
-        write_new(&out, b"pack bytes").expect("the retry takes the freed name");
+        assert!(
+            matches!(err.partial, PartialFile::MayRemain),
+            "{:?}",
+            err.partial
+        );
+        let text = err.at(&out).to_string();
+        assert!(
+            text.contains("no space left on device"),
+            "the write's own error must survive: {text}"
+        );
+        assert!(
+            text.contains("pokeemerald.pack"),
+            "the retained file's path must be named: {text}"
+        );
+        assert_eq!(
+            std::fs::read(&out).expect("the partial file is retained"),
+            b"half a ",
+            "cleanup must not remove the call's own partial file"
+        );
+
+        // The name is not free: a retry hits the retained debris.
+        let retry = write_new(&out, b"pack bytes").unwrap_err();
+        assert_eq!(
+            retry.source.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "{:?}",
+            retry.source
+        );
+        assert_eq!(
+            std::fs::read(&out).expect("the partial file still survives the refused retry"),
+            b"half a "
+        );
+
+        // Only once the caller clears the name themselves does a retry land.
+        std::fs::remove_file(&out).expect("the caller's own cleanup");
+        write_new(&out, b"pack bytes").expect("the retry takes the name once it is cleared");
         assert_eq!(
             std::fs::read(&out).expect("the pack reads back"),
             b"pack bytes"
@@ -784,7 +825,7 @@ mod tests {
     fn cleanup_leaves_a_directory_that_replaced_the_partial_file_alone() {
         // The write closure swaps the partial file for a non-empty
         // directory before returning its error. A directory is not a
-        // regular file, so `remove_after`'s identity check classifies it as
+        // regular file, so `classify_partial_file`'s identity check classifies it as
         // a replacement and never attempts to remove it, mirroring
         // `StagedSave::remove_after`'s `Ok(false) => return source`
         // (`crates/engine/src/save/file/staging.rs`).
@@ -805,9 +846,19 @@ mod tests {
         .unwrap_err();
 
         // Cleanup never touched the directory, so the write's own error
-        // comes back unmodified -- no removal failure to fold in.
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
-        assert_eq!(err.to_string(), "no space left on device");
+        // comes back unmodified and nothing of the importer's is reported
+        // left behind.
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
+        );
+        assert_eq!(err.source.to_string(), "no space left on device");
+        assert!(
+            matches!(err.partial, PartialFile::Gone),
+            "{:?}",
+            err.partial
+        );
         assert!(
             out.is_dir(),
             "cleanup must leave a directory that replaced the partial file alone"
@@ -822,7 +873,7 @@ mod tests {
     #[cfg(unix)]
     fn cleanup_leaves_a_file_that_replaced_the_partial_one_alone() {
         // A peer swaps its own file in at `out` during the write; cleanup
-        // must leave it (`remove_after`'s contract).
+        // must leave it (`classify_partial_file`'s contract).
         let dir = TempDir::new("write-cleanup-file-swap");
         let out = dir.join("pokeemerald.pack");
         let renamed_aside = dir.join("pokeemerald.pack.moved");
@@ -839,8 +890,17 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
-        assert_eq!(err.to_string(), "no space left on device");
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
+        );
+        assert_eq!(err.source.to_string(), "no space left on device");
+        assert!(
+            matches!(err.partial, PartialFile::Gone),
+            "{:?}",
+            err.partial
+        );
         assert_eq!(
             std::fs::read(&out).expect("the replacement survives"),
             b"the replacement",
@@ -887,7 +947,11 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
+        );
         assert_eq!(
             std::fs::read(&victim).expect("the unrelated file survives"),
             b"someone else's file",
@@ -1018,7 +1082,11 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::StorageFull,
+            "{err:?}"
+        );
         assert_eq!(
             std::fs::read(&victim).expect("the unrelated file survives"),
             b"someone else's file",
@@ -1027,42 +1095,136 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
-    fn a_failed_cleanup_keeps_its_message_on_one_line() {
-        // The path folded into `original`'s message by `remove_after` is
-        // the caller's own `out_path`, exactly as untrusted as the path
-        // `ImportError::WriteFailed` renders directly (see
-        // `error::path_bearing_messages_are_escaped_and_stay_one_line`), so
-        // a newline or ESC byte in the destination name must not survive
-        // into this cleanup-failure message either. The removal is
-        // injected via `remove_after_with`: cleanup only reaches a removal
-        // attempt for a name that still identifies the file this call
-        // created, and there is no privilege-independent way to make
-        // `remove_file` itself fail on such a name.
-        let dir = TempDir::new("write-cleanup-fails-hostile");
-        let out = dir.join("one\ntwo\u{1b}[2Kthree.pack");
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&out)
-            .expect("the exclusive create succeeds");
-        let original =
-            std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device");
+    fn a_retained_partial_file_keeps_its_message_on_one_line() {
+        // A newline or ESC byte in `out_path` must not survive into the
+        // message the retained-file finding produces (see
+        // `error::path_bearing_messages_are_escaped_and_stay_one_line`).
+        //
+        // Driven through `WriteFailure::at` rather than through a real
+        // failed write: a name holding those bytes cannot exist on Windows,
+        // where the exclusive create is refused with `InvalidFilename`
+        // before any write can fail, so a filesystem-driven spelling of
+        // this test can only ever run on Unix. The rendering is what is
+        // under test, and it renders the path the caller handed in.
+        let out = Path::new("packs/one\ntwo\u{1b}[2Kthree.pack");
 
-        let err = super::remove_after_with(&out, file, original, |_path| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "permission denied",
-            ))
-        });
+        let err = WriteFailure {
+            partial: PartialFile::MayRemain,
+            source: std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+        }
+        .at(out);
 
-        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
         let text = err.to_string();
+        assert!(text.contains("no space left on device"), "{text:?}");
+        assert!(text.contains("a partial file may remain there"), "{text:?}");
         assert!(!text.contains('\n'), "{text:?}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
         assert!(
             text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
             "escaped name missing from {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_identity_check_keeps_its_message_on_one_line() {
+        // The other cleanup finding appends to the same line and owes the
+        // same promise. It was covered off Unix only, through the injected
+        // removal that no longer exists; this restores the coverage on
+        // every platform.
+        let out = Path::new("packs/one\ntwo\u{1b}[2Kthree.pack");
+
+        let err = WriteFailure {
+            partial: PartialFile::Unreadable(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
+            )),
+            source: std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+        }
+        .at(out);
+
+        let text = err.to_string();
+        assert!(text.contains("permission denied"), "{text:?}");
+        assert!(!text.contains('\n'), "{text:?}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(
+            text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
+            "escaped name missing from {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_retained_partial_file_still_hands_back_the_write_error_itself() {
+        // The boundary a caller actually sees. `ImportError::WriteFailed`
+        // documents `source` as the underlying I/O failure, and
+        // `raw_os_error` is how a caller tells a quota failure from a
+        // device one; a cleanup finding is something to report alongside
+        // it, never something to wrap it in. `WriteFailure::at` is the
+        // same conversion `import` performs.
+        const OS_ERROR: i32 = 28;
+        let dir = TempDir::new("write-retained-os-error");
+        let out = dir.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            Err(std::io::Error::from_raw_os_error(OS_ERROR))
+        })
+        .unwrap_err()
+        .at(&out);
+
+        let ImportError::WriteFailed {
+            partial, source, ..
+        } = &err
+        else {
+            panic!("a failed write is a write failure: {err:?}");
+        };
+        assert!(matches!(partial, PartialFile::MayRemain), "{partial:?}");
+        assert_eq!(
+            source.raw_os_error(),
+            Some(OS_ERROR),
+            "matching the variant must still reach the OS error number: {err}"
+        );
+        assert_eq!(
+            std::error::Error::source(&err)
+                .expect("`WriteFailed` has a source")
+                .downcast_ref::<std::io::Error>()
+                .expect("and it is the I/O failure itself")
+                .raw_os_error(),
+            Some(OS_ERROR),
+            "and so must `Error::source`, which is what a caller that does \
+             not match the variant reaches for"
+        );
+        assert!(
+            err.to_string().contains("a partial file may remain there"),
+            "the finding still reaches the caller: {err}"
+        );
+    }
+
+    #[test]
+    fn a_refused_create_reaches_the_caller_as_the_real_os_refusal() {
+        // The same boundary for an error the OS itself raised rather than
+        // one the test injected: a refused exclusive create carries a real
+        // `raw_os_error`, so there is a number there to be lost.
+        let dir = TempDir::new("write-refused-os-error");
+        let out = dir.join("pokeemerald.pack");
+        std::fs::write(&out, b"not the importer's").expect("the existing file writes");
+
+        let err = write_new(&out, b"pack bytes").unwrap_err().at(&out);
+
+        let ImportError::WriteFailed {
+            partial, source, ..
+        } = &err
+        else {
+            panic!("a refused create is a write failure: {err:?}");
+        };
+        assert_eq!(source.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert!(
+            source.raw_os_error().is_some(),
+            "the OS refusal must arrive with its own error number: {source:?}"
+        );
+        assert!(
+            matches!(partial, PartialFile::Gone),
+            "a create that never happened leaves nothing of the importer's: {partial:?}"
         );
     }
 
@@ -1080,7 +1242,12 @@ mod tests {
         std::os::unix::fs::symlink(&victim, &planted).expect("the planted link");
 
         let err = write_new(&planted, b"pack bytes").unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            err.source.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "{:?}",
+            err.source
+        );
         assert_eq!(
             std::fs::read(&victim).expect("the victim survives"),
             b"the player's save",

@@ -749,6 +749,100 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(after.encryption_key, before.encryption_key);
 }
 
+/// `WINDOW_FRAME_TYPE_5` and `OPTIONS_TEXT_SPEED_FAST` -- ordinary non-default
+/// option choices, matching this module's other real-pack fixtures.
+const NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME: u8 = 5;
+const NEW_GAME_OPTIONS_SAVED_TEXT_SPEED: u8 = 2;
+
+/// A checksum-valid save whose `SaveBlock2` carries `text_speed`/
+/// `window_frame` -- the two option fields issue #1125's NEW GAME regression
+/// below needs a boot to recover.
+fn write_save_with_new_game_options(temp: &TempSave, text_speed: u8, window_frame: u8) {
+    let phase = new_game_phase();
+    let (block1, mut block2) = (phase.save1.clone(), phase.save2.clone());
+    block2.options_text_speed = text_speed;
+    block2.options_window_frame_type = window_frame;
+
+    let mut store = engine::save::SaveStore::new();
+    store.save(&block1, &block2);
+    engine::save::SaveFile::at(temp.path().to_path_buf())
+        .write(&store)
+        .expect("the fixture save must be writable");
+}
+
+/// The real end-to-end counterpart to `crate::flow::tests`' packless pin of
+/// `new_game_options_for`'s status split (issue #1125; see that function's
+/// own doc comment for the contract): confirms NEW GAME over an `Ok` save
+/// really does carry its options through a real intro and overworld load,
+/// which no packless test can exercise.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_new_game_over_a_saved_game_keeps_its_options() {
+    let temp = TempSave::new("real-pack-new-game-options");
+    write_save_with_new_game_options(
+        &temp,
+        NEW_GAME_OPTIONS_SAVED_TEXT_SPEED,
+        NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME,
+    );
+    let mut slot = temp.slot();
+
+    let saved = slot.load();
+    assert_eq!(
+        menu_type_for(&saved),
+        MainMenuType::SavedGame,
+        "the fixture save must boot into the saved-game menu"
+    );
+    assert_eq!(
+        super::window_frame_for(&saved),
+        NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME,
+        "the boot half must already recover the saved window frame"
+    );
+
+    let mut menu = crate::main_menu::load_default_with_window_frame(
+        MainMenuType::SavedGame,
+        NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME,
+    )
+    .expect("run `cargo xtask extract` first");
+    menu.move_down();
+    assert_eq!(
+        menu.selected(),
+        MainMenuItem::NewGame,
+        "NEW GAME sits directly below CONTINUE on a saved-game menu"
+    );
+
+    let mut scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
+    let mut started = None;
+    for _ in 0..20_000 {
+        let (next, _frame) = super::advance_scene(
+            scene,
+            pressed(Buttons::A),
+            &mut slot,
+            crate::pack_source::PackSource::Runtime,
+        );
+        assert!(
+            !matches!(next, AppScene::OverworldLoadFailed(_)),
+            "the overworld handoff must load: run `cargo xtask extract` first"
+        );
+        if let AppScene::Overworld(phase) = next {
+            started = Some(phase);
+            break;
+        }
+        scene = next;
+    }
+    let phase = started.expect("A on NEW GAME must reach the overworld through the intro");
+
+    assert_eq!(
+        phase.save2.options_text_speed, NEW_GAME_OPTIONS_SAVED_TEXT_SPEED,
+        "NEW GAME over a recovered save keeps its optionsTextSpeed \
+         (NewGameInitData never re-defaults the options)"
+    );
+    assert_eq!(
+        phase.save2.options_window_frame_type, NEW_GAME_OPTIONS_SAVED_WINDOW_FRAME,
+        "NEW GAME over a recovered save keeps its optionsWindowFrameType \
+         (NewGameInitData never re-defaults the options)"
+    );
+}
+
 /// The other pack-gated step (module docs): `START` really opening the
 /// menu through `crate::start_menu::open`, with real chrome, and a
 /// whole save running through the pack-decoded windows.
