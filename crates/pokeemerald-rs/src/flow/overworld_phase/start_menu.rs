@@ -373,8 +373,10 @@ impl OverworldPhase {
     /// [`OverworldPhase::from_saved`] reads it directly (see
     /// `super::saved_facing`).
     ///
-    /// A stored party count of zero means no lead, exactly as it does
-    /// upstream. A party with no slot that will decode into a usable
+    /// A stored party count of zero means no lead (the no-lead save zeroes
+    /// only slot 0, issue #353), unlike `SetBattlePartyIds`'s count-blind
+    /// scan (`battle_controllers.c:585-606`). A party with no slot that will
+    /// decode into a usable
     /// battler -- checksum-valid sector bytes that are not a mon any
     /// battle code could run -- is logged and leaves the lead empty:
     /// fabricating a replacement starter would hand the player a different
@@ -399,9 +401,9 @@ impl OverworldPhase {
             return;
         }
         let dex = battle::Dex::new();
-        let stored_count =
-            usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
-        match party::select_active_battler(&dex, &self.save1.player_party[..stored_count]) {
+        // SetBattlePartyIds scans all PARTY_SIZE slots, not just the stored
+        // count (pokeemerald/src/battle_controllers.c:591-606, issue #1241).
+        match party::select_active_battler(&dex, &self.save1.player_party) {
             Ok((slot, lead)) => {
                 self.lead_hp_hidden_by_load =
                     party::hp_hidden_by_load(&dex, &self.save1.player_party[slot], &lead);

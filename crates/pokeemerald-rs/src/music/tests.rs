@@ -399,10 +399,11 @@ fn finite_reverbed_song_restarts_only_after_tail_drains() {
 
 mod synthetic_pack {
     use assets::{
-        AssetPack, Envelope, ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId,
-        Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
+        AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
+        ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId, SongEvent, Square1Voice,
+        Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
     };
-    use audio::Instrument;
+    use audio::{Instrument, Sequencer, DEFAULT_MASTER_VOLUME};
 
     use crate::music::load_song_from_pack;
 
@@ -645,6 +646,148 @@ mod synthetic_pack {
             !path.exists(),
             "the guard must remove the scratch pack even when the test panics"
         );
+    }
+
+    fn occupant_track() -> Vec<SongEvent> {
+        vec![
+            SongEvent::Priority(0),
+            SongEvent::Voice(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 127,
+                gate: 8,
+            },
+            SongEvent::Wait(48),
+            SongEvent::Fine,
+        ]
+    }
+
+    /// Selects a silent key-split child at higher priority; must not evict
+    /// [`occupant_track`]'s note, since a silent child produces no note before allocation.
+    fn evictor_track(key: u8) -> Vec<SongEvent> {
+        vec![
+            SongEvent::Priority(90),
+            SongEvent::Voice(1),
+            SongEvent::Note {
+                key,
+                velocity: 127,
+                gate: 8,
+            },
+            SongEvent::Wait(48),
+            SongEvent::Fine,
+        ]
+    }
+
+    #[test]
+    fn empty_and_nested_key_split_children_do_not_evict_an_occupied_voice() {
+        const WAVE_ID: &str = "audio/sample/keysplit_wave";
+        const TOP_VG_ID: &str = "audio/voicegroup/keysplit_top";
+        const CHILD_VG_ID: &str = "audio/voicegroup/keysplit_children";
+
+        let wave = Sample::DirectSound(
+            DirectSoundSample::new(1 << 20, Some(0), vec![100; 64])
+                .expect("a looping 64-sample wave is well-formed"),
+        );
+        // `voice(1)` splits on the played key: 60 selects child 0 (`Empty`), 61 selects
+        // child 1 (a nested key split) -- the two silent cases.
+        let top_group = VoiceGroup::new(vec![
+            VoiceEntry::DirectSound(DirectSoundVoice {
+                base_key: 60,
+                pan: None,
+                sample: SampleId(WAVE_ID.to_owned()),
+                envelope: flat_envelope(),
+                mode: DirectSoundMode::Resampled,
+            }),
+            VoiceEntry::KeySplit(
+                KeySplitVoice::new(60, vec![0, 1], VoiceGroupId(CHILD_VG_ID.to_owned()))
+                    .expect("a two-entry table is well under VOICE_SLOT_COUNT"),
+            ),
+        ])
+        .expect("two slots is well under VOICE_SLOT_COUNT");
+        let child_group = VoiceGroup::new(vec![
+            VoiceEntry::Empty,
+            VoiceEntry::KeySplit(
+                // Never resolved: nested children map straight to `None`,
+                // so this target id need not exist in the pack.
+                KeySplitVoice::new(
+                    0,
+                    vec![0],
+                    VoiceGroupId("audio/voicegroup/unresolved".to_owned()),
+                )
+                .expect("a one-entry table is well under VOICE_SLOT_COUNT"),
+            ),
+        ])
+        .expect("two slots is well under VOICE_SLOT_COUNT");
+
+        let control = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track()],
+        )
+        .expect("one track is well-formed");
+        let empty_child = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track(), evictor_track(60)],
+        )
+        .expect("two tracks is well-formed");
+        let nested_child = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track(), evictor_track(61)],
+        )
+        .expect("two tracks is well-formed");
+
+        let temp_pack = write_pack(
+            "keysplit-silent-children",
+            &[
+                ("audio/song/keysplit_control", control.encode()),
+                ("audio/song/keysplit_empty_child", empty_child.encode()),
+                ("audio/song/keysplit_nested_child", nested_child.encode()),
+                (TOP_VG_ID, top_group.encode()),
+                (CHILD_VG_ID, child_group.encode()),
+                (WAVE_ID, wave.encode()),
+            ],
+        );
+        let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+
+        let render_first_frame = |name: &str| {
+            let song = load_song_from_pack(&pack, name).expect("the synthetic song loads");
+            // One DirectSound slot: any note reaching allocation evicts the occupant
+            // (`mixer::select_direct_sound_slot`), which a silent child must never do.
+            let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 1);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            seq.render_frame(&mut out);
+            (seq.voice_count(), out)
+        };
+
+        let (control_voices, control_frame) = render_first_frame("keysplit_control");
+        assert_eq!(
+            control_voices, 1,
+            "sanity: the occupant must claim the sole DirectSound slot"
+        );
+        assert!(
+            control_frame.iter().any(|&s| s != 0.0),
+            "sanity: the occupant note must be audible"
+        );
+
+        for (name, label) in [
+            ("keysplit_empty_child", "an empty key-split child"),
+            ("keysplit_nested_child", "a nested key-split child"),
+        ] {
+            let (voices, frame) = render_first_frame(name);
+            assert_eq!(
+                voices, 1,
+                "{label} must not add a second voice to the full DirectSound pool"
+            );
+            assert_eq!(
+                frame, control_frame,
+                "{label} must leave the occupied DirectSound slot's output untouched"
+            );
+        }
     }
 }
 
