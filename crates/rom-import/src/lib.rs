@@ -429,8 +429,8 @@ fn write_new(out_path: &Path, bytes: &[u8]) -> Result<(), WriteFailure> {
 /// precedent).
 ///
 /// A failed write hands the still-open handle to [`classify_partial_file`],
-/// which owns the cleanup and its bound; the caller sees the I/O failure
-/// itself beside what cleanup found at the destination.
+/// which reads what the destination holds and removes nothing; the caller
+/// sees the I/O failure itself beside that reading.
 fn write_new_with(
     out_path: &Path,
     write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
