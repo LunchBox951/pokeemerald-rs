@@ -554,8 +554,8 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
-        ImportError, ImportReport, Roots,
+        build_pack, cleanup_failed, import, import_to_bytes, overwrites_rom, partial_file_retained,
+        write_new, write_new_with, ImportError, ImportReport, Roots,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -1034,21 +1034,48 @@ mod tests {
     fn a_retained_partial_file_keeps_its_message_on_one_line() {
         // A newline or ESC byte in `out_path` must not survive into the
         // retained-file message (see `error::path_bearing_messages_are_escaped_and_stay_one_line`).
-        let dir = TempDir::new("write-retained-hostile");
-        let out = dir.join("one\ntwo\u{1b}[2Kthree.pack");
+        //
+        // Driven through `partial_file_retained` rather than through a real
+        // failed write: a name holding those bytes cannot exist on Windows,
+        // where the exclusive create is refused with `InvalidFilename`
+        // before any write can fail, so a filesystem-driven spelling of
+        // this test can only ever run on Unix. The message is what is
+        // under test, and it renders the path the caller handed in.
+        let out = Path::new("packs/one\ntwo\u{1b}[2Kthree.pack");
 
-        let err = write_new_with(&out, |file| {
-            use std::io::Write as _;
-            file.write_all(b"half a ")?;
-            Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
-                "no space left on device",
-            ))
-        })
-        .unwrap_err();
+        let err = partial_file_retained(
+            out,
+            &std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+        );
 
         assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
         let text = err.to_string();
+        assert!(text.contains("no space left on device"), "{text:?}");
+        assert!(!text.contains('\n'), "{text:?}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        assert!(
+            text.contains(r"one\ntwo\u{1b}[2Kthree.pack"),
+            "escaped name missing from {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_identity_check_keeps_its_message_on_one_line() {
+        // The other cleanup-side message renders the same caller path and
+        // owes the same promise. It was covered off Unix only, through the
+        // injected removal that no longer exists; a direct call restores
+        // the coverage on every platform.
+        let out = Path::new("packs/one\ntwo\u{1b}[2Kthree.pack");
+
+        let err = cleanup_failed(
+            out,
+            &std::io::Error::new(std::io::ErrorKind::StorageFull, "no space left on device"),
+            &std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied"),
+        );
+
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        let text = err.to_string();
+        assert!(text.contains("permission denied"), "{text:?}");
         assert!(!text.contains('\n'), "{text:?}");
         assert!(!text.contains('\u{1b}'), "{text:?}");
         assert!(
