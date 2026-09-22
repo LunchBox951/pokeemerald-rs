@@ -7,7 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{SaveFile, SaveFileError, SaveFileGuard, LOCK_FILE_NAME};
+use super::{
+    refuse_an_unusable_entry, SaveFile, SaveFileError, SaveFileGuard, UnusableEntry, LOCK_FILE_NAME,
+};
 
 impl SaveFile {
     /// Acquires an advisory inter-process lock for this save path.
@@ -79,7 +81,9 @@ impl SaveFile {
     }
 
     /// Refuses a symlinked or non-plain-file lock slot before anything opens
-    /// it, since the open would follow the link or block on a FIFO.
+    /// it, since the open would follow the link or block on a FIFO. Shares
+    /// [`refuse_an_unusable_entry`]'s policy with [`SaveFile::read`], so the
+    /// lock slot and the save path always agree on what a plain file is.
     ///
     /// # Errors
     ///
@@ -88,28 +92,18 @@ impl SaveFile {
     /// is not a plain file; [`SaveFileError::Lock`] if it could not be
     /// inspected.
     fn refuse_an_unusable_slot(lock: &Path) -> Result<(), SaveFileError> {
-        let slot = match std::fs::symlink_metadata(lock) {
-            Ok(slot) => slot,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(source) => {
-                return Err(SaveFileError::Lock {
-                    path: lock.to_path_buf(),
-                    source,
-                })
-            }
-        };
-        if slot.is_symlink() {
-            return Err(SaveFileError::LockPathIsAlias {
+        refuse_an_unusable_entry(lock).map_err(|unusable| match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Lock {
                 path: lock.to_path_buf(),
-            });
-        }
-        if slot.is_file() {
-            Ok(())
-        } else {
-            Err(SaveFileError::LockPathNotAPlainFile {
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::LockPathIsAlias {
                 path: lock.to_path_buf(),
-            })
-        }
+            },
+            UnusableEntry::NotAPlainFile => SaveFileError::LockPathNotAPlainFile {
+                path: lock.to_path_buf(),
+            },
+        })
     }
 
     /// Whether the unfollowed entry at `lock` is the inode `file` holds. A

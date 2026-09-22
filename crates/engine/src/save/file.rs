@@ -77,6 +77,16 @@ pub enum SaveFileError {
         /// The lock path that is not a plain file.
         path: PathBuf,
     },
+    /// The save path is a symlink instead of naming the file it opens.
+    SavePathIsAlias {
+        /// The save path that does not name the file it opens.
+        path: PathBuf,
+    },
+    /// The save path is occupied by something other than a plain file.
+    SavePathNotAPlainFile {
+        /// The save path that is not a plain file.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -128,6 +138,19 @@ impl std::fmt::Display for SaveFileError {
                  directory holds -- writing it would replace the inode they lock",
                 path.display()
             ),
+            Self::SavePathIsAlias { path } => write!(
+                f,
+                "save file: the save path {} does not name the file it opens -- reading it \
+                 would follow the link to whatever it led to at the time",
+                path.display()
+            ),
+            Self::SavePathNotAPlainFile { path } => write!(
+                f,
+                "save file: the save path {} is not a plain file -- a directory, socket, \
+                 or device there is not a save image, and opening a FIFO would wait for a \
+                 writer that never comes",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -152,8 +175,51 @@ impl std::error::Error for SaveFileError {
             | Self::LockPathIsSave { .. }
             | Self::LockPathIsAlias { .. }
             | Self::LockPathNotAPlainFile { .. }
+            | Self::SavePathIsAlias { .. }
+            | Self::SavePathNotAPlainFile { .. }
             | Self::BadLength { .. } => None,
         }
+    }
+}
+
+/// What is wrong with an entry [`refuse_an_unusable_entry`] inspected, for
+/// the caller to fold into whichever [`SaveFileError`] variant fits its own
+/// path (a save path or a lock slot).
+enum UnusableEntry {
+    /// The entry could not be inspected at all.
+    Inspect(std::io::Error),
+    /// The entry is a symlink instead of naming the file it opens.
+    IsAlias,
+    /// The entry exists and is not a symlink, but is not a plain file
+    /// either -- a directory, socket, device, or FIFO.
+    NotAPlainFile,
+}
+
+/// Refuses a symlinked or non-plain-file entry before anything opens it,
+/// since the open would follow the link or block on a FIFO. A missing entry
+/// is fine: the caller's own open reports that in its own way.
+///
+/// This is the one policy [`SaveFile::read`] and the lock slot's
+/// `open_lock_slot` share for "what counts as a plain file here", so the two
+/// can never quietly disagree.
+///
+/// # Errors
+///
+/// [`UnusableEntry::IsAlias`] if `path` is a symlink; [`UnusableEntry::NotAPlainFile`]
+/// if it is anything else that is not a plain file; [`UnusableEntry::Inspect`]
+/// if it could not be inspected.
+fn refuse_an_unusable_entry(path: &Path) -> Result<(), UnusableEntry> {
+    let entry = match std::fs::symlink_metadata(path) {
+        Ok(entry) => entry,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(UnusableEntry::Inspect(source)),
+    };
+    if entry.is_symlink() {
+        Err(UnusableEntry::IsAlias)
+    } else if entry.is_file() {
+        Ok(())
+    } else {
+        Err(UnusableEntry::NotAPlainFile)
     }
 }
 
@@ -280,12 +346,28 @@ impl SaveFile {
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Read`] for any I/O failure other than "not found";
+    /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink;
+    /// [`SaveFileError::SavePathNotAPlainFile`] if it is anything else that
+    /// is not a plain file -- a directory, socket, device, or FIFO, which a
+    /// blocking open or read could otherwise wait on forever;
+    /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
+        refuse_an_unusable_entry(&self.path).map_err(|unusable| match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::SavePathIsAlias {
+                path: self.path.clone(),
+            },
+            UnusableEntry::NotAPlainFile => SaveFileError::SavePathNotAPlainFile {
+                path: self.path.clone(),
+            },
+        })?;
         let file = match std::fs::File::open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),

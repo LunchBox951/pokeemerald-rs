@@ -541,17 +541,75 @@ fn an_oversized_files_rejection_does_not_misstate_its_length() {
 }
 
 #[test]
-fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
+fn reading_a_directory_in_the_files_place_is_refused_before_any_open() {
     let dir = TempDir::new("isdir");
     let path = dir.join(SAVE_FILE_NAME);
     std::fs::create_dir_all(&path).unwrap();
 
     let file = SaveFile::at(&path);
     assert!(!file.exists(), "a directory is not a save file");
+    match file.read() {
+        Err(SaveFileError::SavePathNotAPlainFile { path: refused }) => {
+            assert_eq!(refused, path);
+        }
+        other => panic!("expected a not-a-plain-file refusal, got {other:?}"),
+    }
+}
+
+/// A symlinked save path must be refused rather than followed, matching the
+/// lock slot's policy: each locker (or reader) would otherwise chase
+/// whatever the link happened to lead to at the time.
+#[cfg(unix)]
+#[test]
+fn reading_a_symlinked_save_path_is_refused_rather_than_followed() {
+    let dir = TempDir::new("read-symlink");
+    let target = dir.join("real-save");
+    let (store, _, _) = saved_store();
+    SaveFile::at(&target).write(&store).unwrap();
+
+    let path = dir.join(SAVE_FILE_NAME);
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+
+    match SaveFile::at(&path).read() {
+        Err(SaveFileError::SavePathIsAlias { path: refused }) => {
+            assert_eq!(refused, path);
+        }
+        other => panic!("expected an alias refusal, got {other:?}"),
+    }
+}
+
+/// A FIFO in the save's place must be refused rather than opened: a
+/// read-only open of one waits for a writer that a stale entry never gets,
+/// so boot would hang there instead of reporting a save-file error.
+#[cfg(unix)]
+#[test]
+fn reading_a_fifo_in_the_files_place_fails_rather_than_waiting_for_a_writer() {
+    let dir = TempDir::new("read-fifo");
+    let path = dir.join(SAVE_FILE_NAME);
     assert!(
-        matches!(file.read(), Err(SaveFileError::Read { .. })),
-        "reading a directory must surface as a read failure"
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo must run")
+            .success(),
+        "mkfifo must create the FIFO this test stands on"
     );
+
+    let (outcomes, outcome) = std::sync::mpsc::channel();
+    let probe = path.clone();
+    std::thread::spawn(move || {
+        drop(outcomes.send(SaveFile::at(&probe).read().map(|store| store.is_some())));
+    });
+
+    let read = outcome
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("reading a FIFO must return rather than wait for a writer that never comes");
+    match read {
+        Err(SaveFileError::SavePathNotAPlainFile { path: refused }) => {
+            assert_eq!(refused, path);
+        }
+        other => panic!("a FIFO is not a save image, so reading one must fail: {other:?}"),
+    }
 }
 
 /// The container of every level from the filesystem root down to `target`,
