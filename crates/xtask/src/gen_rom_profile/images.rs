@@ -36,7 +36,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::locate::to_addr;
-use super::pack_source::{image_tiles, metatile_candidates};
+use super::pack_source::{metatile_candidates, try_image_tiles};
 use super::plan::{ImagePlan, ReportLine, Resolution};
 use super::Context;
 
@@ -162,7 +162,16 @@ pub fn locate_images(
         for &rom_bit_depth in rom_depths(pack_bit_depth) {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
-                let tiles = image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?;
+                // `rom_depths` probes narrower depths speculatively (an
+                // 8bpp entry may really be a 4bpp-fitting sheet upstream
+                // packed narrow); a probe whose real indices do not fit
+                // that depth is not a candidate here, not a malformed pack,
+                // so it drops this depth/shape rather than aborting the
+                // search for every other query and depth.
+                let Some(tiles) = try_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                else {
+                    continue;
+                };
                 let full = tiles.len();
                 // Upstream cuts art short in two ways -- `-num_tiles`, and
                 // dropping trailing all-zero tiles -- and the two do not

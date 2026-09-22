@@ -650,3 +650,27 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
     let _ = std::fs::remove_file(&rom);
     let _ = std::fs::remove_dir(&dir);
 }
+
+#[test]
+fn an_eight_bit_sheet_with_indices_above_fifteen_is_still_located() {
+    // `title/image/pokemon_logo` is an 8-bit-indexed PNG using indices up
+    // to 223. `rom_depths(8)` speculatively probes 4bpp as well, so the
+    // 4bpp packing of this raster must not abort the whole search.
+    let tiles: Vec<u8> = (0..4 * 64u32)
+        .map(|index| u8::try_from(16 + index % 208).expect("fits in u8"))
+        .collect();
+    let entry =
+        image_entry_from_tiles("title/image/x".into(), &tiles, 8, 16, 16, None).expect("entry");
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x50_0000, &tiles)
+        .finish();
+
+    with_context("wide-index-sheet", &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        let plans = locate_images(ctx, &[ImageQuery::raw("title/image/x")], &mut report)
+            .expect("an 8bpp sheet is located despite the speculative 4bpp probe");
+        assert_eq!(plans[0].addr, 0x0850_0000);
+        assert_eq!(plans[0].rom_bit_depth, 8);
+    });
+}
