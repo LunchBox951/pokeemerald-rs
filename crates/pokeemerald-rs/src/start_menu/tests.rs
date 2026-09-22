@@ -765,13 +765,8 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
 
 /// Selecting SAVE must not blank the screen for a frame (issue #955):
 /// upstream never removes the item window before `SaveConfirmSaveCallback`
-/// has a replacement message ready (`start_menu.c:978-993`). It also keeps
-/// the window through the two intermediate per-frame callback handoffs
-/// upstream spends before that point (`StartMenuSaveCallback` installing
-/// `SaveStartCallback`, then `SaveStartCallback` running `InitSave` and
-/// installing `SaveCallback`), so the confirmation prompt is only built on
-/// the third tick after the selecting A press, not the first
-/// (`start_menu.c:607-626,721-728,809-822,884-894,978-993`, I-6 issue #1339).
+/// has a replacement message ready, and that callback only runs on the third
+/// tick after the selecting A press (`start_menu.c:721-728,809-822,978-993`).
 #[test]
 fn selecting_save_keeps_the_item_window_until_its_message_exists() {
     use rendering::{Framebuffer, Rgb888};

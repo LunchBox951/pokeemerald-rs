@@ -74,13 +74,11 @@ pub(super) enum SaveDialogOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaveDialogState {
-    /// `StartMenuSaveCallback`: the tick after the A press only installs
-    /// `SaveStartCallback` (`pokeemerald/src/start_menu.c:721-728`).
+    /// `StartMenuSaveCallback` spends the frame after the A press
+    /// (`pokeemerald/src/start_menu.c:721-728`).
     EnterSaveStartCallback,
-    /// `SaveStartCallback`: this tick only runs `InitSave` (`SaveMapView`,
-    /// which this port has no counterpart for, plus setting
-    /// `sSaveDialogCallback = SaveConfirmSaveCallback` and clearing
-    /// `sSavingComplete`) and installs `SaveCallback`
+    /// `SaveStartCallback` spends the next frame in `InitSave`, whose
+    /// `SaveMapView` this port has no counterpart for
     /// (`pokeemerald/src/start_menu.c:809-822,877-882`).
     EnterSaveCallback,
     ShowInitialPrompt,
