@@ -121,11 +121,8 @@ pub enum TitleSceneError {
         /// Actual `(width, height)` in pixels.
         actual: (u32, u32),
     },
-    /// A palette index does not fit in the 4 bits a Bpp4 tile has for it.
-    ///
-    /// `ImageRef::bit_depth` is informational only -- pack payloads always
-    /// store one index byte per pixel (`assets::ImageRef` docs) -- so this
-    /// checks the index value itself rather than the declared source depth.
+    /// A palette index does not fit in the 4 bits a Bpp4 tile has for it;
+    /// checked by value, since [`ImageRef::bit_depth`] is informational.
     ImagePaletteIndexOutOfRange {
         /// The pack entry ID.
         id: &'static str,
@@ -425,10 +422,8 @@ fn pack_tile_bytes(
 ) -> Result<Vec<u8>, TitleSceneError> {
     const TILE_DIM: usize = BitDepth::TILE_DIM;
 
-    // `ImageRef::bit_depth` is informational only, so a Bpp4 destination is
-    // validated by index value here rather than by declared source depth --
-    // masking an out-of-range index instead of rejecting it silently aliases
-    // it to a different, wrong colour.
+    // Masking an out-of-range index would alias it to a wrong colour
+    // (`ImageRef::bit_depth` is informational, see its doc).
     if bit_depth == BitDepth::Bpp4 {
         if let Some(&index) = pixels.iter().find(|&&index| index > BPP4_MAX_INDEX) {
             return Err(TitleSceneError::ImagePaletteIndexOutOfRange { id, index });

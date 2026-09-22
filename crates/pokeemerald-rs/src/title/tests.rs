@@ -163,9 +163,7 @@ fn image_to_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
 
 #[test]
 fn image_to_tileset_packs_an_8bpp_source_whose_indices_fit_four_bits() {
-    // `ImageRef::bit_depth` is informational only (`title/image/press_start`
-    // ships pack-8bpp but is consumed as Bpp4), so a declared 8bpp source
-    // with in-range indices must still pack, never a depth-equality error.
+    // `title/image/press_start` ships pack-8bpp but is consumed as Bpp4.
     let mut pixels = vec![0u8; 64];
     pixels[0] = 15;
     let image = ImageRef {
