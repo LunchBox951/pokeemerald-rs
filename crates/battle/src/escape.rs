@@ -1,9 +1,10 @@
 //! Escape odds and ability-based run eligibility for wild single battles.
 //!
-//! Upstream refuses Run at action selection for `BATTLE_TYPE_FIRST_BATTLE`
-//! (`pokeemerald/src/battle_main.c:4339`-`:4344`) and for the traps
-//! [`ensure_admissible`] checks (`:4038`-`:4070`), both via
-//! [`crate::error::BattleError::RunForbidden`] before this formula runs.
+//! Upstream refuses Run at action selection for the traps
+//! [`ensure_admissible`] checks (`pokeemerald/src/battle_main.c:4038`-`:4070`)
+//! and, for a non-Run-Away holder, `BATTLE_TYPE_FIRST_BATTLE`
+//! (`:4078`-`:4082`), both via [`crate::error::BattleError::RunForbidden`]
+//! before this formula runs.
 //!
 //! A Run Away holder that clears admission also bypasses this formula:
 //! [`crate::battle::Battle`] resolves its escape unconditionally, drawing
