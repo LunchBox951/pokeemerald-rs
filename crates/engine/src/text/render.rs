@@ -349,17 +349,12 @@ impl<S: GlyphSource> Printer<S> {
     }
 
     /// Whether the most recent [`Self::tick`] cleared the complete window and
-    /// reset the cursor to the origin.
-    ///
-    /// This is set for a forward `FILL_WINDOW` control
-    /// (`pokeemerald/src/text.c:1052-1056`) and for the page-clear prompt's
-    /// confirmation ([`TickEvent::Cleared`]). Upstream paints the fill itself;
-    /// this printer emits events instead of owning a window buffer, so a
-    /// caller that retains revealed glyphs uses this flag to drop them all,
-    /// then applies whatever primary [`TickEvent`] the same [`Self::tick`]
-    /// call returned -- `FILL_WINDOW` does not end the frame
-    /// (`RENDER_REPEAT`), so a glyph decoded later in the same call can still
-    /// be that event.
+    /// reset the cursor to the origin: set by a forward `FILL_WINDOW`
+    /// (`pokeemerald/src/text.c:1052-1056`) or by the page-clear prompt's
+    /// confirmation ([`TickEvent::Cleared`]). Like [`Self::cleared_span`], the
+    /// caller applies the erase itself; unlike it, `FILL_WINDOW` does not end
+    /// the frame, so a glyph decoded later in the same [`Self::tick`] call can
+    /// still be its returned event.
     #[must_use]
     pub const fn cleared_window(&self) -> bool {
         self.cleared_window
@@ -1212,9 +1207,7 @@ mod tests {
 
         // `text.c:1052-1056` fills the window, resets both cursor axes to the
         // printer origin, and returns `RENDER_REPEAT`, so the glyph after
-        // `FILL_WINDOW` still renders within this same tick call, instead of
-        // stacking after the stale glyph at (6, 17) the way the no-op bug
-        // used to leave it.
+        // `FILL_WINDOW` still renders within this same tick call.
         let TickEvent::Glyph(after_fill) = printer.tick(PrinterInput::none()) else {
             panic!("expected the glyph after FILL_WINDOW in the same frame")
         };
