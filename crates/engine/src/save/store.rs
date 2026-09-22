@@ -2029,17 +2029,11 @@ mod tests {
         );
     }
 
-    /// Importing a rotation-zero cartridge image into a pre-#1227 build and
-    /// saving twice leaves *both* slots as five-sector legacy heads over the
-    /// imported generations' still-signed tails: that writer only ever
-    /// touched physical positions 0-4 (`crates/engine/src/save/store.rs` at
-    /// merge base `617085a`, `save` looping `0..SECTORS_PER_SLOT_U16` with
-    /// `SECTORS_PER_SLOT == 5`). The newest legacy head then sits over a
-    /// complete, checksum-valid set of storage ids 5-13 -- the player's
-    /// boxed Pokemon, still physically present in flash. With no full-format
-    /// slot to donate from, `load` must take storage from that verified
-    /// tail rather than zeroing it, which the next save would make
-    /// permanent.
+    /// Both slots hold five-sector legacy heads over still-signed full
+    /// tails, the shape a five-sector writer leaves after two saves over an
+    /// imported image. With no full-format slot to donate from, `load` must
+    /// take storage from the newest complete verified tail rather than zero
+    /// it.
     #[test]
     fn two_legacy_slots_over_an_imported_image_keep_the_newest_verified_tail() {
         let block2 = sample_block2();
