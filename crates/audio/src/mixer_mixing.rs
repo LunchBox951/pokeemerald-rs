@@ -160,10 +160,7 @@ fn negative_sum_clips_to_minus_one() {
 
 #[test]
 fn cgb_voice_output_is_unaffected_by_the_direct_sound_master_volume() {
-    // `CgbVoice::begin_frame`'s doc has the upstream rationale. A CGB voice
-    // must render identically at Emerald's production default
-    // (`DEFAULT_MASTER_VOLUME`, 12) and at full scale (15); only a Direct
-    // Sound voice may vary with it.
+    // The rationale is on `CgbVoice::begin_frame`.
     let mut default_mixer = Mixer::new(DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES);
     assert!(default_mixer.add_cgb_voice(cgb_keyed_voice(0, 60)));
     let mut at_default = vec![0.0; SAMPLES_PER_FRAME * 2];

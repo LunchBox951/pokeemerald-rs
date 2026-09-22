@@ -635,12 +635,8 @@ impl CgbVoice {
     /// Advance the software envelope and prepare gain for one render
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
     ///
-    /// Unlike the DirectSound voice path, this never scales by the mixer's
-    /// DirectSound master volume: upstream's CGB output is pinned at full
-    /// scale by `MPlayExtender`'s `REG_NR50 = 0x77` and `SOUNDCNT_H`'s
-    /// `SOUND_CGB_MIX_FULL` (`pokeemerald/src/m4a.c:267-275,365-373`), and
-    /// `SoundInfo.masterVolume` is Direct Sound mixer state that `CgbSound`
-    /// never reads (`pokeemerald/include/gba/m4a_internal.h:195-200`).
+    /// Never scales by the DirectSound master volume: `MPlayExtender` pins
+    /// CGB output at full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
     pub fn begin_frame(&mut self, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
         // The goal `CgbModVol` would compute right now from the current side
