@@ -133,7 +133,6 @@ impl fmt::Display for Lz77Fault {
     }
 }
 
-/// Anything that can stop a ROM import.
 /// What the destination held when cleanup looked, after a write failed
 /// part-way through.
 ///
@@ -162,6 +161,7 @@ pub enum PartialFile {
     Unreadable(io::Error),
 }
 
+/// Anything that can stop a ROM import.
 #[derive(Debug)]
 pub enum ImportError {
     /// The ROM file could not be opened or read.
