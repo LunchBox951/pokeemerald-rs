@@ -229,7 +229,7 @@ const DIALOGUE_WING_WIDTH: i32 = 2;
 /// The literal row count `WindowFunc_DrawDialogueFrame` gives each of the
 /// three dialogue-box body fills (wing column, interior, right column),
 /// independent of `height`; only the bottom border uses `height`
-/// (`pokeemerald/src/menu.c`).
+/// (`pokeemerald/src/menu.c:356-410`).
 const DIALOGUE_FILL_ROWS: i64 = 5;
 type TileRect = (u8, TileOrientation, Cells);
 
@@ -244,10 +244,8 @@ pub struct MessageBoxLayout {
     pub content_width: i32,
     /// Content height, in tiles.
     ///
-    /// Only positions the dialogue frame's bottom border
-    /// (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c`); the three
-    /// body fills are always a fixed five rows tall regardless of this
-    /// value. See [`MessageBoxLayout::frame_tiles`].
+    /// Positions only the dialogue frame's bottom border; the body fills are
+    /// `DIALOGUE_FILL_ROWS` tall.
     pub content_height: i32,
 }
 
@@ -262,11 +260,10 @@ impl MessageBoxLayout {
 
     /// Places the standard dialogue frame and interior in tilemap write order.
     ///
-    /// The three body fills are a fixed five rows, independent of
-    /// `content_height`; the vertically flipped bottom border is positioned
-    /// by `content_height` instead, and must remain later in the returned
-    /// sequence so a last-write-wins compositor matches
-    /// `WindowFunc_DrawDialogueFrame` in `pokeemerald/src/menu.c:356-410`.
+    /// The vertically flipped bottom border, positioned by `content_height`,
+    /// must remain later in the returned sequence than the
+    /// `DIALOGUE_FILL_ROWS`-tall body fills so a last-write-wins compositor
+    /// matches `WindowFunc_DrawDialogueFrame` in `pokeemerald/src/menu.c`.
     ///
     /// Never panics: cells clamp onto `i32`'s bounds and extents clamp to
     /// [`MAX_EXTENT_TILES`]. A negative `content_width` omits the interior
@@ -295,10 +292,6 @@ impl MessageBoxLayout {
         let inside = left - 1;
         let corner = right - 1;
         let top_row = top - 1;
-        // Upstream hard-codes the three body fills to a fixed
-        // `DIALOGUE_FILL_ROWS` rows and the interior to `width + 1` columns;
-        // `content_height` never sizes the body fill
-        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c`).
         let fill_bottom = top + DIALOGUE_FILL_ROWS - 1;
 
         [
@@ -919,12 +912,10 @@ mod tests {
 
     #[test]
     fn frame_tiles_with_nonpositive_content_dimensions_does_not_panic() {
-        // A nonpositive `content_width`/`content_height` must not panic. The
-        // fixed five-row body fill still runs regardless of `content_height`
-        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:356-376`);
-        // a `content_height` of -1 instead only pulls the bottom border above
-        // `tilemap_top`, onto the same row as the top border, so the flipped
-        // bottom-border tiles overwrite the top border's corners there.
+        // A nonpositive `content_width`/`content_height` must not panic. A
+        // `content_height` of -1 pulls the bottom border above `tilemap_top`,
+        // onto the same row as the top border, so the flipped bottom-border
+        // tiles overwrite the top border's corners there.
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -966,10 +957,7 @@ mod tests {
     fn frame_tiles_places_the_right_corner_on_the_last_content_column() {
         // `tilemap_left: i32::MAX` leaves the sole content column representable,
         // so the right corner must land on it instead of colliding with the left
-        // corner one column short. The body fill is a fixed five rows (0..=4)
-        // regardless of `content_height`; the bottom border still uses
-        // `content_height` and stays at row 1
-        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:356-410`).
+        // corner one column short.
         let layout = MessageBoxLayout {
             tilemap_left: i32::MAX,
             tilemap_top: 0,
@@ -1076,9 +1064,7 @@ mod tests {
     fn frame_tiles_collapses_the_clipped_interior_onto_the_negative_limit() {
         // `tilemap_left: i32::MIN` clips the interior's outside column onto the
         // limit, so the fill must collapse there instead of spilling one column
-        // past the sole content column. The body fill is a fixed five rows
-        // (0..=4) regardless of `content_height`
-        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:356-376`).
+        // past the sole content column.
         let layout = MessageBoxLayout {
             tilemap_left: i32::MIN,
             tilemap_top: 0,
@@ -1144,8 +1130,7 @@ mod tests {
             content_width: i32::MAX,
             content_height: i32::MAX,
         };
-        // The interior fill is `width + 1` columns by a fixed
-        // `DIALOGUE_FILL_ROWS` rows, independent of `content_height`
+        // The interior fill is `width + 1` columns
         // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:363-369`).
         let expected_fill = (i64::from(MAX_EXTENT_TILES) + 1) * DIALOGUE_FILL_ROWS;
         let interior = layout
@@ -1190,9 +1175,6 @@ mod tests {
 
     #[test]
     fn frame_tiles_retains_upstreams_fixed_five_fill_rows_at_zero_height() {
-        // Upstream's three body fills are a fixed five rows regardless of
-        // `height` (`WindowFunc_DrawDialogueFrame`,
-        // `pokeemerald/src/menu.c:356-376`).
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
@@ -1223,9 +1205,6 @@ mod tests {
 
     #[test]
     fn dialogue_body_fill_is_five_rows_independent_of_content_height() {
-        // Upstream's three body fills are a fixed five rows, independent of
-        // `height`, which only positions the bottom border
-        // (`WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c:356-410`).
         let layout = MessageBoxLayout {
             tilemap_left: 5,
             tilemap_top: 5,
