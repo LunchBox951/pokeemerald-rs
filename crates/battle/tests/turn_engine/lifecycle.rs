@@ -557,3 +557,48 @@ fn a_simultaneous_double_faint_with_a_healthy_reserve_still_wins() {
         "the reserve never entered, so it is untouched"
     );
 }
+
+/// `Cmd_getexp` gates both the EV/message step and the exp-application step
+/// on the recipient's own HP (`src/battle_script_commands.c:3367`,
+/// `:3431`): a party member at zero HP is skipped, so a player that
+/// fainted in the same exchange that felled the enemy gains neither exp nor
+/// EVs and prints no "gained EXP" string. Same fixture as
+/// `a_simultaneous_double_faint_with_a_healthy_reserve_still_wins`.
+#[test]
+fn a_fainted_player_gains_no_exp_or_evs_from_a_simultaneous_double_faint() {
+    const ABSORB: MoveId = MoveId(71);
+    const BULBASAUR: u16 = 1;
+    const TENTACOOL: u16 = 72;
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
+    let player_max_hp = player.stats().max_hp;
+    player.apply_damage(player_max_hp - 6);
+    let experience_before = player.experience();
+    let evs_before = player.evs();
+    let reserve = max_iv_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![MoveId(33)], 1);
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(battle.player().current_hp(), 0, "the player fainted");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+        "a zero-HP recipient is skipped before the exp string: {events:?}"
+    );
+    assert_eq!(
+        battle.player().experience(),
+        experience_before,
+        "a fainted recipient gains no experience"
+    );
+    assert_eq!(
+        battle.player().evs(),
+        evs_before,
+        "`MonGainEVs` is inside the HP-guarded branch"
+    );
+}

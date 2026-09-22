@@ -865,3 +865,26 @@ fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
     );
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
 }
+
+/// A player reserve is never checked against the enemy's moveset before the
+/// battle starts, so an enemy Thunder Wave admitted against the active
+/// member reaches a Shed Skin reserve mid-turn -- after the turn's draws and
+/// the enemy's PP spend -- instead of being refused before construction, the
+/// invariant `a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend` pins.
+#[test]
+fn an_enemy_move_is_refused_against_a_shed_skin_reserve_before_the_battle_starts() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let reserve = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
+    assert_eq!(reserve.ability(), assets::AbilityId::SHED_SKIN);
+    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, THUNDER_WAVE]);
+    let mut rng = SequenceRng::new([0; 32]);
+    let rejected =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .expect_err("Thunder Wave can only ever paralyse the Shed Skin reserve");
+    assert_eq!(
+        rejected,
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+    );
+    assert_eq!(rng.draws(), 0, "a refused battle draws nothing");
+}

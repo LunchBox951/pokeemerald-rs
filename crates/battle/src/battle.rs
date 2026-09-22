@@ -202,17 +202,19 @@ impl Battle {
     /// (`Cmd_checkteamslost`, `src/battle_script_commands.c:3534`-`:3564`;
     /// `BattleScript_HandleFaintedMon`'s send-out branch,
     /// `data/battle_scripts_1.s:2830`-`:2896`). [`Battle::new`] is this
-    /// constructor with an empty reserve list. A reserve's moves are
+    /// constructor with an empty reserve list. A reserve's own moves are
     /// validated as the player selects them, exactly like the active
-    /// member's -- see the top-level docs above.
+    /// member's; the enemy's moveset is validated against every reserve up
+    /// front too, since any of them may face it as a defender with no
+    /// further checkpoint before that turn.
     ///
     /// # Errors
     ///
     /// Returns [`BattleError::FaintedBattler`] for a fainted active
-    /// participant or the first move or ability validation error from the
-    /// enemy's moveset. A fainted reserve is admitted: it models a player
-    /// party that already lost a member before the battle. Errors leave the
-    /// RNG untouched.
+    /// participant, or the first move or ability validation error from the
+    /// enemy's moveset against the active member or any reserve. A fainted
+    /// reserve is admitted: it models a player party that already lost a
+    /// member before the battle. Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
@@ -236,11 +238,16 @@ impl Battle {
             }
             dex.move_data(slot.move_id)?;
             // Zero-PP moves stop before applying effects, Struggle
-            // excepted (`src/battle_script_commands.c:934`-`:939`).
+            // excepted (`src/battle_script_commands.c:934`-`:939`). A
+            // reserve becomes this same enemy's defender the moment it is
+            // sent out, with no further validation at that point, so every
+            // reserve is checked here too.
             if slot.pp > 0 {
                 ensure_executable(&dex, slot.move_id)?;
-                paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
-                secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+                for defender in std::iter::once(&player).chain(player_reserves.iter()) {
+                    paralyze::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
+                    secondary::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
+                }
             }
         }
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
@@ -848,8 +855,10 @@ impl Battle {
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
         // and `MonGainEVs` for a recipient already at the cap
-        // (`src/battle_script_commands.c:3351`-`:3356`).
-        if self.player.level() >= MAX_LEVEL {
+        // (`src/battle_script_commands.c:3351`-`:3356`), and does the same
+        // for a recipient at zero HP -- a simultaneous double faint's own
+        // victor included (`:3367`, `:3431`).
+        if self.player.level() >= MAX_LEVEL || self.player.is_fainted() {
             return Ok(());
         }
         let defeated = self.dex.species(self.enemy.species())?;
