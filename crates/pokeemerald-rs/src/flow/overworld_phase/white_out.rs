@@ -188,18 +188,10 @@ impl OverworldPhase {
         let stored_count =
             usize::from(self.save1.player_party_count).min(self.save1.player_party.len());
 
-        // The lead heals through its live battler and merges back into its
-        // saved slot first, so the re-scan below cannot drop its session
-        // heal, EVs, or experience; every other slot heals through its
-        // saved bytes.
-        //
-        // A lead beyond a *nonzero* `stored_count` is not "occupied" per
-        // upstream's own count-bounded `HealPlayerParty`
-        // (`pokeemerald/src/script_pokemon_util.c:30-58`, issue #1241), so
-        // only its current battle state merges back. `stored_count == 0`
-        // is left healing unconditionally: it also covers a brand-new,
-        // not-yet-saved game, where slot 0 is the whole live party despite
-        // the on-disk count not yet being written (issue #800).
+        // The lead merges its live battler back first so the re-scan keeps
+        // its session state. A lead beyond a nonzero `stored_count` is not
+        // occupied per `HealPlayerParty` (`script_pokemon_util.c:30-58`); a
+        // zero count still heals so an unsaved new game keeps slot 0 (#800).
         if let Some(lead) = self.party_lead.as_mut() {
             let slot = self.party_lead_slot;
             if stored_count == 0 || slot < stored_count {
