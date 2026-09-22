@@ -745,8 +745,7 @@ fn crop_and_pack_tile_bytes_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
 
 #[test]
 fn press_start_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
-    // Reached through the Press Start sheet's crop path (title.rs:519-543),
-    // the same code path the shipping ROM-4bpp/pack-8bpp sheet uses.
+    // The shipping ROM-4bpp/pack-8bpp sheet takes this same crop path.
     let mut pixels = vec![0u8; 160 * 24];
     pixels[0] = 16;
     let image = ImageRef {
