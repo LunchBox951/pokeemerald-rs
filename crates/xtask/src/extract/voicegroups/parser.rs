@@ -206,6 +206,70 @@ fn parse_envelope(
     })
 }
 
+/// The largest attack/decay/release value that survives upstream's CGB
+/// envelope mask (`& 0x7`).
+const MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE: u8 = 0x7;
+
+/// The largest sustain value that survives upstream's CGB envelope mask
+/// (`& 0xF`).
+const MAX_CGB_ENVELOPE_SUSTAIN: u8 = 0xF;
+
+/// Every CGB voice macro masks its envelope operands before emitting them,
+/// unlike `_voice_directsound` (`pokeemerald/asm/macros/music_voice.inc:25-28`
+/// vs. `:50-53`, `:75-78`, `:99-102`, `:124-127`), so only this helper --
+/// never [`parse_envelope`] alone -- belongs on a CGB call site.
+fn parse_cgb_envelope(
+    operands: [&str; 4],
+    group: &str,
+    line: &str,
+) -> Result<Envelope, VoiceGroupError> {
+    let envelope = parse_envelope(operands, group, line)?;
+    let fields = [
+        (
+            "attack",
+            envelope.attack,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        (
+            "decay",
+            envelope.decay,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        ("sustain", envelope.sustain, MAX_CGB_ENVELOPE_SUSTAIN),
+        (
+            "release",
+            envelope.release,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+    ];
+    for (operand, value, maximum) in fields {
+        if value > maximum {
+            return Err(VoiceGroupError::CgbEnvelopeOutOfRange {
+                group: group.to_owned(),
+                operand,
+                value,
+                maximum,
+            });
+        }
+    }
+    Ok(envelope)
+}
+
+/// The largest noise period upstream's `_voice_noise` macro retains after
+/// masking it `& 0x1` (`pokeemerald/asm/macros/music_voice.inc:122`).
+const MAX_NOISE_PERIOD: u8 = 0x1;
+
+fn parse_noise_period(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupError> {
+    let period = parse_byte(operand, group, line)?;
+    if period > MAX_NOISE_PERIOD {
+        return Err(VoiceGroupError::NoisePeriodOutOfRange {
+            group: group.to_owned(),
+            period,
+        });
+    }
+    Ok(period)
+}
+
 fn parse_prefixed_label(
     symbol: &str,
     prefix: &'static str,
@@ -255,7 +319,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
                 length: parse_byte(length, group, line)?,
                 sweep: parse_byte(sweep, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -267,7 +331,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
                 base_key: parse_byte(base_key, group, line)?,
                 length: parse_byte(length, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -279,7 +343,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
                 base_key: parse_byte(base_key, group, line)?,
                 length: parse_byte(length, group, line)?,
                 wave_symbol: (*wave_symbol).to_owned(),
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -290,8 +354,8 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             Ok(RawSlot::Noise {
                 base_key: parse_byte(base_key, group, line)?,
                 length: parse_byte(length, group, line)?,
-                period: parse_byte(period, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                period: parse_noise_period(period, group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
