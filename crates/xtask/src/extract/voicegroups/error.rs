@@ -16,6 +16,16 @@ pub(crate) enum VoiceGroupError {
         group: String,
         duty: u8,
     },
+    CgbEnvelopeOutOfRange {
+        group: String,
+        operand: &'static str,
+        value: u8,
+        maximum: u8,
+    },
+    NoisePeriodOutOfRange {
+        group: String,
+        period: u8,
+    },
     UnknownVoiceMacro {
         group: String,
         macro_name: String,
@@ -105,6 +115,20 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "voicegroup `{group}`: square duty cycle selector {duty} is outside the valid \
                  range 0..=3"
+            ),
+            Self::CgbEnvelopeOutOfRange {
+                group,
+                operand,
+                value,
+                maximum,
+            } => write!(
+                f,
+                "voicegroup `{group}`: CGB envelope {operand} {value} is outside the valid \
+                 range 0..={maximum}"
+            ),
+            Self::NoisePeriodOutOfRange { group, period } => write!(
+                f,
+                "voicegroup `{group}`: noise period {period} is outside the valid range 0..=1"
             ),
             Self::UnknownVoiceMacro { group, macro_name } => {
                 write!(f, "voicegroup `{group}`: unrecognized macro `{macro_name}`")

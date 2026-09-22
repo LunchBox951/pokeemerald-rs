@@ -484,7 +484,10 @@ impl OverworldPhase {
     /// default explicitly.
     #[cfg(test)]
     pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
-        Self::load(crate::pack_source::PackSource::Runtime)
+        Self::load(
+            crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
+        )
     }
 
     /// [`Self::load_default`], pinned to whichever
@@ -496,11 +499,19 @@ impl OverworldPhase {
     /// afterwards inherits the same pin ([`Self::pack_source`]'s own field
     /// docs).
     ///
+    /// `options` is the pair [`crate::flow::advance_scene`]'s `Intro` and
+    /// `OverworldLoadFailed` arms read off the finished
+    /// [`crate::intro::IntroScene`] (issue #1125): the boot-recovered
+    /// `SaveBlock2` options a NEW GAME over an intact save must carry into
+    /// this fresh session instead of always defaulting them (module docs on
+    /// [`Self::new`]).
+    ///
     /// # Errors
     ///
     /// See [`Self::load_default`].
     pub(super) fn load(
         source: crate::pack_source::PackSource,
+        options: new_game::NewGameOptions,
     ) -> Result<Self, OverworldSceneError> {
         // No session event-data exists yet at this point (`new_game::init_save_blocks`
         // hasn't run) -- a fresh store is the honest value: `SPAWN_MAP_ID` is
@@ -517,7 +528,7 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source);
+        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source, options);
         // The stand-in for the un-ported starter handout (issue #207
         // review): without a lead, every I-4 encounter would be rolled and
         // dropped. Deliberately drawing nothing from `phase.rng` — see
@@ -865,6 +876,7 @@ impl OverworldPhase {
             player,
             dialog,
             crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
         )
     }
 
@@ -880,9 +892,10 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
         pack_source: crate::pack_source::PackSource,
+        options: new_game::NewGameOptions,
     ) -> Self {
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
-        let (mut save1, save2) = new_game::init_save_blocks(&mut rng);
+        let (mut save1, save2) = new_game::init_save_blocks_with_options(&mut rng, options);
         // Entering the initial map is a map transition like any other. For
         // the production spawn bedroom, this hides its twelve decoration
         // placeholders; test maps receive their own transition effects.

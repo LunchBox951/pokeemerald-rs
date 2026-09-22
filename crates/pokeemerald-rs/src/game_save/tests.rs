@@ -92,6 +92,34 @@ fn a_slot_with_no_resolvable_path_loads_as_no_flash() {
     assert!(!saved.status.menu_shows_continue());
 }
 
+/// `SaveSlot::none` (the headless-real-scenario medium, `App::new_headless_real`)
+/// must load as `Empty`, not `NoFlash`: unlike `NoFlash`, `Empty` re-defaults
+/// `SaveBlock2` (`SaveFileStatus::boot_clears_save_block2`), so a scripted
+/// NEW GAME gets the same boot-defaulted options a real never-saved boot
+/// does, instead of `NoFlash`'s zero-filled placeholder bytes.
+#[test]
+fn a_none_slot_loads_as_empty_not_no_flash() {
+    let saved = SaveSlot::none().load();
+    assert_eq!(saved.status, SaveFileStatus::Empty);
+    assert!(saved.status.boot_clears_save_block2());
+    assert!(!saved.status.menu_shows_continue());
+}
+
+/// A `none` slot never opens a file, so a write attempt is refused exactly
+/// like `disabled`'s -- it must never touch a player's save.
+#[test]
+fn a_none_slot_never_writes() {
+    let mut slot = SaveSlot::none();
+    let err = slot
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::NewGame,
+        )
+        .expect_err("a none slot has no file to write to");
+    assert!(matches!(err, SaveFileError::NoDataDirectory));
+}
+
 #[test]
 fn a_written_slot_loads_back_ok_with_its_blocks() {
     let temp = TempSave::new("ok");
