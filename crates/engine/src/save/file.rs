@@ -223,6 +223,85 @@ fn refuse_an_unusable_entry(path: &Path) -> Result<(), UnusableEntry> {
     }
 }
 
+/// `open(2)`/`CreateFileW` flag and errno values `std` has no portable name
+/// for, needed so the open itself -- not just the [`refuse_an_unusable_entry`]
+/// check before it -- refuses a symlinked final component and never blocks
+/// on a FIFO's other end.
+#[cfg(unix)]
+mod open_flags {
+    // Linux's `<bits/fcntl-linux.h>` and `<asm-generic/errno.h>`.
+    #[cfg(target_os = "linux")]
+    pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
+    #[cfg(target_os = "linux")]
+    pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
+    #[cfg(target_os = "linux")]
+    pub(super) const ELOOP: i32 = 40;
+
+    // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
+    #[cfg(not(target_os = "linux"))]
+    pub(super) const O_NOFOLLOW: i32 = 0x0000_0100;
+    #[cfg(not(target_os = "linux"))]
+    pub(super) const O_NONBLOCK: i32 = 0x0000_0004;
+    #[cfg(not(target_os = "linux"))]
+    pub(super) const ELOOP: i32 = 62;
+}
+
+/// Windows's `<winbase.h>`.
+#[cfg(windows)]
+mod open_flags {
+    /// Opens a reparse point (a symlink, among others) itself rather than
+    /// following it.
+    pub(super) const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+}
+
+/// Adds the flags that close the window between [`refuse_an_unusable_entry`]
+/// and the open it precedes: an entry swapped for a symlink in that window
+/// can no longer be followed, and a FIFO swapped in cannot block the open.
+fn refuse_unusable_opens(options: &mut std::fs::OpenOptions) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(open_flags::O_NOFOLLOW | open_flags::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        options.custom_flags(open_flags::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+}
+
+/// Whether `error` is [`refuse_unusable_opens`]'s flags refusing to follow a
+/// symlinked final component.
+fn open_refused_a_symlink(error: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(open_flags::ELOOP)
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows opens the reparse point itself instead of failing the
+        // open; `refuse_an_unusable_open` catches it from the handle.
+        let _ = error;
+        false
+    }
+}
+
+/// Refuses an opened handle that is not a plain file after all: the one
+/// case [`refuse_unusable_opens`]'s flags cannot themselves refuse on
+/// Windows (a reparse point, opened rather than followed), or anything
+/// [`refuse_an_unusable_entry`] could have missed because the entry changed
+/// between that check and this open.
+fn refuse_an_unusable_open(file: &std::fs::File) -> Result<(), UnusableEntry> {
+    let opened = file.metadata().map_err(UnusableEntry::Inspect)?;
+    if opened.is_symlink() {
+        Err(UnusableEntry::IsAlias)
+    } else if opened.is_file() {
+        Ok(())
+    } else {
+        Err(UnusableEntry::NotAPlainFile)
+    }
+}
+
 /// Host convention used to resolve a per-user data directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFamily {
@@ -356,21 +435,24 @@ impl SaveFile {
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
-        refuse_an_unusable_entry(&self.path).map_err(|unusable| match unusable {
-            UnusableEntry::Inspect(source) => SaveFileError::Read {
-                path: self.path.clone(),
-                source,
-            },
-            UnusableEntry::IsAlias => SaveFileError::SavePathIsAlias {
-                path: self.path.clone(),
-            },
-            UnusableEntry::NotAPlainFile => SaveFileError::SavePathNotAPlainFile {
-                path: self.path.clone(),
-            },
-        })?;
-        let file = match std::fs::File::open(&self.path) {
+        // Refuses a symlink or a non-plain file up front, for a fast, typed
+        // error in the ordinary case; `refuse_unusable_opens` and
+        // `refuse_an_unusable_open` below close the window an entry swapped
+        // in between this check and the open could otherwise slip through.
+        refuse_an_unusable_entry(&self.path)
+            .map_err(|unusable| self.unusable_entry_error(unusable))?;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        refuse_unusable_opens(&mut options);
+        let file = match options.open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if open_refused_a_symlink(&err) => {
+                return Err(SaveFileError::SavePathIsAlias {
+                    path: self.path.clone(),
+                })
+            }
             Err(source) => {
                 return Err(SaveFileError::Read {
                     path: self.path.clone(),
@@ -378,6 +460,8 @@ impl SaveFile {
                 })
             }
         };
+        refuse_an_unusable_open(&file).map_err(|unusable| self.unusable_entry_error(unusable))?;
+
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
         // Borrow so the handle survives for `observed_length`'s metadata query.
@@ -402,6 +486,23 @@ impl SaveFile {
                 expected: store::FLASH_IMAGE_LEN,
                 got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// Folds an [`UnusableEntry`] classification of this save path into the
+    /// [`SaveFileError`] variant that names it.
+    fn unusable_entry_error(&self, unusable: UnusableEntry) -> SaveFileError {
+        match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::SavePathIsAlias {
+                path: self.path.clone(),
+            },
+            UnusableEntry::NotAPlainFile => SaveFileError::SavePathNotAPlainFile {
+                path: self.path.clone(),
+            },
+        }
     }
 
     /// The real length behind a bounded probe read's `bytes.len()`: exact

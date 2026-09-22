@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    refuse_an_unusable_entry, SaveFile, SaveFileError, SaveFileGuard, UnusableEntry, LOCK_FILE_NAME,
+    open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
+    refuse_unusable_opens, SaveFile, SaveFileError, SaveFileGuard, UnusableEntry, LOCK_FILE_NAME,
 };
 
 impl SaveFile {
@@ -68,7 +69,10 @@ impl SaveFile {
         Ok(SaveFileGuard { _lock_file: file })
     }
 
-    /// Opens this directory's vetted lock slot, without locking it.
+    /// Opens this directory's vetted lock slot, without locking it. The
+    /// pre-open [`Self::refuse_an_unusable_slot`] check and the open itself
+    /// both refuse a symlink or non-plain file, so a slot swapped between
+    /// the two cannot slip through either.
     ///
     /// # Errors
     ///
@@ -77,7 +81,27 @@ impl SaveFile {
     pub(super) fn open_lock_slot(&self) -> Result<std::fs::File, SaveFileError> {
         let path = self.lock_path();
         Self::refuse_an_unusable_slot(&path)?;
-        Self::open_lock_file(&path).map_err(|source| SaveFileError::Lock { path, source })
+        let file = Self::open_lock_file(&path).map_err(|source| {
+            if open_refused_a_symlink(&source) {
+                SaveFileError::LockPathIsAlias { path: path.clone() }
+            } else {
+                SaveFileError::Lock {
+                    path: path.clone(),
+                    source,
+                }
+            }
+        })?;
+        refuse_an_unusable_open(&file).map_err(|unusable| match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Lock {
+                path: path.clone(),
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::LockPathIsAlias { path: path.clone() },
+            UnusableEntry::NotAPlainFile => {
+                SaveFileError::LockPathNotAPlainFile { path: path.clone() }
+            }
+        })?;
+        Ok(file)
     }
 
     /// Refuses a symlinked or non-plain-file lock slot before anything opens
@@ -234,6 +258,7 @@ impl SaveFile {
             let mut existing = std::fs::OpenOptions::new();
             existing.read(true).write(true);
             Self::deny_delete_sharing(&mut existing);
+            refuse_unusable_opens(&mut existing);
             let denied = match existing.open(path) {
                 Err(denied) if denied.kind() == std::io::ErrorKind::PermissionDenied => denied,
                 result => return result,
@@ -241,6 +266,7 @@ impl SaveFile {
             let mut read_only = std::fs::OpenOptions::new();
             read_only.read(true);
             Self::deny_delete_sharing(&mut read_only);
+            refuse_unusable_opens(&mut read_only);
             match read_only.open(path) {
                 Err(still) if still.kind() == std::io::ErrorKind::PermissionDenied => {
                     if attempt == RETRIES {
