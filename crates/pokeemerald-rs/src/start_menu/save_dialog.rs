@@ -143,8 +143,7 @@ pub(super) struct SaveDialog {
 }
 
 impl SaveDialog {
-    /// Creates a save dialog at `StartMenuSaveCallback`, two callback ticks
-    /// before the confirmation prompt (`pokeemerald/src/start_menu.c:721-822`).
+    /// Creates a save dialog at its first callback tick.
     pub(super) fn new() -> Self {
         Self {
             state: SaveDialogState::EnterSaveStartCallback,
@@ -157,10 +156,6 @@ impl SaveDialog {
     }
 
     /// Advances the save dialog by one frame.
-    ///
-    /// The first two calls only advance through `StartMenuSaveCallback` and
-    /// `SaveStartCallback`; the prompt shows on the third
-    /// (`pokeemerald/src/start_menu.c:721-822,884-894,978-993`).
     ///
     /// A queued prompt-opening or store dispatches on the same tick its
     /// message finishes printing, matching `RunSaveCallback` observing

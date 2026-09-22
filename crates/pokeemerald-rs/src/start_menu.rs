@@ -257,10 +257,7 @@ impl StartMenu {
         }
         if buttons.is_newly_pressed(Buttons::A) {
             match self.items[self.cursor] {
-                // `gMenuCallback = StartMenuSaveCallback` (`:607-626`);
-                // `SaveDialog` preserves the following two callback-install
-                // ticks (`StartMenuSaveCallback` -> `SaveStartCallback` ->
-                // `InitSave`, `:721-728`, `:809-815`) before the prompt.
+                // `gMenuCallback = StartMenuSaveCallback` (`:607-626`).
                 StartMenuItem::Save => self.save = Some(SaveDialog::new()),
                 // `gMenuCallback = StartMenuExitCallback` (`:616`).
                 StartMenuItem::Exit => self.exit_pending = true,
