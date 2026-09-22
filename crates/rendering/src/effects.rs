@@ -17,6 +17,18 @@
 //! The hardware stores `EVA`, `EVB`, and `EVY` as 5-bit values, but mGBA caps
 //! each at 16 when its register is written
 //! (`mgba/src/gba/renderers/video-software.c:325-344`).
+//!
+//! An OBJ that is a target1 layer under Brighten or Darken can be brightened
+//! or darkened twice: once at draw time, when mGBA bakes its own variant
+//! palette straight into the stored pixel color for any OBJ whose own mode
+//! is `Normal`, independent of whatever entry later wins priority at that
+//! pixel (`mgba/src/gba/renderers/software-obj.c:177-203`); and again in the
+//! end-of-scanline reblend postprocess, whenever a semi-transparent OBJ
+//! later wins priority at that pixel (with any target2 present anywhere) and
+//! flag-only overwrites the stored color's order/reblend/target-1 bits
+//! without touching the color itself
+//! (`mgba/src/gba/renderers/software-obj.c:120-126`,
+//! `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
 
 use crate::palette::Rgb888;
 
@@ -206,9 +218,20 @@ pub fn backdrop_variant(
 
 /// Resolve the displayed color for a front layer and its immediate neighbor.
 ///
-/// `front` contains its color, layer kind, and whether sprite semi-transparency
-/// forces alpha blending. Only `next` can be a second target when present; the
+/// `front` contains its color, layer kind, whether the entry that currently
+/// owns priority forces alpha blending, and whether the entry that actually
+/// supplied `color` is itself [`ObjMode::SemiTransparent`](crate::oam::ObjMode::SemiTransparent)
+/// (see [`SpritePixel`](crate::sprite::SpritePixel)'s docs for why those two
+/// can differ). Only `next` can be a second target when present; the
 /// backdrop is considered only when no layer is behind `front`.
+///
+/// An OBJ that is a target1 layer under Brighten or Darken gets mGBA's
+/// draw-time variant applied to `color` first, exactly when the
+/// color-supplying entry is not semi-transparent, or no target2 exists
+/// anywhere in the frame (`mgba/src/gba/renderers/software-obj.c:177-203`)
+/// — this module's docs above explain why that stage exists separately from
+/// the ordinary target1 brighten/darken below, and why a target1 OBJ never
+/// falls through to that ordinary block.
 ///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
 /// window enable bit. If it fails to blend against an immediate second target
@@ -218,16 +241,44 @@ pub fn backdrop_variant(
 /// (`mgba/src/gba/renderers/software-obj.c:159,177-192`,
 /// `mgba/src/gba/renderers/software-private.h:54-65`,
 /// `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
+///
+/// Known gap: mGBA also suppresses a *Normal*-mode OBJ's draw-time variant
+/// (deferring it to this same target2 check) whenever `OBJWIN` is enabled
+/// with a blend-enable bit that differs from the pixel's own window's
+/// (`objwinSlowPath`, `mgba/src/gba/renderers/software-obj.c:176,180-192`),
+/// independent of `color_semi_transparent`. This function does not yet take
+/// an `objwinSlowPath` signal, so a Normal-mode color supplier in that
+/// specific window configuration can still diverge from mGBA by the same
+/// double/under brighten pattern this function otherwise guards against
+/// `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
     effects_enabled: bool,
     any_target2_enabled: bool,
-    front: (Rgb888, LayerKind, bool),
+    front: (Rgb888, LayerKind, bool, bool),
     next: Option<(Rgb888, LayerKind)>,
     backdrop: Rgb888,
 ) -> Rgb888 {
-    let (front_color, front_kind, forced_alpha) = front;
+    let (mut front_color, front_kind, forced_alpha, color_semi_transparent) = front;
+    let is_obj = matches!(front_kind, LayerKind::Obj);
+
+    // mGBA's draw-time OBJ variant (module docs above): applies whenever the
+    // OBJ layer is target1 under Brighten/Darken, and the color-supplying
+    // entry either isn't semi-transparent or finds no target2 anywhere to
+    // defer to the reblend postpass below.
+    if is_obj
+        && effects_enabled
+        && cfg.target1.obj
+        && (!color_semi_transparent || !any_target2_enabled)
+    {
+        front_color = match cfg.effect {
+            ColorEffect::Brighten => brighten(front_color, cfg.evy),
+            ColorEffect::Darken => darken(front_color, cfg.evy),
+            ColorEffect::None | ColorEffect::AlphaBlend => front_color,
+        };
+    }
+
     let can_have_second_target = !matches!(front_kind, LayerKind::Backdrop);
     let alpha_target1 = can_have_second_target
         && (forced_alpha
@@ -258,7 +309,10 @@ pub fn resolve_pixel_color(
         }
     }
 
-    if effects_enabled && cfg.target1.contains(front_kind) {
+    // The OBJ layer's target1 brighten/darken is already fully represented
+    // by the draw-time variant stage above, at its actual draw-time
+    // position; falling through here as well would double-apply it.
+    if effects_enabled && !is_obj && cfg.target1.contains(front_kind) {
         match cfg.effect {
             ColorEffect::Brighten => return brighten(front_color, cfg.evy),
             ColorEffect::Darken => return darken(front_color, cfg.evy),
@@ -823,12 +877,12 @@ mod tests {
         }
     }
 
-    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool) {
-        (color, kind, false)
+    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool, bool) {
+        (color, kind, false, false)
     }
 
-    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool) {
-        (color, LayerKind::Obj, true)
+    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool, bool) {
+        (color, LayerKind::Obj, true, true)
     }
 
     fn bg0_blends_with_bg1() -> EffectsConfig {
@@ -1001,6 +1055,40 @@ mod tests {
                 b: 127
             },
             "the surviving reblend OBJ receives mGBA's half-weight darken"
+        );
+    }
+
+    #[test]
+    fn resolve_promoted_transparent_obj_rebrightens_an_already_variant_normal_color() {
+        // A better-priority semi-transparent OBJ that is transparent at this
+        // pixel promotes priority (and forces alpha) without replacing the
+        // stored color, which still belongs to a worse-priority Normal OBJ
+        // that already got mGBA's draw-time variant (module docs above). The
+        // reblend postpass then brightens that already-brightened color a
+        // second time (`mgba/src/gba/renderers/software-obj.c:120-126,177-203`,
+        // `mgba/src/gba/renderers/video-software.c:982-1013`).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: 0,
+            evb: 0,
+            evy: HALF_WEIGHT,
+        };
+        // forced_alpha (from the promoting semi-transparent entry) is true;
+        // color_semi_transparent (from the Normal color supplier) is false.
+        let front = (Rgb888::BLACK, LayerKind::Obj, true, false);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result =
+            resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
+        assert_eq!(
+            result,
+            Rgb888 {
+                r: 191,
+                g: 191,
+                b: 191
+            },
+            "the colour supplier's own draw-time variant, plus the reblend postpass, brightens twice"
         );
     }
 

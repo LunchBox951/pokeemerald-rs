@@ -264,7 +264,11 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
-type Candidate = (OrderKey, Rgb888, LayerKind, bool);
+/// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
+/// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
+/// `semi_transparent`/`color_semi_transparent` split and are always `false`
+/// for a BG candidate.
+type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
@@ -478,6 +482,7 @@ fn compose_pixel(
                     pixel.color,
                     LayerKind::Obj,
                     pixel.semi_transparent,
+                    pixel.color_semi_transparent,
                 ),
             );
         }
@@ -507,22 +512,30 @@ fn compose_pixel(
                 color,
                 LayerKind::Bg(slot.bg_index),
                 false,
+                false,
             ),
         );
     }
 
-    let Some((_, front_color, front_kind, front_semi_transparent)) = front else {
+    let Some((_, front_color, front_kind, front_semi_transparent, front_color_semi_transparent)) =
+        front
+    else {
         // Nothing drawn: the backdrop itself is shown, already resolved to
         // its span variant (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
         return span_backdrop;
     };
-    let next = next.map(|(_, color, kind, _)| (color, kind));
+    let next = next.map(|(_, color, kind, _, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
         window.effects,
         any_target2,
-        (front_color, front_kind, front_semi_transparent),
+        (
+            front_color,
+            front_kind,
+            front_semi_transparent,
+            front_color_semi_transparent,
+        ),
         next,
         span_backdrop,
     )
@@ -2099,6 +2112,101 @@ mod tests {
             control_fb.pixel(0, 0),
             Some(Bgr555::from_channels(7, 0, 0).to_rgb888()),
             "without the OBJWIN hole, B keeps priority 2 and the BG wins"
+        );
+    }
+
+    #[test]
+    fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
+        // Slice-review correctness finding: a transparent, better-priority
+        // semi-transparent OBJ promotes priority over an already
+        // variant-brightened worse-priority Normal OBJ without replacing its
+        // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
+        // that worse-priority Normal OBJ's own draw-time variant into its
+        // stored color (`software-obj.c:177-203`), keeps that color through
+        // the promoting entry's flag-only overwrite (`software-obj.c:120-126`),
+        // and brightens the surviving pixel again in the reblend postpass
+        // (`video-software.c:982-1013`) -- a double brighten this crate must
+        // reproduce.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(1); // BG0: priority 1, not target2
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(2); // BG1: priority 2, target2
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true),
+            BgSlot::new(layer_b, 1, 2, 0, 0, true),
+        ];
+
+        // Tile 0: opaque everywhere at palette index 15 (the worse-priority
+        // Normal OBJ). Tile 1: fully transparent (the better-priority
+        // semi-transparent OBJ, transparent at (0, 0)).
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].fill(0xFF);
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(8, 4, 2);
+        let sprite_palette = Palette::new(sprite_colors);
+        let worse_priority_opaque_normal = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2, // worse priority
+            true,
+        );
+        let better_priority_transparent_semi = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0, // better priority
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent);
+        let entries = [
+            worse_priority_opaque_normal,
+            better_priority_transparent_semi,
+        ];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [false; 4],
+                    obj: true,
+                    backdrop: false,
+                },
+                target2: LayerTargets {
+                    bg: [false, true, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 8,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Rgb888 {
+                r: 207,
+                g: 199,
+                b: 195,
+            }),
+            "the retained Normal OBJ variant color is brightened again by the reblend postpass"
         );
     }
 
