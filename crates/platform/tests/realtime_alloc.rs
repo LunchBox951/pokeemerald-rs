@@ -66,7 +66,7 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOCATOR: Counting = Counting;
 
 const CHANNELS: u16 = 2;
-const SOURCE_RATE: u32 = 13_379;
+const SOURCE_RATE: f64 = 13_379.0;
 const DEVICE_RATE: u32 = 48_000;
 /// The largest callback size the device advertised, which is all
 /// `Resampler::new` gets to pre-size against.
