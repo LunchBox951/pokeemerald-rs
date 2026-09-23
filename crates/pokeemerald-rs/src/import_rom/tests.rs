@@ -486,6 +486,7 @@ fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
     // A level recorded without its own descriptor (the reopen right after
