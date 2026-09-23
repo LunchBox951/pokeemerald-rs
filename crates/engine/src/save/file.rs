@@ -5,14 +5,20 @@
 //! [`SaveStore`]; the sibling entry a write is staged into is owned by the
 //! private `staging` submodule, and the inter-process lock slot -- its
 //! validation, identity, staging, and platform-sharing rules -- is owned by
-//! the private `lock` submodule.
+//! the private `lock` submodule. Whether an entry at either path is a plain
+//! file safe to open is decided by the private `open` submodule.
 
 mod lock;
+mod open;
 mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::open::{
+    open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
+    refuse_unusable_opens, UnusableEntry,
+};
 use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
@@ -179,126 +185,6 @@ impl std::error::Error for SaveFileError {
             | Self::SavePathNotAPlainFile { .. }
             | Self::BadLength { .. } => None,
         }
-    }
-}
-
-/// What is wrong with an entry [`refuse_an_unusable_entry`] inspected, for
-/// the caller to fold into whichever [`SaveFileError`] variant fits its own
-/// path (a save path or a lock slot).
-enum UnusableEntry {
-    /// The entry could not be inspected at all.
-    Inspect(std::io::Error),
-    /// The entry is a symlink instead of naming the file it opens.
-    IsAlias,
-    /// The entry exists and is not a symlink, but is not a plain file
-    /// either -- a directory, socket, device, or FIFO.
-    NotAPlainFile,
-}
-
-/// Refuses a symlinked or non-plain-file entry before anything opens it,
-/// since the open would follow the link or block on a FIFO. A missing entry
-/// is fine: the caller's own open reports that in its own way.
-///
-/// This is the one policy [`SaveFile::read`] and the lock slot's
-/// `open_lock_slot` share for "what counts as a plain file here", so the two
-/// can never quietly disagree.
-///
-/// # Errors
-///
-/// [`UnusableEntry::IsAlias`] if `path` is a symlink; [`UnusableEntry::NotAPlainFile`]
-/// if it is anything else that is not a plain file; [`UnusableEntry::Inspect`]
-/// if it could not be inspected.
-fn refuse_an_unusable_entry(path: &Path) -> Result<(), UnusableEntry> {
-    let entry = match std::fs::symlink_metadata(path) {
-        Ok(entry) => entry,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => return Err(UnusableEntry::Inspect(source)),
-    };
-    if entry.is_symlink() {
-        Err(UnusableEntry::IsAlias)
-    } else if entry.is_file() {
-        Ok(())
-    } else {
-        Err(UnusableEntry::NotAPlainFile)
-    }
-}
-
-/// `open(2)`/`CreateFileW` flag and errno values `std` has no portable name
-/// for, needed so the open itself -- not just the [`refuse_an_unusable_entry`]
-/// check before it -- refuses a symlinked final component and never blocks
-/// on a FIFO's other end.
-#[cfg(unix)]
-mod open_flags {
-    // Linux's `<bits/fcntl-linux.h>` and `<asm-generic/errno.h>`.
-    #[cfg(target_os = "linux")]
-    pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
-    #[cfg(target_os = "linux")]
-    pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
-    #[cfg(target_os = "linux")]
-    pub(super) const ELOOP: i32 = 40;
-
-    // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
-    #[cfg(not(target_os = "linux"))]
-    pub(super) const O_NOFOLLOW: i32 = 0x0000_0100;
-    #[cfg(not(target_os = "linux"))]
-    pub(super) const O_NONBLOCK: i32 = 0x0000_0004;
-    #[cfg(not(target_os = "linux"))]
-    pub(super) const ELOOP: i32 = 62;
-}
-
-/// Windows's `<winbase.h>`.
-#[cfg(windows)]
-mod open_flags {
-    /// Opens a reparse point (a symlink, among others) itself rather than
-    /// following it.
-    pub(super) const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-}
-
-/// Adds the flags that close the window between [`refuse_an_unusable_entry`]
-/// and the open it precedes: an entry swapped for a symlink in that window
-/// can no longer be followed, and a FIFO swapped in cannot block the open.
-fn refuse_unusable_opens(options: &mut std::fs::OpenOptions) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(open_flags::O_NOFOLLOW | open_flags::O_NONBLOCK);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        options.custom_flags(open_flags::FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-}
-
-/// Whether `error` is [`refuse_unusable_opens`]'s flags refusing to follow a
-/// symlinked final component.
-fn open_refused_a_symlink(error: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    {
-        error.raw_os_error() == Some(open_flags::ELOOP)
-    }
-    #[cfg(not(unix))]
-    {
-        // Windows opens the reparse point itself instead of failing the
-        // open; `refuse_an_unusable_open` catches it from the handle.
-        let _ = error;
-        false
-    }
-}
-
-/// Refuses an opened handle that is not a plain file after all: the one
-/// case [`refuse_unusable_opens`]'s flags cannot themselves refuse on
-/// Windows (a reparse point, opened rather than followed), or anything
-/// [`refuse_an_unusable_entry`] could have missed because the entry changed
-/// between that check and this open.
-fn refuse_an_unusable_open(file: &std::fs::File) -> Result<(), UnusableEntry> {
-    let opened = file.metadata().map_err(UnusableEntry::Inspect)?;
-    if opened.is_symlink() {
-        Err(UnusableEntry::IsAlias)
-    } else if opened.is_file() {
-        Ok(())
-    } else {
-        Err(UnusableEntry::NotAPlainFile)
     }
 }
 

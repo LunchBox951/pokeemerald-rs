@@ -7,10 +7,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{
+use super::open::{
     open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
-    refuse_unusable_opens, SaveFile, SaveFileError, SaveFileGuard, UnusableEntry, LOCK_FILE_NAME,
+    refuse_unusable_opens, UnusableEntry,
 };
+use super::{SaveFile, SaveFileError, SaveFileGuard, LOCK_FILE_NAME};
 
 impl SaveFile {
     /// Acquires an advisory inter-process lock for this save path.
