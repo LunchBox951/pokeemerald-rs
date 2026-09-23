@@ -44,8 +44,9 @@
 //! `start_npc_trainer_battle`/`advance_npc_trainer_battle` path, against one
 //! of the six Route 103 *rivals* (proven constructible by
 //! `route103_rival::tests::all_six_rivals_construct_and_play_to_a_terminal_outcome`)
-//! as a stand-in party, while `sight_trainer_id` is still set to Rhett's own
-//! real `TrainerId` -- so the *defeated-flag* half is pinned honestly (the
+//! as a stand-in party, while the `ActiveBattle::SightTrainer` variant
+//! carries Rhett's own real `TrainerId` -- so the *defeated-flag* half is
+//! pinned honestly (the
 //! real id the flag ends up keyed to) even though the *party* is borrowed.
 //! Once a future move-coverage slice lets a real sight trainer construct,
 //! the two halves should be merged back into one real end-to-end test.
