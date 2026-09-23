@@ -96,7 +96,7 @@
 //!
 //! It drives [`App::step`] (pump input, advance `flow::advance_scene`'s
 //! title arm, pace, present) and compares against title frames composed
-//! independently via [`title::load_default`], so no assertion can pass by
+//! independently via [`title::load_repo`], so no assertion can pass by
 //! comparing a value with itself. The presented-frame assertions read
 //! `platform::Platform::last_presented` -- the frame the null backend
 //! actually received -- rather than [`App::frame`], which `step` sets
@@ -120,7 +120,7 @@
 //! This is the evidence for I-2 "boots to the title screen". Before it, the
 //! pack-backed title coverage (`animated_frame_returns_the_presented_tick`,
 //! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) all called
-//! [`title::load_default`]/`compose` directly, and went through neither
+//! [`title::load_repo`]/`compose` directly, and went through neither
 //! construction nor presentation.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
