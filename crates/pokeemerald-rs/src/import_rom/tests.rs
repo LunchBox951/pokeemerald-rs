@@ -487,6 +487,26 @@ fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
 }
 
 #[test]
+fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
+    // A level recorded without its own descriptor (the reopen right after
+    // `mkdirat` failed) has nothing pinning its inode, so the cleanup cannot
+    // tell it from a same-number replacement and leaves it alone.
+    let dir = TempDir::new("undo-unpinned");
+    let level = dir.join("new");
+
+    let mut created = create_directories(&level).expect("the missing level is created");
+    assert_eq!(created_paths(&created), std::slice::from_ref(&level));
+    created[0].own = None;
+
+    super::undo_created_directories(&created);
+
+    assert!(
+        level.is_dir(),
+        "an unpinned level must be left standing, not removed by identity alone"
+    );
+}
+
+#[test]
 fn a_pack_directory_spelled_through_dotdot_still_imports() {
     // `directories_to_create` walks lexically (`Path::parent`), so a
     // destination spelled through `..` produces a level whose

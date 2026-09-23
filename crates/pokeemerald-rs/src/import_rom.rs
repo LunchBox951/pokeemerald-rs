@@ -124,10 +124,9 @@
 //! back (ext4 and XFS both do), which a bare comparison would accept. Each
 //! level's own descriptor is therefore held open until cleanup is done:
 //! the inode it pins stays allocated after its name is gone, so a
-//! replacement cannot carry its number. The one level recorded without that
-//! pin is one whose reopen right after `mkdirat` itself failed (a full
-//! descriptor table, say); it is still matched by device and inode, so
-//! only there does removal plus same-number reuse stay possible.
+//! replacement cannot carry its number. A level whose reopen right after
+//! `mkdirat` itself failed (a full descriptor table, say) has no pin, so
+//! cleanup leaves it standing rather than trust device and inode alone.
 //!
 //! That identity is captured by reopening the level `mkdirat` just made,
 //! which is itself two syscalls, not one — `mkdirat` returns no descriptor
@@ -779,8 +778,8 @@ struct CreatedDirectory {
     /// the next directory made at that name. An open descriptor keeps this
     /// level's inode allocated even after its name is gone, so no
     /// replacement can carry its number. `None` only when the reopen right
-    /// after `mkdirat` failed; that level is then matched by
-    /// [`CreatedDirectory::identity`] alone, unpinned (module docs).
+    /// after `mkdirat` failed; cleanup then leaves that level standing
+    /// (module docs).
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
@@ -1050,9 +1049,9 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// path: a rollback can run an arbitrary interval after the create (module
 /// docs), so `dir.name` is looked up in `dir.parent` and compared against
 /// the device and inode `create_directories` captured, without following a
-/// final symlink -- and, while the level's own descriptor is held, against
-/// that descriptor's `fstat` too, whose inode cannot have been freed and
-/// reissued to a replacement. Only a match is removed, by that same lookup
+/// final symlink -- and against the level's own held descriptor's `fstat`,
+/// whose inode cannot have been freed and reissued to a replacement; a
+/// level with no held descriptor is never removed. Only a match is removed, by that same lookup
 /// (`unlinkat`, which a held descriptor does not prevent), never a name that
 /// now resolves to something else -- that is left standing as harmless
 /// litter rather than taken on the strength of its spelling alone.
@@ -1068,7 +1067,7 @@ fn undo_created_directories(created: &[CreatedDirectory]) {
         ) {
             Ok(stat)
                 if same(&stat, &dir.identity)
-                    && dir.own.as_ref().is_none_or(|own| {
+                    && dir.own.as_ref().is_some_and(|own| {
                         rustix::fs::fstat(&**own).is_ok_and(|held| same(&stat, &held))
                     }) =>
             {
