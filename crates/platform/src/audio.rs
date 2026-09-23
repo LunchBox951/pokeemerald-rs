@@ -795,8 +795,6 @@ mod tests {
 
     #[test]
     fn source_for_device_never_takes_the_direct_shortcut_even_at_the_exact_mixer_rate() {
-        // Coverage for the removed `device_sample_rate == M4A_MIXER_RATE`
-        // direct-passthrough branch; see `Source`'s docs.
         let (_producer, consumer) = ring_buffer(64);
         let source = source_for_device(
             consumer,

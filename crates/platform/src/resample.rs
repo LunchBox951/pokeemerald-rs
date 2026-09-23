@@ -164,15 +164,11 @@ impl Resampler {
 
         // One output frame's advance can need `ceil(step)` source frames, so
         // no chunk size can resolve a `step` past the scratch cap without
-        // extrapolating. `step.is_nan() || step <= 0.0` also catches a
-        // non-finite, negative, or zero `source_rate` (`<=` so `0.0`/`-0.0`
-        // are refused too, not just strictly-negative values) — `source_rate`
-        // is `f64` now (an exact cadence, not a rounded Hz count), so this
-        // refusal is what keeps that widened input space from ever reaching
-        // `frac`. A zero `step` is not merely out of range: `fill_chunk`'s
-        // advance (`self.frac += self.step`) would never cross a source-frame
-        // boundary, so playback would stick on the first primed frame forever
-        // while the ring buffer it stops draining silently overruns.
+        // extrapolating. `step.is_nan() || step <= 0.0` refuses a non-finite,
+        // negative, or zero `source_rate` (`<=` so `0.0` and `-0.0` are
+        // refused too); a zero `step` would never cross a source-frame
+        // boundary, sticking playback on the first primed frame while the
+        // ring overruns.
         #[expect(
             clippy::cast_precision_loss,
             reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
