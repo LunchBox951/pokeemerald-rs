@@ -270,6 +270,42 @@ fn cgb_channel_always_reuses_a_released_occupant() {
 }
 
 #[test]
+fn a_stopped_direct_sound_track_vacates_its_slot_immediately() {
+    let mut mixer = mixer_with_full_pool(vec![voice(1, u8::MAX, 60)]);
+
+    mixer.stop_track(1);
+
+    assert!(
+        mixer.direct_sound_slots[0].is_none(),
+        "the stopped voice's slot must be vacant before another mix frame"
+    );
+    assert!(mixer.add_voice(voice(2, u8::MIN, 70)));
+    assert_eq!(occupied_slot(&mixer, 0).midi_key(), 70);
+}
+
+#[test]
+fn a_stopped_cgb_track_vacates_its_slot_immediately() {
+    let mut mixer = Mixer::default();
+    let slot = CgbChannelNumber::Square1.slot();
+    assert!(mixer.add_cgb_voice(cgb_voice(1, u8::MAX, 60)));
+
+    mixer.stop_track(1);
+
+    assert!(
+        mixer.cgb_voices()[slot].is_none(),
+        "the stopped voice's slot must be vacant before another mix frame"
+    );
+    assert!(mixer.add_cgb_voice(cgb_voice(2, u8::MIN, 70)));
+    assert_eq!(
+        mixer.cgb_voices()[slot]
+            .as_ref()
+            .expect("replacement present")
+            .midi_key(),
+        70
+    );
+}
+
+#[test]
 fn a_cgb_note_only_contends_for_its_own_hardware_channel() {
     let mut mixer = Mixer::default();
     assert!(mixer.add_cgb_voice(cgb_voice(0, u8::MAX, 60)));
