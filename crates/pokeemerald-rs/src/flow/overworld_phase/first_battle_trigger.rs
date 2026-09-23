@@ -502,9 +502,7 @@ impl OverworldPhase {
     /// Play one frame of an in-progress scripted first battle (issue #231)
     /// — [`OverworldPhase::advance_active_battle_frame`]'s `First` arm,
     /// mirroring [`OverworldPhase::advance_wild_battle_frame`]'s shape exactly
-    /// except for which driver it calls. Same "hand the taken battle to a
-    /// local `Option` slot, then report whether it is still occupied"
-    /// adapter that method's own docs explain (issue #460).
+    /// except for which driver it calls.
     ///
     /// Nothing here touches `VAR_ROUTE101_STATE` directly:
     /// [`OverworldPhase::begin_first_battle`] already consumed the trigger

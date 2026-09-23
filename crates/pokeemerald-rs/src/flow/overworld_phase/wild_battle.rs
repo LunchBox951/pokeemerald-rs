@@ -40,9 +40,7 @@ impl OverworldPhase {
     /// with the [`ActiveBattle::Wild`] variant's own battle already taken
     /// out of [`OverworldPhase::active_battle`]. Returns the same battle,
     /// re-wrapped, if it is still in progress, or `None` once it has ended
-    /// or aborted -- mirroring this method's former shape as a bare `bool`
-    /// frame-ownership gate over its own field, before issue #460 folded
-    /// that field into [`ActiveBattle`].
+    /// or aborted.
     ///
     /// The turn itself, and writing the player's mon back when the battle
     /// ends, are [`wild_encounter::advance_wild_battle`]'s; this is only the

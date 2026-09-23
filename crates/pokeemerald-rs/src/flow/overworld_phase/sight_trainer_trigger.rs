@@ -524,9 +524,8 @@ impl OverworldPhase {
     /// [`OverworldPhase::advance_active_battle_frame`]'s `SightTrainer` arm,
     /// mirroring
     /// [`super::route103_rival_trigger::OverworldPhase::advance_route103_rival_battle_frame`]'s
-    /// shape (issue #460's same "local `Option` slot" adapter), with
-    /// [`TRAINER_FLAGS_START`] in place of a bespoke hide flag on a win
-    /// (`SetBattledTrainersFlags`, that constant's own docs) and
+    /// shape, with [`TRAINER_FLAGS_START`] in place of a bespoke hide flag on
+    /// a win (`SetBattledTrainersFlags`, that constant's own docs) and
     /// `CB2_EndTrainerBattle`'s `IsPlayerDefeated` white-out on a loss.
     pub(super) fn advance_sight_trainer_battle_frame(
         &mut self,
@@ -560,10 +559,8 @@ impl OverworldPhase {
             }
         }
         // `trainer_id` is dropped along with the rest of
-        // `ActiveBattle::SightTrainer` the instant `slot` empties, slot-based
-        // rather than outcome-based -- issue #460 retires the separate
-        // `sight_trainer_id` field this comment used to explain the abort
-        // clause of.
+        // `ActiveBattle::SightTrainer` the instant `slot` empties -- an
+        // abort clears it too, not only a reported outcome.
         slot.map(|battle| ActiveBattle::SightTrainer { battle, trainer_id })
     }
 }

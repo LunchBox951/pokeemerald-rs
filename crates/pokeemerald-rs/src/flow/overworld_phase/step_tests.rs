@@ -1442,15 +1442,10 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
     );
 }
 
-/// Issue #460's own regression: [`ActiveBattle`] makes "never more than one
-/// battle at a time" a type-level fact rather than a doc-comment invariant
-/// over four parallel `Option<Battle>` fields. Installs each variant of
-/// [`OverworldPhase::active_battle`] in turn and pins that exactly one
-/// `is_*_battle_active` accessor agrees with it, `in_battle()` is true
-/// throughout, and every accessor projects the single owning variant --
-/// the runtime half of a fact the enum's shape already guarantees at
-/// compile time (a second variant simply cannot coexist in the same
-/// `Option`, unlike the four retired fields it replaced).
+/// At most one battle owns the overworld frame at a time. Installs each
+/// [`OverworldPhase::active_battle`] variant in turn and pins that exactly
+/// one `is_*_battle_active` accessor agrees with it, `in_battle()` is true
+/// throughout, and every accessor projects the single owning variant.
 #[test]
 fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
     use crate::flow::npc_trainer_battle;
@@ -1540,12 +1535,8 @@ fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
             "is_sight_trainer_battle_active must agree with the installed variant"
         );
 
-        // Ending the battle -- here, simply taking it, the same "the slot
-        // empties" postcondition every real driver arm leaves behind --
-        // drops the whole variant at once, `trainer_id` included, with no
-        // separate clear required (module docs on `route103_rival_trigger`'s
-        // and `sight_trainer_trigger`'s own former `rival_trainer_id`/
-        // `sight_trainer_id` fields).
+        // Clearing the slot drops the whole variant at once, `trainer_id`
+        // included.
         phase.active_battle = None;
         assert!(!phase.in_battle());
         assert!(!phase.is_wild_battle_active());

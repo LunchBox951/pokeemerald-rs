@@ -404,8 +404,7 @@ impl OverworldPhase {
     /// -- [`OverworldPhase::advance_active_battle_frame`]'s `Rival` arm,
     /// mirroring
     /// [`super::first_battle_trigger::OverworldPhase::advance_first_battle_frame`]'s
-    /// shape (issue #460's same "local `Option` slot" adapter) with two
-    /// additions on [`battle::BattleOutcome::PlayerWon`]: sets
+    /// shape, with two additions on [`battle::BattleOutcome::PlayerWon`]: sets
     /// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's
     /// [`TRAINER_FLAGS_START`] flag, on no other outcome -- matching
     /// `CB2_EndTrainerBattle`'s non-defeat/defeat `if`/`else if` split.
@@ -457,9 +456,7 @@ impl OverworldPhase {
         // `advance_npc_trainer_battle` can also end the battle with no
         // outcome at all, on a failed turn
         // (`npc_trainer_battle::finalize_battle_turn`'s own `turn_failed`
-        // abort) -- issue #460 retires the separate `rival_trainer_id` field
-        // this comment used to explain the staleness of, since there is no
-        // longer a sibling field for it to go stale relative to.
+        // abort).
         slot.map(|battle| ActiveBattle::Rival { battle, trainer_id })
     }
 }
