@@ -93,6 +93,16 @@ impl Source {
             Self::Resampled(resampler) => resampler.fill(out),
         }
     }
+
+    /// See [`AudioOutput::playback_settle_margin_frames`]: zero for `Direct`
+    /// (no interpolation buffering to defer a lookahead pull through), the
+    /// resampler's own [`Resampler::settle_margin_frames`] for `Resampled`.
+    fn settle_margin_frames(&self) -> u64 {
+        match self {
+            Self::Direct(_) => 0,
+            Self::Resampled(resampler) => resampler.settle_margin_frames(),
+        }
+    }
 }
 
 /// Build the [`Source`] a real device's stream is driven through — see
@@ -270,6 +280,9 @@ pub struct AudioOutput {
     max_callback_frames: usize,
     /// Measured playback-position signal — see [`Self::playback_progress`].
     playback_clock: Arc<PlaybackClock>,
+    /// See [`Self::playback_settle_margin_frames`]. Fixed at construction
+    /// (a function of the source's resample step, which never changes).
+    settle_margin_frames: u64,
 }
 
 impl AudioOutput {
@@ -357,6 +370,7 @@ impl AudioOutput {
             device_sample_rate,
             max_buffer_frames(&config),
         )?;
+        let settle_margin_frames = source.settle_margin_frames();
 
         let stream_errors = Arc::new(AtomicU64::new(0));
         let playback_clock = Arc::new(PlaybackClock::new());
@@ -378,6 +392,7 @@ impl AudioOutput {
             stream_errors,
             max_callback_frames: max_buffer_frames(&config),
             playback_clock,
+            settle_margin_frames,
         })
     }
 
@@ -386,7 +401,11 @@ impl AudioOutput {
     /// Always available (no hardware required), and the only backend unit
     /// tests may construct — CI runners have no audio device, so `cargo
     /// test` must never open a real `cpal` stream. Drive it by hand with
-    /// [`AudioOutput::pull_null`].
+    /// [`AudioOutput::pull_null`]. Always plays samples straight through with
+    /// no interpolation buffering (see the module docs), so
+    /// [`Self::playback_settle_margin_frames`] is always `0`; a test that
+    /// needs to exercise a resampler's deferred-lookahead tail without a real
+    /// `cpal` device wants [`Self::null_resampled`] instead.
     #[must_use]
     pub fn null(ring_capacity_frames: usize) -> Self {
         let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(Self::CHANNELS));
@@ -400,7 +419,54 @@ impl AudioOutput {
             stream_errors: Arc::new(AtomicU64::new(0)),
             max_callback_frames: 0,
             playback_clock: Arc::new(PlaybackClock::new()),
+            settle_margin_frames: 0,
         }
+    }
+
+    /// Test-only headless backend that resamples like a real device instead
+    /// of playing samples straight through, so a test can exercise
+    /// [`Self::playback_settle_margin_frames`]'s nonzero (real-device) case
+    /// through [`Self::pull_null`] without a real `cpal` device. Otherwise
+    /// identical to [`Self::null`]: `source_rate`/`device_rate` feed
+    /// [`crate::resample::Resampler::new`] exactly as a real device's
+    /// negotiated rate would.
+    ///
+    /// # Errors
+    ///
+    /// See [`crate::resample::Resampler::new`]'s `UnsupportedResampleRatio` doc.
+    #[doc(hidden)]
+    pub fn null_resampled(
+        ring_capacity_frames: usize,
+        source_rate: f64,
+        device_rate: u32,
+        max_output_frames: usize,
+    ) -> Result<Self, PlatformError> {
+        let channels = Self::CHANNELS;
+        let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(channels));
+        // Unlike `source_for_device` (which always resamples from the fixed
+        // M4A source cadence), this test seam takes `source_rate` directly so
+        // a test can reproduce an exact rate ratio (e.g. the reviewer's
+        // step = 0.25 regression) without depending on that constant.
+        let source = Source::Resampled(Resampler::new(
+            consumer,
+            channels,
+            source_rate,
+            device_rate,
+            max_output_frames,
+        )?);
+        let settle_margin_frames = source.settle_margin_frames();
+        Ok(Self {
+            backend: Backend::Null(source),
+            producer,
+            sample_rate: Self::M4A_MIXER_RATE,
+            device_sample_rate: device_rate,
+            channels,
+            running: false,
+            stream_errors: Arc::new(AtomicU64::new(0)),
+            max_callback_frames: 0,
+            playback_clock: Arc::new(PlaybackClock::new()),
+            settle_margin_frames,
+        })
     }
 
     /// Start (or resume) playback.
@@ -532,6 +598,24 @@ impl AudioOutput {
             submitted_frames: self.playback_clock.submitted_frames.load(Ordering::Acquire),
             sounded_frames: self.playback_clock.sounded_frames.load(Ordering::Acquire),
         })
+    }
+
+    /// Extra device frames, beyond a [`Self::playback_progress`] snapshot's
+    /// `submitted_frames`, that may still carry real, audible content sounded
+    /// from a [`crate::resample::Resampler`]'s buffered interpolation state —
+    /// see that type's module docs' "deferred lookahead pull". Always `0` for
+    /// the null backend (see [`Self::null`]) and any device whose source
+    /// plays samples straight through with no interpolation buffering.
+    ///
+    /// A caller latching a "done" target from `submitted_frames` the instant
+    /// its own ring reads empty (as `pokeemerald_rs::music::player::MusicPlayer::drained`
+    /// and the `play_song` example's tail wait both do) must add this margin
+    /// to that target before waiting for `sounded_frames` to reach it, or it
+    /// can end the wait one callback before the resampler's real, decaying
+    /// tail actually finishes sounding.
+    #[must_use]
+    pub fn playback_settle_margin_frames(&self) -> u64 {
+        self.settle_margin_frames
     }
 
     /// Marks this instance's playback-position signal available, as a real
@@ -1354,6 +1438,55 @@ mod tests {
         // Monotonic even for the fake clock: a lower value must not regress it.
         output.advance_sounded_frames_for_test(1);
         assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
+    }
+
+    #[test]
+    fn the_null_backend_reports_a_zero_settle_margin() {
+        assert_eq!(AudioOutput::null(256).playback_settle_margin_frames(), 0);
+    }
+
+    #[test]
+    fn null_resampled_reports_the_resamplers_own_settle_margin() {
+        // Same rates as the module-level regression this margin exists to
+        // fix (see `crate::resample`'s `a_ring_emptied_mid_callback_still_sounds_real_audio_in_the_next_one`):
+        // step = 25/100 = 0.25.
+        let output = AudioOutput::null_resampled(64, 25.0, 100, 16)
+            .expect("a real rate ratio must always construct a Resampler");
+        assert_eq!(output.playback_settle_margin_frames(), 8);
+    }
+
+    #[test]
+    fn null_resampled_refuses_the_same_rate_ratios_resampler_new_refuses() {
+        // `AudioOutput` has no `Debug` impl (it owns a non-`Debug` `cpal::Stream`
+        // on the real-device path), so the failure is matched out by hand
+        // rather than via `expect_err`.
+        let Err(err) = AudioOutput::null_resampled(64, f64::NAN, 100, 16) else {
+            panic!("a non-finite source rate must be refused");
+        };
+        assert!(matches!(
+            err,
+            PlatformError::UnsupportedResampleRatio { .. }
+        ));
+    }
+
+    #[test]
+    fn pull_null_drives_a_resampled_source_and_advances_submitted_frames_by_stereo_frames() {
+        let mut output = AudioOutput::null_resampled(64, 25.0, 100, 16)
+            .expect("a real rate ratio must always construct a Resampler");
+        let producer = output.producer();
+        // One interleaved stereo source frame: `null_resampled` always uses
+        // `AudioOutput::CHANNELS` (stereo), matching every real device.
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+
+        output.enable_playback_progress_for_test();
+        let mut out = [0.0_f32; 4]; // two interleaved stereo output frames
+        output.pull_null(&mut out);
+        assert_eq!(
+            output.playback_progress().unwrap().submitted_frames,
+            2,
+            "submitted_frames must count stereo frames (out.len() / channels), not raw \
+             interleaved samples, exactly as the real device callback does"
+        );
     }
 
     #[test]

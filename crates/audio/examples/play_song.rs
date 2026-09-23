@@ -133,10 +133,16 @@ fn main() -> ExitCode {
     // Prefer the device's own measured playback position when it has one
     // (see `platform::AudioOutput::playback_progress`); the derived
     // `device_tail_wait` bound below is only the fallback for a host that
-    // never reports a usable timestamp.
-    let submitted_target = output
-        .playback_progress()
-        .map(|progress| progress.submitted_frames);
+    // never reports a usable timestamp. The target is widened by the
+    // resampler's own settle margin (`playback_settle_margin_frames`), or a
+    // resampled device's buffered interpolation tail could still be sounding
+    // real audio after the wait already ended -- see `measured_drain_target`.
+    let submitted_target = output.playback_progress().map(|progress| {
+        measured_drain_target(
+            progress.submitted_frames,
+            output.playback_settle_margin_frames(),
+        )
+    });
     let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
     let tail_result = wait_for_device_tail_or_measured(
         submitted_target,
@@ -437,6 +443,19 @@ fn wait_for_drain(
     }
 }
 
+/// The measured wait's target: `submitted_frames` plus `settle_margin_frames`
+/// (`platform::AudioOutput::playback_settle_margin_frames`, read at the same
+/// poll), so a target latched from `AudioOutput::playback_progress` does not
+/// stop waiting before a resampled device's buffered interpolation state
+/// finishes sounding real audio -- see `platform::Resampler`'s deferred
+/// lookahead pull. Zero margin (no resampling, or an exact-rate device)
+/// leaves the raw submitted-frame count unchanged. Saturates rather than
+/// overflowing -- `submitted_frames` is a real device's frame counter,
+/// nowhere near `u64::MAX`.
+fn measured_drain_target(submitted_frames: u64, settle_margin_frames: u64) -> u64 {
+    submitted_frames.saturating_add(settle_margin_frames)
+}
+
 /// Fallback for a device with no measured playback position (see
 /// `platform::AudioOutput::playback_progress` and
 /// [`wait_for_device_tail_or_measured`]): how long the device may still be
@@ -577,10 +596,11 @@ mod tests {
     use platform::{AudioOutput, PlatformError};
 
     use super::{
-        build_song, classify_open_error, device_tail_wait, prefill_then_start, push_frame,
-        start_playback, wait_for_device_tail, wait_for_device_tail_or_measured, wait_for_drain,
-        wait_for_frame_deadline, wait_for_measured_tail, DrainError, OpenOutcome, PushError,
-        RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        build_song, classify_open_error, device_tail_wait, measured_drain_target,
+        prefill_then_start, push_frame, start_playback, wait_for_device_tail,
+        wait_for_device_tail_or_measured, wait_for_drain, wait_for_frame_deadline,
+        wait_for_measured_tail, DrainError, OpenOutcome, PushError, RetryPolicy, StartOutcome,
+        DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -1108,6 +1128,17 @@ mod tests {
         // callback buffer is far smaller, so waiting the maximum would look
         // like a hang.
         assert_eq!(device_tail_wait(Some(480_000), 48_000), DEVICE_TAIL_MAX);
+    }
+
+    #[test]
+    fn measured_drain_target_adds_the_settle_margin() {
+        assert_eq!(measured_drain_target(100, 8), 108);
+        assert_eq!(measured_drain_target(100, 0), 100);
+    }
+
+    #[test]
+    fn measured_drain_target_saturates_rather_than_overflowing() {
+        assert_eq!(measured_drain_target(u64::MAX, 5), u64::MAX);
     }
 
     #[test]

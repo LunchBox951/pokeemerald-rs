@@ -104,6 +104,23 @@ const fn game_frames_in(millis: usize) -> usize {
     (millis * MIXER_RATE as usize).div_ceil(1000 * SAMPLES_PER_FRAME)
 }
 
+/// The measured-wait target [`MusicPlayer::drained`] latches: `submitted_frames`
+/// plus `settle_margin_frames` (the output's own
+/// [`AudioOutput::playback_settle_margin_frames`], read at the same poll).
+///
+/// A resampled output keeps buffered interpolation state, so its source ring
+/// reading empty does not mean it is done producing real, audible content --
+/// the deferred lookahead pull can still blend already-buffered real data
+/// into the very next callback (see `platform::Resampler`'s module docs).
+/// Latching the raw `submitted_frames` count alone would let `drained` end
+/// the wait one callback before that real tail finishes sounding; adding the
+/// margin covers it. Zero margin (the null backend, or an exact-rate device)
+/// leaves the raw count unchanged. Saturates rather than overflowing --
+/// `submitted_frames` is a real device's frame counter, nowhere near `u64::MAX`.
+fn measured_drain_target(submitted_frames: u64, settle_margin_frames: u64) -> u64 {
+    submitted_frames.saturating_add(settle_margin_frames)
+}
+
 /// Audio state inherited by songs started in the same session.
 ///
 /// Songs without a reverb override inherit the most recently resolved level,
@@ -188,12 +205,12 @@ pub struct MusicPlayer {
     /// [`Self::drained`]'s device-tail bound, from [`device_tail_millis`] for
     /// the output this instance was started with.
     max_device_tail_frames: usize,
-    /// The submitted-device-frame target [`Self::drained`] latched the first
-    /// poll it saw the ring empty, from [`AudioOutput::playback_progress`] --
-    /// `None` either before that first empty poll, or when the output had no
-    /// measured signal to latch at that moment, in which case
-    /// [`Self::max_device_tail_frames`] alone governs the wait exactly as
-    /// before.
+    /// The [`measured_drain_target`] [`Self::drained`] latched the first poll
+    /// it saw the ring empty, from [`AudioOutput::playback_progress`] and
+    /// [`AudioOutput::playback_settle_margin_frames`] -- `None` either before
+    /// that first empty poll, or when the output had no measured signal to
+    /// latch at that moment, in which case [`Self::max_device_tail_frames`]
+    /// alone governs the wait exactly as before.
     measured_drain_target: Option<u64>,
 }
 
@@ -359,14 +376,16 @@ impl MusicPlayer {
     /// An empty ring only proves the output callback took the last samples,
     /// so a healthy stream is held further frames for them to sound. The
     /// first poll that sees the ring empty latches
-    /// [`AudioOutput::playback_progress`]'s submitted-frame count as a
-    /// target, then every later poll returns `true` as soon as the output's
-    /// measured sounded-frame count reaches it -- waiting on the device's
-    /// own measured playback position, not a poll count. If the output has
-    /// no measured signal at that first empty poll (a host that reports no
-    /// usable timestamp, including an unmodified null backend), this falls
-    /// back to [`device_tail_millis`] for this output's own device exactly
-    /// as before. Either way [`Self::max_device_tail_frames`] remains an
+    /// [`measured_drain_target`] of [`AudioOutput::playback_progress`]'s
+    /// submitted-frame count -- widened by [`AudioOutput::playback_settle_margin_frames`]
+    /// so a resampled output's buffered interpolation tail is not cut off --
+    /// then every later poll returns `true` as soon as the output's measured
+    /// sounded-frame count reaches it: waiting on the device's own measured
+    /// playback position, not a poll count. If the output has no measured
+    /// signal at that first empty poll (a host that reports no usable
+    /// timestamp, including an unmodified null backend), this falls back to
+    /// [`device_tail_millis`] for this output's own device exactly as
+    /// before. Either way [`Self::max_device_tail_frames`] remains an
     /// absolute cap: a stalled device, or a measured signal that stalls,
     /// still cannot hold the transition open past it.
     ///
@@ -383,8 +402,11 @@ impl MusicPlayer {
         if self.producer.available_space() >= self.ring_capacity {
             self.drain_wait_frames = 0;
             if self.device_tail_frames == 0 {
-                self.measured_drain_target =
-                    self.output.playback_progress().map(|p| p.submitted_frames);
+                let margin = self.output.playback_settle_margin_frames();
+                self.measured_drain_target = self
+                    .output
+                    .playback_progress()
+                    .map(|p| measured_drain_target(p.submitted_frames, margin));
             }
             self.device_tail_frames += 1;
             if let Some(target) = self.measured_drain_target {
@@ -459,8 +481,9 @@ mod tests {
 
     use super::{
         callback_cadence_frames, device_tail_millis, game_frames_in, max_drain_wait_frames,
-        MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_FRAMES, DEVICE_TAIL_FLOOR_MILLIS,
-        DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS, RING_CAPACITY_FRAMES,
+        measured_drain_target, MusicContext, MusicPlayer, DEVICE_TAIL_FLOOR_FRAMES,
+        DEVICE_TAIL_FLOOR_MILLIS, DEVICE_TAIL_MARGIN_MILLIS, DEVICE_TAIL_MAX_MILLIS,
+        RING_CAPACITY_FRAMES,
     };
 
     fn short_song_without_its_own_reverb() -> Song {
@@ -717,6 +740,96 @@ mod tests {
         assert!(
             player.drained(),
             "must report drained once the measured playback position reaches the target"
+        );
+    }
+
+    #[test]
+    fn measured_drain_target_adds_the_settle_margin() {
+        assert_eq!(measured_drain_target(100, 8), 108);
+        assert_eq!(measured_drain_target(100, 0), 100);
+    }
+
+    #[test]
+    fn measured_drain_target_saturates_rather_than_overflowing() {
+        assert_eq!(measured_drain_target(u64::MAX, 5), u64::MAX);
+    }
+
+    /// A resampled output keeps buffered `prev`/`next` interpolation state,
+    /// so real, audible content can still be sounding in the callback AFTER
+    /// the source ring first reads empty (see `platform::Resampler`'s
+    /// deferred-lookahead module docs, and its
+    /// `a_ring_emptied_mid_callback_still_sounds_real_audio_in_the_next_one`
+    /// regression, which reproduces this exact rate ratio at the `Resampler`
+    /// level). `AudioOutput::null`'s source plays samples straight through
+    /// with no such buffering, so it cannot exercise this path --
+    /// `AudioOutput::null_resampled` stands in for a real device instead.
+    ///
+    /// This must fail against the pre-fix `drained`, which latched the raw
+    /// submitted-frame count with no settle margin: reaching that raw count
+    /// alone must NOT report drained once a nonzero margin is in play, only
+    /// reaching the raw count plus the margin may.
+    #[test]
+    fn drained_waits_past_the_resamplers_deferred_lookahead_tail() {
+        const RING_FRAMES: usize = 512;
+        // Same rate ratio (step = 25/100 = 0.25) as the `Resampler`-level
+        // regression this margin exists to cover.
+        let output = AudioOutput::null_resampled(RING_FRAMES, 25.0, 100, 16)
+            .expect("a real rate ratio must always construct a Resampler");
+        output.enable_playback_progress_for_test();
+        let margin = output.playback_settle_margin_frames();
+        assert!(
+            margin > 0,
+            "an up-sampling resampler must report a nonzero settle margin"
+        );
+
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("a resampled null backend never errors");
+        let full_ring = player.ring_capacity_for_test();
+        // Upsampling (step < 1.0) drains far more than `full_ring` output
+        // frames' worth of *device* frames from the source ring per pull, so
+        // one `full_ring`-sized pull is not guaranteed to empty it; poll
+        // until it genuinely does, bounded generously against a runaway loop.
+        let mut sink = vec![0.0_f32; full_ring];
+        let mut pulls = 0;
+        while player.ring_free_for_test() < full_ring {
+            player.drain_null_for_test(&mut sink);
+            pulls += 1;
+            assert!(
+                pulls <= 64,
+                "the ring must empty well within this many pulls"
+            );
+        }
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring is empty"
+        );
+
+        assert!(
+            !player.drained(),
+            "the fake sounded-frame clock starts at zero, well short of any target"
+        );
+        let raw_target = player
+            .output
+            .playback_progress()
+            .expect("the test hook was enabled")
+            .submitted_frames;
+
+        player.output.advance_sounded_frames_for_test(raw_target);
+        assert!(
+            !player.drained(),
+            "reaching the raw submitted-frame count must not read as drained: the resampler's \
+             buffered interpolation state can still be sounding real audio for `margin` more \
+             device frames"
+        );
+
+        player
+            .output
+            .advance_sounded_frames_for_test(raw_target + margin);
+        assert!(
+            player.drained(),
+            "must report drained once the measured position reaches the raw target plus the \
+             resampler's settle margin"
         );
     }
 
