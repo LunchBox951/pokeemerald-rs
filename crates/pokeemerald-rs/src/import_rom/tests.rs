@@ -457,6 +457,35 @@ fn a_failed_import_does_not_remove_a_directory_it_did_not_create() {
     assert!(moved.is_dir());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
+    // Another account removes the empty level this run made and makes its
+    // own at the same name before the cleanup runs. ext4 and XFS commonly
+    // hand the freed inode number straight to that replacement, so a
+    // device and inode comparison alone would take it for this run's level
+    // and `unlinkat` it. The record's held descriptor keeps the original
+    // inode allocated, so the filesystem cannot reuse it; the recorded
+    // identity is overwritten with the replacement's here to stand in for a
+    // filesystem that did, on any filesystem this runs on.
+    let dir = TempDir::new("undo-inode-reuse");
+    let level = dir.join("new");
+
+    let mut created = create_directories(&level).expect("the missing level is created");
+    assert_eq!(created_paths(&created), std::slice::from_ref(&level));
+
+    fs::remove_dir(&level).expect("the created level is removed");
+    fs::create_dir(&level).expect("somebody else's level takes the name");
+    created[0].identity = rustix::fs::stat(&level).expect("the replacement's identity is readable");
+
+    super::undo_created_directories(&created);
+
+    assert!(
+        level.is_dir(),
+        "the cleanup took back a replacement that reused the created level's inode number"
+    );
+}
+
 #[test]
 fn a_pack_directory_spelled_through_dotdot_still_imports() {
     // `directories_to_create` walks lexically (`Path::parent`), so a

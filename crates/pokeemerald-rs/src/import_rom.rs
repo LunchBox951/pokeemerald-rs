@@ -118,6 +118,17 @@
 //! Unix, created levels are still addressed by path, like the destination
 //! itself.
 //!
+//! A device and inode pair only names one directory while that inode is
+//! allocated. Another account that removes an empty created level and makes
+//! a new one at the same name commonly gets the same inode number straight
+//! back (ext4 and XFS both do), which a bare comparison would accept. Each
+//! level's own descriptor is therefore held open until cleanup is done:
+//! the inode it pins stays allocated after its name is gone, so a
+//! replacement cannot carry its number. The one level recorded without that
+//! pin is one whose reopen right after `mkdirat` itself failed (a full
+//! descriptor table, say); it is still matched by device and inode, so
+//! only there does removal plus same-number reuse stay possible.
+//!
 //! That identity is captured by reopening the level `mkdirat` just made,
 //! which is itself two syscalls, not one — `mkdirat` returns no descriptor
 //! of its own. An account that can write the parent can still win a swap
@@ -728,10 +739,13 @@ fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
 /// it again.
 ///
 /// On Unix this is the parent [`create_directories`] created the level
-/// through, pinned open, plus the level's own basename and the identity
-/// (`fstat`'s device and inode) captured the moment it was made -- so a
+/// through, pinned open, plus the level's own basename, the identity
+/// (`fstat`'s device and inode) captured the moment it was made, and the
+/// level's own descriptor, held open until the record is dropped -- so a
 /// later rename that leaves a different directory at the same name is not
-/// mistaken for this one. See the module docs. Off Unix there is no
+/// mistaken for this one, and neither is one made after this level was
+/// removed outright and its freed inode number handed straight back. See
+/// the module docs. Off Unix there is no
 /// descriptor to pin (`rustix` is Unix-only), so this stays the path alone,
 /// re-resolved each time, as it always was.
 #[derive(Debug)]
@@ -745,8 +759,11 @@ struct CreatedDirectory {
         reason = "read only by tests::created_paths, not by production Unix code"
     )]
     path: PathBuf,
-    /// The directory this level was created in.
-    parent: std::os::fd::OwnedFd,
+    /// The directory this level was created in. Shared, not duplicated,
+    /// with the level above's own [`CreatedDirectory::own`] when that level
+    /// was created by this run too, so a deep chain costs one descriptor per
+    /// level rather than two.
+    parent: std::rc::Rc<std::os::fd::OwnedFd>,
     /// This level's own basename inside `parent`.
     name: std::ffi::OsString,
     /// This level's own device and inode, captured right after it was
@@ -755,6 +772,16 @@ struct CreatedDirectory {
     /// signedness differ across Unixes this ships to (`i32` on macOS, `u64`
     /// on Linux).
     identity: rustix::fs::Stat,
+    /// This level itself, held open for as long as the record lives. A
+    /// device and inode pair only names one directory while that inode is
+    /// allocated: once another account removes an empty level, a
+    /// filesystem such as ext4 or XFS readily hands the same inode number to
+    /// the next directory made at that name. An open descriptor keeps this
+    /// level's inode allocated even after its name is gone, so no
+    /// replacement can carry its number. `None` only when the reopen right
+    /// after `mkdirat` failed; that level is then matched by
+    /// [`CreatedDirectory::identity`] alone, unpinned (module docs).
+    own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
 /// [`CreatedDirectory`]'s off-Unix shape: see its own docs for why.
@@ -818,7 +845,7 @@ fn create_directories(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut parent_fd = match dest::open_traversal_directory(start) {
-        Ok(fd) => fd,
+        Ok(fd) => std::rc::Rc::new(fd),
         Err(source) => return Err((Vec::new(), source)),
     };
 
@@ -835,13 +862,13 @@ fn create_directories(
             #[cfg(test)]
             run_before_dotdot_hook();
             parent_fd = match dest::open_directory_at(&parent_fd, OsStr::new("..")) {
-                Ok(fd) => fd,
+                Ok(fd) => std::rc::Rc::new(fd),
                 Err(source) => return Err((created, source)),
             };
             continue;
         };
         match rustix::fs::mkdirat(
-            &parent_fd,
+            &*parent_fd,
             &name,
             rustix::fs::Mode::RWXU | rustix::fs::Mode::RWXG | rustix::fs::Mode::RWXO,
         ) {
@@ -856,7 +883,7 @@ fn create_directories(
                 // looks again is somebody else's swap; refused the same
                 // way, without following it as a symlink might.
                 let found =
-                    rustix::fs::statat(&parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
+                    rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
                 let identity = match found {
                     Ok(found)
                         if rustix::fs::FileType::from_raw_mode(found.st_mode)
@@ -873,13 +900,16 @@ fn create_directories(
                     Err(source) => return Err((created, source.into())),
                 };
                 // Continues the descent through a fresh handle -- refusing
-                // a symlink here too, for the same reason.
-                let descend = dest::open_created_directory_at(&parent_fd, &name);
+                // a symlink here too, for the same reason. The same handle
+                // is what the record holds to pin this level's inode.
+                let descend =
+                    dest::open_created_directory_at(&parent_fd, &name).map(std::rc::Rc::new);
                 created.push(CreatedDirectory {
                     path: level,
                     parent: parent_fd,
                     name,
                     identity,
+                    own: descend.as_ref().ok().map(std::rc::Rc::clone),
                 });
                 parent_fd = match descend {
                     Ok(fd) => fd,
@@ -894,7 +924,7 @@ fn create_directories(
             // version of this same check) always tolerated here.
             Err(mkdir_err) => {
                 let already_a_directory =
-                    rustix::fs::statat(&parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
+                    rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
                         |stat| {
                             rustix::fs::FileType::from_raw_mode(stat.st_mode)
                                 == rustix::fs::FileType::Directory
@@ -902,7 +932,7 @@ fn create_directories(
                     );
                 if already_a_directory {
                     match dest::open_directory_at(&parent_fd, &name) {
-                        Ok(fd) => parent_fd = fd,
+                        Ok(fd) => parent_fd = std::rc::Rc::new(fd),
                         // The open's own failure is the real diagnosis now;
                         // the `mkdir` collision only ever proved the name
                         // was taken, which it still is.
@@ -1020,22 +1050,30 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// path: a rollback can run an arbitrary interval after the create (module
 /// docs), so `dir.name` is looked up in `dir.parent` and compared against
 /// the device and inode `create_directories` captured, without following a
-/// final symlink. Only a match is removed, by that same lookup
-/// (`unlinkat`), never a name that now resolves to something else -- that
-/// is left standing as harmless litter rather than taken on the strength of
-/// its spelling alone.
+/// final symlink -- and, while the level's own descriptor is held, against
+/// that descriptor's `fstat` too, whose inode cannot have been freed and
+/// reissued to a replacement. Only a match is removed, by that same lookup
+/// (`unlinkat`, which a held descriptor does not prevent), never a name that
+/// now resolves to something else -- that is left standing as harmless
+/// litter rather than taken on the strength of its spelling alone.
 #[cfg(unix)]
 fn undo_created_directories(created: &[CreatedDirectory]) {
+    let same =
+        |a: &rustix::fs::Stat, b: &rustix::fs::Stat| a.st_dev == b.st_dev && a.st_ino == b.st_ino;
     for dir in created.iter().rev() {
         match rustix::fs::statat(
-            &dir.parent,
+            &*dir.parent,
             &dir.name,
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         ) {
             Ok(stat)
-                if stat.st_dev == dir.identity.st_dev && stat.st_ino == dir.identity.st_ino =>
+                if same(&stat, &dir.identity)
+                    && dir.own.as_ref().is_none_or(|own| {
+                        rustix::fs::fstat(&**own).is_ok_and(|held| same(&stat, &held))
+                    }) =>
             {
-                match rustix::fs::unlinkat(&dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR) {
+                match rustix::fs::unlinkat(&*dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR)
+                {
                     Ok(()) => {}
                     // Already gone is already taken care of.
                     Err(err) if err == rustix::io::Errno::NOENT => {}
