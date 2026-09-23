@@ -832,6 +832,8 @@ fn create_directories(
         // which would re-walk -- and so trust again -- every component
         // already pinned.
         let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
+            #[cfg(test)]
+            run_before_dotdot_hook();
             parent_fd = match dest::open_directory_at(&parent_fd, OsStr::new("..")) {
                 Ok(fd) => fd,
                 Err(source) => return Err((created, source)),
@@ -913,6 +915,32 @@ fn create_directories(
         }
     }
     Ok(created)
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// Runs on [`create_directories`]'s own thread the instant before it
+    /// resolves a `..` level -- after every level ahead of it is made and
+    /// pinned -- so a test can land a swap exactly there instead of racing
+    /// a second thread against the descent.
+    static BEFORE_DOTDOT: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs [`BEFORE_DOTDOT`] for this thread's next `..` level, replacing
+/// any hook already set.
+#[cfg(all(test, unix))]
+fn set_before_dotdot_hook(hook: impl FnMut() + 'static) {
+    BEFORE_DOTDOT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+/// Takes and runs [`BEFORE_DOTDOT`] if a test installed one; a no-op
+/// otherwise.
+#[cfg(all(test, unix))]
+fn run_before_dotdot_hook() {
+    if let Some(mut hook) = BEFORE_DOTDOT.with(|slot| slot.borrow_mut().take()) {
+        hook();
+    }
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so this

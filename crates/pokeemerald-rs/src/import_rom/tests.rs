@@ -1416,98 +1416,44 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
     // level *after* the `..` would then be created inside the attacker's
     // tree, through an `mkdirat` the pinned descent was supposed to keep
     // out of reach.
-    const LEVELS: usize = 128;
-
+    //
+    // The swap lands through `create_directories`'s own before-`..` hook,
+    // on its own thread, once both levels ahead of the `..` are made and
+    // pinned and before the `..` is resolved -- the one point the race
+    // matters, every run, with no second thread to schedule.
     let dir = TempDir::new("dotdot-swap");
-    let names: Vec<String> = (0..LEVELS).map(|level| format!("l{level:03}")).collect();
-    let mut dest = dir.path.clone();
-    for name in &names {
-        dest.push(name);
-    }
-    dest.push("..");
-    dest.push("downstream");
+    let dest = dir.join("l0").join("l1").join("..").join("downstream");
 
-    // The attacker's tree mirrors the levels below the swapped component,
-    // so the reopened path resolves through it instead of failing.
+    // The attacker's tree mirrors the level below the swapped component,
+    // so a reopened path resolves through it instead of failing.
     let mirror = dir.join("attacker");
-    let mut mirror_leaf = mirror.clone();
-    for name in &names[1..] {
-        mirror_leaf.push(name);
-    }
-    fs::create_dir_all(&mirror_leaf).expect("the attacker's mirror is built");
-    let mirror_dotdot = mirror_leaf
-        .parent()
-        .expect("the mirror has a parent")
-        .to_path_buf();
+    fs::create_dir_all(mirror.join("l1")).expect("the attacker's mirror is built");
 
-    let swapped = dir.join(&names[0]);
+    let swapped = dir.join("l0");
     let moved = dir.join("carried-off");
-    let probe = swapped.join(&names[1]).join(&names[2]);
-    let deepest = {
-        let mut deepest = moved.clone();
-        for name in &names[1..] {
-            deepest.push(name);
-        }
-        deepest
-    };
-    // The descent is a few milliseconds of `mkdirat`, so a thread that is
-    // still starting up when it begins can miss the whole window and swap
-    // into a finished tree -- a failure with nothing wrong in the code
-    // under test. The barrier holds the descent until the attacker is
-    // already spinning.
-    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let attacker = {
-        let (swapped, moved) = (swapped.clone(), moved.clone());
-        let ready = std::sync::Arc::clone(&ready);
-        std::thread::spawn(move || {
-            ready.wait();
-            // Wait until the descent is past the component being swapped,
-            // so the swap cannot disturb its own creation or pin. Bounded,
-            // not an unconditional spin: a `create_directories` that stalls
-            // or fails before reaching `probe` (a regression this test
-            // would otherwise want to catch) must not hang this thread, and
-            // so `attacker.join()`, forever -- `None` reports that instead.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            while !probe.exists() {
-                if std::time::Instant::now() >= deadline {
-                    return None;
-                }
-                std::hint::spin_loop();
-            }
+    let swapped_at_dotdot = std::rc::Rc::new(std::cell::Cell::new(false));
+    {
+        let (swapped, moved, mirror) = (swapped.clone(), moved.clone(), mirror.clone());
+        let flag = std::rc::Rc::clone(&swapped_at_dotdot);
+        super::set_before_dotdot_hook(move || {
             fs::rename(&swapped, &moved).expect("the pinned level is carried off");
             std::os::unix::fs::symlink(&mirror, &swapped).expect("a symlink takes its name");
-            // Whether the swap landed before the `..` level was reached:
-            // the innermost level is not created yet.
-            Some(!deepest.exists())
-        })
-    };
-
-    ready.wait();
-    let made_them = create_directories(&dest).is_ok();
-    let landed = attacker.join().expect("the attacker thread finishes");
-
-    match landed {
-        Some(true) => {}
-        // The descent never got as far as the level the swap waits on, so
-        // something ahead of it stalled or failed -- the regression the
-        // bounded wait exists to surface rather than hang on.
-        None => panic!("the descent never reached the level the swap waits on"),
-        // The descent outran the swap, which then landed on a tree already
-        // finished: the `..` reopen this test is about had already
-        // happened, so there was nothing left to race. Said out loud
-        // rather than passed with nothing checked, the same way the
-        // privileged skips above are.
-        Some(false) => {
-            eprintln!(
-                "a_dotdot_level_descends_from_the_pinned_parent_not_the_path: \
-                 skipped -- the descent finished before the swap could land"
-            );
-            return;
-        }
+            flag.set(true);
+        });
     }
 
+    let made_them = create_directories(&dest).is_ok();
+
     assert!(
-        !mirror_dotdot.join("downstream").exists(),
+        swapped_at_dotdot.get(),
+        "the descent never reached the `..` level the swap is hooked to"
+    );
+    assert!(
+        !mirror.join("downstream").exists(),
         "a level after `..` was created inside the attacker's tree (run succeeded: {made_them})"
+    );
+    assert!(
+        moved.join("downstream").is_dir(),
+        "the level after `..` belongs under the pinned level's own parent, wherever it was moved"
     );
 }
