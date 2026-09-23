@@ -275,18 +275,22 @@ impl Mixer {
         }
     }
 
-    /// Stop every voice on `track` outright, matching `TrackStop`
-    /// (`m4a_1.s:1469`-`:1506`) rather than [`Self::release_track`]'s
-    /// graceful note-off.
+    /// Stop every voice on `track` and vacate its slot immediately, matching
+    /// `TrackStop`'s channel clears (`m4a_1.s:1480`-`:1500`) rather than
+    /// [`Self::release_track`]'s graceful note-off.
     pub fn stop_track(&mut self, track: usize) {
-        for voice in self.direct_sound_slots.iter_mut().flatten() {
-            if voice.track() == Some(track) {
-                voice.stop();
+        for slot in &mut self.direct_sound_slots {
+            if let Some(voice) = slot {
+                if voice.track() == Some(track) {
+                    *slot = None;
+                }
             }
         }
-        for voice in self.cgb_slots.iter_mut().flatten() {
-            if voice.track() == track {
-                voice.stop();
+        for slot in &mut self.cgb_slots {
+            if let Some(voice) = slot {
+                if voice.track() == track {
+                    *slot = None;
+                }
             }
         }
     }
