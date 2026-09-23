@@ -3,6 +3,7 @@ use assets::fonts::{
 };
 use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
+use engine::text::Token;
 use pack_format::PackEntry;
 use rendering::Rgb888;
 
@@ -255,6 +256,48 @@ fn a_page_break_clears_the_revealed_glyph_accumulator() {
     assert!(
         glyph_count_decreased,
         "expected the glyph accumulator to shrink after a page clear"
+    );
+}
+
+#[test]
+fn fill_window_drops_stale_glyphs_but_keeps_the_glyph_printed_after_it() {
+    let pixels = transparent_glyph_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+    // `0x0F` is `EXT_CTRL_CODE_FILL_WINDOW` (`pokeemerald/src/text.c`
+    // `:1052-1056`), zero arguments per `charmap.txt:427`. `tests` is a
+    // descendant of `intro`, so it can restart the scene's own printer
+    // directly with a controlled token stream instead of the real speech.
+    scene.printer.restart(vec![
+        Token::Char('A'),
+        Token::Char('B'),
+        Token::ExtCtrl {
+            sub: 0x0F,
+            args: vec![],
+        },
+        Token::Char('C'),
+        Token::End,
+    ]);
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    assert_eq!(
+        scene.revealed_glyph_count(),
+        2,
+        "both glyphs printed before FILL_WINDOW should be on screen"
+    );
+
+    assert_eq!(scene.tick(NO_INPUT), IntroStatus::Continue);
+    assert_eq!(
+        scene.revealed_glyph_count(),
+        1,
+        "FILL_WINDOW must drop the stale glyphs, but not the one printed after it \
+         in the same tick"
+    );
+    let only_glyph = scene.revealed[0];
+    assert_eq!(
+        (only_glyph.x, only_glyph.y),
+        STANDARD_PRINTER_ORIGIN,
+        "the surviving glyph must be placed at the reset cursor, not the stale one"
     );
 }
 

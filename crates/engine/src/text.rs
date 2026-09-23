@@ -80,6 +80,9 @@ const EXT_CTRL_CODE_PLAY_BGM: u8 = 0x0B;
 const EXT_CTRL_CODE_ESCAPE: u8 = 0x0C;
 const EXT_CTRL_CODE_SHIFT_RIGHT: u8 = 0x0D;
 const EXT_CTRL_CODE_SHIFT_DOWN: u8 = 0x0E;
+// The window fill and cursor reset it triggers (`pokeemerald/src/text.c`
+// `:1052-1056`) are modelled in `render.rs`; see `ext_ctrl::FILL_WINDOW`.
+const EXT_CTRL_CODE_FILL_WINDOW: u8 = 0x0F;
 const EXT_CTRL_CODE_PLAY_SE: u8 = 0x10;
 const EXT_CTRL_CODE_CLEAR: u8 = 0x11;
 const EXT_CTRL_CODE_SKIP: u8 = 0x12;
@@ -835,6 +838,7 @@ mod tests {
         assert_eq!(EXT_CTRL_CODE_ESCAPE, 0x0C);
         assert_eq!(EXT_CTRL_CODE_SHIFT_RIGHT, 0x0D);
         assert_eq!(EXT_CTRL_CODE_SHIFT_DOWN, 0x0E);
+        assert_eq!(EXT_CTRL_CODE_FILL_WINDOW, 0x0F);
         assert_eq!(EXT_CTRL_CODE_PLAY_SE, 0x10);
         assert_eq!(EXT_CTRL_CODE_CLEAR, 0x11);
         assert_eq!(EXT_CTRL_CODE_SKIP, 0x12);
@@ -899,6 +903,9 @@ mod tests {
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_SE), 3);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_JPN), 1);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PAUSE_UNTIL_PRESS), 1);
+        // FILL_WINDOW (`0x0F`) is zero-argument: `charmap.txt:427` maps it as
+        // `FC 0F` and `string_util.c:676` gives it length 1.
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_FILL_WINDOW), 1);
         // RESUME_MUSIC (0x18) pinned by raw byte: it must stay zero-argument,
         // and no argument-bearing match arm may absorb it.
         assert_eq!(ext_ctrl_code_len(0x18), 1);

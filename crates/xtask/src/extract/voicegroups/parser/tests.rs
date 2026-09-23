@@ -9,6 +9,12 @@ fn envelope(attack: u8, decay: u8, sustain: u8, release: u8) -> Envelope {
     }
 }
 
+/// The hardware byte upstream's four CGB voice macros encode a nonzero
+/// second operand into (see [`parse_cgb_length`]).
+fn encoded_cgb_length(operand: u8) -> u8 {
+    0x80 | operand
+}
+
 #[test]
 fn parses_a_simple_group_with_a_leaf_slot_of_every_kind() {
     let text = "\
@@ -159,7 +165,7 @@ voice_group operand_matrix
             },
             RawSlot::Square1 {
                 base_key: 23,
-                length: 54,
+                length: encoded_cgb_length(54),
                 sweep: 55,
                 duty: 0,
                 envelope: envelope(1, 2, 8, 3),
@@ -167,7 +173,7 @@ voice_group operand_matrix
             },
             RawSlot::Square1 {
                 base_key: 24,
-                length: 60,
+                length: encoded_cgb_length(60),
                 sweep: 61,
                 duty: 1,
                 envelope: envelope(2, 3, 9, 4),
@@ -175,42 +181,42 @@ voice_group operand_matrix
             },
             RawSlot::Square2 {
                 base_key: 25,
-                length: 66,
+                length: encoded_cgb_length(66),
                 duty: 2,
                 envelope: envelope(3, 4, 10, 5),
                 fixed_rate: false,
             },
             RawSlot::Square2 {
                 base_key: 26,
-                length: 71,
+                length: encoded_cgb_length(71),
                 duty: 3,
                 envelope: envelope(4, 5, 11, 6),
                 fixed_rate: true,
             },
             RawSlot::ProgrammableWave {
                 base_key: 27,
-                length: 76,
+                length: encoded_cgb_length(76),
                 wave_symbol: "ProgrammableWaveData_operand_a".to_owned(),
                 envelope: envelope(5, 6, 12, 7),
                 fixed_rate: false,
             },
             RawSlot::ProgrammableWave {
                 base_key: 28,
-                length: 81,
+                length: encoded_cgb_length(81),
                 wave_symbol: "ProgrammableWaveData_operand_b".to_owned(),
                 envelope: envelope(6, 7, 13, 0),
                 fixed_rate: true,
             },
             RawSlot::Noise {
                 base_key: 29,
-                length: 86,
+                length: encoded_cgb_length(86),
                 period: 0,
                 envelope: envelope(1, 2, 14, 3),
                 fixed_rate: false,
             },
             RawSlot::Noise {
                 base_key: 30,
-                length: 92,
+                length: encoded_cgb_length(92),
                 period: 1,
                 envelope: envelope(2, 3, 15, 4),
                 fixed_rate: true,
@@ -520,6 +526,49 @@ fn noise_periods_above_the_assembly_maximum_are_rejected() {
                 period: 2,
             }),
             "expected an out-of-domain noise period to be rejected: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_maximum_cgb_length_operand_is_encoded_for_every_family() {
+    let text = "\
+voice_group demo
+\tvoice_square_1 60, 127, 0, 0, 0, 0, 0, 0
+\tvoice_square_2 60, 127, 0, 0, 0, 0, 0
+\tvoice_programmable_wave 60, 127, ProgrammableWaveData_1, 0, 0, 0, 0
+\tvoice_noise 60, 127, 0, 0, 0, 0, 0
+";
+    let group = parse_voice_group(text).unwrap();
+    for slot in &group.slots {
+        let length = match slot {
+            RawSlot::Square1 { length, .. }
+            | RawSlot::Square2 { length, .. }
+            | RawSlot::ProgrammableWave { length, .. }
+            | RawSlot::Noise { length, .. } => *length,
+            other => panic!("expected a CGB slot, got {other:?}"),
+        };
+        assert_eq!(length, encoded_cgb_length(127));
+    }
+}
+
+#[test]
+fn a_cgb_length_operand_above_the_schema_maximum_is_rejected() {
+    let lines = [
+        "voice_square_1 60, 128, 0, 0, 0, 0, 0, 0",
+        "voice_square_2 60, 128, 0, 0, 0, 0, 0",
+        "voice_programmable_wave 60, 128, ProgrammableWaveData_1, 0, 0, 0, 0",
+        "voice_noise 60, 128, 0, 0, 0, 0, 0",
+    ];
+    for line in lines {
+        let text = format!("voice_group demo\n\t{line}\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::CgbLengthOutOfRange {
+                group: "demo".to_owned(),
+                length: 128,
+            }),
+            "expected an out-of-domain CGB length operand to be rejected: {line}"
         );
     }
 }
