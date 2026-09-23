@@ -255,6 +255,35 @@ fn parse_cgb_envelope(
     Ok(envelope)
 }
 
+/// The largest CGB voice macros' second source operand (named `pan`
+/// upstream though it targets `ToneData::length`) [`parse_cgb_length`] can
+/// encode without its `0x80` bit colliding with the value. A canonical-input
+/// policy, mirroring [`MAX_PAN_OVERRIDE`]'s idiom for `_voice_directsound`'s
+/// real pan operand -- upstream's assembler itself has no such check.
+const MAX_CGB_LENGTH_OPERAND: u8 = 127;
+
+/// Encodes a CGB voice macro's second source operand the way upstream's
+/// assembler does (`pokeemerald/asm/macros/music_voice.inc:39-46,64-71,89-96,113-120`;
+/// copied unchanged into the CGB channel at `src/m4a_1.s:1770-1772`). Unlike
+/// [`parse_optional_pan`]'s semantic `Option<u8>`, the asset schema's CGB
+/// `length` fields store this literal hardware byte, so encoding happens
+/// here rather than deferring to pack-write time.
+fn parse_cgb_length(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupError> {
+    const NO_LENGTH_OVERRIDE: u8 = 0;
+    let length = parse_byte(operand, group, line)?;
+    if length > MAX_CGB_LENGTH_OPERAND {
+        return Err(VoiceGroupError::CgbLengthOutOfRange {
+            group: group.to_owned(),
+            length,
+        });
+    }
+    Ok(if length == NO_LENGTH_OVERRIDE {
+        0
+    } else {
+        0x80 | length
+    })
+}
+
 /// The largest noise period upstream's `_voice_noise` macro retains after
 /// masking it `& 0x1` (`pokeemerald/asm/macros/music_voice.inc:122`).
 const MAX_NOISE_PERIOD: u8 = 0x1;
@@ -316,7 +345,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Square1 {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 sweep: parse_byte(sweep, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
                 envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
@@ -329,7 +358,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Square2 {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
                 envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
@@ -341,7 +370,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::ProgrammableWave {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 wave_symbol: (*wave_symbol).to_owned(),
                 envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
@@ -353,7 +382,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Noise {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 period: parse_noise_period(period, group, line)?,
                 envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
