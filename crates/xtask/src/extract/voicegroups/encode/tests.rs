@@ -292,3 +292,52 @@ fn a_multi_slot_group_writes_the_count_then_each_slot_in_order() {
     expected.push(VoiceSlotTag::Empty.byte());
     assert_eq!(encode_voice_group(&group), expected);
 }
+
+/// Source text -> parse -> resolve -> encode parity with the byte
+/// `rom-import` reads back into the same field
+/// (`crates/rom-import/src/domains/audio.rs:312-315`), across all four CGB
+/// families.
+#[test]
+fn cgb_length_operands_round_trip_the_way_the_assembler_encodes_them() {
+    use crate::extract::voicegroups::parser::{parse_voice_group, RawKeySplitTable};
+    use crate::extract::voicegroups::resolve::resolve_voice_groups;
+    use std::collections::HashMap;
+
+    // [0] slot count, [1] slot tag, [2] base key, [3] length.
+    const FIRST_SLOT_LENGTH_BYTE: usize = 3;
+
+    fn encoded_cgb_length(operand: u8) -> u8 {
+        0x80 | operand
+    }
+
+    let families = [
+        "voice_square_1 60, {length}, 0, 0, 0, 0, 0, 0",
+        "voice_square_2 60, {length}, 0, 0, 0, 0, 0",
+        "voice_programmable_wave 60, {length}, ProgrammableWaveData_1, 0, 0, 0, 0",
+        "voice_noise 60, {length}, 0, 0, 0, 0, 0",
+    ];
+
+    for family in families {
+        for (length_operand, expected_byte) in [(0_u8, 0_u8), (54, encoded_cgb_length(54))] {
+            let slot_line = family.replace("{length}", &length_operand.to_string());
+            let text = format!("voice_group demo\n\t{slot_line}\n");
+            let raw = parse_voice_group(&text).unwrap();
+            let raw_groups = HashMap::from([(raw.label.clone(), raw)]);
+            let no_keysplit_tables: HashMap<String, RawKeySplitTable> = HashMap::new();
+            let resolved = resolve_voice_groups("demo", &raw_groups, &no_keysplit_tables).unwrap();
+            assert_eq!(
+                encode_voice_group(&resolved[0])[FIRST_SLOT_LENGTH_BYTE],
+                expected_byte,
+                "{slot_line}"
+            );
+        }
+
+        let rejected_line = family.replace("{length}", "128");
+        let text = format!("voice_group demo\n\t{rejected_line}\n");
+        assert!(
+            parse_voice_group(&text).is_err(),
+            "expected an out-of-domain CGB length operand to be rejected before resolve/encode: \
+             {rejected_line}"
+        );
+    }
+}
