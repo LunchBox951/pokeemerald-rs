@@ -520,10 +520,10 @@ mod tests {
 
     #[test]
     fn a_non_finite_negative_or_zero_source_rate_is_refused() {
-        // `source_rate` widened from `u32` to `f64` so the exact (not
-        // rounded-to-Hz) production cadence can be carried through (see
-        // `crate::audio::AudioOutput::open`, issue #867) — which also widens
-        // the input space to values a `u32` ruled out by construction. Every
+        // `source_rate` is an `f64` so the exact production cadence can be
+        // carried through (`crate::audio::AudioOutput::source_cadence_hz`),
+        // which also widens the input space to values a `u32` ruled out by
+        // construction. Every
         // one of those must be refused: NaN or a negative `step` would
         // poison `frac`'s `[0.0, 1.0)` invariant, and a zero `step` (`0.0` or
         // `-0.0`, both refused by `<= 0.0`) would instead stick playback on
