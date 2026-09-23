@@ -40,10 +40,15 @@ pub enum PlatformError {
     /// source frames than the scratch cap allows, which would otherwise leave
     /// an unresolved interpolation cursor behind for `fill` to extrapolate
     /// with. Refused up front rather than degrading into incorrect audio.
+    ///
+    /// Also covers a non-finite or negative `source_rate` — see
+    /// [`crate::resample::Resampler::new`]'s docs.
     UnsupportedResampleRatio {
-        /// The nominal source sample rate the resampler was asked to bridge
-        /// from.
-        source_rate: u32,
+        /// The nominal source sample rate (Hz) the resampler was asked to
+        /// bridge from — the ring buffer's actual production cadence, not
+        /// necessarily a whole number (see
+        /// `crate::audio::AudioOutput::open`).
+        source_rate: f64,
         /// The negotiated device sample rate the resampler was asked to
         /// bridge to.
         device_rate: u32,
@@ -72,7 +77,7 @@ impl fmt::Display for PlatformError {
                 device_rate,
             } => write!(
                 f,
-                "the {source_rate} Hz -> {device_rate} Hz resample ratio is too extreme for \
+                "the {source_rate:.3} Hz -> {device_rate} Hz resample ratio is too extreme for \
                  the resampler's bounded scratch to carry"
             ),
         }

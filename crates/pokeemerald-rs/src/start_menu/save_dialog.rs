@@ -74,6 +74,13 @@ pub(super) enum SaveDialogOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SaveDialogState {
+    /// `StartMenuSaveCallback` spends the frame after the A press
+    /// (`pokeemerald/src/start_menu.c:721-728`).
+    EnterSaveStartCallback,
+    /// `SaveStartCallback` spends the next frame in `InitSave`, whose
+    /// `SaveMapView` this port has no counterpart for
+    /// (`pokeemerald/src/start_menu.c:809-822,877-882`).
+    EnterSaveCallback,
     ShowInitialPrompt,
     OpenInitialChoice,
     AwaitInitialChoice,
@@ -136,10 +143,10 @@ pub(super) struct SaveDialog {
 }
 
 impl SaveDialog {
-    /// Creates a save dialog at its initial confirmation prompt.
+    /// Creates a save dialog at its first callback tick.
     pub(super) fn new() -> Self {
         Self {
-            state: SaveDialogState::ShowInitialPrompt,
+            state: SaveDialogState::EnterSaveStartCallback,
             message: None,
             message_is_printing: false,
             yes_no: None,
@@ -171,6 +178,14 @@ impl SaveDialog {
         }
 
         match self.state {
+            SaveDialogState::EnterSaveStartCallback => {
+                self.state = SaveDialogState::EnterSaveCallback;
+                SaveDialogOutcome::InProgress
+            }
+            SaveDialogState::EnterSaveCallback => {
+                self.state = SaveDialogState::ShowInitialPrompt;
+                SaveDialogOutcome::InProgress
+            }
             SaveDialogState::ShowInitialPrompt => {
                 self.show_message(SaveMessage::ConfirmSave, chrome, target);
                 self.state = SaveDialogState::OpenInitialChoice;

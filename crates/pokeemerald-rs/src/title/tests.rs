@@ -141,6 +141,41 @@ fn image_to_tileset_rejects_payload_shorter_than_declared_dimensions() {
     );
 }
 
+#[test]
+fn image_to_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 16;
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let err = image_to_tileset("bogus/id", image, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "bogus/id",
+            index: 16,
+        }
+    );
+}
+
+#[test]
+fn image_to_tileset_packs_an_8bpp_source_whose_indices_fit_four_bits() {
+    // `title/image/press_start` ships pack-8bpp but is consumed as Bpp4.
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 15;
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let tileset = image_to_tileset("title/image/press_start", image, BitDepth::Bpp4).unwrap();
+    assert_eq!(tileset.tile(0).unwrap().index(0, 0), 15);
+}
+
 /// Writes `bytes` to `path` and removes it on drop, so a failed assertion
 /// or panic still cleans up the scratch file.
 struct TempPackFile {
@@ -684,6 +719,47 @@ fn crop_and_pack_tile_bytes_rejects_a_short_payload_instead_of_panicking() {
             width: 16,
             height: 8,
             actual: 16 * 8 - 1,
+        }
+    );
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    let pixels = tiled_image(16, 8, |col, _row| if col == 0 { 1 } else { 16 });
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let err =
+        crop_and_pack_tile_bytes("bogus/sheet", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "bogus/sheet",
+            index: 16,
+        }
+    );
+}
+
+#[test]
+fn press_start_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    // The shipping ROM-4bpp/pack-8bpp sheet takes this same crop path.
+    let mut pixels = vec![0u8; 160 * 24];
+    pixels[0] = 16;
+    let image = ImageRef {
+        width: 160,
+        height: 24,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let err = press_start_tileset("title/image/press_start", image).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "title/image/press_start",
+            index: 16,
         }
     );
 }

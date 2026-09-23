@@ -14,7 +14,10 @@
 //!   becomes the running status as it executes.
 //! - `0x80..=0xB0` is a rest, `gClockTable[cmd - 0x80]` ticks.
 //! - `0xB1..=0xCE` are the named commands, dispatched by `cmd - 0xB1`
-//!   through `gMPlayJumpTable`; the table's unused entries are errors here.
+//!   through `gMPlayJumpTable`. Eight of the table's slots (`0xB6..=0xB8`,
+//!   `0xC6..=0xC7`, `0xC9..=0xCB`) are unpatched `ply_fine` entries and
+//!   terminate like `FINE`; any other command this importer does not model
+//!   is an error here.
 //! - `0xCF` and up is a note: `gClockTable[cmd - 0xCF]` ticks of gate
 //!   (`0` for `TIE`), then an optional key, an optional velocity, and an
 //!   optional gate extension, each present only if the byte before it was
@@ -236,7 +239,10 @@ fn step(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<Step, ImportErr
             track.push(SongEvent::Wait(CLOCK_TABLE[usize::from(cmd - CMD_WAIT)]));
             at
         }
-        CMD_FINE => {
+        // gMPlayJumpTable's reserved slots (0xB6-0xB8, 0xC6-0xC7, 0xC9-0xCB) are
+        // unpatched `ply_fine` entries, same as CMD_FINE (m4a_1.s:1256-1268;
+        // m4a_tables.c:6-44; m4a.c:287-305).
+        CMD_FINE | 0xB6..=0xB8 | 0xC6..=0xC7 | 0xC9..=0xCB => {
             track.push(SongEvent::Fine);
             return Ok(Step::Fine);
         }
