@@ -395,9 +395,8 @@ impl<'a> SpriteLayer<'a> {
         const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
 
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-        // mGBA applies its Y-space-boundary mosaic clamp before dispatching
-        // to either the affine or affine-OBJWIN draw loop, so both
-        // `sample_entry_mosaic` branches share it here.
+        // Shared by both `sample_entry_mosaic` branches; the contract is on
+        // `floor_dy_to_wrap_boundary_bottom`.
         let local_y = if mosaic.vertical() > 1 {
             entry.floor_dy_to_wrap_boundary_bottom(local_y)
         } else {
@@ -1195,11 +1194,8 @@ mod tests {
     }
 
     /// A double-size affine box (128 tall) at raw Y=128 ends exactly at the
-    /// Y-space boundary. mGBA stores that box's `endY` as exactly 256 and
-    /// then masks it with `& 0xFF` before its vertical OBJ mosaic clamp
-    /// (`mgba/src/gba/renderers/video-software.c:1043-1050`), which forces
-    /// every scanline the box covers to its bottom row instead of the
-    /// scanline's own mosaic-block row.
+    /// Y-space boundary, the case `OamEntry::floor_dy_to_wrap_boundary_bottom`
+    /// documents.
     #[test]
     fn affine_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
         const RAW_Y: u8 = 128;
