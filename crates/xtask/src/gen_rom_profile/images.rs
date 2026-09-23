@@ -36,7 +36,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::locate::to_addr;
-use super::pack_source::{metatile_candidates, try_image_tiles};
+use super::pack_source::{image_tiles, metatile_candidates, try_image_tiles};
 use super::plan::{ImagePlan, ReportLine, Resolution};
 use super::Context;
 
@@ -159,18 +159,33 @@ pub fn locate_images(
         // over it: a malformed pack's dimensions drive the metatile walk
         // and the tile packing, so they must be backed by real bytes.
         let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
-        for &rom_bit_depth in rom_depths(pack_bit_depth) {
+        for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
-                // `rom_depths` probes narrower depths speculatively (an
-                // 8bpp entry may really be a 4bpp-fitting sheet upstream
-                // packed narrow); a probe whose real indices do not fit
-                // that depth is not a candidate here, not a malformed pack,
-                // so it drops this depth/shape rather than aborting the
-                // search for every other query and depth.
-                let Some(tiles) = try_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
-                else {
-                    continue;
+                // `rom_depths` lists the entry's own depth first and any
+                // narrower depth after it as a speculative probe (an 8bpp
+                // entry may really be a 4bpp-fitting sheet upstream packed
+                // narrow); a probe whose real indices do not fit that depth
+                // is not a candidate here, not a malformed pack, so it
+                // drops this depth/shape rather than aborting the search
+                // for every other query and depth. That suppression only
+                // applies to a later, speculative candidate: `depth_index`
+                // rather than a numeric comparison to `pack_bit_depth`
+                // decides it, because a 2bpp entry's sole candidate is
+                // 4bpp too, and is exactly as authoritative as a 4bpp
+                // entry's -- neither is a guess, so an out-of-range index
+                // at either must reach `image_tiles` and report as
+                // `EntryShape` rather than read as the art simply not
+                // being here.
+                let tiles = if depth_index == 0 {
+                    image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                } else {
+                    let Some(tiles) =
+                        try_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                    else {
+                        continue;
+                    };
+                    tiles
                 };
                 let full = tiles.len();
                 // Upstream cuts art short in two ways -- `-num_tiles`, and
