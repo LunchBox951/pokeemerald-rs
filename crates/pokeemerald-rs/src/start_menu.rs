@@ -1,65 +1,14 @@
-//! The field start menu (I-6, issue #232): `START` in the overworld opens
-//! upstream's `src/start_menu.c` menu, and `SAVE` on it runs the real
-//! `SaveGameTask`/`sSaveDialogCallback` chain ([`save_dialog`]) -- the
-//! player-driven write that replaces issue #214's save-on-exit stand-in.
+//! Field start-menu state: item selection, SAVE delegation, and composition
+//! over the overworld frame.
 //!
-//! # Scope: two of upstream's eight normal items
+//! Only [`StartMenuItem::Save`] and [`StartMenuItem::Exit`] are supported;
+//! see [`ITEMS`] for why. [`chrome`] owns this menu's window geometry and
+//! palettes; [`save_dialog`] owns the SAVE flow this menu delegates to once
+//! selected.
 //!
-//! `BuildNormalStartMenu` (`start_menu.c:315-337`) appends
-//! `POKéDEX`/`POKéMON`/`BAG`/`POKéNAV`/`PLAYER`/`SAVE`/`OPTION`/`EXIT`,
-//! each gated on its own unlock flag. This shell carries
-//! [`StartMenuItem::Save`] and [`StartMenuItem::Exit`] only, because those
-//! are the two whose destinations exist in this port: every other entry
-//! opens a screen no
-//! slice has built (a Pokédex, a party menu, a bag, the `POKéNAV`, the
-//! trainer card, the options screen). Adding a label that opens nothing
-//! would be worse than leaving it out -- the player would read it as a bug.
-//! Recorded as such in the coverage ledger; the item list is a `Vec` so a
-//! later slice appends rather than restructures.
-//!
-//! The three unlock flags upstream reads (`FLAG_SYS_POKEDEX_GET`,
-//! `FLAG_SYS_POKEMON_GET`, `FLAG_SYS_POKENAV_GET`) are therefore not
-//! consulted, and neither are the six alternate menus
-//! (`BuildLinkModeStartMenu` and its siblings) -- no link cable, no Safari
-//! Zone, no Battle Frontier.
-//!
-//! # Geometry, straight from upstream
-//!
-//! Every constant below lives in the sibling [`chrome`] module, which owns
-//! this menu's windows; this file owns its state machine.
-//!
-//! | element | upstream | here |
-//! |---|---|---|
-//! | menu window | `AddWindowParameterized(0, 22, 1, 7, numActions * 2 + 2, ...)` (`src/menu.c:490-494`) | [`MENU_TILEMAP_LEFT`] and friends |
-//! | item label | `AddTextPrinterParameterized(..., 8, (index << 4) + 9, ...)` (`start_menu.c:472-473`) | [`LABEL_ORIGIN`] |
-//! | cursor | `InitMenuNormal(..., 0, 9, 16, ...)` (`:511`) -> `gText_SelectorArrow3` at `(left, optionHeight * pos + top)` (`src/menu.c:945`) | [`CURSOR_ORIGIN`] |
-//! | Yes/No window | `sYesNo_WindowTemplates` = `(21, 9, 5, 4)` (`src/menu.c:98-107`) | [`YesNoMenu`] |
-//! | Yes/No text | `gText_YesNo` at `(8, 1)`, cursor at `(0, 1)`, 16px rows (`src/menu.c:1621-1645`, `:1556-1566`) | [`YesNoMenu`] |
-//!
-//! The window frame is `DrawStdWindowFrame`'s standard frame
-//! (`src/menu.c:225-232`) -- the same `text_window_frame` handle
-//! [`crate::main_menu`] draws its item boxes with; see
-//! [`chrome::StartMenuChrome::from_pack`] for which frame that is and why.
-//! The content fill is that call's own `PIXEL_FILL(1)`, i.e. the frame
-//! palette's index 1.
-//! Label glyphs use `FONT_NORMAL`'s own default colours
-//! (`gFontInfos[FONT_NORMAL]`, `src/text.c:131-140`: fg 2, bg 1, shadow 3),
-//! resolved through that same palette -- unlike [`crate::main_menu`], which
-//! has to hardcode three literals because upstream patches its palette at
-//! runtime.
-//!
-//! # Frame ownership
-//!
-//! An open start menu freezes the overworld exactly as an open
-//! [`crate::overworld::NpcDialog`] does, and for upstream's own reason:
-//! `ShowStartMenu` (`src/field_control_avatar.c:182-187`) runs
-//! `LockPlayerFieldControls`,
-//! so `ProcessPlayerFieldInput` stops being polled until the menu closes.
-//! See [`crate::flow::overworld_phase`]'s `start_menu` module for the gate
-//! that decides when `START` may open one at all.
-//!
-//! A on `EXIT` only arms `gMenuCallback = StartMenuExitCallback` (`:607-626`), which closes the
-//! menu on the next tick (`:747-752`); `START`/`B` close it on the press frame (`:629-634`).
+//! An open menu locks field input exactly as an open
+//! [`crate::overworld::NpcDialog`] does. [`crate::flow::overworld_phase`]'s
+//! `start_menu` module owns the gate that decides when [`open`] may run.
 
 use assets::pack::PackError;
 use engine::text::render::RevealedGlyph;
@@ -78,20 +27,14 @@ use chrome::{
 use save_dialog::{SaveDialog, SaveDialogOutcome};
 pub(crate) use save_dialog::{SaveMode, SaveTarget};
 
-/// One entry of `sStartMenuItems` (`start_menu.c:181-197`) this shell
-/// carries -- see the module docs for why the other six are absent.
+/// An action selectable from the field start menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartMenuItem {
-    /// `MENU_ACTION_SAVE` -> `StartMenuSaveCallback` (`:721-728`).
     Save,
-    /// `MENU_ACTION_EXIT` -> `StartMenuExitCallback` (`:747-752`), which
-    /// hides the menu and gives field control back.
     Exit,
 }
 
 impl StartMenuItem {
-    /// This item's `sStartMenuItems[].text` (`gText_MenuSave`
-    /// /`gText_MenuExit`, `src/strings.c:1515`/`:1517`).
     const fn label(self) -> &'static str {
         match self {
             Self::Save => "SAVE",
@@ -100,18 +43,15 @@ impl StartMenuItem {
     }
 }
 
-/// `BuildNormalStartMenu`'s list (`start_menu.c:315-337`), restricted to
-/// the items this port can act on (module docs) but keeping upstream's
-/// order: `SAVE` comes before `EXIT`.
+/// The menu's items, in upstream's own order among the six this port omits
+/// (`pokeemerald/src/start_menu.c:315-337`): every other destination opens a
+/// screen this port has not built, so listing it would read as a bug.
 const ITEMS: [StartMenuItem; 2] = [StartMenuItem::Save, StartMenuItem::Exit];
 
 /// Why building a [`StartMenu`] failed.
-///
-/// Concrete per-crate-boundary enum `(oop-boundaries)`, mirroring
-/// [`crate::overworld::NpcDialogError`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartMenuError {
-    /// The pack, or one of the four entries the menu needs, is missing.
+    /// A required pack entry was missing or malformed.
     Pack(PackError),
     /// The font glyph sheet fetched from the pack didn't decode.
     Font(assets::AssetError),
@@ -145,43 +85,32 @@ impl From<assets::AssetError> for StartMenuError {
 pub(crate) enum StartMenuOutcome {
     /// The menu still owns field input.
     Open,
-    /// The menu is done (`HideStartMenu` + `UnlockPlayerFieldControls`);
-    /// the caller drops it and resumes ordinary overworld control.
+    /// The menu is done; the caller drops it and resumes field control.
     Closed,
 }
 
-/// One open start menu (module docs).
+/// State of an open field start menu.
 #[derive(Debug)]
 pub(crate) struct StartMenu {
     chrome: StartMenuChrome,
     items: Vec<StartMenuItem>,
-    /// One entry per [`Self::items`] entry, in that order.
+    /// Rendered labels, one per [`Self::items`] entry in that order.
     labels: Vec<Vec<RevealedGlyph>>,
     cursor_glyphs: Vec<RevealedGlyph>,
     yes_no_glyphs: Vec<RevealedGlyph>,
-    /// `sStartMenuCursorPos` (`start_menu.c:83`).
     cursor: usize,
-    /// `gMenuCallback`: `None` is `HandleStartMenuInput`; `Some` is the
-    /// SAVE callback chain (`StartMenuSaveCallback` -> `SaveStartCallback`
-    /// -> `SaveCallback`) having taken over.
+    /// `Some` while the SAVE flow owns the menu; `None` while item input
+    /// does.
     save: Option<SaveDialog>,
-    /// `gMenuCallback == StartMenuExitCallback`: A armed it on a previous
-    /// tick. A bare `bool` rather than a `save` variant, since EXIT carries
-    /// no state of its own.
+    /// Whether EXIT was selected and is waiting for the next tick to close
+    /// the menu (see [`Self::tick`]).
     exit_pending: bool,
 }
 
 impl StartMenu {
-    /// Build the menu around already-decoded `chrome` -- the shared body of
-    /// [`open`] and the test-only [`synthetic_start_menu`], so a
-    /// fixture menu's item list and geometry are never a second opinion
-    /// (mirrors [`crate::main_menu::MainMenuScene::assemble`]).
-    ///
-    /// `cursor` seeds `sStartMenuCursorPos` (`start_menu.c:83`, seeded back
-    /// in at `:511`) from whatever the caller retained across the previous
-    /// close -- [`crate::flow::overworld_phase`] is the session-lifetime
-    /// owner, EWRAM's counterpart here. Clamped to the item list so a
-    /// future slice shrinking [`ITEMS`] can never index out of bounds.
+    /// Builds the menu around already-decoded `chrome`, with `cursor`
+    /// clamped to the item list so a retained position can never index out
+    /// of bounds.
     fn assemble(chrome: StartMenuChrome, cursor: usize) -> Self {
         let items = ITEMS.to_vec();
         let labels = items
@@ -189,9 +118,6 @@ impl StartMenu {
             .map(|item| chrome.render_label(item.label()))
             .collect();
         let cursor_glyphs = chrome.render_label(&SELECTOR_ARROW.to_string());
-        // `gText_YesNo` (`src/strings.c:1467`) is one two-line string, so
-        // its rows land 16px apart from the printer's own newline handling
-        // -- the same spacing `sMenu.optionHeight` gives the cursor.
         let yes_no_glyphs = chrome.render_label("YES\nNO");
         let cursor = cursor.min(items.len() - 1);
         Self {
@@ -206,49 +132,40 @@ impl StartMenu {
         }
     }
 
-    /// Advance the menu by one frame.
+    /// Advances the menu by one frame.
     ///
-    /// While the SAVE flow owns the menu (`gMenuCallback` is
-    /// `StartMenuSaveCallback`, `SaveStartCallback`, or `SaveCallback`),
-    /// every frame goes to [`SaveDialog::run`] and `HandleStartMenuInput`
-    /// is not reached at all -- upstream's own structure, and what keeps a
-    /// D-pad press meant for a Yes/No prompt from also moving the item
-    /// cursor behind it.
+    /// [`Self::exit_pending`] closes the menu first; otherwise, while the
+    /// SAVE flow is open it exclusively owns the frame -- item input is not
+    /// read at all, so a D-pad press meant for a Yes/No prompt can never
+    /// also move the item cursor behind it
+    /// (`pokeemerald/src/start_menu.c:593-637`).
     ///
-    /// [`Self::exit_pending`] takes the same precedence, ahead of `save`.
+    /// Direction and A are independent tests, not a chain: a frame that
+    /// reports DOWN and A together moves the cursor and *then* selects the
+    /// item it landed on, and A returns before START/B are checked, so a
+    /// same-frame START cannot also close the menu behind the selection
+    /// (`pokeemerald/src/start_menu.c:593-634`).
     pub(crate) fn tick(
         &mut self,
         buttons: ButtonState,
         target: &mut impl SaveTarget,
     ) -> StartMenuOutcome {
         if self.exit_pending {
-            // `StartMenuExitCallback` (`:747-752`).
             return StartMenuOutcome::Closed;
         }
         if let Some(dialog) = &mut self.save {
-            // SAVE's per-frame callback chain
-            // (`start_menu.c:721-728,809-822,817-836`).
             return match dialog.run(buttons, &self.chrome, target) {
                 SaveDialogOutcome::InProgress => StartMenuOutcome::Open,
-                // `SAVE_CANCELED`: `InitStartMenu` again, back to
-                // `HandleStartMenuInput`.
                 SaveDialogOutcome::Canceled => {
                     self.save = None;
                     StartMenuOutcome::Open
                 }
-                // `SAVE_SUCCESS`/`SAVE_ERROR` share one arm: close the menu
-                // and hand field control back either way.
+                // Success and error share one arm: the menu closes either
+                // way (`pokeemerald/src/start_menu.c:828-834`).
                 SaveDialogOutcome::Success | SaveDialogOutcome::Error => StartMenuOutcome::Closed,
             };
         }
 
-        // `HandleStartMenuInput` (`start_menu.c:593-637`). Upstream's four
-        // tests are *independent* `if`s, not a chain: `JOY_NEW(DPAD_UP)`
-        // (`:595`), `JOY_NEW(DPAD_DOWN)` (`:601`) and `JOY_NEW(A_BUTTON)`
-        // (`:607`) each run on the same frame if the pad reports them
-        // together, so a DOWN+A frame moves the cursor and *then* selects
-        // the item it landed on. An `else if` chain would silently drop
-        // the A.
         if buttons.is_newly_pressed(Buttons::UP) {
             self.move_cursor(-1);
         }
@@ -257,25 +174,20 @@ impl StartMenu {
         }
         if buttons.is_newly_pressed(Buttons::A) {
             match self.items[self.cursor] {
-                // `gMenuCallback = StartMenuSaveCallback` (`:607-626`).
                 StartMenuItem::Save => self.save = Some(SaveDialog::new()),
-                // `gMenuCallback = StartMenuExitCallback` (`:616`).
                 StartMenuItem::Exit => self.exit_pending = true,
             }
-            // `return FALSE` (`:626`): the A branch is the one that ends
-            // the function, so a START/B on the same frame does *not* also
-            // close the menu behind the item it just picked.
             return StartMenuOutcome::Open;
         }
         if buttons.is_newly_pressed(Buttons::START) || buttons.is_newly_pressed(Buttons::B) {
-            // `JOY_NEW(START_BUTTON | B_BUTTON)` (`:629-634`): close.
             return StartMenuOutcome::Closed;
         }
         StartMenuOutcome::Open
     }
 
-    /// `Menu_MoveCursor` (`src/menu.c:948-962`): wraps at both ends, unlike
-    /// the Yes/No menu's own no-wrap variant.
+    /// Moves the cursor by `delta`, wrapping at both ends
+    /// (`pokeemerald/src/menu.c:948-962`) -- unlike [`YesNoMenu`], which
+    /// does not wrap.
     fn move_cursor(&mut self, delta: isize) {
         let count = self.items.len();
         let last = count - 1;
@@ -287,48 +199,35 @@ impl StartMenu {
         };
     }
 
-    /// The currently selected item -- `sStartMenuCursorPos` decoded back to
-    /// a [`StartMenuItem`].
     #[cfg(test)]
     pub(crate) fn selected(&self) -> StartMenuItem {
         self.items[self.cursor]
     }
 
-    /// The raw `sStartMenuCursorPos` value (`start_menu.c:83`), read by
-    /// [`crate::flow::overworld_phase`] whenever this menu closes so the
-    /// session-lifetime owner can carry it into the next
-    /// [`Self::assemble`], the same way EWRAM outlives `InitStartMenu`
-    /// upstream.
+    /// Returns the cursor position, for the caller to retain and pass back
+    /// into the next [`Self::assemble`] across a close and reopen.
     pub(crate) const fn cursor_position(&self) -> usize {
         self.cursor
     }
 
-    /// Whether SAVE's callback chain currently owns the menu
-    /// (`StartMenuSaveCallback`, `SaveStartCallback`, or `SaveCallback`).
     #[cfg(test)]
     pub(crate) const fn saving(&self) -> bool {
         self.save.is_some()
     }
 
-    /// The Yes/No window's cursor row (`0` = YES, `1` = NO) while one is
-    /// open, or `None` when no prompt is waiting on an answer.
-    ///
-    /// Test-only, and the one piece of flow state a driver genuinely needs
-    /// from outside: an A press means YES or NO depending on where the
-    /// cursor started, and the two overwrite prompts deliberately start it
-    /// in different places.
+    /// Returns the open Yes/No prompt's cursor row (`0` = YES, `1` = NO),
+    /// or `None` when no prompt is open.
     #[cfg(test)]
     pub(crate) fn yes_no_cursor(&self) -> Option<u8> {
         self.save.as_ref()?.yes_no().map(|menu| menu.cursor)
     }
 
-    /// Composite the menu -- and whatever the SAVE flow has open -- over an
-    /// already-composed overworld frame, the same way
-    /// [`crate::overworld::NpcDialog::compose_over`] does (the map keeps rendering behind an
-    /// open start menu upstream too).
+    /// Composites the menu, and whatever the SAVE flow has open, over an
+    /// already-composed overworld frame.
     pub(crate) fn compose_over(&self, mut base: Framebuffer) -> Framebuffer {
-        // `SaveConfirmSaveCallback` removes the item window and shows its
-        // replacement message in the same call (`start_menu.c:978-993`).
+        // The item window is removed only once its replacement save message
+        // exists, never a frame earlier
+        // (`pokeemerald/src/start_menu.c:978-993`).
         let save_message = self.save.as_ref().and_then(SaveDialog::message);
         if save_message.is_none() {
             self.draw_items(&mut base);
@@ -344,8 +243,6 @@ impl StartMenu {
         base
     }
 
-    /// The item window: `AddStartMenuWindow` + `PrintStartMenuActions` +
-    /// `Menu_MoveCursor`'s selector arrow (module docs' geometry table).
     fn draw_items(&self, fb: &mut Framebuffer) {
         let height = menu_height(self.items.len());
         let window = (MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH, height);
@@ -365,7 +262,6 @@ impl StartMenu {
         );
     }
 
-    /// The Yes/No window: `CreateYesNoMenu` (`src/menu.c:1621-1646`).
     fn draw_yes_no(&self, fb: &mut Framebuffer, menu: &YesNoMenu) {
         let window = (
             YES_NO_TILEMAP_LEFT,
@@ -387,24 +283,13 @@ impl StartMenu {
     }
 }
 
-/// Load the pack this session's [`crate::pack_source::PackSource`] resolves
-/// to and open a start menu out of it -- mirrors
-/// [`crate::overworld::NpcDialog::open`], and reads from disk on every call
-/// for the same reason: a start menu only opens on the single frame the
-/// player presses `START`.
-///
-/// `cursor` is [`StartMenu::assemble`]'s own seed -- the caller's retained
-/// `sStartMenuCursorPos`. `source` is the owning
-/// [`crate::flow::OverworldPhase`]'s own retained source (issue #412), so a
-/// headless-real scenario's field start menu keeps reading the checkout
-/// pack exactly as its title screen already did. `window_frame` is the live
-/// save's own `optionsWindowFrameType` -- see
-/// [`chrome::StartMenuChrome::from_pack`] for why the message box is not
-/// threaded the same way.
+/// Loads `source`'s pack and opens a start menu at `cursor`, bordered with
+/// `window_frame` (the live save's `optionsWindowFrameType`).
 ///
 /// # Errors
 ///
-/// See [`StartMenuError`].
+/// Returns [`StartMenuError`] when the pack is missing a required entry or
+/// the font glyph sheet fails to decode.
 pub(crate) fn open(
     source: crate::pack_source::PackSource,
     cursor: usize,
@@ -417,22 +302,13 @@ pub(crate) fn open(
     ))
 }
 
-/// Test-only: a [`StartMenu`] over blank chrome, no local pack needed --
-/// mirroring [`crate::overworld::dialog::synthetic_dialog`], and going
-/// through the same [`StartMenu::assemble`] production uses so a fixture
-/// menu's items, geometry, and state machine are the real ones. Opens on
-/// SAVE (`sStartMenuCursorPos`'s own zero default), the state a fresh
-/// session starts in -- [`synthetic_start_menu_at`] is the variant that
-/// exercises a retained cursor.
+/// Builds a [`StartMenu`] over blank chrome, with the cursor on SAVE.
 #[cfg(test)]
 pub(crate) fn synthetic_start_menu() -> StartMenu {
     StartMenu::assemble(StartMenuChrome::synthetic(), 0)
 }
 
-/// Test-only: [`synthetic_start_menu`], seeded at a caller-chosen cursor --
-/// what [`crate::flow::overworld_phase::OverworldPhase::open_synthetic_start_menu`]
-/// calls with its own retained position, so a flow test can drive the
-/// close-and-reopen round trip without a real asset pack.
+/// [`synthetic_start_menu`], with the cursor seeded at a chosen position.
 #[cfg(test)]
 pub(crate) fn synthetic_start_menu_at(cursor: usize) -> StartMenu {
     StartMenu::assemble(StartMenuChrome::synthetic(), cursor)
