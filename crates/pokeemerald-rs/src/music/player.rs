@@ -188,6 +188,13 @@ pub struct MusicPlayer {
     /// [`Self::drained`]'s device-tail bound, from [`device_tail_millis`] for
     /// the output this instance was started with.
     max_device_tail_frames: usize,
+    /// The submitted-device-frame target [`Self::drained`] latched the first
+    /// poll it saw the ring empty, from [`AudioOutput::playback_progress`] --
+    /// `None` either before that first empty poll, or when the output had no
+    /// measured signal to latch at that moment, in which case
+    /// [`Self::max_device_tail_frames`] alone governs the wait exactly as
+    /// before.
+    measured_drain_target: Option<u64>,
 }
 
 impl MusicPlayer {
@@ -284,6 +291,7 @@ impl MusicPlayer {
             drain_wait_frames: 0,
             device_tail_frames: 0,
             max_device_tail_frames: device_tail,
+            measured_drain_target: None,
         })
     }
 
@@ -349,23 +357,47 @@ impl MusicPlayer {
     /// stream where it stands rather than playing out what it holds.
     ///
     /// An empty ring only proves the output callback took the last samples,
-    /// so a healthy stream is held further frames for them to sound --
-    /// [`device_tail_millis`] for this output's own device, not a fixed wait.
+    /// so a healthy stream is held further frames for them to sound. The
+    /// first poll that sees the ring empty latches
+    /// [`AudioOutput::playback_progress`]'s submitted-frame count as a
+    /// target, then every later poll returns `true` as soon as the output's
+    /// measured sounded-frame count reaches it -- waiting on the device's
+    /// own measured playback position, not a poll count. If the output has
+    /// no measured signal at that first empty poll (a host that reports no
+    /// usable timestamp, including an unmodified null backend), this falls
+    /// back to [`device_tail_millis`] for this output's own device exactly
+    /// as before. Either way [`Self::max_device_tail_frames`] remains an
+    /// absolute cap: a stalled device, or a measured signal that stalls,
+    /// still cannot hold the transition open past it.
+    ///
     /// An elapsed [`max_drain_wait_frames`] bound answers `true` while the
     /// ring stays nonempty, so a consumer that never takes the fade cannot
     /// hold the device open; a stream error is not read, since cpal's ALSA
     /// worker reports a recoverable XRUN through the same counter and keeps
     /// running. Counts one poll per call. A ring seen empty clears the
-    /// stall count, and a ring that refills restarts the device tail;
-    /// meaningful only once [`Self::fade_finished`].
+    /// stall count, and a ring that refills restarts the device tail (and
+    /// the latched measured target); meaningful only once
+    /// [`Self::fade_finished`].
     #[must_use]
     pub fn drained(&mut self) -> bool {
         if self.producer.available_space() >= self.ring_capacity {
             self.drain_wait_frames = 0;
+            if self.device_tail_frames == 0 {
+                self.measured_drain_target =
+                    self.output.playback_progress().map(|p| p.submitted_frames);
+            }
             self.device_tail_frames += 1;
+            if let Some(target) = self.measured_drain_target {
+                if let Some(progress) = self.output.playback_progress() {
+                    if progress.sounded_frames >= target {
+                        return true;
+                    }
+                }
+            }
             return self.device_tail_frames > self.max_device_tail_frames;
         }
         self.device_tail_frames = 0;
+        self.measured_drain_target = None;
         self.drain_wait_frames += 1;
         self.drain_wait_frames >= self.max_drain_wait_frames
     }
@@ -627,6 +659,64 @@ mod tests {
         assert_eq!(
             polls_after_refill, tail,
             "the tail must run in full from the latest drain, not resume the earlier count"
+        );
+    }
+
+    /// With a measured playback-position signal available, `drained` must
+    /// wait on it rather than on the poll count: it must stay `false` while
+    /// the measured sounded-frame position is stationary, however many polls
+    /// elapse short of the device-tail cap, and must return `true` the
+    /// instant the fake clock reaches the latched target -- not merely
+    /// because enough polls have gone by.
+    #[test]
+    fn drained_waits_on_the_measured_playback_position_not_the_poll_count() {
+        const RING_FRAMES: usize = 512;
+        let full_ring = RING_FRAMES * usize::from(AudioOutput::CHANNELS);
+        let output = AudioOutput::null(RING_FRAMES);
+        let mut player = MusicPlayer::start(short_song_without_its_own_reverb(), output)
+            .expect("null backend never errors");
+        let mut sink = vec![0.0_f32; full_ring];
+
+        player.drain_null_for_test(&mut sink);
+        assert_eq!(
+            player.ring_free_for_test(),
+            full_ring,
+            "sanity: the ring is empty"
+        );
+
+        // Enabled only after draining, so the latched target below is the
+        // real submitted-frame count `drain_null_for_test` just advanced.
+        player.output.enable_playback_progress_for_test();
+        let tail = player.max_device_tail_frames;
+        assert!(
+            tail > 2,
+            "the null backend's floor must leave room for a partial count"
+        );
+
+        // Poll up to (but not past) the poll-count cap without ever
+        // advancing the fake sounded-frame clock: every poll must stay
+        // false, driven by the unmet measured target rather than by the
+        // ring/poll bookkeeping `a_ring_that_refills_restarts_the_device_tail`
+        // already pins.
+        for _ in 0..tail - 1 {
+            assert!(
+                !player.drained(),
+                "must not report drained while the measured playback position is stationary"
+            );
+        }
+
+        // Advance the fake clock to the latched submitted-frame target
+        // (`drain_null_for_test` submitted `RING_FRAMES` stereo frames, not
+        // `full_ring` samples) on this very poll -- one short of the
+        // poll-count cap (`tail`) that would otherwise still have to elapse
+        // -- and `drained` must report true immediately, proving the
+        // measured signal decided it.
+        player
+            .output
+            .advance_sounded_frames_for_test(RING_FRAMES as u64);
+        assert!(
+            player.drained(),
+            "must report drained once the measured playback position reaches the target"
         );
     }
 

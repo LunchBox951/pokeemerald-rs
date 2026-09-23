@@ -130,8 +130,28 @@ fn main() -> ExitCode {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
-    let tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
-    if let Err(err) = wait_for_device_tail(tail, || output.stream_errors(), std::thread::sleep) {
+    // Prefer the device's own measured playback position when it has one
+    // (see `platform::AudioOutput::playback_progress`); the derived
+    // `device_tail_wait` bound below is only the fallback for a host that
+    // never reports a usable timestamp.
+    let submitted_target = output
+        .playback_progress()
+        .map(|progress| progress.submitted_frames);
+    let derived_tail = device_tail_wait(output.max_callback_frames(), output.device_sample_rate());
+    let tail_result = wait_for_device_tail_or_measured(
+        submitted_target,
+        derived_tail,
+        &policy,
+        || {
+            output
+                .playback_progress()
+                .map(|progress| progress.sounded_frames)
+        },
+        || output.stream_errors(),
+        Instant::now,
+        std::thread::sleep,
+    );
+    if let Err(err) = tail_result {
         eprintln!("audio playback stopped: {}", err.describe());
         return ExitCode::FAILURE;
     }
@@ -417,7 +437,10 @@ fn wait_for_drain(
     }
 }
 
-/// How long the device may still be playing after the ring reads empty:
+/// Fallback for a device with no measured playback position (see
+/// `platform::AudioOutput::playback_progress` and
+/// [`wait_for_device_tail_or_measured`]): how long the device may still be
+/// playing after the ring reads empty, derived rather than measured --
 /// [`HOST_QUEUED_PERIODS`] of its largest advertised callback buffer at its
 /// own rate, plus [`DEVICE_TAIL_MARGIN`], clamped between [`DEVICE_TAIL_FALLBACK`] and
 /// [`DEVICE_TAIL_MAX`]; the floor alone when it advertises none. An empty
@@ -446,6 +469,69 @@ fn wait_for_device_tail(
     match stream_errors() {
         0 => Ok(()),
         errors => Err(DrainError::StreamStoppedDuringTail { errors }),
+    }
+}
+
+/// Wait, within `policy`, for the device's measured playback position (see
+/// `platform::AudioOutput::playback_progress`) to reach `target` submitted
+/// device frames, polling `sounded_frames` at `policy.interval`.
+///
+/// Gives up quietly at `policy.max_wait`, exactly as the derived
+/// [`wait_for_device_tail`]'s fixed sleep does: this bounds how long a
+/// healthy but slow-to-report stream is held open, not a promise the device
+/// actually finished sounding by then. A stream error before the target is
+/// reached is not a successful finish, matching [`wait_for_device_tail`].
+/// `sounded_frames`, `stream_errors`, `now`, and `sleep` are injected as in
+/// [`push_frame`].
+fn wait_for_measured_tail(
+    target: u64,
+    policy: &RetryPolicy,
+    mut sounded_frames: impl FnMut() -> Option<u64>,
+    mut stream_errors: impl FnMut() -> u64,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    let deadline = now() + policy.max_wait;
+    loop {
+        let sounded = sounded_frames();
+        let errors = stream_errors();
+        if errors > 0 {
+            return Err(DrainError::StreamStoppedDuringTail { errors });
+        }
+        match sounded {
+            Some(sounded) if sounded >= target => return Ok(()),
+            // The signal disappearing mid-wait should not itself be read as
+            // a failure -- give up quietly, the same as a stalled deadline.
+            None => return Ok(()),
+            _ => {}
+        }
+        if now() >= deadline {
+            return Ok(());
+        }
+        sleep(policy.interval);
+    }
+}
+
+/// `main`'s whole "hold the stream open until the last samples sound" step:
+/// prefer the measured wait when `submitted_target` is `Some` (i.e.
+/// `AudioOutput::playback_progress` returned a value when `main` checked),
+/// otherwise fall back to sleeping `derived_tail` (`main`'s
+/// [`device_tail_wait`] result) via [`wait_for_device_tail`] -- see the
+/// module docs. `sounded_frames`, `stream_errors`, `now`, and `sleep` are
+/// injected as in [`push_frame`].
+fn wait_for_device_tail_or_measured(
+    submitted_target: Option<u64>,
+    derived_tail: Duration,
+    policy: &RetryPolicy,
+    sounded_frames: impl FnMut() -> Option<u64>,
+    stream_errors: impl FnMut() -> u64,
+    now: impl FnMut() -> Instant,
+    sleep: impl FnMut(Duration),
+) -> Result<(), DrainError> {
+    if let Some(target) = submitted_target {
+        wait_for_measured_tail(target, policy, sounded_frames, stream_errors, now, sleep)
+    } else {
+        wait_for_device_tail(derived_tail, stream_errors, sleep)
     }
 }
 
@@ -492,9 +578,9 @@ mod tests {
 
     use super::{
         build_song, classify_open_error, device_tail_wait, prefill_then_start, push_frame,
-        start_playback, wait_for_device_tail, wait_for_drain, wait_for_frame_deadline, DrainError,
-        OpenOutcome, PushError, RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK,
-        DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
+        start_playback, wait_for_device_tail, wait_for_device_tail_or_measured, wait_for_drain,
+        wait_for_frame_deadline, wait_for_measured_tail, DrainError, OpenOutcome, PushError,
+        RetryPolicy, StartOutcome, DEVICE_TAIL_FALLBACK, DEVICE_TAIL_MARGIN, DEVICE_TAIL_MAX,
     };
 
     #[test]
@@ -1022,5 +1108,126 @@ mod tests {
         // callback buffer is far smaller, so waiting the maximum would look
         // like a hang.
         assert_eq!(device_tail_wait(Some(480_000), 48_000), DEVICE_TAIL_MAX);
+    }
+
+    #[test]
+    fn measured_wait_succeeds_immediately_once_the_target_is_already_reached() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+
+        let result = wait_for_measured_tail(
+            4,
+            &policy,
+            || Some(4),
+            || 0,
+            std::time::Instant::now,
+            |_| panic!("the target is already reached; must not sleep"),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn measured_wait_reports_a_stream_error_before_the_target_is_reached() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_mins(1),
+        };
+        let start = std::time::Instant::now();
+
+        let result = wait_for_measured_tail(
+            4,
+            &policy,
+            || Some(0), // stationary, well short of the target
+            || 1,       // already unhealthy
+            || start,
+            |_| panic!("a stream error must abort before any retry sleep"),
+        );
+
+        assert!(matches!(
+            result,
+            Err(DrainError::StreamStoppedDuringTail { errors: 1 })
+        ));
+    }
+
+    #[test]
+    fn measured_wait_gives_up_quietly_at_the_deadline_with_no_stream_error() {
+        // A stalled measured signal is bounded exactly like the derived
+        // tail's fixed sleep: giving up alone is not itself a reported
+        // failure.
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(10),
+            max_wait: std::time::Duration::from_millis(30),
+        };
+        let clock = Rc::new(RefCell::new(std::time::Instant::now()));
+        let sleeps = Cell::new(0_u32);
+
+        let result = wait_for_measured_tail(
+            4,
+            &policy,
+            || Some(0), // never reaches the target
+            || 0,
+            || *clock.borrow(),
+            |duration| {
+                sleeps.set(sleeps.get() + 1);
+                *clock.borrow_mut() += duration;
+            },
+        );
+
+        assert!(result.is_ok());
+        assert!(
+            sleeps.get() > 0,
+            "must have retried at least once before giving up"
+        );
+    }
+
+    #[test]
+    fn the_orchestrator_prefers_the_measured_target_when_available() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+
+        let result = wait_for_device_tail_or_measured(
+            Some(4),
+            std::time::Duration::from_millis(200),
+            &policy,
+            || Some(4),
+            || 0,
+            std::time::Instant::now,
+            |_| panic!("the measured target is already reached; must not sleep"),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn the_orchestrator_falls_back_to_the_derived_tail_with_no_measured_target() {
+        let policy = RetryPolicy {
+            interval: std::time::Duration::from_millis(1),
+            max_wait: std::time::Duration::from_secs(1),
+        };
+        let derived_tail = device_tail_wait(Some(12_000), 48_000);
+        let slept = Rc::new(RefCell::new(Vec::new()));
+        let slept_sleep = Rc::clone(&slept);
+
+        let result = wait_for_device_tail_or_measured(
+            None,
+            derived_tail,
+            &policy,
+            || panic!("the measured path must not be consulted once no target is available"),
+            || 0,
+            std::time::Instant::now,
+            move |d| slept_sleep.borrow_mut().push(d),
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(
+            *slept.borrow(),
+            vec![std::time::Duration::from_millis(500) + DEVICE_TAIL_MARGIN],
+            "the fallback must sleep the single derived tail duration, not poll"
+        );
     }
 }
