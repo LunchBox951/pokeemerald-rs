@@ -18,7 +18,8 @@ pub(super) enum UnusableEntry {
     /// The entry is a symlink instead of naming the file it opens.
     IsAlias,
     /// The entry exists and is not a symlink, but is not a plain file
-    /// either -- a directory, socket, device, or FIFO.
+    /// either -- a directory, socket, device, FIFO, or another kind of
+    /// Windows reparse point.
     NotAPlainFile,
 }
 
@@ -41,12 +42,40 @@ pub(super) fn refuse_an_unusable_entry(path: &Path) -> Result<(), UnusableEntry>
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(source) => return Err(UnusableEntry::Inspect(source)),
     };
-    if entry.is_symlink() {
+    refuse_an_unusable_kind(&entry)
+}
+
+/// The one classification both [`refuse_an_unusable_entry`] and
+/// [`refuse_an_unusable_open`] apply to what they inspected.
+///
+/// On Windows `std` calls only a name-surrogate reparse point (a symlink or
+/// junction) a symlink, so a cloud-files placeholder, an app-execution
+/// alias, or a deduplicated file reports as a plain file. Opened with
+/// [`refuse_unusable_opens`]'s flags, such an entry would be read as its
+/// raw reparse object, not the data its filter serves, so any reparse point
+/// that is not a symlink is refused too.
+fn refuse_an_unusable_kind(metadata: &std::fs::Metadata) -> Result<(), UnusableEntry> {
+    if metadata.is_symlink() {
         Err(UnusableEntry::IsAlias)
-    } else if entry.is_file() {
+    } else if metadata.is_file() && !is_reparse_point(metadata) {
         Ok(())
     } else {
         Err(UnusableEntry::NotAPlainFile)
+    }
+}
+
+/// Whether `metadata` carries Windows's reparse-point attribute; never true
+/// elsewhere.
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        metadata.file_attributes() & open_flags::FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
     }
 }
 
@@ -73,12 +102,14 @@ mod open_flags {
     pub(super) const ELOOP: i32 = 62;
 }
 
-/// Windows's `<winbase.h>`.
+/// Windows's `<winbase.h>` and `<winnt.h>`.
 #[cfg(windows)]
 mod open_flags {
     /// Opens a reparse point (a symlink, among others) itself rather than
     /// following it.
     pub(super) const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    /// Marks an entry as a reparse point of any tag.
+    pub(super) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 }
 
 /// Adds the flags that close the window between [`refuse_an_unusable_entry`]
@@ -120,11 +151,5 @@ pub(super) fn open_refused_a_symlink(error: &std::io::Error) -> bool {
 /// between that check and this open.
 pub(super) fn refuse_an_unusable_open(file: &std::fs::File) -> Result<(), UnusableEntry> {
     let opened = file.metadata().map_err(UnusableEntry::Inspect)?;
-    if opened.is_symlink() {
-        Err(UnusableEntry::IsAlias)
-    } else if opened.is_file() {
-        Ok(())
-    } else {
-        Err(UnusableEntry::NotAPlainFile)
-    }
+    refuse_an_unusable_kind(&opened)
 }

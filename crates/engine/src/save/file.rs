@@ -153,8 +153,8 @@ impl std::fmt::Display for SaveFileError {
             Self::SavePathNotAPlainFile { path } => write!(
                 f,
                 "save file: the save path {} is not a plain file -- a directory, socket, \
-                 or device there is not a save image, and opening a FIFO would wait for a \
-                 writer that never comes",
+                 device, or reparse point there is not a save image, and opening a FIFO \
+                 would wait for a writer that never comes",
                 path.display()
             ),
             Self::BadLength {
@@ -314,7 +314,8 @@ impl SaveFile {
     /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink;
     /// [`SaveFileError::SavePathNotAPlainFile`] if it is anything else that
     /// is not a plain file -- a directory, socket, device, or FIFO, which a
-    /// blocking open or read could otherwise wait on forever;
+    /// blocking open or read could otherwise wait on forever, or a Windows
+    /// reparse point such as a cloud-files placeholder;
     /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
