@@ -99,10 +99,14 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
-    /// The player's remaining party members for a wild battle, in party
-    /// order. Empty for a trainer battle: this slice models no trainer-side
-    /// player replacement. Each index keeps standing for the same party
-    /// position across replacements (`Battle::send_out_next_player_reserve`).
+    /// The player's remaining party members for a wild battle, starting in
+    /// party order. Empty for a trainer battle: this slice models no
+    /// trainer-side player replacement.
+    /// [`Battle::send_out_next_player_reserve`] swaps the newly fainted
+    /// active member into the sent-out reserve's slot, so an index does not
+    /// keep standing for the same party position across replacements; see
+    /// [`Battle::player_members`] for reconciling a member by identity
+    /// instead.
     player_reserves: Vec<BattlePokemon>,
     enemy: BattlePokemon,
     run_attempts: u8,
@@ -204,17 +208,19 @@ impl Battle {
     /// `data/battle_scripts_1.s:2830`-`:2896`). [`Battle::new`] is this
     /// constructor with an empty reserve list. A reserve's own moves are
     /// validated as the player selects them, exactly like the active
-    /// member's; the enemy's moveset is validated against every reserve up
-    /// front too, since any of them may face it as a defender with no
-    /// further checkpoint before that turn.
+    /// member's; the enemy's moveset is validated against every non-fainted
+    /// reserve up front too, since any of them may face it as a defender
+    /// with no further checkpoint before that turn. A fainted reserve is
+    /// admitted without that check: [`Battle::send_out_next_player_reserve`]
+    /// never selects it, so it can never become the enemy's defender.
     ///
     /// # Errors
     ///
     /// Returns [`BattleError::FaintedBattler`] for a fainted active
     /// participant, or the first move or ability validation error from the
-    /// enemy's moveset against the active member or any reserve. A fainted
-    /// reserve is admitted: it models a player party that already lost a
-    /// member before the battle. Errors leave the RNG untouched.
+    /// enemy's moveset against the active member or any non-fainted reserve.
+    /// A fainted reserve is admitted: it models a player party that already
+    /// lost a member before the battle. Errors leave the RNG untouched.
     pub fn new_with_player_reserves(
         dex: Dex,
         player: BattlePokemon,
@@ -239,12 +245,18 @@ impl Battle {
             dex.move_data(slot.move_id)?;
             // Zero-PP moves stop before applying effects, Struggle
             // excepted (`src/battle_script_commands.c:934`-`:939`). A
-            // reserve becomes this same enemy's defender the moment it is
-            // sent out, with no further validation at that point, so every
-            // reserve is checked here too.
+            // non-fainted reserve becomes this same enemy's defender the
+            // moment it is sent out, with no further validation at that
+            // point, so every non-fainted reserve is checked here too. A
+            // fainted reserve is skipped: `send_out_next_player_reserve`
+            // never selects it.
             if slot.pp > 0 {
                 ensure_executable(&dex, slot.move_id)?;
-                for defender in std::iter::once(&player).chain(player_reserves.iter()) {
+                for defender in std::iter::once(&player).chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ) {
                     paralyze::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
                     secondary::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
                 }

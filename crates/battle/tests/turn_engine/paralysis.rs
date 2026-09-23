@@ -866,11 +866,12 @@ fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
 }
 
-/// A player reserve is never checked against the enemy's moveset before the
-/// battle starts, so an enemy Thunder Wave admitted against the active
-/// member reaches a Shed Skin reserve mid-turn -- after the turn's draws and
-/// the enemy's PP spend -- instead of being refused before construction, the
-/// invariant `a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend` pins.
+/// A non-fainted player reserve is checked against the enemy's moveset
+/// before the battle starts, exactly like the active member: it may become
+/// the enemy's defender with no further checkpoint once sent out, so a
+/// Shed Skin reserve reachable by an admitted enemy Thunder Wave must
+/// refuse construction up front instead of reaching an unsupported ability
+/// interaction mid-turn.
 #[test]
 fn an_enemy_move_is_refused_against_a_shed_skin_reserve_before_the_battle_starts() {
     let dex = Dex::new();
@@ -887,4 +888,22 @@ fn an_enemy_move_is_refused_against_a_shed_skin_reserve_before_the_battle_starts
         BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
     );
     assert_eq!(rng.draws(), 0, "a refused battle draws nothing");
+}
+
+/// A fainted reserve can never be sent out
+/// (`Battle::send_out_next_player_reserve` skips every fainted entry), so it
+/// models a player party that already lost a member before the battle and
+/// must not refuse construction over an enemy move it will never face.
+#[test]
+fn a_fainted_shed_skin_reserve_does_not_refuse_an_enemy_thunder_wave() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut reserve = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
+    assert_eq!(reserve.ability(), assets::AbilityId::SHED_SKIN);
+    reserve.apply_damage(reserve.stats().max_hp);
+    assert!(reserve.is_fainted());
+    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, THUNDER_WAVE]);
+    let mut rng = SequenceRng::new([0; 32]);
+    Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+        .expect("a fainted reserve can never be sent out, so it is never validated as a defender");
 }
