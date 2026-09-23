@@ -6,10 +6,10 @@ use battle::{Battle, BattleEvent, Dex, PlayerAction};
 
 #[test]
 fn battle_start_draws_the_initial_turn_order_tie_on_equal_speeds() {
-    // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
-    // `ignoreChosenMoves = TRUE` (`battle_main.c:3852`..`:3861`), so a
-    // mirror match (identical species/level, all stages neutral) hits
-    // the exact-Speed-tie draw (`:4745`..`:4750`) before turn 1.
+    // Upstream seeds the initial turn order before turn 1 even runs
+    // (`TryDoEventsBeforeFirstTurn`, `battle_main.c:3852`-`:3861`), so an
+    // exact Speed tie at construction already costs a draw there
+    // (`:4745`-`:4750`), before any turn-body tie draw.
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
@@ -25,10 +25,8 @@ fn battle_start_draws_the_initial_turn_order_tie_on_equal_speeds() {
 #[test]
 fn battle_start_and_every_turn_each_refresh_the_turn_number() {
     let dex = Dex::new();
-    // Non-terminal fixture (see `move_priority_beats_speed_for_either_side`'s
-    // leg 1): the player's +1-priority Quick Attack and the enemy's Tackle
-    // deal 6 and 9 damage respectively each turn, and both mons survive two
-    // exchanges, so a real second turn starts and can be asserted on too.
+    // Both battlers survive two full turns, so a real second turn starts
+    // and its own turn-number refresh can be asserted on too.
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // Rattata/Quick Attack
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // Charmander/Tackle
 
@@ -83,15 +81,9 @@ fn battle_start_and_every_turn_each_refresh_the_turn_number() {
 #[test]
 fn move_priority_beats_speed_for_either_side() {
     let dex = Dex::new();
-    // Leg 1: the slower player's Quick Attack (move 98, priority +1)
-    // moves first against the faster enemy's ordinary Tackle. Priorities
-    // differ, so no turn-order draw is made.
-    //
-    // Damage pins, hand computed: Rattata L5 Quick Attack (atk 12,
-    // power 40) into Charmander L10 (def 16): 12*40 = 480, *4 = 1920,
-    // /16 = 120, /50 = 2, +2 = 4, STAB -> 6. Charmander L10 Tackle (atk
-    // 18) into Rattata L5 (def 10): 18*35 = 630, *6 = 3780, /10 = 378,
-    // /50 = 7, +2 = 9, no STAB. Both survive.
+    // Leg 1: the slower player's +1-priority Quick Attack moves first
+    // against the faster enemy's ordinary Tackle. Priorities differ, so
+    // no turn-order draw is made.
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // slow, +1 priority
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
@@ -121,9 +113,7 @@ fn move_priority_beats_speed_for_either_side() {
 
     // Leg 2, mirrored: the wild mon's rejection loop lands on its own
     // +1-priority slot (draw 1 -> slot 1, Quick Attack) and it moves
-    // first despite being far slower than the player. Same numbers with
-    // the roles reversed: Rattata's Quick Attack deals 6, Charmander's
-    // Tackle 9.
+    // first despite being far slower than the player.
     let player = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(98)]); // slow
     let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0]);
@@ -168,11 +158,6 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
     // value 0 must mean "player first" -- were the two consumed in the
     // other order, the odd 1 would flip the tie to the enemy and the 0
     // would pick slot 0 (Tackle), failing both assertions below.
-    //
-    // Damage pins: Rattata L5 (atk 12) Tackle into def 10: 12*35 = 420,
-    // *4 = 1680, /10 = 168, /50 = 3, +2 = 5, STAB -> 7. Scratch (power
-    // 40): 12*40 = 480, *4 = 1920, /10 = 192, /50 = 3, +2 = 5, STAB ->
-    // 7. Both survive (19 HP).
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
     let mut rng = SequenceRng::new([
@@ -244,7 +229,7 @@ fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId(129),
-                damage: 10, // 12*60=720, *4=2880, /11=261, /50=5, +2=7, STAB -> 10
+                damage: 10,
                 is_critical: false,
             },
             BattleEvent::Hit {
