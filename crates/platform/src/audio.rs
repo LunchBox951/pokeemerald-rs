@@ -178,17 +178,11 @@ impl AudioOutput {
     /// (stereo, matching the GBA's Direct Sound A/B output).
     pub const CHANNELS: u16 = 2;
 
-    /// The ring buffer's real production cadence:
+    /// The ring buffer's real production cadence, about 13378.96 Hz:
     /// [`Self::M4A_SAMPLES_PER_GAME_FRAME`] frames per
-    /// [`crate::pacing::GBA_FRAME_PERIOD`], about 13378.96 Hz. The
-    /// [`Resampler`] drains against this rather than the rounded
-    /// [`Self::M4A_MIXER_RATE`], which upstream's integer math uses for
-    /// pitch: the 0.04 frames/s difference is a rate bias, not jitter, so
-    /// draining at 13379 Hz empties any prefilled headroom over hours of
-    /// play. The cadence is fixed here because the ring exists for the
-    /// game's frame-driven producer; a producer pushing at exactly
-    /// `M4A_MIXER_RATE` drifts by that same 0.04 frames/s, bounded by the
-    /// ring depth and its own full-ring retry.
+    /// [`crate::pacing::GBA_FRAME_PERIOD`]. The [`Resampler`] drains at this
+    /// rate, not the rounded [`Self::M4A_MIXER_RATE`] upstream uses for
+    /// pitch; the difference is a rate bias that drains the ring over hours.
     fn source_cadence_hz() -> f64 {
         f64::from(Self::M4A_SAMPLES_PER_GAME_FRAME) / crate::pacing::GBA_FRAME_PERIOD.as_secs_f64()
     }

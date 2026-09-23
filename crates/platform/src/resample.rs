@@ -148,20 +148,10 @@ impl Resampler {
     /// # Errors
     ///
     /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate`
-    /// is not finite and positive (a caller error class a `u32` used to rule
-    /// out entirely, before `source_rate` carried the exact — not
-    /// rounded-to-the-nearest-Hz — production cadence; see
-    /// `crate::audio::AudioOutput::open`), or if `source_rate / device_rate`
-    /// alone (regardless of `max_output_frames`) exceeds
-    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: even the smallest possible chunk
-    /// (`chunk_frames == 1`) would then need more source frames than the
-    /// scratch cap allows to resolve a single output frame's advance, which
-    /// would otherwise leave `self.frac >= 1.0` for [`Self::fill_chunk`] to
-    /// interpolate with — extrapolating past the source range instead of
-    /// bounding a chunk crossing count that can never fully catch up.
-    /// Refusing here, rather than degrading inside `fill_chunk`, keeps every
-    /// constructed `Resampler`'s `frac` invariant (`[0.0, 1.0)`, see the
-    /// field doc) unconditionally true.
+    /// is not finite and positive, or if `source_rate / device_rate` exceeds
+    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: one output frame would then need more
+    /// source frames than the scratch cap holds, breaking the `frac`
+    /// invariant (see the field doc).
     pub fn new(
         consumer: Consumer,
         channels: u16,
