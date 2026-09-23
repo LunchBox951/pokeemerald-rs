@@ -4,9 +4,9 @@
 //! `cpal` calls `Source::fill` (and, on the common resampled path,
 //! `Resampler::fill`) on the OS audio thread under a hard deadline. A buffer
 //! larger than the size the device advertised is exactly the moment the
-//! callback must stay allocation-free: pre-sizing off the thread already
-//! covers the advertised sizes, so an in-callback grow only ever fires when
-//! the deadline is least forgiving.
+//! callback must stay allocation-free: pre-sizing off the thread covers
+//! every realistic advertised size, and anything past it is chunked, so an
+//! in-callback grow would only ever fire when the deadline is least forgiving.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -66,7 +66,7 @@ unsafe impl GlobalAlloc for Counting {
 static ALLOCATOR: Counting = Counting;
 
 const CHANNELS: u16 = 2;
-const SOURCE_RATE: u32 = 13_379;
+const SOURCE_RATE: f64 = 13_379.0;
 const DEVICE_RATE: u32 = 48_000;
 /// The largest callback size the device advertised, which is all
 /// `Resampler::new` gets to pre-size against.
@@ -81,7 +81,8 @@ fn an_oversized_callback_does_not_allocate_on_the_audio_thread() {
         SOURCE_RATE,
         DEVICE_RATE,
         ADVERTISED_FRAMES,
-    );
+    )
+    .unwrap();
 
     let pcm = vec![0.25_f32; 1 << 14];
     let mut advertised = vec![0.0_f32; ADVERTISED_FRAMES * usize::from(CHANNELS)];

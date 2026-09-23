@@ -168,6 +168,15 @@ pub enum OverworldSceneError {
         /// The height in pixels.
         height: u32,
     },
+    /// A source palette index exceeds the 4bpp destination maximum of 15.
+    ///
+    /// See [`ImageRef`] for the source image contract.
+    ImagePaletteIndexOutOfRange {
+        /// A diagnostic label for the image's role, not its pack entry id.
+        label: &'static str,
+        /// The rejected palette index.
+        index: u8,
+    },
     /// A people sprite sheet, for the player or an NPC, has dimensions the
     /// frame layout cannot use.
     SpriteSheetWrongDimensions {
@@ -215,6 +224,11 @@ impl std::fmt::Display for OverworldSceneError {
                 f,
                 "overworld scene: image `{label}` ({width}x{height}) is not a whole number of \
                  8x8 tiles"
+            ),
+            Self::ImagePaletteIndexOutOfRange { label, index } => write!(
+                f,
+                "overworld scene: image `{label}` has palette index {index}, expected 0..=15 \
+                 for 4bpp"
             ),
             Self::SpriteSheetWrongDimensions {
                 id,
@@ -750,7 +764,7 @@ pub(crate) fn load_room_from_source(
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
-fn resolve_tileset_pack_name(
+pub(crate) fn resolve_tileset_pack_name(
     tileset_symbol: &'static str,
 ) -> Result<&'static str, OverworldSceneError> {
     match tileset_symbol {
@@ -783,7 +797,7 @@ fn pack_4bpp_region(
 ) -> Result<Vec<u8>, OverworldSceneError> {
     const TILE_SIDE: usize = BitDepth::TILE_DIM;
     const PIXELS_PER_BYTE: usize = 2;
-    const PIXEL_MASK: u8 = 0x0F;
+    const MAX_PIXEL_INDEX: u8 = 0x0F;
     const HIGH_NIBBLE_SHIFT: u32 = 4;
 
     let image_row_width = image.width as usize;
@@ -819,8 +833,11 @@ fn pack_4bpp_region(
                     .copy_from_slice(&image.pixels[source_row_start..source_row_start + TILE_SIDE]);
             }
             for pixel_pair in tile_pixels.chunks_exact(PIXELS_PER_BYTE) {
-                let low_nibble = pixel_pair[0] & PIXEL_MASK;
-                let high_nibble = (pixel_pair[1] & PIXEL_MASK) << HIGH_NIBBLE_SHIFT;
+                if let Some(&index) = pixel_pair.iter().find(|&&index| index > MAX_PIXEL_INDEX) {
+                    return Err(OverworldSceneError::ImagePaletteIndexOutOfRange { label, index });
+                }
+                let low_nibble = pixel_pair[0];
+                let high_nibble = pixel_pair[1] << HIGH_NIBBLE_SHIFT;
                 packed_bytes.push(low_nibble | high_nibble);
             }
         }

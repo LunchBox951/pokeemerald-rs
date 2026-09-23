@@ -18,6 +18,26 @@ use super::{
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
 
+#[test]
+fn release_channel_missing_pack_does_not_load_shared_or_checkout_data() {
+    let actual = resolve(
+        &env_of(&[("HOME", "/home/player")]),
+        Some(Path::new("/game")),
+        &exists_of(&[
+            "/home/player/.local/share/pokeemerald-rs/pokeemerald.pack",
+            "/game/assets-pack/pokeemerald.pack",
+        ]),
+        DataDirRule::Xdg,
+    );
+    let expected = match super::RELEASE_CHANNEL {
+        "unstable" => "/home/player/.local/share/pokeemerald-rs/unstable/pokeemerald.pack",
+        "stable" => "/home/player/.local/share/pokeemerald-rs/stable/pokeemerald.pack",
+        "main" => "/home/player/.local/share/pokeemerald-rs/main/pokeemerald.pack",
+        _ => "/home/player/.local/share/pokeemerald-rs/pokeemerald.pack",
+    };
+    assert_eq!(actual, PathBuf::from(expected));
+}
+
 /// An environment built from `(key, value)` pairs; every other key is unset.
 fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     let owned: Vec<(String, OsString)> = pairs

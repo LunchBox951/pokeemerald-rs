@@ -16,6 +16,20 @@ pub(crate) enum VoiceGroupError {
         group: String,
         duty: u8,
     },
+    CgbEnvelopeOutOfRange {
+        group: String,
+        operand: &'static str,
+        value: u8,
+        maximum: u8,
+    },
+    NoisePeriodOutOfRange {
+        group: String,
+        period: u8,
+    },
+    CgbLengthOutOfRange {
+        group: String,
+        length: u8,
+    },
     UnknownVoiceMacro {
         group: String,
         macro_name: String,
@@ -34,6 +48,10 @@ pub(crate) enum VoiceGroupError {
     SplitBeforeKeySplit,
     InvalidSplitOperands {
         table: String,
+    },
+    SplitChildSlotOutOfRange {
+        table: String,
+        slot: u8,
     },
     SplitOutOfOrder {
         table: String,
@@ -102,6 +120,25 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: square duty cycle selector {duty} is outside the valid \
                  range 0..=3"
             ),
+            Self::CgbEnvelopeOutOfRange {
+                group,
+                operand,
+                value,
+                maximum,
+            } => write!(
+                f,
+                "voicegroup `{group}`: CGB envelope {operand} {value} is outside the valid \
+                 range 0..={maximum}"
+            ),
+            Self::NoisePeriodOutOfRange { group, period } => write!(
+                f,
+                "voicegroup `{group}`: noise period {period} is outside the valid range 0..=1"
+            ),
+            Self::CgbLengthOutOfRange { group, length } => write!(
+                f,
+                "voicegroup `{group}`: CGB length operand {length} is outside the valid range \
+                 0..=127"
+            ),
             Self::UnknownVoiceMacro { group, macro_name } => {
                 write!(f, "voicegroup `{group}`: unrecognized macro `{macro_name}`")
             }
@@ -138,6 +175,12 @@ impl fmt::Display for VoiceGroupError {
                 f,
                 "keysplit table `{table}`: malformed `split` line (index/ending_note not a valid \
                  u8)"
+            ),
+            Self::SplitChildSlotOutOfRange { table, slot } => write!(
+                f,
+                "keysplit table `{table}`: `split` selects child slot {slot}, past the last voice \
+                 slot {}",
+                super::VOICE_SLOT_COUNT - 1
             ),
             Self::SplitOutOfOrder { table } => write!(
                 f,

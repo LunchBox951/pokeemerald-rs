@@ -29,6 +29,10 @@ pub enum AudioError {
     /// A key-split table exceeds [`super::voicegroup::VOICE_SLOT_COUNT`] entries. The
     /// value is the table length.
     KeySplitTableTooLong(usize),
+    /// A key-split table entry selects a child slot index of
+    /// [`super::voicegroup::VOICE_SLOT_COUNT`] or higher, which no voicegroup can
+    /// define. `entry_index` is the table entry's position; `slot` is its value.
+    KeySplitTableEntryOutOfRange { entry_index: usize, slot: u8 },
     /// A song has more tracks than its `u8` wire count can encode. The value is the
     /// track count.
     TooManyTracks(usize),
@@ -101,6 +105,13 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack voicegroup: key-split table of {len} entries \
                  exceeds the maximum of {}",
+                super::voicegroup::VOICE_SLOT_COUNT
+            ),
+            Self::KeySplitTableEntryOutOfRange { entry_index, slot } => write!(
+                f,
+                "audio-pack voicegroup: key-split table entry {entry_index} \
+                 selects child slot {slot}, which is not less than the \
+                 maximum of {}",
                 super::voicegroup::VOICE_SLOT_COUNT
             ),
             Self::TooManyTracks(count) => write!(

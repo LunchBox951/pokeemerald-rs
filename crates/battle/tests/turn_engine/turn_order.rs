@@ -25,15 +25,26 @@ fn battle_start_draws_the_initial_turn_order_tie_on_equal_speeds() {
 #[test]
 fn battle_start_and_every_turn_each_refresh_the_turn_number() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    // Distinguishable turn-number values, then the ordinary tail of the
-    // turn (opponent's move pick + the player's 4-draw hit).
-    let mut rng = SequenceRng::new([0x1234, 0xABCD, 0, 0, 1, 0, 0]);
+    // Non-terminal fixture (see `move_priority_beats_speed_for_either_side`'s
+    // leg 1): the player's +1-priority Quick Attack and the enemy's Tackle
+    // deal 6 and 9 damage respectively each turn, and both mons survive two
+    // exchanges, so a real second turn starts and can be asserted on too.
+    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // Rattata/Quick Attack
+    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // Charmander/Tackle
+
+    // Three distinguishable turn-number draws (battle start, turn 1, turn
+    // 2), each followed by the ordinary tail of a turn (no turn-order draw,
+    // since priorities differ; the wild mon's move pick; then each side's
+    // 4-draw hit) so the sequence stays unambiguous.
+    let mut rng = SequenceRng::new([
+        0x1111, // battle start
+        0x2222, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 1: turn number, then its tail
+        0x3333, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 2: turn number, then its tail
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         battle.random_turn_number(),
-        0x1234,
+        0x1111,
         "BattleStartClearSetData's draw (battle_main.c:3140)"
     );
     assert_eq!(
@@ -46,8 +57,26 @@ fn battle_start_and_every_turn_each_refresh_the_turn_number() {
         .unwrap();
     assert_eq!(
         battle.random_turn_number(),
-        0xABCD,
+        0x2222,
         "the turn's own draw (battle_main.c:3923 / :4013) comes first"
+    );
+    assert_eq!(
+        rng.draws(),
+        11,
+        "1 (battle start) + 1 (turn number) + 1 (pick) + 4 + 4 (turn 1's hits)"
+    );
+    let _ = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        battle.random_turn_number(),
+        0x3333,
+        "every turn redraws the turn number, not just the first"
+    );
+    assert_eq!(
+        rng.draws(),
+        21,
+        "11 (through turn 1) + 1 (turn number) + 1 (pick) + 4 + 4 (turn 2's hits)"
     );
 }
 

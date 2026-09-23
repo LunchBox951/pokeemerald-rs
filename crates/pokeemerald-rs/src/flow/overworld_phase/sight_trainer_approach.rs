@@ -5,7 +5,7 @@
 //! speech.
 //!
 //! Ports `Task_RunTrainerSeeFuncList`'s own state list
-//! (`pokeemerald/src/trainer_see.c:438-528`) followed by
+//! (`pokeemerald/src/trainer_see.c:438-539`) followed by
 //! `EventScript_TrainerApproach` -> `EventScript_ShowTrainerIntroMsg`
 //! (`data/scripts/trainer_battle.inc:95-110`), which is where upstream's
 //! `dotrainerbattle` finally starts the fight. Everything before that
@@ -81,9 +81,12 @@ const EXCLAMATION_ICON_FRAMES: u8 = 60;
 
 /// Which part of the sequence the approach is currently in -- upstream's
 /// `sTrainerSeeFuncList` (`trainer_see.c:89-104`) minus the two reveal
-/// stages, and with its two pairs of "do it"/"wait for it" states collapsed
-/// into one counting state each (this port counts the frames itself rather
-/// than polling a sprite that does not exist).
+/// stages. `TRSEE_EXCLAMATION`/`_EXCLAMATION_WAIT` and
+/// `TRSEE_MOVE_TO_PLAYER`'s own per-tile do/wait pair are collapsed into one
+/// counting state each (this port counts the frames itself rather than
+/// polling a sprite that does not exist); `TRSEE_PLAYER_FACE` and
+/// `_PLAYER_FACE_WAIT` stay two ([`Self::PlayerFacesTrainer`],
+/// [`Self::PlayerFaceWait`] -- that variant's own docs say why).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApproachStage {
     /// `TRSEE_EXCLAMATION`/`_EXCLAMATION_WAIT`: the icon is up and the
@@ -101,10 +104,17 @@ enum ApproachStage {
         /// is already committed ([`ObjectEventState::walk`]).
         frames_left: u8,
     },
-    /// `TRSEE_PLAYER_FACE`/`_PLAYER_FACE_WAIT`: the trainer has stopped and
-    /// turned to the player; this frame writes its movement type and
-    /// template back and turns the player around to meet it.
+    /// `TRSEE_PLAYER_FACE`: the trainer has stopped and turned to the
+    /// player; this frame writes its movement type and template back and
+    /// turns the player around to meet it.
     PlayerFacesTrainer,
+    /// `TRSEE_PLAYER_FACE_WAIT`: the one frame `WaitPlayerFaceApproachingTrainer`
+    /// spends before it may `SwitchTaskToFollowupFunc` (`trainer_see.c:531-539`),
+    /// so the intro speech cannot open on the same frame the player turns.
+    /// [`engine::overworld::PlayerState::face`] has nothing left to poll --
+    /// it already wrote both directions synchronously -- so this stage
+    /// exists only to spend that frame boundary.
+    PlayerFaceWait,
     /// `EventScript_ShowTrainerIntroMsg`: `special ShowTrainerIntroSpeech`,
     /// `waitmessage`, `waitbuttonpress`
     /// (`data/scripts/trainer_battle.inc:101-107`).
@@ -233,7 +243,9 @@ impl SightApproach {
             }
             // Driven by `OverworldPhase`, which owns the player and the
             // message box this module's later stages touch.
-            ApproachStage::PlayerFacesTrainer | ApproachStage::IntroMessage { .. } => {}
+            ApproachStage::PlayerFacesTrainer
+            | ApproachStage::PlayerFaceWait
+            | ApproachStage::IntroMessage { .. } => {}
         }
     }
 
@@ -289,12 +301,15 @@ impl SightApproach {
     /// Returns the direction the player must turn to meet it --
     /// `GetOppositeDirection(trainerObj->facingDirection)` (`:526`) --
     /// which only [`OverworldPhase`] can apply.
+    ///
+    /// Advances to [`ApproachStage::PlayerFaceWait`] -- that variant's own
+    /// docs say why not straight to `IntroMessage`.
     fn stop_facing_player(&mut self) -> Direction {
         let movement_type = trainer_facing_movement_type(self.trainer.facing());
         self.trainer.set_movement_type(movement_type);
         self.trainer.override_template_movement_type(movement_type);
         self.trainer.override_template_coords();
-        self.stage = ApproachStage::IntroMessage { opened: false };
+        self.stage = ApproachStage::PlayerFaceWait;
         self.trainer.opposite_facing()
     }
 }
@@ -458,14 +473,18 @@ impl OverworldPhase {
                 }
                 if let Some(approach) = &mut self.sight_approach {
                     let facing = approach.stop_facing_player();
-                    // `CancelPlayerForcedMovement` has no counterpart here
-                    // (no forced movement is modelled), and the player's own
-                    // face action finishes in the frame it is applied --
-                    // `PlayerState::face`'s own docs -- so
-                    // `TRSEE_PLAYER_FACE_WAIT` has nothing left to wait for
-                    // once the guard above has already let the held walk
-                    // finish.
+                    // `CancelPlayerForcedMovement` never clears
+                    // `PLAYER_AVATAR_FLAG_CONTROLLABLE`, the flag
+                    // `forced_movement_armed` models, so it has no counterpart
+                    // here (`field_player_avatar.c:429-441`).
                     self.player.face(facing);
+                }
+                Some(SightTrainerOutcome::ApproachAdvanced)
+            }
+            ApproachStage::PlayerFaceWait => {
+                // `ApproachStage::PlayerFaceWait`'s own docs.
+                if let Some(approach) = &mut self.sight_approach {
+                    approach.stage = ApproachStage::IntroMessage { opened: false };
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }
@@ -758,7 +777,8 @@ mod tests {
         );
         assert_eq!(
             approach.stage,
-            ApproachStage::IntroMessage { opened: false }
+            ApproachStage::PlayerFaceWait,
+            "the intro message must not open on the same frame the trainer stops"
         );
     }
 

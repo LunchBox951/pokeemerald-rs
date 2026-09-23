@@ -32,6 +32,13 @@ const VAR_BIRCH_LAB_STATE: u16 = 0x4084;
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`).
 const VAR_STARTER_MON: u16 = 0x4023;
 
+/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
+/// has no resolver, so `validate_player_move` refuses every slot holding it
+/// ahead of any draw (`crates/battle/src/battle.rs:415`), and its full PP
+/// keeps the all-spent Struggle diversion (`crates/battle/src/battle.rs:491`)
+/// from turning the abort into a played turn.
+const UNEXECUTABLE_MOVE: MoveId = MoveId(228);
+
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`) -- independently transcribed, same
 /// convention as the vars above. Assigned to the local-ID-2 rescue-battle
@@ -318,11 +325,34 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
     );
 }
 
+/// A Treecko whose only move is [`UNEXECUTABLE_MOVE`] -- the one lead
+/// `crate::flow::first_battle::advance_first_battle` still aborts on, since
+/// its fallback scan finds no slot `validate_player_move` accepts.
+fn unplayable_treecko_lead() -> BattlePokemon {
+    let ivs = Ivs {
+        hp: MAX_IV,
+        attack: MAX_IV,
+        defense: MAX_IV,
+        speed: MAX_IV,
+        sp_attack: MAX_IV,
+        sp_defense: MAX_IV,
+    };
+    BattlePokemon::new(
+        &Dex::new(),
+        SpeciesId(277),
+        5,
+        ivs,
+        0,
+        vec![UNEXECUTABLE_MOVE],
+    )
+    .expect("Treecko/Pursuit must be in the dex")
+}
+
 /// An **aborted** first battle (module docs, "The upstream chain": no real
 /// outcome, no upstream counterpart) must not run the conclusion at all --
 /// no heal, no var writes, no warp. Mirrors
 /// `first_battle_trigger_tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`'s
-/// own PP-drain setup, since that is the one reachable way
+/// own fixture, since an unexecutable moveset is the one remaining way
 /// `crate::flow::first_battle::advance_first_battle` reports `None` instead
 /// of a real outcome.
 #[test]
@@ -334,19 +364,13 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
         Direction::East,
     ));
     phase.rng = Rng::new(4242);
-    let mut lead = new_game::provisional_starter();
-    let starting_pp = lead.moves()[0].pp;
-    for _ in 0..starting_pp {
-        lead.deduct_pp(0)
-            .expect("draining a slot that still has PP");
-    }
-    phase.party_lead = Some(lead);
+    phase.party_lead = Some(unplayable_treecko_lead());
 
     walk_one_tile_east(&mut phase);
     assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
 
-    // One driver frame: the turn fails pre-draw (no PP), so the battle ends
-    // with no outcome at all -- and no conclusion may run off it.
+    // One driver frame: the turn fails pre-draw, so the battle ends with no
+    // outcome at all -- and no conclusion may run off it.
     phase.step(held(Buttons::RIGHT));
     assert!(
         phase.first_battle.is_none(),

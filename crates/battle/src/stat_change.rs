@@ -3,7 +3,7 @@
 //! Raising effects target the user and skip the accuracy check. Lowering effects
 //! target the defender and spend one accuracy draw before checking ability
 //! protection, except a Soundproof block on a sound move (see
-//! `SOUND_STAT_DROP_MOVES`), which precedes the draw. Ability protection is
+//! `SOUND_MOVES`), which precedes the draw. Ability protection is
 //! checked before the stage floor.
 //!
 //! # Random draws
@@ -77,12 +77,20 @@ pub const HYPER_CUTTER: AbilityId = AbilityId(52);
 /// The Soundproof ability ID.
 pub const SOUNDPROOF: AbilityId = AbilityId(43);
 
-/// The move IDs of Emerald's sound-based moves that reach this resolver, taken
-/// from `sSoundMovesTable` (`src/battle_util.c:686-692`).
-const SOUND_STAT_DROP_MOVES: [MoveId; 3] = [
+/// Emerald's sound-based moves, in the order of `sSoundMovesTable`
+/// (`src/battle_util.c:686-692`). Soundproof blocks every entry, whatever the
+/// move's effect.
+const SOUND_MOVES: [MoveId; 10] = [
     MoveId(45),  // Growl
+    MoveId(46),  // Roar
+    MoveId(47),  // Sing
+    MoveId(48),  // Supersonic
     MoveId(103), // Screech
+    MoveId(173), // Snore
+    MoveId(253), // Uproar
     MoveId(319), // Metal Sound
+    MoveId(320), // Grass Whistle
+    MoveId(304), // Hyper Voice
 ];
 
 /// A battle stat that a move effect can raise or lower.
@@ -372,14 +380,13 @@ fn ability_blocks_drop(ability: AbilityId, stat: ChangedStat) -> bool {
 
 /// Whether `defender`'s Soundproof blocks `move_id` outright, before PP and
 /// accuracy (`ABILITYEFFECT_MOVES_BLOCK`, `battle_util.c:2659-2675`).
-fn soundproof_blocks(move_id: MoveId, change: StatChangeEffect, defender: &BattlePokemon) -> bool {
-    change.direction == StatChangeDirection::Lower
-        && defender.ability() == SOUNDPROOF
-        && SOUND_STAT_DROP_MOVES.contains(&move_id)
+fn soundproof_blocks(move_id: MoveId, defender: &BattlePokemon) -> bool {
+    defender.ability() == SOUNDPROOF && SOUND_MOVES.contains(&move_id)
 }
 
 /// Whether `defender`'s Soundproof blocks `move_id` outright; `false` for
-/// every other move, including ones with no stat change at all.
+/// every move outside `SOUND_MOVES`. A listed move is blocked whatever its
+/// effect, so a damaging sound move never reaches hit resolution.
 ///
 /// # Errors
 ///
@@ -389,9 +396,8 @@ pub fn soundproof_block(
     move_id: MoveId,
     defender: &BattlePokemon,
 ) -> Result<bool, BattleError> {
-    let effect = dex.move_data(move_id)?.effect;
-    Ok(stat_change_for_effect(effect)
-        .is_some_and(|change| soundproof_blocks(move_id, change, defender)))
+    dex.move_data(move_id)?;
+    Ok(soundproof_blocks(move_id, defender))
 }
 
 /// Resolves a stat-changing move without mutating either battler.
@@ -416,7 +422,7 @@ pub fn resolve_stat_change_move(
         stat_change_for_effect(mv.effect).ok_or(BattleError::UnsupportedMoveEffect(move_id))?;
 
     if change.direction == StatChangeDirection::Lower {
-        if soundproof_blocks(move_id, change, defender) {
+        if soundproof_blocks(move_id, defender) {
             return Ok(StatChangeOutcome::SoundproofProtected);
         }
 

@@ -13,7 +13,10 @@
 //! - Adjacent [`SongEvent::Wait`]s merge into one rest.
 //! - A rest longer than `255` ticks splits into `255`-tick chunks with the
 //!   remainder last.
-//! - A zero-length rest emits nothing.
+//! - A zero-length rest emits nothing, unless a [`SongEvent::Goto`] or
+//!   [`SongEvent::MemAccBranch`] targets it: a targeted rest keeps one
+//!   `Wait(0)` as an addressable anchor so the jump still lands on a real
+//!   event.
 //! - A run never merges across a jump target: a [`SongEvent::Goto`] or
 //!   [`SongEvent::MemAccBranch`] that lands between two rests keeps them
 //!   apart, because merging would change how long the loop waits on
@@ -52,6 +55,10 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             continue;
         }
         let start = out.len();
+        // A target boundary (below) always starts a fresh run at the
+        // targeted index, so checking `index` alone tells us whether this
+        // run's anchor is addressed.
+        let run_is_targeted = targets.contains(&index);
         // Find the run's extent first; the tick sum is a separate pass
         // below, wide enough that it cannot overflow no matter how long
         // the run gets.
@@ -69,6 +76,12 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
             };
             *ticks
         })));
+        if run_is_targeted && out.len() == start {
+            // A zero-total run normally emits nothing, but a jump targets
+            // this index, so an anchor must survive for the target to land
+            // on.
+            out.push(SongEvent::Wait(0));
+        }
         index = end;
     }
     map.push(out.len());
@@ -86,7 +99,8 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
 
 /// Sum a run of adjacent `Wait` tick counts and lazily split the total into
 /// canonical chunks: `255`-tick steps with the remainder last, nothing for a
-/// zero total (module docs).
+/// zero total. [`canonicalize_waits`] adds back a `Wait(0)` anchor when a
+/// zero-total run's source index is a jump target (module docs).
 ///
 /// The running total is `u64`, not `u32`: [`super::Song::new`] documents
 /// accepting a track of up to [`u32::MAX`] events, and a run that long, made

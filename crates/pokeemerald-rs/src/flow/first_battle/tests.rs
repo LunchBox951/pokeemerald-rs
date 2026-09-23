@@ -12,6 +12,7 @@ const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const TACKLE: MoveId = MoveId(33);
 const GROWL: MoveId = MoveId(45);
 const POUND: MoveId = MoveId(1);
+const LEER: MoveId = MoveId(43);
 const FIRST_MOVE_SLOT: usize = 0;
 const FIXED_PLAYER_PERSONALITY: u32 = 0;
 const SCRIPTED_OPPONENT_LEVEL: u8 = 2;
@@ -193,8 +194,10 @@ fn advance_first_battle_clears_stat_stages_after_growl_modifies_them() {
     );
 }
 
+// A lead whose only move is spent is forced to Struggle at selection
+// (`AreAllMovesUnusable`) and the fight plays to an outcome.
 #[test]
-fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
+fn advance_first_battle_forces_struggle_and_fights_to_an_outcome_when_the_lead_has_no_pp() {
     let mut rng = Rng::new(DEFAULT_RNG_SEED);
     let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND]);
     let starting_pp = lead.moves()[FIRST_MOVE_SLOT].pp;
@@ -204,6 +207,60 @@ fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
             .expect("draining a slot that still has PP");
     }
     assert_eq!(lead.moves()[FIRST_MOVE_SLOT].pp, 0);
+    let lead_max_hp = lead.stats().max_hp;
+
+    let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
+        .expect("construction must succeed");
+    let mut battle_slot = Some(battle);
+    let mut player_lead = None;
+    let mut turn_count = 0;
+    let outcome = loop {
+        if let Some(outcome) = advance_first_battle(&mut battle_slot, &mut player_lead, &mut rng) {
+            break outcome;
+        }
+        turn_count += 1;
+        assert!(
+            turn_count < MAX_HEADLESS_TURNS,
+            "the headless driver must terminate"
+        );
+    };
+
+    assert!(
+        matches!(outcome, BattleOutcome::PlayerWon | BattleOutcome::WildFled),
+        "a level-50 Treecko's forced Struggle is never going to lose to a \
+         level-2 Zigzagoon: got {outcome:?}"
+    );
+    assert!(battle_slot.is_none(), "a terminal battle empties its slot");
+    let lead = player_lead.expect("a terminal battle writes the player lead back");
+    assert_eq!(lead.species(), TREECKO);
+    assert_eq!(
+        lead.moves()[FIRST_MOVE_SLOT].pp,
+        0,
+        "a fully spent slot is never restored mid-battle, and a forced \
+         Struggle spends no PP of its own \
+         (`pokeemerald/src/battle_util.c:100`-`:104`)"
+    );
+    assert!(
+        lead.current_hp() < lead_max_hp,
+        "Struggle's own recoil must have cost the lead some HP: {}/{lead_max_hp}",
+        lead.current_hp()
+    );
+    assert_eq!(lead.stages(), battle::StatStages::default());
+}
+
+/// A spent slot 0 must not abort a first battle the player can still legally
+/// play -- the driver falls back to the next usable slot.
+#[test]
+fn advance_first_battle_falls_back_from_a_spent_slot_zero_to_the_next_usable_move() {
+    const FALLBACK_SLOT: usize = 1;
+
+    let mut rng = Rng::new(DEFAULT_RNG_SEED);
+    let mut lead = max_iv_player_mon(TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND, LEER]);
+    for _remaining_pp in 0..lead.moves()[FIRST_MOVE_SLOT].pp {
+        lead.deduct_pp(FIRST_MOVE_SLOT)
+            .expect("draining a slot that still has PP");
+    }
+    let fallback_pp_before = lead.moves()[FALLBACK_SLOT].pp;
 
     let battle = start_first_battle(lead, TEST_PLAYER_TRAINER_ID, &mut rng)
         .expect("construction must succeed");
@@ -212,22 +269,15 @@ fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
 
     let outcome = advance_first_battle(&mut battle_slot, &mut player_lead, &mut rng);
 
-    assert!(
-        outcome.is_none(),
-        "an aborted turn has no battle outcome: {outcome:?}"
-    );
-    assert!(
-        battle_slot.is_none(),
-        "an aborted battle must empty its slot"
-    );
-    let lead = player_lead.expect("an aborted battle writes the player lead back");
-    assert_eq!(lead.species(), TREECKO);
+    assert_eq!(outcome, None, "Leer ends no battle: {outcome:?}");
+    let battle = battle_slot
+        .as_ref()
+        .expect("a battle with a usable move left must stay active, not abort");
     assert_eq!(
-        lead.moves()[FIRST_MOVE_SLOT].pp,
-        0,
-        "the drained PP persists into the overworld copy"
+        battle.player().moves()[FALLBACK_SLOT].pp,
+        fallback_pp_before - 1,
+        "the driver must spend the usable slot instead of aborting on the spent one"
     );
-    assert_eq!(lead.stages(), battle::StatStages::default());
 }
 
 #[test]

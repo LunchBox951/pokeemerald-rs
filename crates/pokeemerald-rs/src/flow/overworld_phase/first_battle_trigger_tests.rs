@@ -6,8 +6,8 @@
 use super::test_support::*;
 use super::OverworldPhase;
 use crate::new_game;
-use assets::MapId;
-use battle::BattleOutcome;
+use assets::{MapId, MoveId};
+use battle::{BattleOutcome, BattlePokemon, Dex, Ivs, MAX_IV};
 use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP, MB_NORMAL, MB_TALL_GRASS,
 };
@@ -28,6 +28,12 @@ const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
 
 /// `ROUTE_101_TRIGGER_TILE`'s own elevation.
 const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
+
+/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
+/// has no resolver, so `validate_player_move` refuses it ahead of any draw
+/// (`crates/battle/src/battle.rs:415`) and the driver's fallback scan finds
+/// nothing usable.
+const UNEXECUTABLE_MOVE: MoveId = MoveId(228);
 
 /// A synthetic, fully open (no collision, elevation 3 throughout) room named
 /// `MAP_ROUTE101`: the layout grid is fabricated, but `map_id` still resolves
@@ -182,9 +188,51 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
 }
 
+/// Overrides the trigger tile's own cell to the transition elevation `0`
+/// (wildcard rule owned by [`engine::overworld::MapRuntime::coord_events_at`]'s
+/// docs), so the rescue trigger must fire at the retained elevation rather
+/// than the landed cell's collision one.
+#[test]
+fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_cell_elevation(
+            25,
+            25,
+            trigger_tile_cell(),
+            engine::overworld::collision::ELEVATION_TRANSITION,
+        ),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert_eq!(
+        phase.player.elevation(),
+        engine::overworld::collision::ELEVATION_TRANSITION,
+        "setup: the landed cell's collision elevation must be the transition value"
+    );
+    assert_eq!(
+        phase.player.previous_elevation(),
+        ROUTE_101_TRIGGER_ELEVATION,
+        "setup: the retained elevation must still be the ordinary one the player walked in with"
+    );
+    assert!(
+        phase.first_battle.is_some(),
+        "the rescue trigger must fire at the retained elevation even though the tile's own \
+         collision elevation is the transition value"
+    );
+}
+
 /// Route 101's second rescue coord event must trigger independently of the
 /// first one: approach `(11, 19)` from the east and exercise the complete
-/// [`OverworldPhase::step`] path through the landing drain frame.
+/// [`OverworldPhase::step`] path through the landing call the coord event
+/// runs on.
 #[test]
 fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_first_battle() {
     let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -197,8 +245,15 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::LEFT));
     }
-
     assert_eq!(phase.player.position(), (11, 19));
+    assert!(
+        phase.first_battle.is_none(),
+        "the call that drains the walk animation is upstream's last CB2 animation \
+         frame -- nothing has looked at the completed step yet (issue #1039)"
+    );
+
+    // Upstream's `T_TILE_CENTER` CB1, where `TryStartCoordEventScript` runs.
+    phase.step(ButtonState::new());
     assert!(
         phase.first_battle.is_some(),
         "the second rescue coord event must start the scripted first battle"
@@ -536,10 +591,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
     // `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
     // uses, continued one step further into the rescue trigger.
     for _ in 0..3 {
-        phase.step(held(Buttons::UP));
-        for _ in 1..WALK_FRAMES_PER_TILE {
-            phase.step(ButtonState::new());
-        }
+        walk_one_tile(&mut phase, Buttons::UP);
     }
 
     assert_eq!(
@@ -599,15 +651,21 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 /// consume the trigger just the same.
 ///
 /// `crate::flow::first_battle::advance_first_battle`'s own doc comment spells
-/// the abort contract out — a turn the engine cannot play (here: a lead whose
-/// slot 0 has no PP left, `battle::BattleError::NoPpRemaining(0)` out of
-/// `Battle::take_turn`'s pre-draw validation) empties the slot, writes the
-/// lead back, and returns **`None`**, never an outcome. An earlier revision
-/// of this slice advanced `VAR_ROUTE101_STATE` only on `Some(outcome)`, which
-/// left the var at `1` on exactly this path and the coord-event tile live, so
-/// the next step onto it started the whole thing over. The var now moves at
-/// trigger time, upstream's own ordering (`scripts.inc:40`, mid-cutscene) —
-/// see `super::first_battle_trigger`'s "When the var advances" section.
+/// the abort contract out — a turn the engine truly cannot play (here: the
+/// lead's only move is unexecutable, so `Battle::take_turn`'s pre-draw
+/// validation rejects it) empties the slot, writes the lead back, and returns
+/// **`None`**, never an outcome. An earlier revision of this slice advanced
+/// `VAR_ROUTE101_STATE` only on `Some(outcome)`, which left the var at `1` on
+/// exactly this path and the coord-event tile live, so the next step onto it
+/// started the whole thing over. The var now moves at trigger time,
+/// upstream's own ordering (`scripts.inc:40`, mid-cutscene) — see
+/// `super::first_battle_trigger`'s "When the var advances" section.
+///
+/// Setup gives the lead [`UNEXECUTABLE_MOVE`] rather than draining PP: a
+/// spent slot 0 now falls back to the next usable slot, and an all-spent
+/// moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`), so
+/// only an unexecutable moveset keeps this test's real subject -- an abort
+/// still consumes the trigger -- reachable.
 #[test]
 fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -620,16 +678,28 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     // Prove beginning this attempt clears stale terminal state rather than
     // letting its later abort masquerade as a completed battle.
     phase.first_battle_outcome = Some(BattleOutcome::PlayerWon);
-    // Drain slot 0 through the same accessor the turn engine spends PP with,
-    // rather than reaching into the struct -- `crate::flow::first_battle`'s
-    // own abort test does it this way too.
-    let mut lead = new_game::provisional_starter();
-    let starting_pp = lead.moves()[0].pp;
-    assert!(starting_pp > 0, "a freshly built starter starts with PP");
-    for _ in 0..starting_pp {
-        lead.deduct_pp(0)
-            .expect("draining a slot that still has PP");
-    }
+    // A level-5 Treecko knowing only Pursuit: full PP, so this is a genuine
+    // pre-draw refusal rather than the all-spent Struggle diversion.
+    let lead = BattlePokemon::new(
+        &Dex::new(),
+        new_game::PROVISIONAL_STARTER_SPECIES,
+        5,
+        Ivs {
+            hp: MAX_IV,
+            attack: MAX_IV,
+            defense: MAX_IV,
+            speed: MAX_IV,
+            sp_attack: MAX_IV,
+            sp_defense: MAX_IV,
+        },
+        0,
+        vec![UNEXECUTABLE_MOVE],
+    )
+    .expect("Treecko/Pursuit must be in the dex");
+    assert!(
+        lead.moves().iter().all(|slot| slot.pp > 0),
+        "setup: an abort here must come from the effect gate, not from spent PP"
+    );
     phase.party_lead = Some(lead);
 
     walk_one_tile_east(&mut phase);
@@ -910,6 +980,13 @@ fn the_prevent_exit_coord_events_never_start_a_battle() {
         phase.player.position(),
         (tx, ty - 1),
         "setup: the step must land on the PreventExitSouth coord event"
+    );
+    // The landing call is where `TryStartCoordEventScript` runs, so the
+    // negative below is only worth anything once it has (issue #1039).
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.mid_step(),
+        "setup: the landing call must have consumed the completed step"
     );
     assert!(
         phase.first_battle.is_none(),

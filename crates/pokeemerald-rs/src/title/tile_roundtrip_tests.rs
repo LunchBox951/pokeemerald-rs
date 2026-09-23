@@ -47,7 +47,14 @@ fn assert_round_trips(tiles: &[u8], bit_depth: BitDepth, depth_bits: u8, width: 
     let payload = entry.payload;
     assert_eq!(payload.len(), (width as usize) * (height as usize));
 
-    let repacked = pack_tile_bytes(width as usize, height as usize, &payload, bit_depth);
+    let repacked = pack_tile_bytes(
+        "test/tiles",
+        width as usize,
+        height as usize,
+        &payload,
+        bit_depth,
+    )
+    .unwrap();
     assert_eq!(
         repacked, tiles,
         "{depth_bits}bpp {width}x{height} did not survive the raster round trip"

@@ -7,7 +7,8 @@
 //! disables saving for the session like `TrySavingData` (`save.c:765-771, 871-879`).
 
 use engine::save::{
-    BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
+    BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveFileGuard, SaveStatus,
+    SaveStore,
 };
 
 /// The save status used to choose the boot menu — upstream `gSaveFileStatus`'s
@@ -75,9 +76,13 @@ pub(crate) struct SavedGame {
 }
 
 impl SavedGame {
-    fn no_flash() -> Self {
+    /// Fresh default blocks under `status` -- there is no image to recover
+    /// them from, whether because the medium was never consulted
+    /// ([`SaveSlot::none`]'s `Empty`) or is unusable
+    /// ([`SaveSlot::disabled`]/a read failure's `NoFlash`).
+    fn defaulted(status: SaveFileStatus) -> Self {
         Self {
-            status: SaveFileStatus::NoFlash,
+            status,
             block1: SaveBlock1::default(),
             block2: SaveBlock2::default(),
         }
@@ -134,16 +139,49 @@ pub(crate) struct SaveSlot {
     session_counter: Option<u32>,
     session_base: Option<BaseSnapshot>,
     session_status: Option<SaveFileStatus>,
+    /// The status [`Self::load`] reports (and defaults blocks under) when
+    /// `file` is `None` -- distinguishes a medium that is unusable
+    /// ([`Self::disabled`]'s `NoFlash`, upstream's missing-flash-chip
+    /// verdict, `save.c:871-879`) from one that simply never consults a save
+    /// at all ([`Self::none`]'s `Empty`, upstream's nothing-ever-saved
+    /// verdict). A read failure always latches `NoFlash` regardless of this
+    /// field -- see [`Self::load`].
+    absent_status: SaveFileStatus,
 }
 
 impl SaveSlot {
-    /// A deliberately unavailable medium: loads as `NoFlash`, never writes.
+    /// A deliberately unavailable medium: loads as `NoFlash`, never writes --
+    /// upstream's own missing-flash-chip verdict. Use [`Self::none`] instead
+    /// for a medium that is absent by design rather than by failure, e.g. a
+    /// scripted scenario's boot.
     pub(crate) const fn disabled() -> Self {
         Self {
             file: None,
             session_counter: None,
             session_base: None,
             session_status: None,
+            absent_status: SaveFileStatus::NoFlash,
+        }
+    }
+
+    /// A medium deliberately never read or written: loads as `Empty`,
+    /// matching a boot where nothing has ever been saved.
+    ///
+    /// [`App::new_headless_real`](crate::app::App::new_headless_real)'s
+    /// contract is "no-save menu, never touches a player's save" -- a fresh
+    /// boot, not upstream's missing-flash-chip verdict
+    /// ([`Self::disabled`]). Reporting `Empty` rather than `NoFlash` matters
+    /// downstream: `Empty` re-defaults `SaveBlock2` like a real never-saved
+    /// boot does (`crate::flow::new_game_options_for`,
+    /// [`SaveFileStatus::boot_clears_save_block2`]), where `NoFlash` would
+    /// instead carry its zero-filled placeholder options into NEW GAME.
+    pub(crate) const fn none() -> Self {
+        Self {
+            file: None,
+            session_counter: None,
+            session_base: None,
+            session_status: None,
+            absent_status: SaveFileStatus::Empty,
         }
     }
 
@@ -156,6 +194,7 @@ impl SaveSlot {
                 session_counter: None,
                 session_base: None,
                 session_status: None,
+                absent_status: SaveFileStatus::NoFlash,
             },
             Err(err) => {
                 eprintln!("save: {err} -- this session cannot load or save");
@@ -172,6 +211,7 @@ impl SaveSlot {
             session_counter: None,
             session_base: None,
             session_status: None,
+            absent_status: SaveFileStatus::NoFlash,
         }
     }
 
@@ -183,12 +223,15 @@ impl SaveSlot {
 
     /// Loads the current save for boot.
     ///
-    /// Read failures log and return [`SaveFileStatus::NoFlash`]: boot has no
-    /// error path and must never overwrite a file it could not read.
+    /// A `file`-less slot reports and defaults blocks under its own
+    /// `absent_status` (`NoFlash` for [`Self::disabled`], `Empty` for
+    /// [`Self::none`]). Read failures always log and return
+    /// [`SaveFileStatus::NoFlash`] regardless: boot has no error path and
+    /// must never overwrite a file it could not read.
     pub(crate) fn load(&mut self) -> SavedGame {
         let Some(file) = &self.file else {
-            self.session_status = Some(SaveFileStatus::NoFlash);
-            return SavedGame::no_flash();
+            self.session_status = Some(self.absent_status);
+            return SavedGame::defaulted(self.absent_status);
         };
         let mut store = match file.read() {
             Ok(Some(store)) => store,
@@ -197,7 +240,7 @@ impl SaveSlot {
                 eprintln!("save: {err} -- starting without a saved game; saving is disabled for this session");
                 self.file = None;
                 self.session_status = Some(SaveFileStatus::NoFlash);
-                return SavedGame::no_flash();
+                return SavedGame::defaulted(SaveFileStatus::NoFlash);
             }
         };
         let outcome = store.load();
@@ -252,9 +295,22 @@ impl SaveSlot {
         refuse_foreign: bool,
         lineage: SaveLineage,
     ) -> Result<StoreOutcome, SaveFileError> {
+        self.store_under(block1, block2, refuse_foreign, lineage, SaveFile::lock)
+    }
+
+    /// As [`SaveSlot::store_impl`], taking the read-modify-write lock through
+    /// `lock`, which the whole cycle then runs under.
+    fn store_under(
+        &mut self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        refuse_foreign: bool,
+        lineage: SaveLineage,
+        lock: impl FnOnce(&SaveFile) -> Result<SaveFileGuard, SaveFileError>,
+    ) -> Result<StoreOutcome, SaveFileError> {
         let clear_base = lineage.clears_base();
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
-        let _read_modify_write_lock = file.lock()?;
+        let _read_modify_write_lock = lock(file)?;
         let mut store = file.read()?.unwrap_or_else(SaveStore::new);
         let disk_status = SaveFileStatus::from_store(store.load().status);
         let disk_counter = store.save_counter();

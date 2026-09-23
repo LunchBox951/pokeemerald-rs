@@ -562,6 +562,18 @@ impl BattlePokemon {
         self.ability_slot
     }
 
+    /// Both of this species' ability slots, regardless of which one this
+    /// Pokemon has. `[second]` is [`AbilityId`]`(0)` for a single-ability
+    /// species.
+    ///
+    /// Trainer AI's ability guess for an unrevealed target reads both slots
+    /// rather than [`BattlePokemon::ability`] (`src/battle_ai_script_commands.c:
+    /// 1350-1391`).
+    #[must_use]
+    pub(crate) const fn ability_slots(&self) -> [AbilityId; 2] {
+        self.base_stats.abilities
+    }
+
     /// Restores a saved ability slot, masking the input to one bit.
     #[must_use]
     pub const fn with_ability_slot(mut self, ability_slot: u8) -> Self {

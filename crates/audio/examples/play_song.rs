@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
-use platform::{AudioOutput, PlatformError, Producer};
+use platform::{AudioOutput, PlatformError, Producer, GBA_FRAME_PERIOD};
 
 const RING_CAPACITY_FRAMES: usize = 4096;
 
@@ -64,8 +64,12 @@ fn main() -> ExitCode {
     };
     let producer = output.producer();
     let ring_capacity_samples = RING_CAPACITY_FRAMES * usize::from(output.channels());
-    let frame_samples = u32::try_from(audio::SAMPLES_PER_FRAME).expect("frame fits u32");
-    let frame_period = Duration::from_secs_f64(f64::from(frame_samples) / f64::from(MIXER_RATE));
+    // Pace at the real game-frame period, the same cadence the output's
+    // resampler drains the ring at (`AudioOutput::source_cadence_hz`), not at
+    // the rounded `SAMPLES_PER_FRAME / MIXER_RATE`: that rounding produces
+    // about 0.04 frames/s more than the resampler consumes, which is a rate
+    // bias no ring depth absorbs over a long enough run.
+    let frame_period = GBA_FRAME_PERIOD;
     let policy = RetryPolicy {
         interval: frame_period / 4,
         max_wait: RETRY_MAX_WAIT,

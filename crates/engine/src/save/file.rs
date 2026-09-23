@@ -1,15 +1,24 @@
 //! Persists a [`SaveStore`] flash image as one host file.
 //!
 //! This module resolves save paths, performs exact-length reads, and provides
-//! locking and atomic writes. Save contents and slot validation remain owned by
+//! atomic writes. Save contents and slot validation remain owned by
 //! [`SaveStore`]; the sibling entry a write is staged into is owned by the
-//! private `staging` submodule.
+//! private `staging` submodule, and the inter-process lock slot -- its
+//! validation, identity, staging, and platform-sharing rules -- is owned by
+//! the private `lock` submodule. Whether an entry at either path is a plain
+//! file safe to open is decided by the private `open` submodule.
 
+mod lock;
+mod open;
 mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::open::{
+    open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
+    refuse_unusable_opens, UnusableEntry,
+};
 use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
@@ -17,10 +26,14 @@ use super::store::{self, SaveStore};
 pub const SAVE_PATH_ENV: &str = "POKEEMERALD_RS_SAVE";
 
 /// Per-user data subdirectory containing the default save file.
-pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
+pub const SAVE_DIR_NAME: &str = pack_format::APP_DATA_SUBDIRECTORY;
 
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
+
+/// The one lock file [`SaveFile::lock`] uses in any save directory. At most
+/// `_POSIX_NAME_MAX` (14) bytes, so it fits every host that accepts a save.
+pub const LOCK_FILE_NAME: &str = ".emerald.lock";
 
 /// File-system or path-resolution failure while accessing a save file.
 #[derive(Debug)]
@@ -55,6 +68,31 @@ pub enum SaveFileError {
         /// The underlying I/O failure.
         source: std::io::Error,
     },
+    /// The configured save path is the directory's own lock file.
+    LockPathIsSave {
+        /// The lock path the save path resolves to.
+        path: PathBuf,
+    },
+    /// The lock slot leads somewhere else instead of being a file itself.
+    LockPathIsAlias {
+        /// The lock path that does not name the file it opens.
+        path: PathBuf,
+    },
+    /// The lock slot is occupied by something other than a plain file.
+    LockPathNotAPlainFile {
+        /// The lock path that is not a plain file.
+        path: PathBuf,
+    },
+    /// The save path is a symlink instead of naming the file it opens.
+    SavePathIsAlias {
+        /// The save path that does not name the file it opens.
+        path: PathBuf,
+    },
+    /// The save path is occupied by something other than a plain file.
+    SavePathNotAPlainFile {
+        /// The save path that is not a plain file.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -86,6 +124,39 @@ impl std::fmt::Display for SaveFileError {
             Self::Lock { path, source } => {
                 write!(f, "save file: locking {} failed: {source}", path.display())
             }
+            Self::LockPathIsAlias { path } => write!(
+                f,
+                "save file: the lock slot {} does not name the file it opens -- each \
+                 locker would follow it to whatever it led to at the time, so they \
+                 would not exclude one another",
+                path.display()
+            ),
+            Self::LockPathNotAPlainFile { path } => write!(
+                f,
+                "save file: the lock slot {} is not a plain file -- a directory, socket, \
+                 or device there cannot carry a lock, and opening a FIFO would wait for \
+                 a reader that never comes",
+                path.display()
+            ),
+            Self::LockPathIsSave { path } => write!(
+                f,
+                "save file: this save resolves to {}, the lock file every save in that \
+                 directory holds -- writing it would replace the inode they lock",
+                path.display()
+            ),
+            Self::SavePathIsAlias { path } => write!(
+                f,
+                "save file: the save path {} does not name the file it opens -- reading it \
+                 would follow the link to whatever it led to at the time",
+                path.display()
+            ),
+            Self::SavePathNotAPlainFile { path } => write!(
+                f,
+                "save file: the save path {} is not a plain file -- a directory, socket, \
+                 device, or reparse point there is not a save image, and opening a FIFO \
+                 would wait for a writer that never comes",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -106,7 +177,13 @@ impl std::error::Error for SaveFileError {
             | Self::Read { source, .. }
             | Self::Write { source, .. }
             | Self::Lock { source, .. } => Some(source),
-            Self::NoDataDirectory | Self::BadLength { .. } => None,
+            Self::NoDataDirectory
+            | Self::LockPathIsSave { .. }
+            | Self::LockPathIsAlias { .. }
+            | Self::LockPathNotAPlainFile { .. }
+            | Self::SavePathIsAlias { .. }
+            | Self::SavePathNotAPlainFile { .. }
+            | Self::BadLength { .. } => None,
         }
     }
 }
@@ -234,15 +311,35 @@ impl SaveFile {
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Read`] for any I/O failure other than "not found";
+    /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink;
+    /// [`SaveFileError::SavePathNotAPlainFile`] if it is anything else that
+    /// is not a plain file -- a directory, socket, device, or FIFO, which a
+    /// blocking open or read could otherwise wait on forever, or a Windows
+    /// reparse point such as a cloud-files placeholder;
+    /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
-        let file = match std::fs::File::open(&self.path) {
+        // Refuses a symlink or a non-plain file up front, for a fast, typed
+        // error in the ordinary case; `refuse_unusable_opens` and
+        // `refuse_an_unusable_open` below close the window an entry swapped
+        // in between this check and the open could otherwise slip through.
+        refuse_an_unusable_entry(&self.path)
+            .map_err(|unusable| self.unusable_entry_error(unusable))?;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        refuse_unusable_opens(&mut options);
+        let file = match options.open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if open_refused_a_symlink(&err) => {
+                return Err(SaveFileError::SavePathIsAlias {
+                    path: self.path.clone(),
+                })
+            }
             Err(source) => {
                 return Err(SaveFileError::Read {
                     path: self.path.clone(),
@@ -250,6 +347,8 @@ impl SaveFile {
                 })
             }
         };
+        refuse_an_unusable_open(&file).map_err(|unusable| self.unusable_entry_error(unusable))?;
+
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
         // Borrow so the handle survives for `observed_length`'s metadata query.
@@ -274,6 +373,23 @@ impl SaveFile {
                 expected: store::FLASH_IMAGE_LEN,
                 got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// Folds an [`UnusableEntry`] classification of this save path into the
+    /// [`SaveFileError`] variant that names it.
+    fn unusable_entry_error(&self, unusable: UnusableEntry) -> SaveFileError {
+        match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::SavePathIsAlias {
+                path: self.path.clone(),
+            },
+            UnusableEntry::NotAPlainFile => SaveFileError::SavePathNotAPlainFile {
+                path: self.path.clone(),
+            },
+        }
     }
 
     /// The real length behind a bounded probe read's `bytes.len()`: exact
@@ -374,52 +490,6 @@ impl SaveFile {
         drop(std::fs::File::open(path).and_then(|directory| directory.sync_all()));
     }
 
-    /// Acquires an advisory inter-process lock for this save path.
-    ///
-    /// The lock lives on a sibling `.lock` file, not the save file itself:
-    /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
-    /// on a replaced inode would silently stop excluding anyone who opened
-    /// the path afterwards.
-    ///
-    /// Hold the returned guard across the complete read-modify-write cycle.
-    ///
-    /// On a first save, creates the missing hierarchy and best-effort
-    /// synchronises every ancestor while the lock is held.
-    ///
-    /// # Errors
-    ///
-    /// [`SaveFileError::CreateDirectory`] if the parent directory could not
-    /// be created; [`SaveFileError::Lock`] if the lock file could not be
-    /// created or locked.
-    pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
-        self.lock_with(Self::sync_directory_best_effort)
-    }
-
-    /// As [`SaveFile::lock`], synchronising through the given `sync_directory`
-    /// rather than always [`SaveFile::sync_directory_best_effort`].
-    fn lock_with(&self, sync_directory: impl FnMut(&Path)) -> Result<SaveFileGuard, SaveFileError> {
-        let first_save = !self.exists();
-        let parent = self.create_parent_directory()?;
-        let path = self.lock_path();
-        let lock_error = |source: std::io::Error| SaveFileError::Lock {
-            path: path.clone(),
-            source,
-        };
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(lock_error)?;
-        file.lock().map_err(lock_error)?;
-        if first_save {
-            if let Some(parent) = parent {
-                Self::sync_ancestor_chain(parent, sync_directory);
-            }
-        }
-        Ok(SaveFileGuard { _lock_file: file })
-    }
-
     /// Creates the save file's parent directory and any missing ancestors;
     /// on a first save, best-effort synchronises every ancestor.
     fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
@@ -491,12 +561,6 @@ impl SaveFile {
                 | Component::ParentDir,
             ) => None,
         }
-    }
-
-    fn lock_path(&self) -> PathBuf {
-        let mut name = self.path.as_os_str().to_os_string();
-        name.push(".lock");
-        PathBuf::from(name)
     }
 }
 

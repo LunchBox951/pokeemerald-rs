@@ -1,6 +1,6 @@
 use assets::trainers::{TrainerClass, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
-use battle::{trainer_data, trainer_money, BattleOutcome, BattlePokemon, Dex, Ivs};
+use battle::{trainer_data, trainer_money, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction};
 use engine::rng::Rng;
 
 use super::{route103_rival_for, PlayerStarter, Rival};
@@ -8,10 +8,15 @@ use crate::flow::npc_trainer_battle::{
     advance_npc_trainer_battle, start_npc_trainer_battle, trainer_party_personalities,
     NpcTrainerBattleError,
 };
+use crate::flow::wild_encounter::SharedRng;
 
 const POUND: MoveId = MoveId(1);
 const TACKLE: MoveId = MoveId(33);
 const LEER: MoveId = MoveId(43);
+/// `MOVE_PURSUIT`: `EFFECT_PURSUIT` has no resolver, so
+/// `validate_player_move` refuses it ahead of any draw
+/// (`crates/battle/src/battle.rs:415`).
+const PURSUIT: MoveId = MoveId(228);
 const SLASH: MoveId = MoveId(163);
 const FEMALE_TRAINER_PERSONALITY_BASE: u32 = 0x78;
 const MALE_TRAINER_PERSONALITY_BASE: u32 = 0x88;
@@ -358,14 +363,23 @@ fn the_driver_never_attempts_to_run() {
     assert_eq!(battle.turn_counter(), 0);
 }
 
+/// The driver's surviving abort path: no slot passes pre-turn validation, so
+/// the battle ends with no outcome and the lead is still written back.
+///
+/// A spent slot 0 is no longer such a case -- the driver falls back to the
+/// next usable slot (`a_spent_slot_zero_falls_back_to_the_next_usable_move`)
+/// -- and an all-spent moveset is diverted into Struggle
+/// (`crates/battle/src/battle.rs:491`), so the fixture is [`PURSUIT`].
 #[test]
-fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
+fn a_lead_with_no_usable_move_ends_the_battle_and_is_still_written_back() {
     let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
     let mut rng = Rng::new(5);
-    let mut lead = player_mon(SpeciesId::MUDKIP, RIVAL_LEVEL, vec![TACKLE]);
-    for _remaining_pp in 0..lead.moves()[HEADLESS_MOVE_SLOT].pp {
-        lead.deduct_pp(HEADLESS_MOVE_SLOT).unwrap();
-    }
+    let lead = player_mon(SpeciesId::MUDKIP, RIVAL_LEVEL, vec![PURSUIT]);
+    let pp_before = lead.moves()[HEADLESS_MOVE_SLOT].pp;
+    assert!(
+        pp_before > 0,
+        "setup: the refusal must come from the effect gate, not from spent PP"
+    );
     let mut slot = Some(start_npc_trainer_battle(lead, id, &mut rng).unwrap());
     let mut written_back = None;
     let mut money = 0;
@@ -374,7 +388,57 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     assert_eq!(outcome, None);
     assert!(slot.is_none());
     let mon = written_back.expect("the player's mon must be written back");
-    assert_eq!(mon.moves()[HEADLESS_MOVE_SLOT].pp, 0);
+    assert_eq!(
+        mon.moves()[HEADLESS_MOVE_SLOT].pp,
+        pp_before,
+        "a pre-turn refusal spends no PP"
+    );
+}
+
+/// A spent slot 0 must not abort a battle the player can still legally play.
+///
+/// The real new-game lead (`crate::new_game::provisional_starter`, Treecko at
+/// level 5) carries POUND in slot 0 and LEER in slot 1, and PP only ever
+/// returns through a white-out or the first-battle conclusion heal, so a
+/// spent POUND is an ordinary reachable state rather than a synthetic one.
+#[test]
+fn a_spent_slot_zero_falls_back_to_the_next_usable_move() {
+    const FALLBACK_SLOT: usize = 1;
+
+    let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
+    let mut rng = Rng::new(5);
+    let mut lead = player_mon(SpeciesId::TREECKO, DOMINANT_PLAYER_LEVEL, vec![POUND, LEER]);
+    for _remaining_pp in 0..lead.moves()[HEADLESS_MOVE_SLOT].pp {
+        lead.deduct_pp(HEADLESS_MOVE_SLOT).unwrap();
+    }
+    let fallback_pp_before = lead.moves()[FALLBACK_SLOT].pp;
+    let mut slot = Some(start_npc_trainer_battle(lead, id, &mut rng).unwrap());
+
+    let mut probe_rng = Rng::new(5);
+    let mut probe = slot.as_ref().unwrap().clone();
+    assert!(
+        probe
+            .take_turn(
+                PlayerAction::UseMove(FALLBACK_SLOT),
+                &mut SharedRng::new(&mut probe_rng),
+            )
+            .is_ok(),
+        "setup: slot 1 really is a legal action on this exact battle state"
+    );
+
+    let mut written_back = None;
+    let mut money = 0;
+    let outcome = advance_npc_trainer_battle(&mut slot, &mut written_back, &mut money, &mut rng);
+
+    assert_eq!(outcome, None, "the battle must not have ended");
+    let battle = slot
+        .as_ref()
+        .expect("a battle with a usable move left must stay active");
+    assert_eq!(
+        battle.player().moves()[FALLBACK_SLOT].pp,
+        fallback_pp_before - 1,
+        "the driver must spend the usable slot instead of aborting on the spent one"
+    );
 }
 
 #[test]

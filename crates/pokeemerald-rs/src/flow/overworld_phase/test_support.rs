@@ -7,7 +7,8 @@ use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS};
 use engine::overworld::{
-    ConnectedMapData, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE,
+    ConnectedMapData, Direction, MapRuntime, PlayerState, TURN_IN_PLACE_FRAMES,
+    WALK_FRAMES_PER_TILE,
 };
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
@@ -46,13 +47,14 @@ pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
 /// private fixture): this crate can't import it directly (private to
 /// `engine`), but the shape this issue's [`ConnectedMapData`] consumers
 /// need is identical -- a neighbour's dimensions plus one decoded landing
-/// cell.
+/// cell and its behavior.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SingleConnectedMap {
     pub(super) id: MapId,
     pub(super) dimensions: (u16, u16),
     pub(super) landing_position: (i32, i32),
     pub(super) landing_cell: MetatileCell,
+    pub(super) landing_behavior: u8,
 }
 
 impl ConnectedMapData for SingleConnectedMap {
@@ -62,6 +64,10 @@ impl ConnectedMapData for SingleConnectedMap {
 
     fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
         (map == self.id && (x, y) == self.landing_position).then_some(self.landing_cell)
+    }
+
+    fn metatile_behavior(&self, map: MapId, x: i32, y: i32) -> Option<u8> {
+        (map == self.id && (x, y) == self.landing_position).then_some(self.landing_behavior)
     }
 }
 
@@ -462,13 +468,47 @@ pub(super) const ROUTE_101_GRASS_ELEVATION: u8 = 3;
 /// `ENCOUNTER_SEED`, reused so the two files' scenarios stay comparable.
 pub(super) const IMMUNITY_SEED: u32 = 17;
 
-/// Walk one whole tile east and let its walk animation drain, so the frame
-/// the encounter roll happens on (the drain frame -- `OverworldPhase::step`'s
-/// "Warp timing" docs) is included.
-pub(super) fn walk_one_tile_east(phase: &mut OverworldPhase) {
+/// Walk one whole tile in `button`'s direction, let its walk animation
+/// drain, and then give the completed step the landing call it is observed
+/// on.
+///
+/// The 16 held calls are the crossing itself; the 17th is upstream's
+/// `T_TILE_CENTER` CB1, where the coordinate event, the door-shaped warp
+/// and the encounter roll actually run (`OverworldPhase::step`'s "Frame
+/// shape" docs, issue #1039). That call is deliberately *neutral* rather
+/// than another held frame: a held direction there would start the next
+/// crossing too, which is continuous walking, not "walk one tile".
+///
+/// The caller must already be facing `button`'s direction, or the first
+/// call spends itself turning and the tile is never crossed.
+pub(super) fn walk_one_tile(phase: &mut OverworldPhase, button: Buttons) {
     for _ in 0..WALK_FRAMES_PER_TILE {
-        phase.step(held(Buttons::RIGHT));
+        phase.step(held(button));
     }
+    phase.step(ButtonState::new());
+}
+
+/// [`walk_one_tile`] east, the direction most of these tests walk.
+pub(super) fn walk_one_tile_east(phase: &mut OverworldPhase) {
+    walk_one_tile(phase, Buttons::RIGHT);
+}
+
+/// [`walk_one_tile`] for a direction the player is *not* already facing and
+/// has no movement streak in: turn in place first, wait out the turn's own
+/// busy window, then cross.
+///
+/// A player at rest who is handed a new direction only turns
+/// ([`PlayerState::step`]'s `movement_streak_active`/`TURN_IN_PLACE_FRAMES`
+/// branch, upstream's `PlayerNotOnBikeTurningInPlace`), and stays busy for
+/// [`TURN_IN_PLACE_FRAMES`] calls before any step can start -- so a
+/// reversal costs those calls on top of the crossing's own. Continuous
+/// walking never pays them, which is why [`walk_one_tile`] does not: its
+/// trailing neutral call is what drops the streak in the first place.
+pub(super) fn turn_and_walk_one_tile(phase: &mut OverworldPhase, button: Buttons) {
+    for _ in 0..TURN_IN_PLACE_FRAMES {
+        phase.step(held(button));
+    }
+    walk_one_tile(phase, button);
 }
 
 /// Drive `state` through one more step onto tall grass against Route 101's

@@ -19,13 +19,13 @@
 //!   way out; the ring buffer and its producers never need to know.
 //! - **Sample rate**: [`AudioOutput::M4A_MIXER_RATE`] (13379 Hz, the rate
 //!   upstream's M4A engine actually renders PCM at — see the const's docs) is
-//!   always the ring buffer's nominal rate; the `audio` crate renders at this
-//!   rate unconditionally. Real output devices are 44.1/48 kHz and virtually
-//!   never advertise 13379 Hz, so a [`crate::resample::Resampler`] linearly
-//!   interpolating from nominal to the device's actual rate inside the
-//!   callback (see `Source::Resampled`) is the common path. Direct 1:1
-//!   streaming (see `Source::Direct`) only happens when a device supports
-//!   13379 Hz exactly, or for the null backend.
+//!   the ring buffer's nominal rate for pitch/synthesis purposes; the `audio`
+//!   crate renders at this rate unconditionally. The ring buffer's *actual*
+//!   production cadence is [`AudioOutput::source_cadence_hz`] instead.
+//!   Devices virtually never advertise 13379 Hz, so a
+//!   [`crate::resample::Resampler`] bridging nominal to actual rate inside
+//!   the callback (`Source::Resampled`) is the common path; direct 1:1
+//!   streaming (`Source::Direct`) is reserved for the null backend.
 //! - **Channels**: fixed at [`AudioOutput::CHANNELS`] (stereo), matching the
 //!   GBA's Direct Sound A/B stereo output. A device with no stereo output
 //!   config at all is out of scope and reported as
@@ -61,6 +61,12 @@ use crate::ring::{ring_buffer, Consumer, Producer};
 /// Either play ring-buffer samples straight through, or bridge a sample-rate
 /// mismatch via [`Resampler`] — see the module docs.
 ///
+/// `Direct` is reserved for [`AudioOutput::null`], which its caller clocks
+/// by hand. A real device, built through [`source_for_device`], is always
+/// `Resampled`, even at exactly [`AudioOutput::M4A_MIXER_RATE`] Hz: its
+/// clock free-runs at that integer rate, not at
+/// [`AudioOutput::source_cadence_hz`].
+///
 /// Both variants bottom out in [`crate::ring::Consumer::fill`]'s non-blocking
 /// bulk drain, so the underrun-safe behaviour tested against the null backend
 /// below is exactly what the real device callback runs.
@@ -76,6 +82,31 @@ impl Source {
             Self::Resampled(resampler) => resampler.fill(out),
         }
     }
+}
+
+/// Build the [`Source`] a real device's stream is driven through — see
+/// [`Source`]'s docs for why this is always [`Source::Resampled`].
+///
+/// Extracted from [`AudioOutput::open`] so this selection is unit-testable
+/// without a `cpal` device (only `open` itself touches `cpal` to get here —
+/// see the module docs).
+///
+/// # Errors
+///
+/// See [`crate::resample::Resampler::new`]'s `UnsupportedResampleRatio` doc.
+fn source_for_device(
+    consumer: Consumer,
+    channels: u16,
+    device_sample_rate: u32,
+    max_output_frames: usize,
+) -> Result<Source, PlatformError> {
+    Ok(Source::Resampled(Resampler::new(
+        consumer,
+        channels,
+        AudioOutput::source_cadence_hz(),
+        device_sample_rate,
+        max_output_frames,
+    )?))
 }
 
 /// The open output stream/device, or the null stand-in used by tests and
@@ -133,9 +164,28 @@ impl AudioOutput {
     /// so resampling to the device rate is the norm — see the module docs.
     pub const M4A_MIXER_RATE: u32 = 13_379;
 
+    /// Stereo frames the ring buffer's producer (in practice the integration
+    /// crate's frame-driven music player) pushes per game frame — one call to
+    /// `MusicPlayer::advance_frame` per `App::step`, each rendering
+    /// `Sequencer::FRAME_SAMPLES / CHANNELS` frames. A duplicate of the
+    /// `audio` crate's `SAMPLES_PER_FRAME`, not an import of it: `platform`
+    /// has no dependency on `audio`, only the reverse, as a dev dependency
+    /// (see `crates/audio/Cargo.toml`). Used only by
+    /// [`Self::source_cadence_hz`].
+    const M4A_SAMPLES_PER_GAME_FRAME: u32 = 224;
+
     /// Interleaved channel count the ring buffer and device stream use
     /// (stereo, matching the GBA's Direct Sound A/B output).
     pub const CHANNELS: u16 = 2;
+
+    /// The ring buffer's real production cadence, about 13378.96 Hz:
+    /// [`Self::M4A_SAMPLES_PER_GAME_FRAME`] frames per
+    /// [`crate::pacing::GBA_FRAME_PERIOD`]. The [`Resampler`] drains at this
+    /// rate, not the rounded [`Self::M4A_MIXER_RATE`] upstream uses for
+    /// pitch; the difference is a rate bias that drains the ring over hours.
+    fn source_cadence_hz() -> f64 {
+        f64::from(Self::M4A_SAMPLES_PER_GAME_FRAME) / crate::pacing::GBA_FRAME_PERIOD.as_secs_f64()
+    }
 
     /// Open the default output device and negotiate [`Self::M4A_MIXER_RATE`]
     /// or the nearest supported rate (falling back to on-the-fly resampling
@@ -158,6 +208,10 @@ impl AudioOutput {
     ///   device, or fails to build the stream. A device lost *after* the
     ///   query stays here rather than collapsing into `NoAudioDevice`: the
     ///   device was real, so losing it is a failure, not a headless run.
+    /// - [`PlatformError::UnsupportedResampleRatio`] if the negotiated
+    ///   device rate pairs with [`Self::source_cadence_hz`] into a ratio the
+    ///   resampler's bounded scratch cannot carry (see
+    ///   [`crate::resample::Resampler::new`]).
     pub fn open(ring_capacity_frames: usize) -> Result<Self, PlatformError> {
         let host = cpal::default_host();
         let device = host
@@ -168,20 +222,12 @@ impl AudioOutput {
         let device_sample_rate = config.sample_rate();
         let channels = config.channels();
         let (producer, consumer) = ring_buffer(ring_capacity_frames * channels as usize);
-        let source = if device_sample_rate == Self::M4A_MIXER_RATE {
-            Source::Direct(consumer)
-        } else {
-            // Pre-size the resampler's source-frame scratch off the real-time
-            // thread, bounded by the device's largest advertised callback (in
-            // frames); see `Resampler::new` and `max_buffer_frames`.
-            Source::Resampled(Resampler::new(
-                consumer,
-                channels,
-                Self::M4A_MIXER_RATE,
-                device_sample_rate,
-                max_buffer_frames(&config),
-            ))
-        };
+        let source = source_for_device(
+            consumer,
+            channels,
+            device_sample_rate,
+            max_buffer_frames(&config),
+        )?;
 
         let stream_errors = Arc::new(AtomicU64::new(0));
         let stream = build_stream(&device, &config, source, Arc::clone(&stream_errors))?;
@@ -374,9 +420,10 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 /// - **Distance is primary**: the nearest achievable rate wins, regardless of
 ///   format or the order the device enumerated its ranges. A range that
 ///   covers `target` has distance `0`, so an exact-rate candidate always
-///   beats one that needs resampling — exact support is what lets
-///   `AudioOutput::open` build [`Source::Direct`] instead of a [`Resampler`]
-///   (see the module docs), so it must not lose to a mere format preference.
+///   beats one that needs resampling further — an exact-Hz device still
+///   builds a [`Resampler`] (see [`Source`]'s docs), but with a step nearest
+///   `1.0`, minimizing interpolation error — so it must not lose to a mere
+///   format preference.
 /// - **Format rank is the tie-break** ([`sample_format_rank`]: `f32` before
 ///   `i16`) between candidates equally far from `target`. Ties (equal
 ///   distance and rank) keep device-enumeration order.
@@ -445,9 +492,11 @@ fn classify_query_error(err: cpal::Error) -> PlatformError {
 }
 
 /// The device's largest advertised callback size in frames, or `0` if the
-/// device advertises no concrete range (`Unknown`). Used to pre-size
-/// real-time scratch buffers off the callback thread (see [`build_stream`]'s
-/// `i16` path and [`Resampler::new`]).
+/// device advertises no concrete range (`Unknown`). This is the *raw*
+/// advertised value — [`AudioOutput::max_callback_frames`] exposes it
+/// unmodified for callers that need the device's actual claim (e.g.
+/// tail-wait timing). Consumers that pre-size real-time scratch off it cap
+/// it first — see [`MAX_SCRATCH_CALLBACK_FRAMES`] and [`Resampler::new`].
 fn max_buffer_frames(config: &cpal::SupportedStreamConfig) -> usize {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
@@ -472,6 +521,27 @@ fn f32_to_i16(sample: f32) -> i16 {
 /// Generously larger than any realistic callback buffer (8192 stereo frames)
 /// so pre-sizing still spares the real-time thread an allocation.
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
+
+/// Ceiling (in frames) applied to a device-advertised buffer maximum before
+/// it sizes the `i16` scratch buffer. A device may advertise an
+/// unconstrained callback range as an enormous concrete number instead of
+/// `Unknown` (cpal's ALSA backend hands back `u32::MAX` for exactly this),
+/// and [`fill_i16_output`] already chunks a callback past this scale, so
+/// capping the preallocation here loses nothing but reserved-but-unused
+/// memory.
+const MAX_SCRATCH_CALLBACK_FRAMES: usize = 8192;
+
+/// Capacity (interleaved `f32` samples) for the `i16` callback's fixed
+/// scratch buffer: `max_frames` capped at [`MAX_SCRATCH_CALLBACK_FRAMES`]
+/// and floored at [`DEFAULT_SCRATCH_SAMPLES`], times `channels`. Pure so the
+/// cap is unit-testable against an extreme advertised maximum without
+/// allocating the buffer it sizes.
+fn i16_scratch_capacity(max_frames: usize, channels: usize) -> usize {
+    max_frames
+        .min(MAX_SCRATCH_CALLBACK_FRAMES)
+        .saturating_mul(channels)
+        .max(DEFAULT_SCRATCH_SAMPLES)
+}
 
 /// Fill `data` (interleaved `i16`) from `source`, converting through the
 /// fixed `scratch` buffer in `scratch.len()`-bounded chunks rather than
@@ -569,18 +639,13 @@ fn build_stream<D: OutputDevice>(
         )?,
         cpal::SampleFormat::I16 => {
             // Fix the `f32` scratch buffer's length here, off the real-time
-            // callback thread, so the callback never resizes it. The
-            // device's largest supported buffer (in frames) bounds the
-            // scratch size; multiply by the channel count for interleaved
-            // samples. A device that reports no buffer-size range gets a
-            // generous fallback. The callback below processes `data` in
-            // `scratch`-sized chunks instead, so a `data` cpal hands us
+            // callback thread, so the callback never resizes it — see
+            // `i16_scratch_capacity`. The callback below processes `data`
+            // in `scratch`-sized chunks instead, so a `data` cpal hands us
             // larger than anything advertised still never grows `scratch`.
             let max_frames = max_buffer_frames(config);
             let channels = usize::from(config.channels());
-            let scratch_capacity = max_frames
-                .saturating_mul(channels)
-                .max(DEFAULT_SCRATCH_SAMPLES);
+            let scratch_capacity = i16_scratch_capacity(max_frames, channels);
             let mut scratch: Vec<f32> = vec![0.0; scratch_capacity];
             device.build_output_stream(
                 stream_config,
@@ -714,6 +779,189 @@ mod tests {
     }
 
     #[test]
+    fn source_cadence_hz_is_the_exact_producer_rate_not_the_rounded_mixer_rate() {
+        let cadence = AudioOutput::source_cadence_hz();
+        let expected = 224.0 / crate::pacing::GBA_FRAME_PERIOD.as_secs_f64();
+        assert_eq!(cadence, expected);
+        assert!(cadence < f64::from(AudioOutput::M4A_MIXER_RATE));
+
+        let deficit = f64::from(AudioOutput::M4A_MIXER_RATE) - cadence;
+        assert!(
+            (deficit - 0.039_633_6).abs() < 1e-6,
+            "expected the rounded mixer rate to overstate the real production \
+             cadence by ~0.0396336 Hz, got {deficit}"
+        );
+    }
+
+    #[test]
+    fn source_for_device_never_takes_the_direct_shortcut_even_at_the_exact_mixer_rate() {
+        let (_producer, consumer) = ring_buffer(64);
+        let source = source_for_device(
+            consumer,
+            AudioOutput::CHANNELS,
+            AudioOutput::M4A_MIXER_RATE,
+            0,
+        )
+        .expect("an exact-rate device must still construct a resampler");
+        assert!(
+            matches!(source, Source::Resampled(_)),
+            "an exact-M4A_MIXER_RATE device must resample at the real cadence, \
+             not take a Direct shortcut"
+        );
+    }
+
+    /// Stereo frames per prefill/production block in the long-horizon
+    /// regression below, matching the real per-game-frame contract.
+    const LONG_HORIZON_CHANNELS: usize = 2;
+
+    /// Simulates a free-running device clock without sleeping or a real
+    /// device: an integer nanosecond phase accumulator that, each
+    /// [`Self::tick`], pulls however many device frames the elapsed
+    /// wall-clock time actually owes the device
+    /// (`device_rate * GBA_FRAME_PERIOD`), carrying the sub-frame remainder
+    /// forward exactly like real hardware would. Used only by
+    /// `long_horizon_playback_keeps_the_ring_level_bounded_at_the_corrected_cadence`.
+    struct DeviceClock {
+        device_rate: u32,
+        period_ns: u128,
+        total_ns: u128,
+        frames_pulled: u128,
+        scratch: Vec<f32>,
+    }
+
+    impl DeviceClock {
+        fn new(device_rate: u32) -> Self {
+            Self {
+                device_rate,
+                period_ns: crate::pacing::GBA_FRAME_PERIOD.as_nanos(),
+                total_ns: 0,
+                frames_pulled: 0,
+                scratch: vec![0.0; 1024 * LONG_HORIZON_CHANNELS],
+            }
+        }
+
+        /// One simulated real GBA frame: push the producer's fixed
+        /// per-frame contract, then pull whatever elapsed time actually owes
+        /// the device (see [`Self`]'s docs).
+        fn tick(&mut self, producer: &Producer, source: &mut Source, block: &[f32]) {
+            assert_eq!(
+                producer.push(block),
+                block.len(),
+                "the ring must never overrun a producer pushing exactly the \
+                 real per-frame contract"
+            );
+            self.total_ns += u128::from(self.device_rate) * self.period_ns;
+            let target_frames = self.total_ns / 1_000_000_000;
+            let to_pull = target_frames - self.frames_pulled;
+            if to_pull > 0 {
+                let needed = usize::try_from(to_pull).unwrap() * LONG_HORIZON_CHANNELS;
+                if needed > self.scratch.len() {
+                    self.scratch.resize(needed, 0.0);
+                }
+                source.fill(&mut self.scratch[..needed]);
+                self.frames_pulled = target_frames;
+            }
+        }
+    }
+
+    /// Queued stereo frames currently sitting in `producer`'s ring.
+    fn queued_frames(producer: &Producer) -> i64 {
+        let queued = producer.capacity() - producer.available_space();
+        i64::try_from(queued / LONG_HORIZON_CHANNELS).unwrap()
+    }
+
+    /// One `device_rate`'s worth of
+    /// `long_horizon_playback_keeps_the_ring_level_bounded_at_the_corrected_cadence`,
+    /// factored out to keep that test under the line-count lint.
+    fn assert_ring_level_stays_bounded(device_rate: u32) {
+        const CAPACITY_FRAMES: usize = 4096; // matches the real production ring
+        const WARMUP_TICKS: u32 = 1_200; // ~20.1 simulated seconds
+        const MEASURE_TICKS: u32 = 50_000; // ~837.1 simulated seconds (~14 min)
+
+        // Draining at the rounded 13379 Hz drifts ~0.04 frames/s, ~33 frames
+        // over `MEASURE_TICKS`, so a regressed cadence fails by a wide margin.
+        const TOLERANCE_FRAMES: i64 = 4;
+
+        let (producer, consumer) = ring_buffer(CAPACITY_FRAMES * LONG_HORIZON_CHANNELS);
+        let mut source = source_for_device(consumer, AudioOutput::CHANNELS, device_rate, 0)
+            .expect("a real device rate must always construct a Resampler");
+
+        // Prefill to half capacity in whole game-frame blocks, mirroring the
+        // real integration crate's startup (`MusicPlayer::prefill`).
+        let block = [0.5_f32; 224 * LONG_HORIZON_CHANNELS];
+        let target = producer.available_space() / 2;
+        let mut queued_samples = 0;
+        while queued_samples + block.len() <= target {
+            assert_eq!(producer.push(&block), block.len());
+            queued_samples += block.len();
+        }
+
+        let mut clock = DeviceClock::new(device_rate);
+        for _ in 0..WARMUP_TICKS {
+            clock.tick(&producer, &mut source, &block);
+        }
+
+        let baseline = queued_frames(&producer);
+        assert_eq!(
+            producer.underruns(),
+            0,
+            "device_rate {device_rate}: prefill headroom must survive warmup with no underrun"
+        );
+
+        for _ in 0..MEASURE_TICKS {
+            clock.tick(&producer, &mut source, &block);
+        }
+
+        let drift = queued_frames(&producer) - baseline;
+        assert_eq!(
+            producer.underruns(),
+            0,
+            "device_rate {device_rate}: the ring must never underrun at the corrected cadence"
+        );
+        assert!(
+            drift.abs() <= TOLERANCE_FRAMES,
+            "device_rate {device_rate}: queued level drifted {drift} frames over \
+             {MEASURE_TICKS} simulated frames at the corrected cadence (tolerance \
+             {TOLERANCE_FRAMES})"
+        );
+
+        let measure_seconds =
+            f64::from(MEASURE_TICKS) * crate::pacing::GBA_FRAME_PERIOD.as_secs_f64();
+        let implied_drain_hours = if drift < 0 {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "drift is a small frame count, far below f64's exact-integer range"
+            )]
+            let drift_rate = (-drift) as f64 / measure_seconds;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "baseline is a small frame count, far below f64's exact-integer range"
+            )]
+            let headroom = baseline as f64;
+            (headroom / drift_rate) / 3600.0
+        } else {
+            f64::INFINITY
+        };
+        assert!(
+            implied_drain_hours > 100.0,
+            "device_rate {device_rate}: the measured drift rate implies the prefilled \
+             headroom would drain in only {implied_drain_hours:.2}h of continuous play \
+             — far short of the 'many hours' this must stay bounded over"
+        );
+    }
+
+    /// Simulates ~14 minutes at the exact-mixer-rate and 48 kHz device rates,
+    /// then extrapolates the measured drift rate to assert the prefilled
+    /// headroom outlasts 100 hours; at the correct cadence the drift is
+    /// bounded priming error, not a function of time.
+    #[test]
+    fn long_horizon_playback_keeps_the_ring_level_bounded_at_the_corrected_cadence() {
+        for device_rate in [AudioOutput::M4A_MIXER_RATE, 48_000] {
+            assert_ring_level_stays_bounded(device_rate);
+        }
+    }
+
+    #[test]
     fn null_backend_reports_the_m4a_mixer_rate() {
         let output = AudioOutput::null(256);
         // The nominal producer contract is upstream's 13379 Hz M4A mixer
@@ -815,6 +1063,73 @@ mod tests {
     }
 
     #[test]
+    fn an_extreme_advertised_maximum_does_not_inflate_i16_scratch_capacity() {
+        // `i16_scratch_capacity` is what `build_stream`'s `i16` arm sizes
+        // scratch against (see `MAX_SCRATCH_CALLBACK_FRAMES`'s docs); pin
+        // the cap for a device advertising `u32::MAX` without allocating it.
+        let huge_frames = usize::try_from(u32::MAX).unwrap();
+        let capacity = i16_scratch_capacity(huge_frames, usize::from(AudioOutput::CHANNELS));
+        assert_eq!(capacity, DEFAULT_SCRATCH_SAMPLES);
+    }
+
+    #[test]
+    fn scratch_capped_from_a_maximum_above_the_cap_still_chunks_an_oversized_fill_correctly() {
+        // Route an advertised maximum comfortably above the cap through the
+        // actual production capacity function, then drive `fill_i16_output`
+        // with scratch sized exactly as `build_stream` would -- proving the
+        // cap changes chunk granularity, never correctness.
+        let above_cap = MAX_SCRATCH_CALLBACK_FRAMES * 4;
+        let channels = usize::from(AudioOutput::CHANNELS);
+        let capacity = i16_scratch_capacity(above_cap, channels);
+        assert_eq!(capacity, DEFAULT_SCRATCH_SAMPLES);
+
+        let (producer, consumer) = ring_buffer(64);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "i is 0..20, exactly representable in f32"
+        )]
+        let pcm: Vec<f32> = (0..20_i32).map(|i| (i as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), 20);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; capacity];
+        let mut data = vec![0_i16; 20];
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn capped_scratch_chunks_a_fill_larger_than_the_cap_derived_chunk() {
+        let above_cap = MAX_SCRATCH_CALLBACK_FRAMES * 4;
+        let channels = usize::from(AudioOutput::CHANNELS);
+        let capacity = i16_scratch_capacity(above_cap, channels);
+        let len = capacity + 7;
+
+        let (producer, consumer) = ring_buffer(len);
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the remainder is below 21, exact in f32"
+        )]
+        let pcm: Vec<f32> = (0..len).map(|i| ((i % 21) as f32 - 10.0) / 10.0).collect();
+        assert_eq!(producer.push(&pcm), len);
+
+        let mut source = Source::Direct(consumer);
+        let mut scratch = vec![0.0; capacity];
+        let mut data = vec![0_i16; len];
+        fill_i16_output(&mut source, &mut scratch, &mut data);
+
+        assert!(
+            data.len() > scratch.len(),
+            "the fill must cross the cap-derived chunk boundary"
+        );
+        assert_eq!(scratch.len(), capacity, "scratch must never grow");
+        let expected: Vec<i16> = pcm.iter().map(|&sample| f32_to_i16(sample)).collect();
+        assert_eq!(data, expected);
+    }
+
+    #[test]
     fn sample_format_rank_prefers_f32_then_i16() {
         assert!(
             sample_format_rank(cpal::SampleFormat::F32)
@@ -852,7 +1167,8 @@ mod tests {
 
     #[test]
     fn select_config_prefers_an_exact_i16_rate_over_a_resampled_f32() {
-        // An exact-rate config reaches Source::Direct with no resampling, so
+        // An exact-rate config still builds a Resampler (see Source's docs),
+        // but with a near-1.0 step and thus minimal interpolation error, so
         // it must win over an off-rate config even in the ring buffer's
         // preferred format: i16 at 13379 exactly (distance 0) beats f32 at
         // 44100 (distance 30721) despite f32 ranking ahead on format alone.
