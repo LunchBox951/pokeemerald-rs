@@ -150,7 +150,9 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them; [`paralyze::ensure_admissible`] admits both holders.
+//! them, and the paralysis pipeline reads no ability at all: Shed Skin's own
+//! end-turn cure draw lives in `Battle::residual_effects` instead (issue
+//! #944).
 //! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
 //! 150% the same way, before the same stage multiply
 //! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
@@ -219,9 +221,8 @@
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
 //! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! two abilities that still read a holder's primary status or the draw
-//! that inflicts it — Shed Skin and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
+//! one ability that still reads a holder's primary status for a poison
+//! landing only — Serene Grace (see [`secondary::ensure_admissible`]) —
 //! and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which
