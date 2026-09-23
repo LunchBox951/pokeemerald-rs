@@ -1,8 +1,8 @@
 //! Driving an in-progress wild battle (module split of
 //! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`, issue
 //! #169): the per-map fightability screen
-//! ([`OverworldPhase::wild_table_fightable`]), the frame-ownership gate
-//! [`OverworldPhase::step`] defers to
+//! ([`OverworldPhase::wild_table_fightable`]), the `Wild` arm
+//! [`OverworldPhase::advance_active_battle_frame`] dispatches to
 //! ([`OverworldPhase::advance_wild_battle_frame`]), and turning a fired
 //! [`engine::overworld::WildEncounter`] into an in-progress
 //! [`battle::Battle`] ([`OverworldPhase::begin_wild_battle`]). The turn
@@ -12,7 +12,7 @@
 
 use crate::flow::wild_encounter;
 
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 impl OverworldPhase {
     /// Whether the current map's land table only rolls wild mons the battle
@@ -35,25 +35,28 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress wild battle, if there is one
-    /// (issue #169). Returns whether the battle owned this frame -- `true`
-    /// means [`OverworldPhase::step`] must do nothing else,
-    /// the way upstream's `CB2_InitBattle` callback owns the frame outright
-    /// once `BattleSetup_StartWildBattle` has scheduled it.
+    /// Play one frame of an in-progress wild battle (issue #169) --
+    /// [`OverworldPhase::advance_active_battle_frame`]'s `Wild` arm, called
+    /// with the [`ActiveBattle::Wild`] variant's own battle already taken
+    /// out of [`OverworldPhase::active_battle`]. Returns the same battle,
+    /// re-wrapped, if it is still in progress, or `None` once it has ended
+    /// or aborted -- mirroring this method's former shape as a bare `bool`
+    /// frame-ownership gate over its own field, before issue #460 folded
+    /// that field into [`ActiveBattle`].
     ///
     /// The turn itself, and writing the player's mon back when the battle
     /// ends, are [`wild_encounter::advance_wild_battle`]'s; this is only the
-    /// frame-ownership gate, the outcome log, and the return-to-field
-    /// animation reset (issue #865).
-    pub(super) fn advance_wild_battle_frame(&mut self) -> bool {
-        if self.wild_battle.is_none() {
-            return false;
-        }
-        if let Some(outcome) = wild_encounter::advance_wild_battle(
-            &mut self.wild_battle,
-            &mut self.party_lead,
-            &mut self.rng,
-        ) {
+    /// frame-ownership adapter (a local `Option` slot, since that driver
+    /// still takes `&mut Option<`[`battle::Battle`]`>`), the outcome log,
+    /// and the return-to-field animation reset (issue #865).
+    pub(super) fn advance_wild_battle_frame(
+        &mut self,
+        battle: battle::Battle,
+    ) -> Option<ActiveBattle> {
+        let mut slot = Some(battle);
+        if let Some(outcome) =
+            wild_encounter::advance_wild_battle(&mut slot, &mut self.party_lead, &mut self.rng)
+        {
             eprintln!("wild battle: ended -- {outcome:?}");
             // `CB2_EndWildBattle`'s `IsPlayerDefeated` branch
             // (`src/battle_setup.c:602-616`) -> `CB2_WhiteOut` (issue #261):
@@ -69,10 +72,10 @@ impl OverworldPhase {
         // upstream (`InitTilesetAnimations`, `src/overworld.c:523-530`,
         // `src/tileset_anims.c:600-615`; issue #865) -- a loss's `white_out`
         // warp above already zeroed `tick` by the time this runs.
-        if self.wild_battle.is_none() {
+        if slot.is_none() {
             self.tick = 0;
         }
-        true
+        slot.map(ActiveBattle::Wild)
     }
 
     /// Turn a fired [`engine::overworld::WildEncounter`] into an in-progress
@@ -124,7 +127,7 @@ impl OverworldPhase {
         match wild_encounter::start_wild_battle(lead, encounter, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
-                self.wild_battle = Some(battle);
+                self.active_battle = Some(ActiveBattle::Wild(battle));
             }
             Err(error) => eprintln!("wild encounter: can't start a battle ({error:?})"),
         }

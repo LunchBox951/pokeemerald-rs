@@ -45,7 +45,7 @@ use engine::overworld::{trainer_can_see_player, MapRuntime, ObjectEventState, Pl
 use crate::flow::npc_trainer_battle;
 
 use super::sight_trainer_approach::SightApproach;
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 /// `TRAINER_FLAGS_START` (`include/constants/flags.h:1343`): the base of the
 /// per-trainer "already fought" flag range `HasTrainerBeenFought` /
@@ -348,9 +348,9 @@ pub(super) enum SightTrainerOutcome {
     ApproachStarted,
     /// An already-running approach advanced by one frame and owns it.
     ApproachAdvanced,
-    /// The approach finished and the battle is now in
-    /// [`OverworldPhase::sight_trainer_battle`]; from the next frame on it
-    /// is the battle driver that owns the frame.
+    /// The approach finished and the battle is now
+    /// [`OverworldPhase::active_battle`]'s `SightTrainer` variant; from the
+    /// next frame on it is the battle driver that owns the frame.
     BattleStarted,
 }
 
@@ -520,19 +520,22 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress sight-trainer battle, if there is
-    /// one -- mirrors
+    /// Play one frame of an in-progress sight-trainer battle (issue #264) --
+    /// [`OverworldPhase::advance_active_battle_frame`]'s `SightTrainer` arm,
+    /// mirroring
     /// [`super::route103_rival_trigger::OverworldPhase::advance_route103_rival_battle_frame`]'s
-    /// shape exactly, with [`TRAINER_FLAGS_START`] in place of a bespoke
-    /// hide flag on a win (`SetBattledTrainersFlags`, that constant's own
-    /// docs) and `CB2_EndTrainerBattle`'s `IsPlayerDefeated` white-out on a
-    /// loss.
-    pub(super) fn advance_sight_trainer_battle_frame(&mut self) -> bool {
-        if self.sight_trainer_battle.is_none() {
-            return false;
-        }
+    /// shape (issue #460's same "local `Option` slot" adapter), with
+    /// [`TRAINER_FLAGS_START`] in place of a bespoke hide flag on a win
+    /// (`SetBattledTrainersFlags`, that constant's own docs) and
+    /// `CB2_EndTrainerBattle`'s `IsPlayerDefeated` white-out on a loss.
+    pub(super) fn advance_sight_trainer_battle_frame(
+        &mut self,
+        battle: battle::Battle,
+        trainer_id: TrainerId,
+    ) -> Option<ActiveBattle> {
+        let mut slot = Some(battle);
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
-            &mut self.sight_trainer_battle,
+            &mut slot,
             &mut self.party_lead,
             &mut self.save1.money,
             &mut self.rng,
@@ -541,29 +544,27 @@ impl OverworldPhase {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
-                if let Some(trainer_id) = self.sight_trainer_id {
-                    if let Err(error) = self
-                        .save1
-                        .event_data
-                        .flag_set(TRAINER_FLAGS_START + trainer_id.0)
-                    {
-                        eprintln!(
-                            "sight trainer: couldn't set trainer {trainer_id:?}'s defeated \
-                             flag ({error}) -- it may re-trigger"
-                        );
-                    }
+                if let Err(error) = self
+                    .save1
+                    .event_data
+                    .flag_set(TRAINER_FLAGS_START + trainer_id.0)
+                {
+                    eprintln!(
+                        "sight trainer: couldn't set trainer {trainer_id:?}'s defeated \
+                         flag ({error}) -- it may re-trigger"
+                    );
                 }
             }
             if outcome == battle::BattleOutcome::PlayerLost {
                 self.white_out();
             }
         }
-        // Slot-based, not outcome-based: `Self::sight_trainer_id`'s own
-        // abort clause.
-        if self.sight_trainer_battle.is_none() {
-            self.sight_trainer_id = None;
-        }
-        true
+        // `trainer_id` is dropped along with the rest of
+        // `ActiveBattle::SightTrainer` the instant `slot` empties, slot-based
+        // rather than outcome-based -- issue #460 retires the separate
+        // `sight_trainer_id` field this comment used to explain the abort
+        // clause of.
+        slot.map(|battle| ActiveBattle::SightTrainer { battle, trainer_id })
     }
 }
 

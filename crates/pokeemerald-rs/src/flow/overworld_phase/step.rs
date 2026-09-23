@@ -271,7 +271,7 @@ impl OverworldPhase {
     /// in [`crate::flow::wild_encounter`] via
     /// [`OverworldPhase::begin_wild_battle`]. An
     /// in-progress battle owns the whole frame ahead of everything above —
-    /// see [`OverworldPhase::advance_wild_battle_frame`].
+    /// see [`OverworldPhase::advance_active_battle_frame`].
     ///
     /// The frame `arrow_trigger` or `animated_door_trigger` fires is the one
     /// case upstream would still have polled `checkStandardWildEncounter` on
@@ -315,16 +315,13 @@ impl OverworldPhase {
         // `super::first_battle_trigger`), the Route 103 rival battle (issue
         // #248, `super::route103_rival_trigger`), or a Route 103
         // sight-trainer battle (issue #264, `super::sight_trainer_trigger`)
-        // -- the four fields are never more than one `Some` at a time,
-        // struct docs on `first_battle` -- owns the frame outright, ahead of
-        // the dialog check, the same way upstream's battle callback owns
-        // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
-        // has run (`src/battle_setup.c:369`).
-        if self.advance_wild_battle_frame()
-            || self.advance_first_battle_frame()
-            || self.advance_route103_rival_battle_frame()
-            || self.advance_sight_trainer_battle_frame()
-        {
+        // -- `Self::active_battle` can hold at most one of the four at a
+        // time by construction (`ActiveBattle`'s own struct docs, issue
+        // #460) -- owns the frame outright, ahead of the dialog check, the
+        // same way upstream's battle callback owns `CB2_Overworld` outright
+        // once `SetMainCallback2(CB2_InitBattle)` has run
+        // (`src/battle_setup.c:369`).
+        if self.advance_active_battle_frame() {
             return;
         }
 

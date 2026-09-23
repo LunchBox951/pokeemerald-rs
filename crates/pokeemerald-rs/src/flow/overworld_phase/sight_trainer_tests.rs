@@ -39,8 +39,7 @@
 //! constructed -- and leaving it untested would hide real bugs in this
 //! module's own glue (the flag id, the white-out call, the outcome channel)
 //! behind an unrelated `battle`-crate move-coverage gap. So [`seed_battle`]
-//! below seeds
-//! [`OverworldPhase::sight_trainer_battle`]/[`OverworldPhase::sight_trainer_id`]
+//! below seeds [`OverworldPhase::active_battle`]'s `SightTrainer` variant
 //! directly: a real battle, built through the real
 //! `start_npc_trainer_battle`/`advance_npc_trainer_battle` path, against one
 //! of the six Route 103 *rivals* (proven constructible by
@@ -60,7 +59,7 @@ use crate::flow::tests::held;
 
 use super::sight_trainer_approach::SightApproach;
 use super::test_support::pressed;
-use super::{OverworldPhase, SyntheticStartMenu};
+use super::{ActiveBattle, OverworldPhase, SyntheticStartMenu};
 
 /// `MAP_ROUTE103`, used throughout this file.
 const ROUTE_103: MapId = MapId("MAP_ROUTE103");
@@ -409,10 +408,10 @@ const STAND_IN_TRAINER: u16 = 532;
 /// [`OverworldPhase::begin_sight_trainer_battle_if_seen`]'s own construction
 /// attempt (module docs, "The stand-in party"): a *real* battle, built
 /// through the real `start_npc_trainer_battle`, against
-/// [`STAND_IN_TRAINER`] -- but [`OverworldPhase::sight_trainer_id`] (private
-/// to `overworld_phase`, reachable here since this file is one of its own
-/// descendant modules) is set to `trainer_id`, the real sight trainer the
-/// defeated-flag half should end up keyed to.
+/// [`STAND_IN_TRAINER`] -- but [`ActiveBattle`] (private to `overworld_phase`,
+/// reachable here since this file is one of its own descendant modules) is
+/// keyed to `trainer_id`, the real sight trainer the defeated-flag half
+/// should end up keyed to.
 fn seed_battle(
     phase: &mut OverworldPhase,
     trainer_id: u16,
@@ -427,8 +426,21 @@ fn seed_battle(
     )
     .expect("the stand-in Route 103 rival must always construct");
     phase.party_lead = None;
-    phase.sight_trainer_battle = Some(battle);
-    phase.sight_trainer_id = Some(assets::trainers::TrainerId(trainer_id));
+    phase.active_battle = Some(ActiveBattle::SightTrainer {
+        battle,
+        trainer_id: assets::trainers::TrainerId(trainer_id),
+    });
+}
+
+/// Which [`assets::trainers::TrainerId`] `phase.active_battle`'s
+/// `SightTrainer` variant is keyed to, if any -- the read-side counterpart
+/// to [`seed_battle`]'s own construction, now that issue #460 folds the
+/// former standalone `sight_trainer_id` field into [`ActiveBattle`].
+fn active_sight_trainer_id(phase: &OverworldPhase) -> Option<assets::trainers::TrainerId> {
+    match phase.active_battle.as_ref() {
+        Some(ActiveBattle::SightTrainer { trainer_id, .. }) => Some(*trainer_id),
+        _ => None,
+    }
 }
 
 // -- Frame ownership ---------------------------------------------------------
@@ -1356,7 +1368,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         "`dotrainerbattle` is where the lead is finally taken into the fight"
     );
     assert_eq!(
-        phase.sight_trainer_id,
+        active_sight_trainer_id(&phase),
         Some(assets::trainers::TrainerId(TRAINER_RHETT)),
         "the fight is keyed to the real sight trainer, for the defeated flag"
     );
@@ -1477,7 +1489,7 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
         "the approach is over once its battle has started"
     );
     assert_eq!(
-        phase.sight_trainer_id,
+        active_sight_trainer_id(&phase),
         Some(assets::trainers::TrainerId(TRAINER_RHETT)),
         "the fight is keyed to the real sight trainer"
     );
@@ -1521,9 +1533,9 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
         .trainer()
 }
 
-/// Pins [`OverworldPhase::sight_trainer_id`]'s abort clause: a lead with no
+/// Pins [`ActiveBattle::SightTrainer`]'s own abort clause: a lead with no
 /// selectable move at all fails the turn with no outcome, which must still
-/// clear the id.
+/// clear the id, along with the rest of the slot.
 ///
 /// The fixture is [`UNEXECUTABLE_MOVE`]: a spent slot 0 no longer aborts
 /// anything, since the driver falls back to the next usable slot
@@ -1542,7 +1554,7 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
 
     phase.step(ButtonState::new());
     assert!(
-        phase.sight_trainer_battle.is_none(),
+        !phase.is_sight_trainer_battle_active(),
         "setup: the failed turn must have emptied the battle slot"
     );
     assert_eq!(
@@ -1551,7 +1563,8 @@ fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
         "setup: an abort reports no outcome at all"
     );
     assert_eq!(
-        phase.sight_trainer_id, None,
+        active_sight_trainer_id(&phase),
+        None,
         "the trainer id must be cleared on an abort too -- an id retained past the point the \
          battle slot emptied is stale the instant a fresh cone entry reuses the field"
     );

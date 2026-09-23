@@ -27,7 +27,7 @@ use super::{
     advance_wild_battle, arrow_poll_open, field_input_consumed, roll_eligible_landing,
     start_wild_battle,
 };
-use crate::flow::overworld_phase::OverworldPhase;
+use crate::flow::overworld_phase::{ActiveBattle, OverworldPhase};
 
 /// Route 101, the map whose real wild table and real object events the phase
 /// below resolves against.
@@ -165,7 +165,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     for step in 1..=4 {
         walk_east_and_land(&mut phase, 1);
         assert_eq!(phase.player.position(), (2 + step, 5));
-        assert!(phase.wild_battle.is_none(), "step {step} must be immune");
+        assert!(!phase.is_wild_battle_active(), "step {step} must be immune");
     }
     assert_eq!(
         phase.rng.state(),
@@ -184,15 +184,14 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     }
     assert_eq!(phase.player.position(), (7, 5));
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "the drain call is upstream's last CB2 animation frame -- the completed step \
          has not been observed yet (issue #1039)"
     );
     phase.step(ButtonState::new());
-    let battle = phase
-        .wild_battle
-        .as_ref()
-        .expect("the seeded roll fires an encounter on the first rolled step");
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("the seeded roll fires an encounter on the first rolled step");
+    };
     assert_eq!(battle.enemy().species(), WURMPLE);
     assert_eq!(battle.enemy().level(), 2);
     // `GiveBoxMonInitialMoveset`: a level-2 Wurmple knows Tackle (33) and
@@ -252,7 +251,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     // The battle owns the frame from here: movement stops until it ends.
     let frozen_at = phase.player.position();
     let mut frames = 0;
-    while phase.wild_battle.is_some() {
+    while phase.is_wild_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
@@ -345,7 +344,7 @@ fn an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_play
 
     walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
-    assert!(phase.wild_battle.is_none(), "no mon, no battle");
+    assert!(!phase.is_wild_battle_active(), "no mon, no battle");
     // The roll consumed its four draws all the same.
     let mut expected = Rng::new(ENCOUNTER_SEED);
     for _ in 0..4 {
@@ -373,7 +372,7 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(phase.player.position(), (9, 5));
-    assert!(phase.wild_battle.is_none());
+    assert!(!phase.is_wild_battle_active());
     assert_eq!(
         phase.rng.state(),
         Rng::new(ENCOUNTER_SEED).state(),
@@ -438,7 +437,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
         (8, 5),
         "three of them through grass"
     );
-    assert!(phase.wild_battle.is_none(), "no battle may start");
+    assert!(!phase.is_wild_battle_active(), "no battle may start");
     assert_eq!(
         phase.rng.state(),
         Rng::new(ENCOUNTER_SEED).state(),
@@ -655,7 +654,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
     // has probability under 1e-5 -- and the seed is fixed anyway, so this
     // either fires deterministically or the roll is broken.
     let mut steps = 0;
-    while phase.wild_battle.is_none() {
+    while !phase.is_wild_battle_active() {
         let target = REAL_GRASS[usize::from(phase.player.position() == REAL_GRASS[0])];
         let button = if target.0 > phase.player.position().0 {
             Buttons::RIGHT
@@ -669,7 +668,7 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
         // start the next step, so the loop stops on arrival rather than on
         // a fixed frame count.
         let mut frames = 0;
-        while phase.wild_battle.is_none()
+        while !phase.is_wild_battle_active()
             && (phase.player.position() != target || phase.player.in_transit())
         {
             phase.step(held(button));
@@ -680,14 +679,16 @@ fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
                 phase.player.position()
             );
         }
-        if phase.wild_battle.is_some() {
+        if phase.is_wild_battle_active() {
             break;
         }
         steps += 1;
         assert!(steps < 100, "100 steps in grass without an encounter");
     }
 
-    let battle = phase.wild_battle.as_ref().expect("an encounter fired");
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("an encounter fired");
+    };
     let land = assets::WildEncounterTable::new()
         .get_by_map(ROUTE_101)
         .expect("Route 101 header")
@@ -846,7 +847,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
         Rng::new(ENCOUNTER_SEED).state(),
         "nothing in this whole walk may draw"
     );
-    assert!(phase.wild_battle.is_none());
+    assert!(!phase.is_wild_battle_active());
 }
 
 /// [`super::roll_eligible_landing`] exhaustively: upstream's `:155-161`
@@ -1007,12 +1008,12 @@ fn a_lost_battle_now_heals_the_party_and_halves_money() {
     walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
     assert!(
-        phase.wild_battle.is_some(),
+        phase.is_wild_battle_active(),
         "the seeded roll fires on the first rolled step"
     );
 
     let mut frames = 0;
-    while phase.wild_battle.is_some() {
+    while phase.is_wild_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
@@ -1088,9 +1089,9 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     phase.party_lead = Some(lead);
 
     walk_east_and_land(&mut phase, 5);
-    assert!(phase.wild_battle.is_some(), "setup: the roll fired");
+    assert!(phase.is_wild_battle_active(), "setup: the roll fired");
     let mut frames = 0;
-    while phase.wild_battle.is_some() {
+    while phase.is_wild_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
@@ -1209,10 +1210,13 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
         (tx, ty),
         "setup: landed on the rescue trigger"
     );
-    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
+    assert!(
+        phase.is_first_battle_active(),
+        "setup: the trigger must fire"
+    );
 
     let mut frames = 0;
-    while phase.first_battle.is_some() {
+    while phase.is_first_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 20, "the crafted loss must resolve quickly");
@@ -1289,10 +1293,10 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
     phase.party_lead = Some(lead);
 
     walk_east_and_land(&mut phase, 5);
-    assert!(phase.wild_battle.is_some(), "setup: the roll fired");
+    assert!(phase.is_wild_battle_active(), "setup: the roll fired");
 
     let mut frames = 0;
-    while phase.wild_battle.is_some() {
+    while phase.is_wild_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");

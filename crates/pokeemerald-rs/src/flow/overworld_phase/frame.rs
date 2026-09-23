@@ -18,7 +18,7 @@ impl OverworldPhase {
     /// Tick an open [`NpcDialog`](crate::overworld::NpcDialog), if any.
     /// Returns whether a dialog owned this frame -- `true` freezes movement
     /// for it exactly as
-    /// [`OverworldPhase::advance_wild_battle_frame`] does
+    /// [`OverworldPhase::advance_active_battle_frame`] does
     /// for a battle, and closing it consumes the same frame. Split from
     /// [`OverworldPhase::step`] purely along that existing
     /// frame-ownership seam.

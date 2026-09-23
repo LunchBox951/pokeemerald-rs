@@ -814,11 +814,11 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
     // drains (`OverworldPhase::step`'s "Frame shape" docs, issue #1039).
     route_101.step(held(Buttons::RIGHT));
     assert!(
-        route_101.first_battle.is_some(),
+        route_101.is_first_battle_active(),
         "setup: the rescue trigger must fire"
     );
     let mut frames = 0;
-    while route_101.first_battle.is_some() {
+    while route_101.is_first_battle_active() {
         route_101.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 20, "setup: the crafted loss must resolve quickly");

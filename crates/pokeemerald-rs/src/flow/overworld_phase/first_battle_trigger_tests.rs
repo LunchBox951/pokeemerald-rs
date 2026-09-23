@@ -4,7 +4,7 @@
 //! encounter roll.
 
 use super::test_support::*;
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 use crate::new_game;
 use assets::{MapId, MoveId};
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs, MAX_IV};
@@ -169,13 +169,12 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
 
     assert_eq!(phase.player.position(), (tx, ty));
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "this trigger must never route through the ordinary wild-encounter path"
     );
-    let battle = phase
-        .first_battle
-        .as_ref()
-        .expect("the rescue trigger must start the scripted first battle");
+    let Some(ActiveBattle::First(battle)) = phase.active_battle.as_ref() else {
+        panic!("the rescue trigger must start the scripted first battle");
+    };
     assert_eq!(
         battle.enemy().species(),
         assets::SpeciesId(288),
@@ -223,7 +222,7 @@ fn the_rescue_trigger_fires_at_the_retained_elevation_not_the_transition_cell() 
         "setup: the retained elevation must still be the ordinary one the player walked in with"
     );
     assert!(
-        phase.first_battle.is_some(),
+        phase.is_first_battle_active(),
         "the rescue trigger must fire at the retained elevation even though the tile's own \
          collision elevation is the transition value"
     );
@@ -247,7 +246,7 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
     }
     assert_eq!(phase.player.position(), (11, 19));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "the call that drains the walk animation is upstream's last CB2 animation \
          frame -- nothing has looked at the completed step yet (issue #1039)"
     );
@@ -255,7 +254,7 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
     // Upstream's `T_TILE_CENTER` CB1, where `TryStartCoordEventScript` runs.
     phase.step(ButtonState::new());
     assert!(
-        phase.first_battle.is_some(),
+        phase.is_first_battle_active(),
         "the second rescue coord event must start the scripted first battle"
     );
 }
@@ -285,7 +284,7 @@ fn the_trigger_is_consumed_even_when_there_is_no_party_lead_to_fight_with() {
 
     assert_eq!(phase.player.position(), (tx, ty));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "there was no lead mon to build a battle out of"
     );
     assert_eq!(
@@ -313,8 +312,8 @@ fn a_step_that_does_not_land_on_the_trigger_tile_starts_nothing() {
     walk_one_tile_east(&mut phase);
 
     assert_eq!(phase.player.position(), (tx - 1, ty));
-    assert!(phase.first_battle.is_none());
-    assert!(phase.wild_battle.is_none());
+    assert!(!phase.is_first_battle_active());
+    assert!(!phase.is_wild_battle_active());
 }
 
 /// (b) from the issue's test list: the battle the trigger starts plays to a
@@ -323,8 +322,9 @@ fn a_step_that_does_not_land_on_the_trigger_tile_starts_nothing() {
 /// freezing the overworld exactly as an ordinary wild battle does, and hands
 /// the player's mon back on the frame it ends.
 ///
-/// The "frozen" claim is checked only on frames that leave [`OverworldPhase::first_battle`]
-/// still `Some` -- the one frame that empties it (issue #251) also runs
+/// The "frozen" claim is checked only on frames that leave
+/// [`OverworldPhase::is_first_battle_active`] still `true` -- the one frame
+/// that empties the slot (issue #251) also runs
 /// [`OverworldPhase::conclude_first_battle`], which may move the player via
 /// its own warp to Birch's lab (pack-dependent:
 /// [`OverworldPhase::warp_to_position`]'s "leaves the player exactly where
@@ -342,18 +342,21 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
     phase.rng = Rng::new(4242);
     phase.party_lead = Some(new_game::provisional_starter());
     walk_one_tile_east(&mut phase);
-    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
+    assert!(
+        phase.is_first_battle_active(),
+        "setup: the trigger must fire"
+    );
 
     let frozen_at = phase.player.position();
     let mut frames = 0;
-    while phase.first_battle.is_some() {
+    while phase.is_first_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(
             frames < 500,
             "the headless first-battle driver must terminate"
         );
-        if phase.first_battle.is_some() {
+        if phase.is_first_battle_active() {
             assert_eq!(
                 phase.player.position(),
                 frozen_at,
@@ -403,7 +406,7 @@ fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
     concluded.party_lead = Some(new_game::provisional_starter());
     walk_one_tile_east(&mut concluded);
     let mut frames = 0;
-    while concluded.first_battle.is_some() {
+    while concluded.is_first_battle_active() {
         concluded.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(frames < 500, "setup: the driver must terminate");
@@ -435,11 +438,11 @@ fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
 
     assert_eq!(phase.player.position(), (tx, ty));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "the trigger must not refire once VAR_ROUTE101_STATE has advanced"
     );
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "the tile must not fall through to an ordinary wild-encounter roll either"
     );
     assert_eq!(
@@ -468,7 +471,9 @@ fn the_trigger_draws_off_the_phases_single_shared_stream() {
     phase.party_lead = Some(lead.clone());
 
     walk_one_tile_east(&mut phase);
-    let battle = phase.first_battle.as_ref().expect("the trigger must fire");
+    let Some(ActiveBattle::First(battle)) = phase.active_battle.as_ref() else {
+        panic!("the trigger must fire");
+    };
 
     // Replay the identical construction off an independent, identically
     // seeded generator: no overworld step precedes it, so if the phase drew
@@ -552,7 +557,7 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
          trigger's gate is already open when this step's landing drains"
     );
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "the crossing step is still mid-animation -- the coord event is only tested once \
          its landing drains"
     );
@@ -603,17 +608,16 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
         (10, 19),
         "Route 101's real south-edge landing tile is the real rescue trigger tile"
     );
-    assert!(phase.wild_battle.is_none());
-    let battle = phase
-        .first_battle
-        .as_ref()
-        .expect("landing on the real trigger tile must start the scripted first battle");
+    assert!(!phase.is_wild_battle_active());
+    let Some(ActiveBattle::First(battle)) = phase.active_battle.as_ref() else {
+        panic!("landing on the real trigger tile must start the scripted first battle");
+    };
     assert_eq!(battle.enemy().species(), assets::SpeciesId(288));
     assert_eq!(battle.enemy().level(), 2);
 
     // Play it out through the real per-frame driver.
     let mut frames = 0;
-    while phase.first_battle.is_some() {
+    while phase.is_first_battle_active() {
         phase.step(held(Buttons::RIGHT));
         frames += 1;
         assert!(
@@ -704,7 +708,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
 
     walk_one_tile_east(&mut phase);
     assert!(
-        phase.first_battle.is_some(),
+        phase.is_first_battle_active(),
         "setup: the trigger must fire and build a battle -- the abort happens a frame later"
     );
     assert_eq!(
@@ -716,7 +720,7 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     // outcome at all.
     phase.step(held(Buttons::RIGHT));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "setup: the aborted battle must have emptied the slot"
     );
     assert!(
@@ -742,10 +746,10 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
 
     assert_eq!(phase.player.position(), (tx, ty));
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "an aborted battle must not leave the rescue trigger live"
     );
-    assert!(phase.wild_battle.is_none());
+    assert!(!phase.is_wild_battle_active());
     assert_eq!(
         phase.rng.state(),
         rng_before,
@@ -806,11 +810,11 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
 
     assert_eq!(phase.player.position(), (tx, ty));
     assert!(
-        phase.first_battle.is_some(),
+        phase.is_first_battle_active(),
         "the coord event still fires on a tile that is also grass"
     );
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "and the grass roll it outranks must never have happened"
     );
     let mut reference = Rng::new(SEED);
@@ -857,11 +861,11 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
     control.party_lead = Some(new_game::provisional_starter());
     walk_east(&mut control, 5);
     assert!(
-        control.first_battle.is_none(),
+        !control.is_first_battle_active(),
         "control: a spent trigger must not fire"
     );
     assert!(
-        control.wild_battle.is_some(),
+        control.is_wild_battle_active(),
         "control: the same grass tile really does roll an encounter when nothing outranks it"
     );
     assert_eq!(
@@ -925,7 +929,7 @@ fn route_101_has_no_warp_events_so_the_trigger_can_never_race_one() {
             "behavior {behavior:#04x}: the player stays on the trigger tile"
         );
         assert!(
-            phase.first_battle.is_some(),
+            phase.is_first_battle_active(),
             "behavior {behavior:#04x}: the coord event fires regardless of the tile's behavior"
         );
     }
@@ -989,10 +993,10 @@ fn the_prevent_exit_coord_events_never_start_a_battle() {
         "setup: the landing call must have consumed the completed step"
     );
     assert!(
-        phase.first_battle.is_none(),
+        !phase.is_first_battle_active(),
         "a PreventExit* coord event is not the rescue trigger, whatever its var says"
     );
-    assert!(phase.wild_battle.is_none());
+    assert!(!phase.is_wild_battle_active());
     assert_eq!(
         phase.rng.state(),
         rng_before,

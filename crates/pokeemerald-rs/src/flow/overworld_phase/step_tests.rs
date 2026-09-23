@@ -3,7 +3,7 @@
 
 use super::step::InteractionOutcome;
 use super::test_support::*;
-use super::{OverworldPhase, SyntheticStartMenu};
+use super::{ActiveBattle, OverworldPhase, SyntheticStartMenu};
 use crate::new_game;
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
@@ -1440,4 +1440,117 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
          forced-movement tile, so a player stranded on a slope whose forced \
          step is collision-blocked must still be able to open the menu"
     );
+}
+
+/// Issue #460's own regression: [`ActiveBattle`] makes "never more than one
+/// battle at a time" a type-level fact rather than a doc-comment invariant
+/// over four parallel `Option<Battle>` fields. Installs each variant of
+/// [`OverworldPhase::active_battle`] in turn and pins that exactly one
+/// `is_*_battle_active` accessor agrees with it, `in_battle()` is true
+/// throughout, and every accessor projects the single owning variant --
+/// the runtime half of a fact the enum's shape already guarantees at
+/// compile time (a second variant simply cannot coexist in the same
+/// `Option`, unlike the four retired fields it replaced).
+#[test]
+fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
+    use crate::flow::npc_trainer_battle;
+
+    const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+    // `TRAINER_BRENDAN_ROUTE_103_TREECKO` -- the same proven-constructible
+    // stand-in `sight_trainer_tests`' own `seed_battle` uses, reused here for
+    // both trainer-battle variants since this test only cares about which
+    // `ActiveBattle` arm owns the frame, not which real trainer it is.
+    let stand_in_trainer = assets::trainers::TrainerId(532);
+
+    let mut rng = Rng::new(1);
+    let wild_battle = crate::flow::wild_encounter::start_wild_battle(
+        new_game::provisional_starter(),
+        engine::overworld::wild_encounter::WildEncounter {
+            species: assets::SpeciesId(290), // SPECIES_WURMPLE
+            level: 2,
+            slot: 0,
+        },
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("a Wurmple encounter is fightable");
+    let first_battle = crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("the provisional starter must construct the scripted first battle");
+    let rival_battle = npc_trainer_battle::start_npc_trainer_battle(
+        new_game::provisional_starter(),
+        stand_in_trainer,
+        &mut rng,
+    )
+    .expect("the stand-in trainer must always construct");
+    let sight_battle = npc_trainer_battle::start_npc_trainer_battle(
+        new_game::provisional_starter(),
+        stand_in_trainer,
+        &mut rng,
+    )
+    .expect("the stand-in trainer must always construct");
+
+    let variants = [
+        ActiveBattle::Wild(wild_battle),
+        ActiveBattle::First(first_battle),
+        ActiveBattle::Rival {
+            battle: rival_battle,
+            trainer_id: stand_in_trainer,
+        },
+        ActiveBattle::SightTrainer {
+            battle: sight_battle,
+            trainer_id: stand_in_trainer,
+        },
+    ];
+
+    for variant in variants {
+        let expect_wild = matches!(variant, ActiveBattle::Wild(_));
+        let expect_first = matches!(variant, ActiveBattle::First(_));
+        let expect_rival = matches!(variant, ActiveBattle::Rival { .. });
+        let expect_sight = matches!(variant, ActiveBattle::SightTrainer { .. });
+
+        let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        phase.active_battle = Some(variant);
+
+        assert!(
+            phase.in_battle(),
+            "an installed ActiveBattle variant must own the frame"
+        );
+        assert_eq!(
+            phase.is_wild_battle_active(),
+            expect_wild,
+            "is_wild_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_first_battle_active(),
+            expect_first,
+            "is_first_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_rival_battle_active(),
+            expect_rival,
+            "is_rival_battle_active must agree with the installed variant"
+        );
+        assert_eq!(
+            phase.is_sight_trainer_battle_active(),
+            expect_sight,
+            "is_sight_trainer_battle_active must agree with the installed variant"
+        );
+
+        // Ending the battle -- here, simply taking it, the same "the slot
+        // empties" postcondition every real driver arm leaves behind --
+        // drops the whole variant at once, `trainer_id` included, with no
+        // separate clear required (module docs on `route103_rival_trigger`'s
+        // and `sight_trainer_trigger`'s own former `rival_trainer_id`/
+        // `sight_trainer_id` fields).
+        phase.active_battle = None;
+        assert!(!phase.in_battle());
+        assert!(!phase.is_wild_battle_active());
+        assert!(!phase.is_first_battle_active());
+        assert!(!phase.is_rival_battle_active());
+        assert!(!phase.is_sight_trainer_battle_active());
+    }
 }
