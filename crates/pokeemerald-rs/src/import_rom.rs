@@ -790,10 +790,11 @@ struct CreatedDirectory {
 ///
 /// Opening a directory to hold as `mkdirat`'s target needs no more than a
 /// plain path-based `mkdir` already needed from it -- write and search --
-/// on Linux, Android, FreeBSD (`O_PATH`), and every Apple platform
+/// on Linux, Android, FreeBSD (`O_PATH`), and macOS 13 and later
 /// (POSIX's own `O_SEARCH`; see `dest::open_traversal_directory`'s own
-/// docs for where that comes from, and why it is not Linux's `O_PATH`
-/// again under another name). Every other non-Linux Unix this builds for
+/// docs for where that comes from, why it is not Linux's `O_PATH` again
+/// under another name, and why an older Apple kernel still opens for
+/// read, tracked as #1312). Every other non-Linux Unix this builds for
 /// still reopens for real, read-mode access -- unverified against any of
 /// those platforms' own documentation here -- and does need read
 /// permission on it, the same requirement [`Dest::open`] always has for

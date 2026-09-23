@@ -197,14 +197,14 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     assert!(again.is_empty(), "a run that created nothing owns nothing");
 }
 
-// Linux, Android, FreeBSD, and Apple platforms are where `dest`'s own
+// Linux, Android, FreeBSD, and macOS 13 or later are where `dest`'s own
 // traversal opens (`open_traversal_directory`, `open_directory_at`,
 // `open_created_directory_at`) actually ask a pinned parent for no more
 // than write and search -- see their own docs in `dest.rs` for exactly
 // which arm each of those four takes and why. Every other Unix this
-// crate builds for still falls back to a real, read-requiring open, so
-// this assertion is not a `cfg(unix)`-wide guarantee and must not claim
-// to be one.
+// crate builds for, and an Apple kernel older than Ventura (#1312),
+// still falls back to a real, read-requiring open, so this assertion is
+// not a `cfg(unix)`-wide guarantee and must not claim to be one.
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
