@@ -300,6 +300,7 @@ struct SlotSurvey {
     storage_valid_ids: u32,
     storage_counter: Option<u32>,
     storage_consistent: bool,
+    storage_ids_unique: bool,
     legacy_counter: Option<u32>,
     legacy_consistent: bool,
 }
@@ -320,6 +321,7 @@ impl SlotSurvey {
             storage_valid_ids: 0,
             storage_counter: None,
             storage_consistent: true,
+            storage_ids_unique: true,
             legacy_counter: None,
             legacy_consistent: true,
         }
@@ -350,6 +352,14 @@ impl SlotSurvey {
         // full generation scatters its storage ids across every position,
         // and a damaged slot's surviving storage is worth just as much.
         if id >= SECTOR_ID_PKMN_STORAGE_START {
+            // One generation writes each id once. A second checksum-valid
+            // copy under the same counter can only be a save-block sector
+            // whose unchecksummed footer id was damaged into this one (ids
+            // 1-3 share ids 5-12's payload length), and `load`'s donor copy
+            // would splice it over the real chunk.
+            if self.storage_valid_ids & (1 << id) != 0 {
+                self.storage_ids_unique = false;
+            }
             self.storage_valid_ids |= 1 << id;
             match self.storage_counter {
                 None => self.storage_counter = Some(counter),
@@ -431,16 +441,19 @@ impl SlotSurvey {
         } else {
             self.counter
         };
-        // Only a complete, single-generation set is worth donating. It also
+        // Only a complete, single-generation set holding each id exactly once
+        // is worth donating. It also
         // fills all nine tail positions when it is a legacy head's stale
         // tail, so such a tail can never carry the id-0 remnant that would
         // steal the head's rotation in `copy_valid_slot_payloads`.
-        let storage_counter =
-            if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK && self.storage_consistent {
-                self.storage_counter
-            } else {
-                None
-            };
+        let storage_counter = if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK
+            && self.storage_consistent
+            && self.storage_ids_unique
+        {
+            self.storage_counter
+        } else {
+            None
+        };
         SlotScan {
             integrity,
             counter,
@@ -2025,6 +2038,78 @@ mod tests {
             &storage_bytes[..],
             "the damaged slot's nine intact storage sectors must be salvaged, not \
              zeroed and then overwritten by the next save"
+        );
+    }
+
+    /// A footer id is outside the sector checksum, and ids 1-3 (`SaveBlock1`
+    /// chunks 0-2) share ids 5-12's payload length, so a bit flip turning id 1
+    /// into id 5 leaves both copies checksum-valid under one counter with
+    /// all nine storage ids still present. At rotation 10 the relabeled
+    /// chunk sits at position 11, after the real id 5 at position 1, so a
+    /// donor copy would splice `SaveBlock1` bytes over the first box chunk
+    /// and the next save would persist them.
+    #[test]
+    fn a_duplicated_storage_id_is_never_donated_as_storage() {
+        const ROTATION: u16 = 10;
+        let block2 = sample_block2();
+        let older_block1 = SaveBlock1 {
+            money: 111,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 222,
+            ..sample_block1()
+        };
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = older_block1.to_bytes(block2.encryption_key);
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        // Slot 0: a complete full generation at counter 10, rotation 10.
+        for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else if id < SECTOR_ID_PKMN_STORAGE_START {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+                &storage_bytes[offset..offset + len]
+            };
+            let physical = usize::from((id + ROTATION) % NUM_SECTORS_PER_SLOT_U16);
+            store.write_physical(0, physical, &Sector::write(id, payload, 10));
+        }
+        // One bit of id 1's footer flips, relabeling it id 5.
+        let relabeled =
+            usize::from((SECTOR_ID_SAVEBLOCK1_START + ROTATION) % NUM_SECTORS_PER_SLOT_U16);
+        // The footer ends id (u16), checksum (u16), signature, counter (u32s).
+        let id_offset = SECTOR_SIZE - 2 * size_of::<u32>() - 2 * size_of::<u16>();
+        let mut bytes = *store.read_physical(0, relabeled).as_bytes();
+        bytes[id_offset] ^= 0x04;
+        store.write_physical(0, relabeled, &Sector::from_bytes(bytes));
+        assert_eq!(
+            store.read_physical(0, relabeled).id(),
+            SECTOR_ID_PKMN_STORAGE_START
+        );
+        assert!(store
+            .read_physical(0, relabeled)
+            .is_valid(sector_payload_len(SECTOR_ID_PKMN_STORAGE_START).unwrap()));
+        // Slot 1: a newer pre-#1227 generation with no storage of its own.
+        write_legacy_slot(&mut store, 1, &newer_block1, &block2, 11);
+
+        assert!(
+            store.scan_slot(0).storage_counter.is_none(),
+            "a slot holding two copies of a storage id must not be offered as a donor"
+        );
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Error);
+        assert_eq!(outcome.block1.money, newer_block1.money);
+        let first_chunk = &store.base_pokemon_storage[..SECTOR_DATA_SIZE];
+        assert_ne!(
+            first_chunk,
+            &block1_bytes[..SECTOR_DATA_SIZE],
+            "SaveBlock1 bytes must never be loaded as a box chunk"
         );
     }
 
