@@ -199,6 +199,14 @@ impl AudioOutput {
     /// #867) — a bias no amount of on-time frame pacing (see
     /// [`crate::pacing::FramePacer`]) can absorb, since it is a *rate*
     /// mismatch, not a timing jitter one.
+    ///
+    /// The cadence is fixed here rather than taken per caller because the
+    /// ring exists for the game's frame-driven producer. A producer that
+    /// pushes at exactly `M4A_MIXER_RATE` instead runs about 0.04 frames/s
+    /// ahead of this drain; the ring's depth and the producer's own
+    /// full-ring retry bound that drift, and `crates/audio`'s `play_song`
+    /// example paces at [`crate::pacing::GBA_FRAME_PERIOD`] for the same
+    /// reason.
     fn source_cadence_hz() -> f64 {
         f64::from(Self::M4A_SAMPLES_PER_GAME_FRAME) / crate::pacing::GBA_FRAME_PERIOD.as_secs_f64()
     }
