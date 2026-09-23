@@ -171,10 +171,8 @@ struct TrackState {
     /// This track's own note priority (`PRIO`, `track->priority`); combined
     /// into each new note's effective priority by [`Sequencer::note_priority`].
     priority: u8,
-    /// Mirrors `MPT_FLG_VOLCHG` (`m4a_internal.h:266`): a `VOL`/`PAN`/`ModType`
-    /// command or an amplitude-target LFO step raised this since the last
-    /// [`Sequencer::propagate_dirty_tracks`] pass, and existing voices still
-    /// carry the previous value.
+    /// Mirrors `MPT_FLG_VOLCHG` (`m4a_internal.h:266`): a volume input changed
+    /// since the last [`Sequencer::propagate_dirty_tracks`] pass.
     vol_dirty: bool,
     /// Mirrors `MPT_FLG_PITCHG` (`m4a_internal.h:268`); see
     /// [`Self::vol_dirty`]'s sibling for the pitch-affecting commands
@@ -392,19 +390,11 @@ impl Sequencer {
         }
     }
 
-    /// Like [`Self::render_frame`], but applies an active fade's `volX`
-    /// before this frame's tick, exactly where upstream's `FadeOutBody`
-    /// runs -- at the very start of `MPlayMain`, before that frame's own
-    /// track pass (`m4a_1.s:1152`-`:1169`). `FadeOutBody` only writes
-    /// `volX` and raises `MPT_FLG_VOLCHG` (`m4a.c:753`-`:757`); the same
-    /// dirty flag any `VOL`/`PAN` command raises, so it's staged through
-    /// [`Self::stage_fade_volume`] and left to [`Self::propagate_dirty_tracks`]
-    /// like every other volume input. That lets this tick's own `Fine`
-    /// (`m4a_1.s:750`-`:777`) or a successful `Note`
-    /// (`m4a_1.s:1802`-`:1805`) consume it exactly as they would a
-    /// command-driven change, instead of a bespoke post-tick step that
-    /// always reached every surviving track regardless of what the tick
-    /// did with it.
+    /// Like [`Self::render_frame`], but stages an active fade's `volX` before
+    /// this frame's tick, where upstream's `FadeOutBody` runs
+    /// (`m4a_1.s:1152`-`:1169`). The fade raises the same dirty flag as a
+    /// `VOL` command (`m4a.c:753`-`:757`), so this tick's `Fine` or `Note`
+    /// consumes it and [`Self::propagate_dirty_tracks`] applies the rest.
     ///
     /// The terminal step (`volX == 0`) instead pauses the sequencer: every
     /// track stops and no tick runs again, while the mixer keeps rendering
@@ -441,13 +431,8 @@ impl Sequencer {
         }
     }
 
-    /// `FadeOutBody`'s own track pass (`m4a.c:750`-`:757`): writes `volX`
-    /// into every not-yet-ended track whose `volX` actually changes, and
-    /// raises `vol_dirty` -- the same flag a `VOL`/`PAN` command raises --
-    /// instead of recomputing anything itself. Runs before this frame's
-    /// tick, so that tick's own `Fine`/`Note` can still consume the flag,
-    /// and [`Self::propagate_dirty_tracks`] is left to push it into a
-    /// surviving track's voices once the tick finishes.
+    /// `FadeOutBody`'s track pass (`m4a.c:750`-`:757`): writes `volX` into
+    /// every live track whose value changes and raises `vol_dirty`.
     fn stage_fade_volume(&mut self, vol_x: u8) {
         for track in &mut self.tracks {
             if !track.ended && track.vol_x != vol_x {
@@ -482,11 +467,8 @@ impl Sequencer {
             self.tempo_c -= TEMPO_UNIT;
             self.do_tick();
         }
-        // Runs once per `advance_frame` call -- after every tick this frame's
-        // tempo crossed, not once per tick -- matching the single dirty-flag
-        // pass `MPlayMain` reaches once its own `while (tempoC >= 150)` loop
-        // finishes (`m4a_1.s:1169`..`:1175`, `:1341`..`:1360`), including a
-        // call whose accumulator never crosses 150 this frame.
+        // Once per frame after every tick, matching `MPlayMain`'s single
+        // pass after its tempo loop (`m4a_1.s:1169`-`:1175`, `:1341`-`:1360`).
         self.propagate_dirty_tracks();
     }
 
@@ -507,18 +489,10 @@ impl Sequencer {
         }
     }
 
-    /// The once-per-frame deferred recompute `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`
-    /// exist for: pushes each dirty, still-live track's resolved
-    /// volume/pitch into its voices and clears the flag, matching
-    /// `TrkVolPitSet`'s callers (`m4a_1.s:1361`..`:1432`) gating on
-    /// `MPT_FLG_EXIST` and unconditionally clearing both dirty bits
-    /// afterward (`m4a_1.s:1438`..`:1441`). A track `ply_fine` ended this
-    /// frame -- its flags already zeroed (`m4a_1.s:750`-`:777`) -- never
-    /// reaches this recompute, so a command or LFO step reached in the same
-    /// tick as `Fine` never leaks into the voice it just released. A
-    /// successful `Event::Note` also consumes the flags itself, the same
-    /// way (see its own handler); this pass is where every other dirty
-    /// control eventually lands.
+    /// The deferred recompute behind `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`:
+    /// pushes each dirty, live track's volume and pitch into its voices and
+    /// clears both flags (`m4a_1.s:1361`-`:1441`). A track ended by `Fine`
+    /// this frame has no flags left to apply.
     fn propagate_dirty_tracks(&mut self) {
         let Self { tracks, mixer, .. } = self;
         for (track_id, track) in tracks.iter_mut().enumerate() {
@@ -603,11 +577,8 @@ impl Sequencer {
             }
             Event::Goto(index) => track.cursor = index,
             Event::Voice(v) => track.voice = usize::from(v),
-            // `ply_vol`/`ply_pan` only store the operand and raise
-            // `MPT_FLG_VOLCHG` (`m4a_1.s:969`-`:990`); [`Self::propagate_dirty_tracks`]
-            // is what pushes it into the track's existing voices (a
-            // subsequent `Event::Note` this same tick consumes it instead,
-            // deriving its own new voice directly).
+            // `ply_vol`/`ply_pan` store the operand and raise the flag
+            // (`m4a_1.s:969`-`:990`); the post-tick pass applies it.
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -624,10 +595,8 @@ impl Sequencer {
             // too, guarding `tempo_c`'s accumulation against a malformed
             // pack.
             Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
-            // `ply_keysh`/`ply_bend`/`ply_bendr`/`ply_tune` only store the
-            // operand and raise `MPT_FLG_PITCHG` (`m4a_1.s:933`-`:943`,
-            // `:994`-`:1017`, `:1043`-`:1052`); see the `Volume`/`Pan` arms
-            // above for the deferred-propagation rationale.
+            // `ply_keysh`/`ply_bend`/`ply_bendr`/`ply_tune` store the operand
+            // and raise the flag (`m4a_1.s:933`-`:1052`).
             Event::KeyShift(k) => {
                 track.key_shift = k;
                 track.pitch_dirty = true;
@@ -653,10 +622,8 @@ impl Sequencer {
                     Self::reset_lfo(track);
                 }
             }
-            // `ply_modt` raises both flags together, but only when the
-            // target actually changes (`m4a_1.s:1027`-`:1041`): the old
-            // target's applied modulation must be cleared and the new one's
-            // picked up, both still deferred to the same recompute.
+            // `ply_modt` raises both flags only when the target changes
+            // (`m4a_1.s:1027`-`:1041`).
             Event::ModType(kind) => {
                 let target = ModulationTarget::from_command(kind);
                 if track.modulation_target != target {
@@ -692,15 +659,9 @@ impl Sequencer {
                     if track.lfo_delay != 0 {
                         Self::reset_lfo(track);
                     }
-                    // A successful allocation already resolved the track's
-                    // current volume/pitch into the just-started channel
-                    // (`note_on`, via `note_track`), then masks the whole
-                    // flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`),
-                    // clearing both dirty bits. A control (or the LFO-delay
-                    // reset just above) already spent deriving this new
-                    // voice must not still be pending for
-                    // [`Self::propagate_dirty_tracks`] to apply to the
-                    // track's other, older voices this same frame.
+                    // A successful allocation applied the track's current
+                    // volume and pitch to the new voice, so upstream masks
+                    // the flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`).
                     track.vol_dirty = false;
                     track.pitch_dirty = false;
                 }
@@ -756,11 +717,7 @@ impl Sequencer {
     fn finish_track(track: &mut TrackState, mixer: &mut Mixer, track_id: usize) {
         mixer.release_track(track_id);
         track.ended = true;
-        // `ply_fine` zeroes the whole flags byte, including `MPT_FLG_VOLCHG`
-        // and `MPT_FLG_PITCHG` (`m4a_1.s:771`-`:773`); `ended` alone already
-        // makes [`Self::propagate_dirty_tracks`] skip this track, but
-        // clearing here keeps the field's meaning ("recompute still owed")
-        // honest instead of merely unobserved.
+        // `ply_fine` zeroes the whole flags byte (`m4a_1.s:771`-`:773`).
         track.vol_dirty = false;
         track.pitch_dirty = false;
     }
@@ -2457,13 +2414,9 @@ mod tests {
         );
     }
 
-    /// `ply_pan` only stores the operand and raises `MPT_FLG_VOLCHG`
-    /// (`m4a_1.s:981`-`:990`); the single post-tick propagation pass is what
-    /// pushes a track's volume/pan into its channels
-    /// (`m4a_1.s:1361`-`:1400`), and `ply_fine` runs first, unlinking every
-    /// channel and zeroing the flags (`m4a_1.s:750`-`:777`). So a `PAN`
-    /// reached in the same tick as `FINE` must never reach the voice
-    /// upstream leaves ringing out in release.
+    /// `ply_fine` unlinks every channel and zeroes the flags before the
+    /// post-tick pass runs (`m4a_1.s:750`-`:777`), so a same-tick `PAN`
+    /// never reaches the released voice.
     #[test]
     fn a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
         let track = vec![
@@ -2493,11 +2446,7 @@ mod tests {
         );
     }
 
-    /// `ply_bend` only stores the operand and raises `MPT_FLG_PITCHG`
-    /// (`m4a_1.s:994`-`:1005`); see
-    /// [`a_pan_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice`]
-    /// for the shared deferred-propagation rationale, mirrored here for the
-    /// pitch domain instead of volume.
+    /// The pitch-domain twin of the `PAN` case above (`m4a_1.s:994`-`:1005`).
     #[test]
     fn a_bend_command_in_the_same_tick_as_fine_must_not_reach_the_released_voice() {
         let track = vec![
@@ -2528,14 +2477,10 @@ mod tests {
         );
     }
 
-    /// Upstream's single dirty-flag propagation pass runs once per call to
-    /// `MPlayMain` -- after its own `while (tempoC >= 150)` loop has ticked
-    /// every track for this frame, not after each individual tick
-    /// (`m4a_1.s:1169`-`:1175`, `:1341`-`:1360`). At a fast enough tempo, two
-    /// ticks can land in the same [`Sequencer::advance_frame`] call; if the
-    /// second of those ticks reaches `Fine`, a control from the first tick
-    /// must still never propagate, exactly as if both had landed in a single
-    /// tick.
+    /// Propagation runs once per `MPlayMain` call after every tick of the
+    /// frame (`m4a_1.s:1169`-`:1175`), so a control from the first of two
+    /// same-frame ticks still never reaches a voice the second tick's `Fine`
+    /// releases.
     #[test]
     fn a_control_from_an_earlier_tick_in_the_same_frame_as_fine_must_not_reach_the_released_voice()
     {
@@ -2555,12 +2500,7 @@ mod tests {
         seq.render_frame(&mut out);
         let before = seq.mixer.voices()[0].base_volume();
 
-        // Frame 2 runs two ticks by doubling the tempo accumulator's input:
-        // the first reaches `Pan` then blocks on the second `Wait`; the
-        // second, still within this one `advance_frame` call, reaches
-        // `Fine`. A propagation pass placed after each tick (instead of
-        // once after this whole frame) would wrongly apply the first
-        // tick's `Pan` before the second tick's `Fine` ever runs.
+        // Frame 2 runs two ticks: the first reaches `Pan`, the second `Fine`.
         seq.tempo_i = 2 * TEMPO_UNIT;
         seq.render_frame(&mut out);
         assert!(
@@ -2575,13 +2515,9 @@ mod tests {
         );
     }
 
-    /// A successful `ply_note` allocation resolves and applies the track's
-    /// current volume/pitch to the just-started channel itself, then masks
-    /// the whole flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`), consuming
-    /// `MPT_FLG_VOLCHG`/`MPT_FLG_PITCHG`. So a control reached earlier in the
-    /// same tick as a new `Note` on the same track is spent deriving that
-    /// new voice and must not also reach an older, still-sounding voice on
-    /// that track once [`Sequencer::propagate_dirty_tracks`] runs.
+    /// A successful `ply_note` applies the track's current controls to the
+    /// new voice and masks the flags (`m4a_1.s:1802`-`:1805`), so a same-tick
+    /// control never also reaches an older voice on that track.
     #[test]
     fn a_note_started_the_same_tick_as_a_pending_control_consumes_it_before_older_voices_see_it() {
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
@@ -2638,13 +2574,8 @@ mod tests {
         );
     }
 
-    /// `FadeOutBody` only writes `volX` and raises `MPT_FLG_VOLCHG`
-    /// (`m4a.c:753`-`:757`) -- the same dirty flag any other volume input
-    /// raises -- and a successful `ply_note` allocation consumes that flag
-    /// deriving its own new voice, then masks it away
-    /// (`m4a_1.s:1802`-`:1805`). So a fade step landing the same tick as a
-    /// new `Note` on the same track must not also reach an older,
-    /// still-sounding voice on that track.
+    /// A fade step raises the same flag as a `VOL` command (`m4a.c:753`-`:757`),
+    /// so a same-tick `Note` consumes it like any other control.
     #[test]
     fn a_note_started_the_same_tick_as_a_fade_step_consumes_it_before_older_voices_see_it() {
         let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
@@ -2678,10 +2609,7 @@ mod tests {
             .expect("the first note's voice must exist")
             .base_volume();
 
-        // Frame 2 reaches a new `Note`, with a fade step landing the same
-        // frame: the note consumes the fade's dirty flag deriving its own
-        // voice, so the older voice must not receive that fade step this
-        // frame.
+        // Frame 2 reaches a new `Note` with a fade step landing the same frame.
         seq.render_frame_with_fade(&mut out, Some(32));
         assert_eq!(
             seq.voice_count(),
