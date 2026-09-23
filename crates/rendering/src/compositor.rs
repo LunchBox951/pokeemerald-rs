@@ -463,6 +463,16 @@ fn compose_pixel(
     // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
     let span_backdrop =
         effects::backdrop_variant(&effects.color, partition_control.effects, effects.backdrop);
+    // mGBA's `objwinSlowPath` (`effects::resolve_pixel_color`'s docs):
+    // `OBJWIN`'s own blend-enable bit compared against this pixel's static
+    // span, not the OBJWIN-mask-resolved `window` below -- sprites are only
+    // ever preprocessed against a `WIN0`/`WIN1`/`WINOUT` span
+    // (`mgba/src/gba/renderers/video-software.c:1052-1055`)
+    // `(behavioral-fidelity)`.
+    let objwin_slow_path = effects
+        .windows
+        .obj_window
+        .is_some_and(|enable| enable.effects != partition_control.effects);
 
     let mut front = None;
     let mut next = None;
@@ -528,7 +538,11 @@ fn compose_pixel(
     let next = next.map(|(_, color, kind, _, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
-        window.effects,
+        effects::PixelWindowEffects {
+            enabled: window.effects,
+            static_span_enabled: partition_control.effects,
+            objwin_slow_path,
+        },
         any_target2,
         (
             front_color,
@@ -2629,6 +2643,91 @@ mod tests {
             fb.pixel(5, 0),
             Some(white),
             "the OBJWIN mask must not re-select the backdrop variant"
+        );
+    }
+
+    #[test]
+    fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
+        // End-to-end version of effects::resolve_pixel_color's
+        // `objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer`
+        // unit test: OBJWIN enabled with a blend-enable bit that differs
+        // from WINOUT's own is mGBA's `objwinSlowPath`
+        // (`mgba/src/gba/renderers/software-obj.c:176,180-192`), and it
+        // reblends a plain Normal-mode OBJ even though BLDCNT never marks it
+        // as a target1 layer.
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )]; // Normal mode (default), never a target1 OBJ below
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let mut winout = WindowLayerEnable::NONE;
+        winout.obj = true;
+        winout.effects = true;
+
+        let color = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: LayerTargets::default(), // deliberately excludes LayerKind::Obj
+            target2: LayerTargets {
+                bg: [false; 4],
+                obj: false,
+                backdrop: true,
+            },
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        };
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE), // OBJWIN blend bit off, WINOUT's is on
+                winout,
+            },
+            color,
+            backdrop: Rgb888::BLACK,
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Rgb888::BLACK),
+            "objwin_slow_path reblends the Normal OBJ even though it is not a target1 layer"
+        );
+
+        // Control: OBJWIN's own blend-enable bit now matches WINOUT's, so
+        // objwin_slow_path is false -- the non-target1 Normal OBJ is never a
+        // reblend candidate and stays raw white.
+        let mut matched_obj_window = WindowLayerEnable::NONE;
+        matched_obj_window.effects = true;
+        let control_effects = FrameEffects {
+            windows: WindowConfig {
+                obj_window: Some(matched_obj_window),
+                ..effects.windows
+            },
+            ..effects
+        };
+        let control_fb = compose_frame_with_effects(&sprites, &[], &control_effects);
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(white),
+            "without objwin_slow_path, a non-target1 Normal OBJ is never reblended"
         );
     }
 
