@@ -627,6 +627,21 @@ mod tests {
     }
 
     #[test]
+    fn rejects_literal_palette_index_four() {
+        // Upstream's font palette is fixed at four colours, so index 4 is the
+        // first invalid value regardless of `MAX_PALETTE_INDEX`.
+        assert_eq!(MAX_PALETTE_INDEX, 3);
+        let mut pixels = patterned_pixels();
+        let invalid_index = pixels.len() / 2;
+        pixels[invalid_index] = 4;
+        let err = FontGlyphSheet::new(synthetic_font_image(FontId::Normal, &pixels)).unwrap_err();
+        assert_eq!(
+            err,
+            AssetError::FontSheetInvalidPixel("normal", invalid_index, 4)
+        );
+    }
+
+    #[test]
     fn glyph_zero_is_the_top_left_cell() {
         let pixels = patterned_pixels();
         let image = synthetic_font_image(FontId::Normal, &pixels);
