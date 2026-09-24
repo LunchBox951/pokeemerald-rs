@@ -40,6 +40,16 @@
 //!   driver error) on its own callback thread. Those are counted separately
 //!   via [`AudioOutput::stream_errors`]; a nonzero count means the stream is
 //!   unhealthy even when [`AudioOutput::underruns`] stays flat.
+//! - **Playback position**: a real device's callback captures
+//!   `cpal::OutputCallbackInfo::timestamp()` on every invocation and derives
+//!   a monotonic, best-effort "device frames actually sounded" estimate from
+//!   it, published lock-free via atomics and exposed as
+//!   [`AudioOutput::playback_progress`]. A host that never reports a usable
+//!   timestamp pair (including [`AudioOutput::null`], unless a test enables
+//!   one by hand) leaves this `None` forever, so callers that wait on
+//!   playback position keep a derived-bound fallback for that case — see
+//!   `pokeemerald_rs::music::player::MusicPlayer::drained` and the
+//!   `play_song` example's `device_tail_wait`.
 //!
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
@@ -49,8 +59,9 @@
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -80,6 +91,16 @@ impl Source {
         match self {
             Self::Direct(consumer) => consumer.fill(out),
             Self::Resampled(resampler) => resampler.fill(out),
+        }
+    }
+
+    /// See [`AudioOutput::playback_settle_margin_frames`]: zero for `Direct`
+    /// (no interpolation buffering to defer a lookahead pull through), the
+    /// resampler's own [`Resampler::settle_margin_frames`] for `Resampled`.
+    fn settle_margin_frames(&self) -> u64 {
+        match self {
+            Self::Direct(_) => 0,
+            Self::Resampled(resampler) => resampler.settle_margin_frames(),
         }
     }
 }
@@ -116,6 +137,122 @@ enum Backend {
     Device(cpal::Stream),
 }
 
+/// Shared playback-position signal, written only by the real device's
+/// callback thread and read by any number of other threads — atomics, not a
+/// lock, so the real-time callback (see the module docs' "no allocation"
+/// rule and `crates/platform/tests/realtime_alloc.rs`) never blocks on a
+/// reader.
+///
+/// [`AudioOutput::null`] starts [`Self::timestamp_available`] `false` and
+/// leaves it there unless a test enables it by hand (see
+/// `AudioOutput::enable_playback_progress_for_test`), so
+/// [`AudioOutput::playback_progress`] reads `None` for the whole lifetime of
+/// an unmodified null-backed instance — exactly like a real host that never
+/// reports a usable timestamp.
+struct PlaybackClock {
+    /// Device frames handed to the callback so far — advanced *before* the
+    /// callback consumes them from the ring (see [`Self::record_callback`]),
+    /// so a reader that observes the ring newly empty already sees the frame
+    /// count for the callback holding the last samples, not the one before
+    /// it.
+    submitted_frames: AtomicU64,
+    /// The most recent conservative estimate of device frames that have
+    /// actually sounded (see [`estimate_sounded_frames`]). Published via
+    /// `fetch_max` so a jittery host estimate can never move it backward.
+    sounded_frames: AtomicU64,
+    /// Whether at least one callback has published a usable host timestamp.
+    /// Sticky: once observed, never reset — a single callback whose
+    /// timestamp pair doesn't support an estimate (see
+    /// [`estimate_sounded_frames`]) does not undo an earlier one that did.
+    timestamp_available: AtomicBool,
+}
+
+impl PlaybackClock {
+    fn new() -> Self {
+        Self {
+            submitted_frames: AtomicU64::new(0),
+            sounded_frames: AtomicU64::new(0),
+            timestamp_available: AtomicBool::new(false),
+        }
+    }
+
+    /// Records one real-device callback of `frame_count` device frames,
+    /// called *before* [`Source::fill`] consumes them from the ring.
+    /// Allocation-free (atomic loads/stores only), so it is safe to call
+    /// from the real-time callback thread.
+    ///
+    /// A callback whose timestamp pair does not support an estimate this
+    /// time (see [`estimate_sounded_frames`]) simply leaves the published
+    /// estimate where it was.
+    fn record_callback(
+        &self,
+        frame_count: u64,
+        info: &cpal::OutputCallbackInfo,
+        device_sample_rate: u32,
+    ) {
+        let callback_start_frame = self
+            .submitted_frames
+            .fetch_add(frame_count, Ordering::Release);
+        if let Some(sounded) =
+            estimate_sounded_frames(callback_start_frame, info.timestamp(), device_sample_rate)
+        {
+            self.sounded_frames.fetch_max(sounded, Ordering::Release);
+            self.timestamp_available.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// A snapshot of [`AudioOutput`]'s measured playback-position signal — see
+/// [`AudioOutput::playback_progress`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaybackProgress {
+    /// Device frames submitted to the output callback so far (monotonic
+    /// non-decreasing across calls against the same [`AudioOutput`]).
+    pub submitted_frames: u64,
+    /// The most recent conservative estimate of device frames that have
+    /// actually sounded, derived from the host's own callback timestamps
+    /// (monotonic non-decreasing; see the module docs). Read as a separate
+    /// atomic from `submitted_frames`, not one atomic snapshot, so a caller
+    /// should trust each field's own history across calls rather than their
+    /// exact relationship within one snapshot.
+    pub sounded_frames: u64,
+}
+
+/// `delay` (a callback-to-playback gap from a [`cpal::OutputStreamTimestamp`])
+/// as whole device frames at `device_sample_rate`, rounded up: undercounting
+/// the delay would let a caller read a frame as sounded before it actually
+/// is.
+fn delay_to_frames(delay: Duration, device_sample_rate: u32) -> u64 {
+    let nanos = delay.as_nanos();
+    let rate = u128::from(device_sample_rate);
+    u64::try_from(nanos.saturating_mul(rate).div_ceil(1_000_000_000)).unwrap_or(u64::MAX)
+}
+
+/// Estimate how many device frames have actually sounded as of a callback's
+/// invocation, given `callback_start_frame` (device frames submitted before
+/// this callback — the position its first sample occupies) and the host's
+/// own callback/playback timestamp pair: `timestamp.playback` is the
+/// predicted instant the data this callback writes (starting at
+/// `callback_start_frame`) will sound, so subtracting that delay's frame
+/// count from `callback_start_frame` estimates what is sounding right now.
+///
+/// `None` if the pair does not support an estimate: `playback` earlier than
+/// `callback` is a nonsensical (or deliberately unimplemented) pair, not a
+/// real zero-latency device — [`cpal::StreamInstant::checked_duration_since`]
+/// already treats an exactly-equal pair (delay zero) as valid, so this only
+/// excludes the inverted case.
+fn estimate_sounded_frames(
+    callback_start_frame: u64,
+    timestamp: cpal::OutputStreamTimestamp,
+    device_sample_rate: u32,
+) -> Option<u64> {
+    let delay = timestamp
+        .playback
+        .checked_duration_since(timestamp.callback)?;
+    let delay_frames = delay_to_frames(delay, device_sample_rate);
+    Some(callback_start_frame.saturating_sub(delay_frames))
+}
+
 /// An owned audio-output subsystem: opens (at most) one output stream and
 /// exposes a [`Producer`] handle its caller fills with rendered PCM.
 ///
@@ -141,6 +278,11 @@ pub struct AudioOutput {
     /// `max_buffer_frames` of the negotiated config; `0` for the null backend
     /// and for a device advertising no concrete range.
     max_callback_frames: usize,
+    /// Measured playback-position signal — see [`Self::playback_progress`].
+    playback_clock: Arc<PlaybackClock>,
+    /// See [`Self::playback_settle_margin_frames`]. Fixed at construction
+    /// (a function of the source's resample step, which never changes).
+    settle_margin_frames: u64,
 }
 
 impl AudioOutput {
@@ -228,9 +370,17 @@ impl AudioOutput {
             device_sample_rate,
             max_buffer_frames(&config),
         )?;
+        let settle_margin_frames = source.settle_margin_frames();
 
         let stream_errors = Arc::new(AtomicU64::new(0));
-        let stream = build_stream(&device, &config, source, Arc::clone(&stream_errors))?;
+        let playback_clock = Arc::new(PlaybackClock::new());
+        let stream = build_stream(
+            &device,
+            &config,
+            source,
+            Arc::clone(&stream_errors),
+            Arc::clone(&playback_clock),
+        )?;
 
         Ok(Self {
             backend: Backend::Device(stream),
@@ -241,6 +391,8 @@ impl AudioOutput {
             running: false,
             stream_errors,
             max_callback_frames: max_buffer_frames(&config),
+            playback_clock,
+            settle_margin_frames,
         })
     }
 
@@ -249,7 +401,11 @@ impl AudioOutput {
     /// Always available (no hardware required), and the only backend unit
     /// tests may construct — CI runners have no audio device, so `cargo
     /// test` must never open a real `cpal` stream. Drive it by hand with
-    /// [`AudioOutput::pull_null`].
+    /// [`AudioOutput::pull_null`]. Always plays samples straight through with
+    /// no interpolation buffering (see the module docs), so
+    /// [`Self::playback_settle_margin_frames`] is always `0`; a test that
+    /// needs to exercise a resampler's deferred-lookahead tail without a real
+    /// `cpal` device wants [`Self::null_resampled`] instead.
     #[must_use]
     pub fn null(ring_capacity_frames: usize) -> Self {
         let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(Self::CHANNELS));
@@ -262,7 +418,55 @@ impl AudioOutput {
             running: false,
             stream_errors: Arc::new(AtomicU64::new(0)),
             max_callback_frames: 0,
+            playback_clock: Arc::new(PlaybackClock::new()),
+            settle_margin_frames: 0,
         }
+    }
+
+    /// Test-only headless backend that resamples like a real device instead
+    /// of playing samples straight through, so a test can exercise
+    /// [`Self::playback_settle_margin_frames`]'s nonzero (real-device) case
+    /// through [`Self::pull_null`] without a real `cpal` device. Otherwise
+    /// identical to [`Self::null`]: `source_rate`/`device_rate` feed
+    /// [`crate::resample::Resampler::new`] exactly as a real device's
+    /// negotiated rate would.
+    ///
+    /// # Errors
+    ///
+    /// See [`crate::resample::Resampler::new`]'s `UnsupportedResampleRatio` doc.
+    #[doc(hidden)]
+    pub fn null_resampled(
+        ring_capacity_frames: usize,
+        source_rate: f64,
+        device_rate: u32,
+        max_output_frames: usize,
+    ) -> Result<Self, PlatformError> {
+        let channels = Self::CHANNELS;
+        let (producer, consumer) = ring_buffer(ring_capacity_frames * usize::from(channels));
+        // Unlike `source_for_device` (which always resamples from the fixed
+        // M4A source cadence), this test seam takes `source_rate` directly so
+        // a test can reproduce an exact rate ratio (e.g. the reviewer's
+        // step = 0.25 regression) without depending on that constant.
+        let source = Source::Resampled(Resampler::new(
+            consumer,
+            channels,
+            source_rate,
+            device_rate,
+            max_output_frames,
+        )?);
+        let settle_margin_frames = source.settle_margin_frames();
+        Ok(Self {
+            backend: Backend::Null(source),
+            producer,
+            sample_rate: Self::M4A_MIXER_RATE,
+            device_sample_rate: device_rate,
+            channels,
+            running: false,
+            stream_errors: Arc::new(AtomicU64::new(0)),
+            max_callback_frames: 0,
+            playback_clock: Arc::new(PlaybackClock::new()),
+            settle_margin_frames,
+        })
     }
 
     /// Start (or resume) playback.
@@ -373,15 +577,89 @@ impl AudioOutput {
         self.stream_errors.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// A measured playback-position signal derived from the host's own
+    /// callback timestamps (see the module docs' "Playback position"
+    /// bullet), or `None` if no callback has yet published a usable one —
+    /// including for the whole lifetime of an unmodified [`AudioOutput::null`]
+    /// instance. A caller waiting for playback to catch up to a target frame
+    /// count should fall back to a derived bound when this is `None`; see
+    /// `pokeemerald_rs::music::player::MusicPlayer::drained` and the
+    /// `play_song` example's `device_tail_wait`.
+    #[must_use]
+    pub fn playback_progress(&self) -> Option<PlaybackProgress> {
+        if !self
+            .playback_clock
+            .timestamp_available
+            .load(Ordering::Acquire)
+        {
+            return None;
+        }
+        Some(PlaybackProgress {
+            submitted_frames: self.playback_clock.submitted_frames.load(Ordering::Acquire),
+            sounded_frames: self.playback_clock.sounded_frames.load(Ordering::Acquire),
+        })
+    }
+
+    /// Extra device frames, beyond a [`Self::playback_progress`] snapshot's
+    /// `submitted_frames`, that may still carry real, audible content sounded
+    /// from a [`crate::resample::Resampler`]'s buffered interpolation state —
+    /// see that type's module docs' "deferred lookahead pull". Always `0` for
+    /// the null backend (see [`Self::null`]) and any device whose source
+    /// plays samples straight through with no interpolation buffering.
+    ///
+    /// A caller latching a "done" target from `submitted_frames` the instant
+    /// its own ring reads empty (as `pokeemerald_rs::music::player::MusicPlayer::drained`
+    /// and the `play_song` example's tail wait both do) must add this margin
+    /// to that target before waiting for `sounded_frames` to reach it, or it
+    /// can end the wait one callback before the resampler's real, decaying
+    /// tail actually finishes sounding.
+    #[must_use]
+    pub fn playback_settle_margin_frames(&self) -> u64 {
+        self.settle_margin_frames
+    }
+
+    /// Marks this instance's playback-position signal available, as a real
+    /// device's first callback with a usable timestamp would, so a
+    /// null-backed test can drive [`Self::playback_progress`] without a
+    /// `cpal` device. See [`Self::advance_sounded_frames_for_test`].
+    #[doc(hidden)]
+    pub fn enable_playback_progress_for_test(&self) {
+        self.playback_clock
+            .timestamp_available
+            .store(true, Ordering::Release);
+    }
+
+    /// Advances this instance's fake sounded-frame position for a
+    /// null-backed test, the way a real device callback's own estimate
+    /// would — clamped to monotonic non-decreasing, so a lower `frames`
+    /// never moves it backward. Has no effect on
+    /// [`Self::playback_progress`] until
+    /// [`Self::enable_playback_progress_for_test`] has been called.
+    #[doc(hidden)]
+    pub fn advance_sounded_frames_for_test(&self, frames: u64) {
+        self.playback_clock
+            .sounded_frames
+            .fetch_max(frames, Ordering::Release);
+    }
+
     /// Drive the null backend by hand, filling `out` through the exact same
     /// underrun-safe path the real device callback runs (see the module
     /// docs and [`crate::ring::Consumer::fill`]).
     ///
     /// A no-op (leaves `out` untouched) if this instance was opened against
     /// a real device via [`AudioOutput::open`] — the OS drives consumption
-    /// there instead, on its own callback thread.
+    /// there instead, on its own callback thread. Advances the submitted
+    /// device-frame count read back through [`Self::playback_progress`]
+    /// before filling, exactly as a real device callback does, so it tracks
+    /// a null-backed test's own draining regardless of whether the test has
+    /// enabled [`Self::playback_progress`] via the hooks above.
     pub fn pull_null(&mut self, out: &mut [f32]) {
         if let Backend::Null(source) = &mut self.backend {
+            let channels = usize::from(self.channels).max(1);
+            let frames = u64::try_from(out.len() / channels).unwrap_or(u64::MAX);
+            self.playback_clock
+                .submitted_frames
+                .fetch_add(frames, Ordering::Release);
             source.fill(out);
         }
     }
@@ -612,12 +890,17 @@ impl OutputDevice for cpal::Device {
 
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`. Asynchronous stream errors are recorded into `stream_errors`,
-/// the counter [`AudioOutput::stream_errors`] reads.
+/// the counter [`AudioOutput::stream_errors`] reads. Every callback also
+/// records its device-frame count and the host's callback timestamp into
+/// `playback_clock` (see [`PlaybackClock::record_callback`]) *before*
+/// `source` consumes them, the signal [`AudioOutput::playback_progress`]
+/// reads.
 fn build_stream<D: OutputDevice>(
     device: &D,
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
     stream_errors: Arc<AtomicU64>,
+    playback_clock: Arc<PlaybackClock>,
 ) -> Result<cpal::Stream, PlatformError> {
     let stream_config = config.config();
     // A `cpal` stream reports async failures (device disconnect, driver
@@ -630,10 +913,19 @@ fn build_stream<D: OutputDevice>(
         stream_errors.fetch_add(1, Ordering::Relaxed);
     };
 
+    // Shared by both format arms below: `PlaybackClock::record_callback`
+    // only needs the channel count and device rate, not the sample format.
+    let channels = usize::from(config.channels()).max(1);
+    let device_sample_rate = config.sample_rate();
+
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(
             stream_config,
-            move |data: &mut [f32], _| source.fill(data),
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                let frame_count = u64::try_from(data.len() / channels).unwrap_or(u64::MAX);
+                playback_clock.record_callback(frame_count, info, device_sample_rate);
+                source.fill(data);
+            },
             err_fn,
             None,
         )?,
@@ -644,12 +936,15 @@ fn build_stream<D: OutputDevice>(
             // in `scratch`-sized chunks instead, so a `data` cpal hands us
             // larger than anything advertised still never grows `scratch`.
             let max_frames = max_buffer_frames(config);
-            let channels = usize::from(config.channels());
             let scratch_capacity = i16_scratch_capacity(max_frames, channels);
             let mut scratch: Vec<f32> = vec![0.0; scratch_capacity];
             device.build_output_stream(
                 stream_config,
-                move |data: &mut [i16], _| fill_i16_output(&mut source, &mut scratch, data),
+                move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                    let frame_count = u64::try_from(data.len() / channels).unwrap_or(u64::MAX);
+                    playback_clock.record_callback(frame_count, info, device_sample_rate);
+                    fill_i16_output(&mut source, &mut scratch, data);
+                },
                 err_fn,
                 None,
             )?
@@ -767,6 +1062,7 @@ mod tests {
                 &config,
                 Source::Direct(consumer),
                 Arc::new(AtomicU64::new(0)),
+                Arc::new(PlaybackClock::new()),
             ) else {
                 panic!("the fake device always fails the build");
             };
@@ -1022,6 +1318,175 @@ mod tests {
         let mut out = [0.0; 4];
         output.pull_null(&mut out);
         assert_eq!(out, expected.as_slice());
+    }
+
+    #[test]
+    fn delay_to_frames_converts_an_exact_delay_at_the_device_rate() {
+        assert_eq!(delay_to_frames(Duration::from_millis(10), 48_000), 480);
+    }
+
+    /// Rounding a fractional-frame delay down would let a caller read a
+    /// frame as sounded one frame before it actually is.
+    #[test]
+    fn delay_to_frames_rounds_a_fractional_frame_up() {
+        assert_eq!(delay_to_frames(Duration::from_nanos(1), 48_000), 1);
+    }
+
+    #[test]
+    fn estimate_sounded_frames_treats_an_exact_zero_delay_as_valid() {
+        let ts = cpal::OutputStreamTimestamp {
+            callback: cpal::StreamInstant::new(1, 0),
+            playback: cpal::StreamInstant::new(1, 0),
+        };
+        assert_eq!(estimate_sounded_frames(1_000, ts, 48_000), Some(1_000));
+    }
+
+    #[test]
+    fn estimate_sounded_frames_is_none_for_an_inverted_timestamp_pair() {
+        let ts = cpal::OutputStreamTimestamp {
+            callback: cpal::StreamInstant::new(2, 0),
+            playback: cpal::StreamInstant::new(1, 0),
+        };
+        assert_eq!(estimate_sounded_frames(1_000, ts, 48_000), None);
+    }
+
+    #[test]
+    fn playback_clock_publishes_a_monotonic_estimate_under_host_jitter() {
+        let clock = PlaybackClock::new();
+        let ts_with_delay = |delay_ms: u64| cpal::OutputStreamTimestamp {
+            callback: cpal::StreamInstant::ZERO,
+            playback: cpal::StreamInstant::from_millis(delay_ms),
+        };
+
+        // Callback 1: nothing submitted yet outsizes a 10ms (480-frame)
+        // delay, so the estimate floors at zero.
+        clock.record_callback(
+            1_000,
+            &cpal::OutputCallbackInfo::new(ts_with_delay(10)),
+            48_000,
+        );
+        assert_eq!(clock.sounded_frames.load(Ordering::Acquire), 0);
+
+        // Callback 2: 1000 frames now submitted outsize the same delay.
+        clock.record_callback(
+            1_000,
+            &cpal::OutputCallbackInfo::new(ts_with_delay(10)),
+            48_000,
+        );
+        assert_eq!(clock.sounded_frames.load(Ordering::Acquire), 520);
+
+        // Callback 3: a jitter spike inflates the reported delay past the
+        // submitted position, so the naive estimate would fall back to
+        // zero -- the published estimate must hold at 520 instead.
+        clock.record_callback(
+            1_000,
+            &cpal::OutputCallbackInfo::new(ts_with_delay(60)),
+            48_000,
+        );
+        assert_eq!(
+            clock.sounded_frames.load(Ordering::Acquire),
+            520,
+            "a jittery spike in the reported delay must not move the published position backward"
+        );
+
+        // Callback 4: delay returns to normal, and the estimate resumes
+        // advancing past the held value.
+        clock.record_callback(
+            1_000,
+            &cpal::OutputCallbackInfo::new(ts_with_delay(10)),
+            48_000,
+        );
+        assert_eq!(clock.sounded_frames.load(Ordering::Acquire), 2_520);
+    }
+
+    #[test]
+    fn playback_progress_is_none_until_a_callback_or_test_hook_publishes_one() {
+        let output = AudioOutput::null(256);
+        assert_eq!(output.playback_progress(), None);
+    }
+
+    #[test]
+    fn pull_null_advances_submitted_frames_but_playback_progress_stays_none_by_default() {
+        let mut output = AudioOutput::null(256);
+        let producer = output.producer();
+        assert_eq!(producer.push(&[0.0; 8]), 8);
+        let mut out = [0.0; 8];
+        output.pull_null(&mut out);
+        // The null backend never publishes a timestamp on its own; a test
+        // must opt in via `enable_playback_progress_for_test`.
+        assert_eq!(output.playback_progress(), None);
+    }
+
+    #[test]
+    fn the_test_hooks_publish_a_measured_playback_position_on_the_null_backend() {
+        let mut output = AudioOutput::null(256);
+        let producer = output.producer();
+        assert_eq!(producer.push(&[0.0; 8]), 8);
+        let mut out = [0.0; 8];
+        output.pull_null(&mut out); // 4 stereo frames submitted
+
+        output.enable_playback_progress_for_test();
+        let progress = output
+            .playback_progress()
+            .expect("the test hook must publish availability");
+        assert_eq!(progress.submitted_frames, 4);
+        assert_eq!(progress.sounded_frames, 0);
+
+        output.advance_sounded_frames_for_test(4);
+        assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
+
+        // Monotonic even for the fake clock: a lower value must not regress it.
+        output.advance_sounded_frames_for_test(1);
+        assert_eq!(output.playback_progress().unwrap().sounded_frames, 4);
+    }
+
+    #[test]
+    fn the_null_backend_reports_a_zero_settle_margin() {
+        assert_eq!(AudioOutput::null(256).playback_settle_margin_frames(), 0);
+    }
+
+    #[test]
+    fn null_resampled_reports_the_resamplers_own_settle_margin() {
+        // Same rates as the module-level regression this margin exists to
+        // fix (see `crate::resample`'s `a_ring_emptied_mid_callback_still_sounds_real_audio_in_the_next_one`):
+        // step = 25/100 = 0.25.
+        let output = AudioOutput::null_resampled(64, 25.0, 100, 16)
+            .expect("a real rate ratio must always construct a Resampler");
+        assert_eq!(output.playback_settle_margin_frames(), 8);
+    }
+
+    #[test]
+    fn null_resampled_refuses_the_same_rate_ratios_resampler_new_refuses() {
+        // `AudioOutput` has no `Debug` impl (it owns a non-`Debug` `cpal::Stream`
+        // on the real-device path), so the failure is matched out by hand
+        // rather than via `expect_err`.
+        let Err(err) = AudioOutput::null_resampled(64, f64::NAN, 100, 16) else {
+            panic!("a non-finite source rate must be refused");
+        };
+        assert!(matches!(
+            err,
+            PlatformError::UnsupportedResampleRatio { .. }
+        ));
+    }
+
+    #[test]
+    fn pull_null_drives_a_resampled_source_and_advances_submitted_frames_by_stereo_frames() {
+        let mut output = AudioOutput::null_resampled(64, 25.0, 100, 16)
+            .expect("a real rate ratio must always construct a Resampler");
+        let producer = output.producer();
+        // One interleaved stereo source frame: `null_resampled` always uses
+        // `AudioOutput::CHANNELS` (stereo), matching every real device.
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+
+        output.enable_playback_progress_for_test();
+        let mut out = [0.0_f32; 4]; // two interleaved stereo output frames
+        output.pull_null(&mut out);
+        assert_eq!(
+            output.playback_progress().unwrap().submitted_frames,
+            2,
+            "submitted_frames must count stereo frames (out.len() / channels), not raw \
+             interleaved samples, exactly as the real device callback does"
+        );
     }
 
     #[test]
