@@ -161,8 +161,9 @@ pub(crate) struct StartMenu {
     yes_no_glyphs: Vec<RevealedGlyph>,
     /// `sStartMenuCursorPos` (`start_menu.c:83`).
     cursor: usize,
-    /// `gMenuCallback`: `None` is `HandleStartMenuInput`, `Some` is the
-    /// SAVE flow having taken over (`SaveCallback`).
+    /// `gMenuCallback`: `None` is `HandleStartMenuInput`; `Some` is the
+    /// SAVE callback chain (`StartMenuSaveCallback` -> `SaveStartCallback`
+    /// -> `SaveCallback`) having taken over.
     save: Option<SaveDialog>,
     /// `gMenuCallback == StartMenuExitCallback`: A armed it on a previous
     /// tick. A bare `bool` rather than a `save` variant, since EXIT carries
@@ -207,7 +208,8 @@ impl StartMenu {
 
     /// Advance the menu by one frame.
     ///
-    /// While the SAVE flow owns the menu (`gMenuCallback == SaveCallback`),
+    /// While the SAVE flow owns the menu (`gMenuCallback` is
+    /// `StartMenuSaveCallback`, `SaveStartCallback`, or `SaveCallback`),
     /// every frame goes to [`SaveDialog::run`] and `HandleStartMenuInput`
     /// is not reached at all -- upstream's own structure, and what keeps a
     /// D-pad press meant for a Yes/No prompt from also moving the item
@@ -224,7 +226,8 @@ impl StartMenu {
             return StartMenuOutcome::Closed;
         }
         if let Some(dialog) = &mut self.save {
-            // `SaveCallback` (`start_menu.c:817-836`).
+            // SAVE's per-frame callback chain
+            // (`start_menu.c:721-728,809-822,817-836`).
             return match dialog.run(buttons, &self.chrome, target) {
                 SaveDialogOutcome::InProgress => StartMenuOutcome::Open,
                 // `SAVE_CANCELED`: `InitStartMenu` again, back to
@@ -254,8 +257,7 @@ impl StartMenu {
         }
         if buttons.is_newly_pressed(Buttons::A) {
             match self.items[self.cursor] {
-                // `StartMenuSaveCallback` -> `SaveStartCallback` ->
-                // `InitSave` (`:721-728`, `:809-815`).
+                // `gMenuCallback = StartMenuSaveCallback` (`:607-626`).
                 StartMenuItem::Save => self.save = Some(SaveDialog::new()),
                 // `gMenuCallback = StartMenuExitCallback` (`:616`).
                 StartMenuItem::Exit => self.exit_pending = true,
@@ -301,8 +303,8 @@ impl StartMenu {
         self.cursor
     }
 
-    /// Whether the SAVE flow currently owns the menu (`gMenuCallback ==
-    /// SaveCallback`).
+    /// Whether SAVE's callback chain currently owns the menu
+    /// (`StartMenuSaveCallback`, `SaveStartCallback`, or `SaveCallback`).
     #[cfg(test)]
     pub(crate) const fn saving(&self) -> bool {
         self.save.is_some()

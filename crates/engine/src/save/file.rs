@@ -5,14 +5,20 @@
 //! [`SaveStore`]; the sibling entry a write is staged into is owned by the
 //! private `staging` submodule, and the inter-process lock slot -- its
 //! validation, identity, staging, and platform-sharing rules -- is owned by
-//! the private `lock` submodule.
+//! the private `lock` submodule. Whether an entry at either path is a plain
+//! file safe to open is decided by the private `open` submodule.
 
 mod lock;
+mod open;
 mod staging;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+use self::open::{
+    open_refused_a_symlink, refuse_an_unusable_entry, refuse_an_unusable_open,
+    refuse_unusable_opens, UnusableEntry,
+};
 use self::staging::{StagedSave, StagingArea};
 use super::store::{self, SaveStore};
 
@@ -20,7 +26,7 @@ use super::store::{self, SaveStore};
 pub const SAVE_PATH_ENV: &str = "POKEEMERALD_RS_SAVE";
 
 /// Per-user data subdirectory containing the default save file.
-pub const SAVE_DIR_NAME: &str = "pokeemerald-rs";
+pub const SAVE_DIR_NAME: &str = pack_format::APP_DATA_SUBDIRECTORY;
 
 /// Default save-file name.
 pub const SAVE_FILE_NAME: &str = "pokeemerald.sav";
@@ -77,6 +83,16 @@ pub enum SaveFileError {
         /// The lock path that is not a plain file.
         path: PathBuf,
     },
+    /// The save path is a symlink instead of naming the file it opens.
+    SavePathIsAlias {
+        /// The save path that does not name the file it opens.
+        path: PathBuf,
+    },
+    /// The save path is occupied by something other than a plain file.
+    SavePathNotAPlainFile {
+        /// The save path that is not a plain file.
+        path: PathBuf,
+    },
     /// The file length does not match [`store::FLASH_IMAGE_LEN`].
     BadLength {
         /// The file whose length was wrong.
@@ -128,6 +144,19 @@ impl std::fmt::Display for SaveFileError {
                  directory holds -- writing it would replace the inode they lock",
                 path.display()
             ),
+            Self::SavePathIsAlias { path } => write!(
+                f,
+                "save file: the save path {} does not name the file it opens -- reading it \
+                 would follow the link to whatever it led to at the time",
+                path.display()
+            ),
+            Self::SavePathNotAPlainFile { path } => write!(
+                f,
+                "save file: the save path {} is not a plain file -- a directory, socket, \
+                 device, or reparse point there is not a save image, and opening a FIFO \
+                 would wait for a writer that never comes",
+                path.display()
+            ),
             Self::BadLength {
                 path,
                 expected,
@@ -152,6 +181,8 @@ impl std::error::Error for SaveFileError {
             | Self::LockPathIsSave { .. }
             | Self::LockPathIsAlias { .. }
             | Self::LockPathNotAPlainFile { .. }
+            | Self::SavePathIsAlias { .. }
+            | Self::SavePathNotAPlainFile { .. }
             | Self::BadLength { .. } => None,
         }
     }
@@ -280,15 +311,35 @@ impl SaveFile {
     ///
     /// # Errors
     ///
-    /// [`SaveFileError::Read`] for any I/O failure other than "not found";
+    /// [`SaveFileError::SavePathIsAlias`] if the save path is a symlink;
+    /// [`SaveFileError::SavePathNotAPlainFile`] if it is anything else that
+    /// is not a plain file -- a directory, socket, device, or FIFO, which a
+    /// blocking open or read could otherwise wait on forever, or a Windows
+    /// reparse point such as a cloud-files placeholder;
+    /// [`SaveFileError::Read`] for any other I/O failure than "not found";
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
         use std::io::Read as _;
 
-        let file = match std::fs::File::open(&self.path) {
+        // Refuses a symlink or a non-plain file up front, for a fast, typed
+        // error in the ordinary case; `refuse_unusable_opens` and
+        // `refuse_an_unusable_open` below close the window an entry swapped
+        // in between this check and the open could otherwise slip through.
+        refuse_an_unusable_entry(&self.path)
+            .map_err(|unusable| self.unusable_entry_error(unusable))?;
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        refuse_unusable_opens(&mut options);
+        let file = match options.open(&self.path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) if open_refused_a_symlink(&err) => {
+                return Err(SaveFileError::SavePathIsAlias {
+                    path: self.path.clone(),
+                })
+            }
             Err(source) => {
                 return Err(SaveFileError::Read {
                     path: self.path.clone(),
@@ -296,6 +347,8 @@ impl SaveFile {
                 })
             }
         };
+        refuse_an_unusable_open(&file).map_err(|unusable| self.unusable_entry_error(unusable))?;
+
         let oversized_image_probe_len = store::FLASH_IMAGE_LEN + 1;
         let mut bytes = Vec::with_capacity(oversized_image_probe_len);
         // Borrow so the handle survives for `observed_length`'s metadata query.
@@ -320,6 +373,23 @@ impl SaveFile {
                 expected: store::FLASH_IMAGE_LEN,
                 got: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             })
+    }
+
+    /// Folds an [`UnusableEntry`] classification of this save path into the
+    /// [`SaveFileError`] variant that names it.
+    fn unusable_entry_error(&self, unusable: UnusableEntry) -> SaveFileError {
+        match unusable {
+            UnusableEntry::Inspect(source) => SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            },
+            UnusableEntry::IsAlias => SaveFileError::SavePathIsAlias {
+                path: self.path.clone(),
+            },
+            UnusableEntry::NotAPlainFile => SaveFileError::SavePathNotAPlainFile {
+                path: self.path.clone(),
+            },
+        }
     }
 
     /// The real length behind a bounded probe read's `bytes.len()`: exact

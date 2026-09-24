@@ -7,11 +7,12 @@
 //!
 //! Formatting, audio, and window-buffer controls are consumed without applying
 //! effects. Placeholders, dynamic tokens, and keypad icons are skipped because
-//! this renderer has no expansion context or corresponding glyphs. The `CLEAR`
-//! and `CLEAR_TO` controls are the one exception: they move the cursor, so
-//! their geometry is reported as a [`ClearedSpan`] for the caller to erase.
-//! Which colour that erase uses stays out of scope with the rest of
-//! formatting.
+//! this renderer has no expansion context or corresponding glyphs. `CLEAR`,
+//! `CLEAR_TO`, and `FILL_WINDOW` are the exceptions: they move the cursor, so
+//! `CLEAR`/`CLEAR_TO`'s geometry is reported as a [`ClearedSpan`] and
+//! `FILL_WINDOW`'s whole-window equivalent through
+//! [`Printer::cleared_window`], both for the caller to erase. Which colour
+//! that erase uses stays out of scope with the rest of formatting.
 
 use assets::fonts::{FontId, Glyph, GlyphSource};
 
@@ -24,6 +25,7 @@ mod ext_ctrl {
     pub const SKIP: u8 = super::super::EXT_CTRL_CODE_SKIP;
     pub const CLEAR: u8 = super::super::EXT_CTRL_CODE_CLEAR;
     pub const CLEAR_TO: u8 = super::super::EXT_CTRL_CODE_CLEAR_TO;
+    pub const FILL_WINDOW: u8 = super::super::EXT_CTRL_CODE_FILL_WINDOW;
     pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
     pub const PAUSE_UNTIL_PRESS: u8 = super::super::EXT_CTRL_CODE_PAUSE_UNTIL_PRESS;
 }
@@ -64,8 +66,9 @@ const fn clear_span_height(font: FontId) -> i32 {
 /// Upstream's `ClearTextSpan` paints this rectangle into the window's tile
 /// buffer (`pokeemerald/src/text.c:649-674`). [`Printer`] owns no such buffer,
 /// so it reports the geometry instead and the caller erases; see
-/// [`Printer::cleared_span`]. This is a run within one text line, unrelated to
-/// the whole-page [`TickEvent::Cleared`].
+/// [`Printer::cleared_span`]. This is a run within one text line, distinct
+/// from a `FILL_WINDOW` clear ([`Printer::cleared_window`]) and from the
+/// whole-page [`TickEvent::Cleared`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClearedSpan {
     /// Window-local left edge.
@@ -206,7 +209,13 @@ pub enum TickEvent {
     /// The frame revealed no glyph: either the reveal delay consumed it, or a
     /// `CLEAR`/`CLEAR_TO` control erased a span. Upstream ends the frame for
     /// both (`RENDER_UPDATE` and `RENDER_PRINT`, `pokeemerald/src/text.c`
-    /// `:352-360`). [`Printer::cleared_span`] distinguishes them.
+    /// `:352-360`). [`Printer::cleared_span`] distinguishes them. At Slow/Mid
+    /// speed a `FILL_WINDOW` control also produces this variant, the same as
+    /// any other `RENDER_REPEAT`-class token: its own reveal-delay reload is
+    /// spent before the next token starts (`text.c:941-962`); only at
+    /// Fast/Instant does its glyph, if any, reach the caller within the same
+    /// call. [`Printer::cleared_window`] distinguishes an idle `FILL_WINDOW`
+    /// tick from an ordinary delay.
     Idle,
     /// A glyph became visible.
     Glyph(Box<RevealedGlyph>),
@@ -224,6 +233,7 @@ pub enum TickEvent {
     /// A page-clear prompt is waiting for a new A or B press.
     AwaitingClear,
     /// The page was confirmed and the cursor returned to its origin.
+    /// [`Printer::cleared_window`] is also set on this tick.
     Cleared,
     /// `PAUSE_UNTIL_PRESS` is waiting for a new A or B press.
     AwaitingPress,
@@ -251,6 +261,11 @@ enum ControlOutcome {
     Glyph(u16),
     /// `RENDER_PRINT`: a span was erased and the frame ends.
     ClearedSpan,
+    /// `FILL_WINDOW`'s `RENDER_REPEAT`: the whole window was cleared and the
+    /// cursor reset to the origin, but -- unlike [`Self::ClearedSpan`] --
+    /// token handling continues within the same frame
+    /// (`pokeemerald/src/text.c:1052-1056`).
+    ClearedWindow,
 }
 
 #[must_use]
@@ -280,6 +295,7 @@ pub struct Printer<S> {
     line_height: i32,
     clear_height: i32,
     cleared_span: Option<ClearedSpan>,
+    cleared_window: bool,
     state: PrinterState,
     allows_ab_speed_up: bool,
     ab_speed_up_latched: bool,
@@ -297,6 +313,7 @@ impl<S: GlyphSource> Printer<S> {
             line_height: max_letter_height(glyphs.font()),
             clear_height: clear_span_height(glyphs.font()),
             cleared_span: None,
+            cleared_window: false,
             glyphs,
             speed,
             reveal_delay_frames_remaining: 0,
@@ -334,6 +351,21 @@ impl<S: GlyphSource> Printer<S> {
         self.cleared_span
     }
 
+    /// Whether the most recent [`Self::tick`] cleared the complete window and
+    /// reset the cursor to the origin: set by a forward `FILL_WINDOW`
+    /// (`pokeemerald/src/text.c:1052-1056`) or by the page-clear prompt's
+    /// confirmation ([`TickEvent::Cleared`]). Like [`Self::cleared_span`], the
+    /// caller applies the erase itself; unlike it, `FILL_WINDOW` never ends
+    /// upstream's frame (it is unconditionally `RENDER_REPEAT`), so at
+    /// Fast/Instant speed a glyph decoded later in the same [`Self::tick`]
+    /// call can still be its returned event -- at Slow/Mid that call instead
+    /// returns [`TickEvent::Idle`], the same as any other `RENDER_REPEAT`
+    /// token's own reveal-delay reload.
+    #[must_use]
+    pub const fn cleared_window(&self) -> bool {
+        self.cleared_window
+    }
+
     /// Returns whether the token stream has ended.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
@@ -347,6 +379,7 @@ impl<S: GlyphSource> Printer<S> {
         self.reveal_delay_frames_remaining = 0;
         self.cursor = self.origin;
         self.cleared_span = None;
+        self.cleared_window = false;
         self.state = PrinterState::HandleChar;
         self.ab_speed_up_latched = false;
     }
@@ -358,6 +391,7 @@ impl<S: GlyphSource> Printer<S> {
     /// later held frames skip remaining reveal delays.
     pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         self.cleared_span = None;
+        self.cleared_window = false;
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
             PrinterState::HandleChar => self.tick_handle_char(input),
@@ -387,6 +421,7 @@ impl<S: GlyphSource> Printer<S> {
             PrinterState::AwaitingClear => {
                 if input.confirm_pressed() {
                     self.cursor = self.origin;
+                    self.cleared_window = true;
                     self.state = PrinterState::HandleChar;
                     TickEvent::Cleared
                 } else {
@@ -466,6 +501,14 @@ impl<S: GlyphSource> Printer<S> {
                     // Upstream's `RENDER_PRINT` copies the erased window to
                     // VRAM and ends the frame (`text.c:352-360`).
                     ControlOutcome::ClearedSpan => return TickEvent::Idle,
+                    // `FILL_WINDOW` is also `RENDER_REPEAT` (`text.c`
+                    // `:1052-1056`): the caller reads `cleared_window()`
+                    // alongside whichever event this call eventually
+                    // returns, so token handling keeps going here.
+                    ControlOutcome::ClearedWindow => {
+                        self.cleared_window = true;
+                        None
+                    }
                 },
                 ref other => glyph_id_for_token(other),
             };
@@ -535,6 +578,13 @@ impl<S: GlyphSource> Printer<S> {
                 };
                 let target = self.origin.0 + i32::from(column);
                 return self.clear_span(target - self.cursor.0);
+            }
+            // `text.c:1052-1056`: fills the whole window and resets both
+            // cursor axes to the printer origin, then repeats within the
+            // same frame.
+            ext_ctrl::FILL_WINDOW => {
+                self.cursor = self.origin;
+                return ControlOutcome::ClearedWindow;
             }
             _ => {}
         }
@@ -835,10 +885,18 @@ mod tests {
         assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
         assert_eq!(printer.tick(press_a()), TickEvent::Cleared);
         assert_eq!(printer.cursor(), (0, 1));
+        assert!(
+            printer.cleared_window(),
+            "the page-clear confirmation should also report a whole-window clear"
+        );
         let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected printing to resume on the new page")
         };
         assert_eq!((g.x, g.y), (0, 1));
+        assert!(
+            !printer.cleared_window(),
+            "the flag should not persist into the next tick"
+        );
     }
 
     #[test]
@@ -1123,6 +1181,52 @@ mod tests {
             assert_eq!((after.x, after.y), (9, 1));
             assert_eq!(printer.cleared_span(), None);
         }
+    }
+
+    #[test]
+    fn fill_window_clears_stale_glyphs_and_resets_the_cursor_within_the_same_frame() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        // The Bard's song appends `EXT_CTRL_CODE_BEGIN, FILL_WINDOW` between
+        // paragraphs (`pokeemerald/src/mauville_old_man.c:224-230`).
+        let tokens = decode_tokens(&[
+            ENCODED_A,
+            super::super::CHAR_NEWLINE,
+            ENCODED_A,
+            super::super::EXT_CTRL_CODE_BEGIN,
+            ext_ctrl::FILL_WINDOW,
+            ENCODED_A,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
+
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the first glyph")
+        };
+        assert_eq!((first.x, first.y), (0, 1));
+        assert!(!printer.cleared_window());
+
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the second-line glyph")
+        };
+        assert_eq!((second.x, second.y), (0, 17));
+
+        // `text.c:1052-1056` fills the window, resets both cursor axes to the
+        // printer origin, and returns `RENDER_REPEAT`, so the glyph after
+        // `FILL_WINDOW` still renders within this same tick call.
+        let TickEvent::Glyph(after_fill) = printer.tick(PrinterInput::none()) else {
+            panic!("expected the glyph after FILL_WINDOW in the same frame")
+        };
+        assert_eq!((after_fill.x, after_fill.y), (0, 1));
+        assert!(
+            printer.cleared_window(),
+            "FILL_WINDOW must report a whole-window clear"
+        );
+        assert_eq!(
+            printer.cursor(),
+            (i32::from(NORMAL_A_ADVANCE_WIDTH), 1),
+            "FILL_WINDOW must reset the cursor to the origin before the next glyph advances it"
+        );
     }
 
     #[test]

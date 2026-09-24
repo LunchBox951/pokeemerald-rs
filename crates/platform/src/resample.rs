@@ -147,36 +147,34 @@ impl Resampler {
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate /
-    /// device_rate` alone (regardless of `max_output_frames`) exceeds
-    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: even the smallest possible chunk
-    /// (`chunk_frames == 1`) would then need more source frames than the
-    /// scratch cap allows to resolve a single output frame's advance, which
-    /// would otherwise leave `self.frac >= 1.0` for [`Self::fill_chunk`] to
-    /// interpolate with — extrapolating past the source range instead of
-    /// bounding a chunk crossing count that can never fully catch up.
-    /// Refusing here, rather than degrading inside `fill_chunk`, keeps every
-    /// constructed `Resampler`'s `frac` invariant (`[0.0, 1.0)`, see the
-    /// field doc) unconditionally true.
+    /// Returns [`PlatformError::UnsupportedResampleRatio`] if `source_rate`
+    /// is not finite and positive, or if `source_rate / device_rate` exceeds
+    /// [`MAX_SCRATCH_SOURCE_FRAMES`]: one output frame would then need more
+    /// source frames than the scratch cap holds, breaking the `frac`
+    /// invariant (see the field doc).
     pub fn new(
         consumer: Consumer,
         channels: u16,
-        source_rate: u32,
+        source_rate: f64,
         device_rate: u32,
         max_output_frames: usize,
     ) -> Result<Self, PlatformError> {
         let channels = usize::from(channels.max(1));
-        let step = f64::from(source_rate) / f64::from(device_rate.max(1));
+        let step = source_rate / f64::from(device_rate.max(1));
 
         // One output frame's advance can need `ceil(step)` source frames, so
         // no chunk size can resolve a `step` past the scratch cap without
-        // extrapolating.
+        // extrapolating. `step.is_nan() || step <= 0.0` refuses a non-finite,
+        // negative, or zero `source_rate` (`<=` so `0.0` and `-0.0` are
+        // refused too); a zero `step` would never cross a source-frame
+        // boundary, sticking playback on the first primed frame while the
+        // ring overruns.
         #[expect(
             clippy::cast_precision_loss,
             reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
         )]
         let source_cap = MAX_SCRATCH_SOURCE_FRAMES as f64;
-        if step > source_cap {
+        if step.is_nan() || step <= 0.0 || step > source_cap {
             return Err(PlatformError::UnsupportedResampleRatio {
                 source_rate,
                 device_rate,
@@ -379,7 +377,7 @@ mod tests {
         // only builds a `Resampler` when the rates actually differ).
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0, 30.0, 40.0, 50.0]), 6);
-        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16).unwrap();
+        let mut resampler = Resampler::new(consumer, 1, 100.0, 100, 16).unwrap();
 
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
@@ -404,7 +402,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(64);
         assert_eq!(producer_a.push(&source), 30);
-        let mut oversized = Resampler::new(consumer_a, 1, 1, 1, 4).unwrap();
+        let mut oversized = Resampler::new(consumer_a, 1, 1.0, 1, 4).unwrap();
         let scratch_capacity = oversized.scratch.len();
 
         let mut big_out = [0.0; 20];
@@ -417,7 +415,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(64);
         assert_eq!(producer_b.push(&source), 30);
-        let mut chunked = Resampler::new(consumer_b, 1, 1, 1, 4).unwrap();
+        let mut chunked = Resampler::new(consumer_b, 1, 1.0, 1, 4).unwrap();
         let mut small_out = [0.0; 20];
         for chunk in small_out.chunks_mut(4) {
             chunked.fill(chunk);
@@ -484,18 +482,59 @@ mod tests {
         // must refuse this ratio outright: no `Resampler` is ever constructed
         // here for `fill` to extrapolate through.
         let (_producer, consumer) = ring_buffer(MAX_SCRATCH_SOURCE_FRAMES + 8);
-        let result = Resampler::new(consumer, 1, u32::MAX, 1, DEFAULT_MAX_OUTPUT_FRAMES);
-        assert!(
-            matches!(
-                result,
-                Err(PlatformError::UnsupportedResampleRatio {
-                    source_rate: u32::MAX,
-                    device_rate: 1,
-                })
+        let source_rate = f64::from(u32::MAX);
+        let result = Resampler::new(consumer, 1, source_rate, 1, DEFAULT_MAX_OUTPUT_FRAMES);
+        match result {
+            Err(PlatformError::UnsupportedResampleRatio {
+                source_rate: got_source_rate,
+                device_rate: got_device_rate,
+            }) => {
+                assert_eq!(got_source_rate, source_rate);
+                assert_eq!(got_device_rate, 1);
+            }
+            // `Resampler` has no `Debug` impl (see its docs), so the failure
+            // case is spelled out by hand rather than via `{result:?}`.
+            Ok(_) => panic!(
+                "a rate ratio past the source cap must be refused with UnsupportedResampleRatio, \
+                 not constructed into a Resampler whose fill could extrapolate"
             ),
-            "a rate ratio past the source cap must be refused with UnsupportedResampleRatio, \
-             not constructed into a Resampler whose fill could extrapolate"
-        );
+            Err(other) => {
+                panic!("expected UnsupportedResampleRatio, got a different PlatformError: {other}")
+            }
+        }
+    }
+
+    #[test]
+    fn a_non_finite_negative_or_zero_source_rate_is_refused() {
+        // `source_rate` is an `f64` so the exact production cadence can be
+        // carried through (`crate::audio::AudioOutput::source_cadence_hz`),
+        // which also widens the input space to values a `u32` ruled out by
+        // construction. Every
+        // one of those must be refused: NaN or a negative `step` would
+        // poison `frac`'s `[0.0, 1.0)` invariant, and a zero `step` (`0.0` or
+        // `-0.0`, both refused by `<= 0.0`) would instead stick playback on
+        // the first primed frame forever while silently overrunning the ring
+        // it stops draining — see `Resampler::new`'s doc.
+        for source_rate in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            -1.0,
+            -0.0001,
+            0.0,
+            -0.0,
+        ] {
+            let (_producer, consumer) = ring_buffer(16);
+            let result =
+                Resampler::new(consumer, 1, source_rate, 48_000, DEFAULT_MAX_OUTPUT_FRAMES);
+            match result {
+                Err(PlatformError::UnsupportedResampleRatio { .. }) => {}
+                Ok(_) => panic!("source_rate {source_rate} must be refused, but constructed"),
+                Err(other) => panic!(
+                    "source_rate {source_rate}: expected UnsupportedResampleRatio, got: {other}"
+                ),
+            }
+        }
     }
 
     #[test]
@@ -505,10 +544,10 @@ mod tests {
         // still construct, and a real `fill()` against it must stay
         // memory-safe and finite, never indexing past `scratch`.
         #[expect(
-            clippy::cast_possible_truncation,
-            reason = "MAX_SCRATCH_SOURCE_FRAMES is far below u32::MAX"
+            clippy::cast_precision_loss,
+            reason = "MAX_SCRATCH_SOURCE_FRAMES is a small constant, exactly representable in f64"
         )]
-        let source_rate = MAX_SCRATCH_SOURCE_FRAMES as u32;
+        let source_rate = MAX_SCRATCH_SOURCE_FRAMES as f64;
         let (_producer, consumer) = ring_buffer(16);
         let mut resampler = Resampler::new(consumer, 1, source_rate, 1, DEFAULT_MAX_OUTPUT_FRAMES)
             .expect("a rate ratio exactly at the source cap must still construct");
@@ -533,7 +572,7 @@ mod tests {
         // source-frame cap, so construction succeeds.
         let huge_bound = usize::try_from(u32::MAX).unwrap();
         let (_producer, consumer) = ring_buffer(16);
-        let resampler = Resampler::new(consumer, 2, 13_379, 1, huge_bound).unwrap();
+        let resampler = Resampler::new(consumer, 2, 13_379.0, 1, huge_bound).unwrap();
         assert!(resampler.scratch.len() <= (MAX_SCRATCH_SOURCE_FRAMES + 4) * 2);
     }
 
@@ -555,7 +594,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(64);
         assert_eq!(producer_a.push(&source), 30);
-        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap).unwrap();
+        let mut capped = Resampler::new(consumer_a, 1, 1.0, 1, above_cap).unwrap();
         assert_eq!(capped.chunk_frames, DEFAULT_MAX_OUTPUT_FRAMES);
 
         let mut big_out = [0.0; 20];
@@ -563,7 +602,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(64);
         assert_eq!(producer_b.push(&source), 30);
-        let mut reference = Resampler::new(consumer_b, 1, 1, 1, 4).unwrap();
+        let mut reference = Resampler::new(consumer_b, 1, 1.0, 1, 4).unwrap();
         let mut small_out = [0.0; 20];
         for chunk in small_out.chunks_mut(4) {
             reference.fill(chunk);
@@ -585,7 +624,7 @@ mod tests {
 
         let (producer_a, consumer_a) = ring_buffer(source.len());
         assert_eq!(producer_a.push(&source), source.len());
-        let mut capped = Resampler::new(consumer_a, 1, 1, 1, above_cap).unwrap();
+        let mut capped = Resampler::new(consumer_a, 1, 1.0, 1, above_cap).unwrap();
         assert_eq!(capped.chunk_frames, DEFAULT_MAX_OUTPUT_FRAMES);
         let scratch_capacity = capped.scratch.len();
 
@@ -599,7 +638,7 @@ mod tests {
 
         let (producer_b, consumer_b) = ring_buffer(source.len());
         assert_eq!(producer_b.push(&source), source.len());
-        let mut reference = Resampler::new(consumer_b, 1, 1, 1, above_cap).unwrap();
+        let mut reference = Resampler::new(consumer_b, 1, 1.0, 1, above_cap).unwrap();
         let mut small_out = vec![0.0; frames];
         for chunk in small_out.chunks_mut(DEFAULT_MAX_OUTPUT_FRAMES) {
             reference.fill(chunk);
@@ -616,7 +655,7 @@ mod tests {
         // midpoint.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0]), 3);
-        let mut resampler = Resampler::new(consumer, 1, 1, 2, 16).unwrap();
+        let mut resampler = Resampler::new(consumer, 1, 1.0, 2, 16).unwrap();
 
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
@@ -634,7 +673,7 @@ mod tests {
         // source frame is emitted verbatim with no interpolation blending.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0, 30.0, 40.0]), 5);
-        let mut resampler = Resampler::new(consumer, 1, 2, 1, 16).unwrap();
+        let mut resampler = Resampler::new(consumer, 1, 2.0, 1, 16).unwrap();
 
         let mut out = [0.0; 2];
         resampler.fill(&mut out);
@@ -649,7 +688,7 @@ mod tests {
         let (producer, consumer) = ring_buffer(16);
         // Two stereo frames: (0, 100) and (10, 200).
         assert_eq!(producer.push(&[0.0, 100.0, 10.0, 200.0]), 4);
-        let mut resampler = Resampler::new(consumer, 2, 1, 2, 16).unwrap();
+        let mut resampler = Resampler::new(consumer, 2, 1.0, 2, 16).unwrap();
 
         let mut out = [0.0; 4]; // 2 stereo frames
         resampler.fill(&mut out);
@@ -667,7 +706,7 @@ mod tests {
         // (no silence blend) with underruns still 0.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0]), 2);
-        let mut resampler = Resampler::new(consumer, 1, 1, 2, 8).unwrap();
+        let mut resampler = Resampler::new(consumer, 1, 1.0, 2, 8).unwrap();
 
         let mut cb1 = [0.0; 2];
         resampler.fill(&mut cb1);
@@ -696,7 +735,7 @@ mod tests {
         // queued sample even though nothing was emitted.
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[7.0]), 1);
-        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16).unwrap();
+        let mut resampler = Resampler::new(consumer, 1, 100.0, 100, 16).unwrap();
 
         resampler.fill(&mut []);
         assert_eq!(producer.available_space(), 16 - 1);
@@ -730,7 +769,7 @@ mod tests {
         fn make() -> (Producer, Resampler) {
             let (producer, consumer) = ring_buffer(16);
             assert_eq!(producer.push(&[0.0, 10.0]), 2);
-            (producer, Resampler::new(consumer, 1, 1, 2, 8).unwrap())
+            (producer, Resampler::new(consumer, 1, 1.0, 2, 8).unwrap())
         }
 
         let (producer_a, mut baseline) = make();

@@ -347,10 +347,8 @@ fn release(hold: &mut Hold) {
 /// hold the way [`is_the_held_file`] does before [`StagedSave::release_hold`]
 /// runs, is what lets [`remove_through_verified_handle`] delete through the
 /// very handle it just verified instead of re-resolving `path` a second time
-/// for the delete itself (issue #1132; `windows-sys` approved for this
-/// purpose in
-/// <https://github.com/LunchBox951/pokeemerald-rs/issues/1132#issuecomment-5654427839>,
-/// extending <https://github.com/LunchBox951/pokeemerald-rs/issues/914#issuecomment-5602746955>).
+/// for the delete itself (issue #1132; approval trail in the dependency
+/// ledger, `README.md`).
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WindowsFileIdentity {

@@ -958,6 +958,52 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     );
 }
 
+/// `TRSEE_PLAYER_FACE_WAIT` (`trainer_see.c:531-539`,
+/// `ApproachStage::PlayerFaceWait`'s own docs): the turn frame is not the
+/// speech frame. Pack-independent: the box opening or the no-pack battle
+/// fallback starting are both "the speech has opened"
+/// (`advance_intro_message`'s own docs).
+#[test]
+fn the_speech_does_not_open_on_the_frame_the_player_is_turned() {
+    let (rx, ry) = RHETT_TILE;
+    // Adjacent already (`walk_tiles` 0), facing away, so the turn frame is
+    // unambiguous.
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::South));
+    seed_approach(&mut phase, 0);
+
+    let mut frames = 0;
+    while phase.player.facing() == Direction::South {
+        phase.step(ButtonState::new());
+        frames += 1;
+        assert!(frames < 200, "the trainer must eventually turn the player");
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "setup: this is the turning frame"
+    );
+    assert!(
+        phase.dialog.is_none() && !phase.is_sight_trainer_battle_active(),
+        "setup: the turning frame itself never opens the speech"
+    );
+
+    // `TRSEE_PLAYER_FACE_WAIT`.
+    phase.step(ButtonState::new());
+    assert!(
+        phase.dialog.is_none() && !phase.is_sight_trainer_battle_active(),
+        "the frame after the turn is upstream's `TRSEE_PLAYER_FACE_WAIT`, which only sets the \
+         task's followup func -- the intro speech cannot open until at least the frame after \
+         that (trainer_see.c:531-539)"
+    );
+
+    // The intro stage itself, the frame after that.
+    phase.step(ButtonState::new());
+    assert!(
+        phase.dialog.is_some() || phase.is_sight_trainer_battle_active(),
+        "the speech (or its no-pack battle fallback) must open on the frame after the wait"
+    );
+}
+
 /// `PlayerFaceApproachingTrainer`'s own guard (`trainer_see.c:522-523`): a
 /// step the player committed on the very frame the cone reached them (so
 /// [`engine::overworld::PlayerState::in_transit`] is still `true` when the
