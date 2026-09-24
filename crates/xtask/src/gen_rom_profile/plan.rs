@@ -354,9 +354,11 @@ pub struct SamplePlan {
 pub struct AudioPlan {
     /// `gSongTable`.
     pub song_table: u32,
-    /// Every song with a pack entry.
+    /// The one song `audio::locate` supports today (`MUS_TITLE`), kept as
+    /// a `Vec` because the emitter and the runtime importer already
+    /// iterate every song generically.
     pub songs: Vec<SongPlan>,
-    /// Every voicegroup reached from those songs.
+    /// Every voicegroup reached from that song.
     pub voicegroups: Vec<VoicegroupPlan>,
     /// Every key-split table those voicegroups use.
     pub keysplits: Vec<KeysplitPlan>,

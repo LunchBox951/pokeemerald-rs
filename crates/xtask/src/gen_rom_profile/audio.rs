@@ -26,6 +26,7 @@
 
 use std::path::Path;
 
+use crate::extract::midi::SONG_PACK_ID as SUPPORTED_SONG_ID;
 use crate::extract::voicegroups::parser::{RawSlot, RawVoiceGroup};
 use crate::extract::voicegroups::{index_voicegroup_sources, parser};
 
@@ -76,6 +77,8 @@ const PROGRAMMABLE_WAVE_SYMBOL: &str = "ProgrammableWaveData_";
 ///
 /// # Errors
 ///
+/// [`GenRomProfileError::StructMismatch`] if the pack's `audio/song/` ids
+/// are anything but `extract::midi`'s [`SUPPORTED_SONG_ID`],
 /// [`GenRomProfileError::MissingUpstreamCheckout`] without a `pokeemerald/`
 /// checkout, [`GenRomProfileError::UpstreamSource`] if one of its `sound/`
 /// files does not parse, plus any locator failure.
@@ -83,6 +86,22 @@ pub fn locate(
     ctx: &Context<'_>,
     report: &mut Vec<ReportLine>,
 ) -> Result<AudioPlan, GenRomProfileError> {
+    // Checked first, and before any of the ROM searches below: a pack built
+    // for a song this locator was never written for should fail on that
+    // fact, not on a coincidental missing-checkout or sample-search error.
+    // Every derivation past this point -- the title voicegroup, its
+    // children, and `gSongTable` -- is written around this one song, never
+    // a family of them.
+    let song_ids = ctx.pack.ids_with_prefix("audio/song/");
+    if song_ids.len() != 1 || song_ids[0] != SUPPORTED_SONG_ID {
+        return Err(GenRomProfileError::StructMismatch {
+            id: "audio/song/*".to_owned(),
+            reason: format!(
+                "only [\"{SUPPORTED_SONG_ID}\"] is supported, the pack holds {song_ids:?}"
+            ),
+        });
+    }
+
     if !ctx.upstream.join("sound").is_dir() {
         return Err(GenRomProfileError::MissingUpstreamCheckout(
             ctx.upstream.clone(),
@@ -98,47 +117,32 @@ pub fn locate(
         })?
         .groups_by_label;
 
-    let songs_with_groups = ctx.pack.ids_with_prefix("audio/song/");
-    let mut voicegroups = Vec::new();
-    let mut keysplits = Vec::new();
-    let mut songs = Vec::new();
-    let mut song_table = None;
+    let label = "title";
+    let group = groups
+        .get(label)
+        .ok_or_else(|| GenRomProfileError::UpstreamSource {
+            path: ctx.upstream.join("sound/voicegroups"),
+            reason: format!("no voicegroup declares the label `{label}`"),
+        })?;
+    let root = locate_voicegroup(ctx, label, group, &direct_sound, &programmable_wave)?;
+    let mut line = ReportLine::unique(format!("audio/voicegroup/{label}"), root, 0)
+        .with(Resolution::StructDerived)
+        .note(format!("{} slots declared", group.slots.len()));
+    line.symbol = voicegroup_symbol(label, group.starting_note);
+    report.push(line);
+    let mut voicegroups = vec![plan_for(label, root, group)];
 
-    for song_id in songs_with_groups {
-        let label = "title";
-        let group = groups
-            .get(label)
-            .ok_or_else(|| GenRomProfileError::UpstreamSource {
-                path: ctx.upstream.join("sound/voicegroups"),
-                reason: format!("no voicegroup declares the label `{label}`"),
-            })?;
-        let root = locate_voicegroup(ctx, label, group, &direct_sound, &programmable_wave)?;
-        let mut line = ReportLine::unique(format!("audio/voicegroup/{label}"), root, 0)
-            .with(Resolution::StructDerived)
-            .note(format!("{} slots declared", group.slots.len()));
-        line.symbol = voicegroup_symbol(label, group.starting_note);
-        report.push(line);
-        voicegroups.push(plan_for(label, root, group));
+    let (child_voicegroups, mut keysplits) = walk_children(ctx, root, group, &groups, report)?;
+    voicegroups.extend(child_voicegroups);
 
-        let children = walk_children(ctx, root, group, &groups, report)?;
-        voicegroups.extend(children.0);
-        keysplits.extend(children.1);
+    let (song, song_table) = locate_song(ctx, SUPPORTED_SONG_ID, root, report)?;
 
-        let (song, table) = locate_song(ctx, &song_id, root, report)?;
-        songs.push(song);
-        song_table = Some(table);
-    }
-
-    let song_table = song_table.ok_or_else(|| GenRomProfileError::StructMismatch {
-        id: "gSongTable".to_owned(),
-        reason: "the pack holds no song, so nothing locates the table".to_owned(),
-    })?;
     keysplits.sort_by(|a, b| a.label.cmp(&b.label));
     voicegroups.sort_by(|a, b| a.label.cmp(&b.label));
 
     Ok(AudioPlan {
         song_table,
-        songs,
+        songs: vec![song],
         voicegroups,
         keysplits,
         direct_sound,

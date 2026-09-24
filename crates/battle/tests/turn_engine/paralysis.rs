@@ -14,9 +14,7 @@ use crate::common::{
     max_iv_mon, max_iv_mon_with_personality, SequenceRng, MAX_IVS, SECONDARY_ABILITY_PERSONALITY,
 };
 use assets::{MoveId, SpeciesId};
-use battle::{
-    Battle, BattleError, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE,
-};
+use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE};
 
 /// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
@@ -697,59 +695,110 @@ fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
 
 /// `SPECIES_SEVIPER`: Poison, Shed Skin in its primary ability slot.
 const SEVIPER: u16 = 379;
+/// `SPECIES_ABRA`: Psychic, raw Speed 15 at level 5 -- faster than
+/// [`SEVIPER`]'s 13, so the player's Thunder Wave resolves first with no
+/// speed-tie draw.
+const ABRA: u16 = 63;
 
-/// Shed Skin rolls a one-in-three cure every end of turn while its holder is
-/// statused (`src/battle_util.c:2620`-`:2621`), a draw this engine's residual
-/// pass does not make — so the paralysis that would start those rolls is
-/// refused, before the turn's first draw.
+/// Shed Skin's end-turn cure draw lives in `Battle::residual_effects`
+/// instead of the pre-turn admission screen, so a fresh paralysis on a Shed
+/// Skin holder is applied like any other, and that same end-turn pass then
+/// rolls its own cure chance for the newly statused holder
+/// (`src/battle_util.c:2620`-`:2621`).
 #[test]
-fn a_shed_skin_defender_refuses_the_pick_before_any_draw_or_pp_spend() {
+fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let player = max_iv_mon(&dex, ABRA, 5, vec![THUNDER_WAVE]);
     let enemy = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
-    let mut rng = SequenceRng::new([0; 16]);
-    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let pp_before = battle.player().moves()[0].pp;
-    let draws_before = rng.draws();
+    assert_eq!(enemy.ability(), assets::AbilityId::SHED_SKIN);
 
-    let rejected = battle
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw), the enemy's
+    // own full-paralysis draw against the status the player's move just
+    // wrote (residue 0 -> cancelled), then that same battler's end-turn
+    // Shed Skin draw (residue 1 -> miss, the status survives the turn).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
+        .expect("Shed Skin's cure draw lives in the residual pass, so the pick is admitted");
 
     assert_eq!(
-        rejected.error(),
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+        events[0],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
     );
-    assert!(rejected.events().is_empty());
-    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
-    assert_eq!(battle.player().moves()[0].pp, pp_before, "no PP is spent");
-    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::ShedSkinCured { .. })),
+        "the scripted miss must leave the status uncured this turn: {events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
+    );
 }
 
-/// `src/battle_util.c:2620`-`:2621`: Shed Skin's end-turn cure roll is a draw
-/// this engine's residual pass does not make, so an attacker the reflection
-/// would newly paralyse is refused just like a direct-hit Shed Skin defender.
+/// Shed Skin admits a Synchronize reflection just like a direct hit: the
+/// end-turn cure draw that used to justify refusing both now runs from the
+/// residual pass instead.
 #[test]
-fn a_shed_skin_attacker_refuses_a_synchronize_target_before_any_draw() {
+fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, SEVIPER, 5, vec![THUNDER_WAVE]);
     assert_eq!(player.ability(), assets::AbilityId::SHED_SKIN);
     let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
     assert_eq!(enemy.ability(), assets::AbilityId::SYNCHRONIZE);
-    let mut rng = SequenceRng::new([0; 16]);
-    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
-    let draws_before = rng.draws();
 
-    let rejected = battle
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the
+    // reflection itself draws nothing), the enemy's own full-paralysis draw
+    // against its own Tackle now that the reflection paralysed it too
+    // (residue 0 -> cancelled), then the player's own end-turn Shed Skin
+    // draw against the status the reflection just wrote (residue 1 -> miss).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .expect_err("the reflection would paralyse a Shed Skin holder");
+        .expect("Synchronize is admitted: the reflection is modelled");
 
     assert_eq!(
-        rejected.error(),
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "{events:?}"
     );
-    assert_eq!(rng.draws(), draws_before, "a refused pick draws nothing");
-    assert_eq!(battle.player().status1(), Status1::Healthy);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "Synchronize passes the paralysis back to the Shed Skin attacker, \
+         and the scripted miss leaves it uncured this turn"
+    );
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
+    );
 }
 
 /// A spent slot never reaches `seteffectprimary` — `Cmd_attackcanceler` aborts
@@ -864,46 +913,4 @@ fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
         "{events:?}"
     );
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
-}
-
-/// A non-fainted player reserve is checked against the enemy's moveset
-/// before the battle starts, exactly like the active member: it may become
-/// the enemy's defender with no further checkpoint once sent out, so a
-/// Shed Skin reserve reachable by an admitted enemy Thunder Wave must
-/// refuse construction up front instead of reaching an unsupported ability
-/// interaction mid-turn.
-#[test]
-fn an_enemy_move_is_refused_against_a_shed_skin_reserve_before_the_battle_starts() {
-    let dex = Dex::new();
-    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
-    let reserve = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
-    assert_eq!(reserve.ability(), assets::AbilityId::SHED_SKIN);
-    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, THUNDER_WAVE]);
-    let mut rng = SequenceRng::new([0; 32]);
-    let rejected =
-        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
-            .expect_err("Thunder Wave can only ever paralyse the Shed Skin reserve");
-    assert_eq!(
-        rejected,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN)
-    );
-    assert_eq!(rng.draws(), 0, "a refused battle draws nothing");
-}
-
-/// A fainted reserve can never be sent out
-/// (`Battle::send_out_next_player_reserve` skips every fainted entry), so it
-/// models a player party that already lost a member before the battle and
-/// must not refuse construction over an enemy move it will never face.
-#[test]
-fn a_fainted_shed_skin_reserve_does_not_refuse_an_enemy_thunder_wave() {
-    let dex = Dex::new();
-    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
-    let mut reserve = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
-    assert_eq!(reserve.ability(), assets::AbilityId::SHED_SKIN);
-    reserve.apply_damage(reserve.stats().max_hp);
-    assert!(reserve.is_fainted());
-    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, THUNDER_WAVE]);
-    let mut rng = SequenceRng::new([0; 32]);
-    Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
-        .expect("a fainted reserve can never be sent out, so it is never validated as a defender");
 }

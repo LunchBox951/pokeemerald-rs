@@ -28,7 +28,7 @@ use crate::paralyze;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, poison_residual_damage};
+use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -257,7 +257,6 @@ impl Battle {
                         .iter()
                         .filter(|reserve| !reserve.is_fainted()),
                 ) {
-                    paralyze::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
                     secondary::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
                 }
             }
@@ -316,7 +315,6 @@ impl Battle {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
                 if slot.pp > 0 {
-                    paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                     secondary::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                 }
             }
@@ -405,7 +403,9 @@ impl Battle {
     ///
     /// Another prompt may follow immediately. Resolving the final prompt also
     /// releases any deferred replacement, prize money, and battle outcome, and
-    /// then runs the residual pass the prompt held back.
+    /// then runs the residual pass the prompt held back — `rng` feeds that
+    /// released pass, at the stream position it would have drawn from had no
+    /// prompt deferred it.
     ///
     /// # Errors
     ///
@@ -418,6 +418,7 @@ impl Battle {
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
+        rng: &mut impl BattleRng,
     ) -> Result<Vec<BattleEvent>, BattleError> {
         let asked_move = self
             .player
@@ -452,7 +453,7 @@ impl Battle {
                 // deferring that pass to this later call
                 // (`pokeemerald/src/battle_util.c:658`-`:671`).
                 self.last_move_used = MOVE_NONE;
-                self.residual_effects(order, &mut events);
+                self.residual_effects(order, &mut events, rng);
                 self.handle_fainted_mons(&mut events)?;
             }
         }
@@ -488,9 +489,20 @@ impl Battle {
             return Err(BattleError::NoPpRemaining(index));
         }
         ensure_executable(&self.dex, slot.move_id)?;
-        paralyze::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         secondary::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         Ok(slot.move_id)
+    }
+
+    /// Re-screens the enemy's moveset with [`secondary::ensure_admissible`],
+    /// the same PP gate construction used, against the current battlers
+    /// rather than the ones construction saw; see the crate root docs for why.
+    fn revalidate_enemy_admission(&self) -> Result<(), BattleError> {
+        for slot in self.enemy.moves() {
+            if slot.pp > 0 {
+                secondary::ensure_admissible(&self.dex, slot.move_id, &self.enemy, &self.player)?;
+            }
+        }
+        Ok(())
     }
 
     /// Resolves one player action and returns the resulting events in order.
@@ -522,6 +534,7 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let player_action = self.validate_player_action(player_action)?;
+        self.revalidate_enemy_admission()?;
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
@@ -540,7 +553,7 @@ impl Battle {
             }
         };
 
-        self.pass_turn(order, events)
+        self.pass_turn(order, events, rng)
     }
 
     fn validate_player_action(
@@ -705,6 +718,7 @@ impl Battle {
         &mut self,
         order: Order,
         events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
     ) -> Result<(), BattleError> {
         // Upstream reaches `HandleFaintedMonActions` twice a turn: from each
         // action's own `Cmd_end`, and again behind `BattleTurnPassed`'s
@@ -717,17 +731,24 @@ impl Battle {
         // Upstream zeroes `gCurrentMove` as each action closes, before the
         // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
         self.last_move_used = MOVE_NONE;
-        self.residual_effects(order, events);
+        self.residual_effects(order, events, rng);
         self.handle_fainted_mons(events)
     }
 
-    fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
+    fn residual_effects(
+        &mut self,
+        order: Order,
+        events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
+    ) {
         if self.outcome.is_some() {
             return;
         }
         // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
-        // own move order -- and reaches ENDTURN_POISON before ENDTURN_CHARGE
-        // within each battler's pass (`src/battle_util.c:1442`-`:1474`).
+        // own move order -- and within each battler's pass reaches
+        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
+        // ENDTURN_POISON before ENDTURN_CHARGE
+        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -738,6 +759,7 @@ impl Battle {
             if already_fainted {
                 continue;
             }
+            self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_poison_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
@@ -770,6 +792,35 @@ impl Battle {
             BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
             BattleKind::Wild | BattleKind::FirstBattle => true,
         }
+    }
+
+    /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_SHED_SKIN` case: a living battler
+    /// whose ability is Shed Skin draws to cure its own primary status
+    /// (`pokeemerald/src/battle_util.c:2601`-`:2602`, `:2620`-`:2640`).
+    fn apply_shed_skin_residual(
+        &mut self,
+        is_player: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || battler.ability() != AbilityId::SHED_SKIN {
+            return;
+        }
+        let status = battler.status1();
+        if !draws_shed_skin_cure(status, rng) {
+            return;
+        }
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        target.set_status1(Status1::Healthy);
+        events.push(BattleEvent::ShedSkinCured {
+            by_player: is_player,
+            status,
+        });
     }
 
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
