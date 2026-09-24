@@ -12,7 +12,7 @@ use crate::common::{
 };
 use assets::{AbilityId, MoveId};
 use battle::status1::poison_residual_damage;
-use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
+use battle::{Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, Status1};
 
 /// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
@@ -29,6 +29,9 @@ const EKANS: u16 = 23;
 /// `SPECIES_ABRA`: faster than [`slow_runner_rattata`]'s Rattata, so a run
 /// is never automatic, and too weak to end the battle before its residuals.
 const ABRA: u16 = 63;
+/// Level-5 Ralts carries Synchronize, the defender-side ability
+/// `secondary::ensure_admissible` refuses against a poisoning move.
+const RALTS: u16 = 392;
 
 /// `SPECIES_MAKUHITA`: Fighting-type, Guts in ability slot 1 (Thick Fat is
 /// slot 0), slower than [`MILOTIC`].
@@ -747,4 +750,46 @@ fn poison_sting_newly_poisons_a_marvel_scale_defender_who_then_takes_less_damage
         "the poisoned Marvel Scale holder's raw Defense must be raised \
          150% against the player's Tackle: {turn_two:?}"
     );
+}
+
+/// A non-fainted player reserve is checked against the enemy's moveset
+/// before the battle starts, exactly like the active member: it may become
+/// the enemy's defender with no further checkpoint once sent out, so a
+/// Synchronize reserve reachable by an admitted enemy Poison Sting must
+/// refuse construction up front instead of reaching an unsupported ability
+/// interaction mid-turn.
+#[test]
+fn an_enemy_move_is_refused_against_a_synchronize_reserve_before_the_battle_starts() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let reserve = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(reserve.ability(), AbilityId::SYNCHRONIZE);
+    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
+    let mut rng = SequenceRng::new([0; 32]);
+    let rejected =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .expect_err("Poison Sting can newly poison the Synchronize reserve");
+    assert_eq!(
+        rejected,
+        BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE)
+    );
+    assert_eq!(rng.draws(), 0, "a refused battle draws nothing");
+}
+
+/// A fainted reserve can never be sent out
+/// (`Battle::send_out_next_player_reserve` skips every fainted entry), so it
+/// models a player party that already lost a member before the battle and
+/// must not refuse construction over an enemy move it will never face.
+#[test]
+fn a_fainted_synchronize_reserve_does_not_refuse_an_enemy_poison_sting() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut reserve = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(reserve.ability(), AbilityId::SYNCHRONIZE);
+    reserve.apply_damage(reserve.stats().max_hp);
+    assert!(reserve.is_fainted());
+    let enemy = max_iv_mon(&dex, EKANS, 50, vec![TACKLE, POISON_STING]);
+    let mut rng = SequenceRng::new([0; 32]);
+    Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+        .expect("a fainted reserve can never be sent out, so it is never validated as a defender");
 }
