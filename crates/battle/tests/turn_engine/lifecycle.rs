@@ -274,7 +274,7 @@ fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
     assert_eq!(battle.player().level(), 16);
 
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Decline)
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,

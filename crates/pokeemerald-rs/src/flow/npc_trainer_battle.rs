@@ -318,7 +318,7 @@ pub fn advance_npc_trainer_battle(
             true
         }
     };
-    credit_reward_events(money, settle_move_learn_prompts(battle));
+    credit_reward_events(money, settle_move_learn_prompts(battle, rng));
     finalize_battle_turn(battle_slot, turn_failed, player_lead)
 }
 
