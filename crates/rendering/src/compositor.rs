@@ -264,7 +264,11 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
-type Candidate = (OrderKey, Rgb888, LayerKind, bool);
+/// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
+/// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
+/// `semi_transparent`/`color_semi_transparent` split and are always `false`
+/// for a BG candidate.
+type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
@@ -351,10 +355,8 @@ pub fn compose_frame_with_effects(
 ) -> Framebuffer {
     // mgba's global "any target2" signal (software-obj.c:181-185): the
     // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
-    // A forced-alpha OBJ that fails to blend against its immediate neighbor
-    // keeps its brighten/darken variant only when this is false (see
-    // effects::resolve_pixel_color). It is a per-frame constant, so compute it
-    // once rather than per pixel.
+    // See effects::resolve_pixel_color's docs for what this drives. It is a
+    // per-frame constant, so compute it once rather than per pixel.
     let any_target2 = effects.color.target2.backdrop
         || bg_slots.iter().any(|slot| {
             slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
@@ -461,6 +463,16 @@ fn compose_pixel(
     // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
     let span_backdrop =
         effects::backdrop_variant(&effects.color, partition_control.effects, effects.backdrop);
+    // mGBA's `objwinSlowPath` (`effects::resolve_pixel_color`'s docs):
+    // `OBJWIN`'s own blend-enable bit compared against this pixel's static
+    // span, not the OBJWIN-mask-resolved `window` below -- sprites are only
+    // ever preprocessed against a `WIN0`/`WIN1`/`WINOUT` span
+    // (`mgba/src/gba/renderers/video-software.c:1052-1055`)
+    // `(behavioral-fidelity)`.
+    let objwin_slow_path = effects
+        .windows
+        .obj_window
+        .is_some_and(|enable| enable.effects != partition_control.effects);
 
     let mut front = None;
     let mut next = None;
@@ -480,6 +492,7 @@ fn compose_pixel(
                     pixel.color,
                     LayerKind::Obj,
                     pixel.semi_transparent,
+                    pixel.color_semi_transparent,
                 ),
             );
         }
@@ -509,22 +522,34 @@ fn compose_pixel(
                 color,
                 LayerKind::Bg(slot.bg_index),
                 false,
+                false,
             ),
         );
     }
 
-    let Some((_, front_color, front_kind, front_semi_transparent)) = front else {
+    let Some((_, front_color, front_kind, front_semi_transparent, front_color_semi_transparent)) =
+        front
+    else {
         // Nothing drawn: the backdrop itself is shown, already resolved to
         // its span variant (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
         return span_backdrop;
     };
-    let next = next.map(|(_, color, kind, _)| (color, kind));
+    let next = next.map(|(_, color, kind, _, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
-        window.effects,
+        effects::PixelWindowEffects {
+            enabled: window.effects,
+            static_span_enabled: partition_control.effects,
+            objwin_slow_path,
+        },
         any_target2,
-        (front_color, front_kind, front_semi_transparent),
+        (
+            front_color,
+            front_kind,
+            front_semi_transparent,
+            front_color_semi_transparent,
+        ),
         next,
         span_backdrop,
     )
@@ -2105,14 +2130,108 @@ mod tests {
     }
 
     #[test]
-    fn semi_transparent_obj_variant_dropped_by_a_deeper_enabled_target2_bg() {
-        // Finding 3 end-to-end: a semi-transparent OBJ (forced alpha) that is a
-        // BLDCNT first target under BRIGHTEN sits over BG_a (priority 1, its
-        // immediate neighbour, NOT a target2) with BG_b (priority 2, a target2)
-        // enabled deeper in the frame. Because *some* target2 exists globally,
-        // mgba clears the brighten variant and the OBJ shows its raw (black)
-        // color. The control clears BG_b's target2 bit -> no target2 anywhere
-        // -> the OBJ is brightened to white.
+    fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
+        // A transparent, better-priority semi-transparent OBJ promotes
+        // priority over an already
+        // variant-brightened worse-priority Normal OBJ without replacing its
+        // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
+        // that worse-priority Normal OBJ's own draw-time variant into its
+        // stored color (`software-obj.c:177-203`), keeps that color through
+        // the promoting entry's flag-only overwrite (`software-obj.c:120-126`),
+        // and brightens the surviving pixel again in the reblend postpass
+        // (`video-software.c:982-1013`) -- a double brighten this crate must
+        // reproduce.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(1); // BG0: priority 1, not target2
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(2); // BG1: priority 2, target2
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true),
+            BgSlot::new(layer_b, 1, 2, 0, 0, true),
+        ];
+
+        // Tile 0: opaque everywhere at palette index 15 (the worse-priority
+        // Normal OBJ). Tile 1: fully transparent (the better-priority
+        // semi-transparent OBJ, transparent at (0, 0)).
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].fill(0xFF);
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(8, 4, 2);
+        let sprite_palette = Palette::new(sprite_colors);
+        let worse_priority_opaque_normal = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2, // worse priority
+            true,
+        );
+        let better_priority_transparent_semi = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0, // better priority
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent);
+        let entries = [
+            worse_priority_opaque_normal,
+            better_priority_transparent_semi,
+        ];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [false; 4],
+                    obj: true,
+                    backdrop: false,
+                },
+                target2: LayerTargets {
+                    bg: [false, true, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 8,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Rgb888 {
+                r: 207,
+                g: 199,
+                b: 195,
+            }),
+            "the retained Normal OBJ variant color is brightened again by the reblend postpass"
+        );
+    }
+
+    #[test]
+    fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
+        // End-to-end: a semi-transparent OBJ (forced alpha) sits over BG_a
+        // (priority 1, its immediate neighbour, NOT a target2) with BG_b
+        // (priority 2, a target2) enabled deeper in the frame. See
+        // effects::resolve_pixel_color's contract for why a global target2
+        // still brightens this surviving pixel. The control drops BG_b's
+        // target2 bit -> no target2 anywhere -> brightened either way.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -2166,8 +2285,8 @@ mod tests {
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
         assert_eq!(
             fb.pixel(0, 0),
-            Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
-            "a deeper enabled target2 BG clears the variant -> raw (black) OBJ"
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "a deeper enabled target2 BG clears the variant, but the surviving reblend OBJ is postprocessed to white"
         );
 
         // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
@@ -2524,6 +2643,91 @@ mod tests {
             fb.pixel(5, 0),
             Some(white),
             "the OBJWIN mask must not re-select the backdrop variant"
+        );
+    }
+
+    #[test]
+    fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
+        // End-to-end version of effects::resolve_pixel_color's
+        // `objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer`
+        // unit test: OBJWIN enabled with a blend-enable bit that differs
+        // from WINOUT's own is mGBA's `objwinSlowPath`
+        // (`mgba/src/gba/renderers/software-obj.c:176,180-192`), and it
+        // reblends a plain Normal-mode OBJ even though BLDCNT never marks it
+        // as a target1 layer.
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )]; // Normal mode (default), never a target1 OBJ below
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let mut winout = WindowLayerEnable::NONE;
+        winout.obj = true;
+        winout.effects = true;
+
+        let color = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: LayerTargets::default(), // deliberately excludes LayerKind::Obj
+            target2: LayerTargets {
+                bg: [false; 4],
+                obj: false,
+                backdrop: true,
+            },
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        };
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE), // OBJWIN blend bit off, WINOUT's is on
+                winout,
+            },
+            color,
+            backdrop: Rgb888::BLACK,
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Rgb888::BLACK),
+            "objwin_slow_path reblends the Normal OBJ even though it is not a target1 layer"
+        );
+
+        // Control: OBJWIN's own blend-enable bit now matches WINOUT's, so
+        // objwin_slow_path is false -- the non-target1 Normal OBJ is never a
+        // reblend candidate and stays raw white.
+        let mut matched_obj_window = WindowLayerEnable::NONE;
+        matched_obj_window.effects = true;
+        let control_effects = FrameEffects {
+            windows: WindowConfig {
+                obj_window: Some(matched_obj_window),
+                ..effects.windows
+            },
+            ..effects
+        };
+        let control_fb = compose_frame_with_effects(&sprites, &[], &control_effects);
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(white),
+            "without objwin_slow_path, a non-target1 Normal OBJ is never reblended"
         );
     }
 
