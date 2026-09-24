@@ -779,15 +779,10 @@ struct CreatedDirectory {
     /// signedness differ across Unixes this ships to (`i32` on macOS, `u64`
     /// on Linux).
     identity: rustix::fs::Stat,
-    /// This level itself, held open for as long as the record lives. A
-    /// device and inode pair only names one directory while that inode is
-    /// allocated: once another account removes an empty level, a
-    /// filesystem such as ext4 or XFS readily hands the same inode number to
-    /// the next directory made at that name. An open descriptor keeps this
-    /// level's inode allocated even after its name is gone, so no
-    /// replacement can carry its number. `None` only when the reopen right
-    /// after `mkdirat` failed; cleanup then leaves that level standing
-    /// (module docs).
+    /// This level itself, held open for as long as the record lives so its
+    /// inode stays allocated and no replacement can carry its number
+    /// (module docs). `None` only when the reopen right after `mkdirat`
+    /// failed; cleanup then leaves that level standing.
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
@@ -824,18 +819,14 @@ struct CreatedDirectory {
 ///
 /// Opening a directory to hold as `mkdirat`'s target needs no more than a
 /// plain path-based `mkdir` already needed from it -- write and search --
-/// on Linux, Android, FreeBSD (`O_PATH`), and macOS 13 and later
-/// (POSIX's own `O_SEARCH`; see `dest::open_traversal_directory`'s own
-/// docs for where that comes from, why it is not Linux's `O_PATH` again
-/// under another name, and why an older Apple kernel still opens for
-/// read, tracked as #1312). Every other non-Linux Unix this builds for
-/// still reopens for real, read-mode access -- unverified against any of
-/// those platforms' own documentation here -- and does need read
-/// permission on it, the same requirement [`Dest::open`] always has for
-/// the final destination directory itself, which really is read for
-/// `fsync`, not merely traversed. A level this run creates is unaffected
-/// either way: it is made at the ordinary default mode, not reopened
-/// read-restricted.
+/// on Linux, Android, FreeBSD (`O_PATH`), and macOS 13 and later (POSIX's
+/// own `O_SEARCH`; `dest::open_traversal_directory` documents each
+/// platform's open). Every other Unix this builds for reopens for real,
+/// read-mode access and does need read permission on it, the same
+/// requirement [`Dest::open`] always has for the final destination
+/// directory itself, which really is read for `fsync`, not merely
+/// traversed. A level this run creates is unaffected either way: it is
+/// made at the ordinary default mode, not reopened read-restricted.
 #[cfg(unix)]
 fn create_directories(
     dir: &Path,
@@ -843,20 +834,15 @@ fn create_directories(
     create_directories_with_hooks(dir, &mut || {}, &mut || None)
 }
 
-/// [`create_directories`]'s real body on Unix, taking two test-only seams
-/// instead of reaching for a thread-local (global mutable state, against
-/// `crates/README.md`'s "Do not introduce global mutable state"). Both
-/// hooks are no-ops in production; [`create_directories`] is the only
-/// caller outside a test and passes exactly that pair.
+/// [`create_directories`]'s body on Unix, with two seams a test injects
+/// and production leaves as no-ops:
 ///
 /// - `before_dotdot` runs the instant before a `..` level is resolved --
 ///   after every level ahead of it is made and pinned, the one point a
-///   test can land a swap that matters, with no second thread to schedule.
+///   swap can land that matters.
 /// - `force_reopen_failure` replaces the reopen issued right after a
-///   successful `mkdirat` whenever it answers `Some`, so a test can force
-///   the "reopen failed" branch deterministically instead of exhausting
-///   the real descriptor table (`ulimit -n`). `None` defers to the real
-///   reopen.
+///   successful `mkdirat` whenever it answers `Some`, forcing the "reopen
+///   failed" branch. `None` defers to the real reopen.
 #[cfg(unix)]
 fn create_directories_with_hooks(
     dir: &Path,
@@ -1055,20 +1041,13 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// run's to take.
 ///
 /// On Unix, "this run created" is asked of the pinned parent, not of the
-/// path: a rollback can run an arbitrary interval after the create (module
-/// docs), so `dir.name` is looked up in `dir.parent` and compared against
-/// the device and inode `create_directories` captured, without following a
-/// final symlink -- and against the level's own held descriptor's `fstat`,
-/// whose inode cannot have been freed and reissued to a replacement; a
-/// level with no held descriptor is never removed. Only a match at that
-/// lookup is removed, by the same name, through `unlinkat` -- which is why
-/// holding the descriptor open does not by itself prevent the removal:
-/// `unlinkat` takes a parent and a name, never a descriptor to the entry
-/// itself, so it re-resolves that name at the instant it runs. A name that
-/// resolves to something else *at the lookup* is left standing as harmless
-/// litter rather than taken on the strength of its spelling alone; module
-/// docs spell out how narrow the gap between that lookup and the
-/// `unlinkat` really is, and why nothing here closes it further.
+/// path: `dir.name` is looked up in `dir.parent`, without following a
+/// final symlink, and compared against the identity `create_directories`
+/// captured and against the level's own held descriptor's `fstat`; a level
+/// with no held descriptor is never removed. Only a match at that lookup
+/// is removed, by name, through `unlinkat`. The module docs own why the
+/// held descriptor makes that comparison trustworthy, why `unlinkat`
+/// re-resolves the name regardless, and how narrow the remaining gap is.
 #[cfg(unix)]
 fn undo_created_directories(created: &[CreatedDirectory]) {
     let same =
