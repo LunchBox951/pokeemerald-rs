@@ -350,12 +350,18 @@ fn serene_grace_poison_sting_after_a_shed_skin_cure_is_not_silently_undoubled() 
     );
     assert_eq!(battle.player().status1(), Status1::Healthy);
 
+    let draws_before_rejected_turn = rng.draws();
     let turn_error = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .expect_err(
             "the cure must make the next turn re-screen Poison Sting, not silently reuse \
              construction's now-stale admission",
         );
+    assert_eq!(
+        rng.draws(),
+        draws_before_rejected_turn,
+        "a pre-turn admission rejection consumes no RNG"
+    );
     assert_eq!(
         turn_error.error(),
         BattleError::UnportedAbilityInteraction(assets::AbilityId::SERENE_GRACE)
