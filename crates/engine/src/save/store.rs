@@ -295,8 +295,14 @@ struct SlotSurvey {
     head_is_identity: bool,
     tail_signature_seen: bool,
     tail_all_recognized_valid: bool,
-    tail_counter: Option<u32>,
-    tail_consistent: bool,
+    /// The footer counter of each checksum-valid tail sector, in position
+    /// order; only the first `tail_valid_count` entries are meaningful.
+    tail_counters: [u32; PKMN_STORAGE_CHUNKS],
+    tail_valid_count: usize,
+    /// The rotation every checksum-valid tail sector's id/position pairing
+    /// implies, while they all imply the same one.
+    tail_rotation: Option<usize>,
+    tail_rotation_coherent: bool,
     tail_matches_predecessor_of_identity_head: bool,
     storage_valid_ids: u32,
     /// The footer counter of each checksum-valid storage id (5-13), indexed
@@ -317,8 +323,10 @@ impl SlotSurvey {
             head_is_identity: true,
             tail_signature_seen: false,
             tail_all_recognized_valid: true,
-            tail_counter: None,
-            tail_consistent: true,
+            tail_counters: [0; PKMN_STORAGE_CHUNKS],
+            tail_valid_count: 0,
+            tail_rotation: None,
+            tail_rotation_coherent: true,
             tail_matches_predecessor_of_identity_head: true,
             storage_valid_ids: 0,
             storage_counters: [0; PKMN_STORAGE_CHUNKS],
@@ -365,10 +373,14 @@ impl SlotSurvey {
             self.storage_counters[usize::from(id - SECTOR_ID_PKMN_STORAGE_START)] = counter;
         }
         if in_tail {
-            match self.tail_counter {
-                None => self.tail_counter = Some(counter),
-                Some(c) if c == counter => {}
-                Some(_) => self.tail_consistent = false,
+            self.tail_counters[self.tail_valid_count] = counter;
+            self.tail_valid_count += 1;
+            let rotation = (i + NUM_SECTORS_PER_SLOT - usize::from(id) % NUM_SECTORS_PER_SLOT)
+                % NUM_SECTORS_PER_SLOT;
+            match self.tail_rotation {
+                None => self.tail_rotation = Some(rotation),
+                Some(r) if r == rotation => {}
+                Some(_) => self.tail_rotation_coherent = false,
             }
             // A torn rotation-0 write also leaves its predecessor
             // generation (rotation 12) at this exact id/position pairing.
@@ -411,7 +423,31 @@ impl SlotSurvey {
         })
     }
 
+    /// The generation a stale tail belongs to: one full generation's
+    /// layout (every valid sector implying the same rotation) whose
+    /// counters all agree but for at most one outlier.
+    ///
+    /// As with [`Self::storage_generation`], the counter is an
+    /// unchecksummed footer, so one damaged counter in data the slot never
+    /// loads as progress must not reject the legacy head in front of it.
+    /// Rotation coherence keeps a real torn write out: the tail sectors a
+    /// torn write at rotation zero lays down beyond position 4 carry ids at
+    /// that rotation, while the older generation it failed to finish
+    /// overwriting sits two rotations behind, so their mix never shares one
+    /// rotation. The head itself stays unanimous.
+    fn tail_generation(&self) -> Option<u32> {
+        if !self.tail_rotation_coherent {
+            return None;
+        }
+        let counters = &self.tail_counters[..self.tail_valid_count];
+        counters.iter().copied().find(|&candidate| {
+            let agreeing = counters.iter().filter(|&&c| c == candidate).count();
+            agreeing + 1 >= counters.len() && 2 * agreeing > counters.len()
+        })
+    }
+
     fn verdict(&self) -> SlotScan {
+        let tail_counter = self.tail_generation();
         // Same-slot generations sit exactly 2 counters and 2 rotations
         // apart, so this is indistinguishable from a real write torn after 5
         // sectors; upstream reports that shape Error, never Ok.
@@ -419,15 +455,15 @@ impl SlotSurvey {
             && self.tail_matches_predecessor_of_identity_head
             && self
                 .legacy_counter
-                .zip(self.tail_counter)
+                .zip(tail_counter)
                 .is_some_and(|(legacy, tail)| legacy == tail.wrapping_add(2));
 
         let stale_tail_is_donor_only = self.tail_signature_seen
             && self.tail_all_recognized_valid
-            && self.tail_consistent
+            && tail_counter.is_some()
             && self
                 .legacy_counter
-                .zip(self.tail_counter)
+                .zip(tail_counter)
                 .is_some_and(|(legacy, tail)| older_generation_precedes(tail, legacy))
             && !ambiguous_with_a_torn_full_write;
 
@@ -2589,5 +2625,171 @@ mod tests {
         // A tail that is actually the *newer* side of the same wrap must
         // never be read as older just because its raw value is smaller.
         assert!(!older_generation_precedes(0, u32::MAX - 1));
+    }
+
+    /// An identity legacy head over the rotation-13 remnant an imported
+    /// image leaves in slot 1: one bit of one stale tail sector's
+    /// unchecksummed counter footer is flash damage in data the slot never
+    /// loads as progress, and must not cost the player the legacy
+    /// generation they just saved.
+    #[test]
+    fn an_identity_legacy_head_survives_one_damaged_stale_tail_counter() {
+        let block2 = sample_block2();
+        let legacy_block1 = SaveBlock1 {
+            money: 15,
+            ..sample_block1()
+        };
+
+        let mut store = SaveStore::new();
+        for _ in 0..12 {
+            store.save(&sample_block1(), &block2);
+        }
+        store.save(&sample_block1(), &block2);
+        store.save(&sample_block1(), &block2);
+        assert_eq!(store.save_counter(), 14);
+
+        write_legacy_slot(&mut store, 1, &legacy_block1, &block2, 15);
+        // The counter's high byte of the tail sector at position 7: footer
+        // only, so its checksum still holds.
+        store.corrupt_byte(1, 7, SECTOR_SIZE - 1);
+        assert!(store.read_physical(1, 7).is_valid(SECTOR_DATA_SIZE));
+
+        let outcome = store.load();
+        assert_eq!(
+            outcome.status,
+            SaveStatus::Ok,
+            "one outlier counter in a stale tail must not reject the legacy head"
+        );
+        assert_eq!(store.save_counter(), 15);
+        assert_eq!(
+            outcome.block1.money, legacy_block1.money,
+            "reverting to the older counter-14 slot would undo the legacy session"
+        );
+    }
+
+    /// The same damage over a complete rotation-zero tail: every id then
+    /// validates, so without the consensus the slot falls through to the
+    /// full-format path under the tail's own older counter, and the other
+    /// slot's older legacy generation wins under a still-reported `Ok`.
+    #[test]
+    fn an_identity_legacy_head_over_a_complete_tail_keeps_its_counter_despite_one_damaged_tail_counter(
+    ) {
+        let block2 = sample_block2();
+        let counter_15_block1 = SaveBlock1 {
+            money: 15,
+            ..sample_block1()
+        };
+        let counter_16_block1 = SaveBlock1 {
+            money: 16,
+            ..sample_block1()
+        };
+
+        let mut store = SaveStore::new();
+        for _ in 0..12 {
+            store.save(&sample_block1(), &block2);
+        }
+        store.base_pokemon_storage.fill(0x0D);
+        store.save(&sample_block1(), &block2);
+        store.base_pokemon_storage.fill(0x0E);
+        store.save(&sample_block1(), &block2);
+        assert_eq!(store.last_written_sector(), 0);
+        let counter_14_storage = store.base_pokemon_storage.clone();
+
+        write_legacy_slot(&mut store, 1, &counter_15_block1, &block2, 15);
+        write_legacy_slot(&mut store, 0, &counter_16_block1, &block2, 16);
+        store.corrupt_byte(0, 9, SECTOR_SIZE - 1);
+        assert!(store.read_physical(0, 9).is_valid(SECTOR_DATA_SIZE));
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(
+            store.save_counter(),
+            16,
+            "the newer legacy head's own counter must be adopted, not the tail's"
+        );
+        assert_eq!(outcome.block1.money, counter_16_block1.money);
+        assert_eq!(&store.base_pokemon_storage[..], &counter_14_storage[..]);
+    }
+
+    /// The torn-write guard behind the stale-tail consensus: a rotation-0
+    /// full write torn after six sectors leaves its id 5 at position 5
+    /// under the new counter over eight sectors of the rotation-12
+    /// predecessor. Eight of nine tail counters agree, but the tail mixes
+    /// two layouts, so it is never one stale generation and the slot must
+    /// stay unaccepted, exactly as upstream's missing ids 6 and 7 make it.
+    #[test]
+    fn a_full_write_torn_past_the_head_is_never_a_stale_tail_with_one_outlier() {
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+        let payload_for = |id: u16| -> Vec<u8> {
+            let len = sector_payload_len(id).unwrap();
+            if id == SECTOR_ID_SAVEBLOCK2 {
+                block2_bytes[..len].to_vec()
+            } else if id < SECTOR_ID_PKMN_STORAGE_START {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                block1_bytes[offset..offset + len].to_vec()
+            } else {
+                let offset = usize::from(id - SECTOR_ID_PKMN_STORAGE_START) * SECTOR_DATA_SIZE;
+                storage_bytes[offset..offset + len].to_vec()
+            }
+        };
+
+        let mut store = SaveStore::new();
+        for id in 0..NUM_SECTORS_PER_SLOT_U16 {
+            let physical = usize::from((id + 12) % NUM_SECTORS_PER_SLOT_U16);
+            store.write_physical(1, physical, &Sector::write(id, &payload_for(id), 12));
+        }
+        for id in 0..=SECTOR_ID_PKMN_STORAGE_START {
+            store.write_physical(1, usize::from(id), &Sector::write(id, &payload_for(id), 14));
+        }
+
+        assert_eq!(
+            store.load().status,
+            SaveStatus::Corrupt,
+            "a torn full write must not pass as a legacy head over a stale tail"
+        );
+    }
+
+    /// Why the legacy head, unlike its stale tail, stays unanimous: a
+    /// pre-#1227 write torn after four sectors over an imported rotation-10
+    /// generation leaves ids 4, 0, 1, 2, 3 in positions 0-4 -- every head id
+    /// once, all checksum-valid, four footers agreeing -- yet id 4 is
+    /// `SaveBlock1` from a different generation. A four-of-five consensus
+    /// would load that splice as `Ok`.
+    #[test]
+    fn a_torn_legacy_write_over_a_rotated_remnant_is_never_an_intact_head() {
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        let storage_bytes = vec![0x0Fu8; PKMN_STORAGE_PAYLOAD_LEN];
+        let block2_bytes = block2.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+
+        let mut store = SaveStore::new();
+        write_full_slot(&mut store, 1, &block1, &block2, &storage_bytes, 40);
+        // Re-lay the same generation at rotation 10.
+        let sectors: Vec<Sector> = (0..NUM_SECTORS_PER_SLOT)
+            .map(|i| store.read_physical(1, i))
+            .collect();
+        for (id, sector) in sectors.iter().enumerate() {
+            store.write_physical(1, (id + 10) % NUM_SECTORS_PER_SLOT, sector);
+        }
+        for id in 0..4u16 {
+            let len = sector_payload_len(id).unwrap();
+            let payload: &[u8] = if id == SECTOR_ID_SAVEBLOCK2 {
+                &block2_bytes[..len]
+            } else {
+                let offset = usize::from(id - SECTOR_ID_SAVEBLOCK1_START) * SECTOR_DATA_SIZE;
+                &block1_bytes[offset..offset + len]
+            };
+            let physical = usize::from((id + 1) % SECTOR_ID_PKMN_STORAGE_START);
+            store.write_physical(1, physical, &Sector::write(id, payload, 1));
+        }
+        assert_eq!(store.read_physical(1, 0).id(), 4);
+        assert_eq!(store.read_physical(1, 0).counter(), 40);
+
+        assert_eq!(store.scan_slot(1).integrity, SlotIntegrity::Error);
     }
 }
