@@ -45,6 +45,33 @@ const DEFAULT_MAX_OUTPUT_FRAMES: usize = 8192;
 /// granularity changes.
 const MAX_SCRATCH_SOURCE_FRAMES: usize = 32_768;
 
+/// Worst-case extra output frames, beyond the callback that empties the
+/// source ring, during which [`Resampler::fill`] may still emit real,
+/// audible content derived from buffered `prev`/`next` interpolation state
+/// rather than pure silence -- see the module docs' "deferred lookahead
+/// pull". Bounded by two segments of at most `ceil(1/step)` frames each:
+/// one for the deferred pull itself to occur (the crossing from a real
+/// `prev`/real `next` pair to real `prev`/silent `next`), and one more for
+/// the resulting real-to-silence blend to fully decay (the next crossing,
+/// to silent/silent). See [`Resampler::settle_margin_frames`].
+fn resample_settle_margin_frames(step: f64) -> u64 {
+    // `step > 0.0` is guaranteed by `Resampler::new`'s validation, so this is
+    // always finite and non-negative; Rust's float-to-int `as` cast
+    // saturates rather than wrapping or panicking regardless, so an
+    // astronomical (but constructible) rate ratio still lands on `u64::MAX`
+    // here rather than UB -- the caller's own poll-count cap remains the
+    // ultimate bound on how long that gets waited out (see
+    // `crate::audio::AudioOutput::playback_settle_margin_frames`'s docs).
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "ceil()'d and non-negative (step > 0.0); an astronomical step saturates to \
+                  u64::MAX via the float-to-int `as` cast, never UB"
+    )]
+    let frames_per_crossing = (1.0 / step).ceil() as u64;
+    frames_per_crossing.saturating_mul(2)
+}
+
 /// The `(chunk_frames, scratch_frames)` pair [`Resampler::new`] sizes
 /// against: `max_output_frames` capped at [`DEFAULT_MAX_OUTPUT_FRAMES`],
 /// then re-derived downward if `* step` would still exceed
@@ -209,6 +236,15 @@ impl Resampler {
     #[must_use]
     pub fn underruns(&self) -> u64 {
         self.consumer.underruns()
+    }
+
+    /// See [`resample_settle_margin_frames`]: extra output frames, beyond
+    /// whatever callback empties the source ring, during which this
+    /// resampler's buffered interpolation state may still be sounding real
+    /// audio. Fixed for the lifetime of one `Resampler` (`step` never
+    /// changes after construction).
+    pub(crate) fn settle_margin_frames(&self) -> u64 {
+        resample_settle_margin_frames(self.step)
     }
 
     /// Fill `out` (interleaved frames, `channels`-wide) with resampled
@@ -753,6 +789,72 @@ mod tests {
         resampler.fill(&mut out);
         assert_eq!(out, [7.0, 8.0]);
         assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn resample_settle_margin_frames_is_two_crossings_worth_of_frames() {
+        // step = 0.25 -> 1/step = 4 output frames per source-frame crossing;
+        // two crossings (the deferred pull, then the decay to silence) bound
+        // the tail -- see `a_ring_emptied_mid_callback_still_sounds_real_audio_in_the_next_one`.
+        assert_eq!(resample_settle_margin_frames(0.25), 8);
+    }
+
+    #[test]
+    fn resample_settle_margin_frames_floors_at_two_for_a_downsampling_step() {
+        // step >= 1.0 crosses at least once per output frame, so
+        // ceil(1/step) == 1 and the margin floors at two frames regardless
+        // of how far past 1.0 step goes.
+        assert_eq!(resample_settle_margin_frames(1.0), 2);
+        assert_eq!(resample_settle_margin_frames(32.0), 2);
+    }
+
+    #[test]
+    fn resample_settle_margin_frames_saturates_for_an_extreme_step() {
+        assert_eq!(resample_settle_margin_frames(f64::MIN_POSITIVE), u64::MAX);
+    }
+
+    #[test]
+    fn settle_margin_frames_reflects_the_resamplers_own_step() {
+        let (_producer, consumer) = ring_buffer(16);
+        let resampler = Resampler::new(consumer, 1, 25.0, 100, 16).unwrap(); // step = 0.25
+        assert_eq!(
+            resampler.settle_margin_frames(),
+            resample_settle_margin_frames(0.25)
+        );
+    }
+
+    #[test]
+    fn a_ring_emptied_mid_callback_still_sounds_real_audio_in_the_next_one() {
+        // Regression for the playback-position truncation caught in #876's
+        // slice review: the source ring reading empty during one callback
+        // does not mean the resampler is done producing real audio -- the
+        // deferred lookahead pull (see the module docs) can still blend
+        // already-buffered real data into the very next callback's output,
+        // decaying toward silence rather than cutting off immediately. A
+        // caller latching a "done" target the instant the ring reads empty
+        // must add `Resampler::settle_margin_frames` to it, or it drops this
+        // real tail (see `crate::audio::AudioOutput::playback_settle_margin_frames`).
+        let (producer, consumer) = ring_buffer(16);
+        assert_eq!(producer.push(&[1.0, 2.0]), 2);
+        let mut resampler = Resampler::new(consumer, 1, 25.0, 100, 16).unwrap();
+
+        let mut first = [0.0f32; 4];
+        resampler.fill(&mut first);
+        assert_eq!(first, [1.0, 1.25, 1.5, 1.75]);
+        assert_eq!(
+            producer.available_space(),
+            16,
+            "sanity: the ring reads empty here"
+        );
+
+        let mut second = [0.0f32; 4];
+        resampler.fill(&mut second);
+        assert_eq!(
+            second,
+            [2.0, 1.5, 1.0, 0.5],
+            "real audio (decaying from the last real sample toward silence) must still sound \
+             in the callback immediately after the ring first read empty"
+        );
     }
 
     #[test]
