@@ -305,12 +305,7 @@ pub fn resolve_pixel_color(
     let (mut front_color, front_kind, forced_alpha, color_semi_transparent) = front;
     let is_obj = matches!(front_kind, LayerKind::Obj);
 
-    // mGBA's draw-time OBJ variant (function docs above): applies whenever
-    // the OBJ layer is target1 under Brighten/Darken in both the static span
-    // and (for an OBJWIN-masked pixel) OBJWIN's own control, and neither the
-    // color-supplying entry's own semi-transparency nor `objwin_slow_path`
-    // defers it -- together with a real target2 -- to the reblend postpass
-    // below.
+    // mGBA's draw-time OBJ variant; the function docs above own the gate.
     if is_obj
         && window.static_span_enabled
         && window.enabled
