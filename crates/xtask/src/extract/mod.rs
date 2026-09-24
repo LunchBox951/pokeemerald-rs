@@ -50,7 +50,7 @@ mod fonts;
 pub mod inflate;
 pub mod jasc_pal;
 mod layouts_json;
-mod midi;
+pub(crate) mod midi;
 pub mod png;
 mod text_window;
 pub(crate) mod voicegroups;

@@ -171,15 +171,17 @@ pub(crate) fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> b
     aggregate_type_effectiveness(move_type, defender.types()) == Effectiveness::NoEffect
 }
 
-/// Whether `defender`'s Levitate blocks a Ground `move_type`.
+/// Whether a Ground `move_type` is blocked by Levitate on `ability` -- the
+/// defender's true ability at execution, or trainer AI's guessed ability for
+/// an unrevealed target.
 ///
 /// Levitate outranks the type scan in both `Cmd_typecalc`
 /// (`battle_script_commands.c:1375-1383`) and `CheckWonderGuardAndLevitate`
 /// (`:1435-1443`), each of which returns as soon as it matches. Callers apply
 /// the Struggle exemption themselves.
 #[must_use]
-pub(crate) fn defender_levitate_blocked(move_type: Type, defender: &BattlePokemon) -> bool {
-    move_type == Type::Ground && defender.ability() == AbilityId::LEVITATE
+pub(crate) fn defender_levitate_blocked(move_type: Type, ability: AbilityId) -> bool {
+    move_type == Type::Ground && ability == AbilityId::LEVITATE
 }
 
 /// Whether `defender`'s Wonder Guard blocks a not-strictly-super-effective
@@ -233,7 +235,7 @@ pub fn classify_accuracy_failure(
         .battle_type()
         .ok_or(BattleError::UnsupportedMoveType(move_id))?;
 
-    if defender_levitate_blocked(move_type, defender) {
+    if defender_levitate_blocked(move_type, defender.ability()) {
         Ok(HitOutcome::LevitateBlocked)
     } else if defender_wonder_guard_blocked(move_type, defender) {
         Ok(HitOutcome::WonderGuardBlocked)
@@ -357,7 +359,8 @@ pub fn damage_before_roll(
     } else {
         damage_after_critical
     };
-    let levitate_blocked = move_id != STRUGGLE && defender_levitate_blocked(move_type, defender);
+    let levitate_blocked =
+        move_id != STRUGGLE && defender_levitate_blocked(move_type, defender.ability());
     let wonder_guard_blocked =
         move_id != STRUGGLE && defender_wonder_guard_blocked(move_type, defender);
     let damage = if move_id == STRUGGLE {

@@ -189,7 +189,7 @@ pub(super) fn advance_wild_battle(
             true
         }
     };
-    let _ = settle_move_learn_prompts(battle);
+    let _ = settle_move_learn_prompts(battle, rng);
     finalize_battle_turn(battle_slot, turn_failed, player_lead)
 }
 
