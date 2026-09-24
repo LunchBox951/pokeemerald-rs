@@ -2131,8 +2131,8 @@ mod tests {
 
     #[test]
     fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
-        // Slice-review correctness finding: a transparent, better-priority
-        // semi-transparent OBJ promotes priority over an already
+        // A transparent, better-priority semi-transparent OBJ promotes
+        // priority over an already
         // variant-brightened worse-priority Normal OBJ without replacing its
         // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
         // that worse-priority Normal OBJ's own draw-time variant into its
