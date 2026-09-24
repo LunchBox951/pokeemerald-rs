@@ -218,21 +218,28 @@ pub fn backdrop_variant(
 
 /// The window-derived blend-enable signals [`resolve_pixel_color`] needs,
 /// all resolved once per pixel in `compose_pixel` from the same
-/// [`WindowConfig`](crate::window::WindowConfig) classification. Bundled
-/// into one type because they are correlated, not independent choices
-/// (clippy's `fn_params_excessive_bools`), and because most of them only
-/// ever differ from each other on an `OBJWIN`-masked pixel.
+/// [`WindowConfig`](crate::window::WindowConfig). Bundled into one type
+/// because they are correlated, not independent choices (clippy's
+/// `fn_params_excessive_bools`), and because most of them only ever differ
+/// from each other on an `OBJWIN`-masked pixel or an affine mosaic trailing
+/// spill written by an earlier span.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is a distinct window-enable signal mGBA resolves at a different stage (composition, the flag writer's span, the color writer's span)"
+)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PixelWindowEffects {
     /// Whether this pixel's `OBJWIN`-mask-resolved window enables color
     /// effects (`WindowLayerEnable::effects` after `OBJWIN` may have
     /// substituted in its own control).
     pub enabled: bool,
-    /// Whether this pixel's *static* `WIN0`/`WIN1`/`WINOUT` span enables
-    /// color effects, independent of any `OBJWIN` mask
-    /// (`mgba/src/gba/renderers/video-software.c:1052-1055`: sprites are
-    /// only ever preprocessed against this span, never `OBJWIN`'s own
-    /// control directly).
+    /// Whether the *static* `WIN0`/`WIN1`/`WINOUT` span whose OBJ pass wrote
+    /// the front OBJ's flags enables color effects, independent of any
+    /// `OBJWIN` mask (`mgba/src/gba/renderers/video-software.c:1052-1055`:
+    /// sprites are only ever preprocessed against such a span, never
+    /// `OBJWIN`'s own control directly). That is this pixel's own span
+    /// except on an affine mosaic trailing spill
+    /// (`mgba/src/gba/renderers/software-obj.c:227-242`).
     pub static_span_enabled: bool,
     /// mGBA's `objwinSlowPath`: `OBJWIN` enabled with a blend-enable bit
     /// that differs from `static_span_enabled`, independent of the `OBJWIN`
@@ -240,6 +247,18 @@ pub struct PixelWindowEffects {
     /// below, never `&&`-ed with the OBJ's own target1 bit or mode
     /// (`mgba/src/gba/renderers/software-obj.c:176,180`).
     pub objwin_slow_path: bool,
+    /// Whether the span that wrote the front OBJ's color let it take mGBA's
+    /// draw-time brighten/darken variant palette: that span enables color
+    /// effects and, where `OBJWIN` resolves this pixel, `OBJWIN` does too
+    /// (`mgba/src/gba/renderers/software-obj.c:177-179,206-208`). This is
+    /// `static_span_enabled && enabled` except on an affine mosaic trailing
+    /// spill, whose color an earlier span baked
+    /// (`mgba/src/gba/renderers/software-obj.c:227-242`) `(behavioral-fidelity)`.
+    pub color_variant_enabled: bool,
+    /// `objwin_slow_path` as the span that wrote the front OBJ's color saw it,
+    /// which alone decides whether that color skipped the variant palette
+    /// (`mgba/src/gba/renderers/software-obj.c:176,180-192`).
+    pub color_objwin_slow_path: bool,
 }
 
 /// Resolve the displayed color for a front layer and its immediate neighbor.
@@ -254,18 +273,17 @@ pub struct PixelWindowEffects {
 /// An OBJ that is a target1 layer under Brighten or Darken gets mGBA's
 /// draw-time variant applied to `color` first, unless a target2 exists
 /// anywhere in the frame *and* either the color-supplying entry is
-/// semi-transparent or `window.objwin_slow_path` holds
+/// semi-transparent or `window.color_objwin_slow_path` holds
 /// (`mgba/src/gba/renderers/software-obj.c:177-203`) — this module's docs
 /// above explain why that stage exists separately from the ordinary target1
 /// brighten/darken below, and why a target1 OBJ never falls through to that
-/// ordinary block. That draw-time gate itself needs both
-/// `window.static_span_enabled` (mirroring `variant`'s own
-/// `currentWindow`-based precondition,
-/// `mgba/src/gba/renderers/software-obj.c:177-179`) and `window.enabled`
-/// (mirroring the separate, `OBJWIN`-mask-only promotion of `objwinPalette`
-/// to the variant palette, `mgba/src/gba/renderers/software-obj.c:206-208`,
-/// which for a pixel outside the mask always agrees with
-/// `static_span_enabled`) `(behavioral-fidelity)`.
+/// ordinary block. That draw-time gate itself needs
+/// `window.color_variant_enabled`, which folds `variant`'s own
+/// `currentWindow`-based precondition
+/// (`mgba/src/gba/renderers/software-obj.c:177-179`) together with the
+/// separate, `OBJWIN`-mask-only promotion of `objwinPalette` to the variant
+/// palette (`mgba/src/gba/renderers/software-obj.c:206-208`), both as the
+/// span that wrote the color saw them `(behavioral-fidelity)`.
 ///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
 /// window enable bit. If it fails to blend against an immediate second target
@@ -307,10 +325,9 @@ pub fn resolve_pixel_color(
 
     // mGBA's draw-time OBJ variant; the function docs above own the gate.
     if is_obj
-        && window.static_span_enabled
-        && window.enabled
+        && window.color_variant_enabled
         && cfg.target1.obj
-        && !((color_semi_transparent || window.objwin_slow_path) && any_target2_enabled)
+        && !((color_semi_transparent || window.color_objwin_slow_path) && any_target2_enabled)
     {
         front_color = match cfg.effect {
             ColorEffect::Brighten => brighten(front_color, cfg.evy),
@@ -951,6 +968,8 @@ mod tests {
             enabled,
             static_span_enabled: enabled,
             objwin_slow_path: false,
+            color_variant_enabled: enabled,
+            color_objwin_slow_path: false,
         }
     }
 
@@ -1025,6 +1044,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: false,
                 objwin_slow_path: false,
+                color_variant_enabled: false,
+                color_objwin_slow_path: false,
             },
             true,
             front,
@@ -1046,6 +1067,8 @@ mod tests {
                 enabled: false,
                 static_span_enabled: true,
                 objwin_slow_path: false,
+                color_variant_enabled: false,
+                color_objwin_slow_path: false,
             },
             true,
             front,
@@ -1375,6 +1398,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: true,
                 objwin_slow_path: true,
+                color_variant_enabled: true,
+                color_objwin_slow_path: true,
             },
             true,
             front,
@@ -1413,6 +1438,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: true,
                 objwin_slow_path: true,
+                color_variant_enabled: true,
+                color_objwin_slow_path: true,
             },
             false,
             front,
@@ -1452,6 +1479,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: false,
                 objwin_slow_path: false,
+                color_variant_enabled: false,
+                color_objwin_slow_path: false,
             },
             false,
             front,
@@ -1472,6 +1501,8 @@ mod tests {
                 enabled: false,
                 static_span_enabled: true,
                 objwin_slow_path: false,
+                color_variant_enabled: false,
+                color_objwin_slow_path: false,
             },
             false,
             front,
@@ -1520,6 +1551,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: true,
                 objwin_slow_path: true,
+                color_variant_enabled: true,
+                color_objwin_slow_path: true,
             },
             true,
             front,
@@ -1555,6 +1588,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: true,
                 objwin_slow_path: true,
+                color_variant_enabled: true,
+                color_objwin_slow_path: true,
             },
             true,
             front,
@@ -1586,6 +1621,8 @@ mod tests {
                 enabled: true,
                 static_span_enabled: true,
                 objwin_slow_path: true,
+                color_variant_enabled: true,
+                color_objwin_slow_path: true,
             },
             false,
             front,
