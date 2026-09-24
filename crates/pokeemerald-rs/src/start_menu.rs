@@ -51,7 +51,9 @@ const ITEMS: [StartMenuItem; 2] = [StartMenuItem::Save, StartMenuItem::Exit];
 /// Why building a [`StartMenu`] failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StartMenuError {
-    /// A required pack entry was missing or malformed.
+    /// The pack failed to load (missing file, bad magic, unsupported
+    /// version, truncated directory) or a required entry was missing or
+    /// malformed.
     Pack(PackError),
     /// The font glyph sheet fetched from the pack didn't decode.
     Font(assets::AssetError),
@@ -288,8 +290,8 @@ impl StartMenu {
 ///
 /// # Errors
 ///
-/// Returns [`StartMenuError`] when the pack is missing a required entry or
-/// the font glyph sheet fails to decode.
+/// Returns [`StartMenuError`] when the pack fails to load, a required entry
+/// is missing, or the font glyph sheet fails to decode.
 pub(crate) fn open(
     source: crate::pack_source::PackSource,
     cursor: usize,
