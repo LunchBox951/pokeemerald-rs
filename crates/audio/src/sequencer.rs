@@ -684,23 +684,16 @@ impl Sequencer {
                 }
             }
             Event::PatternEnd => track.return_from_pattern(),
+            // `ply_xiecv`/`ply_xiecl` store the raw byte on the track
+            // (`m4a.c:1591`..`:1600`).
             Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
-            } => {
-                // `ply_xiecv` (`m4a.c:1591`): stores the raw byte on the
-                // track; only subsequently started voices pick it up (see
-                // `note_on`), matching upstream's note-on-time copy
-                // (`m4a_1.s:1757`..`:1758`).
-                track.pseudo_echo_volume = u8::try_from(value).unwrap_or(0);
-            }
+            } => track.pseudo_echo_volume = u8::try_from(value).unwrap_or(0),
             Event::Xcmd {
                 kind: XCMD_IECL,
                 value,
-            } => {
-                // `ply_xiecl` (`m4a.c:1597`).
-                track.pseudo_echo_length = u8::try_from(value).unwrap_or(0);
-            }
+            } => track.pseudo_echo_length = u8::try_from(value).unwrap_or(0),
             Event::Repeat { count, target } => track.repeat(count, target),
             Event::MemAcc {
                 op,
@@ -1030,49 +1023,32 @@ impl Sequencer {
         }
     }
 
-    /// A new note's effective priority: the song header's priority
-    /// (`MusicPlayerInfo::priority`) plus the sounding track's own `PRIO`,
-    /// saturated rather than wrapped at `0xFF` (`m4a_1.s:1628`..`:1633` --
-    /// upstream adds in a wide register and clamps the sum before storing
-    /// the byte). [`crate::mixer::Mixer`]'s channel search ranks note-ons by
-    /// this value.
+    /// `ply_note` sums the song and track halves in a wide register and
+    /// clamps before storing the byte (`m4a_1.s:1628`..`:1633`).
     fn note_priority(song: &Song, track: &TrackState) -> u8 {
         song.priority().saturating_add(track.priority)
     }
 }
 
-/// Resolve `instrument` against the played `key` to a concrete leaf
-/// instrument plus its pitch/pan context, following MP2K's key-split
-/// (`TONEDATA_TYPE_SPL`) and rhythm (`TONEDATA_TYPE_RHY`) indirection exactly
-/// as `ply_note` does before allocating a channel (`m4a_1.s:1580`..`:1609`).
-///
-/// Returns the resolved `(leaf, pitch_key, rhythm_pan)`, or `None` when the
-/// table/rhythm slot has nothing for `key`, or when the resolved child is
-/// itself a key-split/rhythm instrument — upstream aborts the note rather
-/// than supporting nested indirection (`_081DDB80`..`b _081DDCEA`,
-/// `m4a_1.s:1604`..`:1609`).
-fn resolve_instrument(instrument: &Instrument, key: u8) -> Option<(&Instrument, u8, i8)> {
-    let resolved = match instrument {
+/// `ply_note` refuses (rather than recurses into) an indirect key-split or
+/// rhythm child (`m4a_1.s:1580`..`:1609`).
+fn resolve_instrument(instrument: &Instrument, played_key: u8) -> Option<(&Instrument, u8, i8)> {
+    let (leaf, pitch_key, rhythm_pan) = match instrument {
         Instrument::KeySplit(split) => {
-            // `keySplitTable[key]` selects the child; pitch/pan still use
-            // the played key untouched (`m4a_1.s:1589`, `:1598`).
-            let &child_index = split.table.get(usize::from(key))?;
+            let &child_index = split.table.get(usize::from(played_key))?;
             let leaf = split.children.get(usize::from(child_index))?.as_ref()?;
-            (leaf, key, 0)
+            (leaf, played_key, 0)
         }
         Instrument::Rhythm(rhythm) => {
-            // The played key indexes `children` directly (no split table);
-            // the child's own base key/pan replace the played note's
-            // (`m4a_1.s:1580`..`:1609`).
-            let child = rhythm.children.get(usize::from(key))?.as_ref()?;
+            let child = rhythm.children.get(usize::from(played_key))?.as_ref()?;
             (&child.instrument, child.base_key, child.pan.unwrap_or(0))
         }
-        leaf => (leaf, key, 0),
+        leaf => (leaf, played_key, 0),
     };
-    if matches!(resolved.0, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
+    if matches!(leaf, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
         return None;
     }
-    Some(resolved)
+    Some((leaf, pitch_key, rhythm_pan))
 }
 
 fn track_volume(track: &TrackState) -> (u8, u8) {
@@ -3519,9 +3495,6 @@ mod tests {
 
     #[test]
     fn key_split_boundary_selects_the_correct_child() {
-        // keySplitTable maps keys < 64 to child 0, >= 64 to child 1 -- two
-        // otherwise-identical DirectSound children distinguished only by
-        // their wave's constant sample value.
         let mut table = [0u8; KEY_SLOTS];
         for slot in table.iter_mut().skip(64) {
             *slot = 1;
@@ -3549,25 +3522,21 @@ mod tests {
             out
         };
 
-        let low = render(30); // < 64 -> child 0 (sample 40)
-        let high = render(90); // >= 64 -> child 1 (sample 100)
+        let key_below_split = render(30);
+        let key_at_or_above_split = render(90);
         assert_ne!(
-            low, high,
+            key_below_split, key_at_or_above_split,
             "the split boundary must select different children"
         );
         let magnitude = |buf: &[f32]| buf.iter().map(|s| s.abs()).sum::<f32>();
         assert!(
-            magnitude(&high) > magnitude(&low),
+            magnitude(&key_at_or_above_split) > magnitude(&key_below_split),
             "key 90 must select the louder (sample 100) child, not the quieter one"
         );
     }
 
     #[test]
     fn key_split_keeps_the_played_key_for_pitch() {
-        // Pitch resolution must keep using the PLAYED key even though the
-        // split table swaps the underlying instrument (`m4a_1.s:1589`,
-        // `:1598`): a key-split note's frequency is exactly
-        // `MidiKeyToFreq(child.wave.freq(), played_key, 0)`.
         let mut table = [0u8; KEY_SLOTS];
         for slot in table.iter_mut().skip(64) {
             *slot = 1;
@@ -3601,9 +3570,6 @@ mod tests {
 
     #[test]
     fn rhythm_indirection_selects_child_by_played_key_directly() {
-        // No split table: the played key indexes `children` directly. Key 36
-        // (a typical MP2K kick-drum trigger) is populated; an unpopulated key
-        // produces no note at all.
         let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
         children[36] = Some(RhythmChild {
             instrument: direct_sound(90),
@@ -3643,8 +3609,6 @@ mod tests {
 
     #[test]
     fn rhythm_child_base_key_overrides_pitch() {
-        // The rhythm child's own base key (72) replaces the played key (36)
-        // for pitch resolution (`ply_note`, `m4a_1.s:1594`).
         let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
         children[36] = Some(RhythmChild {
             instrument: direct_sound(90),
@@ -3676,11 +3640,11 @@ mod tests {
     #[test]
     fn rhythm_child_pan_override_is_applied_when_the_bit_is_set() {
         let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
-        // pan_sweep 0xFF has the 0x80 override bit set -> a hard-right pan.
+        let hard_right_pan_override = rhythm_pan_from_pan_sweep(0xFF);
         children[36] = Some(RhythmChild {
             instrument: direct_sound(90),
             base_key: 36,
-            pan: rhythm_pan_from_pan_sweep(0xFF),
+            pan: hard_right_pan_override,
         });
         let rhythm = Instrument::Rhythm(Rhythm { children });
         let track = vec![
@@ -3706,13 +3670,10 @@ mod tests {
 
     #[test]
     fn nested_key_split_or_rhythm_child_produces_no_note() {
-        // A child that is itself a KeySplit/Rhythm is unsupported nested
-        // indirection; upstream aborts the note rather than recursing
-        // (`m4a_1.s:1604`..`:1609`).
         let inner_rhythm = Instrument::Rhythm(Rhythm {
             children: vec![None; KEY_SLOTS],
         });
-        let table = [0u8; KEY_SLOTS]; // every key -> child 0
+        let table = [0u8; KEY_SLOTS];
         let split = Instrument::KeySplit(KeySplit {
             table,
             children: vec![Some(inner_rhythm)],
@@ -3777,9 +3738,6 @@ mod tests {
 
     #[test]
     fn non_fixed_instrument_renders_differently_across_keys_for_contrast() {
-        // Isolates the previous test's guarantee: without `.fixed()`, the
-        // SAME song rendered at two different keys must actually diverge, so
-        // the equality assertion above is meaningful and not a vacuous no-op.
         let render = |key: u8| {
             let tone = ToneData::new(varying_wave(), Adsr::flat());
             let voices = vec![Instrument::DirectSound(tone)];
@@ -3806,65 +3764,75 @@ mod tests {
 
     #[test]
     fn xcmd_iecv_and_iecl_only_affect_subsequently_started_voices() {
-        // A tied note (key 60) starts before any xIECV/xIECL; a second tied
-        // note (key 64) starts after they are set. Releasing both together
-        // must retire the pre-echo voice quickly while the post-xIECV one
-        // lingers in its pseudo-echo tail -- voices already started keep
-        // whatever they captured at their own note-on.
+        let pre_echo_key = 60;
+        let post_echo_key = 64;
         let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         let track = vec![
             Event::Voice(0),
             Event::Note {
-                key: 60,
+                key: pre_echo_key,
                 velocity: 127,
                 gate: 0,
             },
             Event::Wait(2),
             Event::Xcmd {
-                kind: 0x08,
+                kind: XCMD_IECV,
                 value: 200,
-            }, // xIECV
+            },
             Event::Xcmd {
-                kind: 0x09,
+                kind: XCMD_IECL,
                 value: 5,
-            }, // xIECL
+            },
             Event::Note {
-                key: 64,
+                key: post_echo_key,
                 velocity: 127,
                 gate: 0,
             },
             Event::Wait(2),
-            Event::EndOfTie { key: Some(60) },
-            Event::EndOfTie { key: Some(64) },
+            Event::EndOfTie {
+                key: Some(pre_echo_key),
+            },
+            Event::EndOfTie {
+                key: Some(post_echo_key),
+            },
             Event::Wait(64),
             Event::Fine,
         ];
         let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
-        let mut key60_seen = false;
-        let mut key64_seen = false;
-        let mut key60_gone_at = None;
-        let mut key64_gone_at = None;
+        let mut pre_echo_seen = false;
+        let mut post_echo_seen = false;
+        let mut pre_echo_gone_at = None;
+        let mut post_echo_gone_at = None;
         for frame in 0..64 {
             seq.render_frame(&mut out);
-            let has60 = seq.mixer.voices().iter().any(|v| v.midi_key() == 60);
-            let has64 = seq.mixer.voices().iter().any(|v| v.midi_key() == 64);
-            key60_seen |= has60;
-            key64_seen |= has64;
-            if key60_seen && !has60 && key60_gone_at.is_none() {
-                key60_gone_at = Some(frame);
+            let has_pre_echo = seq
+                .mixer
+                .voices()
+                .iter()
+                .any(|v| v.midi_key() == pre_echo_key);
+            let has_post_echo = seq
+                .mixer
+                .voices()
+                .iter()
+                .any(|v| v.midi_key() == post_echo_key);
+            pre_echo_seen |= has_pre_echo;
+            post_echo_seen |= has_post_echo;
+            if pre_echo_seen && !has_pre_echo && pre_echo_gone_at.is_none() {
+                pre_echo_gone_at = Some(frame);
             }
-            if key64_seen && !has64 && key64_gone_at.is_none() {
-                key64_gone_at = Some(frame);
+            if post_echo_seen && !has_post_echo && post_echo_gone_at.is_none() {
+                post_echo_gone_at = Some(frame);
             }
         }
-        let g60 = key60_gone_at.expect("the pre-echo voice must eventually retire");
-        let g64 = key64_gone_at.expect("the post-xIECV voice must eventually retire");
+        let pre_echo_gone = pre_echo_gone_at.expect("the pre-echo voice must eventually retire");
+        let post_echo_gone =
+            post_echo_gone_at.expect("the post-xIECV voice must eventually retire");
         assert!(
-            g64 > g60,
-            "the xIECV/xIECL voice must outlive the voice started before them ({g64} vs {g60})"
+            post_echo_gone > pre_echo_gone,
+            "the xIECV/xIECL voice must outlive the voice started before them ({post_echo_gone} vs {pre_echo_gone})"
         );
     }
 
@@ -3874,11 +3842,11 @@ mod tests {
             let mut track = vec![Event::Voice(0)];
             if with_echo {
                 track.push(Event::Xcmd {
-                    kind: 0x08,
+                    kind: XCMD_IECV,
                     value: 200,
                 });
                 track.push(Event::Xcmd {
-                    kind: 0x09,
+                    kind: XCMD_IECL,
                     value: 10,
                 });
             }
@@ -3919,11 +3887,11 @@ mod tests {
             let mut track = vec![Event::Voice(0)];
             if with_echo {
                 track.push(Event::Xcmd {
-                    kind: 0x08,
+                    kind: XCMD_IECV,
                     value: 200,
                 });
                 track.push(Event::Xcmd {
-                    kind: 0x09,
+                    kind: XCMD_IECL,
                     value: 10,
                 });
             }
@@ -4002,18 +3970,17 @@ mod tests {
             out
         };
 
-        // Two songs differing ONLY in slot 127's instrument must render
-        // differently -- proving `VOICE 127` reads slot 127's own explicit
-        // entry, not some other (adjacent, wrapped, or default) slot.
-        assert_ne!(render(10), render(120));
+        assert_ne!(
+            render(10),
+            render(120),
+            "slot 127 must read its own explicit entry, not an adjacent, wrapped, or default slot"
+        );
     }
 
-    /// The priority a note-on stamps on its channel after one leading
-    /// `PRIO` operand, for a song of header priority `song_priority`.
-    fn stamped_priority(song_priority: u8, prio: u8) -> u8 {
+    fn stamped_priority(song_priority: u8, track_priority: u8) -> u8 {
         let track = vec![
             Event::Voice(0),
-            Event::Priority(prio),
+            Event::Priority(track_priority),
             Event::Note {
                 key: 60,
                 velocity: 127,
@@ -4031,9 +3998,6 @@ mod tests {
 
     #[test]
     fn note_priority_adds_the_song_and_track_halves() {
-        // `ply_note` sums `MusicPlayerInfo::priority` and the track's own
-        // `PRIO` (`m4a_1.s:1628`..`:1631`); either half alone still reaches
-        // the channel, so neither can quietly be dropped.
         assert_eq!(stamped_priority(0, 0), 0);
         assert_eq!(stamped_priority(30, 0), 30);
         assert_eq!(stamped_priority(0, 40), 40);
@@ -4042,9 +4006,6 @@ mod tests {
 
     #[test]
     fn note_priority_saturates_instead_of_wrapping() {
-        // The sum is clamped, not truncated (`m4a_1.s:1632`..`:1633`): the
-        // byte-wrapped answers would be 44 and 0, both far *below* the
-        // unsaturated halves rather than above them.
         assert_eq!(stamped_priority(200, 100), 255);
         assert_eq!(stamped_priority(255, 1), 255);
         assert_eq!(stamped_priority(255, 255), 255);
@@ -4052,8 +4013,6 @@ mod tests {
 
     #[test]
     fn a_prio_command_only_affects_later_notes() {
-        // `ply_prio` just stores the operand; a channel keeps whatever
-        // priority it was stamped with at its own note-on.
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -4084,13 +4043,12 @@ mod tests {
 
     #[test]
     fn a_low_priority_track_loses_its_note_when_the_pool_is_full() {
-        // End to end: five tracks fill the default five-channel pool at
-        // priority 100, so a sixth track's `PRIO 1` note finds every channel
-        // outranking it and is refused (`m4a_1.s:1716`..`:1718`).
-        let loud = |prio: u8| {
+        // A refused note finds every pool channel outranking it
+        // (`m4a_1.s:1669`..`:1718`).
+        let track_with_priority = |priority: u8| {
             vec![
                 Event::Voice(0),
-                Event::Priority(prio),
+                Event::Priority(priority),
                 Event::Note {
                     key: 60,
                     velocity: 127,
@@ -4100,8 +4058,8 @@ mod tests {
                 Event::Fine,
             ]
         };
-        let mut tracks: Vec<Vec<Event>> = (0..5).map(|_| loud(100)).collect();
-        tracks.push(loud(1));
+        let mut tracks: Vec<Vec<Event>> = (0..5).map(|_| track_with_priority(100)).collect();
+        tracks.push(track_with_priority(1));
         let mut seq = Sequencer::new(test_song(tracks, 150));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
         seq.render_frame(&mut out);
