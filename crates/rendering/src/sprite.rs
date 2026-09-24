@@ -51,6 +51,19 @@ pub struct SpritePixel {
     /// better-priority transparent texel can promote priority without
     /// replacing the stored color (see this struct's docs).
     pub color_semi_transparent: bool,
+    /// The column where the hardware-window span that wrote
+    /// [`priority`](Self::priority) begins. mGBA bakes an OBJ's
+    /// `FLAG_TARGET_1` and `FLAG_REBLEND` from the span whose pass writes the
+    /// pixel (`software-obj.c:159,176-192`), which is the queried column's
+    /// own span except for an affine mosaic trailing spill written by an
+    /// earlier one (`software-obj.c:227-242`); `0` without window spans.
+    pub span_start: usize,
+    /// The column where the span that wrote [`color`](Self::color) begins,
+    /// whose effects enable chose mGBA's brighten/darken variant palette at
+    /// draw time (`software-obj.c:176-208`). Separate from
+    /// [`span_start`](Self::span_start) for the same flag-only-overwrite
+    /// reason as [`color_semi_transparent`](Self::color_semi_transparent).
+    pub color_span_start: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -297,8 +310,9 @@ impl<'a> SpriteLayer<'a> {
                 // `OBJWIN` entry's own suppression is decided per writing
                 // span inside sampling, not here from the queried column.
                 let slot_contested = resolved.is_some();
-                let texel =
+                let (texel, writer_span) =
                     self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
+                let span_start = window_spans.span_start(writer_span);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -315,12 +329,15 @@ impl<'a> SpriteLayer<'a> {
                             priority: entry.priority(),
                             semi_transparent,
                             color_semi_transparent: semi_transparent,
+                            span_start,
+                            color_span_start: span_start,
                         });
                     }
                     (mode, Texel::Transparent) => {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.span_start = span_start;
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),
@@ -367,15 +384,16 @@ impl<'a> SpriteLayer<'a> {
                         WindowSpans::WHOLE_SCANLINE,
                         false
                     ),
-                    Texel::Opaque(_)
+                    (Texel::Opaque(_), _)
                 )
             })
         })
     }
 
-    /// Samples one entry's texel at `(x, y)`.
+    /// Samples one entry's texel at `(x, y)`, paired with the index of the
+    /// window span whose pass wrote it.
     ///
-    /// The sampled span matches `x`'s own for every path but an affine
+    /// The writing span matches `x`'s own for every path but an affine
     /// mosaic trailing spill, which can be written by an earlier span; see
     /// [`Self::sample_affine_local`] for what `slot_contested` changes there.
     fn sample_entry_mosaic(
@@ -386,24 +404,25 @@ impl<'a> SpriteLayer<'a> {
         mosaic: MosaicSize,
         window_spans: WindowSpans<'_>,
         slot_contested: bool,
-    ) -> Texel {
+    ) -> (Texel, usize) {
+        let own_span = window_spans.index_at(x);
         let mosaic = if entry.mosaic() {
             mosaic
         } else {
             MosaicSize::NONE
         };
         let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
-            return Texel::Outside;
+            return (Texel::Outside, own_span);
         };
         if entry.mode() == ObjMode::Window {
             // mGBA applies only vertical mosaic to OBJ-window sampling (`video-software.c:1027,1042-1050`; `software-obj.c:287-304,344-361`).
             let vertical_only = mosaic.vertical_only();
             if matches!(entry.affine(), AffineMode::Regular) {
-                if window_spans.span_suppresses_objwin(window_spans.index_at(x)) {
-                    return Texel::Outside;
+                if window_spans.span_suppresses_objwin(own_span) {
+                    return (Texel::Outside, own_span);
                 }
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
-                self.sample_local(entry, dx, ly)
+                (self.sample_local(entry, dx, ly), own_span)
             } else {
                 self.sample_affine_local(
                     entry,
@@ -418,7 +437,7 @@ impl<'a> SpriteLayer<'a> {
             }
         } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-            self.sample_local(entry, lx, ly)
+            (self.sample_local(entry, lx, ly), own_span)
         } else {
             self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans, slot_contested)
         }
@@ -509,11 +528,11 @@ impl<'a> SpriteLayer<'a> {
 
     /// Samples an affine entry from one footprint-local coordinate per
     /// mosaic block, seeding each window span's hold from `inX - 1` at its
-    /// own start, and returns the texel the span it was drawn under produces
-    /// (`software-obj.c:227-242`). `slot_contested` mirrors mGBA's
-    /// same-entry write lock: a contested pixel stops the spill search at
-    /// the first candidate span, an unclaimed one prefers the first opaque
-    /// one (`software-obj.c:79-85`).
+    /// own start, and returns the texel the span it was drawn under produces,
+    /// paired with that span's index (`software-obj.c:227-242`).
+    /// `slot_contested` mirrors mGBA's same-entry write lock: a contested
+    /// pixel stops the spill search at the first candidate span, an
+    /// unclaimed one prefers the first opaque one (`software-obj.c:79-85`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
@@ -534,7 +553,7 @@ impl<'a> SpriteLayer<'a> {
         mosaic: MosaicSize,
         window_spans: WindowSpans<'_>,
         slot_contested: bool,
-    ) -> Texel {
+    ) -> (Texel, usize) {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         let entry_x = i32::from(entry.x());
         let (width, _) = entry.bounding_box();
@@ -568,9 +587,12 @@ impl<'a> SpriteLayer<'a> {
         if dx < width {
             let span = window_spans.index_at(x);
             if !span_admits_entry(span) {
-                return Texel::Outside;
+                return (Texel::Outside, span);
             }
-            return sample_from_span_start(window_spans.span_start(span) as i32);
+            return (
+                sample_from_span_start(window_spans.span_start(span) as i32),
+                span,
+            );
         }
 
         let raw_edge = (entry_x + width as i32).max(0) as usize;
@@ -582,22 +604,27 @@ impl<'a> SpriteLayer<'a> {
             // A contested slot blocks every span but this entry's first
             // candidate one, so take that first result, whatever it is.
             return candidate_spans
-                .map(|span| sample_from_span_start(window_spans.span_start(span) as i32))
-                .find(|texel| !matches!(texel, Texel::Outside))
-                .unwrap_or(Texel::Outside);
+                .map(|span| {
+                    (
+                        sample_from_span_start(window_spans.span_start(span) as i32),
+                        span,
+                    )
+                })
+                .find(|(texel, _)| !matches!(texel, Texel::Outside))
+                .unwrap_or((Texel::Outside, last_span));
         }
 
         let mut transparent_fallback = None;
         for span in candidate_spans {
             let texel = sample_from_span_start(window_spans.span_start(span) as i32);
             if matches!(texel, Texel::Opaque(_)) {
-                return texel;
+                return (texel, span);
             }
             if transparent_fallback.is_none() && matches!(texel, Texel::Transparent) {
-                transparent_fallback = Some(texel);
+                transparent_fallback = Some((texel, span));
             }
         }
-        transparent_fallback.unwrap_or(Texel::Outside)
+        transparent_fallback.unwrap_or((Texel::Outside, last_span))
     }
 }
 
