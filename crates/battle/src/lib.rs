@@ -200,7 +200,8 @@
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, and Hustle (all ten above), Run Away, Shadow Tag,
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Away, Shadow Tag,
 //! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
 //! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
 //! Levitate's Ground-move damage immunity ([`hit::damage_before_roll`] —
