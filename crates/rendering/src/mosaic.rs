@@ -68,6 +68,15 @@ impl MosaicSize {
         self.h
     }
 
+    /// Returns the vertical block dimension.
+    ///
+    /// Used by [`crate::sprite::SpriteLayer::sample_affine_local`] to gate
+    /// its Y-space-boundary mosaic clamp on mGBA's own `mosaicV > 1` guard.
+    #[must_use]
+    pub(crate) const fn vertical(self) -> u8 {
+        self.v
+    }
+
     /// Returns the sprite-local sample for a screen-aligned mosaic block.
     ///
     /// `local_coordinate` is `screen_coordinate`'s offset in a non-empty sprite
@@ -238,6 +247,11 @@ mod tests {
     #[test]
     fn horizontal_returns_the_h_dimension() {
         assert_eq!(MosaicSize::new(3, 5).horizontal(), 3);
+    }
+
+    #[test]
+    fn vertical_returns_the_v_dimension() {
+        assert_eq!(MosaicSize::new(3, 5).vertical(), 5);
     }
 
     #[test]
