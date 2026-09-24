@@ -36,7 +36,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::locate::to_addr;
-use super::pack_source::{image_tiles, metatile_candidates, try_image_tiles};
+use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
 use super::Context;
 
@@ -109,16 +109,54 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     Vec::new()
 }
 
-/// Which ROM bit depths could produce a pack entry of this depth.
+/// Which ROM bit depths could produce a pack entry of this depth, the
+/// entry's own depth first and any narrower depth after it.
 ///
-/// A 4bpp entry can only have come from 4bpp tiles. An 8bpp entry usually
-/// came from 8bpp tiles, but not always: the title screen's press-start
-/// banner is an 8-bit-indexed PNG whose indices all fit a nibble, and
-/// upstream stores it as 4bpp.
+/// A 4bpp entry can only have come from 4bpp tiles, and a 2bpp entry's sole
+/// candidate is 4bpp too; both are authoritative, so a palette index that
+/// does not fit there is a malformed pack. An 8bpp entry usually came from
+/// 8bpp tiles, but not always: the title screen's press-start banner is an
+/// 8-bit-indexed PNG whose indices all fit a nibble, and upstream stores it
+/// as 4bpp. That second candidate is a speculative probe, so a raster whose
+/// indices do not fit it is simply not stored at that depth
+/// ([`probe_image_tiles`]).
 fn rom_depths(pack_bit_depth: u8) -> &'static [u8] {
     match pack_bit_depth {
         8 => &[8, 4],
         _ => &[4],
+    }
+}
+
+/// [`image_tiles`] for a speculative narrower-depth candidate of
+/// [`rom_depths`]: an out-of-range palette index resolves to `None`, the
+/// raster was never stored at this depth, rather than aborting the search.
+///
+/// # Errors
+///
+/// Same as [`image_tiles`], except
+/// [`pack_format::EntryShapeError::ImagePaletteIndexOutOfRange`] resolves to
+/// `Ok(None)`.
+fn probe_image_tiles(
+    pack: &PackSource,
+    id: &str,
+    rom_bit_depth: u8,
+    metatile: (u32, u32),
+) -> Result<Option<Vec<u8>>, GenRomProfileError> {
+    let asset = pack.get(id)?;
+    let (width, height, _) = asset.image_shape(id)?;
+    match pack_format::tiles_from_image(
+        &asset.payload,
+        rom_bit_depth,
+        width,
+        height,
+        Some(metatile),
+    ) {
+        Ok(tiles) => Ok(Some(tiles)),
+        Err(pack_format::EntryShapeError::ImagePaletteIndexOutOfRange { .. }) => Ok(None),
+        Err(err) => Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: err.to_string(),
+        }),
     }
 }
 
@@ -162,26 +200,13 @@ pub fn locate_images(
         for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
-                // `rom_depths` lists the entry's own depth first and any
-                // narrower depth after it as a speculative probe (an 8bpp
-                // entry may really be a 4bpp-fitting sheet upstream packed
-                // narrow); a probe whose real indices do not fit that depth
-                // is not a candidate here, not a malformed pack, so it
-                // drops this depth/shape rather than aborting the search
-                // for every other query and depth. That suppression only
-                // applies to a later, speculative candidate: `depth_index`
-                // rather than a numeric comparison to `pack_bit_depth`
-                // decides it, because a 2bpp entry's sole candidate is
-                // 4bpp too, and is exactly as authoritative as a 4bpp
-                // entry's -- neither is a guess, so an out-of-range index
-                // at either must reach `image_tiles` and report as
-                // `EntryShape` rather than read as the art simply not
-                // being here.
+                // Only a later `rom_depths` candidate is a guess (its docs
+                // own why); the first is authoritative and reports as is.
                 let tiles = if depth_index == 0 {
                     image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
                 } else {
                     let Some(tiles) =
-                        try_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                        probe_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
                     else {
                         continue;
                     };

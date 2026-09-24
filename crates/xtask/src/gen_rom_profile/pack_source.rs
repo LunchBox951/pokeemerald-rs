@@ -202,41 +202,6 @@ pub fn image_tiles(
         })
 }
 
-/// Like [`image_tiles`], but for [`super::images::locate_images`]'s
-/// speculative narrower-depth probe: a raster whose real palette indices do
-/// not fit `rom_bit_depth` is not a malformed pack, just a depth this
-/// raster was never stored at, so it resolves to `None` rather than
-/// aborting the whole search.
-///
-/// # Errors
-///
-/// Same as [`image_tiles`], except
-/// [`pack_format::EntryShapeError::ImagePaletteIndexOutOfRange`] resolves to
-/// `Ok(None)` instead of an error.
-pub fn try_image_tiles(
-    pack: &PackSource,
-    id: &str,
-    rom_bit_depth: u8,
-    metatile: (u32, u32),
-) -> Result<Option<Vec<u8>>, GenRomProfileError> {
-    let asset = pack.get(id)?;
-    let (width, height, _) = asset.image_shape(id)?;
-    match pack_format::tiles_from_image(
-        &asset.payload,
-        rom_bit_depth,
-        width,
-        height,
-        Some(metatile),
-    ) {
-        Ok(tiles) => Ok(Some(tiles)),
-        Err(pack_format::EntryShapeError::ImagePaletteIndexOutOfRange { .. }) => Ok(None),
-        Err(err) => Err(GenRomProfileError::EntryShape {
-            id: id.to_owned(),
-            reason: err.to_string(),
-        }),
-    }
-}
-
 /// Every metatile shape that divides an image's tile grid.
 ///
 /// The ROM decides which one upstream used: only the right shape produces
