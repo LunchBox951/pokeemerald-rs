@@ -387,6 +387,10 @@ enum DrainError {
     /// `AudioOutput::stream_errors` went nonzero after the ring emptied,
     /// while the device was still playing its final buffer.
     StreamStoppedDuringTail { errors: u64 },
+    /// `RetryPolicy::max_wait` elapsed with the device's measured playback
+    /// position still short of the submitted target and no stream error
+    /// reported.
+    MeasuredTailTimedOut { sounded: u64, target: u64 },
 }
 
 impl DrainError {
@@ -403,6 +407,11 @@ impl DrainError {
             DrainError::DeadlineExceeded { remaining } => format!(
                 "no drain progress before the {:.1}s retry deadline; {remaining} sample(s) were \
                  still queued and unplayed",
+                RETRY_MAX_WAIT.as_secs_f64()
+            ),
+            DrainError::MeasuredTailTimedOut { sounded, target } => format!(
+                "the device had sounded {sounded} of {target} submitted frame(s) at the {:.1}s \
+                 retry deadline; the final audio is unconfirmed",
                 RETRY_MAX_WAIT.as_secs_f64()
             ),
         }
@@ -495,13 +504,14 @@ fn wait_for_device_tail(
 /// `platform::AudioOutput::playback_progress`) to reach `target` submitted
 /// device frames, polling `sounded_frames` at `policy.interval`.
 ///
-/// Gives up quietly at `policy.max_wait`, exactly as the derived
-/// [`wait_for_device_tail`]'s fixed sleep does: this bounds how long a
-/// healthy but slow-to-report stream is held open, not a promise the device
-/// actually finished sounding by then. A stream error before the target is
-/// reached is not a successful finish, matching [`wait_for_device_tail`].
-/// `sounded_frames`, `stream_errors`, `now`, and `sleep` are injected as in
-/// [`push_frame`].
+/// `policy.max_wait` bounds how long a stream is held open, but unlike the
+/// derived [`wait_for_device_tail`]'s fixed sleep the measured wait knows
+/// whether the target was reached: a position still short of it at the
+/// deadline is reported as [`DrainError::MeasuredTailTimedOut`] rather than
+/// read as a finish. A stream error before the target is reached is not a
+/// successful finish either, matching [`wait_for_device_tail`]. The signal
+/// disappearing mid-wait is not itself a failure. `sounded_frames`,
+/// `stream_errors`, `now`, and `sleep` are injected as in [`push_frame`].
 fn wait_for_measured_tail(
     target: u64,
     policy: &RetryPolicy,
@@ -517,15 +527,13 @@ fn wait_for_measured_tail(
         if errors > 0 {
             return Err(DrainError::StreamStoppedDuringTail { errors });
         }
-        match sounded {
+        let sounded = match sounded {
             Some(sounded) if sounded >= target => return Ok(()),
-            // The signal disappearing mid-wait should not itself be read as
-            // a failure -- give up quietly, the same as a stalled deadline.
+            Some(sounded) => sounded,
             None => return Ok(()),
-            _ => {}
-        }
+        };
         if now() >= deadline {
-            return Ok(());
+            return Err(DrainError::MeasuredTailTimedOut { sounded, target });
         }
         sleep(policy.interval);
     }
@@ -1184,10 +1192,10 @@ mod tests {
     }
 
     #[test]
-    fn measured_wait_gives_up_quietly_at_the_deadline_with_no_stream_error() {
-        // A stalled measured signal is bounded exactly like the derived
-        // tail's fixed sleep: giving up alone is not itself a reported
-        // failure.
+    fn measured_wait_reports_a_stalled_target_at_the_deadline() {
+        // A position still short of the target when the bound elapses is a
+        // stalled device, not a finish: the tool must not exit successfully
+        // with the final audio unconfirmed.
         let policy = RetryPolicy {
             interval: std::time::Duration::from_millis(10),
             max_wait: std::time::Duration::from_millis(30),
@@ -1207,7 +1215,16 @@ mod tests {
             },
         );
 
-        assert!(result.is_ok());
+        assert!(
+            matches!(
+                result,
+                Err(DrainError::MeasuredTailTimedOut {
+                    sounded: 0,
+                    target: 4
+                })
+            ),
+            "an unmet measured target must not exit successfully"
+        );
         assert!(
             sleeps.get() > 0,
             "must have retried at least once before giving up"
