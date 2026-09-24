@@ -112,10 +112,18 @@
 //! removes a level only relative to the parent handle that level was
 //! created through, and only once that parent's own lookup of the name
 //! still identifies the directory this run made (`fstat`'s device and
-//! inode, compared before every `unlinkat`). A name that now resolves to
-//! something else is left standing rather than guessed at — harmless
-//! litter, not a directory some other process is about to write into. Off
-//! Unix, created levels are still addressed by path, like the destination
+//! inode, checked immediately before `unlinkat`). That check narrows the
+//! window from the whole cleanup call down to the gap between the check and
+//! the removal itself — two syscalls, not one, because no Unix this ships
+//! to can remove a directory by the descriptor that names it: `unlinkat`
+//! always re-resolves the name it is given. A rename that swaps a
+//! different directory into that exact name inside that gap is still
+//! removed; nothing portable closes a window that narrow. What the check
+//! does promise is everything outside it — a rename anywhere before the
+//! check is caught, and a name that resolves to something else *at check
+//! time* is left standing rather than guessed at, harmless litter rather
+//! than a directory some other process is about to write into. Off Unix,
+//! created levels are still addressed by path, like the destination
 //! itself.
 //!
 //! A device and inode pair only names one directory while that inode is
@@ -1051,10 +1059,15 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// the device and inode `create_directories` captured, without following a
 /// final symlink -- and against the level's own held descriptor's `fstat`,
 /// whose inode cannot have been freed and reissued to a replacement; a
-/// level with no held descriptor is never removed. Only a match is removed, by that same lookup
-/// (`unlinkat`, which a held descriptor does not prevent), never a name that
-/// now resolves to something else -- that is left standing as harmless
-/// litter rather than taken on the strength of its spelling alone.
+/// level with no held descriptor is never removed. Only a match at that
+/// lookup is removed, by the same name, through `unlinkat` -- which is why
+/// holding the descriptor open does not by itself prevent the removal:
+/// `unlinkat` takes a parent and a name, never a descriptor to the entry
+/// itself, so it re-resolves that name at the instant it runs. A name that
+/// resolves to something else *at the lookup* is left standing as harmless
+/// litter rather than taken on the strength of its spelling alone; module
+/// docs spell out how narrow the gap between that lookup and the
+/// `unlinkat` really is, and why nothing here closes it further.
 #[cfg(unix)]
 fn undo_created_directories(created: &[CreatedDirectory]) {
     let same =
