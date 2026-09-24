@@ -241,9 +241,10 @@ struct SlotScan {
     /// Whether an `Ok` integrity came from the legacy five-sector fallback
     /// rather than all 14 sectors validating. See [`SaveStore::resolve`].
     legacy: bool,
-    /// The counter of a complete, checksum-valid, counter-consistent set of
-    /// ids 5-13 held anywhere in this slot: the box data still salvageable
-    /// from it, whatever the slot's own integrity. A legacy head's stale
+    /// The generation of a complete, checksum-valid set of ids 5-13, each
+    /// held once, anywhere in this slot (at most one footer counter may
+    /// disagree; see `SlotSurvey::storage_generation`): the box data still
+    /// salvageable from it, whatever the slot's own integrity. A legacy head's stale
     /// tail sets it; so does a slot whose save-block sectors are too damaged
     /// for the slot to be `Ok` at all. Completeness is required because a
     /// partial set would mix stale chunks with zeroed ones into a storage
@@ -298,8 +299,9 @@ struct SlotSurvey {
     tail_consistent: bool,
     tail_matches_predecessor_of_identity_head: bool,
     storage_valid_ids: u32,
-    storage_counter: Option<u32>,
-    storage_consistent: bool,
+    /// The footer counter of each checksum-valid storage id (5-13), indexed
+    /// by chunk; meaningful only for the ids set in `storage_valid_ids`.
+    storage_counters: [u32; PKMN_STORAGE_CHUNKS],
     storage_ids_unique: bool,
     legacy_counter: Option<u32>,
     legacy_consistent: bool,
@@ -319,8 +321,7 @@ impl SlotSurvey {
             tail_consistent: true,
             tail_matches_predecessor_of_identity_head: true,
             storage_valid_ids: 0,
-            storage_counter: None,
-            storage_consistent: true,
+            storage_counters: [0; PKMN_STORAGE_CHUNKS],
             storage_ids_unique: true,
             legacy_counter: None,
             legacy_consistent: true,
@@ -361,11 +362,7 @@ impl SlotSurvey {
                 self.storage_ids_unique = false;
             }
             self.storage_valid_ids |= 1 << id;
-            match self.storage_counter {
-                None => self.storage_counter = Some(counter),
-                Some(c) if c == counter => {}
-                Some(_) => self.storage_consistent = false,
-            }
+            self.storage_counters[usize::from(id - SECTOR_ID_PKMN_STORAGE_START)] = counter;
         }
         if in_tail {
             match self.tail_counter {
@@ -389,6 +386,29 @@ impl SlotSurvey {
                 Some(_) => self.legacy_consistent = false,
             }
         }
+    }
+
+    /// The generation a complete, unique storage set belongs to: the
+    /// counter at least eight of its nine footers agree on.
+    ///
+    /// The counter sits outside the checksummed payload (upstream's
+    /// `CalculateChecksum` sums `data` only, `pokeemerald/src/save.c:674-685`;
+    /// likewise [`Sector::is_valid`]), so one damaged footer leaves a chunk
+    /// whose bytes still verify. Upstream never compares counters across a
+    /// slot's sectors at all (`GetSaveValidStatus`, `save.c:514-585`). A
+    /// torn write cannot produce this shape either: it lays new ids 0.. in
+    /// order two rotations past the slot's previous generation, so the old
+    /// and new sectors it leaves always meet at a duplicated pair of ids and
+    /// a missing pair, and a set with neither in 5-13 draws on one
+    /// generation only. Anything wider than one outlier is still refused.
+    fn storage_generation(&self) -> Option<u32> {
+        self.storage_counters.iter().copied().find(|&candidate| {
+            self.storage_counters
+                .iter()
+                .filter(|&&counter| counter == candidate)
+                .count()
+                >= PKMN_STORAGE_CHUNKS - 1
+        })
     }
 
     fn verdict(&self) -> SlotScan {
@@ -441,19 +461,17 @@ impl SlotSurvey {
         } else {
             self.counter
         };
-        // Only a complete, single-generation set holding each id exactly once
-        // is worth donating. It also
-        // fills all nine tail positions when it is a legacy head's stale
-        // tail, so such a tail can never carry the id-0 remnant that would
-        // steal the head's rotation in `copy_valid_slot_payloads`.
-        let storage_counter = if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK
-            && self.storage_consistent
-            && self.storage_ids_unique
-        {
-            self.storage_counter
-        } else {
-            None
-        };
+        // Only a complete set holding each id exactly once is worth
+        // donating. It also fills all nine tail positions when it is a
+        // legacy head's stale tail, so such a tail can never carry the id-0
+        // remnant that would steal the head's rotation in
+        // `copy_valid_slot_payloads`.
+        let storage_counter =
+            if self.storage_valid_ids == PKMN_STORAGE_IDS_MASK && self.storage_ids_unique {
+                self.storage_generation()
+            } else {
+                None
+            };
         SlotScan {
             integrity,
             counter,
@@ -2414,6 +2432,65 @@ mod tests {
             &store.base_pokemon_storage[..],
             &storage_bytes[..],
             "the tail's verified storage must survive even with no second slot"
+        );
+    }
+
+    /// A sector's footer counter sits outside the payload its checksum
+    /// covers, upstream (`pokeemerald/src/save.c:674-685` sums `data` only)
+    /// and here ([`Sector::is_valid`]), so flash damage there leaves every
+    /// id and checksum intact. Both slots hold legacy heads, and only slot
+    /// 1's stale tail is a complete storage set; one bit of one of its
+    /// counters must not cost the player every boxed Pokemon when the other
+    /// eight chunks still agree on their generation.
+    #[test]
+    fn one_damaged_storage_counter_still_leaves_a_complete_tail_donatable() {
+        let block2 = sample_block2();
+        let older_block1 = SaveBlock1 {
+            money: 111,
+            ..sample_block1()
+        };
+        let newer_block1 = SaveBlock1 {
+            money: 222,
+            ..sample_block1()
+        };
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        write_full_slot(&mut store, 1, &older_block1, &block2, &storage_bytes, 2);
+        // The counter's high byte of storage id 9, at position 9: footer
+        // only, so its checksum still holds.
+        store.corrupt_byte(1, 9, SECTOR_SIZE - 1);
+        assert!(store.read_physical(1, 9).is_valid(SECTOR_DATA_SIZE));
+        write_legacy_slot_rotated(&mut store, 1, &older_block1, &block2, 3, 1);
+        write_legacy_slot(&mut store, 0, &newer_block1, &block2, 4);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(store.save_counter(), 4);
+        assert_eq!(outcome.block1.money, newer_block1.money);
+        assert!(
+            store.base_pokemon_storage[..] == storage_bytes[..],
+            "an isolated counter outlier must not zero an otherwise complete storage set"
+        );
+    }
+
+    /// One outlier is flash damage; two disagreeing footers are no longer a
+    /// set this scan can vouch for, so the donor rule stays strict there.
+    #[test]
+    fn two_damaged_storage_counters_withdraw_the_tail_as_a_donor() {
+        let block2 = sample_block2();
+        let storage_bytes = vec![0xABu8; PKMN_STORAGE_PAYLOAD_LEN];
+
+        let mut store = SaveStore::new();
+        write_full_slot(&mut store, 1, &sample_block1(), &block2, &storage_bytes, 2);
+        store.corrupt_byte(1, 9, SECTOR_SIZE - 1);
+        write_legacy_slot_rotated(&mut store, 1, &sample_block1(), &block2, 3, 1);
+        assert_eq!(store.scan_slot(1).storage_counter, Some(2));
+
+        store.corrupt_byte(1, 11, SECTOR_SIZE - 1);
+        assert!(
+            store.scan_slot(1).storage_counter.is_none(),
+            "two counter outliers must not be offered as a donor"
         );
     }
 
