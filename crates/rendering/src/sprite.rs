@@ -411,6 +411,13 @@ impl<'a> SpriteLayer<'a> {
         const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
 
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
+        // Shared by both `sample_entry_mosaic` branches; the contract is on
+        // `floor_dy_to_wrap_boundary_bottom`.
+        let local_y = if mosaic.vertical() > 1 {
+            entry.floor_dy_to_wrap_boundary_bottom(local_y)
+        } else {
+            local_y
+        };
         let entry_x = i32::from(entry.x());
         let block_origin_x = mosaic.snap(x, y).0 as i32;
         let local_x = if block_origin_x >= entry_x {
@@ -1142,6 +1149,124 @@ mod tests {
                     .map(|p| p.color),
                 Some(BLUE.to_rgb888()),
                 "screen x = {x}"
+            );
+        }
+    }
+
+    /// A 64x64 texture for a double-size affine sprite whose box ends
+    /// exactly at the Y-space boundary: source row 0 (top) is red, and
+    /// source row 63 (bottom) marks columns 0 and 1 green so both the
+    /// normal color path and the OBJWIN transparency path can distinguish
+    /// "own row" from "forced bottom row".
+    fn wrap_boundary_affine_double_size_texture() -> (Vec<u8>, Palette) {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BITS_PER_PIXEL: usize = 4;
+        const TEXTURE_TILES_PER_ROW: usize = 64 / BitDepth::TILE_DIM;
+        const TILE_COUNT: usize = TEXTURE_TILES_PER_ROW * TEXTURE_TILES_PER_ROW;
+        const TOP_ROW: usize = 0;
+        const BOTTOM_ROW: usize = 63;
+
+        let mut bytes = vec![0u8; TILE_COUNT * BPP4_TILE_BYTES];
+        let mut set_pixel = |x: usize, y: usize, index: u8| {
+            let bytes_per_tile_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+            let tile_index =
+                (y / BitDepth::TILE_DIM) * TEXTURE_TILES_PER_ROW + (x / BitDepth::TILE_DIM);
+            let (local_x, local_y) = (x % BitDepth::TILE_DIM, y % BitDepth::TILE_DIM);
+            let byte = tile_index * BPP4_TILE_BYTES
+                + local_y * bytes_per_tile_row
+                + local_x / PIXELS_PER_BYTE;
+            bytes[byte] |= index << ((local_x % PIXELS_PER_BYTE) * BITS_PER_PIXEL);
+        };
+        set_pixel(0, TOP_ROW, RED_INDEX);
+        set_pixel(0, BOTTOM_ROW, GREEN_INDEX);
+        set_pixel(1, BOTTOM_ROW, GREEN_INDEX);
+
+        (
+            bytes,
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]),
+        )
+    }
+
+    fn wrap_boundary_double_size_affine_entry(y: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            y,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            SIXTY_FOUR_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 })
+    }
+
+    fn half_scale_matrix() -> AffineMatrix {
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        AffineMatrix::new(two_times_magnification, 0, 0, two_times_magnification)
+    }
+
+    /// A double-size affine box (128 tall) at raw Y=128 ends exactly at the
+    /// Y-space boundary, the case `OamEntry::floor_dy_to_wrap_boundary_bottom`
+    /// documents.
+    #[test]
+    fn affine_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y).with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert_eq!(
+            layer.resolve_pixel(0, usize::from(RAW_Y)).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "without mosaic, the top row samples its own source row"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(0, y, vertical_mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen y = {y}"
+            );
+        }
+    }
+
+    /// The OBJWIN affine path shares `sample_affine_local` with the normal
+    /// affine path, so it must be pinned to the same forced bottom row.
+    #[test]
+    fn affine_objwin_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const SCREEN_X: usize = 2;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert!(
+            !layer.objwin_mask(SCREEN_X, usize::from(RAW_Y)),
+            "without mosaic, the top row's source column is transparent"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert!(
+                layer.objwin_mask_with_mosaic(SCREEN_X, y, vertical_mosaic),
+                "screen y = {y}"
             );
         }
     }
