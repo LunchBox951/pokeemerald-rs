@@ -53,6 +53,12 @@
 //! different number of `Random()` calls, and a shared stream that advanced
 //! the wrong number of steps is wrong for the rest of the battle.
 //!
+//! [`secondary::ensure_admissible`]'s Serene Grace/Synchronize screen is
+//! status-dependent rather than static, so a residual that cures a primary
+//! status can flip a verdict construction already gave. `Battle` re-screens
+//! the enemy's admissible moves once at the start of every turn, before that
+//! turn's own RNG, restoring the guarantee above for the life of the battle.
+//!
 //! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
 //! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
 //! flag: crit suppression ([`hit::resolve_hit`]'s `suppress_crit`, see

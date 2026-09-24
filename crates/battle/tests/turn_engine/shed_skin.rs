@@ -11,7 +11,9 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::status1::poison_residual_damage;
-use battle::{Battle, BattleEvent, BattleOutcome, Dex, MoveLearnDecision, PlayerAction, Status1};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, Dex, MoveLearnDecision, PlayerAction, Status1,
+};
 
 /// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
@@ -41,6 +43,14 @@ const DRATINI: u16 = 147;
 const RATTATA: u16 = 19;
 /// `SPECIES_TREECKO`, [`MAY_ROUTE_103_MUDKIP`]'s two-mon bench.
 const TREECKO: u16 = 277;
+/// `SPECIES_DUNSPARCE`: Serene Grace in its primary ability slot, the
+/// ability `secondary::ensure_admissible` refuses to admit once a Poison
+/// Sting could newly land.
+const DUNSPARCE: u16 = 206;
+/// `MOVE_POISON_STING`, a 30% `EFFECT_POISON_HIT` move Serene Grace doubles
+/// to 60%; this crate does not model that doubling, so
+/// `secondary::ensure_admissible` refuses it instead.
+const POISON_STING: MoveId = MoveId(40);
 /// May's Route 103 starter-rival trainer, whose party this fixture replaces
 /// with two [`TREECKO`] so the bench survives the first knockout.
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
@@ -310,4 +320,54 @@ fn resolve_move_learn_threads_rng_into_the_deferred_shed_skin_cure_draw() {
     );
     assert_eq!(battle.player().status1(), Status1::Healthy);
     assert_eq!(battle.outcome(), None, "the battle plays on");
+}
+
+/// Construction admitted Serene Grace's Poison Sting only because the
+/// statused player could not be poisoned; once Shed Skin cures the player,
+/// the pre-turn re-screen must refuse the next turn before its own RNG runs,
+/// not let Poison Sting silently reach the executor's undoubled 30% chance.
+/// A draw of 48 would land under upstream's doubled 60% threshold.
+#[test]
+fn serene_grace_poison_sting_after_a_shed_skin_cure_is_not_silently_undoubled() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, DRATINI, 10, vec![TACKLE]);
+    player.set_status1(Status1::Poisoned);
+    let enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
+    assert_eq!(enemy.ability(), assets::AbilityId::SERENE_GRACE);
+
+    let mut rng = SequenceRng::new([48u16; 256]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
+        .expect("a statused target makes the constructor admit Serene Grace");
+    let first = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        first.contains(&BattleEvent::ShedSkinCured {
+            by_player: true,
+            status: Status1::Poisoned
+        }),
+        "{first:?}"
+    );
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+
+    let turn_error = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect_err(
+            "the cure must make the next turn re-screen Poison Sting, not silently reuse \
+             construction's now-stale admission",
+        );
+    assert_eq!(
+        turn_error.error(),
+        BattleError::UnportedAbilityInteraction(assets::AbilityId::SERENE_GRACE)
+    );
+    assert!(
+        turn_error.events().is_empty(),
+        "the re-screen runs before this turn's own RNG or events, like construction's own \
+         admission check: {turn_error:?}"
+    );
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Healthy,
+        "a pre-turn rejection runs no move"
+    );
 }

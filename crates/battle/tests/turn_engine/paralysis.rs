@@ -739,6 +739,11 @@ fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
         "the scripted miss must leave the status uncured this turn: {events:?}"
     );
     assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
+    );
 }
 
 /// Shed Skin admits a Synchronize reflection just like a direct hit: the
@@ -788,6 +793,11 @@ fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
         Status1::Paralysed,
         "Synchronize passes the paralysis back to the Shed Skin attacker, \
          and the scripted miss leaves it uncured this turn"
+    );
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
     );
 }
 

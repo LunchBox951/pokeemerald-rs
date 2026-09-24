@@ -419,6 +419,18 @@ impl Battle {
         Ok(slot.move_id)
     }
 
+    /// Re-screens the enemy's moveset with [`secondary::ensure_admissible`],
+    /// the same PP gate construction used, against the current battlers
+    /// rather than the ones construction saw; see the crate root docs for why.
+    fn revalidate_enemy_admission(&self) -> Result<(), BattleError> {
+        for slot in self.enemy.moves() {
+            if slot.pp > 0 {
+                secondary::ensure_admissible(&self.dex, slot.move_id, &self.enemy, &self.player)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Resolves one player action and returns the resulting events in order.
     ///
     /// The action is validated before RNG is consumed. The opponent then chooses
@@ -448,6 +460,7 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let player_action = self.validate_player_action(player_action)?;
+        self.revalidate_enemy_admission()?;
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
