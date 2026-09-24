@@ -192,15 +192,17 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
 /// Guts and Marvel Scale (`battle_script_commands.c:2299-2340`); their
 /// status-dependent damage reads (`pokemon.c:3211-3214`) are modelled by
 /// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
-/// newly poisoning either holder is admitted.
+/// newly poisoning either holder is admitted. Shed Skin is likewise admitted:
+/// its end-turn cure draw lives in `Battle::residual_effects` instead of
+/// here.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
 /// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
 /// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
-/// the attacker's Serene Grace, or the defender's Synchronize or Shed Skin,
-/// when the move would newly poison the defender.
+/// the attacker's Serene Grace or the defender's Synchronize, when the move
+/// would newly poison the defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -223,15 +225,12 @@ pub fn ensure_admissible(
     if !poison_can_land(move_type, defender) {
         return Ok(());
     }
-    match defender.ability() {
-        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SHED_SKIN,
-        )),
-        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
-            BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
-        ),
-        _ => Ok(()),
+    if defender.ability() == AbilityId::SYNCHRONIZE && attacker.status1().is_healthy() {
+        return Err(BattleError::UnportedAbilityInteraction(
+            AbilityId::SYNCHRONIZE,
+        ));
     }
+    Ok(())
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.

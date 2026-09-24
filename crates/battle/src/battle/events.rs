@@ -8,6 +8,7 @@ use assets::{AbilityId, MoveId, SpeciesId};
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 
 use super::BattleOutcome;
 
@@ -290,6 +291,18 @@ pub enum BattleEvent {
         by_player: bool,
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
+    },
+    /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
+    /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
+    /// holder's end-turn draw cured its primary status, before that
+    /// battler's own [`BattleEvent::HurtByPoison`] tick would otherwise run
+    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON`,
+    /// `pokeemerald/src/battle_util.c:1494`-`:1535`).
+    ShedSkinCured {
+        /// Whether the player's battler was cured.
+        by_player: bool,
+        /// The primary status Shed Skin cured.
+        status: Status1,
     },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
