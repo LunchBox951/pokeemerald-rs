@@ -586,7 +586,7 @@ fn a_level_up_prompt_defers_the_residual_tick_to_the_answer_rather_than_dropping
     let hp_before = battle.player().current_hp();
     let expected = poison_residual_damage(battle.player().stats().max_hp);
     let answered = battle
-        .resolve_move_learn(battle::MoveLearnDecision::Decline)
+        .resolve_move_learn(battle::MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,

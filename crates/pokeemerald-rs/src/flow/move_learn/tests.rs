@@ -128,7 +128,7 @@ fn settling_declines_the_prompt_before_releasing_the_deferred_send_out() {
         "fixture sanity: the fight must have reached the prompt"
     );
 
-    let events = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
 
     assert_eq!(
         events,
@@ -142,7 +142,7 @@ fn settling_declines_the_prompt_before_releasing_the_deferred_send_out() {
     );
     assert!(battle.pending_move_learn().is_none());
     assert!(
-        settle_move_learn_prompts(&mut battle).is_empty(),
+        settle_move_learn_prompts(&mut battle, &mut rng).is_empty(),
         "settling again with nothing pending is a no-op, not an error"
     );
 }
@@ -175,7 +175,7 @@ fn declining_a_prompt_preserves_the_pp_up_bits() {
         "fixture sanity: the PP-Up fixture reaches the Peck prompt"
     );
     assert_eq!(
-        settle_move_learn_prompts(&mut probe).first(),
+        settle_move_learn_prompts(&mut probe, &mut probe_rng).first(),
         Some(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
         "settling the prompt declines it"
     );
@@ -242,7 +242,7 @@ fn settling_a_prompt_does_not_advance_the_shared_rng() {
     assert!(battle.pending_move_learn().is_some());
 
     let before = rng.state();
-    let events = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
     assert!(
         events.contains(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
         "the RNG-state check below only means anything once the prompt is answered"
@@ -313,7 +313,7 @@ fn settling_drains_a_chain_of_prompts_in_one_call() {
     );
     let money = battle.trainer().expect("a trainer battle").money();
 
-    let events = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
 
     assert_eq!(
         events,
