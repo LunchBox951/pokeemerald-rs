@@ -119,9 +119,10 @@
 //!
 //! This is the evidence for I-2 "boots to the title screen". Before it, the
 //! pack-backed title coverage (`animated_frame_returns_the_presented_tick`,
-//! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) all called
-//! [`title::load_repo`]/`compose` directly, and went through neither
-//! construction nor presentation.
+//! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) built the
+//! scene directly, through [`title::load_repo`] or `TitleScene::from_pack`,
+//! and called `compose` on it, going through neither construction nor
+//! presentation.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
