@@ -1361,14 +1361,16 @@ mod tests {
         // `objwin_slow_path` alone (independent of `color_semi_transparent`)
         // must suppress the draw-time variant when a target2 exists
         // (function docs above), deferring to the reblend fallback instead --
-        // which darkens the still-raw color exactly once, not twice.
+        // which darkens the still-raw color exactly once, not twice. A half
+        // weight keeps one and two passes distinguishable: a full-weight
+        // darken maps white to black and a second pass would leave it there.
         let cfg = EffectsConfig {
             effect: ColorEffect::Darken,
             target1: obj_target(),
             target2: bg_target(1),
             eva: 0,
             evb: 0,
-            evy: FULL_WEIGHT,
+            evy: HALF_WEIGHT,
         };
         let front = opaque_layer(WHITE, LayerKind::Obj);
         let non_target_neighbor = Some((Rgb888::BLACK, LayerKind::Bg(2)));
@@ -1386,8 +1388,13 @@ mod tests {
         );
         assert_eq!(
             result,
-            Rgb888::BLACK,
+            darken(WHITE, HALF_WEIGHT),
             "the reblend fallback darkens the still-raw color exactly once"
+        );
+        assert_ne!(
+            darken(darken(WHITE, HALF_WEIGHT), HALF_WEIGHT),
+            darken(WHITE, HALF_WEIGHT),
+            "the half weight must tell one darken from two"
         );
     }
 
