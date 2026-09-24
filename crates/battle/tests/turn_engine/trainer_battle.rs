@@ -857,7 +857,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let dex = Dex::new();
     let money = battle.trainer().expect("a trainer battle").money();
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Replace(1))
+        .resolve_move_learn(MoveLearnDecision::Replace(1), &mut rng)
         .unwrap();
     assert_eq!(
         answered,
@@ -896,7 +896,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     );
     assert_eq!(
         battle
-            .resolve_move_learn(MoveLearnDecision::Decline)
+            .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
             .unwrap_err(),
         BattleError::NoMoveLearnPending,
         "answering twice is a caller bug, not a second decision"
@@ -953,7 +953,7 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
     );
 
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Decline)
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,
@@ -1020,7 +1020,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     // else -- no money, no outcome, no end.
     for pair in LEVEL_15_BLOCK.windows(2) {
         let answered = battle
-            .resolve_move_learn(MoveLearnDecision::Decline)
+            .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
             .unwrap();
         assert_eq!(
             answered,
@@ -1034,7 +1034,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
 
     // The last answer releases the whole deferred aftermath, in order.
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Decline)
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,
