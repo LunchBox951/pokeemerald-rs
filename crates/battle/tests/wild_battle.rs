@@ -279,15 +279,16 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
 
     // The final report carries both members' terminal state: the original
     // active's overkill and the reserve's own overkill, each never having
-    // acted, so neither spent any PP. `Battle::player` reports whichever
-    // member is (or was last) active first -- the Squirtle reserve here --
-    // then the remaining slot, which now holds the demoted Rattata.
+    // acted, so neither spent any PP. The members keep the order they were
+    // passed in -- the Rattata that started active, then the Squirtle
+    // reserve -- though the Squirtle is the one `Battle::player` reports.
+    assert_eq!(battle.player().species(), SpeciesId(7));
     let members: Vec<_> = battle.player_members().collect();
     assert_eq!(members.len(), 2);
-    assert_eq!(members[0].species(), SpeciesId(7));
+    assert_eq!(members[0].species(), SpeciesId(19));
     assert_eq!(members[0].current_hp(), 0);
     assert_eq!(members[0].moves()[0].pp, tackle_max_pp);
-    assert_eq!(members[1].species(), SpeciesId(19));
+    assert_eq!(members[1].species(), SpeciesId(7));
     assert_eq!(members[1].current_hp(), 0);
     assert_eq!(members[1].moves()[0].pp, tackle_max_pp);
 }

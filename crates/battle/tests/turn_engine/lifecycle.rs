@@ -348,6 +348,98 @@ fn an_active_faint_with_a_healthy_reserve_sends_it_out_instead_of_ending_the_bat
     assert_eq!(rng.draws(), 7);
 }
 
+/// Upstream leaves every `gPlayerParty` record in its slot through a
+/// replacement and only repoints `gBattlerPartyIndexes`
+/// (`src/battle_script_commands.c:4613`), so a caller must be able to
+/// persist each reported member onto the slot it came from even when two
+/// members are indistinguishable by species, personality, and original
+/// trainer id -- the only thing left to tell them apart is position.
+#[test]
+fn identical_identity_members_report_in_their_original_party_order_after_a_replacement() {
+    let dex = Dex::new();
+    // Same species, personality, and OT id: only the slot tells these two
+    // Rattata apart. The first is overkilled by the L50 Charmander before
+    // it can act; the second enters untouched.
+    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 7)
+        .with_original_trainer_id(12_345);
+    let reserve = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 7)
+        .with_original_trainer_id(12_345);
+    let reserve_max_hp = reserve.stats().max_hp;
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::PlayerSentOut {
+            species: SpeciesId(19),
+            reserves_remaining: 0,
+        }),
+        "fixture sanity: the second Rattata replaced the first: {events:?}"
+    );
+    assert_eq!(battle.player().current_hp(), reserve_max_hp);
+
+    let members: Vec<_> = battle.player_members().collect();
+    assert_eq!(members.len(), 2);
+    assert_eq!(
+        members[0].current_hp(),
+        0,
+        "slot 0 is the Rattata that started active and fainted"
+    );
+    assert_eq!(
+        members[1].current_hp(),
+        reserve_max_hp,
+        "slot 1 is the Rattata that was sent out and still stands"
+    );
+    assert_eq!(rng.draws(), 7);
+}
+
+/// Two replacements in a row move the active member off party position 0,
+/// so the second send-out must return each fainted member to its own slot
+/// from the middle of the party, not just from the front.
+#[test]
+fn successive_replacements_keep_every_member_in_its_original_party_order() {
+    let dex = Dex::new();
+    // Three L5 Rattata told apart only by personality, each overkilled in
+    // turn by the fast L50 Charmander.
+    let player = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 1);
+    let second = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 2);
+    let third = max_iv_mon_with_personality(&dex, 19, 5, vec![MoveId(33)], 3);
+    let third_max_hp = third.stats().max_hp;
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+
+    // Turn 1: battle start, turn number, enemy pick, enemy hit. Turn 2:
+    // turn number, enemy pick, enemy hit.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, player, vec![second, third], enemy, false, &mut rng)
+            .unwrap();
+    for turn in 1..=2 {
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, BattleEvent::PlayerSentOut { .. })),
+            "fixture sanity: turn {turn} ends in a replacement: {events:?}"
+        );
+    }
+    assert_eq!(battle.outcome(), None);
+    assert_eq!(battle.player().personality(), 3);
+
+    let members: Vec<_> = battle.player_members().collect();
+    let personalities: Vec<_> = members.iter().map(|m| m.personality()).collect();
+    assert_eq!(personalities, vec![1, 2, 3], "the caller's order survives");
+    let hp: Vec<_> = members.iter().map(|m| m.current_hp()).collect();
+    assert_eq!(hp, vec![0, 0, third_max_hp]);
+    assert_eq!(rng.draws(), 13);
+}
+
 /// Unlike the test above, every player member here is already fainted when
 /// the active goes down, so `Cmd_checkteamslost`'s whole-party HP total is
 /// zero and `Battle::player_members` must still report both members' final

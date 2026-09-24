@@ -99,15 +99,20 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
-    /// The player's remaining party members for a wild battle, starting in
-    /// party order. Empty for a trainer battle: this slice models no
-    /// trainer-side player replacement.
-    /// [`Battle::send_out_next_player_reserve`] swaps the newly fainted
-    /// active member into the sent-out reserve's slot, so an index does not
-    /// keep standing for the same party position across replacements; see
-    /// [`Battle::player_members`] for reconciling a member by identity
-    /// instead.
+    /// The player's party members other than [`Battle::player`] for a wild
+    /// battle, always in the order the owning flow passed them. Empty for a
+    /// trainer battle: this slice models no trainer-side player replacement.
+    /// [`Battle::send_out_next_player_reserve`] returns a fainted active
+    /// member to its own position here rather than swapping it into the
+    /// sent-out reserve's, so the party order never changes across
+    /// replacements, as upstream's `gPlayerParty` records keep their slots
+    /// while `gBattlerPartyIndexes` names the active one.
     player_reserves: Vec<BattlePokemon>,
+    /// The position of [`Battle::player`] in the party as passed to
+    /// [`Battle::new_with_player_reserves`]: `0` until a replacement, and
+    /// never beyond `player_reserves.len()`. The player-side analogue of
+    /// upstream's `gBattlerPartyIndexes` entry for the player's battler.
+    player_slot: usize,
     enemy: BattlePokemon,
     run_attempts: u8,
     random_turn_number: u16,
@@ -266,6 +271,7 @@ impl Battle {
             dex,
             player,
             player_reserves,
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -329,6 +335,7 @@ impl Battle {
             // (issue #1326's boundary); a trainer battle's player party is
             // always this one active member.
             player_reserves: Vec::new(),
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -366,16 +373,24 @@ impl Battle {
         &self.player
     }
 
-    /// Returns every player-side battler this battle has drawn on, [`Battle::player`]
-    /// first and then the remaining reserve slots.
+    /// Returns every player-side party member in the order it was passed to
+    /// [`Battle::new_with_player_reserves`] -- the starting active member
+    /// first, then each reserve -- whichever member is active now.
     ///
-    /// Each entry's identity ([`BattlePokemon::species`],
-    /// [`BattlePokemon::personality`], [`BattlePokemon::original_trainer_id`])
-    /// and its final HP, PP, and experience state let an owning flow
-    /// reconcile it against the caller's party; this crate does not
-    /// interpret that identity itself.
+    /// The position is the stable link back to the caller's party slot: it
+    /// survives every replacement, so two members that share species,
+    /// personality, and original trainer id still reconcile to their own
+    /// slots. Each entry carries its final HP, PP, and experience state;
+    /// its identity ([`BattlePokemon::personality`],
+    /// [`BattlePokemon::original_trainer_id`]) remains available for the
+    /// owning flow to check each slot's record against, as it already does
+    /// for a single lead.
     pub fn player_members(&self) -> impl Iterator<Item = &BattlePokemon> {
-        std::iter::once(&self.player).chain(self.player_reserves.iter())
+        let (before, after) = self.player_reserves.split_at(self.player_slot);
+        before
+            .iter()
+            .chain(std::iter::once(&self.player))
+            .chain(after.iter())
     }
 
     /// Returns the opponent's active Pokémon.
@@ -889,6 +904,12 @@ impl Battle {
     /// party-order policy always takes the first non-fainted reserve, with
     /// no player choice and no party-screen UI.
     ///
+    /// The fainted member goes back to its own party position among the
+    /// reserves, so [`Battle::player_members`] keeps the caller's order:
+    /// upstream likewise leaves every `gPlayerParty` record in its slot and
+    /// only repoints `gBattlerPartyIndexes` at the replacement
+    /// (`src/battle_script_commands.c:4613`).
+    ///
     /// Returns `false`, leaving `self.player` untouched, once every reserve
     /// is fainted too.
     fn send_out_next_player_reserve(&mut self, events: &mut Vec<BattleEvent>) -> bool {
@@ -899,7 +920,26 @@ impl Battle {
         else {
             return false;
         };
-        std::mem::swap(&mut self.player, &mut self.player_reserves[index]);
+        // `player_reserves` holds every party position but `player_slot`, in
+        // order, so reserve `index` sits at party position `index` below the
+        // active member's and one past it above.
+        let replacement_slot = if index < self.player_slot {
+            index
+        } else {
+            index + 1
+        };
+        let replacement = self.player_reserves.remove(index);
+        let fainted = std::mem::replace(&mut self.player, replacement);
+        // Likewise, with both members out of the list, the fainted member's
+        // party position is its reserve index below the replacement's and
+        // one less above it.
+        let fainted_index = if self.player_slot < replacement_slot {
+            self.player_slot
+        } else {
+            self.player_slot - 1
+        };
+        self.player_reserves.insert(fainted_index, fainted);
+        self.player_slot = replacement_slot;
         events.push(BattleEvent::PlayerSentOut {
             species: self.player.species(),
             reserves_remaining: self.usable_player_reserves(),
@@ -1167,6 +1207,7 @@ mod tests {
             dex,
             player,
             player_reserves: Vec::new(),
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number: 0,
