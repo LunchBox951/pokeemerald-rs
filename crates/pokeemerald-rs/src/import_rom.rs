@@ -840,6 +840,29 @@ struct CreatedDirectory {
 fn create_directories(
     dir: &Path,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
+    create_directories_with_hooks(dir, &mut || {}, &mut || None)
+}
+
+/// [`create_directories`]'s real body on Unix, taking two test-only seams
+/// instead of reaching for a thread-local (global mutable state, against
+/// `crates/README.md`'s "Do not introduce global mutable state"). Both
+/// hooks are no-ops in production; [`create_directories`] is the only
+/// caller outside a test and passes exactly that pair.
+///
+/// - `before_dotdot` runs the instant before a `..` level is resolved --
+///   after every level ahead of it is made and pinned, the one point a
+///   test can land a swap that matters, with no second thread to schedule.
+/// - `force_reopen_failure` replaces the reopen issued right after a
+///   successful `mkdirat` whenever it answers `Some`, so a test can force
+///   the "reopen failed" branch deterministically instead of exhausting
+///   the real descriptor table (`ulimit -n`). `None` defers to the real
+///   reopen.
+#[cfg(unix)]
+fn create_directories_with_hooks(
+    dir: &Path,
+    before_dotdot: &mut dyn FnMut(),
+    force_reopen_failure: &mut dyn FnMut() -> Option<io::Error>,
+) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
         return Ok(Vec::new());
@@ -866,8 +889,7 @@ fn create_directories(
         // which would re-walk -- and so trust again -- every component
         // already pinned.
         let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
-            #[cfg(test)]
-            run_before_dotdot_hook();
+            before_dotdot();
             parent_fd = match dest::open_directory_at(&parent_fd, OsStr::new("..")) {
                 Ok(fd) => std::rc::Rc::new(fd),
                 Err(source) => return Err((created, source)),
@@ -909,8 +931,13 @@ fn create_directories(
                 // Continues the descent through a fresh handle -- refusing
                 // a symlink here too, for the same reason. The same handle
                 // is what the record holds to pin this level's inode.
-                let descend =
-                    dest::open_created_directory_at(&parent_fd, &name).map(std::rc::Rc::new);
+                let descend: io::Result<std::rc::Rc<std::os::fd::OwnedFd>> =
+                    match force_reopen_failure() {
+                        Some(err) => Err(err),
+                        None => {
+                            dest::open_created_directory_at(&parent_fd, &name).map(std::rc::Rc::new)
+                        }
+                    };
                 created.push(CreatedDirectory {
                     path: level,
                     parent: parent_fd,
@@ -952,32 +979,6 @@ fn create_directories(
         }
     }
     Ok(created)
-}
-
-#[cfg(all(test, unix))]
-thread_local! {
-    /// Runs on [`create_directories`]'s own thread the instant before it
-    /// resolves a `..` level -- after every level ahead of it is made and
-    /// pinned -- so a test can land a swap exactly there instead of racing
-    /// a second thread against the descent.
-    static BEFORE_DOTDOT: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Installs [`BEFORE_DOTDOT`] for this thread's next `..` level, replacing
-/// any hook already set.
-#[cfg(all(test, unix))]
-fn set_before_dotdot_hook(hook: impl FnMut() + 'static) {
-    BEFORE_DOTDOT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-}
-
-/// Takes and runs [`BEFORE_DOTDOT`] if a test installed one; a no-op
-/// otherwise.
-#[cfg(all(test, unix))]
-fn run_before_dotdot_hook() {
-    if let Some(mut hook) = BEFORE_DOTDOT.with(|slot| slot.borrow_mut().take()) {
-        hook();
-    }
 }
 
 /// [`create_directories`]'s off-Unix arm: no descriptor to pin, so this

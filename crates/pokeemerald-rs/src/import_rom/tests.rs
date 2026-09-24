@@ -491,13 +491,22 @@ fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
 fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
     // A level recorded without its own descriptor (the reopen right after
     // `mkdirat` failed) has nothing pinning its inode, so the cleanup cannot
-    // tell it from a same-number replacement and leaves it alone.
+    // tell it from a same-number replacement and leaves it alone. Driven
+    // through the injected `force_reopen_failure` hook rather than clearing
+    // `own` by hand afterwards, so this exercises the real reopen-failure
+    // branch instead of a stand-in for its end state.
     let dir = TempDir::new("undo-unpinned");
     let level = dir.join("new");
 
-    let mut created = create_directories(&level).expect("the missing level is created");
+    let (created, _source) = super::create_directories_with_hooks(&level, &mut || {}, &mut || {
+        Some(std::io::Error::other("reopen forced to fail for the test"))
+    })
+    .expect_err("a forced reopen failure fails the create");
     assert_eq!(created_paths(&created), std::slice::from_ref(&level));
-    created[0].own = None;
+    assert!(
+        created[0].own.is_none(),
+        "a forced reopen failure must record no pin"
+    );
 
     super::undo_created_directories(&created);
 
@@ -1467,8 +1476,8 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
     // tree, through an `mkdirat` the pinned descent was supposed to keep
     // out of reach.
     //
-    // The swap lands through `create_directories`'s own before-`..` hook,
-    // on its own thread, once both levels ahead of the `..` are made and
+    // The swap lands through `create_directories_with_hooks`'s injected
+    // `before_dotdot` hook, once both levels ahead of the `..` are made and
     // pinned and before the `..` is resolved -- the one point the race
     // matters, every run, with no second thread to schedule.
     let dir = TempDir::new("dotdot-swap");
@@ -1482,17 +1491,18 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
     let swapped = dir.join("l0");
     let moved = dir.join("carried-off");
     let swapped_at_dotdot = std::rc::Rc::new(std::cell::Cell::new(false));
-    {
+    let mut before_dotdot = {
         let (swapped, moved, mirror) = (swapped.clone(), moved.clone(), mirror.clone());
         let flag = std::rc::Rc::clone(&swapped_at_dotdot);
-        super::set_before_dotdot_hook(move || {
+        move || {
             fs::rename(&swapped, &moved).expect("the pinned level is carried off");
             std::os::unix::fs::symlink(&mirror, &swapped).expect("a symlink takes its name");
             flag.set(true);
-        });
-    }
+        }
+    };
 
-    let made_them = create_directories(&dest).is_ok();
+    let made_them =
+        super::create_directories_with_hooks(&dest, &mut before_dotdot, &mut || None).is_ok();
 
     assert!(
         swapped_at_dotdot.get(),
