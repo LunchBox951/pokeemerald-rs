@@ -8,6 +8,7 @@ use assets::{AbilityId, MoveId, SpeciesId};
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 
 use super::BattleOutcome;
 
@@ -291,12 +292,34 @@ pub enum BattleEvent {
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
     },
+    /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
+    /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
+    /// holder's end-turn draw cured its primary status, before that
+    /// battler's own [`BattleEvent::HurtByPoison`] tick would otherwise run
+    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON`,
+    /// `pokeemerald/src/battle_util.c:1494`-`:1535`).
+    ShedSkinCured {
+        /// Whether the player's battler was cured.
+        by_player: bool,
+        /// The primary status Shed Skin cured.
+        status: Status1,
+    },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
         /// The replacement's species.
         species: SpeciesId,
         /// Party members remaining on the bench after the replacement.
         bench_remaining: usize,
+    },
+    /// The player sent out the first non-fainted reserve after an active
+    /// faint, under the headless party-order policy (no player choice, no
+    /// party-screen UI). This crate models it only for a wild battle: a
+    /// trainer battle sends no player reserves.
+    PlayerSentOut {
+        /// The replacement's species.
+        species: SpeciesId,
+        /// Usable (non-fainted) reserves remaining after the replacement.
+        reserves_remaining: usize,
     },
     /// The full experience award after the opposing battler fainted.
     ///

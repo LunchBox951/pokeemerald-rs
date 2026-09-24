@@ -303,13 +303,10 @@ pub(crate) struct OverworldPhase {
     /// [`Self::party_lead`], but each bails out unless a lead is already
     /// `Some`, so none can flip this flag while it is true -- only this
     /// load path's arms do in production.
-    /// [`Self::copy_party_and_objects_to_save`] reads this
-    /// flag, not the save bytes, to decide whether the no-lead arm may zero
-    /// `player_party[0]` -- upstream's `SavePlayerParty`
-    /// (`pokeemerald/src/load_save.c:160-168`) never rebuilds a party
-    /// record from a partial model, it copies whatever bytes `gPlayerParty`
-    /// holds, so a slot this port cannot decode into a battler must still
-    /// round-trip through a save exactly as those bytes came in.
+    /// [`Self::copy_party_and_objects_to_save`]'s no-lead arm leaves
+    /// `player_party[0]`/`player_party_count` untouched either way, so this
+    /// flag is diagnostic only -- it records *why* [`Self::party_lead`] is
+    /// `None`, not a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
     /// The wild battle currently being played out, if any (issue #169).
     /// `Some` freezes the overworld for the frame -- the same shape

@@ -60,7 +60,11 @@ use super::{read_file, read_text, ExtractError};
 use pack_format::PackWriter;
 
 const SONG_MIDI_FILENAME: &str = "mus_title.mid";
-const SONG_PACK_ID: &str = "audio/song/mus_title";
+/// The one song id this compiler ever writes. Crate-visible: `gen_rom_profile::audio`
+/// reuses this exact id as the one `audio/song/` entry it locates a ROM
+/// address for, the same reuse [`super::voicegroups`]'s `groups_by_label`
+/// documents for the voicegroup index.
+pub(crate) const SONG_PACK_ID: &str = "audio/song/mus_title";
 
 /// Compile [`SONG_MIDI_FILENAME`] into its normalized [`event::SongEvent`]
 /// streams (per [`compile::compile`]'s own semantics) and write it as a
