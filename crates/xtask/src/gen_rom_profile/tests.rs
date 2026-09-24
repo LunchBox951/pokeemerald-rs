@@ -2,9 +2,11 @@
 //!
 //! Every test here but the last builds its own ROM-shaped image with
 //! `rom_import::fixture::RomFixture` and its own pack, so the suite needs
-//! no copyrighted ROM and no upstream checkout. The last one needs both and
-//! is `#[ignore]`d: it regenerates the profile and asserts the committed
-//! file is what a fresh run would write.
+//! no copyrighted ROM and no real upstream checkout -- the audio tests
+//! build their own synthetic stand-in for the `sound/` files that domain
+//! reads. The last test needs both a real ROM and a real checkout and is
+//! `#[ignore]`d: it regenerates the profile and asserts the committed file
+//! is what a fresh run would write.
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +14,7 @@ use pack_format::{image_entry_from_tiles, palette_entry, PackWriter};
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
+use super::audio;
 use super::error::GenRomProfileError;
 use super::images::{locate_images, ImageQuery};
 use super::pack_source::PackSource;
@@ -649,4 +652,158 @@ fn an_output_reaching_the_rom_through_a_missing_directory_is_refused() {
     let _ = std::fs::remove_dir(dir.join("absent"));
     let _ = std::fs::remove_file(&rom);
     let _ = std::fs::remove_dir(&dir);
+}
+
+/// A synthetic `pokeemerald/` holding just the `sound/` files
+/// [`audio::locate`] reads, plus the `MUS_*` constants a multi-song pack
+/// would name. Not a real upstream checkout: `title.inc` declares one slot,
+/// enough to anchor the run [`audio_rom`] plants.
+fn audio_upstream(dir: &Path) -> PathBuf {
+    let upstream = dir.join("upstream");
+    std::fs::create_dir_all(upstream.join("sound/voicegroups")).expect("voicegroup dir");
+    std::fs::create_dir_all(upstream.join("include/constants")).expect("constants dir");
+    std::fs::write(
+        upstream.join("sound/voicegroups/voicegroup_title.inc"),
+        "voice_group title\n\tvoice_directsound 60, 0, DirectSoundWaveData_demo, 255, 0, 255, 165\n",
+    )
+    .expect("write voicegroup");
+    std::fs::write(upstream.join("sound/keysplit_tables.inc"), "").expect("write keysplits");
+    std::fs::write(
+        upstream.join("include/constants/songs.h"),
+        "#define MUS_TITLE 1\n#define MUS_OTHER 2\n",
+    )
+    .expect("write songs.h");
+    upstream
+}
+
+/// The pack payload of one `DirectSound` sample, in the wire format
+/// `extract::audio_samples` writes: kind, freq, loop flag, loop start,
+/// count, PCM.
+fn audio_direct_sound_payload(frequency: u32, pcm: &[u8]) -> Vec<u8> {
+    let mut payload = vec![0u8];
+    payload.extend_from_slice(&frequency.to_le_bytes());
+    payload.push(0);
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&u32::try_from(pcm.len()).expect("small").to_le_bytes());
+    payload.extend_from_slice(pcm);
+    payload
+}
+
+/// A ROM holding one sample, `voicegroup_title`'s one slot, one song header
+/// that plays through it, and the `gSongTable` entry at `MUS_TITLE`'s index.
+fn audio_rom(pcm: &[u8]) -> Vec<u8> {
+    let mut header = Vec::new();
+    header.extend_from_slice(&0u16.to_le_bytes());
+    header.extend_from_slice(&0u16.to_le_bytes());
+    header.extend_from_slice(&0x2000u32.to_le_bytes());
+    header.extend_from_slice(&0u32.to_le_bytes());
+    header.extend_from_slice(&u32::try_from(pcm.len()).expect("small").to_le_bytes());
+
+    let mut slot = vec![0x00, 60, 0, 0];
+    slot.extend_from_slice(&0x0810_0000u32.to_le_bytes());
+    slot.extend_from_slice(&[255, 0, 255, 165]);
+
+    let mut song_header = vec![1u8, 0, 0, 0];
+    song_header.extend_from_slice(&0x0820_0000u32.to_le_bytes());
+    song_header.extend_from_slice(&0x0840_0000u32.to_le_bytes());
+
+    RomFixture::new()
+        .emerald_header()
+        .write(0x10_0000, &header)
+        .write(0x10_0010, pcm)
+        .write(0x20_0000, &slot)
+        .write(0x30_0000, &song_header)
+        // gSongTable at 0x0850_0000; MUS_TITLE is index 1.
+        .write(0x50_0008, &0x0830_0000u32.to_le_bytes())
+        .finish()
+}
+
+/// Run `body` against the [`audio_rom`]/[`audio_upstream`] fixture, with
+/// `songs` as the pack's `audio/song/` ids.
+fn with_audio_context<T>(name: &str, songs: &[&str], body: impl FnOnce(&Context<'_>) -> T) -> T {
+    let pcm: Vec<u8> = (0..64u32)
+        .map(|index| u8::try_from((index * 43 + 7) % 199).expect("modulo 199 fits in u8"))
+        .collect();
+    let rom = audio_rom(&pcm);
+    let dir = scratch(name);
+    let upstream = audio_upstream(&dir);
+
+    let mut writer = PackWriter::new();
+    writer.push(pack_format::raw_entry(
+        "audio/sample/direct-sound/demo".to_owned(),
+        audio_direct_sound_payload(0x2000, &pcm),
+    ));
+    for song in songs {
+        writer.push(pack_format::raw_entry((*song).to_owned(), vec![1, 2, 3, 4]));
+    }
+    let pack_path = dir.join("test.pack");
+    std::fs::write(&pack_path, writer.finish().expect("pack")).expect("write pack");
+    let pack = PackSource::load(&pack_path).expect("load pack");
+
+    let ctx = Context {
+        rom: &rom,
+        pack: &pack,
+        raw: RawSearch::new(&rom),
+        lz77: Lz77Search::new(&rom),
+        pointers: PointerIndex::build(&rom),
+        upstream,
+    };
+    let out = body(&ctx);
+    let _ = std::fs::remove_dir_all(&dir);
+    out
+}
+
+#[test]
+fn the_audio_fixture_locates_its_one_song() {
+    // The sanity check the refusal test below leans on: the fixture itself
+    // resolves the header, the table, and exactly one voicegroup when the
+    // pack holds only the one song this locator supports.
+    with_audio_context("audio-one-song", &["audio/song/mus_title"], |ctx| {
+        let mut report = Vec::new();
+        let plan = audio::locate(ctx, &mut report).expect("the one-song pack locates");
+        assert_eq!(plan.songs.len(), 1);
+        assert_eq!(plan.songs[0].id, "audio/song/mus_title");
+        assert_eq!(plan.songs[0].header, 0x0830_0000);
+        assert_eq!(plan.song_table, 0x0850_0000);
+        assert_eq!(plan.voicegroups.len(), 1);
+    });
+}
+
+#[test]
+fn a_second_song_is_refused_by_name_instead_of_mapped_through_mus_title() {
+    // Pins the refusal naming both offending ids, before any root is
+    // located.
+    with_audio_context(
+        "audio-two-songs",
+        &["audio/song/mus_other", "audio/song/mus_title"],
+        |ctx| {
+            let mut report = Vec::new();
+            let err = audio::locate(ctx, &mut report)
+                .expect_err("a pack with more than the one supported song must be refused");
+            let GenRomProfileError::StructMismatch { id, reason } = &err else {
+                panic!("{err:?}");
+            };
+            assert_eq!(id, "audio/song/*");
+            assert!(reason.contains("audio/song/mus_other"), "{reason}");
+            assert!(reason.contains("audio/song/mus_title"), "{reason}");
+            assert!(
+                report.is_empty(),
+                "refused before locating anything: {report:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn no_song_at_all_is_refused_by_the_same_singleton_check() {
+    // Pins the same `StructMismatch` on an empty `audio/song/` id set.
+    with_audio_context("audio-no-song", &[], |ctx| {
+        let mut report = Vec::new();
+        let err = audio::locate(ctx, &mut report)
+            .expect_err("a pack with no audio/song/ entries must be refused");
+        assert!(
+            matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/song/*"),
+            "{err:?}"
+        );
+    });
 }

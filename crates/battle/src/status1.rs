@@ -1,6 +1,6 @@
 //! Primary status ([`Status1`]), the attacker-side gate that keeps a
-//! paralysed battler from acting roughly a quarter of the time, and the
-//! end-turn poison residual's damage floor.
+//! paralysed battler from acting roughly a quarter of the time, the end-turn
+//! poison residual's damage floor, and Shed Skin's end-turn cure draw.
 //!
 //! `gBattleMons[].status1` is a persistent field distinct from the volatile
 //! `status2`/`gStatuses3` bits [`crate::volatile::Volatiles`] carries: a
@@ -90,9 +90,30 @@ pub const fn poison_residual_damage(max_hp: u32) -> u32 {
     }
 }
 
+/// The denominator of Shed Skin's end-turn cure chance
+/// (`pokeemerald/src/battle_util.c:2621`).
+const SHED_SKIN_CURE_CHANCE_DENOMINATOR: u16 = 3;
+
+/// Draws whether a living, statused Shed Skin holder cures its primary
+/// status this residual pass — `ABILITY_SHED_SKIN`'s `ABILITYEFFECT_ENDTURN`
+/// case (`pokeemerald/src/battle_util.c:2620`-`:2621`).
+///
+/// Draws nothing, and returns `false`, for a healthy battler: upstream's
+/// `&&` short-circuits before its own `Random()` call. The caller is
+/// responsible for the case's own `hp != 0` guard
+/// (`pokeemerald/src/battle_util.c:2601`-`:2602`) and ability check; this
+/// function only resolves the chance once both already hold.
+#[must_use]
+pub fn draws_shed_skin_cure(status1: Status1, rng: &mut impl BattleRng) -> bool {
+    !status1.is_healthy()
+        && rng
+            .next_u16()
+            .is_multiple_of(SHED_SKIN_CURE_CHANCE_DENOMINATOR)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{draws_full_paralysis, poison_residual_damage, Status1};
+    use super::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
     use crate::damage::BattleRng;
 
     struct FixedRng(u16);
@@ -164,6 +185,36 @@ mod tests {
             rng.draws, 0,
             "only Status1::Paralysed drives the full-paralysis draw"
         );
+    }
+
+    #[test]
+    fn a_healthy_battler_draws_nothing_for_the_shed_skin_cure() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        assert!(!draws_shed_skin_cure(Status1::Healthy, &mut rng));
+        assert_eq!(rng.draws, 0, "the healthy case must not touch the RNG");
+    }
+
+    #[test]
+    fn a_statused_battler_draws_exactly_once_for_the_shed_skin_cure() {
+        let mut rng = CountingRng { value: 1, draws: 0 };
+        let _ = draws_shed_skin_cure(Status1::Paralysed, &mut rng);
+        assert_eq!(rng.draws, 1);
+    }
+
+    #[test]
+    fn one_in_three_values_cure_a_statused_shed_skin_holder() {
+        for status in [Status1::Paralysed, Status1::Poisoned] {
+            assert!(draws_shed_skin_cure(status, &mut FixedRng(0)), "{status:?}");
+            assert!(draws_shed_skin_cure(status, &mut FixedRng(3)), "{status:?}");
+            assert!(
+                !draws_shed_skin_cure(status, &mut FixedRng(1)),
+                "{status:?}"
+            );
+            assert!(
+                !draws_shed_skin_cure(status, &mut FixedRng(2)),
+                "{status:?}"
+            );
+        }
     }
 
     #[test]

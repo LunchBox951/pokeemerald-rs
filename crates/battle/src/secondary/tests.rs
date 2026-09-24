@@ -45,7 +45,7 @@ const DUNSPARCE: u16 = 206;
 /// `SPECIES_RALTS`: Synchronize in its primary ability slot.
 const RALTS: u16 = 392;
 /// `SPECIES_DRATINI`: Shed Skin in its only ability slot, and Dragon-type,
-/// so the type guard does not pre-empt the ability guard.
+/// so the type guard does not pre-empt the poison-landing check.
 const DRATINI: u16 = 147;
 /// `SPECIES_MACHOP`: Guts in its primary ability slot.
 const MACHOP: u16 = 66;
@@ -569,17 +569,18 @@ fn a_synchronize_defender_is_refused_unless_the_attacker_is_already_statused() {
     );
 }
 
+/// Shed Skin's end-turn cure draw lives in `Battle::residual_effects`
+/// instead of here, so this pipeline never refuses a freshly-poisoned
+/// holder (`battle_script_commands.c:2299-2340`).
 #[test]
-fn a_shed_skin_defender_is_refused() {
+fn a_shed_skin_defender_is_admitted() {
     let dex = Dex::new();
     let attacker = mon(&dex, ZIGZAGOON);
     let defender = mon(&dex, DRATINI);
     assert_eq!(defender.ability(), AbilityId::SHED_SKIN);
     assert_eq!(
         ensure_admissible(&dex, POISON_STING, &attacker, &defender),
-        Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SHED_SKIN
-        ))
+        Ok(())
     );
 }
 
