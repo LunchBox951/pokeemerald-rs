@@ -16,6 +16,9 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
     let enemy = max_iv_mon(&dex, 288, 3, vec![MoveId(33), MoveId(45)]); // Zigzagoon: Tackle, Growl
     let enemy_hp_before = enemy.current_hp();
+    // Pins the level-3 fixture's HP construction independently of the
+    // damage arithmetic below.
+    assert_eq!(enemy_hp_before, 16);
 
     // battle start (no tie, speeds differ), turn number, the rejection
     // loop landing on slot 1 (Growl: draw 1 % 4 == 1), the player's
@@ -64,6 +67,9 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
     let enemy = max_iv_mon(&dex, 290, 3, vec![MoveId(33), MoveId(81)]); // Wurmple: Tackle, String Shot
     let enemy_hp_before = enemy.current_hp();
+    // Pins the level-3 fixture's HP construction independently of the
+    // damage arithmetic below.
+    assert_eq!(enemy_hp_before, 16);
 
     // battle start, turn number, the rejection loop landing on slot 1
     // (String Shot: draw 1 % 4 == 1), the player's 4-draw Tackle, then
@@ -208,6 +214,10 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     let enemy = max_iv_mon(&dex, 286, 5, vec![MoveId(33)]); // Poochyena: Tackle
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
+    // Pin both level-5 fixtures' HP construction independently of the
+    // damage arithmetic below.
+    assert_eq!(player_hp_before, 21);
+    assert_eq!(enemy_hp_before, 20);
 
     // battle start (no tie, 8 vs 10), then:
     // turn 1: turn number, enemy pick (its only move), Poochyena's
