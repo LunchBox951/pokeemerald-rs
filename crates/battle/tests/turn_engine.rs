@@ -22,6 +22,8 @@ mod pipelines;
 mod poison;
 #[path = "turn_engine/pressure.rs"]
 mod pressure;
+#[path = "turn_engine/shed_skin.rs"]
+mod shed_skin;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
 #[path = "turn_engine/trainer_battle.rs"]

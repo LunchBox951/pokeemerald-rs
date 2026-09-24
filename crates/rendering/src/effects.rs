@@ -17,6 +17,18 @@
 //! The hardware stores `EVA`, `EVB`, and `EVY` as 5-bit values, but mGBA caps
 //! each at 16 when its register is written
 //! (`mgba/src/gba/renderers/video-software.c:325-344`).
+//!
+//! An OBJ that is a target1 layer under Brighten or Darken can be brightened
+//! or darkened twice: once at draw time, when mGBA bakes its own variant
+//! palette straight into the stored pixel color for any OBJ whose own mode
+//! is `Normal`, independent of whatever entry later wins priority at that
+//! pixel (`mgba/src/gba/renderers/software-obj.c:177-203`); and again in the
+//! end-of-scanline reblend postprocess, whenever a semi-transparent OBJ
+//! later wins priority at that pixel (with any target2 present anywhere) and
+//! flag-only overwrites the stored color's order/reblend/target-1 bits
+//! without touching the color itself
+//! (`mgba/src/gba/renderers/software-obj.c:120-126`,
+//! `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
 
 use crate::palette::Rgb888;
 
@@ -204,31 +216,118 @@ pub fn backdrop_variant(
     }
 }
 
+/// The window-derived blend-enable signals [`resolve_pixel_color`] needs,
+/// all resolved once per pixel in `compose_pixel` from the same
+/// [`WindowConfig`](crate::window::WindowConfig) classification. Bundled
+/// into one type because they are correlated, not independent choices
+/// (clippy's `fn_params_excessive_bools`), and because most of them only
+/// ever differ from each other on an `OBJWIN`-masked pixel.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PixelWindowEffects {
+    /// Whether this pixel's `OBJWIN`-mask-resolved window enables color
+    /// effects (`WindowLayerEnable::effects` after `OBJWIN` may have
+    /// substituted in its own control).
+    pub enabled: bool,
+    /// Whether this pixel's *static* `WIN0`/`WIN1`/`WINOUT` span enables
+    /// color effects, independent of any `OBJWIN` mask
+    /// (`mgba/src/gba/renderers/video-software.c:1052-1055`: sprites are
+    /// only ever preprocessed against this span, never `OBJWIN`'s own
+    /// control directly).
+    pub static_span_enabled: bool,
+    /// mGBA's `objwinSlowPath`: `OBJWIN` enabled with a blend-enable bit
+    /// that differs from `static_span_enabled`, independent of the `OBJWIN`
+    /// mask itself and, unlike `forced_alpha` and the target1-Alpha check
+    /// below, never `&&`-ed with the OBJ's own target1 bit or mode
+    /// (`mgba/src/gba/renderers/software-obj.c:176,180`).
+    pub objwin_slow_path: bool,
+}
+
 /// Resolve the displayed color for a front layer and its immediate neighbor.
 ///
-/// `front` contains its color, layer kind, and whether sprite semi-transparency
-/// forces alpha blending. Only `next` can be a second target when present; the
+/// `front` contains its color, layer kind, whether the entry that currently
+/// owns priority forces alpha blending, and whether the entry that actually
+/// supplied `color` is itself [`ObjMode::SemiTransparent`](crate::oam::ObjMode::SemiTransparent)
+/// (see [`SpritePixel`](crate::sprite::SpritePixel)'s docs for why those two
+/// can differ). Only `next` can be a second target when present; the
 /// backdrop is considered only when no layer is behind `front`.
 ///
+/// An OBJ that is a target1 layer under Brighten or Darken gets mGBA's
+/// draw-time variant applied to `color` first, unless a target2 exists
+/// anywhere in the frame *and* either the color-supplying entry is
+/// semi-transparent or `window.objwin_slow_path` holds
+/// (`mgba/src/gba/renderers/software-obj.c:177-203`) — this module's docs
+/// above explain why that stage exists separately from the ordinary target1
+/// brighten/darken below, and why a target1 OBJ never falls through to that
+/// ordinary block. That draw-time gate itself needs both
+/// `window.static_span_enabled` (mirroring `variant`'s own
+/// `currentWindow`-based precondition,
+/// `mgba/src/gba/renderers/software-obj.c:177-179`) and `window.enabled`
+/// (mirroring the separate, `OBJWIN`-mask-only promotion of `objwinPalette`
+/// to the variant palette, `mgba/src/gba/renderers/software-obj.c:206-208`,
+/// which for a pixel outside the mask always agrees with
+/// `static_span_enabled`) `(behavioral-fidelity)`.
+///
 /// A semi-transparent sprite forces alpha regardless of the selected effect or
-/// window enable bit. If it has no immediate second target, mGBA suppresses its
-/// configured brightness variant when any second target exists elsewhere in
-/// the frame (`mgba/src/gba/renderers/software-obj.c:159,177-192`)
+/// window enable bit. If it fails to blend against an immediate second target
+/// while any second target exists in the frame, mGBA still brightens or
+/// darkens the surviving pixel wherever its window enables effects, without
+/// rechecking the sprite's own target-1 bit
+/// (`mgba/src/gba/renderers/software-obj.c:159,177-192`,
+/// `mgba/src/gba/renderers/software-private.h:54-65`,
+/// `mgba/src/gba/renderers/video-software.c:982-1013`) `(behavioral-fidelity)`.
+/// An OBJ's own target1-under-Alpha eligibility is decided the same way, but
+/// from `window.static_span_enabled` alone: mGBA sets the sprite's
+/// `FLAG_TARGET_1` from its `currentWindow` with no `OBJWIN`-mask adjustment
+/// at all (`mgba/src/gba/renderers/software-obj.c:159`) — unlike a BG
+/// target1 layer, whose own effects gate keeps using `window.enabled` below,
+/// since a BG does carry an `OBJWIN`-mask-aware flags substitute
+/// (`mgba/src/gba/renderers/video-software.c:1105-1111`) `(behavioral-fidelity)`.
+///
+/// When `window.objwin_slow_path` holds and any target2 exists, it defers
+/// *any* OBJ — target1 or not — to the reblend fallback below, on top of
+/// suppressing the draw-time variant above. But because `objwinSlowPath`
+/// alone never sets the per-pixel `FLAG_TARGET_1` bit mGBA's direct
+/// neighbor/backdrop blend requires
+/// (`mgba/src/gba/renderers/software-private.h:41-65`), an OBJ that reaches
+/// the fallback only through it must go straight to the brighten/darken
+/// postprocess and never attempt that direct blend, even when `next` is a
+/// valid target2 (`mgba/src/gba/renderers/software-obj.c:159,180-192`)
 /// `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
-    effects_enabled: bool,
+    window: PixelWindowEffects,
     any_target2_enabled: bool,
-    front: (Rgb888, LayerKind, bool),
+    front: (Rgb888, LayerKind, bool, bool),
     next: Option<(Rgb888, LayerKind)>,
     backdrop: Rgb888,
 ) -> Rgb888 {
-    let (front_color, front_kind, forced_alpha) = front;
+    let (mut front_color, front_kind, forced_alpha, color_semi_transparent) = front;
+    let is_obj = matches!(front_kind, LayerKind::Obj);
+
+    // mGBA's draw-time OBJ variant; the function docs above own the gate.
+    if is_obj
+        && window.static_span_enabled
+        && window.enabled
+        && cfg.target1.obj
+        && !((color_semi_transparent || window.objwin_slow_path) && any_target2_enabled)
+    {
+        front_color = match cfg.effect {
+            ColorEffect::Brighten => brighten(front_color, cfg.evy),
+            ColorEffect::Darken => darken(front_color, cfg.evy),
+            ColorEffect::None | ColorEffect::AlphaBlend => front_color,
+        };
+    }
+
     let can_have_second_target = !matches!(front_kind, LayerKind::Backdrop);
+    let alpha_effects_enabled = if is_obj {
+        window.static_span_enabled
+    } else {
+        window.enabled
+    };
     let alpha_target1 = can_have_second_target
         && (forced_alpha
-            || (effects_enabled
+            || (alpha_effects_enabled
                 && cfg.effect == ColorEffect::AlphaBlend
                 && cfg.target1.contains(front_kind)));
 
@@ -240,12 +339,24 @@ pub fn resolve_pixel_color(
             None if cfg.target2.backdrop => {
                 return alpha_blend(front_color, backdrop, cfg.eva, cfg.evb);
             }
-            _ if any_target2_enabled => return front_color,
+            // The reblend postprocess described above, applied here.
+            _ if any_target2_enabled => {
+                return reblend_postprocess(cfg.effect, window.enabled, front_color, cfg.evy);
+            }
             _ => {}
         }
+    } else if is_obj && window.objwin_slow_path && any_target2_enabled {
+        // `objwin_slow_path` alone (function docs above) never sets mGBA's
+        // per-pixel target1 bit, so -- unlike `alpha_target1` above -- it can
+        // only ever reach the brighten/darken postprocess, never a direct
+        // blend against `next` or the backdrop.
+        return reblend_postprocess(cfg.effect, window.enabled, front_color, cfg.evy);
     }
 
-    if effects_enabled && cfg.target1.contains(front_kind) {
+    // The OBJ layer's target1 brighten/darken is already fully represented
+    // by the draw-time variant stage above, at its actual draw-time
+    // position; falling through here as well would double-apply it.
+    if window.enabled && !is_obj && cfg.target1.contains(front_kind) {
         match cfg.effect {
             ColorEffect::Brighten => return brighten(front_color, cfg.evy),
             ColorEffect::Darken => return darken(front_color, cfg.evy),
@@ -256,11 +367,30 @@ pub fn resolve_pixel_color(
     front_color
 }
 
+/// mGBA's brighten/darken reblend postprocess (module docs above): gated by
+/// the pixel's own window-effects bit; any other selected effect leaves
+/// `color` unchanged (`mgba/src/gba/renderers/video-software.c:982-1013`).
+fn reblend_postprocess(
+    effect: ColorEffect,
+    effects_enabled: bool,
+    color: Rgb888,
+    evy: u8,
+) -> Rgb888 {
+    match effect {
+        ColorEffect::Brighten if effects_enabled => brighten(color, evy),
+        ColorEffect::Darken if effects_enabled => darken(color, evy),
+        ColorEffect::None
+        | ColorEffect::AlphaBlend
+        | ColorEffect::Brighten
+        | ColorEffect::Darken => color,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         alpha_blend, brighten, darken, resolve_pixel_color, ColorEffect, EffectsConfig, LayerKind,
-        LayerTargets, FULL_EFFECT_WEIGHT,
+        LayerTargets, PixelWindowEffects, FULL_EFFECT_WEIGHT,
     };
     use crate::palette::Rgb888;
 
@@ -810,12 +940,22 @@ mod tests {
         }
     }
 
-    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool) {
-        (color, kind, false)
+    fn opaque_layer(color: Rgb888, kind: LayerKind) -> (Rgb888, LayerKind, bool, bool) {
+        (color, kind, false, false)
     }
 
-    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool) {
-        (color, LayerKind::Obj, true)
+    /// A pixel with no `OBJWIN` mask in play: the static span and the
+    /// resolved window always agree, and `objwinSlowPath` cannot fire.
+    fn window_effects(enabled: bool) -> PixelWindowEffects {
+        PixelWindowEffects {
+            enabled,
+            static_span_enabled: enabled,
+            objwin_slow_path: false,
+        }
+    }
+
+    fn semi_transparent_obj(color: Rgb888) -> (Rgb888, LayerKind, bool, bool) {
+        (color, LayerKind::Obj, true, true)
     }
 
     fn bg0_blends_with_bg1() -> EffectsConfig {
@@ -834,7 +974,8 @@ mod tests {
         let cfg = bg0_blends_with_bg1();
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
         let next = Some((WHITE, LayerKind::Bg(1)));
-        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        let result =
+            resolve_pixel_color(&cfg, window_effects(true), true, front, next, Rgb888::BLACK);
         assert_eq!(result.r, u8::MAX / 2);
     }
 
@@ -846,7 +987,7 @@ mod tests {
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
         let result = resolve_pixel_color(
             &cfg,
-            true,
+            window_effects(true),
             true,
             front,
             non_target_neighbor,
@@ -860,11 +1001,70 @@ mod tests {
     }
 
     #[test]
+    fn resolve_obj_alpha_target1_uses_the_static_span_not_the_masked_window() {
+        // mGBA sets a sprite's FLAG_TARGET_1 under Alpha purely from the
+        // static WIN0/WIN1/WINOUT span (`software-obj.c:159`), with no
+        // OBJWIN-mask adjustment -- unlike the OBJWIN-mask-resolved
+        // `effects_enabled`/`window.effects` this crate otherwise uses.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::AlphaBlend,
+            target1: obj_target(),
+            target2: bg_target(0),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: 0,
+        };
+        let front = opaque_layer(Rgb888::BLACK, LayerKind::Obj);
+        let next = Some((WHITE, LayerKind::Bg(0)));
+
+        // The masked window enables effects but the static span does not:
+        // mGBA never sets FLAG_TARGET_1 here, so no blend happens.
+        let masked_only = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: false,
+                objwin_slow_path: false,
+            },
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            masked_only,
+            Rgb888::BLACK,
+            "OBJWIN's own blend bit must not stand in for the static span"
+        );
+
+        // The static span enables effects but the masked window does not:
+        // mGBA still sets FLAG_TARGET_1 from the static span alone, so the
+        // blend still happens.
+        let static_only = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: false,
+                static_span_enabled: true,
+                objwin_slow_path: false,
+            },
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            static_only.r,
+            u8::MAX / 2,
+            "the static span alone is enough to set an OBJ's own target1-under-Alpha bit"
+        );
+    }
+
+    #[test]
     fn resolve_blends_against_the_backdrop_when_nothing_else_is_behind() {
         let mut cfg = bg0_blends_with_bg1();
         cfg.target2.backdrop = true;
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, true, true, front, None, WHITE);
+        let result = resolve_pixel_color(&cfg, window_effects(true), true, front, None, WHITE);
         assert_eq!(result.r, u8::MAX / 2);
     }
 
@@ -880,7 +1080,8 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let next = Some((WHITE, LayerKind::Bg(0)));
-        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        let result =
+            resolve_pixel_color(&cfg, window_effects(true), true, front, next, Rgb888::BLACK);
         assert_eq!(
             result.r,
             u8::MAX / 2,
@@ -901,7 +1102,14 @@ mod tests {
         let front = semi_transparent_obj(Rgb888::BLACK);
         let next = Some((WHITE, LayerKind::Bg(0)));
 
-        let result = resolve_pixel_color(&cfg, false, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(false),
+            true,
+            front,
+            next,
+            Rgb888::BLACK,
+        );
 
         assert_eq!(
             result.r,
@@ -915,7 +1123,14 @@ mod tests {
         let cfg = EffectsConfig::default();
         let front_color = Rgb888 { r: 7, g: 7, b: 7 };
         let front = semi_transparent_obj(front_color);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(result, front_color);
     }
 
@@ -930,7 +1145,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result.r,
             u8::MAX,
@@ -939,7 +1161,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_emits_raw() {
+    fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_postprocesses_brightness(
+    ) {
+        // See resolve_pixel_color's contract above
+        // (`mgba/src/gba/renderers/video-software.c:982-1013`).
         let cfg = EffectsConfig {
             effect: ColorEffect::Brighten,
             target1: obj_target(),
@@ -950,12 +1175,153 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
-        let result =
-            resolve_pixel_color(&cfg, true, true, front, non_target_neighbor, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result, WHITE,
+            "a surviving reblend OBJ still receives the brightness postprocess"
+        );
+    }
+
+    #[test]
+    fn resolve_semi_transparent_obj_darkens_a_surviving_reblend_pixel() {
+        // Same reblend-fallback path as the brighten case above, but with
+        // Darken selected: the postprocess pass darkens the surviving pixel
+        // instead of leaving it raw
+        // (`mgba/src/gba/renderers/video-software.c:999-1005`), using mGBA's
+        // shifted-lane rounding (module docs above).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: HALF_WEIGHT,
+        };
+        let front = semi_transparent_obj(WHITE);
+        let non_target_neighbor = Some((Rgb888::BLACK, LayerKind::Bg(2)));
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            Rgb888 {
+                r: 128,
+                g: 127,
+                b: 127
+            },
+            "the surviving reblend OBJ receives mGBA's half-weight darken"
+        );
+    }
+
+    #[test]
+    fn resolve_promoted_transparent_obj_rebrightens_an_already_variant_normal_color() {
+        // A better-priority semi-transparent OBJ that is transparent at this
+        // pixel promotes priority (and forces alpha) without replacing the
+        // stored color, which still belongs to a worse-priority Normal OBJ
+        // that already got mGBA's draw-time variant (module docs above). The
+        // reblend postpass then brightens that already-brightened color a
+        // second time (`mgba/src/gba/renderers/software-obj.c:120-126,177-203`,
+        // `mgba/src/gba/renderers/video-software.c:982-1013`).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: 0,
+            evb: 0,
+            evy: HALF_WEIGHT,
+        };
+        // forced_alpha (from the promoting semi-transparent entry) is true;
+        // color_semi_transparent (from the Normal color supplier) is false.
+        let front = (Rgb888::BLACK, LayerKind::Obj, true, false);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            Rgb888 {
+                r: 191,
+                g: 191,
+                b: 191
+            },
+            "the colour supplier's own draw-time variant, plus the reblend postpass, brightens twice"
+        );
+    }
+
+    #[test]
+    fn resolve_forced_alpha_obj_not_target1_still_gets_reblend_brightness() {
+        // Covers the "without rechecking the sprite's own target-1 bit" half
+        // of resolve_pixel_color's contract (`software-obj.c:159,177-180`).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: bg_target(0), // deliberately excludes LayerKind::Obj
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: FULL_WEIGHT,
+        };
+        let front = semi_transparent_obj(Rgb888::BLACK);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result, WHITE,
+            "the reblend postpass does not recheck the OBJ target1 bit"
+        );
+    }
+
+    #[test]
+    fn resolve_reblend_brightness_still_obeys_window_effect_enable() {
+        // The postprocess pass is gated on the applicable window's own
+        // blend-enable bit for that column
+        // (`mgba/src/gba/renderers/video-software.c:989-996`), which this
+        // module models with `effects_enabled`. A window with effects
+        // disabled must not brighten the surviving reblend pixel.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: FULL_WEIGHT,
+        };
+        let front = semi_transparent_obj(Rgb888::BLACK);
+        let non_target_neighbor = Some((WHITE, LayerKind::Bg(2)));
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(false),
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result,
             Rgb888::BLACK,
-            "a global target2 clears the brightness variant"
+            "the reblend postpass remains gated by the pixel's window effect enable"
         );
     }
 
@@ -971,11 +1337,264 @@ mod tests {
         };
         let front = semi_transparent_obj(Rgb888::BLACK);
         let non_target_neighbor = Some((WHITE, LayerKind::Bg(0)));
-        let result =
-            resolve_pixel_color(&cfg, true, false, front, non_target_neighbor, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result, WHITE,
             "the brightness variant survives when no target2 exists"
+        );
+    }
+
+    #[test]
+    fn resolve_objwin_slow_path_suppresses_the_draw_time_variant_but_a_single_darken_survives() {
+        // `objwin_slow_path` alone (independent of `color_semi_transparent`)
+        // must suppress the draw-time variant when a target2 exists
+        // (function docs above), deferring to the reblend fallback instead --
+        // which darkens the still-raw color exactly once, not twice. A half
+        // weight keeps one and two passes distinguishable: a full-weight
+        // darken maps white to black and a second pass would leave it there.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: obj_target(),
+            target2: bg_target(1),
+            eva: 0,
+            evb: 0,
+            evy: HALF_WEIGHT,
+        };
+        let front = opaque_layer(WHITE, LayerKind::Obj);
+        let non_target_neighbor = Some((Rgb888::BLACK, LayerKind::Bg(2)));
+        let result = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: true,
+                objwin_slow_path: true,
+            },
+            true,
+            front,
+            non_target_neighbor,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            darken(WHITE, HALF_WEIGHT),
+            "the reblend fallback darkens the still-raw color exactly once"
+        );
+        assert_ne!(
+            darken(darken(WHITE, HALF_WEIGHT), HALF_WEIGHT),
+            darken(WHITE, HALF_WEIGHT),
+            "the half weight must tell one darken from two"
+        );
+    }
+
+    #[test]
+    fn resolve_objwin_slow_path_with_no_target2_leaves_the_draw_time_variant_untouched() {
+        // mGBA only clears the sprite's own target1 bit when no target2
+        // exists; the draw-time variant, already computed, survives
+        // (`software-obj.c:186-192`).
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: obj_target(),
+            target2: LayerTargets::default(),
+            eva: 0,
+            evb: 0,
+            evy: FULL_WEIGHT,
+        };
+        let front = opaque_layer(WHITE, LayerKind::Obj);
+        let result = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: true,
+                objwin_slow_path: true,
+            },
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            Rgb888::BLACK,
+            "with no target2 anywhere, objwin_slow_path must not suppress the variant"
+        );
+    }
+
+    #[test]
+    fn resolve_obj_draw_time_variant_requires_both_the_static_span_and_the_masked_window() {
+        // mGBA's `variant` (the draw-time brighten/darken bake) requires the
+        // static span's blend bit (`software-obj.c:177-179`); for an
+        // OBJWIN-masked pixel specifically, `objwinPalette` is only promoted
+        // to that variant when OBJWIN's own blend bit is *also* set
+        // (`software-obj.c:206-208`). Neither bit alone is enough.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: obj_target(),
+            target2: LayerTargets::default(),
+            eva: 0,
+            evb: 0,
+            evy: FULL_WEIGHT,
+        };
+        let front = opaque_layer(WHITE, LayerKind::Obj);
+
+        // Masked window enables effects, static span does not: mGBA's
+        // `variant` is never set, so `objwinPalette` stays the normal
+        // palette regardless of OBJWIN's own blend bit.
+        let masked_only = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: false,
+                objwin_slow_path: false,
+            },
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            masked_only, WHITE,
+            "the masked window's blend bit alone must not bake the variant"
+        );
+
+        // Static span enables effects, masked window does not: `variant` is
+        // set, but OBJWIN's own blend bit never promotes `objwinPalette` to
+        // it, so this masked pixel still draws the normal color.
+        let static_only = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: false,
+                static_span_enabled: true,
+                objwin_slow_path: false,
+            },
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            static_only, WHITE,
+            "the static span's blend bit alone must not bake the variant for a masked pixel"
+        );
+
+        // Both agree: mGBA bakes the variant.
+        let both = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            both,
+            Rgb888::BLACK,
+            "with both bits set, the draw-time variant applies as before"
+        );
+    }
+
+    #[test]
+    fn resolve_objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer() {
+        // Unlike `forced_alpha` and the target1-Alpha check, mGBA's
+        // `objwinSlowPath` is never `&&`-ed with the OBJ's own target1 bit
+        // (`software-obj.c:180`): a plain Normal-mode OBJ that BLDCNT does
+        // not even mark as target1 still gets reblended.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: bg_target(0), // deliberately excludes LayerKind::Obj
+            target2: bg_target(1),
+            eva: 0,
+            evb: 0,
+            evy: FULL_WEIGHT,
+        };
+        let front = opaque_layer(WHITE, LayerKind::Obj);
+        let result = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: true,
+                objwin_slow_path: true,
+            },
+            true,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            Rgb888::BLACK,
+            "objwin_slow_path reblends a non-target1 OBJ purely from the global window state"
+        );
+    }
+
+    #[test]
+    fn resolve_objwin_slow_path_alone_never_attempts_a_direct_blend_against_next() {
+        // objwin_slow_path never sets mGBA's per-pixel FLAG_TARGET_1
+        // (`software-obj.c:159,180-192`), so even a valid target2 sitting
+        // immediately behind this OBJ must not trigger a direct RGB blend --
+        // only the brighten/darken postprocess ever applies.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: LayerTargets::default(), // not even a target1 OBJ
+            target2: bg_target(0),
+            eva: HALF_WEIGHT,
+            evb: HALF_WEIGHT,
+            evy: FULL_WEIGHT,
+        };
+        let front = opaque_layer(WHITE, LayerKind::Obj);
+        let immediate_target2 = Some((Rgb888::BLACK, LayerKind::Bg(0)));
+        let result = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: true,
+                objwin_slow_path: true,
+            },
+            true,
+            front,
+            immediate_target2,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result,
+            Rgb888::BLACK,
+            "darken alone, never an RGB alpha blend against the immediate target2 neighbor"
+        );
+    }
+
+    #[test]
+    fn resolve_objwin_slow_path_without_any_target2_anywhere_does_nothing() {
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: LayerTargets::default(),
+            target2: LayerTargets::default(),
+            eva: 0,
+            evb: 0,
+            evy: FULL_WEIGHT,
+        };
+        let front_color = Rgb888 { r: 9, g: 9, b: 9 };
+        let front = opaque_layer(front_color, LayerKind::Obj);
+        let result = resolve_pixel_color(
+            &cfg,
+            PixelWindowEffects {
+                enabled: true,
+                static_span_enabled: true,
+                objwin_slow_path: true,
+            },
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
+        assert_eq!(
+            result, front_color,
+            "with no target2 anywhere, objwin_slow_path has nothing to defer to"
         );
     }
 
@@ -990,7 +1609,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = opaque_layer(Rgb888::BLACK, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(result, WHITE, "full brighten of black must reach white");
     }
 
@@ -1005,7 +1631,14 @@ mod tests {
             evy: FULL_WEIGHT,
         };
         let front = opaque_layer(WHITE, LayerKind::Obj);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(true),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result,
             Rgb888::BLACK,
@@ -1029,7 +1662,14 @@ mod tests {
             b: 10,
         };
         let front = opaque_layer(front_color, LayerKind::Bg(0));
-        let result = resolve_pixel_color(&cfg, false, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(
+            &cfg,
+            window_effects(false),
+            false,
+            front,
+            None,
+            Rgb888::BLACK,
+        );
         assert_eq!(
             result, front_color,
             "window's effect-enable bit must gate brighten"
@@ -1048,7 +1688,7 @@ mod tests {
         };
         let backdrop = Rgb888::BLACK;
         let front = opaque_layer(backdrop, LayerKind::Backdrop);
-        let result = resolve_pixel_color(&cfg, true, false, front, None, backdrop);
+        let result = resolve_pixel_color(&cfg, window_effects(true), false, front, None, backdrop);
         assert_eq!(result, WHITE);
     }
 
@@ -1068,7 +1708,7 @@ mod tests {
             b: 42,
         };
         let front = opaque_layer(backdrop, LayerKind::Backdrop);
-        let result = resolve_pixel_color(&cfg, true, true, front, None, backdrop);
+        let result = resolve_pixel_color(&cfg, window_effects(true), true, front, None, backdrop);
         assert_eq!(result, backdrop);
     }
 }

@@ -206,6 +206,93 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     assert_eq!(rng.draws(), 0);
 }
 
+/// A full scripted battle exercised only through the public API, tying
+/// `Battle::new_with_player_reserves` together with the turn engine the way
+/// an owning flow would: `PlayerLost` arrives only once both party members
+/// have fainted, each carrying its own final identity and state.
+#[test]
+fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
+    let dex = Dex::new();
+    // A fast, overwhelming L50 Charmander one-shots either fragile L5
+    // active in turn order, exactly like the immediate-loss fixture this
+    // issue corrects -- first the active Rattata, then the Squirtle
+    // reserve behind it.
+    let player = fixed_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player_max_hp = player.stats().max_hp;
+    let reserve = fixed_mon(&dex, 7, 5, vec![MoveId(33)]);
+    let reserve_max_hp = reserve.stats().max_hp;
+    let enemy = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let tackle_max_pp = dex.move_data(MoveId(33)).unwrap().pp;
+
+    // Turn 1: battle start, turn number, enemy pick, enemy hit (accuracy /
+    // no crit / best roll / effect chance) -- the active is overkilled
+    // before it can act. Turn 2: turn number, enemy pick, enemy hit again
+    // -- the reserve, now active, meets the same fate. No battle-start
+    // draw the second time: that is `Battle::new`'s alone.
+    let mut rng = ScriptedRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]);
+    let mut battle =
+        Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
+            .expect("Battle::new_with_player_reserves");
+
+    let turn1 = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("turn 1");
+    assert_eq!(
+        turn1,
+        vec![
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: MoveId(33),
+                damage: player_max_hp,
+                is_critical: false,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::PlayerSentOut {
+                species: SpeciesId(7),
+                reserves_remaining: 0,
+            },
+        ],
+        "the healthy reserve takes over instead of ending the battle: {turn1:?}"
+    );
+    assert_eq!(battle.outcome(), None);
+    assert_eq!(battle.player().species(), SpeciesId(7));
+
+    let turn2 = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("turn 2");
+    assert_eq!(
+        turn2,
+        vec![
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: MoveId(33),
+                damage: reserve_max_hp,
+                is_critical: false,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the second faint has no reserve left, so the battle ends: {turn2:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+    assert_eq!(rng.draws(), 13);
+
+    // The final report carries both members' terminal state: the original
+    // active's overkill and the reserve's own overkill, each never having
+    // acted, so neither spent any PP. The members keep the order they were
+    // passed in -- the Rattata that started active, then the Squirtle
+    // reserve -- though the Squirtle is the one `Battle::player` reports.
+    assert_eq!(battle.player().species(), SpeciesId(7));
+    let members: Vec<_> = battle.player_members().collect();
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0].species(), SpeciesId(19));
+    assert_eq!(members[0].current_hp(), 0);
+    assert_eq!(members[0].moves()[0].pp, tackle_max_pp);
+    assert_eq!(members[1].species(), SpeciesId(7));
+    assert_eq!(members[1].current_hp(), 0);
+    assert_eq!(members[1].moves()[0].pp, tackle_max_pp);
+}
+
 #[test]
 fn an_impossible_battler_cannot_be_built_at_all() {
     let dex = Dex::new();

@@ -27,7 +27,15 @@ use std::cell::RefCell;
 /// One opaque sprite-layer result for cross-layer composition.
 ///
 /// A better-priority transparent texel can update `priority` and
-/// `semi_transparent` without replacing `color`.
+/// `semi_transparent` without replacing `color` or `color_semi_transparent`
+/// — mirroring mGBA's flag-only overwrite, which keeps the stored pixel's
+/// color bits while replacing only its order/reblend/target-1 flag bits
+/// (`mgba/src/gba/renderers/software-obj.c:120-126`). So `semi_transparent`
+/// and `color_semi_transparent` can name two different entries: the one that
+/// currently owns priority (and thus forced-alpha eligibility for blending
+/// against a second target) versus the one that actually supplied `color`
+/// (and thus whether that stored color is eligible for mGBA's draw-time
+/// brighten/darken variant, `software-obj.c:177-203`) `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -37,6 +45,12 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
+    /// Whether the sprite that supplied [`color`](Self::color) is itself
+    /// [`ObjMode::SemiTransparent`] — separate from
+    /// [`semi_transparent`](Self::semi_transparent) because a later,
+    /// better-priority transparent texel can promote priority without
+    /// replacing the stored color (see this struct's docs).
+    pub color_semi_transparent: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -209,10 +223,12 @@ impl<'a> SpriteLayer<'a> {
                 match (entry.mode(), texel) {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
+                        let semi_transparent = mode == ObjMode::SemiTransparent;
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
-                            semi_transparent: mode == ObjMode::SemiTransparent,
+                            semi_transparent,
+                            color_semi_transparent: semi_transparent,
                         });
                     }
                     (mode, Texel::Transparent) => {
