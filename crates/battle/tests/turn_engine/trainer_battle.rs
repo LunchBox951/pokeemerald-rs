@@ -1,10 +1,9 @@
-//! `BATTLE_TYPE_TRAINER` (issue #237): the scripted Route 103 rival battle's
-//! five deltas from a wild encounter — running refused, a party opponent, the
-//! forced post-faint send-out, `x1.5` experience, and prize money — pinned
-//! end to end through the public `battle` API, the same way every other
-//! `turn_engine/` module pins its family of behaviour. Per-script AI draw
-//! accounting is pinned next to the AI itself
-//! (`crates/battle/src/battle/trainer_ai.rs`); construction is pinned in
+//! `BATTLE_TYPE_TRAINER`: the scripted Route 103 rival battle's five deltas
+//! from a wild encounter — running refused, a party opponent, the forced
+//! post-faint send-out, `x1.5` experience, and prize money — pinned end to
+//! end through the public `battle` API. Per-script AI draw accounting is
+//! pinned next to the AI itself (`crates/battle/src/battle/trainer_ai.rs`);
+//! construction is pinned in
 //! `crates/pokeemerald-rs/src/flow/route103_rival/tests.rs`.
 //!
 //! The trainers used here are the real ones. `TRAINER_MAY_ROUTE_103_MUDKIP`
@@ -23,8 +22,7 @@
 //! fixtures below use hand-built parties instead — pinning behaviour only
 //! against a one-mon party would pin nothing. A forced post-faint send-out
 //! runs `GetMostSuitableMonToSwitchInto`'s type/damage selector before
-//! falling back to party order; see `TrainerContext::send_out_next`'s docs
-//! (issue #1040).
+//! falling back to party order; see `TrainerContext::send_out_next`'s docs.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
@@ -47,6 +45,10 @@ const TORCHIC: u16 = 280;
 const MUDKIP: u16 = 283;
 const ZIGZAGOON: u16 = 288;
 const PICHU: u16 = 172;
+/// `SPECIES_RATTATA`: paired with Slash and level 50 in these fixtures, it
+/// one-shots and outspeeds any level-5 party member, so the rival's own
+/// action never executes.
+const RATTATA: u16 = 19;
 /// `SPECIES_CHANSEY`: pure Normal, and slower than [`KANGASKHAN`].
 const CHANSEY: u16 = 113;
 /// `SPECIES_KANGASKHAN`: pure Normal, fast enough to act ahead of
@@ -59,8 +61,9 @@ const TACKLE: MoveId = MoveId(33);
 const LEER: MoveId = MoveId(43);
 const GROWL: MoveId = MoveId(45);
 const ABSORB: MoveId = MoveId(71);
-/// `MOVE_PURSUIT`, Treecko's level-16 learnset move -- still unexecutable
-/// after issue #321 (see `battle::hit`'s allow-list docs).
+/// `MOVE_PURSUIT`, Treecko's level-16 learnset move: `EFFECT_PURSUIT` has
+/// no resolver, so `battle::hit`'s allow-list refuses it (see its module
+/// docs).
 const PURSUIT: MoveId = MoveId(228);
 /// `MOVE_PECK` (`include/constants/moves.h:68`) — Torchic's level-16
 /// learnset entry.
@@ -70,14 +73,11 @@ const FIRE_SPIN: MoveId = MoveId(83);
 const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
 /// `MOVE_MEGA_KICK` (`include/constants/moves.h:25`): a plain-hit Normal
-/// move with far more power than Tackle's, for a most-damage-fallback
-/// fixture proving that power difference no longer matters once base
-/// damage comes from one shared, stale move.
+/// move with far more power than Tackle's.
 const MEGA_KICK: MoveId = MoveId(25);
 /// `MOVE_WATER_GUN` (`include/constants/moves.h:59`).
 const WATER_GUN: MoveId = MoveId(55);
 
-/// The rival's real party: one level-5 Treecko knowing Pound and Leer.
 fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
     vec![max_iv_mon(dex, TREECKO, 5, vec![POUND, LEER])]
 }
@@ -158,20 +158,11 @@ fn a_wild_battle_has_no_trainer_context() {
     assert!(battle.trainer().is_none());
 }
 
-/// Beating the rival's only mon must end the battle in victory, with the
-/// `x1.5` trainer experience bonus and the prize money, in
-/// `Cmd_getexp`-then-`Cmd_getmoneyreward` order.
+/// Upstream runs `Cmd_getexp` before `Cmd_getmoneyreward`.
 #[test]
 fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle() {
     let dex = Dex::new();
-    // A level-50 Rattata one-shots a level-5 Treecko with Slash and easily
-    // outspeeds it, so the rival's chosen action never executes.
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
-
-    // Battle::new_trainer: 1 turn number.
-    // take_turn: 1 turn number, 2-5 simulatedRNG, 6 AI_CV_DefenseDown is
-    // skipped (healthy user, default Defense stage) so the next draw is the
-    // tie-break, 7 accuracy, 8 crit, 9 damage roll, 10 effect chance.
+    let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let mut rng = SequenceRng::new([0; 16]);
     let mut battle = Battle::new_trainer(
         dex,
@@ -218,7 +209,7 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
 #[test]
 fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let enemy = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
 
     let mut rng = SequenceRng::new([0; 16]);
@@ -246,9 +237,7 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
-    // A three-mon party. Route 103's is one mon, so this is a synthetic
-    // party against a real trainer id.
+    let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
@@ -284,23 +273,30 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         "the replacement comes out at full HP"
     );
 
-    // Second KO: the third mon comes out.
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert!(events.contains(&BattleEvent::TrainerSentOut {
-        species: SpeciesId(MUDKIP),
-        bench_remaining: 0,
-    }));
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(MUDKIP),
+            bench_remaining: 0,
+        }),
+        "the third party member comes out: {events:?}"
+    );
 
-    // Third KO: bench empty, so this one ends the battle and pays out.
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    assert!(!events
-        .iter()
-        .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })));
-    assert!(events.contains(&BattleEvent::MoneyGained(300)));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })),
+        "the bench is empty, so no replacement is sent out: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::MoneyGained(300)),
+        "the bench-empty knockout pays out and ends the battle"
+    );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
@@ -347,7 +343,7 @@ fn a_fainted_trainer_mon_is_replaced_by_the_most_suitable_bench_member() {
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_party_order() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let party = vec![
         max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
         max_iv_mon(&dex, MUDKIP, 5, vec![WATER_GUN]),
@@ -380,7 +376,7 @@ fn a_fainted_trainer_mon_is_replaced_by_the_stab_boosted_bench_member_out_of_par
 #[test]
 fn tied_move_types_send_out_the_earlier_bench_member_regardless_of_base_power() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, RATTATA, 50, vec![SLASH]);
     let party = vec![
         max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]),
         max_iv_mon(&dex, PICHU, 5, vec![TACKLE]),
@@ -861,7 +857,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let dex = Dex::new();
     let money = battle.trainer().expect("a trainer battle").money();
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Replace(1))
+        .resolve_move_learn(MoveLearnDecision::Replace(1), &mut rng)
         .unwrap();
     assert_eq!(
         answered,
@@ -900,7 +896,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     );
     assert_eq!(
         battle
-            .resolve_move_learn(MoveLearnDecision::Decline)
+            .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
             .unwrap_err(),
         BattleError::NoMoveLearnPending,
         "answering twice is a caller bug, not a second decision"
@@ -957,7 +953,7 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
     );
 
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Decline)
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,
@@ -1024,7 +1020,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     // else -- no money, no outcome, no end.
     for pair in LEVEL_15_BLOCK.windows(2) {
         let answered = battle
-            .resolve_move_learn(MoveLearnDecision::Decline)
+            .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
             .unwrap();
         assert_eq!(
             answered,
@@ -1038,7 +1034,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
 
     // The last answer releases the whole deferred aftermath, in order.
     let answered = battle
-        .resolve_move_learn(MoveLearnDecision::Decline)
+        .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
     assert_eq!(
         answered,

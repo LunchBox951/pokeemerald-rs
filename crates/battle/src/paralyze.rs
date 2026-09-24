@@ -20,8 +20,9 @@
 //!
 //! Guts and Marvel Scale are modelled as raw-stat modifiers in
 //! [`crate::pokemon::BattlePokemon::attacking_stat`] and
-//! [`crate::pokemon::BattlePokemon::defending_stat`], so admission never
-//! refuses either.
+//! [`crate::pokemon::BattlePokemon::defending_stat`], and Shed Skin's
+//! end-turn cure draw lives in `Battle::residual_effects` instead of here —
+//! this module performs no ability-based refusal for a paralysing move.
 
 use assets::{AbilityId, MoveEffect, MoveId, Type};
 
@@ -59,67 +60,6 @@ fn defender_is_immune(move_type: Type, defender: &BattlePokemon) -> bool {
     apply_dual_type_effectiveness(TYPE_EFFECTIVENESS_PROBE_DAMAGE, move_type, defender.types()) == 0
 }
 
-/// An ability this battle model cannot yet apply a fresh primary status
-/// against: each reads `status1` in a way not implemented here (Shed Skin's
-/// end-turn cure draw, `src/battle_util.c:2620-2621`; Guts and Marvel
-/// Scale's damage-calculation reads).
-fn unported_paralysis_ability(ability: AbilityId) -> Option<AbilityId> {
-    match ability {
-        AbilityId::SHED_SKIN => Some(AbilityId::SHED_SKIN),
-        _ => None,
-    }
-}
-
-/// Rejects a paralysis move when inflicting the status - directly on the
-/// defender, or through a Synchronize reflection onto the attacker - would
-/// activate an unsupported ability interaction.
-///
-/// This function does not report move-data errors; callers use
-/// [`ensure_resolvable`] for those. Attempts stopped by Limber, type immunity,
-/// or an existing primary status are accepted because they cannot reach an
-/// unsupported interaction. When the defender holds Synchronize, a healthy
-/// attacker is checked too: the move-end reflection resolved by
-/// [`resolve_synchronize_reflection`] would newly paralyse it exactly as a
-/// direct hit would paralyse an unsupported-ability defender, so the same
-/// ability set is refused on either side. Guts and Marvel Scale are
-/// modelled by [`BattlePokemon::attacking_stat`] and
-/// [`BattlePokemon::defending_stat`], so newly paralysing either holder is
-/// admitted.
-///
-/// # Errors
-///
-/// Returns [`BattleError::UnportedAbilityInteraction`] for Shed Skin,
-/// whichever battler the move (directly, or via reflection) would newly
-/// paralyse.
-pub fn ensure_admissible(
-    dex: &Dex,
-    move_id: MoveId,
-    attacker: &BattlePokemon,
-    defender: &BattlePokemon,
-) -> Result<(), BattleError> {
-    if ensure_resolvable(dex, move_id).is_err() {
-        return Ok(());
-    }
-    let Some(move_type) = dex.move_data(move_id)?.move_type.battle_type() else {
-        return Ok(());
-    };
-    if defender.ability() == AbilityId::LIMBER
-        || defender_is_immune(move_type, defender)
-        || !defender.status1().is_healthy()
-    {
-        return Ok(());
-    }
-    if let Some(ability) = unported_paralysis_ability(defender.ability()) {
-        return Err(BattleError::UnportedAbilityInteraction(ability));
-    }
-    if defender.ability() == AbilityId::SYNCHRONIZE && attacker.status1().is_healthy() {
-        if let Some(ability) = unported_paralysis_ability(attacker.ability()) {
-            return Err(BattleError::UnportedAbilityInteraction(ability));
-        }
-    }
-    Ok(())
-}
-
 /// The result of resolving an [`EFFECT_PARALYZE`] move, before any mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParalyzeOutcome {
@@ -141,14 +81,12 @@ pub enum ParalyzeOutcome {
 /// Resolves one [`EFFECT_PARALYZE`] move against `defender` without mutating
 /// either battler.
 ///
-/// Limber, type immunity, an existing primary status, and unsupported ability
-/// interactions are resolved before accuracy. Only the accuracy check can
-/// consume RNG.
+/// Limber, type immunity, and an existing primary status are resolved before
+/// accuracy. Only the accuracy check can consume RNG.
 ///
 /// # Errors
 ///
-/// Returns the errors from [`ensure_resolvable`] or [`ensure_admissible`].
-/// Admission completes before any draw.
+/// Returns the errors from [`ensure_resolvable`].
 pub fn resolve_paralyze_move(
     dex: &Dex,
     move_id: MoveId,
@@ -179,7 +117,6 @@ pub fn resolve_paralyze_move(
     if !defender.status1().is_healthy() {
         return Ok(ParalyzeOutcome::AlreadyStatused);
     }
-    ensure_admissible(dex, move_id, attacker, defender)?;
 
     if !accuracy_check(
         move_data.accuracy,
