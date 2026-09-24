@@ -150,9 +150,10 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them, and the paralysis pipeline reads no ability at all: Shed Skin's own
-//! end-turn cure draw lives in `Battle::residual_effects` instead (issue
-//! #944).
+//! them. The paralysis pipeline still reads Limber and the accuracy
+//! abilities ([`paralyze`], `accuracy_check`) but no longer refuses a Shed
+//! Skin holder at admission: Shed Skin's own end-turn cure draw lives in
+//! `Battle::residual_effects` instead (issue #944).
 //! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
 //! 150% the same way, before the same stage multiply
 //! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
