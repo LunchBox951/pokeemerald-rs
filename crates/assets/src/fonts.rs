@@ -490,8 +490,8 @@ static SMALL_NARROW_WIDTHS: [u8; GLYPH_COUNT] = [
 #[cfg(test)]
 mod tests {
     use super::{
-        FontGlyphSheet, FontId, FontImageRef, GlyphSource, OwnedFontGlyphSheet, GLYPH_COLUMNS,
-        GLYPH_COUNT, GLYPH_PIXELS, GLYPH_SIZE, MAX_PALETTE_INDEX, SHEET_HEIGHT, SHEET_WIDTH,
+        FontGlyphSheet, FontId, FontImageRef, GlyphSource, OwnedFontGlyphSheet, GLYPH_COUNT,
+        GLYPH_PIXELS, GLYPH_SIZE, MAX_PALETTE_INDEX, SHEET_HEIGHT, SHEET_WIDTH,
     };
     use crate::error::AssetError;
     use crate::pack::ImageRef;
@@ -666,23 +666,23 @@ mod tests {
 
     #[test]
     fn glyph_at_a_nonzero_row_and_column_slices_the_right_cell() {
-        let (column, row) = (1u32, 1u32);
-        let glyph_id = u16::try_from(row * GLYPH_COLUMNS + column).unwrap();
-
+        // Literal geometry on purpose: upstream's sheet is 16 columns of
+        // 16x16 cells, so glyph 17 is column 1, row 1, the pixel rectangle
+        // x in 16..32, y in 16..32. Deriving these from the crate's own
+        // constants would let the fixture drift with the implementation.
         let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
-        for y in (row * GLYPH_SIZE)..(row * GLYPH_SIZE + GLYPH_SIZE) {
-            for x in (column * GLYPH_SIZE)..(column * GLYPH_SIZE + GLYPH_SIZE) {
+        for y in 16..32u32 {
+            for x in 16..32u32 {
                 pixels[(y * SHEET_WIDTH + x) as usize] = MAX_PALETTE_INDEX;
             }
         }
         let image = synthetic_font_image(FontId::Small, &pixels);
         let sheet = FontGlyphSheet::new(image).unwrap();
 
-        let glyph = sheet.glyph(glyph_id).unwrap();
+        let glyph = sheet.glyph(17).unwrap();
         assert!(glyph.pixels.iter().all(|&p| p == MAX_PALETTE_INDEX));
 
-        let neighbor_id = u16::try_from(row * GLYPH_COLUMNS + column + 1).unwrap();
-        let neighbor = sheet.glyph(neighbor_id).unwrap();
+        let neighbor = sheet.glyph(18).unwrap();
         assert!(neighbor.pixels.iter().all(|&p| p == 0));
     }
 
