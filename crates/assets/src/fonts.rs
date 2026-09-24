@@ -3,9 +3,9 @@
 //!
 //! Glyph *bitmaps* live in the gitignored asset pack, not in this crate;
 //! fetch one through [`AssetPack::font`](crate::pack::AssetPack::font),
-//! which returns an [`ImageRef`] this module wraps as a [`FontImageRef`].
-//! Binding the image to the [`FontId`] it was fetched under keeps one
-//! font's pixels from being paired with another font's width table.
+//! which returns it already bound as a [`FontImageRef`]. Binding the
+//! [`ImageRef`] to the [`FontId`] it was fetched under keeps one font's
+//! pixels from being paired with another font's width table.
 //! [`FontGlyphSheet::new`] validates a bound image; [`FontGlyphSheet::glyph`]
 //! and [`OwnedFontGlyphSheet::glyph`] slice out one glyph's pixels.
 //!
