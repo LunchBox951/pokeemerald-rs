@@ -26,6 +26,7 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((3, 4), 3, Direction::South);
 
@@ -45,6 +46,43 @@ fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
     );
     assert_eq!(player.position(), (3, 0));
     assert!(player.in_transit(), "a crossing is a step like any other");
+}
+
+/// A crossing landing is a standing tile like any other, so a forced one
+/// must arm both guards through this lane too
+/// (`pokeemerald/src/field_player_avatar.c:332-349`) `(behavioral-fidelity)`.
+#[test]
+fn crossing_onto_a_forced_landing_tile_arms_the_guards_through_this_lane() {
+    let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_SOUTH"),
+        dimensions: (5, 5),
+        landing_position: (3, 0),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+        landing_behavior: engine::overworld::metatile_behavior::MB_SOUTHWARD_CURRENT,
+    };
+    let mut player = PlayerState::new((3, 4), 3, Direction::South);
+
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+
+    assert!(
+        player.forced_movement_armed(),
+        "the movement guard must arm from the neighbour's landing behavior"
+    );
+    assert!(
+        player.field_input_suppressed(),
+        "and so must the field-input gate the landing call reads"
+    );
 }
 
 /// The offset case: a nonzero `offset` on an east/west connection shifts
@@ -72,6 +110,7 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((5, 5), 3, Direction::East);
 
@@ -112,6 +151,7 @@ fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((5, 0), 3, Direction::North);
 
@@ -151,6 +191,7 @@ fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the
                 collision: 0,
                 elevation: 3,
             },
+            landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
         };
         let mut player = PlayerState::new((x, 0), 3, Direction::North);
         let outcome = advance_player_one_frame(
@@ -190,6 +231,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
             collision: 0,
             elevation: 3,
         },
+        landing_behavior: engine::overworld::metatile_behavior::MB_NORMAL,
     };
     let mut player = PlayerState::new((8, 2), 3, Direction::South);
 
@@ -231,7 +273,8 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 ///
 /// **`(10, 19)` is also the Route 101 rescue coord-event trigger tile (issue
 /// #231).** That is deliberate and left alone: this phase is built with no
-/// `party_lead`, so the trigger fires on the crossing's drain frame and
+/// `party_lead`, so the trigger fires on the call after the crossing's
+/// drain frame and
 /// `super::first_battle_trigger`'s own `begin_first_battle` takes its
 /// documented "no party mon yet" arm -- it consumes the trigger
 /// (`VAR_ROUTE101_STATE` goes to `2`, upstream's mid-cutscene ordering) and
@@ -284,14 +327,22 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
         phase.pending_landing,
         Some((10, 19)),
         "the crossing step's landing tile re-latches in the *entered* map's coordinate \
-         space, so the drain-frame door check evaluates against Route 101"
+         space, so the landing call's door check evaluates against Route 101"
     );
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
     }
     assert_eq!(
+        phase.pending_landing,
+        Some((10, 19)),
+        "call 16 only drains the walk animation -- the landing is still outstanding \
+         (issue #1039)"
+    );
+    phase.step(ButtonState::new());
+    assert_eq!(
         phase.pending_landing, None,
-        "the drain frame consumed the latched landing (Route 101's south edge is no door)"
+        "call 17's field input consumed the latched landing (Route 101's south edge is \
+         no door)"
     );
 
     assert_eq!(
@@ -445,6 +496,10 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
             phase.step(ButtonState::new());
         }
     }
+    // The last of those four landings is still outstanding: its `tookStep`
+    // ordering belongs to the call after the animation drains (issue #1039),
+    // and no fifth held frame follows it here to supply one.
+    phase.step(ButtonState::new());
     assert_eq!(phase.player.position(), (10, 0));
     assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
     assert_eq!(
@@ -468,8 +523,15 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     }
     assert_eq!(
         phase.wild.immunity_steps(),
+        0,
+        "call 16 only drains the crossing step's walk animation -- its \
+         CheckStandardWildEncounter ordering has not run yet (issue #1039)"
+    );
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.wild.immunity_steps(),
         1,
-        "the crossing step's own landing then spends the first of the four it was just \
+        "call 17's field input then spends the first of the four the crossing had just \
          granted -- upstream reaches CheckStandardWildEncounter for that step too, the \
          crossing having happened inside it"
     );

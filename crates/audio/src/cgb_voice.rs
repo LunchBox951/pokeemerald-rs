@@ -10,7 +10,6 @@ use crate::voice::{channel_volume, pan_terms, StereoAcc};
 const BIPOLAR_SAMPLE_SCALE: i32 = 127;
 const WAVE_SAMPLE_SCALE: i32 = 16;
 const LINEAR_ENVELOPE_SCALE: u32 = 16;
-const MASTER_VOLUME_BITS: u32 = 4;
 const SAMPLE_GAIN_BITS: u32 = 8;
 const MIDI_KEY_COUNT: i32 = 256;
 const CGB_FREQUENCY_REGISTER_BITS: u32 = 11;
@@ -295,7 +294,12 @@ pub struct CgbVoice {
 
 impl CgbVoice {
     /// Start a square-channel voice without fixed-rate DAC correction.
-    /// `sweep_byte` is valid only for channel 1.
+    /// `channel` must be [`CgbChannelNumber::Square1`] or `Square2`;
+    /// `sweep_byte` is silently dropped unless `channel` is `Square1`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `channel` is [`CgbChannelNumber::Wave`] or `Noise`.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
@@ -361,9 +365,20 @@ impl CgbVoice {
         echo_volume: u8,
         echo_length: u8,
     ) -> Self {
+        assert!(
+            matches!(
+                channel,
+                CgbChannelNumber::Square1 | CgbChannelNumber::Square2
+            ),
+            "square voice requires Square1 or Square2, got {channel:?}"
+        );
         let dac_correction = DacCorrection::from_fixed_rate(fixed_rate);
         let freq_reg = dac_correction.apply(midi_key_to_cgb_freq_reg(note_key, pit_m));
-        let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
+        // Only channel 1 has NR10 (`mgba/src/gb/audio.c:170-186`), so a
+        // channel-2 sweep byte is dropped rather than trusted.
+        let sweep = sweep_byte
+            .filter(|_| channel == CgbChannelNumber::Square1)
+            .map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let oscillator = Oscillator::Square(SquareChannel::new(duty, freq_reg, sweep));
         let muted_at_trigger = oscillator.disabled_at_trigger();
         let mut voice = Self::new(
@@ -610,7 +625,10 @@ impl CgbVoice {
 
     /// Advance the software envelope and prepare gain for one render
     /// frame; applies any owed retrigger first ([`Oscillator::retrigger`]'s doc).
-    pub fn begin_frame(&mut self, master_volume: u8, extra_envelope_iteration: bool) {
+    ///
+    /// Never scales by the DirectSound master volume: `MPlayExtender` pins
+    /// CGB output at full scale (`pokeemerald/src/m4a.c:267-275,365-373`).
+    pub fn begin_frame(&mut self, extra_envelope_iteration: bool) {
         let retriggered_by_note_off = std::mem::take(&mut self.pending_retrigger);
         // The goal `CgbModVol` would compute right now from the current side
         // volumes/pan; folded in only at a real boundary (`step_frame`'s doc).
@@ -644,8 +662,7 @@ impl CgbVoice {
         let envelope_gain = self
             .oscillator
             .envelope_gain_256(software_volume, self.hardware_envelope_volume.volume());
-        let effective = ((u32::from(master_volume) + 1) * envelope_gain) >> MASTER_VOLUME_BITS;
-        self.frame_gain = i32::try_from(effective).unwrap_or(i32::MAX);
+        self.frame_gain = i32::try_from(envelope_gain).unwrap_or(i32::MAX);
     }
 
     /// Accumulate this voice into one frame after [`Self::begin_frame`].
@@ -710,7 +727,7 @@ mod tests {
     const TEST_KEY: u8 = 60;
     const FULL_TRACK_VOLUME: u8 = u8::MAX;
     const FULL_VELOCITY: u8 = 127;
-    const MAX_MASTER_VOLUME: u8 = 15;
+    const MAX_ADSR_LEVEL: u8 = 15;
     const HALF_DUTY: u8 = 2;
     const NARROW_NOISE: u8 = 1;
     const WIDE_NOISE: u8 = 0;
@@ -894,7 +911,7 @@ mod tests {
         let adsr = CgbAdsr {
             attack: 0,
             decay: 0,
-            sustain: MAX_MASTER_VOLUME,
+            sustain: MAX_ADSR_LEVEL,
             release: 4,
         };
         let mut voice = noise_voice(adsr, WIDE_NOISE, TestNote::default());
@@ -902,7 +919,7 @@ mod tests {
 
         let mut acc = vec![(0i32, 0i32); 64];
         for _ in 0..3 {
-            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.begin_frame(false);
             voice.render(&mut acc, &[]);
         }
         let walked_away = voice.noise_lfsr();
@@ -918,7 +935,7 @@ mod tests {
             "sanity: note_off must not retrigger before the next begin_frame -- upstream applies \
              a tick's writes inside the following CgbSound call, not synchronously"
         );
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert_eq!(
             voice.noise_lfsr(),
             at_note_on,
@@ -931,7 +948,7 @@ mod tests {
     fn wave_note_with_active_envelope_is_audible() {
         let mut voice = wave_voice(false, TestNote::default());
         let mut acc = vec![(0i32, 0i32); 8];
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         voice.render(&mut acc, &[]);
         assert!(
             acc.iter().any(|&(l, r)| l != 0 || r != 0),
@@ -955,7 +972,7 @@ mod tests {
             ..TestNote::default()
         };
         let mut voice = square_voice_with_adsr(CgbChannelNumber::Square1, None, held_at_goal, note);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert_eq!(
             voice.envelope_volume(),
             expected_level,
@@ -1004,7 +1021,7 @@ mod tests {
         );
         (0..frames)
             .map(|_| {
-                voice.begin_frame(MAX_MASTER_VOLUME, false);
+                voice.begin_frame(false);
                 let mut acc = vec![(0i32, 0i32); 64];
                 voice.render(&mut acc, &[]);
                 acc.iter()
@@ -1070,7 +1087,7 @@ mod tests {
             centred_goal_thirty_one_note(),
         );
         let peak_of = |voice: &mut CgbVoice, extra_envelope_iteration: bool| {
-            voice.begin_frame(MAX_MASTER_VOLUME, extra_envelope_iteration);
+            voice.begin_frame(extra_envelope_iteration);
             let mut acc = vec![(0i32, 0i32); 64];
             voice.render(&mut acc, &[]);
             acc.iter()
@@ -1138,7 +1155,7 @@ mod tests {
             centred_goal_thirty_one_note(),
         );
 
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert_eq!(
             voice.envelope_volume(),
             31,
@@ -1153,7 +1170,7 @@ mod tests {
             .unwrap_or(0);
         assert_eq!(write_frame_peak, level_15_peak);
 
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert_eq!(
             voice.envelope_volume(),
             30,
@@ -1174,7 +1191,7 @@ mod tests {
 
     /// Render one frame and return its peak sample magnitude.
     fn frame_peak(voice: &mut CgbVoice) -> i32 {
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut acc = vec![(0i32, 0i32); 64];
         voice.render(&mut acc, &[]);
         acc.iter()
@@ -1276,7 +1293,7 @@ mod tests {
         let mut previous_peak = -1i32;
         let mut peak_at_fifteen = None;
         for _ in 0..40 {
-            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.begin_frame(false);
             let level = voice.envelope_volume();
             let mut acc = vec![(0i32, 0i32); 64];
             voice.render(&mut acc, &[]);
@@ -1331,7 +1348,7 @@ mod tests {
 
         let mut saw_silence_while_still_in_range = false;
         for _ in 0..40 {
-            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.begin_frame(false);
             let level = voice.envelope_volume();
             let mut acc = vec![(0i32, 0i32); 64];
             voice.render(&mut acc, &[]);
@@ -1369,7 +1386,7 @@ mod tests {
         let held_at_full_sustain = CgbAdsr {
             attack: 0,
             decay: 0,
-            sustain: MAX_MASTER_VOLUME,
+            sustain: MAX_ADSR_LEVEL,
             release: 0,
         };
         let mut voice = square_voice_with_adsr(
@@ -1378,7 +1395,7 @@ mod tests {
             held_at_full_sustain,
             centred_goal_thirty_one_note(),
         );
-        voice.begin_frame(MAX_MASTER_VOLUME, false); // enters sustain at its write frame
+        voice.begin_frame(false); // enters sustain at its write frame
 
         let mut sanity_acc = vec![(0i32, 0i32); 8];
         voice.render(&mut sanity_acc, &[]);
@@ -1391,7 +1408,7 @@ mod tests {
         voice.set_track_volume(near_silent_track_volume, near_silent_track_volume);
 
         for frame in 0..8 {
-            voice.begin_frame(MAX_MASTER_VOLUME, false);
+            voice.begin_frame(false);
             let mut acc = vec![(0i32, 0i32); 8];
             voice.render(&mut acc, &[]);
             assert!(
@@ -1449,7 +1466,7 @@ mod tests {
                 "the overflow mutes the hardware channel; the software voice keeps its slot"
             );
             let mut acc = vec![(0i32, 0i32); 8];
-            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            muted.begin_frame(false);
             muted.render(&mut acc, &[]);
             assert!(
                 acc.iter().all(|&(l, r)| l == 0 && r == 0),
@@ -1458,7 +1475,7 @@ mod tests {
 
             muted.set_track_pitch(i32::from(safe_key) - i32::from(high_key), 0);
             muted.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
-            muted.begin_frame(MAX_MASTER_VOLUME, false);
+            muted.begin_frame(false);
             let mut revived = vec![(0i32, 0i32); 8];
             muted.render(&mut revived, &[]);
             assert!(
@@ -1473,7 +1490,7 @@ mod tests {
             TestNote::at_key(safe_key),
         );
         let mut acc = vec![(0i32, 0i32); 8];
-        normal.begin_frame(MAX_MASTER_VOLUME, false);
+        normal.begin_frame(false);
         normal.render(&mut acc, &[]);
         assert!(
             acc.iter().any(|&(l, r)| l != 0 || r != 0),
@@ -1502,9 +1519,9 @@ mod tests {
         );
         let mut acc_a = vec![(0i32, 0i32); 16];
         let mut acc_b = vec![(0i32, 0i32); 16];
-        square.begin_frame(MAX_MASTER_VOLUME, false);
+        square.begin_frame(false);
         square.render(&mut acc_a, &[]);
-        expected.begin_frame(MAX_MASTER_VOLUME, false);
+        expected.begin_frame(false);
         expected.render(&mut acc_b, &[]);
         assert_eq!(acc_a, acc_b);
     }
@@ -1539,7 +1556,7 @@ mod tests {
 
     /// Sum of absolute per-side render output across one `begin_frame`/`render` pass.
     fn frame_side_energy(voice: &mut CgbVoice) -> (i32, i32) {
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut acc = vec![(0i32, 0i32); 64];
         voice.render(&mut acc, &[]);
         acc.iter()
@@ -1738,15 +1755,15 @@ mod tests {
             CgbAdsr {
                 attack: 0,
                 decay: 0,
-                sustain: MAX_MASTER_VOLUME,
+                sustain: MAX_ADSR_LEVEL,
                 release: 0,
             },
             WIDE_NOISE,
             echo_note,
         );
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         voice.note_off();
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert!(
             voice.is_active(),
             "a nonzero echo_volume must hold the channel in its pseudo-echo tail"
@@ -1770,7 +1787,7 @@ mod tests {
         };
         let mut voice =
             square_voice_with_adsr(CgbChannelNumber::Square1, None, CgbAdsr::flat(), echo_note);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert_eq!(
             voice.envelope.volume(),
             15,
@@ -1780,7 +1797,7 @@ mod tests {
         // One tick's `VOL` then `EOT`, with no envelope boundary between them.
         voice.set_track_volume(32, 32);
         voice.note_off();
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
 
         assert_eq!(
             voice.envelope.volume(),
@@ -1819,9 +1836,9 @@ mod tests {
         // itself must see it.
         voice.set_track_volume(32, 32);
 
-        voice.begin_frame(MAX_MASTER_VOLUME, false); // note-on's CgbModVol latches goal 3
+        voice.begin_frame(false); // note-on's CgbModVol latches goal 3
         voice.note_off(); // live (mid-attack): a real release transition
-        voice.begin_frame(MAX_MASTER_VOLUME, false); // release == 0: straight to the tail
+        voice.begin_frame(false); // release == 0: straight to the tail
 
         assert_eq!(
             voice.envelope.volume(),
@@ -1844,7 +1861,7 @@ mod tests {
             CgbAdsr {
                 attack: 0,
                 decay: 0,
-                sustain: MAX_MASTER_VOLUME,
+                sustain: MAX_ADSR_LEVEL,
                 release: 0,
             },
             WIDE_NOISE,
@@ -1852,7 +1869,7 @@ mod tests {
         );
 
         voice.note_off();
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut acc = vec![(0i32, 0i32); 8];
         voice.render(&mut acc, &[]);
 
@@ -1889,7 +1906,7 @@ mod tests {
         let sweep = upward_sweep(0, 1);
         let mut plain = square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
         let mut plain_frame = vec![(0i32, 0i32); 8];
-        plain.begin_frame(MAX_MASTER_VOLUME, false);
+        plain.begin_frame(false);
         plain.render(&mut plain_frame, &[]);
         assert!(
             plain_frame.iter().any(|&(l, r)| l != 0 || r != 0),
@@ -1898,7 +1915,7 @@ mod tests {
 
         let mut fixed = fixed_square_voice(CgbChannelNumber::Square1, Some(sweep), edge_note);
         let mut fixed_frame = vec![(0i32, 0i32); 8];
-        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        fixed.begin_frame(false);
         fixed.render(&mut fixed_frame, &[]);
         assert!(
             fixed_frame.iter().all(|&(l, r)| l == 0 && r == 0),
@@ -1912,7 +1929,7 @@ mod tests {
         let safe_key: u8 = 48;
         fixed.set_track_pitch(i32::from(safe_key) - i32::from(edge_note.note_key), 0);
         fixed.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
-        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        fixed.begin_frame(false);
         let mut revived = vec![(0i32, 0i32); 8];
         fixed.render(&mut revived, &[]);
         assert!(
@@ -1931,9 +1948,9 @@ mod tests {
         let mut plain = wave_voice(false, edge_note);
         let mut acc_fixed = vec![(0i32, 0i32); 2048];
         let mut acc_plain = vec![(0i32, 0i32); 2048];
-        fixed.begin_frame(MAX_MASTER_VOLUME, false);
+        fixed.begin_frame(false);
         fixed.render(&mut acc_fixed, &[]);
-        plain.begin_frame(MAX_MASTER_VOLUME, false);
+        plain.begin_frame(false);
         plain.render(&mut acc_plain, &[]);
         assert_ne!(
             acc_fixed, acc_plain,
@@ -1963,11 +1980,47 @@ mod tests {
 
         let mut acc_direct = vec![(0i32, 0i32); 2048];
         let mut acc_retuned = vec![(0i32, 0i32); 2048];
-        direct.begin_frame(MAX_MASTER_VOLUME, false);
+        direct.begin_frame(false);
         direct.render(&mut acc_direct, &[]);
-        retuned.begin_frame(MAX_MASTER_VOLUME, false);
+        retuned.begin_frame(false);
         retuned.render(&mut acc_retuned, &[]);
         assert_eq!(acc_direct, acc_retuned);
+    }
+
+    #[test]
+    #[should_panic(expected = "square voice requires Square1 or Square2")]
+    fn square_voice_rejects_a_wave_channel() {
+        let _ = square_voice(CgbChannelNumber::Wave, None, TestNote::default());
+    }
+
+    #[test]
+    #[should_panic(expected = "square voice requires Square1 or Square2")]
+    fn square_voice_rejects_a_noise_channel() {
+        let _ = square_voice(CgbChannelNumber::Noise, None, TestNote::default());
+    }
+
+    #[test]
+    fn a_square2_voice_never_carries_a_sweep() {
+        let sweeping = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(1, 1)),
+            TestNote::at_key(0),
+        );
+        assert!(
+            sweeping.sweep_frequency().is_some(),
+            "sanity: channel 1 does take the sweep byte"
+        );
+
+        let square2 = square_voice(
+            CgbChannelNumber::Square2,
+            Some(upward_sweep(1, 1)),
+            TestNote::at_key(0),
+        );
+        assert_eq!(
+            square2.sweep_frequency(),
+            None,
+            "a Square2 voice must ignore a channel-1 sweep byte"
+        );
     }
 
     fn low_freq_sweep_voice(sweep_byte: u8) -> CgbVoice {
@@ -1980,7 +2033,7 @@ mod tests {
 
     fn sweep_frequency_after(sweep_byte: u8, len: usize, schedule: &[usize]) -> u16 {
         let mut voice = low_freq_sweep_voice(sweep_byte);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let ticks: Vec<usize> = schedule.iter().copied().filter(|&t| t < len).collect();
         let mut acc = vec![(0i32, 0i32); len];
         voice.render(&mut acc, &ticks);
@@ -2034,14 +2087,14 @@ mod tests {
         let make_voice = || low_freq_sweep_voice(upward_sweep(1, 1));
 
         let mut whole_voice = make_voice();
-        whole_voice.begin_frame(MAX_MASTER_VOLUME, false);
+        whole_voice.begin_frame(false);
         let mut whole_clock = FrameSequencer128Hz::default();
         let whole_ticks = whole_clock.advance(600);
         let mut whole_acc = vec![(0i32, 0i32); 600];
         whole_voice.render(&mut whole_acc, &whole_ticks);
 
         let mut split_voice = make_voice();
-        split_voice.begin_frame(MAX_MASTER_VOLUME, false);
+        split_voice.begin_frame(false);
         let mut split_clock = FrameSequencer128Hz::default();
         let first_ticks = split_clock.advance(300);
         let mut first_half = vec![(0i32, 0i32); 300];
@@ -2074,7 +2127,7 @@ mod tests {
             voice.is_active(),
             "not born dead: the trigger check alone doesn't overflow"
         );
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
 
         let mut clock = FrameSequencer128Hz::default();
         let ticks = clock.advance(300);
@@ -2096,7 +2149,7 @@ mod tests {
             "the overflow mutes the hardware channel; the software voice lives on"
         );
         let mut still_muted = vec![(0i32, 0i32); 8];
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         voice.render(&mut still_muted, &[]);
         assert!(
             still_muted.iter().all(|&(l, r)| l == 0 && r == 0),
@@ -2105,7 +2158,7 @@ mod tests {
 
         voice.set_track_pitch(0, 0);
         voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut revived = vec![(0i32, 0i32); 8];
         voice.render(&mut revived, &[]);
         assert!(
@@ -2130,7 +2183,7 @@ mod tests {
             CgbAdsr {
                 attack: 0,
                 decay: 1,
-                sustain: MAX_MASTER_VOLUME,
+                sustain: MAX_ADSR_LEVEL,
                 release: 0,
             },
             safe_key,
@@ -2156,7 +2209,7 @@ mod tests {
             "a pitch bend alone must not retrigger the sweep"
         );
 
-        voice.begin_frame(MAX_MASTER_VOLUME, false); // attack==0 -> decay!=0: retriggers
+        voice.begin_frame(false); // attack==0 -> decay!=0: retriggers
 
         assert!(
             voice.is_active(),
@@ -2184,7 +2237,7 @@ mod tests {
         );
         // Settle `CgbAdsr::flat()`'s own instant retrigger first, so this
         // frame isolates `set_track_volume`'s retrigger below.
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         assert!(
             voice.is_active(),
             "the settling frame must not itself overflow"
@@ -2202,9 +2255,9 @@ mod tests {
             "sanity: set_track_volume must not retrigger before the next begin_frame"
         );
 
-        voice.begin_frame(MAX_MASTER_VOLUME, false); // steady in sustain now, so only
-                                                     // set_track_volume's retrigger explains
-                                                     // the mute below
+        voice.begin_frame(false); // steady in sustain now, so only
+                                  // set_track_volume's retrigger explains
+                                  // the mute below
 
         assert!(
             voice.is_active(),
@@ -2234,7 +2287,7 @@ mod tests {
         // and overflows (`mgba/src/gb/audio.c:180-196`).
         voice.set_track_pitch(i32::from(overflowing_key - safe_key), 0);
         voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut muted = vec![(0i32, 0i32); 8];
         voice.render(&mut muted, &[]);
         assert!(
@@ -2246,7 +2299,7 @@ mod tests {
         // (`m4a.c:1053-1056`).
         voice.set_track_pitch(0, 0);
         voice.set_track_volume(FULL_TRACK_VOLUME, FULL_TRACK_VOLUME);
-        voice.begin_frame(MAX_MASTER_VOLUME, false);
+        voice.begin_frame(false);
         let mut revived = vec![(0i32, 0i32); 8];
         voice.render(&mut revived, &[]);
         assert!(

@@ -1,10 +1,9 @@
-//! Unit tests for the field start menu (I-6, issue #232) -- the item list,
-//! the cursor, the geometry, and the whole `sSaveDialogCallback` chain,
-//! driven against a fake [`SaveTarget`] rather than a real save file.
+//! Unit tests for the field start menu: the item list, the cursor, the
+//! geometry, and the SAVE flow, driven against a fake [`SaveTarget`] rather
+//! than a real save file.
 //!
-//! The *integration* half -- the same menu writing a real save through an
-//! `crate::flow::overworld_phase::OverworldPhase` and reloading it -- lives
-//! in `crate::flow::save_continue_tests` and its `save_continue_*` siblings.
+//! `crate::flow::save_continue_tests` and its `save_continue_*` siblings
+//! cover the same menu writing a real save and reloading it.
 
 use super::text::SaveMessage;
 use super::{
@@ -25,14 +24,12 @@ fn pressed(button: Buttons) -> ButtonState {
     state
 }
 
-/// A save medium that records what it was asked to do instead of touching
-/// a file -- upstream's `gSaveFileStatus`/`gDifferentSaveFile` globals and
-/// `TrySavingData`, as a value the test owns.
+/// A save medium that records what it was asked to do instead of touching a
+/// file.
 #[derive(Debug)]
 struct FakeTarget {
     boot_status: SaveFileStatus,
     different_save_file: bool,
-    /// Whether `TrySavingData` should report `SAVE_STATUS_OK`.
     write_succeeds: bool,
     /// Every mode `try_saving_data` was called with, in order.
     writes: Vec<SaveMode>,
@@ -62,22 +59,15 @@ impl SaveTarget for FakeTarget {
         "STU".chars().map(Token::Char).collect()
     }
 
-    /// Fixed at MID: this fake exists to drive the menu mechanics, not the
-    /// text-speed plumbing (`crate::flow::save_continue_text_speed_tests`
-    /// owns that coverage against the real `PhaseSaveTarget`), and every frame
-    /// budget in this file already assumes MID's cadence.
+    /// Fixed at MID: every frame budget in this file assumes MID's cadence.
+    /// `crate::flow::save_continue_text_speed_tests` covers text-speed
+    /// plumbing against the real `PhaseSaveTarget`.
     fn player_text_speed(&self) -> TextSpeed {
         TextSpeed::Mid
     }
 
-    /// `SaveDoSaveCallback`'s dispatch (`start_menu.c:1093-1096`): the
-    /// `gDifferentSaveFile = FALSE` on `:1096` is inside the
-    /// `SAVE_OVERWRITE_DIFFERENT_FILE` branch and runs before `saveStatus`
-    /// is looked at, so a *failed* overwrite clears the flag too. The real
-    /// implementor
-    /// (`crate::flow::overworld_phase::start_menu`'s `PhaseSaveTarget`)
-    /// does the same; this fake would be a second, wrong opinion if it
-    /// gated the clear on success.
+    /// Clears `different_save_file` on an overwrite attempt even when the
+    /// write fails, matching [`SaveTarget::try_saving_data`]'s contract.
     fn try_saving_data(&mut self, mode: SaveMode) -> bool {
         self.writes.push(mode);
         if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
@@ -87,27 +77,21 @@ impl SaveTarget for FakeTarget {
     }
 }
 
-/// Frames one flow gets before the fixture calls it wedged -- generous
-/// enough for `gText_DifferentSaveFile`'s four-page WARNING at
-/// `TextSpeed::Mid` (`crate::flow::save_continue_tests` documents the
-/// arithmetic).
+/// Frames one flow gets before a test calls it wedged -- generous enough for
+/// the longest WARNING message at `TextSpeed::Mid`
+/// (`crate::flow::save_continue_tests` documents the arithmetic).
 const FRAME_BUDGET: usize = 4_000;
 
-/// A held (not freshly pressed) button, for asserting a countdown ignores it.
 fn held(button: Buttons) -> ButtonState {
     let mut state = pressed(button);
     state.update(button);
     state
 }
 
-/// Ticks `dialog` and a plain reference `NpcDialog` copy of the same
-/// message in lockstep, so the frame the reference reports
-/// [`DialogOutcome::Closed`] -- the same tick `RunTextPrinters` clears the
-/// real printer's `active` flag on `RENDER_FINISH`, before
-/// `RunSaveCallback` reads it (`pokeemerald/src/text.c:319-345`,
-/// `pokeemerald/src/start_menu.c:884-894`) -- pins the exact finish tick
-/// without hard-coding a message's frame count. Calls `before_finish` on
-/// every tick before the one the reference closes on.
+/// Ticks `dialog` and a plain reference `NpcDialog` copy of the same message
+/// in lockstep, pinning the exact tick the message finishes printing without
+/// hard-coding its frame count. Calls `before_finish` on every tick before
+/// the one the reference closes on.
 fn finish_message_in_lockstep(
     dialog: &mut SaveDialog,
     chrome: &StartMenuChrome,
@@ -132,8 +116,7 @@ fn finish_message_in_lockstep(
     panic!("the save message must finish within {FRAME_BUDGET} frames");
 }
 
-/// Drives a fresh [`SaveDialog`] up to its first (`gText_ConfirmSave`)
-/// Yes/No window.
+/// Drives a fresh [`SaveDialog`] up to its first Yes/No window.
 fn open_initial_choice(dialog: &mut SaveDialog, chrome: &StartMenuChrome, target: &mut FakeTarget) {
     assert_eq!(
         dialog.run(ButtonState::new(), chrome, target),
@@ -151,10 +134,9 @@ fn open_initial_choice(dialog: &mut SaveDialog, chrome: &StartMenuChrome, target
     panic!("the initial choice must open within {FRAME_BUDGET} frames");
 }
 
-/// Drives a fresh [`SaveDialog`] through the empty-cartridge shortcut
-/// (`SaveConfirmInputCallback`'s `SAVE_STATUS_EMPTY` arm,
-/// `start_menu.c:1008-1019`) up to its `gText_SavingDontTurnOff` message just
-/// starting to print, with no overwrite prompt in between.
+/// Drives a fresh [`SaveDialog`] through the empty-cartridge shortcut up to
+/// its saving message just starting to print, with no overwrite prompt in
+/// between.
 fn begin_unprompted_saving_message(
     dialog: &mut SaveDialog,
     chrome: &StartMenuChrome,
@@ -176,17 +158,16 @@ fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec
     drive_reporting_outcome(menu, target, answers).0
 }
 
-/// Drive `menu` until it closes or its SAVE flow cancels back to the item
+/// Drives `menu` until it closes or its SAVE flow cancels back to the item
 /// list, answering Yes/No prompts from `answers` (`true` = YES, defaulting
 /// to YES).
 ///
 /// Returns the cursor row each prompt opened on, and how the menu ended:
-/// [`StartMenuOutcome::Closed`] for `HideStartMenu` giving field control
-/// back, [`StartMenuOutcome::Open`] for `SAVE_CANCELED` putting the item
-/// list back up. The two are not interchangeable, and `saving()` cannot
-/// tell them apart -- `SaveCallback`'s `SAVE_SUCCESS`/`SAVE_ERROR` arm
-/// closes the menu with the save flow still installed on it
-/// (`start_menu.c:828-834`).
+/// [`StartMenuOutcome::Closed`] when field control returns,
+/// [`StartMenuOutcome::Open`] when the SAVE flow canceled back to the item
+/// list. The two are not interchangeable, and `saving()` cannot tell them
+/// apart: a successful or failed save also closes the menu while its SAVE
+/// flow is still installed.
 fn drive_reporting_outcome(
     menu: &mut StartMenu,
     target: &mut FakeTarget,
@@ -226,9 +207,6 @@ fn drive_reporting_outcome(
     panic!("the save flow must terminate within {FRAME_BUDGET} frames");
 }
 
-/// `BuildNormalStartMenu` order, restricted to this shell's two items
-/// (module docs): `SAVE` before `EXIT`, and `SAVE` first so a fresh menu
-/// opens on it.
 #[test]
 fn the_item_list_is_save_then_exit() {
     assert_eq!(ITEMS, [StartMenuItem::Save, StartMenuItem::Exit]);
@@ -237,20 +215,18 @@ fn the_item_list_is_save_then_exit() {
     assert_eq!(synthetic_start_menu().selected(), StartMenuItem::Save);
 }
 
-/// `AddStartMenuWindow`'s `(numActions * 2) + 2` height
-/// (`pokeemerald/src/menu.c:493`), and the window it lands in -- the
-/// geometry a two-item menu draws with.
+/// Item-window height is `numActions * 2 + 2` tiles
+/// (`pokeemerald/src/menu.c:493`).
 #[test]
-fn the_window_geometry_is_upstreams() {
-    assert_eq!(menu_height(2), 6);
-    assert_eq!(menu_height(7), 16, "upstream's own full normal menu");
+fn item_window_geometry_matches_upstream() {
+    assert_eq!(menu_height(2), 6, "this shell's own two-item menu");
+    assert_eq!(menu_height(7), 16, "a larger menu");
     assert_eq!(
         (MENU_TILEMAP_LEFT, MENU_TILEMAP_TOP, MENU_WIDTH),
         (22, 1, 7)
     );
 }
 
-/// `Menu_MoveCursor` wraps at both ends (`src/menu.c:948-962`).
 #[test]
 fn the_item_cursor_wraps_in_both_directions() {
     let mut target = FakeTarget::new(SaveFileStatus::Empty, true);
@@ -264,35 +240,29 @@ fn the_item_cursor_wraps_in_both_directions() {
     assert_eq!(menu.selected(), StartMenuItem::Exit);
 }
 
-/// `HandleStartMenuInput`'s D-pad and A tests are three independent `if`s
-/// (`start_menu.c:595`, `:601`, `:607`), not a chain: a frame that reports
-/// DOWN and A together moves the cursor *and then* selects the item it
-/// landed on. The A branch's own `return FALSE` (`:626`) is why a START on
-/// that same frame does not also close the menu behind the selection.
 #[test]
-fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
+fn direction_precedes_a_and_a_precedes_close_buttons_in_the_same_frame() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
-    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached
-    // but not yet closed (issue #1035, module docs).
+    // DOWN+A off a fresh menu: EXIT is selected but not yet closed.
     let mut menu = synthetic_start_menu();
     assert_eq!(menu.selected(), StartMenuItem::Save);
     assert_eq!(
         menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
         StartMenuOutcome::Open,
         "the A must act on the row DOWN just moved it to, not on SAVE, \
-         and StartMenuExitCallback has not run yet"
+         and EXIT must not have closed the menu yet"
     );
     assert_eq!(menu.selected(), StartMenuItem::Exit);
     assert!(!menu.saving(), "the same-frame A selected EXIT, not SAVE");
     assert_eq!(
         menu.tick(ButtonState::new(), &mut target),
         StartMenuOutcome::Closed,
-        "StartMenuExitCallback runs on the next tick, reading no input"
+        "EXIT closes on the next tick, reading no input"
     );
 
-    // UP+A from EXIT: `Menu_MoveCursor` wraps back to SAVE and the same
-    // frame's A starts the save flow.
+    // UP+A from EXIT: the cursor wraps back to SAVE and the same frame's A
+    // starts the save flow.
     let mut menu = synthetic_start_menu();
     menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
@@ -303,7 +273,7 @@ fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
     assert_eq!(menu.selected(), StartMenuItem::Save);
     assert!(menu.saving(), "the same frame's A entered the SAVE flow");
 
-    // A+START: the A branch returns first, so START never closes anything.
+    // A+START: A takes the same-frame selection, so START never closes it.
     let mut menu = synthetic_start_menu();
     assert_eq!(
         menu.tick(pressed(Buttons::A | Buttons::START), &mut target),
@@ -317,12 +287,8 @@ fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
     );
 }
 
-/// `StartMenuExitCallback` (`start_menu.c:750-757`) and
-/// `HandleStartMenuInput`'s `JOY_NEW(START_BUTTON | B_BUTTON)` close
-/// (`:628-633`) -- none of the three writes anything. EXIT closes on the
-/// tick after its A press (issue #1035, module docs).
 #[test]
-fn exit_start_and_b_all_close_without_writing() {
+fn exit_closes_next_tick_while_start_and_b_close_immediately_without_writing() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
 
     let mut menu = synthetic_start_menu();
@@ -331,12 +297,12 @@ fn exit_start_and_b_all_close_without_writing() {
     assert_eq!(
         menu.tick(pressed(Buttons::A), &mut target),
         StartMenuOutcome::Open,
-        "A on EXIT only arms StartMenuExitCallback this tick"
+        "A on EXIT only marks it pending this tick"
     );
     assert_eq!(
         menu.tick(ButtonState::new(), &mut target),
         StartMenuOutcome::Closed,
-        "StartMenuExitCallback closes the menu on the next tick"
+        "the pending EXIT closes the menu on the next tick"
     );
 
     for close_key in [Buttons::START, Buttons::B] {
@@ -350,8 +316,7 @@ fn exit_start_and_b_all_close_without_writing() {
     assert!(target.writes.is_empty(), "closing the menu writes nothing");
 }
 
-/// `SaveConfirmInputCallback`'s shortcut (`start_menu.c:1008-1019`): a
-/// new-game session over an empty cartridge is asked only whether to save
+/// A new-game session over an empty cartridge is asked only whether to save
 /// -- there is provably nothing to overwrite -- and the write records that
 /// no prompt stood behind it.
 #[test]
@@ -363,7 +328,7 @@ fn an_empty_cartridge_skips_the_overwrite_prompt() {
     assert_eq!(
         prompts,
         vec![0],
-        "gText_ConfirmSave only, defaulting to YES"
+        "only the initial prompt, defaulting to YES"
     );
     assert_eq!(
         target.writes,
@@ -371,9 +336,8 @@ fn an_empty_cartridge_skips_the_overwrite_prompt() {
     );
 }
 
-/// The same shortcut applies to `SAVE_STATUS_CORRUPT`
-/// (`start_menu.c:1011-1012`) -- a wrecked file is not an adventure worth
-/// asking about.
+/// The same shortcut applies to a corrupt cartridge -- a wrecked file is
+/// not an adventure worth asking about.
 #[test]
 fn a_corrupt_cartridge_also_skips_the_overwrite_prompt() {
     let mut target = FakeTarget::new(SaveFileStatus::Corrupt, true);
@@ -385,10 +349,8 @@ fn a_corrupt_cartridge_also_skips_the_overwrite_prompt() {
     );
 }
 
-/// A *continued* session saving over its own file gets Emerald's famous
-/// second question -- `gText_AlreadySavedFile`, defaulting to YES
-/// (`SaveConfirmOverwriteCallback`, `start_menu.c:1056-1061`) -- and writes
-/// `SAVE_NORMAL`.
+/// A continued session saving over its own file is asked a second
+/// confirmation, defaulting to YES, and writes with [`SaveMode::Normal`].
 #[test]
 fn a_continued_session_is_asked_twice_and_saves_normally() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
@@ -399,10 +361,9 @@ fn a_continued_session_is_asked_twice_and_saves_normally() {
     assert_eq!(target.writes, vec![SaveMode::Normal]);
 }
 
-/// A new-game session over someone else's save gets the WARNING, whose
-/// Yes/No opens on **NO** (`DisplayYesNoMenuWithDefault(1)`,
-/// `start_menu.c:1049-1053`). Answering NO cancels back to the item list
-/// and writes nothing.
+/// A new-game session over someone else's save gets a WARNING prompt whose
+/// Yes/No opens on **NO** (`pokeemerald/src/start_menu.c:1049-1053`).
+/// Answering NO cancels back to the item list and writes nothing.
 #[test]
 fn the_different_save_file_warning_defaults_to_no_and_can_be_declined() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
@@ -412,7 +373,7 @@ fn the_different_save_file_warning_defaults_to_no_and_can_be_declined() {
     assert_eq!(
         prompts,
         vec![0, 1],
-        "gText_ConfirmSave defaults to YES; the WARNING to NO"
+        "the initial prompt defaults to YES; the WARNING to NO"
     );
     assert!(
         target.writes.is_empty(),
@@ -420,13 +381,12 @@ fn the_different_save_file_warning_defaults_to_no_and_can_be_declined() {
     );
     assert!(
         !menu.saving(),
-        "SAVE_CANCELED puts the item list back (SaveCallback, :822-827)"
+        "cancellation returns the menu to the item list"
     );
 }
 
-/// Answering YES to the WARNING writes -- with `prompted` set, which is
-/// what distinguishes a consented overwrite from the empty-cartridge
-/// shortcut.
+/// Answering YES to the WARNING writes with `prompted` set, distinguishing
+/// a consented overwrite from the empty-cartridge shortcut.
 #[test]
 fn answering_the_warning_writes_an_acknowledged_overwrite() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
@@ -438,9 +398,6 @@ fn answering_the_warning_writes_an_acknowledged_overwrite() {
     );
 }
 
-/// `SaveConfirmInputCallback`'s NO/`MENU_B_PRESSED` arm
-/// (`start_menu.c:1026-1030`): the flow reports `SAVE_CANCELED` before ever
-/// reaching the medium.
 #[test]
 fn declining_the_first_question_never_reaches_the_save_medium() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
@@ -450,15 +407,13 @@ fn declining_the_first_question_never_reaches_the_save_medium() {
     assert!(!menu.saving());
 }
 
-/// B on a Yes/No prompt is `MENU_B_PRESSED`, which every caller here reads
-/// as NO (`Menu_ProcessInputNoWrap`, `src/menu.c:1023-1026`) -- even with
-/// the cursor sitting on YES.
+/// B on a Yes/No prompt always answers NO
+/// (`pokeemerald/src/menu.c:1023-1026`), even with the cursor on YES.
 #[test]
 fn b_on_a_prompt_answers_no_even_with_the_cursor_on_yes() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     let mut menu = synthetic_start_menu();
 
-    // Into the SAVE flow, then forward until the first prompt is waiting.
     menu.tick(pressed(Buttons::A), &mut target);
     for _ in 0..FRAME_BUDGET {
         if menu.yes_no_cursor().is_some() {
@@ -476,10 +431,8 @@ fn b_on_a_prompt_answers_no_even_with_the_cursor_on_yes() {
     assert!(target.writes.is_empty());
 }
 
-/// A failed write shows `gText_SaveError` and still closes the start menu
-/// (`SaveCallback`'s shared `SAVE_SUCCESS`/`SAVE_ERROR` arm,
-/// `start_menu.c:828-834`) -- the player is returned to the field knowing
-/// the save did not happen, not trapped in a menu.
+/// A failed write still closes the start menu -- the player returns to the
+/// field knowing the save did not happen, not trapped in a menu.
 #[test]
 fn a_failed_write_still_closes_the_menu() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
@@ -490,30 +443,25 @@ fn a_failed_write_still_closes_the_menu() {
     assert_eq!(
         outcome,
         StartMenuOutcome::Closed,
-        "SAVE_ERROR shares SAVE_SUCCESS's arm: the menu ends, it does not \
-         drop the player back on the item list"
+        "failure shares success's arm: the menu ends, it does not drop the \
+         player back on the item list"
     );
 }
 
-/// `SaveDoSaveCallback` clears `gDifferentSaveFile` on the statement right
-/// after `TrySavingData(SAVE_OVERWRITE_DIFFERENT_FILE)`, inside the branch
-/// and before `saveStatus` is ever read (`start_menu.c:1093-1096`) -- so a
-/// *failed* overwrite clears it too, and the next SAVE in the same session
-/// meets the ordinary `gText_AlreadySavedFile` question (default YES)
-/// rather than `gText_DifferentSaveFile`'s WARNING (default NO) all over
-/// again. Clearing only on success would re-prompt where upstream does not.
+/// A failed overwrite still clears `different_save_file`, so the next SAVE
+/// in the same session meets the ordinary confirmation (default YES) rather
+/// than the WARNING (default NO) all over again.
 #[test]
 fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
     target.write_succeeds = false;
 
-    // First SAVE: the WARNING, consented to, and the write fails.
     let mut menu = synthetic_start_menu();
-    let prompts = drive(&mut menu, &mut target, &[true, true]);
+    let first_attempt_prompts = drive(&mut menu, &mut target, &[true, true]);
     assert_eq!(
-        prompts,
+        first_attempt_prompts,
         vec![0, 1],
-        "gText_ConfirmSave defaults to YES; the WARNING to NO"
+        "the initial prompt defaults to YES; the WARNING to NO"
     );
     assert_eq!(
         target.writes,
@@ -521,18 +469,17 @@ fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
     );
     assert!(
         !target.different_save_file,
-        "gDifferentSaveFile is cleared by the dispatch, not by the status"
+        "the overwrite attempt clears the flag even though it failed"
     );
 
-    // Second SAVE, same session, this time the medium cooperates.
     target.write_succeeds = true;
     let mut menu = synthetic_start_menu();
-    let prompts = drive(&mut menu, &mut target, &[]);
+    let retry_prompts = drive(&mut menu, &mut target, &[]);
     assert_eq!(
-        prompts,
+        retry_prompts,
         vec![0, 0],
-        "the retry asks gText_AlreadySavedFile, which defaults to YES -- a \
-         second WARNING would open its Yes/No on NO"
+        "the retry asks the ordinary confirmation, which defaults to YES -- \
+         a second WARNING would open its Yes/No on NO"
     );
     assert_eq!(
         target.writes,
@@ -540,15 +487,10 @@ fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
             SaveMode::OverwriteDifferentFile { prompted: true },
             SaveMode::Normal
         ],
-        "the retry dispatches SAVE_NORMAL, exactly as upstream's own \
-         gDifferentSaveFile == FALSE branch does (start_menu.c:1098-1101)"
+        "the retry uses the normal save mode"
     );
 }
 
-/// `RunSaveCallback` calls `sSaveDialogCallback` the instant it observes
-/// printer 0 inactive, so `SaveYesNoCallback` opens the Yes/No window on the
-/// exact tick `gText_ConfirmSave` finishes -- not the tick after
-/// (`start_menu.c:884-894,996-1001`).
 #[test]
 fn initial_yes_no_opens_on_the_confirm_message_finish_tick() {
     let chrome = StartMenuChrome::synthetic();
@@ -558,6 +500,26 @@ fn initial_yes_no_opens_on_the_confirm_message_finish_tick() {
     assert_eq!(
         dialog.run(ButtonState::new(), &chrome, &mut target),
         SaveDialogOutcome::InProgress
+    );
+    assert!(
+        dialog.message().is_none(),
+        "the install tick builds no message"
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress
+    );
+    assert!(
+        dialog.message().is_none(),
+        "the init tick builds no message"
+    );
+    assert_eq!(
+        dialog.run(ButtonState::new(), &chrome, &mut target),
+        SaveDialogOutcome::InProgress
+    );
+    assert!(
+        dialog.message().is_some(),
+        "the third tick must have built the confirm message"
     );
     finish_message_in_lockstep(
         &mut dialog,
@@ -574,9 +536,6 @@ fn initial_yes_no_opens_on_the_confirm_message_finish_tick() {
     );
 }
 
-/// The same same-tick dispatch applies to `SaveConfirmOverwriteCallback`
-/// opening `gText_AlreadySavedFile`'s Yes/No window
-/// (`start_menu.c:884-894,1056-1061`).
 #[test]
 fn overwrite_yes_no_opens_on_the_overwrite_message_finish_tick() {
     let chrome = StartMenuChrome::synthetic();
@@ -592,7 +551,7 @@ fn overwrite_yes_no_opens_on_the_overwrite_message_finish_tick() {
     assert_eq!(
         dialog.run(ButtonState::new(), &chrome, &mut target),
         SaveDialogOutcome::InProgress,
-        "this tick only starts gText_AlreadySavedFile printing"
+        "this tick only starts the overwrite message printing"
     );
     finish_message_in_lockstep(
         &mut dialog,
@@ -611,9 +570,6 @@ fn overwrite_yes_no_opens_on_the_overwrite_message_finish_tick() {
     );
 }
 
-/// `SaveDoSaveCallback` -- the actual `TrySavingData` dispatch -- runs on
-/// the tick `gText_SavingDontTurnOff` finishes, not the tick after
-/// (`start_menu.c:884-894,1080-1109`).
 #[test]
 fn store_runs_on_the_saving_message_finish_tick() {
     let chrome = StartMenuChrome::synthetic();
@@ -637,17 +593,14 @@ fn store_runs_on_the_saving_message_finish_tick() {
     );
 }
 
-/// Unlike the prompt and store dispatches above, upstream's result path has
-/// its own real extra tick: `SaveSuccessCallback`/`SaveErrorCallback` only
-/// switch to the dismissal callback on the result message's finish tick and
-/// do not read input there, so a held A is not honored until the *next*
-/// tick (`start_menu.c:1112-1158`). A held A carried into the finish tick
-/// itself must therefore never fire `SAVE_SUCCESS`/`SAVE_ERROR` early.
+/// Unlike the prompt and store dispatches above, the result path (see
+/// [`SaveDialog::run`]) does not read input on the message's finish tick, so
+/// a held A carried into that tick must never fire success or error early.
 ///
-/// The drive up to and through the result message uses fresh A presses
-/// (`gText_SaveError`'s own `{P}` page break needs one to turn the page,
-/// same as any other field message); only the completion check below holds
-/// A without a fresh edge, the shape of an already-held button.
+/// The drive up to and through the result message uses fresh A presses (a
+/// page-break message still needs one to turn the page); only the
+/// completion check below holds A without a fresh edge, the shape of an
+/// already-held button.
 #[test]
 fn held_a_does_not_skip_the_result_transition_on_the_finish_tick() {
     for write_succeeds in [true, false] {
@@ -681,8 +634,8 @@ fn held_a_does_not_skip_the_result_transition_on_the_finish_tick() {
         } else {
             SaveMessage::SaveError.tokens()
         };
-        // `finish_message_in_lockstep` itself asserts `InProgress` on every
-        // tick up to and including the finish tick -- the load-bearing check
+        // `finish_message_in_lockstep` asserts `InProgress` on every tick up
+        // to and including the finish tick, which is the load-bearing check
         // that the dismissal transition never fires early.
         finish_message_in_lockstep(
             &mut dialog,
@@ -717,7 +670,7 @@ fn held_a_does_not_skip_the_result_transition_on_the_finish_tick() {
 }
 
 /// The composed frame really draws something over the map: a start menu
-/// that rendered nothing would pass every state-machine test above while
+/// that rendered nothing would still pass every state-machine test while
 /// being invisible to the player.
 #[test]
 fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
@@ -732,26 +685,106 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
     base.fill(marker);
     let composed = synthetic_start_menu().compose_over(base);
 
-    // Inside the item window's content rect (tile 22,1, 7x6 tiles): the
-    // fill replaced the caller's backdrop.
-    let inside = composed.pixel(
+    let inside_item_window = composed.pixel(
         usize::try_from(MENU_TILEMAP_LEFT * 8 + 4).unwrap(),
         usize::try_from(MENU_TILEMAP_TOP * 8 + 4).unwrap(),
     );
-    assert_ne!(inside, Some(marker), "the menu window must be painted");
-    // Far from the window -- the overworld behind it still shows.
-    assert_eq!(composed.pixel(4, 150), Some(marker));
+    assert_ne!(
+        inside_item_window,
+        Some(marker),
+        "the menu window must be painted"
+    );
+    let far_from_any_window = composed.pixel(4, 150);
+    assert_eq!(
+        far_from_any_window,
+        Some(marker),
+        "the overworld behind the menu must still show"
+    );
 }
 
-/// Pins the palette split every window here draws with (correctness issue
-/// caught in review): the content fill and `FONT_NORMAL` glyph colours must
-/// come from the message-box palette (bank 15,
-/// `LoadMessageBoxAndBorderGfx`, `pokeemerald/src/text_window.c:93-112`),
-/// while only the border ring uses the selected standard frame's own
-/// palette (bank 14). The standard frame's palette is seeded with sentinel
-/// colours a correct implementation never reads for content or glyphs, so a
-/// regression back to reading `std_frame.palette` for either would show up
-/// as a wrong colour here instead of silently matching by coincidence.
+/// Selecting SAVE must not blank the screen for a frame: the item window
+/// stays up until the SAVE flow has a replacement message ready, which is
+/// not until the third tick after the selecting A press (see
+/// [`StartMenu::compose_over`]).
+#[test]
+fn selecting_save_keeps_the_item_window_until_its_message_exists() {
+    use rendering::{Framebuffer, Rgb888};
+
+    let marker = Rgb888 {
+        r: 10,
+        g: 20,
+        b: 30,
+    };
+    let mut base = Framebuffer::new();
+    base.fill(marker);
+    let item_pixel = (
+        usize::try_from(MENU_TILEMAP_LEFT * 8 + 4).unwrap(),
+        usize::try_from(MENU_TILEMAP_TOP * 8 + 4).unwrap(),
+    );
+
+    let mut menu = synthetic_start_menu();
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+    assert_eq!(menu.selected(), StartMenuItem::Save);
+
+    let assert_item_window_remains = |menu: &StartMenu, frame: &str| {
+        let dialog = menu.save.as_ref().expect("SAVE installs its dialog");
+        assert!(
+            dialog.message().is_none(),
+            "{frame}: no save message may exist yet"
+        );
+        assert_ne!(
+            menu.compose_over(base.clone())
+                .pixel(item_pixel.0, item_pixel.1),
+            Some(marker),
+            "{frame}: the frame must still draw the item window, not a bare \
+             overworld frame"
+        );
+    };
+
+    assert_eq!(
+        menu.tick(pressed(Buttons::A), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_item_window_remains(&menu, "the tick that selects SAVE");
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_item_window_remains(&menu, "the first tick after selecting SAVE");
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_item_window_remains(&menu, "the second tick after selecting SAVE");
+
+    assert_eq!(
+        menu.tick(ButtonState::new(), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert!(
+        menu.save
+            .as_ref()
+            .expect("still saving")
+            .message()
+            .is_some(),
+        "the third tick after selecting SAVE must have built the confirm message"
+    );
+    assert_eq!(
+        menu.compose_over(base).pixel(item_pixel.0, item_pixel.1),
+        Some(marker),
+        "once the confirm message exists the item window must be gone"
+    );
+}
+
+/// The content fill and glyph colours must come from the message-box
+/// palette, never the selected standard frame's own palette, which only
+/// borders the window (`pokeemerald/src/text_window.c:93-112`). The
+/// standard frame's palette is seeded with sentinel colours a correct
+/// implementation never reads for content or glyphs, so a regression would
+/// show up as a wrong colour here instead of silently matching by
+/// coincidence.
 #[test]
 fn standard_window_uses_message_palette_for_content_and_standard_palette_for_border() {
     use assets::{Glyph, GLYPH_PIXELS};
@@ -776,40 +809,53 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
         b: 20,
     };
 
+    // The three indices [`StartMenuChrome`] reads content fill, glyph
+    // foreground, and glyph shadow colours from.
+    const CONTENT_FILL_PALETTE_INDEX: u8 = 1;
+    const GLYPH_FOREGROUND_PALETTE_INDEX: u8 = 2;
+    const GLYPH_SHADOW_PALETTE_INDEX: u8 = 3;
+    const BORDER_PALETTE_INDEX: u8 = 9;
+    // The glyph colour-slot order: 0 is transparent, 1 is foreground, 2 is
+    // shadow.
+    const FOREGROUND_COLOR_SLOT: u8 = 1;
+    const SHADOW_COLOR_SLOT: u8 = 2;
+    const FOREGROUND_PIXEL: usize = 0; // glyph-local (0, 0)
+    const SHADOW_PIXEL: usize = 5; // glyph-local (5, 0)
+
     let mut chrome = StartMenuChrome::synthetic();
-    chrome.std_frame.palette[1] = STD_SENTINEL;
-    chrome.std_frame.palette[2] = STD_SENTINEL;
-    chrome.std_frame.palette[3] = STD_SENTINEL;
-    chrome.std_frame.palette[9] = STD_BORDER;
-    // Every tile of the border sheet reads palette index 9, so any drawn
+    chrome.std_frame.palette[usize::from(CONTENT_FILL_PALETTE_INDEX)] = STD_SENTINEL;
+    chrome.std_frame.palette[usize::from(GLYPH_FOREGROUND_PALETTE_INDEX)] = STD_SENTINEL;
+    chrome.std_frame.palette[usize::from(GLYPH_SHADOW_PALETTE_INDEX)] = STD_SENTINEL;
+    chrome.std_frame.palette[usize::from(BORDER_PALETTE_INDEX)] = STD_BORDER;
+    // Every tile of the border sheet reads this same index, so any drawn
     // border pixel must be [`STD_BORDER`].
-    chrome.std_frame.pixels.fill(9);
-    chrome.message_frame.palette[1] = MSG_FILL;
-    chrome.message_frame.palette[2] = MSG_FG;
-    chrome.message_frame.palette[3] = MSG_SHADOW;
+    chrome.std_frame.pixels.fill(BORDER_PALETTE_INDEX);
+    chrome.message_frame.palette[usize::from(CONTENT_FILL_PALETTE_INDEX)] = MSG_FILL;
+    chrome.message_frame.palette[usize::from(GLYPH_FOREGROUND_PALETTE_INDEX)] = MSG_FG;
+    chrome.message_frame.palette[usize::from(GLYPH_SHADOW_PALETTE_INDEX)] = MSG_SHADOW;
 
     let mut fb = Framebuffer::new();
     let (left, top, width, height) = (1, 1, 2, 2);
     chrome.draw_window(&mut fb, left, top, width, height);
 
-    // The border's top-left corner tile, at tilemap (0, 0) -- pixel (0, 0).
+    let border_top_left_corner = fb.pixel(0, 0);
     assert_eq!(
-        fb.pixel(0, 0),
+        border_top_left_corner,
         Some(STD_BORDER),
         "the border ring must use the standard frame's own palette"
     );
-    // Deep inside the content rect (tiles 1..3, i.e. pixels 8..24), away
-    // from where the glyph below will draw.
+    // Deep inside the content rect, away from where the glyph below draws.
+    let content_interior = fb.pixel(20, 20);
     assert_eq!(
-        fb.pixel(20, 20),
+        content_interior,
         Some(MSG_FILL),
         "the content fill must use the message-box palette, not the \
          standard frame's"
     );
 
     let mut pixels = [0u8; GLYPH_PIXELS];
-    pixels[0] = 1; // fg, glyph-local (0, 0)
-    pixels[5] = 2; // shadow, glyph-local (5, 0)
+    pixels[FOREGROUND_PIXEL] = FOREGROUND_COLOR_SLOT;
+    pixels[SHADOW_PIXEL] = SHADOW_COLOR_SLOT;
     let glyph = RevealedGlyph {
         x: 0,
         y: 0,
@@ -820,20 +866,25 @@ fn standard_window_uses_message_palette_for_content_and_standard_palette_for_bor
     };
     chrome.draw_text(&mut fb, (left, top, width, height), (0, 0), &[glyph]);
 
+    let glyph_foreground_pixel = fb.pixel(8, 8);
     assert_eq!(
-        fb.pixel(8, 8),
+        glyph_foreground_pixel,
         Some(MSG_FG),
-        "FONT_NORMAL's foreground colour must come from the message-box \
-         palette"
+        "the glyph foreground colour must come from the message-box palette"
     );
+    let glyph_shadow_pixel = fb.pixel(13, 8);
     assert_eq!(
-        fb.pixel(13, 8),
+        glyph_shadow_pixel,
         Some(MSG_SHADOW),
-        "FONT_NORMAL's shadow colour must come from the message-box palette"
+        "the glyph shadow colour must come from the message-box palette"
     );
-    // Drawing text must not disturb the border already on the standard
-    // frame's own palette.
-    assert_eq!(fb.pixel(0, 0), Some(STD_BORDER));
+    let border_after_drawing_text = fb.pixel(0, 0);
+    assert_eq!(
+        border_after_drawing_text,
+        Some(STD_BORDER),
+        "drawing text must not disturb the border on the standard frame's \
+         own palette"
+    );
 }
 
 /// The save's `optionsWindowFrameType` borders the item window and the
@@ -855,21 +906,17 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
 
     let frame_5_red = Bgr555::from_channels(31, 0, 0).to_rgb888();
 
-    // The item window's top-left border corner (tilemap
-    // (MENU_TILEMAP_LEFT - 1, MENU_TILEMAP_TOP - 1)).
-    let item_border = menu.compose_over(Framebuffer::new()).pixel(
+    let item_window_border_corner = menu.compose_over(Framebuffer::new()).pixel(
         usize::try_from((MENU_TILEMAP_LEFT - 1) * 8).unwrap(),
         usize::try_from((MENU_TILEMAP_TOP - 1) * 8).unwrap(),
     );
     assert_eq!(
-        item_border,
+        item_window_border_corner,
         Some(frame_5_red),
         "a save whose optionsWindowFrameType is {CHOSEN_FRAME} must draw that \
          frame's border around the start menu's item window, not frame 0's"
     );
 
-    // Into the SAVE flow, forward until the first Yes/No prompt is waiting
-    // (the same idiom as `b_on_a_prompt_answers_no_even_with_the_cursor_on_yes`).
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     menu.tick(pressed(Buttons::A), &mut target);
     for _ in 0..FRAME_BUDGET {
@@ -883,23 +930,19 @@ fn a_saved_games_own_window_frame_choice_borders_the_start_menu() {
         "the save flow must reach a Yes/No prompt within the frame budget"
     );
 
-    // The Yes/No window's top-left border corner (tilemap
-    // (YES_NO_TILEMAP_LEFT - 1, YES_NO_TILEMAP_TOP - 1)).
-    let yes_no_border = menu.compose_over(Framebuffer::new()).pixel(
+    let yes_no_window_border_corner = menu.compose_over(Framebuffer::new()).pixel(
         usize::try_from((YES_NO_TILEMAP_LEFT - 1) * 8).unwrap(),
         usize::try_from((YES_NO_TILEMAP_TOP - 1) * 8).unwrap(),
     );
     assert_eq!(
-        yes_no_border,
+        yes_no_window_border_corner,
         Some(frame_5_red),
         "a save whose optionsWindowFrameType is {CHOSEN_FRAME} must draw that \
          frame's border around the start menu's Yes/No prompt too, not frame 0's"
     );
 }
 
-/// A unique scratch path for a synthetic pack fixture, mirroring
-/// `crate::main_menu::tests::load_synthetic_scene_inner`'s own path
-/// construction.
+/// A unique scratch path for a synthetic pack fixture.
 fn synthetic_pack_path(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "pokeemerald-rs-{label}-{}-{:?}.pack",
@@ -930,12 +973,9 @@ impl Drop for TempPackFile {
 }
 
 /// The smallest pack [`StartMenuChrome::from_pack`] accepts, carrying two
-/// distinguishable selectable standard frames -- frame 0 (green, source
-/// `1.png`) and frame 5 (red, source `6.png`) -- plus the fixed message box
-/// and the normal font sheet, so which frame a menu drew is readable from a
-/// single border pixel. Mirrors
-/// `crate::main_menu::tests::synthetic_main_menu_pack_bytes`'s own two-frame
-/// fixture.
+/// distinguishable selectable standard frames -- frame 0 (green) and frame 5
+/// (red) -- plus the fixed message box and the normal font sheet, so which
+/// frame a menu drew is readable from a single border pixel.
 fn synthetic_start_menu_pack_bytes() -> Vec<u8> {
     use crate::pack_test_support::{image_entry, palette_entry, palette_entry_with_color};
     use rendering::Bgr555;

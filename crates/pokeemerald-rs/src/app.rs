@@ -450,9 +450,13 @@ impl App {
     /// leak into anything else this process loads afterwards.
     ///
     /// Persistence is deliberately disabled so a scenario always starts on
-    /// the no-save menu and never reads or writes a player's save file. No
-    /// BGM is started either -- a scenario asserts frames, not audio, and
-    /// [`App::new`] alone owns the real device.
+    /// the no-save menu and never reads or writes a player's save file --
+    /// `SaveSlot::none`, not `SaveSlot::disabled`: this boots as a fresh
+    /// `Empty` medium (nothing has ever been saved), not upstream's
+    /// missing-flash-chip `NoFlash` verdict, so NEW GAME still gets the
+    /// boot-defaulted options a real never-saved boot would (`SaveSlot::none`'s
+    /// own doc comment). No BGM is started either -- a scenario asserts
+    /// frames, not audio, and [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///
@@ -463,7 +467,7 @@ impl App {
         Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )
     }
@@ -486,7 +490,7 @@ impl App {
         let mut app = Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )?;
         app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
@@ -655,10 +659,15 @@ impl App {
     /// menu. [`MusicPlayer::fade_out`] models `m4aMPlayFadeOut`'s schedule
     /// (see its own docs for the arithmetic and the one divergence).
     ///
-    /// Once [`MusicPlayer::fade_finished`], this stops rendering new frames
-    /// and keeps the player alive until [`MusicPlayer::drained`] reports the
-    /// queued tail out of the ring and the device's own advertised buffering
-    /// waited out, only then dropping it (issue #458).
+    /// The fade's terminal step stops every track but leaves the master-mix
+    /// reverb ring holding the frames it delayed, and upstream keeps mixing
+    /// through the paused player (`m4a_1.s:20`-`:119`), so rendering
+    /// continues while [`MusicPlayer::tail_sounding`] rather than stopping
+    /// on [`MusicPlayer::fade_finished`] and cutting the wet tail short
+    /// (issue #1281). Only once that tail is silent does this keep the
+    /// player alive until [`MusicPlayer::drained`] reports the queued audio
+    /// out of the ring and the device's own advertised buffering waited out,
+    /// then drop it (issue #458).
     ///
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.
@@ -673,7 +682,7 @@ impl App {
         if !matches!(self.scene, Some(AppScene::Title(_))) {
             music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
         }
-        if music.fade_finished() {
+        if music.fade_finished() && !music.tail_sounding() {
             if music.drained() {
                 self.music = None;
             }

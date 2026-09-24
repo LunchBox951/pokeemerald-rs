@@ -9,6 +9,12 @@ fn envelope(attack: u8, decay: u8, sustain: u8, release: u8) -> Envelope {
     }
 }
 
+/// The hardware byte upstream's four CGB voice macros encode a nonzero
+/// second operand into (see [`parse_cgb_length`]).
+fn encoded_cgb_length(operand: u8) -> u8 {
+    0x80 | operand
+}
+
 #[test]
 fn parses_a_simple_group_with_a_leaf_slot_of_every_kind() {
     let text = "\
@@ -121,14 +127,14 @@ voice_group operand_matrix
 \tvoice_directsound 20, 0, DirectSoundWaveData_operand_a, 40, 41, 42, 43
 \tvoice_directsound_no_resample 21, 44, DirectSoundWaveData_operand_b, 45, 46, 47, 48
 \tvoice_directsound_alt 22, 49, DirectSoundWaveData_operand_c, 50, 51, 52, 53
-\tvoice_square_1 23, 54, 55, 0, 56, 57, 58, 59
-\tvoice_square_1_alt 24, 60, 61, 1, 62, 63, 64, 65
-\tvoice_square_2 25, 66, 2, 67, 68, 69, 70
-\tvoice_square_2_alt 26, 71, 3, 72, 73, 74, 75
-\tvoice_programmable_wave 27, 76, ProgrammableWaveData_operand_a, 77, 78, 79, 80
-\tvoice_programmable_wave_alt 28, 81, ProgrammableWaveData_operand_b, 82, 83, 84, 85
-\tvoice_noise 29, 86, 87, 88, 89, 90, 91
-\tvoice_noise_alt 30, 92, 93, 94, 95, 96, 97
+\tvoice_square_1 23, 54, 55, 0, 1, 2, 8, 3
+\tvoice_square_1_alt 24, 60, 61, 1, 2, 3, 9, 4
+\tvoice_square_2 25, 66, 2, 3, 4, 10, 5
+\tvoice_square_2_alt 26, 71, 3, 4, 5, 11, 6
+\tvoice_programmable_wave 27, 76, ProgrammableWaveData_operand_a, 5, 6, 12, 7
+\tvoice_programmable_wave_alt 28, 81, ProgrammableWaveData_operand_b, 6, 7, 13, 0
+\tvoice_noise 29, 86, 0, 1, 2, 14, 3
+\tvoice_noise_alt 30, 92, 1, 2, 3, 15, 4
 ";
 
     let group = parse_voice_group(text).unwrap();
@@ -159,60 +165,60 @@ voice_group operand_matrix
             },
             RawSlot::Square1 {
                 base_key: 23,
-                length: 54,
+                length: encoded_cgb_length(54),
                 sweep: 55,
                 duty: 0,
-                envelope: envelope(56, 57, 58, 59),
+                envelope: envelope(1, 2, 8, 3),
                 fixed_rate: false,
             },
             RawSlot::Square1 {
                 base_key: 24,
-                length: 60,
+                length: encoded_cgb_length(60),
                 sweep: 61,
                 duty: 1,
-                envelope: envelope(62, 63, 64, 65),
+                envelope: envelope(2, 3, 9, 4),
                 fixed_rate: true,
             },
             RawSlot::Square2 {
                 base_key: 25,
-                length: 66,
+                length: encoded_cgb_length(66),
                 duty: 2,
-                envelope: envelope(67, 68, 69, 70),
+                envelope: envelope(3, 4, 10, 5),
                 fixed_rate: false,
             },
             RawSlot::Square2 {
                 base_key: 26,
-                length: 71,
+                length: encoded_cgb_length(71),
                 duty: 3,
-                envelope: envelope(72, 73, 74, 75),
+                envelope: envelope(4, 5, 11, 6),
                 fixed_rate: true,
             },
             RawSlot::ProgrammableWave {
                 base_key: 27,
-                length: 76,
+                length: encoded_cgb_length(76),
                 wave_symbol: "ProgrammableWaveData_operand_a".to_owned(),
-                envelope: envelope(77, 78, 79, 80),
+                envelope: envelope(5, 6, 12, 7),
                 fixed_rate: false,
             },
             RawSlot::ProgrammableWave {
                 base_key: 28,
-                length: 81,
+                length: encoded_cgb_length(81),
                 wave_symbol: "ProgrammableWaveData_operand_b".to_owned(),
-                envelope: envelope(82, 83, 84, 85),
+                envelope: envelope(6, 7, 13, 0),
                 fixed_rate: true,
             },
             RawSlot::Noise {
                 base_key: 29,
-                length: 86,
-                period: 87,
-                envelope: envelope(88, 89, 90, 91),
+                length: encoded_cgb_length(86),
+                period: 0,
+                envelope: envelope(1, 2, 14, 3),
                 fixed_rate: false,
             },
             RawSlot::Noise {
                 base_key: 30,
-                length: 92,
-                period: 93,
-                envelope: envelope(94, 95, 96, 97),
+                length: encoded_cgb_length(92),
+                period: 1,
+                envelope: envelope(2, 3, 15, 4),
                 fixed_rate: true,
             },
         ]
@@ -426,6 +432,145 @@ voice_group demo
             RawSlot::Square2 { duty: 3, .. },
         ]
     ));
+}
+
+#[test]
+fn the_maximum_cgb_envelope_operands_are_accepted() {
+    let text = "\
+voice_group demo
+\tvoice_square_1 60, 0, 0, 3, 7, 7, 15, 7
+\tvoice_square_2 60, 0, 3, 7, 7, 15, 7
+\tvoice_programmable_wave 60, 0, ProgrammableWaveData_1, 7, 7, 15, 7
+\tvoice_noise 60, 0, 1, 7, 7, 15, 7
+";
+    let group = parse_voice_group(text).unwrap();
+    for slot in &group.slots {
+        let actual = match slot {
+            RawSlot::Square1 { envelope, .. }
+            | RawSlot::Square2 { envelope, .. }
+            | RawSlot::ProgrammableWave { envelope, .. }
+            | RawSlot::Noise { envelope, .. } => envelope,
+            other => panic!("expected a CGB slot, got {other:?}"),
+        };
+        assert_eq!(*actual, envelope(7, 7, 15, 7));
+    }
+}
+
+#[test]
+fn cgb_envelope_operands_above_the_assembly_maximum_are_rejected() {
+    let cases = [
+        (
+            "voice_square_1 60, 0, 0, 3, 8, 0, 0, 0",
+            "attack",
+            8_u8,
+            7_u8,
+        ),
+        ("voice_square_1_alt 60, 0, 0, 3, 0, 8, 0, 0", "decay", 8, 7),
+        ("voice_square_2 60, 0, 3, 0, 0, 16, 0", "sustain", 16, 15),
+        ("voice_square_2_alt 60, 0, 3, 0, 0, 0, 8", "release", 8, 7),
+        (
+            "voice_programmable_wave 60, 0, ProgrammableWaveData_1, 8, 0, 0, 0",
+            "attack",
+            8,
+            7,
+        ),
+        (
+            "voice_programmable_wave_alt 60, 0, ProgrammableWaveData_1, 0, 8, 0, 0",
+            "decay",
+            8,
+            7,
+        ),
+        ("voice_noise 60, 0, 1, 0, 0, 16, 0", "sustain", 16, 15),
+        ("voice_noise_alt 60, 0, 1, 0, 0, 0, 8", "release", 8, 7),
+    ];
+    for (line, operand, value, maximum) in cases {
+        let text = format!("voice_group demo\n\t{line}\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::CgbEnvelopeOutOfRange {
+                group: "demo".to_owned(),
+                operand,
+                value,
+                maximum,
+            }),
+            "expected an out-of-domain CGB envelope operand to be rejected: {line}"
+        );
+    }
+}
+
+#[test]
+fn the_maximum_noise_period_is_accepted_for_both_channels() {
+    let text = "\
+voice_group demo
+\tvoice_noise 60, 0, 1, 0, 0, 0, 0
+\tvoice_noise_alt 60, 0, 1, 0, 0, 0, 0
+";
+    let group = parse_voice_group(text).unwrap();
+    assert!(matches!(
+        group.slots.as_slice(),
+        [
+            RawSlot::Noise { period: 1, .. },
+            RawSlot::Noise { period: 1, .. },
+        ]
+    ));
+}
+
+#[test]
+fn noise_periods_above_the_assembly_maximum_are_rejected() {
+    for macro_name in ["voice_noise", "voice_noise_alt"] {
+        let text = format!("voice_group demo\n\t{macro_name} 60, 0, 2, 0, 0, 0, 0\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::NoisePeriodOutOfRange {
+                group: "demo".to_owned(),
+                period: 2,
+            }),
+            "expected an out-of-domain noise period to be rejected: {text}"
+        );
+    }
+}
+
+#[test]
+fn the_maximum_cgb_length_operand_is_encoded_for_every_family() {
+    let text = "\
+voice_group demo
+\tvoice_square_1 60, 127, 0, 0, 0, 0, 0, 0
+\tvoice_square_2 60, 127, 0, 0, 0, 0, 0
+\tvoice_programmable_wave 60, 127, ProgrammableWaveData_1, 0, 0, 0, 0
+\tvoice_noise 60, 127, 0, 0, 0, 0, 0
+";
+    let group = parse_voice_group(text).unwrap();
+    for slot in &group.slots {
+        let length = match slot {
+            RawSlot::Square1 { length, .. }
+            | RawSlot::Square2 { length, .. }
+            | RawSlot::ProgrammableWave { length, .. }
+            | RawSlot::Noise { length, .. } => *length,
+            other => panic!("expected a CGB slot, got {other:?}"),
+        };
+        assert_eq!(length, encoded_cgb_length(127));
+    }
+}
+
+#[test]
+fn a_cgb_length_operand_above_the_schema_maximum_is_rejected() {
+    let lines = [
+        "voice_square_1 60, 128, 0, 0, 0, 0, 0, 0",
+        "voice_square_2 60, 128, 0, 0, 0, 0, 0",
+        "voice_programmable_wave 60, 128, ProgrammableWaveData_1, 0, 0, 0, 0",
+        "voice_noise 60, 128, 0, 0, 0, 0, 0",
+    ];
+    for line in lines {
+        let text = format!("voice_group demo\n\t{line}\n");
+        assert_eq!(
+            parse_voice_group(&text),
+            Err(VoiceGroupError::CgbLengthOutOfRange {
+                group: "demo".to_owned(),
+                length: 128,
+            }),
+            "expected an out-of-domain CGB length operand to be rejected: {line}"
+        );
+    }
 }
 
 #[test]
@@ -651,4 +796,27 @@ fn parse_link_order_marks_foreign_includes_as_barriers_in_file_order() {
 #[test]
 fn parse_link_order_on_empty_text_is_empty() {
     assert_eq!(parse_link_order(""), Vec::<LinkOrderItem>::new());
+}
+
+#[test]
+fn a_split_selecting_a_child_slot_past_the_last_voice_slot_is_rejected() {
+    for slot in ["128", "255"] {
+        let text = format!("keysplit demo, 0\n\tsplit {slot}, 1\n");
+        assert_eq!(
+            parse_keysplit_tables(&text).map(|tables| tables["demo"].table.clone()),
+            Err(VoiceGroupError::SplitChildSlotOutOfRange {
+                table: "demo".to_owned(),
+                slot: slot.parse().unwrap(),
+            })
+        );
+    }
+}
+
+#[test]
+fn a_split_selecting_the_last_voice_slot_is_accepted() {
+    let text = "keysplit demo, 0\n\tsplit 127, 1\n";
+    assert_eq!(
+        parse_keysplit_tables(text).map(|tables| tables["demo"].table.clone()),
+        Ok(vec![127])
+    );
 }

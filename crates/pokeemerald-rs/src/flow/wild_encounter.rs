@@ -72,25 +72,37 @@ pub(super) fn roll_for_step(
     state.check_standard_wild_encounter(metatile_behavior, encounter_header, rng)
 }
 
+/// The completed step `CheckStandardWildEncounter` (`:162`) is allowed to
+/// roll on: one the door-shaped warp above it (`TryStartStepBasedScript`,
+/// `:155-161`) has not already claimed by returning TRUE.
+///
+/// `TryArrowWarp` is deliberately not an input here. It sits at `:164-168`,
+/// *below* the roll, so an arrow poll that is still open on a landing frame
+/// can never suppress the roll -- it is the roll that suppresses the poll
+/// (`arrow_poll_open`).
 pub(super) fn roll_eligible_landing(
     landed: Option<TilePos>,
-    preempting_arrow_warp: Option<WarpTrigger>,
     door_warp: Option<WarpTrigger>,
 ) -> Option<TilePos> {
-    let warp_preempted_encounter = preempting_arrow_warp.is_some() || door_warp.is_some();
-    landed.filter(|_| !warp_preempted_encounter)
+    landed.filter(|_| door_warp.is_none())
 }
 
-pub(super) const fn arrow_poll_open(in_transit: bool, field_event_fired: bool) -> bool {
-    !in_transit && !field_event_fired
+/// Whether `ProcessPlayerFieldInput` reaches `TryArrowWarp` (`:164-168`)
+/// this frame: the player must be between steps -- upstream sets
+/// `input->heldDirection` only at `T_TILE_CENTER`/`T_NOT_MOVING`
+/// (`:95-112`) -- and nothing above `:164` may have claimed the frame
+/// already.
+pub(super) const fn arrow_poll_open(in_transit: bool, landing_claimed: bool) -> bool {
+    !in_transit && !landing_claimed
 }
 
+/// Whether an earlier `ProcessPlayerFieldInput` step already claimed this frame; any
+/// present warp counts, even `Unsupported` (`field_control_avatar.c:688-749`, `:817-820`, `:172`).
 pub(super) const fn field_input_consumed(
     field_event_fired: bool,
     warp_trigger: Option<WarpTrigger>,
 ) -> bool {
-    let resolved_warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
-    field_event_fired || resolved_warp_fired
+    field_event_fired || warp_trigger.is_some()
 }
 
 /// Screens every possible land encounter before the map is allowed to roll.
@@ -177,7 +189,7 @@ pub(super) fn advance_wild_battle(
             true
         }
     };
-    let _ = settle_move_learn_prompts(battle);
+    let _ = settle_move_learn_prompts(battle, rng);
     finalize_battle_turn(battle_slot, turn_failed, player_lead)
 }
 

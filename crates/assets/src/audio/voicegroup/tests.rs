@@ -5,6 +5,7 @@ const KEY_SPLIT_START: u8 = 36;
 const VOICE_GROUP_SLOT_COUNT_BYTE: usize = 0;
 const FIRST_SLOT_KIND_BYTE: usize = 1;
 const FIRST_KEY_SPLIT_TABLE_LENGTH_BYTE: usize = 3;
+const FIRST_KEY_SPLIT_TABLE_ENTRY_BYTE: usize = 4;
 const FIRST_DIRECT_SOUND_PAN_BYTE: usize = 3;
 const FIRST_SQUARE1_DUTY_BYTE: usize = 5;
 const FIRST_SQUARE2_DUTY_BYTE: usize = 4;
@@ -206,6 +207,74 @@ fn decode_rejects_a_declared_key_split_table_length_above_the_maximum() {
         Err(AudioError::KeySplitTableTooLong(usize::from(
             invalid_table_len
         )))
+    );
+}
+
+#[test]
+fn the_highest_valid_key_split_table_entry_is_accepted() {
+    let highest_slot_index = u8::try_from(VOICE_SLOT_COUNT - 1).expect("127 fits a u8");
+    let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
+        KeySplitVoice::new(
+            0,
+            vec![highest_slot_index],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        )
+        .unwrap(),
+    )])
+    .unwrap();
+    match &VoiceGroup::decode(&group.encode()).unwrap().slots()[0] {
+        VoiceEntry::KeySplit(v) => assert_eq!(v.table(), [highest_slot_index]),
+        other => panic!("expected a KeySplit slot, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_key_split_table_entry_one_past_the_maximum_is_rejected_by_the_constructor() {
+    let impossible_slot_index = u8::try_from(VOICE_SLOT_COUNT).expect("128 fits a u8");
+    assert_eq!(
+        KeySplitVoice::new(
+            0,
+            vec![impossible_slot_index],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        ),
+        Err(AudioError::KeySplitTableEntryOutOfRange {
+            entry_index: 0,
+            slot: impossible_slot_index,
+        })
+    );
+}
+
+#[test]
+fn a_key_split_table_entry_out_of_range_names_its_own_position() {
+    let impossible_slot_index = u8::MAX;
+    assert_eq!(
+        KeySplitVoice::new(
+            0,
+            vec![0, 1, impossible_slot_index],
+            VoiceGroupId("audio/voicegroup/x".to_owned()),
+        ),
+        Err(AudioError::KeySplitTableEntryOutOfRange {
+            entry_index: 2,
+            slot: impossible_slot_index,
+        })
+    );
+}
+
+#[test]
+fn decode_rejects_a_key_split_table_entry_above_the_maximum() {
+    let group = VoiceGroup::new(vec![VoiceEntry::KeySplit(
+        KeySplitVoice::new(0, vec![0], VoiceGroupId("audio/voicegroup/x".to_owned())).unwrap(),
+    )])
+    .unwrap();
+    let mut bytes = group.encode();
+    let impossible_slot_index = u8::try_from(VOICE_SLOT_COUNT).expect("128 fits a u8");
+    bytes[FIRST_KEY_SPLIT_TABLE_ENTRY_BYTE] = impossible_slot_index;
+    assert_eq!(
+        VoiceGroup::decode(&bytes),
+        Err(AudioError::KeySplitTableEntryOutOfRange {
+            entry_index: 0,
+            slot: impossible_slot_index,
+        })
     );
 }
 

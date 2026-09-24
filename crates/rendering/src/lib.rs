@@ -14,12 +14,9 @@
 //! `WINOUT`, [`window`]), color special effects (alpha blend, brighten,
 //! darken, [`effects`]), and mosaic ([`mosaic`]), all controlled by the
 //! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
-//! delegates to it with [`compositor::FrameEffects::default`]. It also
-//! reruns affine OBJ mosaic sampling once per hardware-window span rather
-//! than once per scanline, and a trailing spill's target-1 enable, and
-//! normally its brightness enable too, come from the span that wrote it
-//! rather than the queried column's own window -- unless that write's
-//! `OBJWIN` slow path defers brightness to the queried column instead
+//! delegates to it with [`compositor::FrameEffects::default`]. Affine OBJ
+//! mosaic sampling reruns once per hardware-window span rather than once per
+//! scanline, restarting its held source column at each span's own start
 //! (`sprite::SpriteLayer::sample_affine_local`).
 //!
 //! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
@@ -62,8 +59,7 @@ pub use bg::BgLayer;
 pub use bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
 pub use compositor::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
 pub use effects::{
-    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, EffectsEnable, LayerKind,
-    LayerTargets,
+    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, LayerKind, LayerTargets,
 };
 pub use error::RenderError;
 pub use framebuffer::Framebuffer;

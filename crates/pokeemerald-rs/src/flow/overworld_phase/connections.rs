@@ -1,18 +1,16 @@
-//! Warp, door, and map-edge connection transitions (module split of
-//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`): the
-//! [`MapConnections`] resolver [`super::step`] feeds into
-//! [`engine::overworld::PlayerState::step`], the on-transition map-script
-//! effects [`run_on_transition_map_script`] applies, and the ways a
-//! [`super::OverworldPhase`] actually rebinds to a new map --
-//! [`super::OverworldPhase::warp_to`] (a resolved warp),
-//! [`super::OverworldPhase::warp_to_position`] (literal coordinates),
-//! [`super::OverworldPhase::warp_to_saved_location`] (a complete saved
-//! [`WarpData`], issue #951), and
-//! [`super::OverworldPhase::cross_connection`] (a map-edge crossing, issue
-//! #177).
+//! Map-entry transitions: resolved warps ([`OverworldPhase::warp_to`]),
+//! explicit-coordinate warps ([`OverworldPhase::warp_to_position`]), saved
+//! warps ([`OverworldPhase::warp_to_saved_location`]), and map-edge
+//! connection crossings ([`OverworldPhase::cross_connection`]). The
+//! [`MapConnections`] edge-geometry resolver [`super::step`] feeds into
+//! [`engine::overworld::PlayerState::step`], and
+//! [`run_on_transition_map_script`] applies the supported on-transition
+//! map-script effect.
 
 use assets::{MapEventsTable, MapHeaderTable};
-use engine::overworld::{warp_destination_position, warp_in_facing, ConnectedMapData, TilePos};
+use engine::overworld::{
+    warp_destination_position, warp_in_facing, ConnectedMapData, TilePos, NUM_METATILES_IN_PRIMARY,
+};
 use engine::save::WarpData;
 use std::cell::OnceCell;
 
@@ -20,40 +18,29 @@ use crate::overworld;
 
 use super::OverworldPhase;
 
-/// Resolves map-edge connection-crossing geometry (issue #177) against the
-/// real generated map tables and, only once a candidate connection's own
-/// bounds already match, the extracted asset pack -- the
-/// [`ConnectedMapData`] this integration lane feeds
-/// [`engine::overworld::PlayerState::step`] (via
-/// [`super::input::advance_player_one_frame`]), replacing the
-/// `no_connections` stub an earlier revision of this module passed
-/// unconditionally (see [`OverworldPhase::cross_connection`]'s doc comment
-/// for what happens once a step actually resolves against it).
+/// Resolves map-edge connection-crossing geometry against the real
+/// generated map tables and, once a candidate connection's own bounds
+/// already match, the extracted asset pack -- feeding
+/// [`engine::overworld::PlayerState::step`] via
+/// [`super::input::advance_player_one_frame`].
 ///
 /// [`ConnectedMapData::dimensions`] never touches the pack: a map's layout
 /// `width`/`height` are metadata baked into the generated, `'static`
-/// `assets::LayoutTable` (`crates/assets/src/map_layouts.rs`'s own module
-/// docs: "Grid/border bytes are not in this crate"), so every candidate
-/// connection [`engine::overworld::MapRuntime::resolve_connection`]'s own
-/// perpendicular-bounds check considers costs nothing -- no disk I/O merely
-/// for walking near an edge with no matching connection.
-/// [`ConnectedMapData::metatile_cell`] does need the pack -- the landing
-/// tile's actual collision/elevation, upstream's `IsPosInConnectingMap`
-/// (`pokeemerald/src/fieldmap.c:699-712`) having already passed -- and,
-/// unlike [`OverworldPhase::warp_to`]'s once-per-resolved-warp load, it
-/// runs *per attempted crossing*: holding a direction into an edge whose
-/// crossing is refused retries every frame, so an uncached load here would
-/// re-read the whole pack at frame rate. The pack is therefore memoized in
-/// the [`OnceCell`] the owning [`OverworldPhase`] carries for exactly this
+/// `assets::LayoutTable`, so every candidate connection's own
+/// perpendicular-bounds check costs nothing -- no disk I/O merely for
+/// walking near an edge with no matching connection.
+/// [`ConnectedMapData::metatile_cell`] does need the pack, for the landing
+/// tile's real collision/elevation, and, unlike a warp's once-per-load,
+/// runs *per attempted crossing*: holding a direction into a refused
+/// crossing retries every frame, so an uncached load here would re-read the
+/// whole pack at frame rate. The pack is therefore memoized in the
+/// [`OnceCell`] the owning [`OverworldPhase`] carries for exactly this
 /// resolver ([`OverworldPhase::connection_pack`]); a *failed* load is not
-/// cached (the no-pack case already fails every frame today, and caching
-/// the failure would pin a session to it).
+/// cached, so a transient failure can still succeed on a later attempt.
 ///
 /// `source` is the owning [`OverworldPhase`]'s own retained
-/// [`crate::pack_source::PackSource`] (issue #412), so this per-attempt
-/// memoized load honors a headless-real scenario's checkout pin exactly
-/// like every other load [`OverworldPhase`] performs after construction --
-/// never the runtime resolver regardless of `$POKEEMERALD_PACK`.
+/// [`crate::pack_source::PackSource`], so this per-attempt memoized load
+/// honors the same pack pin every other phase-owned load does.
 pub(super) struct MapConnections<'a> {
     pub(super) pack: &'a OnceCell<assets::pack::AssetPack>,
     pub(super) source: crate::pack_source::PackSource,
@@ -61,14 +48,12 @@ pub(super) struct MapConnections<'a> {
 
 impl MapConnections<'_> {
     /// The memoized pack, loading it on the first successful call.
-    fn pack(&self) -> Option<&assets::pack::AssetPack> {
+    fn load_cached_pack(&self) -> Option<&assets::pack::AssetPack> {
         if let Some(pack) = self.pack.get() {
             return Some(pack);
         }
         let loaded = self.source.load().ok()?;
-        // A racing set cannot happen (single-threaded phase); if the cell
-        // were somehow filled between the check and here, the existing
-        // value wins, which is equally correct.
+        // Single-threaded phase: nothing else can race this set.
         let _ = self.pack.set(loaded);
         self.pack.get()
     }
@@ -85,99 +70,69 @@ impl ConnectedMapData for MapConnections<'_> {
         let header = MapHeaderTable::new().header(map).ok()?;
         let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
         let name = overworld::layout_pack_name(header.layout);
-        let pack = self.pack()?;
+        let pack = self.load_cached_pack()?;
         let bytes = pack.layout_map(&name).ok()?;
         let grid = layout.grid(bytes).ok()?;
         grid.cell_at(u16::try_from(x).ok()?, u16::try_from(y).ok()?)
     }
+
+    fn metatile_behavior(&self, map: assets::MapId, x: i32, y: i32) -> Option<u8> {
+        let cell = self.metatile_cell(map, x, y)?;
+        let header = MapHeaderTable::new().header(map).ok()?;
+        let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
+        let (tileset, metatile_id) = if cell.metatile_id < NUM_METATILES_IN_PRIMARY {
+            (layout.primary_tileset, cell.metatile_id)
+        } else {
+            (
+                layout.secondary_tileset,
+                cell.metatile_id - NUM_METATILES_IN_PRIMARY,
+            )
+        };
+        let name = overworld::resolve_tileset_pack_name(tileset).ok()?;
+        let attributes = self
+            .load_cached_pack()?
+            .tileset(name)
+            .ok()?
+            .metatile_attributes;
+        assets::MetatileAttributeTable::new(attributes)
+            .attribute_at(metatile_id)?
+            .ok()
+            .map(|attribute| attribute.behavior)
+    }
 }
 
-/// The maps whose `MAP_SCRIPT_ON_TRANSITION` calls
-/// `SecretBase_EventScript_SetDecorationFlags` -- transcribed from those
-/// maps' own `scripts.inc`
-/// (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-12`,
-/// `data/maps/LittlerootTown_MaysHouse_2F/scripts.inc:6-12`), restricted to
-/// the maps this port bundles. Secret-base maps run the same script via
-/// `data/scripts/shared_secret_base.inc:12-16` and are out of scope.
-///
-/// See [`run_on_transition_map_script`] for what this is for and why it
-/// matters for collision.
+/// Maps whose on-transition script hides their unoccupied secret-base
+/// decoration placeholders, restricted to the maps this port bundles.
 pub(super) const MAPS_THAT_SET_DECORATION_FLAGS: [assets::MapId; 2] = [
     assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"),
     assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F"),
 ];
 
-/// Apply `map`'s `MAP_SCRIPT_ON_TRANSITION` effects to `event_data`, on
-/// entering it.
+/// Applies `map`'s on-transition decoration-flag effect to `event_data`
+/// before entering it. This port has no script engine, so this is a
+/// targeted port of the one on-transition effect that is observable for the
+/// maps it bundles; the maps' other on-transition effects are not modeled.
 ///
-/// This port has no script engine, so this is a targeted port of the one
-/// on-transition effect that is *observable* for the maps it bundles:
-/// `SecretBase_EventScript_SetDecorationFlags`
-/// (`data/scripts/secret_base.inc:233-248`), which sets every
-/// [`assets::object_event_flags::DECORATION_FLAGS`] id. Same shape as
-/// [`crate::new_game`]'s partial port of `EventScript_ResetAllMapFlags` --
-/// the effect, without the interpreter.
+/// # Why this must run before object events spawn
 ///
-/// # Why this is load-bearing, not cosmetic
-///
-/// The two player bedrooms declare twelve `OBJ_EVENT_GFX_VAR_*` decoration
-/// *placeholders* at staging coordinates (`map.json:32-175` in each), each
-/// behind its own `FLAG_DECORATION_*`. Their polarity is inverted from an
-/// ordinary `FLAG_HIDE_*`: an empty slot is the *set* state. Nothing sets
-/// them at new-game time -- `InitEventData` (`src/event_data.c:32-37`)
-/// zeroes the flag array and `EventScript_ResetAllMapFlags` never mentions
-/// them -- so without this, a fresh save reads all twelve as *visible*.
-///
-/// Upstream avoids that purely by ordering: `RunOnTransitionMapScript`
-/// (`src/overworld.c:860`, in `LoadMapFromWarp`) runs this script *before*
-/// `InitObjectEventsLocal` reaches `TrySpawnObjectEvents`
-/// (`src/overworld.c:2163-2178`), whose `!FlagGet(template->flagId)` gate
-/// (`src/event_object_movement.c:1670-1672`) then skips all twelve. The
-/// occupied slots are re-cleared afterwards, one at a time, by
-/// `InitSecretBaseDecorationSprites` (`src/secret_base.c:552-632`) from the
-/// `MAP_SCRIPT_ON_WARP_INTO_MAP_TABLE` script -- and on a fresh save
-/// `playerRoomDecorations[]` is all `DECOR_NONE` (`ClearSav1`,
-/// `src/load_save.c:64-67`), so none are.
-///
-/// Two consequences if this is skipped, both real:
-/// - **Collision.** A spawned placeholder is a hard blocker. Nothing
-///   upstream exempts it: `DoesObjectCollideWithObjectAt`
-///   (`src/event_object_movement.c:4724-4742`) consults only `active`,
-///   coordinates and elevation -- never `invisible` -- so even
-///   `MOVEMENT_TYPE_INVISIBLE` would still block (and these use
-///   `MOVEMENT_TYPE_LOOK_AROUND` anyway). Seven of Brendan's bedroom's
-///   twelve sit on walkable floor down the room's left column, `(1, 2)`
-///   among them; all twelve of May's do.
-/// - **Rendering.** `GetObjectEventGraphicsInfo`
-///   (`src/event_object_movement.c:1914-1931`) resolves
-///   `OBJ_EVENT_GFX_VAR_n` through `VAR_OBJ_GFX_ID_0 + n`, which is `0` on a
-///   fresh save -- i.e. `OBJ_EVENT_GFX_BRENDAN_NORMAL`. Twelve Brendan
-///   clones, not invisible markers.
-///
-/// # Not ported
-///
-/// The `ON_WARP_INTO_MAP` half (`InitSecretBaseDecorationSprites`) that
-/// *clears* a flag per placed decoration, since this port has no
-/// `playerRoomDecorations` save state for anything to be placed in -- a
-/// fresh save's slots are all empty, which is exactly the state this
-/// produces. A future decoration slice adds that half; it needs no change
-/// here, but it **must** model both of that function's writes together --
-/// upstream clears `FLAG_DECORATION_n` *and* sets `VAR_OBJ_GFX_ID_0 + n`
-/// per placed decoration, and `crate::overworld::npc`'s
-/// `OBJ_EVENT_GFX_VAR_0` exception resolves through that var (its module
-/// docs carry the hazard). The other on-transition effects of these maps
-/// (`VAR_LITTLEROOT_RIVAL_STATE`/`VAR_LITTLEROOT_INTRO_STATE` branches,
-/// `setvar VAR_SECRET_BASE_INITIALIZED`) drive story progression this port
-/// does not model yet.
+/// The two player bedrooms' decoration placeholders use flag polarity
+/// inverted from an ordinary hide flag: object-event spawning's own gate is
+/// `!FlagGet(template->flagId)` (`src/event_object_movement.c:1670-1672`),
+/// so an *unset* decoration flag leaves its placeholder spawned, visible,
+/// and collidable, not hidden. Nothing else sets these flags on a fresh
+/// save, so skipping this call would leave twelve such placeholders active
+/// in both bedrooms. Upstream avoids that purely by running its own
+/// equivalent (`RunOnTransitionMapScript`, `src/overworld.c:860`) before
+/// `TrySpawnObjectEvents` (`src/overworld.c:2163-2178`) reaches that gate;
+/// this port preserves that ordering by running from
+/// `OverworldPhase::prepare_map_entry_event_data` before the destination
+/// scene, and its object events, load.
 ///
 /// # Panics
 ///
 /// Never in practice: every
-/// [`assets::object_event_flags::DECORATION_FLAGS`] id is a transcribed
-/// `include/constants/flags.h` literal (`0xAE..=0xBB`) well inside the
-/// ordinary flag range `flag_set` accepts -- the same reasoning
-/// [`crate::new_game::init_save_blocks`]'s own `RESET_MAP_FLAGS`
-/// application rests on, and pinned by this module's
+/// [`assets::object_event_flags::DECORATION_FLAGS`] id is well inside the
+/// ordinary flag range `flag_set` accepts, pinned by this module's
 /// `every_decoration_flag_id_is_settable` test.
 pub(super) fn run_on_transition_map_script(
     map: assets::MapId,
@@ -194,11 +149,11 @@ pub(super) fn run_on_transition_map_script(
 }
 
 impl OverworldPhase {
-    /// Upstream's own `ClearTempFieldEventData`-before-`RunOnTransitionMapScript`
-    /// order, shared by `LoadMapFromWarp` (`src/overworld.c:848,860`) and
-    /// `LoadMapFromCameraTransition` (`:798,807`). Returned uncommitted --
-    /// callers assign it to `self.save1.event_data` only once their own load
-    /// succeeds.
+    /// Clears temp field event data, then applies the supported
+    /// on-transition script effects, in upstream's own ordering
+    /// (`LoadMapFromWarp`/`LoadMapFromCameraTransition`,
+    /// `src/overworld.c:848,860` and `:798,807`). Returned uncommitted; see
+    /// `Self::stage_transition`.
     fn prepare_map_entry_event_data(
         &self,
         map: assets::MapId,
@@ -216,41 +171,52 @@ impl OverworldPhase {
         event_data
     }
 
-    /// Execute a [`engine::overworld::WarpTrigger::Resolved`] warp: load
-    /// `map`'s room ([`overworld::load_room`]) and resolve its `warp_id`-th
-    /// warp event's arrival position/elevation ([`warp_destination_position`]),
-    /// then place `player` there facing whatever the *destination* tile's
-    /// own metatile behavior dictates ([`warp_in_facing`] -- upstream
-    /// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`)
-    /// and assign `map_id`/`scene` together.
+    /// Prepares `map`'s post-transition event data and scene without
+    /// mutating `self`, so every caller below can validate the destination
+    /// and commit the transition only once every fallible step has already
+    /// succeeded. `None` on any load failure, having touched nothing.
+    fn stage_transition(
+        &self,
+        map: assets::MapId,
+    ) -> Option<(engine::event_data::EventData, overworld::OverworldScene)> {
+        let event_data = self.prepare_map_entry_event_data(map, self.save2.player_gender);
+        let scene = overworld::load_room_from_source(
+            self.pack_source,
+            map,
+            self.save2.player_gender.into(),
+            &event_data,
+        )
+        .ok()?;
+        Some((event_data, scene))
+    }
+
+    /// Executes a resolved [`engine::overworld::WarpTrigger::Resolved`]
+    /// warp: loads `map`'s room, resolves its `warp_id`-th warp event's
+    /// arrival position and elevation ([`warp_destination_position`]), and
+    /// faces the player the way the destination tile's own metatile
+    /// behavior dictates ([`warp_in_facing`]; upstream
+    /// `GetAdjustedInitialDirection`, `src/overworld.c:929-951`).
     ///
-    /// Those two fields move in lockstep on purpose:
+    /// `map_id` and `scene` are assigned together, after every fallible
+    /// lookup has already succeeded:
     /// [`crate::overworld::OverworldScene::runtime`] stamps `map_id` onto a
     /// [`engine::overworld::MapRuntime`] built from `scene`'s own decoded
-    /// grid/tileset bytes, so updating one without the other would render
-    /// one map's layout against another map's collision/warp/event data.
-    /// Both are assigned here, after every fallible lookup has already
-    /// succeeded, so there is no window in which they disagree.
+    /// grid, so the two must never disagree.
     ///
-    /// Keeps `save1.location` coherent with the new map, mirroring upstream
-    /// `SetWarpData`/`ApplyCurrentWarp`
-    /// (`pokeemerald/src/overworld.c:554-560, 540-545`): `x`/`y` are left at
-    /// `-1` since the player arrives via a resolved warp id, not fixed
-    /// coordinates -- the exact shape `SetWarpDestinationToMapWarp`
-    /// (`overworld.c:638-641`) passes to `SetWarpDestination`.
+    /// A resolved warp has no fixed destination coordinates, so
+    /// `save1.location.x`/`.y` are left at `-1` -- the shape upstream's
+    /// `SetWarpDestinationToMapWarp` (`overworld.c:638-641`) passes to
+    /// `SetWarpDestination`.
     ///
-    /// If the destination map's header/events/room data can't be loaded, or
-    /// it has no warp event at `warp_id` -- both unreachable against a real
-    /// pack for any warp this port's own tables reference -- logs and
-    /// leaves the player exactly where they stood before the warp
-    /// (module docs' "log-or-ignore is fine" policy), rather than
-    /// half-applying the transition.
+    /// If the destination can't be resolved -- an unknown map, missing
+    /// event data, a room that fails to load, or no warp event at
+    /// `warp_id` -- logs and leaves the player exactly where they stood.
     ///
     /// # Panics
     ///
-    /// If the destination's generated `MAP_GROUP`/`MAP_NUM` index doesn't fit
-    /// the `i8` upstream's `struct WarpData` stores it in -- see
-    /// [`warp_data_index`], which no real extraction can trip.
+    /// If the destination's generated `MAP_GROUP`/`MAP_NUM` index doesn't
+    /// fit the `i8` upstream's `WarpData` stores it in; see
+    /// [`warp_data_index`].
     pub(super) fn warp_to(&mut self, map: assets::MapId, warp_id: u8) {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
@@ -260,35 +226,17 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        // Computed on a scratch clone, before the scene decodes and before
-        // anything reads the destination map's object events, mirroring
-        // upstream's ordering against `TrySpawnObjectEvents` -- see
-        // `Self::prepare_map_entry_event_data`. Not committed to
-        // `self.save1.event_data` until the whole warp is known to succeed
-        // (module docs' "leaves the player exactly where they stood"
-        // failure contract) -- see the assignment near the end of this
-        // method.
-        let transitioned_event_data =
-            self.prepare_map_entry_event_data(map, self.save2.player_gender);
-
-        let Ok(scene) = overworld::load_room_from_source(
-            self.pack_source,
-            map,
-            self.save2.player_gender.into(),
-            &transitioned_event_data,
-        ) else {
+        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
         let destination = {
             let runtime = scene.runtime(map, header, events);
             warp_destination_position(&runtime, warp_id).map(|(x, y, elevation)| {
-                // GetCenterScreenMetatileBehavior (overworld.c:954-957) reads
-                // the tile the player has just been placed on. An
-                // undecodable attribute entry can't happen for a cell
-                // `warp_destination_position` just resolved, but falling back
-                // to MB_NORMAL keeps that case on `GetAdjustedInitialDirection`'s
-                // own final-else path rather than inventing a facing.
+                // An undecodable attribute can't happen for a cell
+                // `warp_destination_position` just resolved; MB_NORMAL keeps
+                // that unreachable case on `GetAdjustedInitialDirection`'s
+                // own default branch instead of inventing a facing.
                 let behavior = runtime
                     .metatile_behavior(i32::from(x), i32::from(y))
                     .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
@@ -302,21 +250,18 @@ impl OverworldPhase {
 
         self.player =
             engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
-        // The departed map's latched landing tile must not survive into the
-        // destination map, where its coordinates would name an unrelated
-        // tile in the next frame's door check.
+        // The departed map's latched door-check tile must not survive into
+        // the destination map.
         self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;
-        // Upstream's own `InitTilesetAnimations` reset (struct docs on
-        // `tick`): the destination map's animated tiles start over from
-        // their own tick 0, not wherever the departed map's counter was.
+        // Upstream's own `InitTilesetAnimations` reset: animated tiles
+        // start over on entry to a new map via warp.
         self.tick = 0;
         self.save1.event_data = transitioned_event_data;
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
-        // `src/overworld.c:850`): the first four steps on the destination
-        // map roll nothing, so stepping out of a door never drops the
-        // player straight into a battle (issue #169).
+        // `src/overworld.c:850`): a warp's first four steps roll no wild
+        // encounter.
         self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
@@ -327,70 +272,37 @@ impl OverworldPhase {
         };
     }
 
-    /// Execute an *explicit-coordinate* warp: land on `(x, y)` of `map`
+    /// Executes an explicit-coordinate warp: lands on `(x, y)` of `map`
     /// directly, rather than resolving a warp event's own position the way
-    /// [`OverworldPhase::warp_to`] does. [`OverworldPhase::warp_to`]'s
-    /// sibling for the one caller with a fixed destination tile and no
-    /// warp event or saved `WarpData` to resolve -- the scripted
-    /// first-battle conclusion's own
-    /// `warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5`
-    /// (`crate::flow::overworld_phase::first_battle_conclusion`) — mirroring
+    /// [`OverworldPhase::warp_to`] does -- mirroring
     /// `SetPlayerCoordsFromWarp`'s own `WARP_ID_NONE` branch
-    /// (`src/overworld.c:611-617`, "the given coords are valid, use those
-    /// instead"): a `warp` command's own literal coordinates name a raw
-    /// tile, not a warp event index. [`OverworldPhase::warp_to_saved_location`]
-    /// is the sibling for the other caller with no warp event to resolve --
-    /// the white-out's complete saved `last_heal_location` (issue #951),
-    /// whose own `warp_id` this method does not consult.
+    /// (`src/overworld.c:611-617`).
     ///
-    /// Same shape as [`OverworldPhase::warp_to`] otherwise -- on-transition
-    /// effects, temp-field-data clear, the two Route 101/103 targeted
-    /// effects, atomic scene/`map_id` rebind, `tick` reset,
-    /// `RestartWildEncounterImmunitySteps` -- and the same "leaves the
-    /// player exactly where they stood" failure contract if `map`'s
-    /// header/events/room can't be resolved, or `(x, y)` is outside the
-    /// destination's decoded grid.
+    /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
+    /// failure contract, except the landing position is validated directly
+    /// against the destination's decoded grid rather than resolved through
+    /// a warp event.
     ///
-    /// Lands at the destination tile's own elevation, exactly as
-    /// [`OverworldPhase::warp_to`]'s resolved-warp landing does. Upstream
-    /// does not leave the wildcard sentinel in place until the player
-    /// moves: `InitObjectEventStateFromTemplate` sets a freshly spawned
-    /// object event's `triggerGroundEffectsOnMove = TRUE`
-    /// (`pokeemerald/src/event_object_movement.c:1301`), so the very next
-    /// `UpdateObjectEventCurrentMovement` call -- on the spawn frame
-    /// itself, during the warp fade and before input unlocks -- runs
-    /// `DoGroundEffects_OnSpawn` (`event_object_movement.c:4931`), which
-    /// calls `UpdateObjectEventElevationAndPriority`
-    /// (`event_object_movement.c:7737`), which calls
-    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`)
-    /// to read the landing tile's real elevation off the destination grid
-    /// and overwrite the sentinel before the player ever takes a step. This
-    /// method's one caller reaches it: the scripted first-battle
-    /// conclusion's return to Birch's lab at `(6, 5)`
-    /// (`crate::flow::overworld_phase::first_battle_conclusion`) lands on
-    /// an elevation-`3` tile, so leaving the sentinel in place would be
-    /// wrong until the player's first step, not merely imprecise.
+    /// Lands at the destination tile's own elevation immediately, rather
+    /// than leaving upstream's spawn-time elevation sentinel in place until
+    /// the player's first step: `InitObjectEventStateFromTemplate` sets a
+    /// freshly spawned object's `triggerGroundEffectsOnMove = TRUE`
+    /// (`event_object_movement.c:1301`), so the very next
+    /// `UpdateObjectEventCurrentMovement` call already runs
+    /// `DoGroundEffects_OnSpawn` (`:4931`), which reaches
+    /// `ObjectEventUpdateElevation` (`:7759-7771`) and overwrites the
+    /// sentinel with the real elevation before the player's first step --
+    /// this port reads that same elevation up front instead of modeling the
+    /// intervening ground-effect frame.
     ///
-    /// `warp_to_position` has no warp event to hand a `warp_id`, so it can't
-    /// call [`warp_destination_position`] directly -- instead it reads the
-    /// destination cell itself, through the same
-    /// [`engine::overworld::MapRuntime::arrival_elevation`] helper
-    /// `warp_destination_position` and [`super::placement::saved_tile_placement`]
-    /// both call, including its multi-level-to-transition substitution
-    /// (issue #379: one read shared by all three placement paths).
-    ///
-    /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
-    /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`
-    /// (`overworld.c:540-546`) copies `sWarpDestination` verbatim, and this
-    /// method's caller sets that to its own literal `x`/`y` as-is -- a real
-    /// `(x, y)` pair, not the `WARP_ID_NONE`-plus-sentinel-coords shape a
-    /// resolved warp event leaves behind.
+    /// Unlike [`OverworldPhase::warp_to`], `save1.location.x`/`.y` are
+    /// **not** `-1`: `ApplyCurrentWarp` (`overworld.c:540-546`) copies
+    /// `sWarpDestination` verbatim, and this method's own `x`/`y` become
+    /// that value as-is.
     ///
     /// # Panics
     ///
-    /// Same as [`OverworldPhase::warp_to`]: if the destination's generated
-    /// `MAP_GROUP`/`MAP_NUM` index doesn't fit the `i8` upstream's `struct
-    /// WarpData` stores it in ([`warp_data_index`]).
+    /// Same as [`OverworldPhase::warp_to`].
     pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
@@ -400,15 +312,7 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let transitioned_event_data =
-            self.prepare_map_entry_event_data(map, self.save2.player_gender);
-
-        let Ok(scene) = overworld::load_room_from_source(
-            self.pack_source,
-            map,
-            self.save2.player_gender.into(),
-            &transitioned_event_data,
-        ) else {
+        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -444,51 +348,23 @@ impl OverworldPhase {
         self.save1.pos = engine::save::Coords16 { x, y };
     }
 
-    /// Execute a *saved-location* warp: land using the complete saved
-    /// [`WarpData`] `destination` names, exactly as upstream's
-    /// `SetWarpDestinationToLastHealLocation` + `WarpIntoMap` chain does
-    /// (`pokeemerald/src/overworld.c:665-668, 626-631`) --
-    /// [`OverworldPhase::warp_to`]'s sibling for the one caller that has a
-    /// complete saved `WarpData` to honor, rather than either a warp
-    /// event's own index alone ([`OverworldPhase::warp_to`]) or literal
-    /// coordinates alone ([`OverworldPhase::warp_to_position`]): the
-    /// white-out's own `last_heal_location` (issue #261/#951,
-    /// `crate::flow::overworld_phase::white_out`).
+    /// Executes a saved-location warp: lands using the complete saved
+    /// [`WarpData`] `destination` names, mirroring upstream's
+    /// `SetWarpDestinationToLastHealLocation` + `WarpIntoMap` chain
+    /// (`src/overworld.c:665-668, 626-631`). [`saved_warp_position`] tries
+    /// `destination`'s three branches in upstream's own order.
     ///
-    /// Mirrors `SetPlayerCoordsFromWarp`'s own three branches
-    /// (`overworld.c:603-624`), tried in order by [`saved_warp_position`]: a
-    /// `destination.warp_id` naming a real warp event on `map` lands at
-    /// that event's own position; otherwise a non-negative
-    /// `destination.x`/`.y` lands there directly; otherwise -- unreachable
-    /// through any state this port's own writers ever produce, since
-    /// [`crate::new_game::default_last_heal_location`]'s worst case is
-    /// `WarpData::default()`'s all-zero (and therefore non-negative)
-    /// coordinates -- the destination map's own center tile, the same
-    /// honest fallback for corrupt save data [`OverworldPhase::warp_to`]'s
-    /// own doc comment describes for its unresolvable cases.
+    /// Same shape as [`OverworldPhase::warp_to`] otherwise, including its
+    /// failure contract.
     ///
     /// Unlike [`OverworldPhase::warp_to_position`], `save1.location` is set
-    /// to `destination` **verbatim**, warp id included: `ApplyCurrentWarp`
-    /// (`overworld.c:540-546`) copies `sWarpDestination` as-is, and
-    /// `SetWarpDestinationToLastHealLocation` sets that to
-    /// `gSaveBlock1Ptr->lastHealLocation` unchanged -- so a later white-out
-    /// or continue reads back the exact value this one saw, not a
-    /// resolved-position sentinel the way [`OverworldPhase::warp_to`]'s
-    /// `-1`/`-1` or `warp_to_position`'s `warp_id: -1` are.
-    ///
-    /// Same on-transition effects, temp-field-data clear, atomic
-    /// scene/`map_id` rebind, `tick` reset, and
-    /// `RestartWildEncounterImmunitySteps` as
-    /// [`OverworldPhase::warp_to_position`]; same "leaves the player
-    /// exactly where they stood" failure contract if `map`'s
-    /// header/events/room can't be resolved, or no branch above names a
-    /// position inside the destination's decoded grid.
+    /// to `destination` **verbatim**, warp id included: a later white-out
+    /// or continue must read back the exact value this warp saw, not a
+    /// resolved-position sentinel.
     ///
     /// # Panics
     ///
-    /// Same as [`OverworldPhase::warp_to`]: if the destination's generated
-    /// `MAP_GROUP`/`MAP_NUM` index doesn't fit the `i8` upstream's `struct
-    /// WarpData` stores it in ([`warp_data_index`]).
+    /// Same as [`OverworldPhase::warp_to`].
     pub(super) fn warp_to_saved_location(&mut self, map: assets::MapId, destination: WarpData) {
         let Ok(header) = MapHeaderTable::new().header(map) else {
             eprintln!("warp: unknown destination map {map:?} -- staying put");
@@ -498,15 +374,7 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let transitioned_event_data =
-            self.prepare_map_entry_event_data(map, self.save2.player_gender);
-
-        let Ok(scene) = overworld::load_room_from_source(
-            self.pack_source,
-            map,
-            self.save2.player_gender.into(),
-            &transitioned_event_data,
-        ) else {
+        let Some((transitioned_event_data, scene)) = self.stage_transition(map) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -539,62 +407,37 @@ impl OverworldPhase {
         self.save1.pos = engine::save::Coords16 { x, y };
     }
 
-    /// Rebind `map_id`/`scene`/`save1.location` (issue #177) after
-    /// `self.player` has already stepped across a map-edge connection into
-    /// `to_map`'s own coordinate space -- [`engine::overworld::StepOutcome::Crossed`],
-    /// resolved against [`MapConnections`] by
-    /// [`super::input::advance_player_one_frame`]'s call into
-    /// [`engine::overworld::PlayerState::step`], and deferred to here by
-    /// [`OverworldPhase::step`] (its own "Map-edge connection crossing"
-    /// comment) so this mutable borrow of `self.scene` never overlaps the
-    /// frame's still-live `runtime`.
+    /// Rebinds `map_id`/`scene`/`save1.location` after `self.player` has
+    /// already stepped across a map-edge connection into `to_map`'s own
+    /// coordinate space ([`engine::overworld::StepOutcome::Crossed`],
+    /// resolved against [`MapConnections`] and deferred to here by
+    /// [`OverworldPhase::step`] so this mutable borrow of `self.scene`
+    /// never overlaps the frame's still-live runtime).
     ///
-    /// **Same atomic-rebind discipline as [`OverworldPhase::warp_to`], one
-    /// field different.** `map_id` and `scene` move together, exactly as
-    /// there -- so a later frame's `self.scene.runtime(self.map_id, ...)`
-    /// never renders one map's layout against another map's collision/event
-    /// data -- `pending_landing` is re-latched onto `to_position` so the
-    /// door-warp drain-frame check (`OverworldPhase::step`'s "Warp timing"
-    /// section) evaluates against the *entered* map once this step's walk
-    /// animation finishes, and `tick` keeps running -- upstream's
-    /// `LoadMapFromCameraTransition` re-inits only the secondary tileset
-    /// counter (`InitSecondaryTilesetAnimation`, `overworld.c:815`), never
-    /// the primary one `tick` models (see the body comment). Unlike
-    /// [`OverworldPhase::warp_to`], `self.player` itself is left entirely
-    /// alone: [`engine::overworld::PlayerState::step`] already committed its
-    /// position/elevation into `to_map`'s coordinate space before ever
-    /// returning [`engine::overworld::StepOutcome::Crossed`] (that variant's
-    /// own doc comment) -- rebuilding a fresh
-    /// [`engine::overworld::PlayerState`] here, the way a warp does, would
-    /// discard the facing and in-progress walk animation an ordinary step
-    /// must keep.
+    /// Same atomic `map_id`/`scene` rebind discipline as
+    /// [`OverworldPhase::warp_to`]. Unlike a warp, `self.player` itself is
+    /// left alone -- [`engine::overworld::PlayerState::step`] already
+    /// committed its position, elevation, and facing before returning
+    /// `Crossed`, so rebuilding a fresh
+    /// [`engine::overworld::PlayerState`] here would discard its
+    /// in-progress walk animation.
+    ///
+    /// `tick` is deliberately **not** reset: upstream's own
+    /// connection-crossing load (`LoadMapFromCameraTransition`,
+    /// `src/overworld.c:784-825`) re-inits only the secondary tileset
+    /// counter (`InitSecondaryTilesetAnimation`, `:815`), never the primary
+    /// one `tick` models, so a crossing's animated tiles continue
+    /// uninterrupted across the seamless transition.
     ///
     /// `save1.location` mirrors upstream's own connection-crossing
-    /// bookkeeping, not a warp's: `CameraMove` (`pokeemerald/src/fieldmap.c:603-624`)
-    /// calls `LoadMapFromCameraTransition(connection->mapGroup,
-    /// connection->mapNum)` (`src/overworld.c:784-786`), which itself calls
+    /// bookkeeping: `warp_id`/`x`/`y` are all `-1`, since
     /// `SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1)`
-    /// (`:633`) then `ApplyCurrentWarp`
-    /// (`:540-546`, `gSaveBlock1Ptr->location = sWarpDestination`) --
-    /// `warp_id` is the `WARP_ID_NONE` sentinel (`-1`), not a resolved warp
-    /// index, because a connection crossing names only the destination map,
-    /// never a warp event; `x`/`y` stay `-1` for the same reason
-    /// [`OverworldPhase::warp_to`]'s own do (a resolved landing tile, not
-    /// fixed coordinates -- here, the tile
-    /// [`engine::overworld::PlayerState::step`] already computed via
-    /// [`MapConnections`], rather than a warp id).
+    /// (`overworld.c:633`) names only the destination map, never a warp
+    /// event or fixed coordinates.
     ///
-    /// If `to_map`'s header can't be resolved or its room can't be loaded --
-    /// both unreachable against a real pack for any connection this port's
-    /// own generated tables reference, since [`MapConnections`] already
-    /// proved both resolvable before [`engine::overworld::PlayerState::step`]
-    /// ever committed the crossing -- logs, touches nothing, and returns
-    /// `false` so the caller can restore the pre-step stance
-    /// ([`OverworldPhase::step`]'s crossing branch does exactly that): the
-    /// player stays put on the departed map, the same "leaves the player
-    /// exactly where they stood" contract [`OverworldPhase::warp_to`]
-    /// documents for its own unreachable failure cases. Returns `true` on a
-    /// completed rebind.
+    /// If `to_map`'s header can't be resolved or its room can't be loaded,
+    /// logs, touches nothing, and returns `false` so the caller can restore
+    /// the pre-step stance. Returns `true` on a completed rebind.
     pub(super) fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) -> bool {
         let Ok(header) = MapHeaderTable::new().header(to_map) else {
             eprintln!(
@@ -603,20 +446,7 @@ impl OverworldPhase {
             );
             return false;
         };
-        // Same "compute on a scratch clone, commit only on success" shape
-        // as `Self::warp_to` -- see `Self::prepare_map_entry_event_data`.
-        // This is in fact the one entry point this port's own connection
-        // chain (Littleroot<->Route101<->Oldale<->Route103) ever reaches
-        // Route 103's rival-sprite setup through.
-        let transitioned_event_data =
-            self.prepare_map_entry_event_data(to_map, self.save2.player_gender);
-
-        let Ok(scene) = overworld::load_room_from_source(
-            self.pack_source,
-            to_map,
-            self.save2.player_gender.into(),
-            &transitioned_event_data,
-        ) else {
+        let Some((transitioned_event_data, scene)) = self.stage_transition(to_map) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -626,28 +456,13 @@ impl OverworldPhase {
 
         self.scene = scene;
         self.map_id = to_map;
-        // Re-latch onto the entered map's own coordinate space (doc comment
-        // above) -- the crossing step's landing tile, in the same role
-        // `OverworldPhase::step`'s ordinary `Advanced` branch already
-        // latches for a door check 16 frames from now, once the walk
-        // animation drains.
+        // Re-latches onto the entered map, unlike a warp's `None`: the
+        // crossing step's own landing tile still needs its door check
+        // evaluated against `to_map`.
         self.pending_landing = Some(to_position);
-        // Deliberately no `self.tick = 0` here: `LoadMapFromCameraTransition`
-        // (`src/overworld.c:784-825`) never calls `InitTilesetAnimations` --
-        // it calls `InitSecondaryTilesetAnimation` (`:815`), which resets
-        // only `sSecondaryTilesetAnimCounter` (`tileset_anims.c:581-583`)
-        // and leaves the primary counter running. `tick` models the
-        // *primary* counter (the only one this port animates -- see
-        // `crate::overworld::tileset_anims`), so the faithful counterpart
-        // of that secondary-only re-init is a no-op: the shared
-        // water/flower animation continues uninterrupted across a seamless
-        // crossing, unlike a warp's full map load.
         self.save1.event_data = transitioned_event_data;
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
-        // `src/overworld.c:800`) -- the piece of that function issue #177
-        // deferred to this slice. Crossing Littleroot's north edge into
-        // Route 101 therefore buys four encounter-free steps before the
-        // grass can roll (issue #169).
+        // `src/overworld.c:800`).
         self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
@@ -660,19 +475,16 @@ impl OverworldPhase {
     }
 }
 
-/// `SetPlayerCoordsFromWarp` (`pokeemerald/src/overworld.c:603-624`): a
-/// `destination.warp_id` naming a real warp event on the map `runtime` is
-/// bound to lands at that event's own position
-/// ([`warp_destination_position`]); otherwise a non-negative
-/// `destination.x`/`.y` lands there directly; otherwise the destination
-/// map's own center tile, upstream's last-resort branch for a `WarpData`
-/// with neither a valid warp id nor valid coordinates.
+/// `SetPlayerCoordsFromWarp` (`src/overworld.c:603-624`): a
+/// `destination.warp_id` naming a real warp event on `runtime`'s map lands
+/// at that event's own position ([`warp_destination_position`]); otherwise
+/// a non-negative `destination.x`/`.y` lands there directly; otherwise the
+/// destination map's own center tile.
 ///
 /// `None` when the chosen branch names a position outside the destination's
 /// decoded grid -- including a valid `warp_id` whose own event cell cannot
-/// decode, which must not fall through to the coordinate branch below it,
-/// since upstream has already committed to the valid-id branch by that
-/// point.
+/// decode, which must not fall through to the coordinate branch below it:
+/// upstream has already committed to the valid-id branch by that point.
 fn saved_warp_position(
     runtime: &engine::overworld::MapRuntime<'_>,
     events: &assets::MapEvents,
@@ -697,21 +509,15 @@ fn saved_warp_position(
     Some((x, y, elevation))
 }
 
-/// Narrow a generated map-table index (`MAP_GROUP`, `MAP_NUM`, or a warp
+/// Narrows a generated map-table index (`MAP_GROUP`, `MAP_NUM`, or a warp
 /// event index) into the `i8` upstream's `struct WarpData`
-/// (`include/global.h`, transcribed as [`WarpData`]) stores it in.
+/// (transcribed as [`WarpData`]) stores it in.
 ///
 /// # Panics
 ///
-/// If `value` exceeds `i8::MAX`. Unreachable against any real extraction:
-/// upstream declares all three fields `s8`, and the generated
-/// [`MapHeaderTable`] tops out at 34 map groups of at most 108 maps each --
-/// same "the constants are cross-checked against the generated table"
-/// reasoning [`crate::new_game::SPAWN_MAP_GROUP`]/[`crate::new_game::SPAWN_MAP_NUM`]
-/// rest on. Panicking (rather than saturating to a fabricated `127`, which
-/// would silently write a *different, real* map's group/num into the save)
-/// is the honest failure mode if a future extraction ever breaks that
-/// assumption.
+/// If `value` exceeds `i8::MAX` -- unreachable against any real extraction.
+/// Panicking, rather than saturating to a fabricated `127`, avoids silently
+/// writing a different, real map's group/num into the save.
 pub(super) fn warp_data_index(value: u8, what: &str) -> i8 {
     i8::try_from(value).unwrap_or_else(|_| {
         panic!("{what} {value} does not fit the i8 upstream's struct WarpData stores it in")

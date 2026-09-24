@@ -5,14 +5,14 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, main_menu_load_failure_message, menu_action, should_retry_overworld_load,
-    title_advance_pressed, window_frame_for, AnimatedTitle, AppScene, MainMenuAction,
-    MainMenuState,
+    advance_scene, main_menu_load_failure_message, menu_action, new_game_options_for,
+    should_retry_overworld_load, title_advance_pressed, window_frame_for, AnimatedTitle, AppScene,
+    MainMenuAction, MainMenuState,
 };
 use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroStatus};
 use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
-use crate::new_game;
+use crate::new_game::{self, NewGameOptions};
 use assets::pack::PackError;
 use platform::{ButtonState, Buttons};
 
@@ -27,18 +27,27 @@ pub(super) fn pressed(button: Buttons) -> ButtonState {
 /// reference precisely so no test has to touch the process-wide
 /// environment that decides the real one.
 pub(super) struct TempSave {
+    dir: std::path::PathBuf,
     path: std::path::PathBuf,
 }
 
 impl TempSave {
+    /// A save in a directory of its own.
+    ///
+    /// [`engine::save::SaveFile::lock`] takes one lock per save *directory*,
+    /// so scratch saves sharing one directory would serialise on a single
+    /// lock -- and a test that removed it would strip the exclusion the
+    /// others were relying on.
     pub(super) fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "pokeemerald-rs-flow-{label}-{}-{:?}.sav",
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-flow-{label}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
-        drop(std::fs::remove_file(&path));
-        Self { path }
+        drop(std::fs::remove_dir_all(&dir));
+        std::fs::create_dir_all(&dir).expect("scratch directory must be creatable");
+        let path = dir.join("pokeemerald.sav");
+        Self { dir, path }
     }
 
     pub(super) fn slot(&self) -> SaveSlot {
@@ -54,7 +63,7 @@ impl TempSave {
 
 impl Drop for TempSave {
     fn drop(&mut self) {
-        drop(std::fs::remove_file(&self.path));
+        drop(std::fs::remove_dir_all(&self.dir));
     }
 }
 
@@ -508,6 +517,50 @@ fn window_frame_for_reads_the_saved_blocks_own_option() {
         "a continued save's own recovered optionsWindowFrameType must not \
          be discarded for a hardcoded default"
     );
+}
+
+/// Pins [`new_game_options_for`]'s status split (issue #1125) -- see that
+/// function's own doc comment for the contract this pins, not a copy of it
+/// here.
+#[test]
+fn new_game_options_for_keeps_every_non_defaulted_saves_own_options() {
+    use crate::game_save::SaveFileStatus;
+    use engine::save::{SaveBlock1, SaveBlock2};
+
+    let recovered = |status: SaveFileStatus| SavedGame {
+        status,
+        block1: SaveBlock1::default(),
+        block2: SaveBlock2 {
+            options_text_speed: 2,
+            options_window_frame_type: 12,
+            ..SaveBlock2::default()
+        },
+    };
+
+    for status in [
+        SaveFileStatus::Ok,
+        SaveFileStatus::Error,
+        SaveFileStatus::NoFlash,
+    ] {
+        let saved = recovered(status);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions {
+                text_speed: 2,
+                window_frame_type: 12,
+            },
+            "a {status:?} save's recovered options must survive into NEW GAME"
+        );
+    }
+
+    for status in [SaveFileStatus::Empty, SaveFileStatus::Corrupt] {
+        let saved = recovered(status);
+        assert_eq!(
+            new_game_options_for(&saved),
+            NewGameOptions::DEFAULT,
+            "a {status:?} boot verdict must still default NEW GAME's options"
+        );
+    }
 }
 
 /// Upstream `Task_HandleMainMenuInput` reads A before the D-pad

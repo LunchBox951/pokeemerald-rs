@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use audio::{Adsr, Event, Instrument, Sequencer, Song, ToneData, WaveData};
+use audio::song::SquareTone;
+use audio::{Adsr, CgbAdsr, Event, Instrument, Sequencer, Song, ToneData, WaveData};
 use platform::AudioOutput;
 
 use super::{load_song_from_pack, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
@@ -53,6 +54,26 @@ fn short_one_shot_song() -> Song {
         Event::Fine,
     ];
     Song::new(voices, vec![events], 150)
+}
+
+/// `tracks` copies of one voice sustaining the same looping note, unlike
+/// [`looping_song`]'s one-shot wave, which falls silent between repeats.
+/// `Wait` must outlast every test using this song, or `Goto` restarts the
+/// untied note early, doubling the voice.
+fn sustained_song(tracks: usize) -> Song {
+    let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; 64]));
+    let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+    let track = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(200),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![track; tracks], 150)
 }
 
 fn finite_reverbed_song() -> Song {
@@ -171,10 +192,21 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
     const FULL_VOLUME: u32 = 64;
     const VOLUME_PER_STEP: u32 = 4;
     const FADE_FRAMES: u32 = 64;
+    // A faded sample is now `dry * gain` truncated through several integer
+    // `>>` stages (`sequencer::track_volume`, `voice::channel_volume`)
+    // instead of one exact float multiply (issue #1243); `1.5/128` covers
+    // this fixture's worst observed truncation (`1.4375/128` at `volX ==
+    // 4`) with headroom.
+    const TRUNCATION_TOLERANCE: f32 = 1.5 / 128.0;
+    // (frame, left, right) mix units at representative steps, independently
+    // derived from those same integer stages rather than observed from this
+    // player: catches a wrong stage, or a reintroduced post-mix scale, that
+    // TRUNCATION_TOLERANCE's headroom alone would miss.
+    const EXACT_MIX_UNITS: [(u32, u8, u8); 3] = [(4, 36, 37), (32, 19, 19), (60, 1, 1)];
 
-    let mut plain = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+    let mut plain = MusicPlayer::start(sustained_song(1), AudioOutput::null(RING_CAPACITY_FRAMES))
         .expect("null backend never errors");
-    let mut fading = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+    let mut fading = MusicPlayer::start(sustained_song(1), AudioOutput::null(RING_CAPACITY_FRAMES))
         .expect("null backend never errors");
     drain_everything(&mut plain);
     drain_everything(&mut fading);
@@ -200,13 +232,22 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
         let gain = volume as f32 / FULL_VOLUME as f32;
         for (i, (&dry, &wet)) in plain_frame.iter().zip(&fading_frame).enumerate() {
             assert!(
-                (wet - dry * gain).abs() < 1e-6,
-                "frame {frame}, sample {i}: expected {dry} * {gain} = {}, got {wet}",
+                (wet - dry * gain).abs() < TRUNCATION_TOLERANCE,
+                "frame {frame}, sample {i}: expected about {dry} * {gain} = {}, got {wet}",
                 dry * gain
             );
             if dry != 0.0 {
                 any_audible = true;
             }
+        }
+        if let Some(&(_, left_units, right_units)) =
+            EXACT_MIX_UNITS.iter().find(|&&(f, ..)| f == frame)
+        {
+            assert_eq!(
+                (fading_frame[0], fading_frame[1]),
+                (f32::from(left_units) / 128.0, f32::from(right_units) / 128.0),
+                "frame {frame}: exact fade level check (independent of TRUNCATION_TOLERANCE) failed"
+            );
         }
 
         assert_eq!(
@@ -222,6 +263,69 @@ fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
     assert!(
         fading_frame.iter().all(|&s| s == 0.0),
         "the last fade frame must be silent"
+    );
+}
+
+/// Renders `song` for `frames` game frames past the prefill, fading from the
+/// first frame when `fade_speed` is given, and returns the last frame's
+/// first sample.
+fn first_sample_after_frames(song: Song, frames: u32, fade_speed: Option<u16>) -> f32 {
+    let mut player = MusicPlayer::start(song, AudioOutput::null(RING_CAPACITY_FRAMES))
+        .expect("null backend never errors");
+    drain_everything(&mut player);
+    if let Some(speed) = fade_speed {
+        player.fade_out(speed);
+    }
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    for _ in 0..frames {
+        player.advance_frame();
+        player.drain_null_for_test(&mut frame);
+    }
+    frame[0]
+}
+
+/// Upstream scales each voice, then sums, then clips (`FadeOutBody`,
+/// `m4a.c:750`-`:757`; `TrkVolPitSet`, `m4a.c:765`-`:788`); four full-volume
+/// tracks overflow signed 8-bit together, so halving their volume must
+/// relieve that clipping, not just halve its clipped remainder.
+#[test]
+fn a_fade_scales_each_voice_before_the_mixer_clips_their_sum() {
+    const CLIPPING_TRACKS: u8 = 4;
+    const FADE_SPEED: u16 = 1;
+    const HALF_VOLUME_FRAME: u32 = 8;
+    const FULL_SCALE: f32 = 127.0 / 128.0;
+
+    let one_voice = first_sample_after_frames(sustained_song(1), 1, None);
+    let unclipped_sum = one_voice * f32::from(CLIPPING_TRACKS);
+    assert!(
+        unclipped_sum > FULL_SCALE,
+        "the test needs voices whose sum overflows the mix: \
+         {CLIPPING_TRACKS} x {one_voice} = {unclipped_sum}"
+    );
+
+    // Per-voice volume truncation costs at most one mix unit per voice.
+    let tolerance = f32::from(CLIPPING_TRACKS) / 128.0;
+    let unfaded = first_sample_after_frames(sustained_song(usize::from(CLIPPING_TRACKS)), 1, None);
+    assert!(
+        (unfaded - FULL_SCALE).abs() < tolerance,
+        "the unfaded frame must sit at clipped full scale, got {unfaded}"
+    );
+
+    let faded = first_sample_after_frames(
+        sustained_song(usize::from(CLIPPING_TRACKS)),
+        HALF_VOLUME_FRAME,
+        Some(FADE_SPEED),
+    );
+    let expected = unclipped_sum * 0.5;
+    assert!(
+        expected < FULL_SCALE,
+        "at half volume the faded voices must fit in the mix without clipping"
+    );
+    assert!(
+        (faded - expected).abs() < tolerance,
+        "half-volume fade of {CLIPPING_TRACKS} clipping voices: expected about {expected}, \
+         got {faded} (scaling the clipped frame instead would give {})",
+        FULL_SCALE * 0.5
     );
 }
 
@@ -295,10 +399,11 @@ fn finite_reverbed_song_restarts_only_after_tail_drains() {
 
 mod synthetic_pack {
     use assets::{
-        AssetPack, Envelope, ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId,
-        Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
+        AssetPack, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
+        ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId, SongEvent, Square1Voice,
+        Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
     };
-    use audio::Instrument;
+    use audio::{Instrument, Sequencer, DEFAULT_MASTER_VOLUME};
 
     use crate::music::load_song_from_pack;
 
@@ -542,6 +647,148 @@ mod synthetic_pack {
             "the guard must remove the scratch pack even when the test panics"
         );
     }
+
+    fn occupant_track() -> Vec<SongEvent> {
+        vec![
+            SongEvent::Priority(0),
+            SongEvent::Voice(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 127,
+                gate: 8,
+            },
+            SongEvent::Wait(48),
+            SongEvent::Fine,
+        ]
+    }
+
+    /// Selects a silent key-split child at higher priority; must not evict
+    /// [`occupant_track`]'s note, since a silent child produces no note before allocation.
+    fn evictor_track(key: u8) -> Vec<SongEvent> {
+        vec![
+            SongEvent::Priority(90),
+            SongEvent::Voice(1),
+            SongEvent::Note {
+                key,
+                velocity: 127,
+                gate: 8,
+            },
+            SongEvent::Wait(48),
+            SongEvent::Fine,
+        ]
+    }
+
+    #[test]
+    fn empty_and_nested_key_split_children_do_not_evict_an_occupied_voice() {
+        const WAVE_ID: &str = "audio/sample/keysplit_wave";
+        const TOP_VG_ID: &str = "audio/voicegroup/keysplit_top";
+        const CHILD_VG_ID: &str = "audio/voicegroup/keysplit_children";
+
+        let wave = Sample::DirectSound(
+            DirectSoundSample::new(1 << 20, Some(0), vec![100; 64])
+                .expect("a looping 64-sample wave is well-formed"),
+        );
+        // `voice(1)` splits on the played key: 60 selects child 0 (`Empty`), 61 selects
+        // child 1 (a nested key split) -- the two silent cases.
+        let top_group = VoiceGroup::new(vec![
+            VoiceEntry::DirectSound(DirectSoundVoice {
+                base_key: 60,
+                pan: None,
+                sample: SampleId(WAVE_ID.to_owned()),
+                envelope: flat_envelope(),
+                mode: DirectSoundMode::Resampled,
+            }),
+            VoiceEntry::KeySplit(
+                KeySplitVoice::new(60, vec![0, 1], VoiceGroupId(CHILD_VG_ID.to_owned()))
+                    .expect("a two-entry table is well under VOICE_SLOT_COUNT"),
+            ),
+        ])
+        .expect("two slots is well under VOICE_SLOT_COUNT");
+        let child_group = VoiceGroup::new(vec![
+            VoiceEntry::Empty,
+            VoiceEntry::KeySplit(
+                // Never resolved: nested children map straight to `None`,
+                // so this target id need not exist in the pack.
+                KeySplitVoice::new(
+                    0,
+                    vec![0],
+                    VoiceGroupId("audio/voicegroup/unresolved".to_owned()),
+                )
+                .expect("a one-entry table is well under VOICE_SLOT_COUNT"),
+            ),
+        ])
+        .expect("two slots is well under VOICE_SLOT_COUNT");
+
+        let control = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track()],
+        )
+        .expect("one track is well-formed");
+        let empty_child = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track(), evictor_track(60)],
+        )
+        .expect("two tracks is well-formed");
+        let nested_child = assets::Song::new(
+            VoiceGroupId(TOP_VG_ID.to_owned()),
+            0,
+            None,
+            vec![occupant_track(), evictor_track(61)],
+        )
+        .expect("two tracks is well-formed");
+
+        let temp_pack = write_pack(
+            "keysplit-silent-children",
+            &[
+                ("audio/song/keysplit_control", control.encode()),
+                ("audio/song/keysplit_empty_child", empty_child.encode()),
+                ("audio/song/keysplit_nested_child", nested_child.encode()),
+                (TOP_VG_ID, top_group.encode()),
+                (CHILD_VG_ID, child_group.encode()),
+                (WAVE_ID, wave.encode()),
+            ],
+        );
+        let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+
+        let render_first_frame = |name: &str| {
+            let song = load_song_from_pack(&pack, name).expect("the synthetic song loads");
+            // One DirectSound slot: any note reaching allocation evicts the occupant
+            // (`mixer::select_direct_sound_slot`), which a silent child must never do.
+            let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 1);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            seq.render_frame(&mut out);
+            (seq.voice_count(), out)
+        };
+
+        let (control_voices, control_frame) = render_first_frame("keysplit_control");
+        assert_eq!(
+            control_voices, 1,
+            "sanity: the occupant must claim the sole DirectSound slot"
+        );
+        assert!(
+            control_frame.iter().any(|&s| s != 0.0),
+            "sanity: the occupant note must be audible"
+        );
+
+        for (name, label) in [
+            ("keysplit_empty_child", "an empty key-split child"),
+            ("keysplit_nested_child", "a nested key-split child"),
+        ] {
+            let (voices, frame) = render_first_frame(name);
+            assert_eq!(
+                voices, 1,
+                "{label} must not add a second voice to the full DirectSound pool"
+            );
+            assert_eq!(
+                frame, control_frame,
+                "{label} must leave the occupied DirectSound slot's output untouched"
+            );
+        }
+    }
 }
 
 #[test]
@@ -703,4 +950,132 @@ mod oracle {
              {reference_rms:.4} (tolerance {tolerance:.4})"
         );
     }
+}
+
+/// The PSG counterpart to [`sustained_song`]: one CGB square voice holding a
+/// tied note, so a fade's terminal frame can be inspected on a channel whose
+/// gain runs through the CGB envelope rather than the `DirectSound` mixer.
+fn sustained_cgb_song() -> Song {
+    let voices = vec![Instrument::CgbSquare1(SquareTone {
+        duty: 2,
+        sweep: 0,
+        adsr: CgbAdsr::flat(),
+        fixed_rate: false,
+    })];
+    let track = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(200),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![track], 150)
+}
+
+/// `FadeOutBody` stops every existing track outright on the step that reaches
+/// `volX == 0` (`m4a.c:750`-`:757`), and `TrackStop` turns each CGB channel
+/// off as it goes -- so the frame mixed after that step carries no PSG sound.
+#[test]
+fn a_finished_fade_silences_a_sustained_cgb_voice_on_its_terminal_frame() {
+    const FADE_FRAMES: u32 = 64;
+
+    let mut player = MusicPlayer::start(
+        sustained_cgb_song(),
+        AudioOutput::null(RING_CAPACITY_FRAMES),
+    )
+    .expect("null backend never errors");
+    drain_everything(&mut player);
+    player.fade_out(TITLE_FADE_OUT_SPEED);
+
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut any_audible = false;
+    for _ in 1..=FADE_FRAMES {
+        player.advance_frame();
+        player.drain_null_for_test(&mut frame);
+        if frame.iter().any(|&s| s != 0.0) {
+            any_audible = true;
+        }
+    }
+
+    assert!(
+        player.fade_finished(),
+        "sanity: the fade must finish on frame {FADE_FRAMES}"
+    );
+    assert!(
+        any_audible,
+        "sanity: the CGB voice must actually have been producing sound to fade"
+    );
+    assert!(
+        frame.iter().all(|&s| s == 0.0),
+        "the terminal fade frame must be silent, got {:?}",
+        &frame[..4]
+    );
+}
+
+/// The `DirectSound` counterpart to
+/// [`a_finished_fade_silences_a_sustained_cgb_voice_on_its_terminal_frame`]:
+/// a reverbed song, whose master-mix feedback ring still holds seven frames
+/// of delayed `DirectSound` samples when the terminal fade step stops every
+/// track (`m4a.c:720`-`:735`). Upstream's mixer keeps running through the
+/// paused player (`SoundMain` and `SoundMainRAM_Reverb`, `m4a_1.s:20`-`:119`),
+/// so those delayed samples keep sounding as a decaying wet tail; stopping the
+/// tracks silences the dry voices, not the ring. The player is droppable only
+/// once that tail has rung down.
+#[test]
+fn a_finished_fade_keeps_sounding_the_reverb_tail_the_ring_still_holds() {
+    const TITLE_REVERB_LEVEL: u8 = 50;
+    const FRAMES: u32 = 96;
+
+    let mut player = MusicPlayer::start(
+        sustained_song(1).with_reverb(TITLE_REVERB_LEVEL),
+        AudioOutput::null(RING_CAPACITY_FRAMES),
+    )
+    .expect("null backend never errors");
+    drain_everything(&mut player);
+    player.fade_out(TITLE_FADE_OUT_SPEED);
+
+    let mut frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut audible_through_terminal = false;
+    let mut audible_after_terminal = false;
+    let mut past_terminal = false;
+    for _ in 0..FRAMES {
+        // The contract `App::advance_music` is built on -- and which
+        // `app::tests::a_faded_reverbed_songs_tail_keeps_sounding_past_the_terminal_fade_step`
+        // drives through the app itself: render frames until the fade has
+        // finished and its tail is silent, then only poll `drained`.
+        if player.fade_finished() && !player.tail_sounding() {
+            let _ = player.drained();
+        } else {
+            player.advance_frame();
+        }
+        player.drain_null_for_test(&mut frame);
+        let audible = frame.iter().any(|&sample| sample != 0.0);
+        if past_terminal {
+            audible_after_terminal |= audible;
+        } else {
+            audible_through_terminal |= audible;
+        }
+        past_terminal |= player.fade_finished();
+    }
+
+    assert!(
+        past_terminal,
+        "sanity: the fade must finish within {FRAMES} frames"
+    );
+    assert!(
+        audible_through_terminal,
+        "sanity: the song must actually have been sounding through the fade"
+    );
+    assert!(
+        audible_after_terminal,
+        "the reverb ring's delayed samples must keep sounding after the terminal fade step, \
+         not be truncated when the fade finishes"
+    );
+    assert!(
+        !player.tail_sounding(),
+        "the tail must ring down within {FRAMES} frames, so the paused player can be dropped"
+    );
 }

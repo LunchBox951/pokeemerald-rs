@@ -191,11 +191,10 @@ pub(crate) struct OverworldPhase {
     /// background tile animation keeps running even while [`Self::dialog`]
     /// or an open start menu freezes movement, mirroring upstream's
     /// `UpdateTilesetAnimations` running every `VBlank` regardless of
-    /// message-box state) and reset to 0 in
-    /// [`Self::load_default`]/[`Self::warp_to`] only, matching upstream's
-    /// own `InitTilesetAnimations` reset points (full map loads,
-    /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
-    /// `tileset_anims`'s own module docs). A connection crossing
+    /// message-box state) and reset to 0 wherever upstream calls
+    /// `InitTilesetAnimations`: full map loads
+    /// ([`Self::load_default`]/[`Self::warp_to`]) and a non-loss wild-battle
+    /// return ([`Self::advance_wild_battle_frame`], issue #865). A connection crossing
     /// ([`Self::cross_connection`]) deliberately does *not* reset it:
     /// upstream's seamless camera transition re-inits only the secondary
     /// tileset counter, which this port does not model.
@@ -304,13 +303,10 @@ pub(crate) struct OverworldPhase {
     /// [`Self::party_lead`], but each bails out unless a lead is already
     /// `Some`, so none can flip this flag while it is true -- only this
     /// load path's arms do in production.
-    /// [`Self::copy_party_and_objects_to_save`] reads this
-    /// flag, not the save bytes, to decide whether the no-lead arm may zero
-    /// `player_party[0]` -- upstream's `SavePlayerParty`
-    /// (`pokeemerald/src/load_save.c:160-168`) never rebuilds a party
-    /// record from a partial model, it copies whatever bytes `gPlayerParty`
-    /// holds, so a slot this port cannot decode into a battler must still
-    /// round-trip through a save exactly as those bytes came in.
+    /// [`Self::copy_party_and_objects_to_save`]'s no-lead arm leaves
+    /// `player_party[0]`/`player_party_count` untouched either way, so this
+    /// flag is diagnostic only -- it records *why* [`Self::party_lead`] is
+    /// `None`, not a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
     /// The wild battle currently being played out, if any (issue #169).
     /// `Some` freezes the overworld for the frame -- the same shape
@@ -485,7 +481,10 @@ impl OverworldPhase {
     /// default explicitly.
     #[cfg(test)]
     pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
-        Self::load(crate::pack_source::PackSource::Runtime)
+        Self::load(
+            crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
+        )
     }
 
     /// [`Self::load_default`], pinned to whichever
@@ -497,11 +496,19 @@ impl OverworldPhase {
     /// afterwards inherits the same pin ([`Self::pack_source`]'s own field
     /// docs).
     ///
+    /// `options` is the pair [`crate::flow::advance_scene`]'s `Intro` and
+    /// `OverworldLoadFailed` arms read off the finished
+    /// [`crate::intro::IntroScene`] (issue #1125): the boot-recovered
+    /// `SaveBlock2` options a NEW GAME over an intact save must carry into
+    /// this fresh session instead of always defaulting them (module docs on
+    /// [`Self::new`]).
+    ///
     /// # Errors
     ///
     /// See [`Self::load_default`].
     pub(super) fn load(
         source: crate::pack_source::PackSource,
+        options: new_game::NewGameOptions,
     ) -> Result<Self, OverworldSceneError> {
         // No session event-data exists yet at this point (`new_game::init_save_blocks`
         // hasn't run) -- a fresh store is the honest value: `SPAWN_MAP_ID` is
@@ -518,7 +525,7 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source);
+        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None, source, options);
         // The stand-in for the un-ported starter handout (issue #207
         // review): without a lead, every I-4 encounter would be rolled and
         // dropped. Deliberately drawing nothing from `phase.rng` — see
@@ -866,6 +873,7 @@ impl OverworldPhase {
             player,
             dialog,
             crate::pack_source::PackSource::Runtime,
+            new_game::NewGameOptions::DEFAULT,
         )
     }
 
@@ -881,9 +889,10 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
         pack_source: crate::pack_source::PackSource,
+        options: new_game::NewGameOptions,
     ) -> Self {
         let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
-        let (mut save1, save2) = new_game::init_save_blocks(&mut rng);
+        let (mut save1, save2) = new_game::init_save_blocks_with_options(&mut rng, options);
         // Entering the initial map is a map transition like any other. For
         // the production spawn bedroom, this hides its twelve decoration
         // placeholders; test maps receive their own transition effects.
@@ -1160,3 +1169,7 @@ mod step_tests;
 mod test_support;
 #[cfg(test)]
 mod warp_tests;
+/// `wild_battle`'s tests -- the same per-area split as the rest of this
+/// list.
+#[cfg(test)]
+mod wild_battle_tests;

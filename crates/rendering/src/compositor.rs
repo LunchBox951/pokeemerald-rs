@@ -34,12 +34,12 @@
 use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
 use crate::bg_affine::{AffineBgLayer, AffineMosaicHold, Overflow};
-use crate::effects::{self, EffectsConfig, EffectsEnable, LayerKind};
+use crate::effects::{self, EffectsConfig, LayerKind};
 use crate::framebuffer::Framebuffer;
 use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::{SpriteLayer, WindowSpans};
-use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
+use crate::window::{WindowConfig, WindowLayerEnable};
 
 /// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
 /// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
@@ -264,14 +264,11 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
-/// The [`EffectsEnable`] differs from the queried column's own window for a
-/// sprite candidate, which always carries its writer's own baked enables
-/// (`compose_pixel`'s docs); a BG candidate's is always the queried column's
-/// window. The two `bool`s are the winning candidate's forced-alpha bit and
-/// its color writer's own semi-transparency
-/// (`sprite::SpritePixel::writer_semi_transparent`); a BG candidate supplies
-/// `false` for both.
-type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool, EffectsEnable);
+/// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
+/// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
+/// `semi_transparent`/`color_semi_transparent` split and are always `false`
+/// for a BG candidate.
+type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
@@ -358,10 +355,8 @@ pub fn compose_frame_with_effects(
 ) -> Framebuffer {
     // mgba's global "any target2" signal (software-obj.c:181-185): the
     // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
-    // A forced-alpha OBJ that fails to blend against its immediate neighbor
-    // keeps its brighten/darken variant only when this is false (see
-    // effects::resolve_pixel_color). It is a per-frame constant, so compute it
-    // once rather than per pixel.
+    // See effects::resolve_pixel_color's docs for what this drives. It is a
+    // per-frame constant, so compute it once rather than per pixel.
     let any_target2 = effects.color.target2.backdrop
         || bg_slots.iter().any(|slot| {
             slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
@@ -386,53 +381,20 @@ pub fn compose_frame_with_effects(
         }
         #[expect(
             clippy::cast_possible_truncation,
-            reason = "the framebuffer is 160 scanlines tall and 240 columns wide, both well within u8"
+            reason = "the framebuffer is 160 scanlines tall, well within u8"
         )]
-        let (
-            span_starts,
-            span_draws_obj,
-            span_effects,
-            span_objwin_reblends,
-            span_suppresses_objwin,
-        ) = {
+        let (span_starts, span_draws_obj, span_suppresses_objwin) = {
             let scanline = y as u8;
             let starts = effects.windows.scanline_span_starts(scanline);
-            let runs_obj_pass: Vec<bool> = starts
+            let draws_obj: Vec<bool> = starts
                 .iter()
                 .map(|&start| span_runs_obj_pass(&effects.windows, start as u8, scanline))
                 .collect();
-            // A span's own effects enable, ignoring OBJWIN like
-            // `span_runs_obj_pass`'s `partition_control` does: OBJWIN masks
-            // per pixel and never partitions the scanline.
-            let runs_effects: Vec<bool> = starts
-                .iter()
-                .map(|&start| {
-                    effects
-                        .windows
-                        .classify(start as u8, scanline, false)
-                        .effects
-                })
-                .collect();
-            // mGBA's `objwinSlowPath`: with any target 2 present, a span
-            // whose blend enable disagrees with OBJWIN's defers brightness to
-            // the reader (`software-obj.c:180-192`, `video-software.c:983-1000`)
-            // `(behavioral-fidelity)`.
-            let runs_objwin_reblend: Vec<bool> = runs_effects
-                .iter()
-                .map(|&span_effects| {
-                    any_target2
-                        && effects
-                            .windows
-                            .obj_window
-                            .is_some_and(|objwin| objwin.effects != span_effects)
-                })
-                .collect();
             // A span's own WIN0/WIN1-vs-OBJWIN rank, ignoring the per-pixel
-            // OBJWIN mask like `runs_effects` does: mGBA drops an OBJWIN
-            // sprite for a whole pass when that pass's own rank outranks
-            // OBJWIN's (`software-obj.c:161`, `video-software.c:131-134`)
-            // `(behavioral-fidelity)`.
-            let runs_suppresses_objwin: Vec<bool> = starts
+            // OBJWIN mask: mGBA drops an OBJWIN sprite for a whole pass when
+            // that pass's own rank outranks OBJWIN's (`software-obj.c:161`,
+            // `video-software.c:131-134`) `(behavioral-fidelity)`.
+            let suppresses_objwin: Vec<bool> = starts
                 .iter()
                 .map(|&start| {
                     effects
@@ -442,21 +404,9 @@ pub fn compose_frame_with_effects(
                         .suppresses_objwin_hole()
                 })
                 .collect();
-            (
-                starts,
-                runs_obj_pass,
-                runs_effects,
-                runs_objwin_reblend,
-                runs_suppresses_objwin,
-            )
+            (starts, draws_obj, suppresses_objwin)
         };
-        let window_spans = WindowSpans::new(
-            &span_starts,
-            &span_draws_obj,
-            &span_effects,
-            &span_objwin_reblends,
-            &span_suppresses_objwin,
-        );
+        let window_spans = WindowSpans::new(&span_starts, &span_draws_obj, &span_suppresses_objwin);
         for x in 0..width {
             if span_starts.contains(&x) {
                 for hold in affine_mosaic_holds.iter_mut().flatten() {
@@ -518,43 +468,6 @@ fn affine_mosaic_hold_participates(
             .is_some_and(|enable| enable.bg_enabled(bg_index))
 }
 
-/// The effects enable an OBJ pixel composites under in `region`, whose
-/// control enables effects iff `window_effects`.
-///
-/// `OBJWIN`'s own effects enable is a per-pixel mask a span-level override
-/// cannot see, so it wins over a spill's writing span on the columns it
-/// governs; `WIN0` and `WIN1` outrank `OBJWIN`, which never flags a pixel they
-/// cover (`software-obj.c:161`). Brightness is always baked at write time
-/// from the writing span's own enable, even when that span is the queried
-/// column's own (`software-obj.c:76-98,176-208`), so `OBJWIN` cannot brighten
-/// a colour its writer stored unbrightened -- unless
-/// [`pixel.reblends`](crate::sprite::SpritePixel::reblends) is live, which
-/// always defers to the queried column's own window instead, discarding
-/// whatever was baked (`software-obj.c:180-192`, `video-software.c:983-1000`)
-/// `(behavioral-fidelity)`.
-fn obj_effects_enable(
-    region: WindowRegion,
-    window_effects: bool,
-    pixel: crate::sprite::SpritePixel,
-) -> EffectsEnable {
-    let brightness = if pixel.reblends {
-        window_effects
-    } else if region == WindowRegion::ObjWindow {
-        window_effects && pixel.brightness_override
-    } else {
-        pixel.brightness_override
-    };
-    let target1 = if region == WindowRegion::ObjWindow {
-        window_effects
-    } else {
-        pixel.target1_override
-    };
-    EffectsEnable {
-        target1,
-        brightness,
-    }
-}
-
 /// Resolve one pixel's final color for [`compose_frame_with_effects`].
 ///
 /// `affine_mosaic_holds` pairs positionally with `bg_slots` — one
@@ -562,19 +475,10 @@ fn obj_effects_enable(
 /// across a scanline; see [`compose_frame_with_effects`]'s docs.
 ///
 /// `window_spans` carries this scanline's hardware-window spans and which of
-/// them run the OBJ pass; see `sprite::SpriteLayer::sample_affine_local` for
-/// what it seeds and why. Every sprite pixel carries its color writer's own
-/// baked brightness enable (`sprite::SpritePixel::brightness_override`),
-/// always the writing span's own state whether or not that span is the
-/// queried column's: it wins outright over the queried column's window, or
-/// is `AND`ed with `OBJWIN`'s own per-pixel enable when the column is an
-/// `OBJWIN` region, unless [`reblends`](crate::sprite::SpritePixel::reblends)
-/// is live on whichever write last touched priority, which always defers to
-/// the queried column instead `(behavioral-fidelity)`.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "framebuffer coordinates are always < 240/160, well within u8"
-)]
+/// them run the OBJ pass at all, for
+/// [`SpriteLayer::sample_affine_local`](crate::sprite::SpriteLayer)'s affine
+/// mosaic hold restart.
+#[allow(clippy::cast_possible_truncation)] // Framebuffer coordinates are always < 240/160, well within u8.
 #[expect(
     clippy::too_many_arguments,
     reason = "mirrors the per-pixel state compose_frame_with_effects threads through every column"
@@ -593,7 +497,7 @@ fn compose_pixel(
 
     let objwin_mask = effects.windows.obj_window.is_some()
         && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
-    let (window, region) = effects.windows.classify_with_region(wx, wy, objwin_mask);
+    let (window, _) = effects.windows.classify_with_region(wx, wy, objwin_mask);
 
     // An `OBJWIN` mask never partitions the scanline, so the enable bits
     // that decide whether a span runs a layer's draw routine at all come
@@ -601,6 +505,21 @@ fn compose_pixel(
     // (`mgba/src/gba/renderers/video-software.c:903-912`)
     // `(behavioral-fidelity)`.
     let (partition_control, _) = effects.windows.classify_with_region(wx, wy, false);
+    // The backdrop's brighten/darken variant is chosen from that same
+    // OBJWIN-independent span, not from `window.effects` below
+    // (`crate::effects::backdrop_variant`) `(behavioral-fidelity)`.
+    let span_backdrop =
+        effects::backdrop_variant(&effects.color, partition_control.effects, effects.backdrop);
+    // mGBA's `objwinSlowPath` (`effects::resolve_pixel_color`'s docs):
+    // `OBJWIN`'s own blend-enable bit compared against this pixel's static
+    // span, not the OBJWIN-mask-resolved `window` below -- sprites are only
+    // ever preprocessed against a `WIN0`/`WIN1`/`WINOUT` span
+    // (`mgba/src/gba/renderers/video-software.c:1052-1055`)
+    // `(behavioral-fidelity)`.
+    let objwin_slow_path = effects
+        .windows
+        .obj_window
+        .is_some_and(|enable| enable.effects != partition_control.effects);
 
     let mut front = None;
     let mut next = None;
@@ -609,7 +528,6 @@ fn compose_pixel(
         if let Some(pixel) =
             sprites.resolve_pixel_with_mosaic_windowed(x, y, effects.mosaic.obj, window_spans)
         {
-            let enable = obj_effects_enable(region, window.effects, pixel);
             insert_candidate(
                 &mut front,
                 &mut next,
@@ -618,8 +536,7 @@ fn compose_pixel(
                     pixel.color,
                     LayerKind::Obj,
                     pixel.semi_transparent,
-                    pixel.writer_semi_transparent,
-                    enable,
+                    pixel.color_semi_transparent,
                 ),
             );
         }
@@ -650,45 +567,35 @@ fn compose_pixel(
                 LayerKind::Bg(slot.bg_index),
                 false,
                 false,
-                EffectsEnable::uniform(window.effects),
             ),
         );
     }
 
-    let Some((
-        _,
-        front_color,
-        front_kind,
-        front_semi_transparent,
-        front_writer_semi_transparent,
-        front_enable,
-    )) = front
+    let Some((_, front_color, front_kind, front_semi_transparent, front_color_semi_transparent)) =
+        front
     else {
-        // Nothing drawn: the backdrop itself is shown, subject only to
-        // brighten/darken (effects::resolve_pixel_color never alpha-blends
+        // Nothing drawn: the backdrop itself is shown, already resolved to
+        // its span variant (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
-        return effects::resolve_pixel_color(
-            &effects.color,
-            EffectsEnable::uniform(window.effects),
-            any_target2,
-            (effects.backdrop, LayerKind::Backdrop, false, false),
-            None,
-            effects.backdrop,
-        );
+        return span_backdrop;
     };
-    let next = next.map(|(_, color, kind, _, _, _)| (color, kind));
+    let next = next.map(|(_, color, kind, _, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
-        front_enable,
+        effects::PixelWindowEffects {
+            enabled: window.effects,
+            static_span_enabled: partition_control.effects,
+            objwin_slow_path,
+        },
         any_target2,
         (
             front_color,
             front_kind,
             front_semi_transparent,
-            front_writer_semi_transparent,
+            front_color_semi_transparent,
         ),
         next,
-        effects.backdrop,
+        span_backdrop,
     )
 }
 
@@ -2528,98 +2435,6 @@ mod tests {
     }
 
     #[test]
-    fn affine_obj_mosaic_trailing_spill_keeps_its_writing_spans_brightness() {
-        // A trailing spill keeps the writing span's stored brightness, not the
-        // queried span's own control (`software-obj.c:157,177-208,423-431`).
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        colors[2] = Bgr555::from_channels(0, 0x1F, 0);
-        colors[3] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
-
-        let entries = [OamEntry::new(
-            1,
-            0,
-            0,
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 })];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let obj_target1 = LayerTargets {
-            obj: true,
-            ..LayerTargets::default()
-        };
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_on,
-                )),
-                win1: None,
-                obj_window: None,
-                winout: obj_on_effects_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: obj_target1,
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let white = Rgb888 {
-            r: u8::MAX,
-            g: u8::MAX,
-            b: u8::MAX,
-        };
-
-        assert_eq!(
-            fb.pixel(9, 0),
-            Some(white),
-            "x=9 is inside the WINOUT span, which enables effects: fully brightened"
-        );
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(white),
-            "x=10 was written by the WINOUT pass, so it carries that pass's brightened palette"
-        );
-        assert_eq!(
-            fb.pixel(11, 0),
-            Some(white),
-            "x=11 was written by the WINOUT pass, so it carries that pass's brightened palette"
-        );
-    }
-
-    #[test]
     fn affine_obj_mosaic_trailing_spill_keeps_a_worse_sprites_color_underneath() {
         // Transparent promotion blocks this entry's own later opaque span
         // without drawing color (`software-obj.c:79-85`).
@@ -2704,362 +2519,90 @@ mod tests {
     }
 
     #[test]
-    fn affine_obj_mosaic_trailing_spill_keeps_objwins_own_effects_enable() {
-        // WIN0 now owns columns [0, 10) (the mirror of earlier tests' WINOUT
-        // role) and writes the spill at x=10 with effects on; an OBJWIN
-        // region also covers x=10 with effects off. `OBJWIN` is a per-pixel
-        // mask, not a hardware-window span, so it always decides color
-        // effects for a pixel it masks, regardless of which span wrote the
-        // sprite color underneath (`mgba/src/gba/renderers/
-        // software-obj.c:88-98,176-208`).
-        //
-        // Identity 8x8 affine OBJ at x = 1 (raw right edge 9), OBJ mosaic H =
-        // 4, rounds to 12: x = 10..=11 is WIN0's trailing spill.
+    fn objwin_affine_mosaic_spill_written_in_winout_still_promotes_inside_win0() {
+        // mGBA drops an OBJWIN sprite per *writing pass*, not per reader
+        // column (`software-obj.c:161`, `video-software.c:131-134`): a
+        // WINOUT pass's OBJWIN hole still promotes a worse-priority OBJ under
+        // its trailing spill, even where that spill lands inside WIN0.
         use crate::oam::AffineMode;
 
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
+        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9); // red BG0
+        let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
+        let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)]; // BG0 at priority 1
 
-        let affine_entry = OamEntry::new(
-            1,
+        // Tile 0: solid index 15 (the normal OBJ). Tile 1 row 0: index 5
+        // everywhere but source column 5, the hole the spill holds.
+        let mut tile_bytes = [0u8; 64];
+        tile_bytes[..32].fill(0xFF);
+        tile_bytes[32] = 0x55; // source columns 0, 1
+        tile_bytes[33] = 0x55; // source columns 2, 3
+        tile_bytes[34] = 0x05; // source column 4 -> index 5, column 5 -> hole
+        tile_bytes[35] = 0x55; // source columns 6, 7
+        let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 9, 0); // green: the normal OBJ
+        sprite_colors[5] = Bgr555::from_channels(0, 31, 31); // must never render
+        let sprite_palette = Palette::new(sprite_colors);
+
+        let entries = [
+            // OAM 0: normal OBJ over x = 8..=15, worst priority, opaque.
+            OamEntry::new(
+                8,
+                0,
+                0,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0,
+                3,
+                true,
+            ),
+            // OAM 1: affine mosaic OBJWIN sprite at x = 1 (raw right edge 9,
+            // rounded to 12 by OBJ mosaic H = 4). Its 4x horizontal
+            // magnification keeps the spill columns inside the texture, where
+            // source column 5 is the transparent hole.
+            OamEntry::new(
+                1,
+                0,
+                1,
+                0,
+                BitDepth::Bpp4,
+                false,
+                false,
+                ObjShape::Square,
+                0,
+                0,
+                true,
+            )
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)
+            .with_affine(AffineMode::Affine { matrix_num: 0 }),
+        ];
+        let matrices = [AffineMatrix::new(
+            AffineMatrix::ONE / 4,
             0,
-            0, // tile 0 (uniform red)
             0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let objwin_marker = OamEntry::new(
-            10,
-            0,
-            1, // tile 1 (opaque), marks OBJWIN across x=10..=17
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mode(ObjMode::Window);
-        let entries = [affine_entry, objwin_marker];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            AffineMatrix::ONE,
+        )];
+        let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
             .with_affine_matrices(&matrices);
 
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-        let objwin_effects_off = obj_on; // effects off, unlike WIN0's writing span below
-
-        let obj_target1 = LayerTargets {
-            obj: true,
-            ..LayerTargets::default()
-        };
-
+        let mut bg0_and_obj = WindowLayerEnable::NONE;
+        bg0_and_obj.bg[0] = true;
+        bg0_and_obj.obj = true;
         let effects = FrameEffects {
             windows: WindowConfig {
+                // WIN0 opens at x = 10, so the spill of block [8, 12) crosses
+                // out of the WINOUT pass that wrote it.
                 win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on_effects_on,
-                )),
-                win1: None,
-                obj_window: Some(objwin_effects_off),
-                winout: obj_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: obj_target1,
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(red),
-            "OBJWIN's own effects-disabled control wins over WIN0's \
-             effects-enabled writing span, so x=10 stays unbrightened"
-        );
-    }
-
-    #[test]
-    fn affine_obj_mosaic_trailing_spill_keeps_an_effects_disabled_writer_under_objwin() {
-        // An OBJWIN column takes the palette its writing span chose, brightened
-        // only if that span enabled effects (`software-obj.c:176-208`).
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let affine_entry = OamEntry::new(
-            1,
-            0,
-            0, // tile 0 (uniform red)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let objwin_marker = OamEntry::new(
-            10,
-            0,
-            1, // tile 1 (opaque), marks OBJWIN across x=10..=17
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mode(ObjMode::Window);
-        let entries = [affine_entry, objwin_marker];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let obj_target1 = LayerTargets {
-            obj: true,
-            ..LayerTargets::default()
-        };
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on, // the writing span: effects off
-                )),
-                win1: None,
-                obj_window: Some(obj_on_effects_on),
-                winout: obj_on_effects_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: obj_target1,
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
-        assert_eq!(
-            fb.pixel(9, 0),
-            Some(red),
-            "x=9 is inside WIN0, whose control disables effects"
-        );
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(red),
-            "x=10 was written by WIN0's effects-disabled pass, so OBJWIN's \
-             effects-enabled control cannot brighten a colour that was never \
-             stored brightened"
-        );
-    }
-
-    #[test]
-    fn objwin_cannot_brighten_a_colour_its_own_span_wrote_unbrightened() {
-        // Same hardware span as the read: mGBA still bakes brighten from the
-        // writer's own blend enable at write time (`software-obj.c:76-98,176-208`).
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let visible = OamEntry::new(
-            0,
-            0,
-            0, // tile 0 (uniform red)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        );
-        let objwin_marker = OamEntry::new(
-            0,
-            0,
-            1, // tile 1 (opaque), marks OBJWIN across x=0..=7
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mode(ObjMode::Window);
-        let entries = [visible, objwin_marker];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: None,
-                win1: None,
-                obj_window: Some(obj_on_effects_on),
-                winout: obj_on, // the sole writing span: effects off
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
-                },
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let red = Bgr555::from_channels(0x1F, 0, 0).to_rgb888();
-        assert_eq!(
-            fb.pixel(4, 0),
-            Some(red),
-            "the OBJ was written by the effects-disabled WINOUT span it shares \
-             with the queried column, so OBJWIN's effects-enabled control \
-             cannot brighten a colour that was never stored brightened"
-        );
-    }
-
-    #[test]
-    fn affine_obj_mosaic_trailing_spill_keeps_its_writing_span_under_win1() {
-        // An OBJWIN sprite covers x=10, but WIN1 also opens there. WIN0 and
-        // WIN1 outrank OBJWIN, so mGBA's OBJWIN pass never runs on a column
-        // they cover and never flags it (`software-obj.c:161`,
-        // `video-software.c:131-134`). The spill therefore keeps the enable
-        // of the WIN0 span that wrote it, instead of falling back to WIN1's.
-        //
-        // Identity 8x8 affine OBJ at x = 1 (raw right edge 9), OBJ mosaic H =
-        // 4, rounds to 12: x = 10..=11 is WIN0's trailing spill.
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let affine_entry = OamEntry::new(
-            1,
-            0,
-            0, // tile 0 (uniform red)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let objwin_marker = OamEntry::new(
-            10,
-            0,
-            1, // tile 1 (opaque), marks OBJWIN across x=10..=17
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        )
-        .with_mode(ObjMode::Window);
-        let entries = [affine_entry, objwin_marker];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let obj_target1 = LayerTargets {
-            obj: true,
-            ..LayerTargets::default()
-        };
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on_effects_on,
-                )),
-                win1: Some((
                     WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_on,
+                    bg0_and_obj,
                 )),
-                obj_window: Some(obj_on),
-                winout: obj_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: obj_target1,
-                evy: 16,
-                ..EffectsConfig::default()
+                win1: None,
+                obj_window: Some(bg0_and_obj),
+                winout: bg0_and_obj,
             },
             mosaic: crate::mosaic::MosaicConfig {
                 bg: MosaicSize::NONE,
@@ -3067,136 +2610,33 @@ mod tests {
             },
             ..FrameEffects::default()
         };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
 
-        let white = Rgb888 {
-            r: u8::MAX,
-            g: u8::MAX,
-            b: u8::MAX,
-        };
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(white),
-            "WIN1 outranks the OBJWIN mask at x=10, so the spill keeps WIN0's \
-             effects-enabled writing span and stays brightened"
-        );
-    }
-
-    #[test]
-    fn affine_obj_mosaic_trailing_spill_takes_target_one_from_the_promoting_span() {
-        // A better-priority sprite whose texel is transparent keeps the
-        // stored color but re-stamps FLAG_TARGET_1 from its own write
-        // (`software-obj.c:79-85`), and that write happens in the queried
-        // column's span. So the spill at x=10 keeps WIN0's unbrightened red
-        // while gaining WIN1's target-1 eligibility, and alpha-blends against
-        // the target-2 BG behind it.
-        //
-        // Identity 8x8 affine OBJ at x = 1 (raw right edge 9), OBJ mosaic H =
-        // 4, rounds to 12: x = 10..=11 is WIN0's trailing spill.
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (blue)
-                                // tile 1 stays zeroed: the promoting sprite is wholly transparent.
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0, 0, 0x1F);
-        let palette = Palette::new(colors);
-
-        let affine_entry = OamEntry::new(
-            1,
-            0,
-            0, // tile 0 (uniform blue)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            1, // worse priority than the promoting sprite
-            true,
-        )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let transparent_promoter = OamEntry::new(
-            10,
-            0,
-            1, // tile 1 (all palette index zero)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        );
-        let entries = [affine_entry, transparent_promoter];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(31);
-        let bg_layer = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
-        let slots = [BgSlot::new(bg_layer, 0, 2, 0, 0, true)];
-
-        let mut obj_and_bg0 = WindowLayerEnable::NONE;
-        obj_and_bg0.obj = true;
-        obj_and_bg0.bg[0] = true;
-        let mut obj_and_bg0_effects_on = obj_and_bg0;
-        obj_and_bg0_effects_on.effects = true;
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_and_bg0,
-                )),
-                win1: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_and_bg0_effects_on,
-                )),
-                obj_window: None,
-                winout: obj_and_bg0,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::AlphaBlend,
-                target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
-                },
-                target2: LayerTargets {
-                    bg: [true, false, false, false],
-                    ..LayerTargets::default()
-                },
-                eva: 8,
-                evb: 8,
-                evy: 0,
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        let green = Bgr555::from_channels(0, 9, 0).to_rgb888();
+        let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
 
-        let blue = Bgr555::from_channels(0, 0, 0x1F).to_rgb888();
         assert_eq!(
             fb.pixel(9, 0),
-            Some(blue),
-            "x=9 belongs to WIN0's own span, which disables effects, so it \
-             neither blends nor changes color"
+            Some(green),
+            "x=9 reads the WINOUT pass's spill in its own span: the OBJWIN \
+             hole promotes the priority-3 OBJ ahead of BG0"
         );
         assert_eq!(
             fb.pixel(10, 0),
-            Some(Rgb888 {
-                r: 127,
-                g: 0,
-                b: 127
-            }),
-            "the promoting sprite re-stamps target 1 from WIN1, so WIN0's \
-             stored blue alpha-blends 50/50 with the target-2 BG"
+            Some(green),
+            "x=10 was written by that same WINOUT pass, so WIN0's rank over \
+             OBJWIN cannot retract the promotion the spill already made"
+        );
+        assert_eq!(
+            fb.pixel(11, 0),
+            Some(green),
+            "x=11 is the last spilled column of block [8, 12)"
+        );
+        assert_eq!(
+            fb.pixel(12, 0),
+            Some(red),
+            "x=12 is past the rounded trailing edge: no OBJWIN hole, so the \
+             priority-3 OBJ stays behind BG0"
         );
     }
 
@@ -3443,14 +2883,108 @@ mod tests {
     }
 
     #[test]
-    fn semi_transparent_obj_variant_dropped_by_a_deeper_enabled_target2_bg() {
-        // Finding 3 end-to-end: a semi-transparent OBJ (forced alpha) that is a
-        // BLDCNT first target under BRIGHTEN sits over BG_a (priority 1, its
-        // immediate neighbour, NOT a target2) with BG_b (priority 2, a target2)
-        // enabled deeper in the frame. Because *some* target2 exists globally,
-        // mgba clears the brighten variant and the OBJ shows its raw (black)
-        // color. The control clears BG_b's target2 bit -> no target2 anywhere
-        // -> the OBJ is brightened to white.
+    fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
+        // A transparent, better-priority semi-transparent OBJ promotes
+        // priority over an already
+        // variant-brightened worse-priority Normal OBJ without replacing its
+        // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
+        // that worse-priority Normal OBJ's own draw-time variant into its
+        // stored color (`software-obj.c:177-203`), keeps that color through
+        // the promoting entry's flag-only overwrite (`software-obj.c:120-126`),
+        // and brightens the surviving pixel again in the reblend postpass
+        // (`video-software.c:982-1013`) -- a double brighten this crate must
+        // reproduce.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(1); // BG0: priority 1, not target2
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(2); // BG1: priority 2, target2
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true),
+            BgSlot::new(layer_b, 1, 2, 0, 0, true),
+        ];
+
+        // Tile 0: opaque everywhere at palette index 15 (the worse-priority
+        // Normal OBJ). Tile 1: fully transparent (the better-priority
+        // semi-transparent OBJ, transparent at (0, 0)).
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].fill(0xFF);
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(8, 4, 2);
+        let sprite_palette = Palette::new(sprite_colors);
+        let worse_priority_opaque_normal = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2, // worse priority
+            true,
+        );
+        let better_priority_transparent_semi = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0, // better priority
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent);
+        let entries = [
+            worse_priority_opaque_normal,
+            better_priority_transparent_semi,
+        ];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [false; 4],
+                    obj: true,
+                    backdrop: false,
+                },
+                target2: LayerTargets {
+                    bg: [false, true, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 8,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Rgb888 {
+                r: 207,
+                g: 199,
+                b: 195,
+            }),
+            "the retained Normal OBJ variant color is brightened again by the reblend postpass"
+        );
+    }
+
+    #[test]
+    fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
+        // End-to-end: a semi-transparent OBJ (forced alpha) sits over BG_a
+        // (priority 1, its immediate neighbour, NOT a target2) with BG_b
+        // (priority 2, a target2) enabled deeper in the frame. See
+        // effects::resolve_pixel_color's contract for why a global target2
+        // still brightens this surviving pixel. The control drops BG_b's
+        // target2 bit -> no target2 anywhere -> brightened either way.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -3504,8 +3038,8 @@ mod tests {
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
         assert_eq!(
             fb.pixel(0, 0),
-            Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
-            "a deeper enabled target2 BG clears the variant -> raw (black) OBJ"
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "a deeper enabled target2 BG clears the variant, but the surviving reblend OBJ is postprocessed to white"
         );
 
         // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
@@ -3796,33 +3330,22 @@ mod tests {
     }
 
     #[test]
-    fn a_promoted_obj_pixel_alpha_blends_the_brightness_its_writer_baked_in() {
-        // A forced blend uses the writer's baked brightness, not its raw
-        // palette entry (`software-obj.c:76-86,177-208`).
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (black)
-                                // tile 1 stays zeroed: the promoter is wholly transparent.
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let colors = [Bgr555::default(); Palette::LEN]; // index 1 is black
-        let palette = Palette::new(colors);
-
-        let writer = OamEntry::new(
+    fn objwin_mask_never_changes_the_uncovered_backdrop_variant() {
+        // The backdrop variant is chosen once per static span
+        // (`effects::backdrop_variant`), not per OBJWIN-masked pixel: WINOUT
+        // enables effects here while OBJWIN doesn't, so both columns brighten.
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]); // columns 4..8 opaque
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
             0,
             0,
-            0, // tile 0 (opaque black)
             0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            1, // worse priority than the promoter
-            true,
-        );
-        let promoter = OamEntry::new(
-            0,
-            0,
-            1, // tile 1 (all palette index zero)
             0,
             BitDepth::Bpp4,
             false,
@@ -3832,437 +3355,194 @@ mod tests {
             0,
             true,
         )
-        .with_mode(ObjMode::SemiTransparent);
-        let entries = [writer, promoter];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
 
-        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(0); // black BG
-        let bg_layer = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
-        let slots = [BgSlot::new(bg_layer, 0, 2, 0, 0, true)];
+        // WINOUT enables color effects; OBJWIN enables nothing at all.
+        let mut winout = WindowLayerEnable::NONE;
+        winout.effects = true;
 
         let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE),
+                winout,
+            },
             color: EffectsConfig {
                 effect: ColorEffect::Brighten,
                 target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
+                    bg: [false; 4],
+                    obj: false,
+                    backdrop: true,
                 },
-                target2: LayerTargets {
-                    bg: [true, false, false, false],
-                    ..LayerTargets::default()
-                },
-                eva: 8,
-                evb: 8,
+                target2: LayerTargets::default(),
+                eva: 0,
+                evb: 0,
                 evy: 16,
             },
+            backdrop: Rgb888::BLACK,
             ..FrameEffects::default()
         };
-        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
 
-        let stored = crate::effects::brighten(Rgb888::BLACK, 16);
-        let expected = crate::effects::alpha_blend(stored, Rgb888::BLACK, 8, 8);
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(white),
+            "outside the OBJWIN mask the WINOUT span brightens the backdrop"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(white),
+            "the OBJWIN mask must not re-select the backdrop variant"
+        );
+    }
+
+    #[test]
+    fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
+        // End-to-end version of effects::resolve_pixel_color's
+        // `objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer`
+        // unit test: OBJWIN enabled with a blend-enable bit that differs
+        // from WINOUT's own is mGBA's `objwinSlowPath`
+        // (`mgba/src/gba/renderers/software-obj.c:176,180-192`), and it
+        // reblends a plain Normal-mode OBJ even though BLDCNT never marks it
+        // as a target1 layer.
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )]; // Normal mode (default), never a target1 OBJ below
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let mut winout = WindowLayerEnable::NONE;
+        winout.obj = true;
+        winout.effects = true;
+
+        let color = EffectsConfig {
+            effect: ColorEffect::Darken,
+            target1: LayerTargets::default(), // deliberately excludes LayerKind::Obj
+            target2: LayerTargets {
+                bg: [false; 4],
+                obj: false,
+                backdrop: true,
+            },
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        };
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(WindowLayerEnable::NONE), // OBJWIN blend bit off, WINOUT's is on
+                winout,
+            },
+            color,
+            backdrop: Rgb888::BLACK,
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
         assert_eq!(
             fb.pixel(0, 0),
-            Some(expected),
-            "the promoter re-stamps target 1 without recoloring, so the blend \
-             takes the writing sprite's brightened color"
+            Some(Rgb888::BLACK),
+            "objwin_slow_path reblends the Normal OBJ even though it is not a target1 layer"
         );
-    }
 
-    #[test]
-    fn affine_obj_mosaic_trailing_spill_defers_brightness_when_objwin_forces_reblend() {
-        // A target-2 backdrop plus OBJWIN's differing blend enable forces
-        // mGBA's slow path, deferring this spill's brightness to the reading
-        // column instead of the writing span (`software-obj.c:180-192`,
-        // `video-software.c:983-1000`). Same geometry as
-        // `..._keeps_its_writing_span_under_win1`.
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-        bytes[32..].fill(0xFF); // tile 1: fully opaque, marks the OBJWIN region
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let square = |x: u16, tile: u16| {
-            OamEntry::new(
-                x,
-                0,
-                tile,
-                0,
-                BitDepth::Bpp4,
-                false,
-                false,
-                ObjShape::Square,
-                0,
-                0,
-                true,
-            )
-        };
-        let affine_entry = square(1, 0)
-            .with_mosaic(true)
-            .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let objwin_marker = square(10, 1).with_mode(ObjMode::Window);
-        let entries = [affine_entry, objwin_marker];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let effects = FrameEffects {
+        // Control: OBJWIN's own blend-enable bit now matches WINOUT's, so
+        // objwin_slow_path is false -- the non-target1 Normal OBJ is never a
+        // reblend candidate and stays raw white.
+        let mut matched_obj_window = WindowLayerEnable::NONE;
+        matched_obj_window.effects = true;
+        let control_effects = FrameEffects {
             windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on_effects_on,
-                )),
-                win1: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_on,
-                )),
-                obj_window: Some(obj_on),
-                winout: obj_on,
+                obj_window: Some(matched_obj_window),
+                ..effects.windows
             },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
-                },
-                target2: LayerTargets {
-                    backdrop: true,
-                    ..LayerTargets::default()
-                },
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
+            ..effects
         };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let white = Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888();
-        let red = colors[1].to_rgb888();
+        let control_fb = compose_frame_with_effects(&sprites, &[], &control_effects);
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
         assert_eq!(
-            fb.pixel(9, 0),
+            control_fb.pixel(0, 0),
             Some(white),
-            "x=9 is WIN0's own column and not OBJWIN-masked, so the reblend \
-             pass brightens it under WIN0's enable"
-        );
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(red),
-            "a target-2 backdrop defers the spill's brightness to the reblend \
-             pass, which skips x=10 because WIN1 disables effects"
+            "without objwin_slow_path, a non-target1 Normal OBJ is never reblended"
         );
     }
 
     #[test]
-    fn affine_obj_mosaic_trailing_spill_restamps_reblend_from_the_promoting_span() {
-        // A better-priority transparent texel re-stamps FLAG_REBLEND from its
-        // own write, exactly like FLAG_TARGET_1 (`software-obj.c:79-85`).
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-                                // tile 1 stays zeroed: the promoter is wholly transparent.
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let affine_entry = OamEntry::new(
-            1,
+    fn forced_alpha_blends_against_the_span_backdrop_variant() {
+        // A semi-transparent OBJ forces alpha with no second target below
+        // it, blending against the span's backdrop variant
+        // (`effects::backdrop_variant`), not the raw backdrop.
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
             0,
-            0, // tile 0 (uniform red)
+            0,
+            0,
             0,
             BitDepth::Bpp4,
             false,
             false,
             ObjShape::Square,
             0,
-            1, // worse priority than the promoting sprite
+            0,
             true,
         )
-        .with_mosaic(true)
-        .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let transparent_promoter = OamEntry::new(
-            10,
-            0,
-            1, // tile 1 (all palette index zero)
-            0,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            0,
-            0,
-            true,
-        );
-        let entries = [affine_entry, transparent_promoter];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
+        .with_mode(ObjMode::SemiTransparent)];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
 
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on, // the writing span: effects off, not reblend-forced
-                )),
-                win1: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_on_effects_on, // the promoter's own span
-                )),
-                obj_window: Some(obj_on), // effects off: differs from WIN1's
-                winout: obj_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
+        let white = Bgr555::from_channels(31, 31, 31).to_rgb888();
+        // EVA = 0, EVB = 16 shows the second target alone, so the displayed
+        // pixel is whichever backdrop variant mgba blended against.
+        for (effect, backdrop, expected) in [
+            (ColorEffect::Brighten, Rgb888::BLACK, white),
+            (ColorEffect::Darken, white, Rgb888::BLACK),
+        ] {
+            let effects = FrameEffects {
+                color: EffectsConfig {
+                    effect,
+                    target1: LayerTargets {
+                        bg: [false; 4],
+                        obj: false,
+                        backdrop: true,
+                    },
+                    target2: LayerTargets {
+                        bg: [false; 4],
+                        obj: false,
+                        backdrop: true,
+                    },
+                    eva: 0,
+                    evb: 16,
+                    evy: 16,
                 },
-                target2: LayerTargets {
-                    backdrop: true,
-                    ..LayerTargets::default()
-                },
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+                backdrop,
+                ..FrameEffects::default()
+            };
 
-        let white = Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888();
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(white),
-            "the transparent promoter's own reblend-forced span defers x=10's \
-             brightness to WIN1's enable, though WIN0 wrote it unbrightened"
-        );
-    }
-
-    #[test]
-    fn affine_obj_mosaic_trailing_spill_keeps_its_baked_brightness_through_a_promotion() {
-        // A promotion re-stamps order/`FLAG_TARGET_1`/`FLAG_REBLEND` but never
-        // the stored color (`software-obj.c:79-85`), so a color already baked
-        // bright by its writing span must survive a later promotion, even one
-        // whose own span disables effects.
-        use crate::oam::AffineMode;
-
-        let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x11); // tile 0: fully opaque index 1 (red)
-                                // tile 1 stays zeroed: the promoter is wholly transparent.
-        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-        let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
-        let palette = Palette::new(colors);
-
-        let square = |x: u16, tile: u16, priority: u8| {
-            OamEntry::new(
-                x,
-                0,
-                tile,
-                0,
-                BitDepth::Bpp4,
-                false,
-                false,
-                ObjShape::Square,
-                0,
-                priority,
-                true,
-            )
-        };
-        let affine_entry = square(1, 0, 1)
-            .with_mosaic(true)
-            .with_affine(AffineMode::Affine { matrix_num: 0 });
-        let transparent_promoter = square(10, 1, 0);
-        let entries = [affine_entry, transparent_promoter];
-        let matrices = [AffineMatrix::IDENTITY];
-        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
-            .with_affine_matrices(&matrices);
-
-        let mut obj_on = WindowLayerEnable::NONE;
-        obj_on.obj = true;
-        let mut obj_on_effects_on = obj_on;
-        obj_on_effects_on.effects = true;
-
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                win0: Some((
-                    WindowRect::new(WindowRange::new(0, 10), WindowRange::new(0, 1)),
-                    obj_on_effects_on, // the writing span: bakes brightness in
-                )),
-                win1: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    obj_on, // the spill's and the promoter's span: effects off
-                )),
-                obj_window: None,
-                winout: obj_on,
-            },
-            color: EffectsConfig {
-                effect: ColorEffect::Brighten,
-                target1: LayerTargets {
-                    obj: true,
-                    ..LayerTargets::default()
-                },
-                evy: 16,
-                ..EffectsConfig::default()
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-        let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-        let white = Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888();
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(white),
-            "the promoter keeps the stored color, so the spill written under \
-             WIN0's effects-enabled span stays brightened"
-        );
-    }
-
-    #[test]
-    fn objwin_affine_mosaic_spill_written_in_winout_still_promotes_inside_win0() {
-        // mGBA drops an OBJWIN sprite per *writing pass*, not per reader
-        // column (`software-obj.c:161`, `video-software.c:131-134`): a
-        // WINOUT pass's OBJWIN hole still promotes a worse-priority OBJ under
-        // its trailing spill, even where that spill lands inside WIN0.
-        use crate::oam::AffineMode;
-
-        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9); // red BG0
-        let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
-        let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)]; // BG0 at priority 1
-
-        // Tile 0: solid index 15 (the normal OBJ). Tile 1 row 0: index 5
-        // everywhere but source column 5, the hole the spill holds.
-        let mut tile_bytes = [0u8; 64];
-        tile_bytes[..32].fill(0xFF);
-        tile_bytes[32] = 0x55; // source columns 0, 1
-        tile_bytes[33] = 0x55; // source columns 2, 3
-        tile_bytes[34] = 0x05; // source column 4 -> index 5, column 5 -> hole
-        tile_bytes[35] = 0x55; // source columns 6, 7
-        let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
-        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 9, 0); // green: the normal OBJ
-        sprite_colors[5] = Bgr555::from_channels(0, 31, 31); // must never render
-        let sprite_palette = Palette::new(sprite_colors);
-
-        let entries = [
-            // OAM 0: normal OBJ over x = 8..=15, worst priority, opaque.
-            OamEntry::new(
-                8,
-                0,
-                0,
-                0,
-                BitDepth::Bpp4,
-                false,
-                false,
-                ObjShape::Square,
-                0,
-                3,
-                true,
-            ),
-            // OAM 1: affine mosaic OBJWIN sprite at x = 1 (raw right edge 9,
-            // rounded to 12 by OBJ mosaic H = 4). Its 4x horizontal
-            // magnification keeps the spill columns inside the texture, where
-            // source column 5 is the transparent hole.
-            OamEntry::new(
-                1,
-                0,
-                1,
-                0,
-                BitDepth::Bpp4,
-                false,
-                false,
-                ObjShape::Square,
-                0,
-                0,
-                true,
-            )
-            .with_mode(ObjMode::Window)
-            .with_mosaic(true)
-            .with_affine(AffineMode::Affine { matrix_num: 0 }),
-        ];
-        let matrices = [AffineMatrix::new(
-            AffineMatrix::ONE / 4,
-            0,
-            0,
-            AffineMatrix::ONE,
-        )];
-        let sprites = SpriteLayer::new(&entries, &sprite_tiles, &sprite_tiles, &sprite_palette)
-            .with_affine_matrices(&matrices);
-
-        let mut bg0_and_obj = WindowLayerEnable::NONE;
-        bg0_and_obj.bg[0] = true;
-        bg0_and_obj.obj = true;
-        let effects = FrameEffects {
-            windows: WindowConfig {
-                // WIN0 opens at x = 10, so the spill of block [8, 12) crosses
-                // out of the WINOUT pass that wrote it.
-                win0: Some((
-                    WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
-                    bg0_and_obj,
-                )),
-                win1: None,
-                obj_window: Some(bg0_and_obj),
-                winout: bg0_and_obj,
-            },
-            mosaic: crate::mosaic::MosaicConfig {
-                bg: MosaicSize::NONE,
-                obj: MosaicSize::new(4, 1),
-            },
-            ..FrameEffects::default()
-        };
-
-        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        let green = Bgr555::from_channels(0, 9, 0).to_rgb888();
-        let red = Bgr555::from_channels(9, 0, 0).to_rgb888();
-
-        assert_eq!(
-            fb.pixel(9, 0),
-            Some(green),
-            "x=9 reads the WINOUT pass's spill in its own span: the OBJWIN \
-             hole promotes the priority-3 OBJ ahead of BG0"
-        );
-        assert_eq!(
-            fb.pixel(10, 0),
-            Some(green),
-            "x=10 was written by that same WINOUT pass, so WIN0's rank over \
-             OBJWIN cannot retract the promotion the spill already made"
-        );
-        assert_eq!(
-            fb.pixel(11, 0),
-            Some(green),
-            "x=11 is the last spilled column of block [8, 12)"
-        );
-        assert_eq!(
-            fb.pixel(12, 0),
-            Some(red),
-            "x=12 is past the rounded trailing edge: no OBJWIN hole, so the \
-             priority-3 OBJ stays behind BG0"
-        );
+            let fb = compose_frame_with_effects(&sprites, &[], &effects);
+            assert_eq!(
+                fb.pixel(0, 0),
+                Some(expected),
+                "forced alpha blends against the span's backdrop variant, not the raw backdrop"
+            );
+        }
     }
 }

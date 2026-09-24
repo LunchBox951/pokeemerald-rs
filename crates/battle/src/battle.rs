@@ -28,7 +28,7 @@ use crate::paralyze;
 use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn, MAX_LEVEL, MOVE_NONE};
 use crate::secondary;
 use crate::stat_change;
-use crate::status1::{draws_full_paralysis, poison_residual_damage};
+use crate::status1::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
 use crate::turn_order::{resolve_order, Order};
 
 mod events;
@@ -40,7 +40,8 @@ pub(crate) mod trainer_ai;
 pub use events::{BattleEvent, TurnError};
 
 use opponent_ai::{
-    choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
+    all_known_moves_are_spent, choose_enemy_action_first_battle, choose_enemy_move,
+    selectable_slot, EnemyAction,
 };
 use trainer::TrainerContext;
 use trainer_ai::choose_trainer_action;
@@ -61,7 +62,9 @@ pub enum PlayerAction {
 pub enum BattleOutcome {
     /// The opposing side has no usable Pokémon.
     PlayerWon,
-    /// The player's active Pokémon fainted.
+    /// The player's party has no usable Pokémon: the active member and every
+    /// reserve have fainted (`Cmd_checkteamslost`,
+    /// `src/battle_script_commands.c:3534`-`:3564`).
     PlayerLost,
     /// The player successfully ran away.
     PlayerRan,
@@ -71,10 +74,6 @@ pub enum BattleOutcome {
 
 /// Validates that one complete move-effect pipeline can execute a move.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    // The ordinary-hit pipeline cannot apply Struggle's recoil half.
-    if move_id == STRUGGLE {
-        return Err(BattleError::UnsupportedMoveEffect(move_id));
-    }
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
@@ -100,6 +99,20 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
 pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
+    /// The player's party members other than [`Battle::player`] for a wild
+    /// battle, always in the order the owning flow passed them. Empty for a
+    /// trainer battle: this slice models no trainer-side player replacement.
+    /// [`Battle::send_out_next_player_reserve`] returns a fainted active
+    /// member to its own position here rather than swapping it into the
+    /// sent-out reserve's, so the party order never changes across
+    /// replacements, as upstream's `gPlayerParty` records keep their slots
+    /// while `gBattlerPartyIndexes` names the active one.
+    player_reserves: Vec<BattlePokemon>,
+    /// The position of [`Battle::player`] in the party as passed to
+    /// [`Battle::new_with_player_reserves`]: `0` until a replacement, and
+    /// never beyond `player_reserves.len()`. The player-side analogue of
+    /// upstream's `gBattlerPartyIndexes` entry for the player's battler.
+    player_slot: usize,
     enemy: BattlePokemon,
     run_attempts: u8,
     random_turn_number: u16,
@@ -125,7 +138,14 @@ enum BattleKind {
 
 #[derive(Debug, Clone, Copy)]
 enum ValidatedPlayerAction {
-    UseMove { slot: usize, move_id: MoveId },
+    /// `slot` is `None` for a forced Struggle: every known move is spent, so
+    /// upstream substitutes `MOVE_STRUGGLE` at selection with no PP slot to
+    /// deduct from (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
+    /// `:1139`, `:100`-`:104`).
+    UseMove {
+        slot: Option<usize>,
+        move_id: MoveId,
+    },
     Run,
 }
 
@@ -153,7 +173,19 @@ impl Battle {
     /// The enemy's full moveset is validated before RNG is consumed because
     /// its action selection can choose any slot. Player moves are validated
     /// when selected. The scripted first battle suppresses critical hits,
-    /// forbids running, and uses its dedicated opponent AI.
+    /// refuses Run from Pokémon without Run Away, and uses its dedicated
+    /// opponent AI.
+    ///
+    /// A depleted enemy slot needs only real move data, not an executable
+    /// effect: [`Battle::act`] fails it as [`BattleEvent::FailedNoPp`] before
+    /// running one, matching `Cmd_attackcanceler`'s no-PP jump
+    /// (`src/battle_script_commands.c:934`-`:939`). Soundproof's own block
+    /// runs earlier still (`:932`-`:933`), but needs only the already-checked
+    /// move data, not an executable effect, so it cannot make this unsafe.
+    /// Struggle is that jump's one exemption (`:934`) and so the only move a
+    /// depleted slot still executes; it has an executable pipeline of its own,
+    /// so the relaxation still reaches [`Battle::execute_move`] with nothing
+    /// unresolvable.
     ///
     /// # Errors
     ///
@@ -167,25 +199,79 @@ impl Battle {
         first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
+        Self::new_with_player_reserves(dex, player, Vec::new(), enemy, first_battle, rng)
+    }
+
+    /// Starts an ordinary wild battle or the scripted first battle with a
+    /// player party larger than the active member.
+    ///
+    /// `player_reserves` is consumed in order under a headless party-order
+    /// policy: an active faint sends out the first entry that is not itself
+    /// fainted, with no player choice and no party-screen UI
+    /// (`Cmd_checkteamslost`, `src/battle_script_commands.c:3534`-`:3564`;
+    /// `BattleScript_HandleFaintedMon`'s send-out branch,
+    /// `data/battle_scripts_1.s:2830`-`:2896`). [`Battle::new`] is this
+    /// constructor with an empty reserve list. A reserve's own moves are
+    /// validated as the player selects them, exactly like the active
+    /// member's; the enemy's moveset is validated against every non-fainted
+    /// reserve up front too, since any of them may face it as a defender
+    /// with no further checkpoint before that turn. A fainted reserve is
+    /// admitted without that check: [`Battle::send_out_next_player_reserve`]
+    /// never selects it, so it can never become the enemy's defender.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattleError::FaintedBattler`] for a fainted active
+    /// participant, or the first move or ability validation error from the
+    /// enemy's moveset against the active member or any non-fainted reserve.
+    /// A fainted reserve is admitted: it models a player party that already
+    /// lost a member before the battle. Errors leave the RNG untouched.
+    pub fn new_with_player_reserves(
+        dex: Dex,
+        player: BattlePokemon,
+        player_reserves: Vec<BattlePokemon>,
+        enemy: BattlePokemon,
+        first_battle: bool,
+        rng: &mut impl BattleRng,
+    ) -> Result<Self, BattleError> {
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
         if enemy.is_fainted() {
             return Err(BattleError::FaintedBattler(false));
         }
-        for slot in enemy.moves() {
-            ensure_executable(&dex, slot.move_id)?;
-            // Zero-PP moves stop before applying effects
-            // (`src/battle_script_commands.c:934`-`:939`).
+        for (index, slot) in enemy.moves().iter().enumerate() {
+            // A depleted slot must still be real move data -- not the
+            // empty-slot placeholder or an id outside the dex -- but its
+            // effect need not be executable; see the no-PP note above.
+            if slot.move_id == MOVE_NONE {
+                return Err(BattleError::PlaceholderMove(index));
+            }
+            dex.move_data(slot.move_id)?;
+            // Zero-PP moves stop before applying effects, Struggle
+            // excepted (`src/battle_script_commands.c:934`-`:939`). A
+            // non-fainted reserve becomes this same enemy's defender the
+            // moment it is sent out, with no further validation at that
+            // point, so every non-fainted reserve is checked here too. A
+            // fainted reserve is skipped: `send_out_next_player_reserve`
+            // never selects it.
             if slot.pp > 0 {
-                paralyze::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
-                secondary::ensure_admissible(&dex, slot.move_id, &enemy, &player)?;
+                ensure_executable(&dex, slot.move_id)?;
+                for defender in std::iter::once(&player).chain(
+                    player_reserves
+                        .iter()
+                        .filter(|reserve| !reserve.is_fainted()),
+                ) {
+                    secondary::ensure_admissible(&dex, slot.move_id, &enemy, defender)?;
+                }
             }
         }
         let random_turn_number = initialize_turn_rng_state(&player, &enemy, rng);
         Ok(Self {
             dex,
             player,
+            player_reserves,
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -235,7 +321,6 @@ impl Battle {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
                 if slot.pp > 0 {
-                    paralyze::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                     secondary::ensure_admissible(&dex, slot.move_id, mon, &player)?;
                 }
             }
@@ -246,6 +331,11 @@ impl Battle {
         Ok(Self {
             dex,
             player,
+            // This slice models no trainer-side player replacement
+            // (issue #1326's boundary); a trainer battle's player party is
+            // always this one active member.
+            player_reserves: Vec::new(),
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number,
@@ -283,6 +373,26 @@ impl Battle {
         &self.player
     }
 
+    /// Returns every player-side party member in the order it was passed to
+    /// [`Battle::new_with_player_reserves`] -- the starting active member
+    /// first, then each reserve -- whichever member is active now.
+    ///
+    /// The position is the stable link back to the caller's party slot: it
+    /// survives every replacement, so two members that share species,
+    /// personality, and original trainer id still reconcile to their own
+    /// slots. Each entry carries its final HP, PP, and experience state;
+    /// its identity ([`BattlePokemon::personality`],
+    /// [`BattlePokemon::original_trainer_id`]) remains available for the
+    /// owning flow to check each slot's record against, as it already does
+    /// for a single lead.
+    pub fn player_members(&self) -> impl Iterator<Item = &BattlePokemon> {
+        let (before, after) = self.player_reserves.split_at(self.player_slot);
+        before
+            .iter()
+            .chain(std::iter::once(&self.player))
+            .chain(after.iter())
+    }
+
     /// Returns the opponent's active Pokémon.
     #[must_use]
     pub const fn enemy(&self) -> &BattlePokemon {
@@ -308,7 +418,9 @@ impl Battle {
     ///
     /// Another prompt may follow immediately. Resolving the final prompt also
     /// releases any deferred replacement, prize money, and battle outcome, and
-    /// then runs the residual pass the prompt held back.
+    /// then runs the residual pass the prompt held back — `rng` feeds that
+    /// released pass, at the stream position it would have drawn from had no
+    /// prompt deferred it.
     ///
     /// # Errors
     ///
@@ -321,6 +433,7 @@ impl Battle {
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
+        rng: &mut impl BattleRng,
     ) -> Result<Vec<BattleEvent>, BattleError> {
         let asked_move = self
             .player
@@ -355,7 +468,7 @@ impl Battle {
                 // deferring that pass to this later call
                 // (`pokeemerald/src/battle_util.c:658`-`:671`).
                 self.last_move_used = MOVE_NONE;
-                self.residual_effects(order, &mut events);
+                self.residual_effects(order, &mut events, rng);
                 self.handle_fainted_mons(&mut events)?;
             }
         }
@@ -385,13 +498,26 @@ impl Battle {
         if !selectable_slot(Some(slot.move_id)) {
             return Err(BattleError::PlaceholderMove(index));
         }
-        if slot.pp == 0 {
+        // `Cmd_attackcanceler`'s no-PP abort exempts Struggle
+        // (`battle_script_commands.c:934`).
+        if slot.pp == 0 && slot.move_id != STRUGGLE {
             return Err(BattleError::NoPpRemaining(index));
         }
         ensure_executable(&self.dex, slot.move_id)?;
-        paralyze::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         secondary::ensure_admissible(&self.dex, slot.move_id, &self.player, &self.enemy)?;
         Ok(slot.move_id)
+    }
+
+    /// Re-screens the enemy's moveset with [`secondary::ensure_admissible`],
+    /// the same PP gate construction used, against the current battlers
+    /// rather than the ones construction saw; see the crate root docs for why.
+    fn revalidate_enemy_admission(&self) -> Result<(), BattleError> {
+        for slot in self.enemy.moves() {
+            if slot.pp > 0 {
+                secondary::ensure_admissible(&self.dex, slot.move_id, &self.enemy, &self.player)?;
+            }
+        }
+        Ok(())
     }
 
     /// Resolves one player action and returns the resulting events in order.
@@ -402,10 +528,8 @@ impl Battle {
     /// # Errors
     ///
     /// Returns [`TurnError`] for an invalid state or action. Pre-turn failures
-    /// consume no RNG and contain no events. A wild opponent forced to use the
-    /// unsupported Struggle may fail after draws or earlier events; those events
-    /// remain in [`TurnError::events`]. A pending move-learning decision takes
-    /// precedence over an existing outcome.
+    /// consume no RNG and contain no events. A pending move-learning decision
+    /// takes precedence over an existing outcome.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -425,6 +549,7 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let player_action = self.validate_player_action(player_action)?;
+        self.revalidate_enemy_admission()?;
         self.start_turn(rng);
         let enemy_action = self.choose_enemy_action(rng)?;
 
@@ -443,7 +568,7 @@ impl Battle {
             }
         };
 
-        self.pass_turn(order, events)
+        self.pass_turn(order, events, rng)
     }
 
     fn validate_player_action(
@@ -460,14 +585,35 @@ impl Battle {
         match action {
             PlayerAction::Run => match self.kind {
                 BattleKind::Trainer(_) => Err(BattleError::NoRunningFromTrainer),
-                BattleKind::FirstBattle => Err(BattleError::RunForbidden),
+                // Run Away is admitted before this refusal
+                // (`pokeemerald/src/battle_main.c:4038`-`:4039`, `:4078`-`:4082`).
+                BattleKind::FirstBattle => {
+                    if self.player.ability() == AbilityId::RUN_AWAY {
+                        Ok(ValidatedPlayerAction::Run)
+                    } else {
+                        Err(BattleError::RunForbidden)
+                    }
+                }
                 BattleKind::Wild => {
                     ensure_admissible(&self.player, &self.enemy)?;
                     Ok(ValidatedPlayerAction::Run)
                 }
             },
+            // `AreAllMovesUnusable` (`pokeemerald/src/battle_util.c:1125`-
+            // `:1139`) forces Struggle before the chosen slot is read; the
+            // cursor can only name an existing slot
+            // (`src/battle_controller_player.c:552`-`:597`).
+            PlayerAction::UseMove(slot) if all_known_moves_are_spent(&self.player) => {
+                if slot >= self.player.moves().len() {
+                    return Err(BattleError::InvalidMoveSlot(slot));
+                }
+                Ok(ValidatedPlayerAction::UseMove {
+                    slot: None,
+                    move_id: STRUGGLE,
+                })
+            }
             PlayerAction::UseMove(slot) => Ok(ValidatedPlayerAction::UseMove {
-                slot,
+                slot: Some(slot),
                 move_id: self.validate_player_move(slot)?,
             }),
         }
@@ -538,7 +684,7 @@ impl Battle {
 
     fn resolve_move_exchange(
         &mut self,
-        player_slot: usize,
+        player_slot: Option<usize>,
         player_move: MoveId,
         enemy_action: EnemyAction,
         rng: &mut impl BattleRng,
@@ -587,6 +733,7 @@ impl Battle {
         &mut self,
         order: Order,
         events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
     ) -> Result<(), BattleError> {
         // Upstream reaches `HandleFaintedMonActions` twice a turn: from each
         // action's own `Cmd_end`, and again behind `BattleTurnPassed`'s
@@ -599,17 +746,24 @@ impl Battle {
         // Upstream zeroes `gCurrentMove` as each action closes, before the
         // residual pass runs (`pokeemerald/src/battle_util.c:658`-`:671`).
         self.last_move_used = MOVE_NONE;
-        self.residual_effects(order, events);
+        self.residual_effects(order, events, rng);
         self.handle_fainted_mons(events)
     }
 
-    fn residual_effects(&mut self, order: Order, events: &mut Vec<BattleEvent>) {
+    fn residual_effects(
+        &mut self,
+        order: Order,
+        events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
+    ) {
         if self.outcome.is_some() {
             return;
         }
         // `DoBattlerEndTurnEffects` walks `gBattlerByTurnOrder` -- this turn's
-        // own move order -- and reaches ENDTURN_POISON before ENDTURN_CHARGE
-        // within each battler's pass (`src/battle_util.c:1442`-`:1474`).
+        // own move order -- and within each battler's pass reaches
+        // ENDTURN_ABILITIES (Shed Skin) before ENDTURN_POISON, and
+        // ENDTURN_POISON before ENDTURN_CHARGE
+        // (`src/battle_util.c:1442`-`:1474`, `:1494`-`:1535`).
         let player_first = matches!(order, Order::AttackerFirst);
         for is_player in [player_first, !player_first] {
             let already_fainted = if is_player {
@@ -620,6 +774,7 @@ impl Battle {
             if already_fainted {
                 continue;
             }
+            self.apply_shed_skin_residual(is_player, rng, events);
             self.apply_poison_residual(is_player, events);
             if is_player {
                 self.player.volatiles_mut().tick_charge();
@@ -642,15 +797,45 @@ impl Battle {
 
     fn fainting_decides_the_battle(&self, is_player: bool) -> bool {
         // `Cmd_checkteamslost` totals a whole party's HP
-        // (`src/battle_script_commands.c:3534`-`:3577`); this crate benches
-        // nothing for the player, so any player faint exhausts that side.
+        // (`src/battle_script_commands.c:3534`-`:3577`); the player side is
+        // exhausted only once its active member and every reserve have
+        // fainted.
         if is_player {
-            return true;
+            return self.usable_player_reserves() == 0;
         }
         match &self.kind {
             BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
             BattleKind::Wild | BattleKind::FirstBattle => true,
         }
+    }
+
+    /// `ABILITYEFFECT_ENDTURN`'s `ABILITY_SHED_SKIN` case: a living battler
+    /// whose ability is Shed Skin draws to cure its own primary status
+    /// (`pokeemerald/src/battle_util.c:2601`-`:2602`, `:2620`-`:2640`).
+    fn apply_shed_skin_residual(
+        &mut self,
+        is_player: bool,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let battler = if is_player { &self.player } else { &self.enemy };
+        if battler.is_fainted() || battler.ability() != AbilityId::SHED_SKIN {
+            return;
+        }
+        let status = battler.status1();
+        if !draws_shed_skin_cure(status, rng) {
+            return;
+        }
+        let target = if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        target.set_status1(Status1::Healthy);
+        events.push(BattleEvent::ShedSkinCured {
+            by_player: is_player,
+            status,
+        });
     }
 
     fn apply_poison_residual(&mut self, is_player: bool, events: &mut Vec<BattleEvent>) {
@@ -676,32 +861,107 @@ impl Battle {
         if self.outcome.is_some() || self.player.pending_move_learn().is_some() {
             return Ok(());
         }
-        // A double faint sets both of `Cmd_checkteamslost`'s outcome bits at
-        // once, and BattleScript_HandleFaintedMon then skips the reward and
-        // the switch-in entirely (`data/battle_scripts_1.s:2831`-`:2832`).
-        if self.player.is_fainted() {
+        // `Cmd_checkteamslost` ORs both sides' outcome bits from independent
+        // whole-party HP totals (`src/battle_script_commands.c:3534`-
+        // `:3577`); an exhausted player party sets the loss regardless of
+        // the enemy's own total, so this precedes any enemy-side handling.
+        if self.player.is_fainted() && self.usable_player_reserves() == 0 {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
         }
         if !self.enemy.is_fainted() {
+            if self.player.is_fainted() {
+                self.send_out_next_player_reserve(events);
+            }
             return Ok(());
         }
         // Case 1 runs `BattleScript_GiveExp` to completion, the yes/no box
         // included, before case 4 replaces or pays out
-        // (`src/battle_util.c:1912`-`:1946`).
+        // (`src/battle_util.c:1912`-`:1946`). This runs against whichever
+        // member was active during the exchange, ahead of any reserve
+        // replacement below.
         self.settle_enemy_reward(events)?;
         if self.player.pending_move_learn().is_some() {
             return Ok(());
         }
         self.settle_fainted_enemy(events)?;
+        // The enemy's own faint may have already ended the battle
+        // (`BattleOutcome::PlayerWon`); only a still-open battle reaches the
+        // player's own send-out branch (`data/battle_scripts_1.s:2830`-
+        // `:2832`).
+        if self.outcome.is_none() && self.player.is_fainted() {
+            self.send_out_next_player_reserve(events);
+        }
         Ok(())
+    }
+
+    /// The player-side analogue of [`Battle::settle_fainted_enemy`]:
+    /// `Cmd_checkteamslost`'s player-side HP total
+    /// (`src/battle_script_commands.c:3534`-`:3564`) reads zero only once
+    /// every party member has fainted, so `BattleScript_HandleFaintedMon`
+    /// reaches its send-out branch first
+    /// (`data/battle_scripts_1.s:2830`-`:2896`). This crate's headless
+    /// party-order policy always takes the first non-fainted reserve, with
+    /// no player choice and no party-screen UI.
+    ///
+    /// The fainted member goes back to its own party position among the
+    /// reserves, so [`Battle::player_members`] keeps the caller's order:
+    /// upstream likewise leaves every `gPlayerParty` record in its slot and
+    /// only repoints `gBattlerPartyIndexes` at the replacement
+    /// (`src/battle_script_commands.c:4613`).
+    ///
+    /// Returns `false`, leaving `self.player` untouched, once every reserve
+    /// is fainted too.
+    fn send_out_next_player_reserve(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+        let Some(index) = self
+            .player_reserves
+            .iter()
+            .position(|reserve| !reserve.is_fainted())
+        else {
+            return false;
+        };
+        // `player_reserves` holds every party position but `player_slot`, in
+        // order, so reserve `index` sits at party position `index` below the
+        // active member's and one past it above.
+        let replacement_slot = if index < self.player_slot {
+            index
+        } else {
+            index + 1
+        };
+        let replacement = self.player_reserves.remove(index);
+        let fainted = std::mem::replace(&mut self.player, replacement);
+        // Likewise, with both members out of the list, the fainted member's
+        // party position is its reserve index below the replacement's and
+        // one less above it.
+        let fainted_index = if self.player_slot < replacement_slot {
+            self.player_slot
+        } else {
+            self.player_slot - 1
+        };
+        self.player_reserves.insert(fainted_index, fainted);
+        self.player_slot = replacement_slot;
+        events.push(BattleEvent::PlayerSentOut {
+            species: self.player.species(),
+            reserves_remaining: self.usable_player_reserves(),
+        });
+        true
+    }
+
+    /// The number of player-side reserves that have not fainted.
+    fn usable_player_reserves(&self) -> usize {
+        self.player_reserves
+            .iter()
+            .filter(|reserve| !reserve.is_fainted())
+            .count()
     }
 
     fn settle_enemy_reward(&mut self, events: &mut Vec<BattleEvent>) -> Result<(), BattleError> {
         // `Cmd_getexp` case 2 zeroes the award and jumps past both the string
         // and `MonGainEVs` for a recipient already at the cap
-        // (`src/battle_script_commands.c:3351`-`:3356`).
-        if self.player.level() >= MAX_LEVEL {
+        // (`src/battle_script_commands.c:3351`-`:3356`), and does the same
+        // for a recipient at zero HP -- a simultaneous double faint's own
+        // victor included (`:3367`, `:3431`).
+        if self.player.level() >= MAX_LEVEL || self.player.is_fainted() {
             return Ok(());
         }
         let defeated = self.dex.species(self.enemy.species())?;
@@ -751,11 +1011,16 @@ impl Battle {
         Ok(())
     }
 
+    /// Runs one battler's turn-order slot: the full-paralysis draw, the
+    /// Soundproof block, PP handling, then execution.
+    ///
+    /// `slot` is `None` for a forced Struggle, which spends no PP
+    /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
     fn act(
         &mut self,
         player_is_attacker: bool,
         move_id: MoveId,
-        slot: usize,
+        slot: Option<usize>,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
@@ -786,8 +1051,10 @@ impl Battle {
             (&mut self.enemy, &self.player)
         };
         if stat_change::soundproof_block(&self.dex, move_id, defender)? {
-            if attacker.moves()[slot].pp > 0 {
-                attacker.deduct_pp_by(slot, pp_cost)?;
+            if let Some(slot) = slot {
+                if attacker.moves()[slot].pp > 0 {
+                    attacker.deduct_pp_by(slot, pp_cost)?;
+                }
             }
             events.push(BattleEvent::SoundproofProtected {
                 by_player: player_is_attacker,
@@ -795,16 +1062,28 @@ impl Battle {
             });
             return Ok(());
         }
-        if player_is_attacker {
-            self.player.deduct_pp_by(slot, pp_cost)?;
-        } else if self.enemy.moves()[slot].pp == 0 {
-            events.push(BattleEvent::FailedNoPp {
-                by_player: false,
-                move_id,
-            });
-            return Ok(());
-        } else {
-            self.enemy.deduct_pp_by(slot, pp_cost)?;
+        if let Some(slot) = slot {
+            let slot_pp = if player_is_attacker {
+                self.player.moves()[slot].pp
+            } else {
+                self.enemy.moves()[slot].pp
+            };
+            if slot_pp == 0 {
+                // `Cmd_attackcanceler` exempts Struggle from the no-PP abort
+                // (`battle_script_commands.c:934`); `Cmd_ppreduce` spends
+                // nothing from an empty slot (`:1230`).
+                if move_id != STRUGGLE {
+                    events.push(BattleEvent::FailedNoPp {
+                        by_player: player_is_attacker,
+                        move_id,
+                    });
+                    return Ok(());
+                }
+            } else if player_is_attacker {
+                self.player.deduct_pp_by(slot, pp_cost)?;
+            } else {
+                self.enemy.deduct_pp_by(slot, pp_cost)?;
+            }
         }
         self.execute_move(player_is_attacker, move_id, rng, events)
     }
@@ -836,25 +1115,18 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         match action {
-            EnemyAction::Move(slot) => {
-                self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
-            }
-            EnemyAction::Struggle => {
-                // `gCurrentMove` is set to Struggle before anything else runs
-                // (`HandleAction_UseMove`, `pokeemerald/src/battle_util.c:103`).
-                self.last_move_used = STRUGGLE;
-                // Struggle reaches the paralysis gate before its unsupported
-                // recoil path (`data/battle_scripts_1.s:241`-`:247`).
-                if draws_full_paralysis(self.enemy.status1(), rng) {
-                    events.push(BattleEvent::FullyParalyzed {
-                        by_player: false,
-                        move_id: STRUGGLE,
-                    });
-                    Ok(())
-                } else {
-                    Err(BattleError::UnsupportedMoveEffect(STRUGGLE))
-                }
-            }
+            EnemyAction::Move(slot) => self.act(
+                false,
+                self.enemy.moves()[slot].move_id,
+                Some(slot),
+                rng,
+                events,
+            ),
+            // An all-spent opponent's forced Struggle runs through the same
+            // slot as an ordinary move, just with no PP to deduct
+            // (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`-
+            // `:1139`, `:100`-`:104`).
+            EnemyAction::Struggle => self.act(false, STRUGGLE, None, rng, events),
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
                 self.finish(events, BattleOutcome::WildFled);
@@ -934,6 +1206,8 @@ mod tests {
         let battle = Battle {
             dex,
             player,
+            player_reserves: Vec::new(),
+            player_slot: 0,
             enemy,
             run_attempts: 0,
             random_turn_number: 0,

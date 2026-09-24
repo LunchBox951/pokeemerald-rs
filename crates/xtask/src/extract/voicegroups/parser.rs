@@ -206,6 +206,99 @@ fn parse_envelope(
     })
 }
 
+/// The largest attack/decay/release value that survives upstream's CGB
+/// envelope mask (`& 0x7`).
+const MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE: u8 = 0x7;
+
+/// The largest sustain value that survives upstream's CGB envelope mask
+/// (`& 0xF`).
+const MAX_CGB_ENVELOPE_SUSTAIN: u8 = 0xF;
+
+/// Every CGB voice macro masks its envelope operands before emitting them,
+/// unlike `_voice_directsound` (`pokeemerald/asm/macros/music_voice.inc:25-28`
+/// vs. `:50-53`, `:75-78`, `:99-102`, `:124-127`), so only this helper --
+/// never [`parse_envelope`] alone -- belongs on a CGB call site.
+fn parse_cgb_envelope(
+    operands: [&str; 4],
+    group: &str,
+    line: &str,
+) -> Result<Envelope, VoiceGroupError> {
+    let envelope = parse_envelope(operands, group, line)?;
+    let fields = [
+        (
+            "attack",
+            envelope.attack,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        (
+            "decay",
+            envelope.decay,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+        ("sustain", envelope.sustain, MAX_CGB_ENVELOPE_SUSTAIN),
+        (
+            "release",
+            envelope.release,
+            MAX_CGB_ENVELOPE_ATTACK_DECAY_RELEASE,
+        ),
+    ];
+    for (operand, value, maximum) in fields {
+        if value > maximum {
+            return Err(VoiceGroupError::CgbEnvelopeOutOfRange {
+                group: group.to_owned(),
+                operand,
+                value,
+                maximum,
+            });
+        }
+    }
+    Ok(envelope)
+}
+
+/// The largest CGB voice macros' second source operand (named `pan`
+/// upstream though it targets `ToneData::length`) [`parse_cgb_length`] can
+/// encode without its `0x80` bit colliding with the value. A canonical-input
+/// policy, mirroring [`MAX_PAN_OVERRIDE`]'s idiom for `_voice_directsound`'s
+/// real pan operand -- upstream's assembler itself has no such check.
+const MAX_CGB_LENGTH_OPERAND: u8 = 127;
+
+/// Encodes a CGB voice macro's second source operand the way upstream's
+/// assembler does (`pokeemerald/asm/macros/music_voice.inc:39-46,64-71,89-96,113-120`;
+/// copied unchanged into the CGB channel at `src/m4a_1.s:1770-1772`). Unlike
+/// [`parse_optional_pan`]'s semantic `Option<u8>`, the asset schema's CGB
+/// `length` fields store this literal hardware byte, so encoding happens
+/// here rather than deferring to pack-write time.
+fn parse_cgb_length(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupError> {
+    const NO_LENGTH_OVERRIDE: u8 = 0;
+    let length = parse_byte(operand, group, line)?;
+    if length > MAX_CGB_LENGTH_OPERAND {
+        return Err(VoiceGroupError::CgbLengthOutOfRange {
+            group: group.to_owned(),
+            length,
+        });
+    }
+    Ok(if length == NO_LENGTH_OVERRIDE {
+        0
+    } else {
+        0x80 | length
+    })
+}
+
+/// The largest noise period upstream's `_voice_noise` macro retains after
+/// masking it `& 0x1` (`pokeemerald/asm/macros/music_voice.inc:122`).
+const MAX_NOISE_PERIOD: u8 = 0x1;
+
+fn parse_noise_period(operand: &str, group: &str, line: &str) -> Result<u8, VoiceGroupError> {
+    let period = parse_byte(operand, group, line)?;
+    if period > MAX_NOISE_PERIOD {
+        return Err(VoiceGroupError::NoisePeriodOutOfRange {
+            group: group.to_owned(),
+            period,
+        });
+    }
+    Ok(period)
+}
+
 fn parse_prefixed_label(
     symbol: &str,
     prefix: &'static str,
@@ -252,10 +345,10 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Square1 {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 sweep: parse_byte(sweep, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -265,9 +358,9 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Square2 {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 duty: parse_square_duty(duty, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -277,9 +370,9 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::ProgrammableWave {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
+                length: parse_cgb_length(length, group, line)?,
                 wave_symbol: (*wave_symbol).to_owned(),
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -289,9 +382,9 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
             };
             Ok(RawSlot::Noise {
                 base_key: parse_byte(base_key, group, line)?,
-                length: parse_byte(length, group, line)?,
-                period: parse_byte(period, group, line)?,
-                envelope: parse_envelope([attack, decay, sustain, release], group, line)?,
+                length: parse_cgb_length(length, group, line)?,
+                period: parse_noise_period(period, group, line)?,
+                envelope: parse_cgb_envelope([attack, decay, sustain, release], group, line)?,
                 fixed_rate: invocation.name.ends_with("_alt"),
             })
         }
@@ -397,8 +490,15 @@ fn parse_key_split_range(operands: &[&str], table: &str) -> Result<KeySplitRange
     let [child_slot, exclusive_end_note] = operands else {
         return Err(invalid_operands());
     };
+    let child_slot = child_slot.parse::<u8>().map_err(|_| invalid_operands())?;
+    if usize::from(child_slot) >= super::VOICE_SLOT_COUNT {
+        return Err(VoiceGroupError::SplitChildSlotOutOfRange {
+            table: table.to_owned(),
+            slot: child_slot,
+        });
+    }
     Ok(KeySplitRange {
-        child_slot: child_slot.parse::<u8>().map_err(|_| invalid_operands())?,
+        child_slot,
         exclusive_end_note: exclusive_end_note
             .parse::<u8>()
             .map_err(|_| invalid_operands())?,

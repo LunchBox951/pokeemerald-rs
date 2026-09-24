@@ -8,6 +8,7 @@ use assets::{AbilityId, MoveId, SpeciesId};
 use crate::error::BattleError;
 use crate::stat_change::ChangedStat;
 use crate::stat_stage::StatStage;
+use crate::status1::Status1;
 
 use super::BattleOutcome;
 
@@ -81,6 +82,18 @@ pub enum BattleEvent {
         damage: u32,
         /// Whether the hit was critical.
         is_critical: bool,
+    },
+    /// Struggle's certain quarter-HP recoil, after its [`BattleEvent::Hit`]
+    /// and before either battler's [`BattleEvent::Fainted`]
+    /// (`MOVE_EFFECT_RECOIL_25`, `data/battle_scripts_1.s:897-901`,
+    /// `:3938-3949`).
+    Recoil {
+        /// Whether the player used Struggle.
+        by_player: bool,
+        /// The move that caused the recoil. Currently always [`STRUGGLE`](crate::damage::STRUGGLE).
+        move_id: MoveId,
+        /// HP removed from the user, capped at its HP before the recoil.
+        damage: u32,
     },
     /// A battler's HP reached zero, after the event that caused it.
     Fainted {
@@ -279,12 +292,34 @@ pub enum BattleEvent {
         /// HP removed, capped at the battler's HP before the tick.
         damage: u32,
     },
+    /// `STRINGID_PKMNSXCUREDYPROBLEM`, `BattleScript_ShedSkinActivates`
+    /// (`data/battle_scripts_1.s:3993-3997`): a living, statused Shed Skin
+    /// holder's end-turn draw cured its primary status, before that
+    /// battler's own [`BattleEvent::HurtByPoison`] tick would otherwise run
+    /// (`ABILITYEFFECT_ENDTURN` precedes `ENDTURN_POISON`,
+    /// `pokeemerald/src/battle_util.c:1494`-`:1535`).
+    ShedSkinCured {
+        /// Whether the player's battler was cured.
+        by_player: bool,
+        /// The primary status Shed Skin cured.
+        status: Status1,
+    },
     /// A trainer sent out the next party member after faint resolution.
     TrainerSentOut {
         /// The replacement's species.
         species: SpeciesId,
         /// Party members remaining on the bench after the replacement.
         bench_remaining: usize,
+    },
+    /// The player sent out the first non-fainted reserve after an active
+    /// faint, under the headless party-order policy (no player choice, no
+    /// party-screen UI). This crate models it only for a wild battle: a
+    /// trainer battle sends no player reserves.
+    PlayerSentOut {
+        /// The replacement's species.
+        species: SpeciesId,
+        /// Usable (non-fainted) reserves remaining after the replacement.
+        reserves_remaining: usize,
     },
     /// The full experience award after the opposing battler fainted.
     ///
@@ -330,8 +365,7 @@ pub enum BattleEvent {
 ///
 /// Battle state and randomness are not rolled back. [`TurnError::events`]
 /// retains events in occurrence order. An empty slice usually identifies a
-/// call rejected before the turn began, but an opponent's forced, unsupported
-/// Struggle can consume turn-order randomness before failing without an event.
+/// call rejected before the turn began.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnError {
     pub(super) events: Vec<BattleEvent>,

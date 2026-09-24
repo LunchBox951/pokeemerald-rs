@@ -116,7 +116,7 @@
 //! the wild-encounter roll, and the arrow-warp poll for that frame, and
 //! discards a same-frame interaction — exactly the "consumes the frame's
 //! field input" contract `crate::flow::wild_encounter::field_input_consumed`
-//! applies to a resolved warp or a fired encounter (pinned by
+//! applies to any fired warp or a fired encounter (pinned by
 //! `crate::flow::wild_encounter::tests::a_fired_encounter_consumes_the_frames_field_input`).
 //!
 //! **How much of that is *pinned*, and how much is only encoded.** The
@@ -410,6 +410,9 @@ impl OverworldPhase {
     /// Whether the completed landing at `(x, y)` fires the Route 101
     /// first-battle trigger. [`OverworldPhase::step`]'s single call into
     /// this module's trigger check.
+    ///
+    /// Same retained-elevation contract as `step.rs`'s
+    /// `resolve_pre_movement_field_input`.
     pub(super) fn first_battle_trigger_ready(
         &self,
         runtime: &MapRuntime<'_>,
@@ -418,7 +421,7 @@ impl OverworldPhase {
         let Some((x, y)) = landed else {
             return false;
         };
-        self.first_battle_trigger_at(runtime, x, y, self.player.elevation())
+        self.first_battle_trigger_at(runtime, x, y, self.player.previous_elevation())
     }
 
     /// Start the scripted first battle in [`OverworldPhase::first_battle`]

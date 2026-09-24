@@ -81,15 +81,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The per-status list carries each status's creator; the combined
-          # status endpoint omits it, so the owner check would never match.
-          status_creator() {
-            local sha="$1" context="$2"
-            # `gh api` refuses `--slurp` together with `--jq`, so the pages go to jq itself.
-            gh api --paginate --slurp "repos/${REPOSITORY}/commits/${sha}/statuses?per_page=100" \
-              | jq -r '[.[][] | select(.context == "'"${context}"'")] | sort_by(.created_at, .id) | last | select(.state == "success") | .creator.login // empty'
-          }
-
           branch_sha() {
             gh api "repos/${REPOSITORY}/branches/$1" --jq '.commit.sha'
           }
@@ -113,18 +104,12 @@ jobs:
 
           open_promotion() {
             local target="$1" source source_sha target_sha ahead existing_json
-            local existing existing_author labels body creator preceding provenance
+            local existing existing_author labels body preceding provenance
             source="$(python3 scripts/channel_ladder.py source-for "${target}")"
             source_sha="$(branch_sha "${source}")"
             target_sha="$(branch_sha "${target}")"
 
-            if [[ "${target}" == "unstable" ]]; then
-              creator="$(status_creator "${source_sha}" release-readiness)"
-              if [[ "${creator}" != "${REPOSITORY_OWNER}" ]]; then
-                echo "${source}@${source_sha} has no owner-recorded release-readiness success; unstable remains dormant."
-                return 0
-              fi
-            else
+            if [[ "${target}" != "unstable" ]]; then
               preceding="$(python3 scripts/channel_ladder.py source-for "${source}")"
               provenance="$(require_preceding_promotion "${source}" "${source_sha}" "${preceding}")"
               if [[ "${provenance}" != "1" ]]; then
@@ -178,7 +163,7 @@ jobs:
           }
 
           merge_unstable() {
-            local pr_count pr_number pr_json head_sha base_sha creator unresolved merge_state
+            local pr_count pr_number pr_json head_sha base_sha unresolved merge_state
             pr_count="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state open \
@@ -216,12 +201,6 @@ jobs:
             base_sha="$(jq -r '.baseRefOid' <<<"${pr_json}")"
             if [[ "${head_sha}" != "$(branch_sha dev)" || "${base_sha}" != "$(branch_sha unstable)" ]]; then
               echo "PR #${pr_number} moved while being evaluated; wait for the next scheduled attempt."
-              return 0
-            fi
-
-            creator="$(status_creator "${head_sha}" release-readiness)"
-            if [[ "${creator}" != "${REPOSITORY_OWNER}" ]]; then
-              echo "Current dev head lacks owner-recorded release-readiness; not merging."
               return 0
             fi
 

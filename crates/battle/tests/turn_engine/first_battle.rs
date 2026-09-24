@@ -1,11 +1,11 @@
 //! `BATTLE_TYPE_FIRST_BATTLE` (issue #187): the Route 101 intro Zigzagoon
 //! fight's three deltas from an ordinary wild encounter -- crit suppression,
-//! running forbidden, and the wild opponent's AI-branch move choice -- pinned
-//! end to end through the public `battle` API, the same way every other
-//! `turn_engine/` module pins its family of behavior. Unit-level draw-count
-//! pins for each formula in isolation live alongside the formula itself
-//! (`crate::critical`, `crate::hit`, `crate::battle`'s own doc-comment
-//! derivations).
+//! Run rejection for non-Run-Away holders, and the wild opponent's
+//! AI-branch move choice -- pinned end to end through the public `battle`
+//! API, the same way every other `turn_engine/` module pins its family of
+//! behavior. Unit-level draw-count pins for each formula in isolation live
+//! alongside the formula itself (`crate::critical`, `crate::hit`,
+//! `crate::battle`'s own doc-comment derivations).
 //!
 //! Zigzagoon (species 288) is the actual scripted first-battle opponent
 //! (`pokeemerald/src/battle_controllers.c:67`-`:72` creates it at level 2 --
@@ -18,7 +18,7 @@
 //! Tackle and Growl. Reused here rather than inventing a stand-in species.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction};
 
 const TACKLE: MoveId = MoveId(33);
@@ -196,10 +196,13 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
     assert_eq!(enemy_move, Some(GROWL));
 }
 
+// The all-spent enemy's forced Struggle draws nothing at selection and
+// executes at its own turn-order slot.
 #[test]
 fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 5, vec![TACKLE]);
+    let player_max_hp = max_iv_mon(&dex, 19, 5, vec![TACKLE]).stats().max_hp;
     let mut enemy = max_iv_mon(&dex, 288, 50, vec![TACKLE, GROWL]); // faster
     for slot in 0..enemy.moves().len() {
         for _ in 0..enemy.moves()[slot].pp {
@@ -207,24 +210,42 @@ fn first_battle_forces_struggle_with_no_selection_draw_when_every_slot_is_spent(
         }
     }
 
-    // battle start + turn number only: `AreAllMovesUnusable` forces
-    // Struggle before `BattleAI_SetupAIData` ever runs, so neither the four
-    // simulatedRNG draws nor a tie-break draw happen.
-    let mut rng = SequenceRng::new([0, 0]);
+    // battle start, turn number: `AreAllMovesUnusable` forces Struggle
+    // before `BattleAI_SetupAIData` ever runs, so neither the four
+    // simulatedRNG draws nor a tie-break draw happen. Then the forced
+    // Struggle's own two draws -- accuracy and damage-variance, with no
+    // crit draw at all: first_battle suppresses it entirely.
+    let mut rng = SequenceRng::new([0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
-    let failure = battle
+    let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .unwrap_err();
+        .unwrap();
 
     assert_eq!(
-        failure.error(),
-        BattleError::UnsupportedMoveEffect(battle::STRUGGLE)
+        events,
+        vec![
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: battle::STRUGGLE,
+                damage: player_max_hp,
+                is_critical: false,
+            },
+            BattleEvent::Recoil {
+                by_player: false,
+                move_id: battle::STRUGGLE,
+                damage: player_max_hp / 4,
+            },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the faster, all-spent enemy is the first mover, and its forced \
+         Struggle one-shots this fixture's level-5 Rattata: {events:?}"
     );
-    assert!(
-        failure.events().is_empty(),
-        "the faster, all-spent enemy is the first mover, so nothing acted yet"
+    assert_eq!(
+        rng.draws(),
+        4,
+        "no simulatedRNG, no tie-break draw, no crit draw (first_battle)"
     );
-    assert_eq!(rng.draws(), 2, "no simulatedRNG, no tie-break draw");
 }
 
 #[test]
@@ -419,4 +440,47 @@ fn first_battle_suppresses_the_wild_opponents_crit_draw_too() {
         "both sides survive this exchange"
     );
     assert_eq!(rng.draws(), 11);
+}
+
+#[test]
+fn run_away_holder_escapes_the_first_battle_unconditionally() {
+    // Upstream's `IsRunningFromBattleImpossible` answers `BATTLE_RUN_SUCCESS`
+    // for a Run Away holder (`pokeemerald/src/battle_main.c:4038`-`:4039`)
+    // before it ever reaches the `BATTLE_TYPE_FIRST_BATTLE` refusal
+    // (`:4078`-`:4082`), so the selection is admitted and
+    // `TryRunFromBattle`'s Run Away branch escapes with no draw and no
+    // `runTries` increment (`pokeemerald/src/battle_util.c:426`-`:446`).
+    let dex = Dex::new();
+    // Rattata's primary ability is Run Away; an even personality selects it.
+    let player = max_iv_mon(&dex, 19, 5, vec![TACKLE]);
+    assert_eq!(player.ability(), AbilityId::RUN_AWAY);
+    let enemy = max_iv_mon(&dex, 288, 2, vec![TACKLE, GROWL]);
+
+    let mut rng = SequenceRng::new([0; 7]);
+    let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 1); // Battle::new's battle-start draw only.
+
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: true,
+            },
+            BattleEvent::Ended(BattleOutcome::PlayerRan),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(
+        battle.run_tries(),
+        0,
+        "Run Away never advances run_tries (`battle_util.c:427`-`:447`)"
+    );
+    assert_eq!(
+        rng.draws(),
+        7,
+        "the turn draws the turn number and the enemy's first-battle AI \
+         setup, but Run Away adds no escape-specific draw"
+    );
 }

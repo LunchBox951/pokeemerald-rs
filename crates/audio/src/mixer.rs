@@ -29,7 +29,9 @@ mod priority_tests;
 #[path = "mixer_cgb_envelope.rs"]
 mod cgb_envelope_cadence_tests;
 
-/// Emerald's default global mix level, on a scale from 0 to 15.
+/// Emerald's default DirectSound mix level, on a scale from 0 to 15
+/// ([`CgbVoice::begin_frame`](crate::cgb_voice::CgbVoice::begin_frame)'s doc
+/// explains why this never reaches CGB voices).
 pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 
 /// Emerald's default DirectSound voice cap.
@@ -65,7 +67,7 @@ impl Default for Mixer {
 }
 
 impl Mixer {
-    /// A mixer with an explicit master volume and voice cap.
+    /// A mixer with an explicit DirectSound master volume and voice cap.
     #[must_use]
     pub fn new(master_volume: u8, max_voices: usize) -> Self {
         Self {
@@ -128,7 +130,7 @@ impl Mixer {
         &self.cgb_slots
     }
 
-    /// The global mix level.
+    /// The DirectSound mix level.
     #[must_use]
     pub fn master_volume(&self) -> u8 {
         self.master_volume
@@ -273,6 +275,26 @@ impl Mixer {
         }
     }
 
+    /// Stop every voice on `track` and vacate its slot immediately, matching
+    /// `TrackStop`'s channel clears (`m4a_1.s:1480`-`:1500`) rather than
+    /// [`Self::release_track`]'s graceful note-off.
+    pub fn stop_track(&mut self, track: usize) {
+        for slot in &mut self.direct_sound_slots {
+            if let Some(voice) = slot {
+                if voice.track() == Some(track) {
+                    *slot = None;
+                }
+            }
+        }
+        for slot in &mut self.cgb_slots {
+            if let Some(voice) = slot {
+                if voice.track() == track {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
     /// Apply updated track volume and panning to every live voice on `track`.
     pub fn set_track_volume(&mut self, track: usize, vol_mr: u8, vol_ml: u8) {
         for voice in self.direct_sound_slots.iter_mut().flatten() {
@@ -341,7 +363,7 @@ impl Mixer {
         let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
         for slot in &mut self.cgb_slots {
             if let Some(voice) = slot {
-                voice.begin_frame(self.master_volume, extra_envelope_iteration);
+                voice.begin_frame(extra_envelope_iteration);
                 voice.render(&mut self.mix_buffer, &self.sweep_ticks);
                 if !voice.is_active() {
                     *slot = None;

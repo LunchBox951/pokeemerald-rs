@@ -3,7 +3,7 @@
 
 use super::test_support::*;
 use super::OverworldPhase;
-use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::overworld::{Direction, PlayerState};
 use platform::{ButtonState, Buttons};
 
 /// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->
@@ -28,15 +28,9 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     // `StepOutcome::Advanced` landing (mirrors this module's own
     // `stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`).
     let bedroom = phase.map_id;
-    phase.step(held(Buttons::DOWN));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
+    walk_one_tile(&mut phase, Buttons::DOWN);
     assert_eq!(phase.map_id, bedroom, "still upstairs after stepping south");
-    phase.step(held(Buttons::UP));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
+    turn_and_walk_one_tile(&mut phase, Buttons::UP);
     let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     assert_eq!(
         phase.map_id, one_f,
@@ -215,14 +209,8 @@ fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
 
     // Down to 1F through the real stair warp -- same step-off/step-back
     // sequence the dialog test above uses.
-    phase.step(held(Buttons::DOWN));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
-    phase.step(held(Buttons::UP));
-    for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
-    }
+    walk_one_tile(&mut phase, Buttons::DOWN);
+    turn_and_walk_one_tile(&mut phase, Buttons::UP);
     let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
     assert_eq!(phase.map_id, one_f, "the stair warp must land on 1F");
 
@@ -367,7 +355,6 @@ fn b_alone_advances_and_closes_a_dialog() {
 /// is A-only, matching `FieldInput::pressedAButton` --
 /// `field_control_avatar.c:172`).
 #[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn b_does_not_move_the_player_or_open_a_dialog() {
     use engine::text::Token;
 
@@ -404,10 +391,25 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
         "B is not an interaction button -- upstream gates \
          TryStartInteractionScript on pressedAButton alone"
     );
-    // ...and the identical press with A does open one, so the check above is
-    // about the button rather than the position.
-    phase.step(pressed(Buttons::A));
-    assert!(phase.dialog.is_some(), "A still interacts");
+    // ...and the identical press with A does find an interaction to
+    // resolve, so the check above is about the button rather than the
+    // position. Read at `interaction_tokens_this_frame` itself -- the
+    // frame's whole A-press decision -- rather than driving it through
+    // `step`, whose own dialog-open commit (`NpcDialog::open`) loads an
+    // asset pack this synthetic fixture has none of.
+    let runtime = runtime_for(&phase);
+    assert!(
+        phase
+            .interaction_tokens_this_frame(pressed(Buttons::B), &runtime)
+            .is_none(),
+        "no B edge may resolve an interaction"
+    );
+    assert!(
+        phase
+            .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+            .is_some(),
+        "A still interacts"
+    );
 }
 
 /// Review regression (#192): the last link of the tick wiring -- the

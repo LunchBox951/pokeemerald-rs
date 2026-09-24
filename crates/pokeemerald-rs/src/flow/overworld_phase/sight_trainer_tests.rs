@@ -76,6 +76,13 @@ const TRAINER_FLAGS_START: u16 = 0x500;
 /// `(67, 5)`, elevation 3, facing south (`MOVEMENT_TYPE_FACE_DOWN`), sight
 /// range 2.
 const TRAINER_RHETT: u16 = 703;
+
+/// `MOVE_PURSUIT`, Treecko's own level-16 learnset move: `EFFECT_PURSUIT`
+/// has no resolver, so `validate_player_move` refuses it ahead of any draw
+/// (`crates/battle/src/battle.rs:415`) while a full-PP slot keeps the
+/// all-spent Struggle diversion (`crates/battle/src/battle.rs:491`) out of
+/// the way.
+const UNEXECUTABLE_MOVE: u16 = 228;
 const RHETT_TILE: (i32, i32) = (67, 5);
 
 /// `TRAINER_ANDREW` (`include/constants/opponents.h`): used only for the
@@ -291,25 +298,45 @@ fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
 }
 
 /// A player one tile beyond a trainer's own sight range must not trigger.
+///
+/// Uses the constructible [`STAND_IN_TRAINER`] (module docs, "The stand-in
+/// party") rather than Andrew's own real party, so a false-positive cone hit
+/// would be observable as a started approach instead of masked by every
+/// real trainer's own construction refusal.
 #[test]
 fn a_player_beyond_range_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     // Andrew's own range is 3; four tiles south is one past it.
     let mut phase = route_103_phase(PlayerState::new((ax, ay + 4), 3, Direction::North));
     phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
+    assert!(
+        phase.sight_approach.is_none(),
+        "a cone genuinely out of range must not start an approach, even against a party \
+         that could actually construct"
+    );
     assert!(!phase.is_sight_trainer_battle_active());
     assert!(phase.party_lead.is_some(), "the lead must be untouched");
 }
 
 /// A player off a trainer's own facing axis must not trigger, even standing
 /// right beside them.
+///
+/// See [`a_player_beyond_range_does_not_trigger`] for why [`STAND_IN_TRAINER`]
+/// stands in here too.
 #[test]
 fn a_player_off_the_facing_axis_does_not_trigger() {
     let (ax, ay) = ANDREW_TILE;
     let mut phase = route_103_phase(PlayerState::new((ax + 1, ay), 3, Direction::North));
     phase.party_lead = Some(overwhelming_lead());
+    phase.synthetic_sight_trainer = Some(assets::trainers::TrainerId(STAND_IN_TRAINER));
     phase.step(ButtonState::new());
+    assert!(
+        phase.sight_approach.is_none(),
+        "a cone genuinely off the facing axis must not start an approach, even against a \
+         party that could actually construct"
+    );
     assert!(!phase.is_sight_trainer_battle_active());
 }
 
@@ -931,6 +958,52 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     );
 }
 
+/// `TRSEE_PLAYER_FACE_WAIT` (`trainer_see.c:531-539`,
+/// `ApproachStage::PlayerFaceWait`'s own docs): the turn frame is not the
+/// speech frame. Pack-independent: the box opening or the no-pack battle
+/// fallback starting are both "the speech has opened"
+/// (`advance_intro_message`'s own docs).
+#[test]
+fn the_speech_does_not_open_on_the_frame_the_player_is_turned() {
+    let (rx, ry) = RHETT_TILE;
+    // Adjacent already (`walk_tiles` 0), facing away, so the turn frame is
+    // unambiguous.
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::South));
+    seed_approach(&mut phase, 0);
+
+    let mut frames = 0;
+    while phase.player.facing() == Direction::South {
+        phase.step(ButtonState::new());
+        frames += 1;
+        assert!(frames < 200, "the trainer must eventually turn the player");
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "setup: this is the turning frame"
+    );
+    assert!(
+        phase.dialog.is_none() && !phase.is_sight_trainer_battle_active(),
+        "setup: the turning frame itself never opens the speech"
+    );
+
+    // `TRSEE_PLAYER_FACE_WAIT`.
+    phase.step(ButtonState::new());
+    assert!(
+        phase.dialog.is_none() && !phase.is_sight_trainer_battle_active(),
+        "the frame after the turn is upstream's `TRSEE_PLAYER_FACE_WAIT`, which only sets the \
+         task's followup func -- the intro speech cannot open until at least the frame after \
+         that (trainer_see.c:531-539)"
+    );
+
+    // The intro stage itself, the frame after that.
+    phase.step(ButtonState::new());
+    assert!(
+        phase.dialog.is_some() || phase.is_sight_trainer_battle_active(),
+        "the speech (or its no-pack battle fallback) must open on the frame after the wait"
+    );
+}
+
 /// `PlayerFaceApproachingTrainer`'s own guard (`trainer_see.c:522-523`): a
 /// step the player committed on the very frame the cone reached them (so
 /// [`engine::overworld::PlayerState::in_transit`] is still `true` when the
@@ -1449,22 +1522,22 @@ fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
 }
 
 /// Pins [`OverworldPhase::sight_trainer_id`]'s abort clause: a lead with no
-/// PP left in its only move fails the turn with no outcome at all, which
-/// must still clear the id.
+/// selectable move at all fails the turn with no outcome, which must still
+/// clear the id.
+///
+/// The fixture is [`UNEXECUTABLE_MOVE`]: a spent slot 0 no longer aborts
+/// anything, since the driver falls back to the next usable slot
+/// (`crate::flow::npc_trainer_battle::take_first_usable_move_turn`) and an
+/// all-spent moveset is diverted into Struggle (`crates/battle/src/battle.rs:491`).
 #[test]
 fn an_aborted_sight_battle_clears_the_trainer_id_with_the_slot() {
     let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
-    // Drain slot 0 through the same accessor the turn engine spends PP
-    // with, rather than reaching into the struct.
-    let mut drained = lead(277, 5, 1);
-    let starting_pp = drained.moves()[0].pp;
-    assert!(starting_pp > 0, "a freshly built lead starts with PP");
-    for _ in 0..starting_pp {
-        drained
-            .deduct_pp(0)
-            .expect("draining a slot that still has PP");
-    }
-    seed_battle(&mut phase, TRAINER_RHETT, drained, 1);
+    seed_battle(
+        &mut phase,
+        TRAINER_RHETT,
+        lead(277, 5, UNEXECUTABLE_MOVE),
+        1,
+    );
     assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
 
     phase.step(ButtonState::new());

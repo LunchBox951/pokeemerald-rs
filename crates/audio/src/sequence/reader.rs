@@ -45,7 +45,9 @@ impl<'a> CommandReader<'a> {
         };
         match command {
             WAIT_LO..=WAIT_HI => Ok(Event::Wait(CLOCK_TABLE[usize::from(command - WAIT_LO)])),
-            FINE => Ok(Event::Fine),
+            // gMPlayJumpTable's reserved slots (0xB6-0xB8, 0xC6-0xC7, 0xC9-0xCB) are
+            // unpatched `ply_fine` entries, same as FINE (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
+            FINE | 0xB6..=0xB8 | 0xC6..=0xC7 | 0xC9..=0xCB => Ok(Event::Fine),
             GOTO => Ok(Event::Goto(self.target()?)),
             PATT => Ok(Event::Pattern(self.target()?)),
             PEND => Ok(Event::PatternEnd),

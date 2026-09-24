@@ -128,7 +128,7 @@ fn settling_declines_the_prompt_before_releasing_the_deferred_send_out() {
         "fixture sanity: the fight must have reached the prompt"
     );
 
-    let events = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
 
     assert_eq!(
         events,
@@ -142,7 +142,7 @@ fn settling_declines_the_prompt_before_releasing_the_deferred_send_out() {
     );
     assert!(battle.pending_move_learn().is_none());
     assert!(
-        settle_move_learn_prompts(&mut battle).is_empty(),
+        settle_move_learn_prompts(&mut battle, &mut rng).is_empty(),
         "settling again with nothing pending is a no-op, not an error"
     );
 }
@@ -175,7 +175,7 @@ fn declining_a_prompt_preserves_the_pp_up_bits() {
         "fixture sanity: the PP-Up fixture reaches the Peck prompt"
     );
     assert_eq!(
-        settle_move_learn_prompts(&mut probe).first(),
+        settle_move_learn_prompts(&mut probe, &mut probe_rng).first(),
         Some(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
         "settling the prompt declines it"
     );
@@ -242,7 +242,7 @@ fn settling_a_prompt_does_not_advance_the_shared_rng() {
     assert!(battle.pending_move_learn().is_some());
 
     let before = rng.state();
-    let events = settle_move_learn_prompts(&mut battle);
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
     assert!(
         events.contains(&BattleEvent::MoveLearnDeclined { move_id: PECK }),
         "the RNG-state check below only means anything once the prompt is answered"
@@ -255,6 +255,99 @@ fn settling_a_prompt_does_not_advance_the_shared_rng() {
         rng.state(),
         before,
         "answering the prompt must not move the stream"
+    );
+}
+
+/// Wynaut's level-15 learnset block is four entries, so levelling from 14
+/// to 15 chains four prompts and one `settle_move_learn_prompts` call must
+/// decline them all before the deferred aftermath is released.
+/// `a_multi_prompt_chain_resolves_fully_before_the_deferred_transition` in
+/// `crates/battle/tests/turn_engine/trainer_battle.rs` pins the same fixture
+/// one answer at a time.
+#[test]
+fn settling_drains_a_chain_of_prompts_in_one_call() {
+    /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
+    /// Counter, Mirror Coat, Safeguard, Destiny Bond (in table order).
+    const WYNAUT: SpeciesId = SpeciesId(360);
+    const LEVEL_15_BLOCK: [MoveId; 4] = [MoveId(68), MoveId(243), MoveId(219), MoveId(194)];
+
+    let dex = Dex::new();
+    let growth_rate = dex.species(WYNAUT).unwrap().growth_rate;
+    let level_15 = assets::experience_for_level(growth_rate, 15).unwrap();
+    let mut player = BattlePokemon::new(
+        &dex,
+        WYNAUT,
+        14,
+        Ivs::default(),
+        0,
+        vec![SCRATCH, GROWL, TACKLE, LEER],
+    )
+    .expect("a four-move Wynaut is representable");
+    assert!(
+        player
+            .apply_experience(&dex, level_15 - 1 - player.experience())
+            .unwrap()
+            .is_none(),
+        "fixture sanity: stopping short of the threshold crosses no level"
+    );
+    // A single-mon party, so the fourth decline's release is the deferred
+    // faint aftermath (money + end), not another trainer send-out.
+    let party =
+        vec![BattlePokemon::new(&dex, TREECKO, 5, Ivs::default(), 0, vec![POUND, LEER]).unwrap()];
+
+    let mut rng = Rng::new(1);
+    let mut battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        party,
+        &mut SharedRng::new(&mut rng),
+    )
+    .unwrap();
+
+    play_until_move_learn_prompt(&mut battle, &mut rng);
+    assert_eq!(
+        battle.pending_move_learn().map(|pending| pending.move_id()),
+        Some(LEVEL_15_BLOCK[0]),
+        "fixture sanity: the award must reach level 15's first entry"
+    );
+    let money = battle.trainer().expect("a trainer battle").money();
+
+    let events = settle_move_learn_prompts(&mut battle, &mut rng);
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[0]
+            },
+            BattleEvent::MoveLearnPrompt {
+                move_id: LEVEL_15_BLOCK[1]
+            },
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[1]
+            },
+            BattleEvent::MoveLearnPrompt {
+                move_id: LEVEL_15_BLOCK[2]
+            },
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[2]
+            },
+            BattleEvent::MoveLearnPrompt {
+                move_id: LEVEL_15_BLOCK[3]
+            },
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[3]
+            },
+            BattleEvent::MoneyGained(money),
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ],
+        "one call must drain the whole chain -- interleaved prompts included \
+         -- before releasing the deferred aftermath: {events:?}"
+    );
+    assert!(
+        battle.pending_move_learn().is_none(),
+        "the chain must be drained, not left mid-way"
     );
 }
 

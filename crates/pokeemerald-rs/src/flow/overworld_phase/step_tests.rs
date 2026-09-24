@@ -1154,16 +1154,23 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(phase.player.position(), (7, 5));
+
+    // The floor tile's landing call -- upstream's `T_TILE_CENTER` CB1, which
+    // is also where the next crossing starts under a still-held direction
+    // (`OverworldPhase::step`'s "Frame shape" docs, issue #1039).
+    phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.wild.prev_metatile_behavior(),
         MB_CAVE,
         "fixture precondition: an unsuppressed roll really does overwrite this"
     );
+    assert_eq!(phase.player.position(), (8, 5));
 
-    for _ in 0..WALK_FRAMES_PER_TILE {
+    // The rest of the door crossing's animation.
+    for _ in 0..WALK_FRAMES_PER_TILE - 1 {
         phase.step(held(Buttons::RIGHT));
     }
-    assert_eq!(phase.player.position(), (8, 5));
+    assert!(!phase.player.in_transit());
     assert_eq!(
         (phase.player.elevation(), phase.player.previous_elevation()),
         (0, 3),
@@ -1171,21 +1178,24 @@ fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
          previousElevation upstream looks warps up at is still 3"
     );
 
+    // The door tile's own landing call.
+    phase.step(held(Buttons::RIGHT));
     assert_eq!(
         phase.wild.prev_metatile_behavior(),
         MB_CAVE,
-        "the door warp must fire on the drain frame -- upstream resolves it at \
+        "the door warp must fire on the landing call -- upstream resolves it at \
          PlayerGetElevation()'s retained 3 (field_player_avatar.c:1192-1195) -- so \
          ProcessPlayerFieldInput returns before CheckStandardWildEncounter and the \
          door tile's own behavior is never recorded"
     );
 }
 
-/// End-to-end landing check for the post-movement arrow lookup; the pack-free
-/// `post_movement_arrow_elevation_tests` in `step.rs` pins the lookup itself.
+/// End-to-end landing check for the arrow lookup on the landing call; the
+/// pack-free `landing_call_arrow_elevation_tests` in `step.rs` pins the
+/// lookup itself.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
+fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
     use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
 
     const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
@@ -1212,23 +1222,31 @@ fn a_post_movement_arrow_warp_is_looked_up_at_the_retained_previous_elevation() 
         None,
     );
 
-    // The poll stays shut while the walk animation drains (`arrow_poll_open`).
-    for frame in 1..u32::from(WALK_FRAMES_PER_TILE) {
+    // The poll stays shut while the step is outstanding (`arrow_poll_open`),
+    // which includes the call that drains the walk animation (issue #1039).
+    for frame in 1..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             phase.map_id, CENTER,
-            "the arrow warp must not fire mid-animation (frame {frame} of \
-             {WALK_FRAMES_PER_TILE})"
+            "the arrow warp must not fire while the step is outstanding (frame \
+             {frame} of {WALK_FRAMES_PER_TILE})"
         );
     }
     assert_eq!(phase.player.position(), (7, 8));
-    assert!(phase.player.in_transit());
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+    assert!(
+        phase.mid_step(),
+        "but the landing is observed on the call after it"
+    );
     assert_eq!(
         (phase.player.elevation(), phase.player.previous_elevation()),
         (0, 3)
     );
 
-    // The drain frame.
+    // The landing call.
     phase.step(held(Buttons::DOWN));
 
     assert_eq!(
@@ -1268,5 +1286,158 @@ fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
         phase.start_menu().is_none(),
         "the dispatch must weigh a fresh START inside step, behind the \
          same-frame interaction -- not open the menu ahead of it"
+    );
+}
+
+/// `FieldGetPlayerInput` leaves `pressedStartButton` unset on a
+/// forced-movement tile (`pokeemerald/src/field_control_avatar.c:92-113`),
+/// so `ProcessPlayerFieldInput` never reaches `ShowStartMenu` (`:180-186`).
+#[test]
+fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_MUDDY_SLOPE,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the forced-movement tile"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "forced movement is armed on the standing tile, so upstream never sets \
+         pressedStartButton on that frame at all"
+    );
+}
+
+/// `forcedMove` comes from `MetatileBehavior_IsForcedMovementTile`, which
+/// includes `MB_CRACKED_FLOOR` (`pokeemerald/src/metatile_behavior.c:338-351`),
+/// so a cracked floor suppresses START on its landing frame too.
+#[test]
+fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_CRACKED_FLOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the cracked floor"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "MB_CRACKED_FLOOR is a forced-movement tile for FieldGetPlayerInput, so \
+         upstream never sets pressedStartButton on that frame at all"
+    );
+}
+
+/// A player whose forced step is collision-blocked parks at `T_NOT_MOVING`,
+/// the gate arm that admits START whatever `forcedMove` says
+/// (`pokeemerald/src/field_control_avatar.c:95`).
+#[test]
+fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_menu() {
+    use engine::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_MUDDY_SLOPE};
+
+    let blocked_slope_phase = || {
+        let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
+            10,
+            10,
+            &[
+                ((6, 4), MB_MUDDY_SLOPE),
+                ((6, 5), MB_IMPASSABLE_SOUTH_AND_NORTH),
+            ],
+        );
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 3), 3, Direction::South),
+            None,
+        );
+        phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::DOWN));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the muddy slope"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained"
+        );
+        phase
+    };
+
+    // Fixture precondition: the slope's forced southward step is blocked by
+    // the impassable-north tile at (6, 5), which is precisely why upstream
+    // falls through to the keypad -- the port already honours that for
+    // movement.
+    let mut steerable = blocked_slope_phase();
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        steerable.step(held(Buttons::LEFT));
+    }
+    assert_eq!(
+        steerable.player.position(),
+        (5, 4),
+        "fixture precondition: a blocked forced direction leaves the player \
+         steerable off the tile"
+    );
+
+    let mut phase = blocked_slope_phase();
+    // The landing's own T_TILE_CENTER frame, where upstream does suppress
+    // buttons on a forced tile -- consumed with no input.
+    phase.step(ButtonState::new());
+    // T_NOT_MOVING from here on: nothing is animating and the forced step
+    // never started.
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_some(),
+        "upstream's T_NOT_MOVING arm sets pressedStartButton even on a \
+         forced-movement tile, so a player stranded on a slope whose forced \
+         step is collision-blocked must still be able to open the menu"
     );
 }

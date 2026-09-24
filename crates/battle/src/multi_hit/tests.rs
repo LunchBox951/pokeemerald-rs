@@ -1,6 +1,6 @@
 use super::{
     ensure_resolvable, is_multi_hit_effect, resolve_multi_hit, roll_hit_count,
-    spend_multi_hit_effect_chance_draw, EFFECT_MULTI_HIT, MAX_HITS, MIN_HITS,
+    spend_multi_hit_effect_chance_draw, MultiHitAdmission, EFFECT_MULTI_HIT, MAX_HITS, MIN_HITS,
 };
 use crate::ability::suppresses_critical_hits;
 use crate::dex::Dex;
@@ -8,17 +8,23 @@ use crate::error::BattleError;
 use crate::hit::{damage_core, HitOutcome};
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
+use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
 
 const DOUBLE_SLAP: MoveId = MoveId(3);
 const FURY_ATTACK: MoveId = MoveId(31);
 const TACKLE: MoveId = MoveId(33);
+/// `MOVE_BONE_RUSH`: `EFFECT_MULTI_HIT`, Ground, 80 accuracy.
+const BONE_RUSH: MoveId = MoveId(198);
 const BULBASAUR: SpeciesId = SpeciesId(1);
 const SQUIRTLE: SpeciesId = SpeciesId(7);
 const ANORITH: SpeciesId = SpeciesId(390);
+/// `SPECIES_GASTLY`: Levitate in its primary (and only) ability slot.
+const GASTLY: SpeciesId = SpeciesId(92);
 const TEST_LEVEL: u8 = 5;
 const ACCURACY_HIT_DRAW: u16 = 0;
 const DOUBLE_SLAP_MISS_DRAW: u16 = 85;
+const BONE_RUSH_MISS_DRAW: u16 = 80;
 const TWO_HIT_COUNT_DRAW: u16 = 0;
 const NON_CRITICAL_DRAW: u16 = 1;
 const FULL_DAMAGE_DRAW: u16 = 0;
@@ -112,7 +118,7 @@ fn admission_draws_accuracy_once_then_draws_the_hit_count() {
     let mut missed_move = SequenceRng::new([DOUBLE_SLAP_MISS_DRAW]);
     assert_eq!(
         resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &defender, &mut missed_move).unwrap(),
-        None
+        MultiHitAdmission::Failed(HitOutcome::Miss)
     );
     assert_eq!(missed_move.draws(), 1);
 
@@ -126,7 +132,7 @@ fn admission_draws_accuracy_once_then_draws_the_hit_count() {
             &mut one_draw_hit_count
         )
         .unwrap(),
-        Some(2)
+        MultiHitAdmission::Admitted { hit_limit: 2 }
     );
     assert_eq!(one_draw_hit_count.draws(), 2);
 
@@ -140,7 +146,7 @@ fn admission_draws_accuracy_once_then_draws_the_hit_count() {
             &mut two_draw_hit_count
         )
         .unwrap(),
-        Some(5)
+        MultiHitAdmission::Admitted { hit_limit: 5 }
     );
     assert_eq!(two_draw_hit_count.draws(), 3);
 }
@@ -206,8 +212,10 @@ fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
         &ordinary_defender,
         &mut ordinary_rng,
     )
-    .unwrap()
-    .expect("the scripted accuracy draw must land");
+    .unwrap();
+    let MultiHitAdmission::Admitted { hit_limit: hits } = hits else {
+        panic!("the scripted accuracy draw must land");
+    };
     assert_eq!(hits, 2);
     for _ in 0..hits {
         damage_core(
@@ -241,8 +249,10 @@ fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
         &battle_armor_defender,
         &mut battle_armor_rng,
     )
-    .unwrap()
-    .expect("the scripted accuracy draw must land");
+    .unwrap();
+    let MultiHitAdmission::Admitted { hit_limit: hits } = hits else {
+        panic!("the scripted accuracy draw must land");
+    };
     assert_eq!(hits, 2);
     for _ in 0..hits {
         let outcome = damage_core(
@@ -270,4 +280,24 @@ fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
         ADMISSION_DRAWS_WITH_ONE_COUNT_ROLL + CRITICAL_SUPPRESSED_DRAWS_PER_HIT * usize::from(hits),
         "Battle Armor defender: damage draw only per hit"
     );
+}
+
+/// A multi-hit move that fails its one accuracy check still runs
+/// `CheckWonderGuardAndLevitate` (`battle_script_commands.c:1175-1186`), whose
+/// Levitate branch returns the Ground-miss result before the type scan
+/// (`:1435-1443`). The hit count is never rolled, so the failed roll remains a
+/// single draw.
+#[test]
+fn a_missed_multi_hit_move_against_levitate_reports_levitate_without_a_count_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, BULBASAUR, vec![BONE_RUSH]);
+    let levitate_defender = mon(&dex, GASTLY, vec![TACKLE]);
+    assert_eq!(levitate_defender.ability(), AbilityId::LEVITATE);
+    let mut rng = SequenceRng::new([BONE_RUSH_MISS_DRAW]);
+
+    assert_eq!(
+        resolve_multi_hit(&dex, BONE_RUSH, &attacker, &levitate_defender, &mut rng).unwrap(),
+        MultiHitAdmission::Failed(HitOutcome::LevitateBlocked)
+    );
+    assert_eq!(rng.draws(), 1, "a failed roll never rolls the hit count");
 }

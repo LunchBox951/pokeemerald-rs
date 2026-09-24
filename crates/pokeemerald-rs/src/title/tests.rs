@@ -141,7 +141,63 @@ fn image_to_tileset_rejects_payload_shorter_than_declared_dimensions() {
     );
 }
 
-fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+#[test]
+fn image_to_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 16;
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let err = image_to_tileset("bogus/id", image, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "bogus/id",
+            index: 16,
+        }
+    );
+}
+
+#[test]
+fn image_to_tileset_packs_an_8bpp_source_whose_indices_fit_four_bits() {
+    // `title/image/press_start` ships pack-8bpp but is consumed as Bpp4.
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 15;
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let tileset = image_to_tileset("title/image/press_start", image, BitDepth::Bpp4).unwrap();
+    assert_eq!(tileset.tile(0).unwrap().index(0, 0), 15);
+}
+
+/// Writes `bytes` to `path` and removes it on drop, so a failed assertion
+/// or panic still cleans up the scratch file.
+struct TempPackFile {
+    path: std::path::PathBuf,
+}
+
+impl TempPackFile {
+    fn write(path: &std::path::Path, bytes: &[u8]) -> Self {
+        std::fs::write(path, bytes).expect("the scratch directory is writable");
+        Self {
+            path: path.to_path_buf(),
+        }
+    }
+}
+
+impl Drop for TempPackFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> TempPackFile {
     let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
     let directory_size: usize = entries
         .iter()
@@ -179,19 +235,40 @@ fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> std::path::PathBuf
         std::process::id(),
         out.len()
     ));
-    std::fs::write(&path, &out).unwrap();
-    path
+    TempPackFile::write(&path, &out)
+}
+
+#[test]
+fn temp_pack_file_removes_the_scratch_file_while_a_panic_unwinds() {
+    let observed = std::cell::RefCell::new(std::path::PathBuf::new());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fixture =
+            write_synthetic_palette_pack(&[("title/palette/pokemon_logo", &RED_BGR555_LE)]);
+        *observed.borrow_mut() = fixture.path.clone();
+        assert!(
+            fixture.path.exists(),
+            "the scratch pack is written up front"
+        );
+        panic!("simulated assertion failure inside the test body");
+    }));
+    assert!(result.is_err(), "the simulated failure must unwind");
+    let path = observed.borrow();
+    assert!(
+        !path.exists(),
+        "the Drop guard must remove {} during unwinding",
+        path.display()
+    );
 }
 
 #[test]
 fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
     let logo = RED_BGR555_LE.repeat(256);
     let rayquaza_clouds = GREEN_BGR555_LE.repeat(16);
-    let path = write_synthetic_palette_pack(&[
+    let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
     ]);
-    let pack = AssetPack::load(&path).unwrap();
+    let pack = AssetPack::load(&fixture.path).unwrap();
     let palette = title_palette_from_refs(
         pack.palette("title/palette/pokemon_logo").unwrap(),
         pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
@@ -201,19 +278,17 @@ fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
     assert_eq!(palette.color(split).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 15).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 16), rendering::Bgr555::default());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn title_palette_never_reads_past_either_entrys_own_color_count() {
     let logo = RED_BGR555_LE;
     let rayquaza_clouds = GREEN_BGR555_LE;
-    let path = write_synthetic_palette_pack(&[
+    let fixture = write_synthetic_palette_pack(&[
         ("title/palette/pokemon_logo", &logo),
         ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
     ]);
-    let pack = AssetPack::load(&path).unwrap();
+    let pack = AssetPack::load(&fixture.path).unwrap();
     let palette = title_palette_from_refs(
         pack.palette("title/palette/pokemon_logo").unwrap(),
         pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
@@ -223,8 +298,6 @@ fn title_palette_never_reads_past_either_entrys_own_color_count() {
     let split = u8::try_from(LOGO_PALETTE_COLORS).unwrap();
     assert_eq!(palette.color(split).to_rgb888().g, 255);
     assert_eq!(palette.color(split + 1), rendering::Bgr555::default());
-
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -646,6 +719,47 @@ fn crop_and_pack_tile_bytes_rejects_a_short_payload_instead_of_panicking() {
             width: 16,
             height: 8,
             actual: 16 * 8 - 1,
+        }
+    );
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    let pixels = tiled_image(16, 8, |col, _row| if col == 0 { 1 } else { 16 });
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let err =
+        crop_and_pack_tile_bytes("bogus/sheet", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "bogus/sheet",
+            index: 16,
+        }
+    );
+}
+
+#[test]
+fn press_start_tileset_rejects_a_palette_index_a_4bpp_tile_cannot_hold() {
+    // The shipping ROM-4bpp/pack-8bpp sheet takes this same crop path.
+    let mut pixels = vec![0u8; 160 * 24];
+    pixels[0] = 16;
+    let image = ImageRef {
+        width: 160,
+        height: 24,
+        bit_depth: 8,
+        pixels: &pixels,
+    };
+    let err = press_start_tileset("title/image/press_start", image).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePaletteIndexOutOfRange {
+            id: "title/image/press_start",
+            index: 16,
         }
     );
 }

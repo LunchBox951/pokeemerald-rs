@@ -36,6 +36,22 @@ const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
 /// `WALK_FRAMES_PER_TILE` — how many `step` calls one tile takes.
 const FRAMES_PER_STEP: usize = engine::overworld::WALK_FRAMES_PER_TILE as usize;
 
+/// Hold East through `steps` whole tile crossings and then give the last one
+/// its landing call.
+///
+/// The crossing itself is [`FRAMES_PER_STEP`] calls; the call after it is
+/// upstream's `T_TILE_CENTER` CB1, where the completed step's coordinate
+/// event, door-shaped warp and encounter roll actually run
+/// (`OverworldPhase::step`'s "Frame shape" docs, issue #1039). That last
+/// call is deliberately neutral, so it cannot also begin a further crossing
+/// the way a still-held direction would.
+fn walk_east_and_land(phase: &mut OverworldPhase, steps: usize) {
+    for _ in 0..(steps * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    phase.step(ButtonState::new());
+}
+
 /// A held (not newly-pressed) direction, the input a walk is driven with --
 /// two updates, so the button reads as held rather than freshly pressed,
 /// matching a real multi-frame hold.
@@ -147,9 +163,7 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
 
     // Four steps on ordinary ground: the immunity window, RNG-silent.
     for step in 1..=4 {
-        for _ in 0..FRAMES_PER_STEP {
-            phase.step(held(Buttons::RIGHT));
-        }
+        walk_east_and_land(&mut phase, 1);
         assert_eq!(phase.player.position(), (2 + step, 5));
         assert!(phase.wild_battle.is_none(), "step {step} must be immune");
     }
@@ -163,11 +177,18 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
         engine::overworld::WILD_ENCOUNTER_IMMUNITY_STEPS
     );
 
-    // The fifth step lands on the grass tile and rolls for real.
+    // The fifth step lands on the grass tile and rolls for real -- on its
+    // landing call, not on the call its walk animation drained.
     for _ in 0..FRAMES_PER_STEP {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(phase.player.position(), (7, 5));
+    assert!(
+        phase.wild_battle.is_none(),
+        "the drain call is upstream's last CB2 animation frame -- the completed step \
+         has not been observed yet (issue #1039)"
+    );
+    phase.step(ButtonState::new());
     let battle = phase
         .wild_battle
         .as_ref()
@@ -322,9 +343,7 @@ fn an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_play
     phase.rng = Rng::new(ENCOUNTER_SEED);
     assert!(phase.party_lead.is_none(), "a bare test phase has no party");
 
-    for _ in 0..(5 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
     assert!(phase.wild_battle.is_none(), "no mon, no battle");
     // The roll consumed its four draws all the same.
@@ -790,9 +809,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
     // Four steps east: (4, 5), (5, 5), (6, 5), then the cave floor at
     // (7, 5). All four are inside the post-transition immunity window, so
     // none of them draws -- but each records its tile's behavior.
-    for _ in 0..(4 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 4);
     assert_eq!(phase.player.position(), (7, 5));
     assert_eq!(
         phase.wild.immunity_steps(),
@@ -807,9 +824,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
     // The fifth step lands on the warp tile. Upstream returns out of
     // ProcessPlayerFieldInput before the encounter check, so the roll must
     // not see this step at all.
-    for _ in 0..FRAMES_PER_STEP {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 1);
     assert_eq!(
         phase.map_id, GRANITE_CAVE_B1F,
         "the warp fires but its destination is outside this port's bundled layouts, so \
@@ -835,16 +850,19 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
 }
 
 /// [`super::roll_eligible_landing`] exhaustively: upstream's `:155-161`
-/// block claims the frame ahead of the encounter check at `:162`, whichever
-/// of the two warp paths claimed it.
+/// block -- `TryStartStepBasedScript`'s door-shaped warp -- claims the frame
+/// ahead of the encounter check at `:162`.
 ///
-/// The `preempting` arm is unreachable through
-/// [`OverworldPhase::step`] today (a preempted frame requires the player to
-/// have been at rest, and `pending_landing` is empty at rest -- see
-/// `advance_or_skip_for_preempt`'s own `debug_assert`), which is exactly why
-/// it is pinned here rather than only by the walked scenario above.
+/// `TryArrowWarp` is deliberately absent. It used to be an input here, back
+/// when a preempting arrow warp and a ready landing could not share a frame
+/// at all; since issue #1039 they can (the landing is consumed at the top of
+/// the call *after* the animation drained, with the player at rest and the
+/// arrow poll open), and upstream's answer for that frame is that the arrow
+/// never gets a say: it sits at `:164-168`, below the roll. The suppression
+/// runs the other way, and `a_fired_encounter_closes_the_arrow_warp_poll`
+/// below pins it.
 #[test]
-fn a_warp_of_either_shape_takes_the_frame_from_the_encounter_roll() {
+fn a_door_shaped_warp_takes_the_frame_from_the_encounter_roll() {
     let landed = Some((4, 5));
     let warp = Some(WarpTrigger::Resolved {
         map: ROUTE_101,
@@ -852,48 +870,46 @@ fn a_warp_of_either_shape_takes_the_frame_from_the_encounter_roll() {
     });
 
     assert_eq!(
-        roll_eligible_landing(landed, None, None),
+        roll_eligible_landing(landed, None),
         landed,
         "a plain completed step is what the roll is for"
     );
     assert_eq!(
-        roll_eligible_landing(landed, warp, None),
-        None,
-        "a pre-movement arrow warp consumed the frame"
-    );
-    assert_eq!(
-        roll_eligible_landing(landed, None, warp),
+        roll_eligible_landing(landed, warp),
         None,
         "a door-shaped warp consumed the frame"
     );
     assert_eq!(
-        roll_eligible_landing(landed, None, Some(WarpTrigger::Unsupported)),
+        roll_eligible_landing(landed, Some(WarpTrigger::Unsupported)),
         None,
         "an unresolvable warp still *fired* upstream -- IsWarpMetatileBehavior matched and \
          TryStartWarpEventScript returned TRUE; only this port's destination lookup failed"
     );
     assert_eq!(
-        roll_eligible_landing(None, None, None),
+        roll_eligible_landing(None, None),
         None,
         "no completed step, nothing to roll for"
     );
 }
 
-/// [`super::arrow_poll_open`]: `TryArrowWarp` (`:164-168`) is two lines
-/// below `CheckStandardWildEncounter` (`:162`), which returns `TRUE` and
-/// ends `ProcessPlayerFieldInput` when a wild Pokémon appears.
+/// [`super::arrow_poll_open`]: `TryArrowWarp` (`:164-168`) is below
+/// `TryStartStepBasedScript` (`:155-161`) and `CheckStandardWildEncounter`
+/// (`:162`), each of which returns `TRUE` and ends
+/// `ProcessPlayerFieldInput` when it claims the frame.
 ///
-/// Unreachable through [`OverworldPhase::step`] with today's data -- the
-/// poll reads the tile the player already stands on, which on a drain frame
-/// is the very tile the roll just read, and no behavior id is both an
-/// arrow-warp id and a land-encounter id -- so this is where upstream's
-/// ordering is pinned.
+/// The claimed arm is unreachable through [`OverworldPhase::step`] with
+/// today's data -- the poll reads the tile the player already stands on,
+/// which on the landing call is the very tile the door check and the roll
+/// just read, and no behavior id is both an arrow-warp id and a
+/// land-encounter id, nor both an arrow-warp id and a warp-event id -- so
+/// this is where upstream's ordering is pinned.
 #[test]
 fn a_fired_encounter_closes_the_arrow_warp_poll() {
     assert!(arrow_poll_open(false, false), "at rest, nothing fired");
     assert!(
         !arrow_poll_open(false, true),
-        "an encounter ends ProcessPlayerFieldInput at :162"
+        "a coord event, a door-shaped warp, or an encounter ends \
+         ProcessPlayerFieldInput before :164"
     );
     assert!(
         !arrow_poll_open(true, false),
@@ -928,8 +944,9 @@ fn a_fired_encounter_consumes_the_frames_field_input() {
     assert!(field_input_consumed(false, resolved), "so does a warp");
     assert!(field_input_consumed(true, resolved));
     assert!(
-        !field_input_consumed(false, Some(WarpTrigger::Unsupported)),
-        "a warp this port cannot resolve did nothing, and must not swallow the A press too"
+        field_input_consumed(false, Some(WarpTrigger::Unsupported)),
+        "an unresolvable warp still *fired* upstream -- TryStartWarpEventScript returned \
+         TRUE; only this port's destination lookup failed, so it owns this frame's A press too"
     );
 }
 
@@ -987,9 +1004,7 @@ fn a_lost_battle_now_heals_the_party_and_halves_money() {
     assert!(lead.moves()[0].pp < base_pp, "setup: PP really is short");
     phase.party_lead = Some(lead);
 
-    for _ in 0..(5 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 5);
     assert_eq!(phase.player.position(), (7, 5));
     assert!(
         phase.wild_battle.is_some(),
@@ -1072,9 +1087,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     lead.apply_damage(lead.stats().max_hp - 1);
     phase.party_lead = Some(lead);
 
-    for _ in 0..(5 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 5);
     assert!(phase.wild_battle.is_some(), "setup: the roll fired");
     let mut frames = 0;
     while phase.wild_battle.is_some() {
@@ -1099,9 +1112,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     // Four ordinary steps east spend the immunity window the battle
     // restarted -- upstream's own post-battle grace, and no draw at all.
     let after_battle = phase.rng.state();
-    for _ in 0..(4 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 4);
     assert_eq!(phase.player.position(), (11, 5));
     assert_eq!(
         phase.rng.state(),
@@ -1115,9 +1126,7 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     );
 
     // The first rolled step after the white-out, onto grass: the check runs.
-    for _ in 0..FRAMES_PER_STEP {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 1);
     assert_eq!(phase.player.position(), (12, 5));
     assert_ne!(
         phase.rng.state(),
@@ -1194,9 +1203,7 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
     let base_pp = fragile_treecko.moves()[0].pp;
     phase.party_lead = Some(fragile_treecko);
 
-    for _ in 0..FRAMES_PER_STEP {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 1);
     assert_eq!(
         phase.player.position(),
         (tx, ty),
@@ -1281,9 +1288,7 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
     lead.apply_damage(lead.stats().max_hp - 1);
     phase.party_lead = Some(lead);
 
-    for _ in 0..(5 * FRAMES_PER_STEP) {
-        phase.step(held(Buttons::RIGHT));
-    }
+    walk_east_and_land(&mut phase, 5);
     assert!(phase.wild_battle.is_some(), "setup: the roll fired");
 
     let mut frames = 0;
