@@ -295,21 +295,11 @@ pub enum SynchronizePoisonReflectionOutcome {
     Applied,
 }
 
-/// Resolves a Synchronize poison reflection against `attacker`, the battler
-/// whose move just poisoned a Synchronize holder: `SetMoveEffect`'s
+/// Resolves a Synchronize poison reflection against `attacker`: `SetMoveEffect`'s
 /// `STATUS1_POISON` case re-entered through `MOVE_EFFECT_AFFECTS_USER` with
-/// `primary == TRUE` (`battle_util.c:2971`-`:2986`,
-/// `battle_script_commands.c:2299`-`:2340`), which runs neither `typecalc`
-/// nor `accuracycheck`.
-///
-/// `primary == TRUE` always takes the guarded prevention branches ahead of
-/// the existing-status no-op, unlike the initial hit's own chance-based
-/// landing (`poison_can_land`, gated on `HITMARKER_STATUS_ABILITY_EFFECT`
-/// and `primary`/`certain` too): an [`AbilityId::IMMUNITY`] holder or a
-/// Poison- or Steel-typed attacker produces its own prevention observable
-/// here, where the initial hit's guard would have refused silently. Only a
-/// normally typed, non-Immunity attacker that already carries a primary
-/// status falls through to the silent no-op.
+/// `primary == TRUE`, which protects an Immunity or Poison-/Steel-typed
+/// attacker ahead of the existing-status no-op
+/// (`battle_util.c:2971`-`:2986`, `battle_script_commands.c:2299`-`:2340`).
 #[must_use]
 pub fn resolve_synchronize_poison_reflection(
     attacker: &BattlePokemon,

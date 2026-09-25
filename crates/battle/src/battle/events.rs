@@ -286,15 +286,13 @@ pub enum BattleEvent {
         move_id: MoveId,
     },
     /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
-    /// back onto the original attacker at move end
-    /// (`MOVEEND_SYNCHRONIZE_TARGET`, `src/battle_util.c:2971`-`:2986`).
+    /// back onto the original attacker after the target's own faint settlement
+    /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
+    /// `data/battle_scripts_1.s:265`-`:267`).
     ///
-    /// This follows the target's own faint settlement, unlike
-    /// [`BattleEvent::ParalyzedBySynchronize`]: `seteffectwithchance` leads
-    /// into `tryfaintmon BS_TARGET` ahead of `moveendall`
-    /// (`data/battle_scripts_1.s:265`-`:267`), where the non-damaging
-    /// paralysis script has no such step. It consumes no RNG: the reflection
-    /// re-enters `SetMoveEffect` without `typecalc` or `accuracycheck`.
+    /// This follows the [`BattleEvent::Poisoned`] event it reflects and
+    /// consumes no RNG: the reflection re-enters `SetMoveEffect` without
+    /// `typecalc` or `accuracycheck`.
     PoisonedBySynchronize {
         /// Whether the player used the poisoning move.
         by_player: bool,
