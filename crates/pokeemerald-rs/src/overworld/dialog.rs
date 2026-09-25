@@ -26,6 +26,11 @@ use rendering::Framebuffer;
 
 use crate::textbox::{self, FrameAssets};
 
+/// Default cadence for a caller not yet threading a saved [`TextSpeed`]
+/// through [`NpcDialog::open`]/[`NpcDialog::from_pack`]. Upstream always
+/// paces field text via `GetPlayerTextSpeedDelay()`
+/// (`pokeemerald/src/menu.c:191-196,481-488`); see
+/// [`NpcDialog::open_at_speed`].
 const FIELD_SCRIPT_TEXT_SPEED: TextSpeed = TextSpeed::Mid;
 
 /// Maps A/B button edges and holds to the shared printer input shape.
@@ -103,9 +108,11 @@ impl NpcDialog {
     /// Creates the standard field message box from decoded assets.
     ///
     /// NPC and save messages share this type because both use the standard field
-    /// message resources. `text_speed` stays caller-supplied so save messages can
-    /// use the saved option while field scripts use [`FIELD_SCRIPT_TEXT_SPEED`].
-    /// Holding A or B accelerates printing.
+    /// message resources. `text_speed` stays caller-supplied: save messages and
+    /// the ordinary field-dialog path ([`Self::open_at_speed`]/
+    /// [`Self::from_pack_at_speed`]) pass the saved, normalized option, while a
+    /// caller still on [`Self::open`]/[`Self::from_pack`] gets
+    /// [`FIELD_SCRIPT_TEXT_SPEED`]. Holding A or B accelerates printing.
     pub(crate) fn new(
         sheet: OwnedFontGlyphSheet,
         frame: FrameAssets,
@@ -130,19 +137,39 @@ impl NpcDialog {
         self
     }
 
-    /// Builds a confirm-to-close dialog from an already-loaded asset pack.
+    /// Builds a confirm-to-close dialog from an already-loaded asset pack, at
+    /// the default [`FIELD_SCRIPT_TEXT_SPEED`] cadence.
     ///
     /// # Errors
     ///
     /// Returns [`NpcDialogError::Pack`] for missing or malformed pack entries,
     /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
     pub(crate) fn from_pack(pack: &AssetPack, tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
-        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
-        let frame = FrameAssets::from_handle(pack.message_box()?);
-        Ok(Self::new(sheet, frame, tokens, FIELD_SCRIPT_TEXT_SPEED).with_waitbuttonpress())
+        Self::from_pack_at_speed(pack, tokens, FIELD_SCRIPT_TEXT_SPEED)
     }
 
-    /// Loads an asset pack and opens a confirm-to-close dialog.
+    /// [`Self::from_pack`], at a caller-chosen `text_speed` rather than the
+    /// [`FIELD_SCRIPT_TEXT_SPEED`] default -- the saved, normalized option for
+    /// an ordinary field dialog (issue #1392), mirroring how upstream's
+    /// `AddTextPrinterForMessage` always paces field text through
+    /// `GetPlayerTextSpeedDelay()` (`pokeemerald/src/menu.c:191-196,481-488`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NpcDialogError::Pack`] for missing or malformed pack entries,
+    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    pub(crate) fn from_pack_at_speed(
+        pack: &AssetPack,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Result<Self, NpcDialogError> {
+        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
+        let frame = FrameAssets::from_handle(pack.message_box()?);
+        Ok(Self::new(sheet, frame, tokens, text_speed).with_waitbuttonpress())
+    }
+
+    /// Loads an asset pack and opens a confirm-to-close dialog, at the
+    /// default [`FIELD_SCRIPT_TEXT_SPEED`] cadence.
     ///
     /// # Errors
     ///
@@ -154,6 +181,22 @@ impl NpcDialog {
     ) -> Result<Self, NpcDialogError> {
         let pack = source.load()?;
         Self::from_pack(&pack, tokens)
+    }
+
+    /// [`Self::open`], at a caller-chosen `text_speed` -- see
+    /// [`Self::from_pack_at_speed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NpcDialogError::Pack`] when the pack cannot be loaded or read,
+    /// and [`NpcDialogError::Font`] when the font sheet cannot be decoded.
+    pub(crate) fn open_at_speed(
+        source: crate::pack_source::PackSource,
+        tokens: Vec<Token>,
+        text_speed: TextSpeed,
+    ) -> Result<Self, NpcDialogError> {
+        let pack = source.load()?;
+        Self::from_pack_at_speed(&pack, tokens, text_speed)
     }
 
     /// Returns the number of glyphs currently visible on screen.
@@ -537,6 +580,135 @@ mod tests {
         assert_eq!(
             composed.pixel(OUTSIDE_DIALOG_PIXEL.0, OUTSIDE_DIALOG_PIXEL.1),
             Some(marker)
+        );
+    }
+
+    /// The smallest pack [`NpcDialog::from_pack_at_speed`] accepts: the
+    /// standard message box frame and the normal font sheet. Mirrors
+    /// `crate::start_menu::tests::synthetic_start_menu_pack_bytes`'s own
+    /// fixture.
+    fn synthetic_field_dialog_pack_bytes() -> Vec<u8> {
+        use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+
+        const MESSAGE_BOX_WIDTH: u32 = 56;
+        const MESSAGE_BOX_HEIGHT: u32 = 16;
+        const FRAME_BIT_DEPTH: u8 = 4;
+        const FONT_BIT_DEPTH: u8 = 2;
+        const PALETTE_COLOUR_COUNT: u16 = 16;
+
+        pack_bytes(vec![
+            image_entry(
+                "text-window/image/message_box",
+                MESSAGE_BOX_WIDTH,
+                MESSAGE_BOX_HEIGHT,
+                FRAME_BIT_DEPTH,
+                0,
+            ),
+            palette_entry("text-window/palette/message_box", PALETTE_COLOUR_COUNT),
+            image_entry(
+                "font/normal/glyphs",
+                assets::fonts::SHEET_WIDTH,
+                assets::fonts::SHEET_HEIGHT,
+                FONT_BIT_DEPTH,
+                0,
+            ),
+        ])
+    }
+
+    /// Ticks `dialog` until `glyph_count` glyphs are revealed, or panics past
+    /// `PRINT_FRAME_BUDGET` frames.
+    fn frames_to_reveal(dialog: &mut NpcDialog, glyph_count: usize) -> usize {
+        const PRINT_FRAME_BUDGET: usize = 64;
+        for frame in 1..=PRINT_FRAME_BUDGET {
+            dialog.tick(NO_INPUT);
+            if dialog.revealed_glyph_count() == glyph_count {
+                return frame;
+            }
+        }
+        panic!("a message of {glyph_count} glyphs must print within {PRINT_FRAME_BUDGET} frames");
+    }
+
+    /// Issue #1392 regression: `AddTextPrinterForMessage` -- the printer
+    /// every ordinary field message goes through
+    /// (`pokeemerald/src/field_message_box.c:117-128`) -- paces at
+    /// `GetPlayerTextSpeedDelay()` (`pokeemerald/src/menu.c:191-196`), which
+    /// reads the saved `optionsTextSpeed` (`:481-488`). A field dialog
+    /// opened through [`NpcDialog::from_pack_at_speed`] (the entry point
+    /// `super::OverworldPhase::field_dialog_text_speed` feeds) must
+    /// therefore take its cadence from the caller-supplied, normalized
+    /// speed rather than the fixed [`FIELD_SCRIPT_TEXT_SPEED`] default, so a
+    /// session saved FAST prints the same message in fewer frames than one
+    /// saved SLOW (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph).
+    #[test]
+    fn field_dialogs_pace_at_the_speed_they_are_given() {
+        const MESSAGE_GLYPHS: usize = 3;
+        let tokens = || {
+            vec![
+                Token::Char('H'),
+                Token::Char('i'),
+                Token::Char('!'),
+                Token::End,
+            ]
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-text-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
+            .expect("the scratch directory is writable");
+        let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
+        let _ = std::fs::remove_file(&path);
+
+        let mut fast_dialog =
+            NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(2))
+                .expect("the synthetic pack carries the dialog's font and message box");
+        let mut slow_dialog =
+            NpcDialog::from_pack_at_speed(&pack, tokens(), TextSpeed::from_raw_option(0))
+                .expect("the synthetic pack carries the dialog's font and message box");
+
+        let fast = frames_to_reveal(&mut fast_dialog, MESSAGE_GLYPHS);
+        let slow = frames_to_reveal(&mut slow_dialog, MESSAGE_GLYPHS);
+
+        assert!(
+            fast < slow,
+            "a field dialog given the FAST saved option must print in fewer frames than one \
+             given SLOW, but they took {fast} and {slow} frames"
+        );
+    }
+
+    /// [`NpcDialog::open`]/[`NpcDialog::from_pack`] must keep defaulting to
+    /// [`FIELD_SCRIPT_TEXT_SPEED`] -- the sight-trainer intro speech
+    /// (`crate::flow::overworld_phase::sight_trainer_approach`) still calls
+    /// the two-argument form and must not change cadence out from under it.
+    #[test]
+    fn from_pack_still_defaults_to_the_field_script_text_speed() {
+        const MESSAGE_GLYPHS: usize = 1;
+
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-field-dialog-default-speed-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, synthetic_field_dialog_pack_bytes())
+            .expect("the scratch directory is writable");
+        let pack = AssetPack::load(&path).expect("the synthetic field-dialog pack must load");
+        let _ = std::fs::remove_file(&path);
+
+        let mut default_dialog = NpcDialog::from_pack(&pack, vec![Token::Char('H'), Token::End])
+            .expect("the synthetic pack carries the dialog's font and message box");
+        let mut mid_dialog = NpcDialog::from_pack_at_speed(
+            &pack,
+            vec![Token::Char('H'), Token::End],
+            FIELD_SCRIPT_TEXT_SPEED,
+        )
+        .expect("the synthetic pack carries the dialog's font and message box");
+
+        assert_eq!(
+            frames_to_reveal(&mut default_dialog, MESSAGE_GLYPHS),
+            frames_to_reveal(&mut mid_dialog, MESSAGE_GLYPHS),
+            "from_pack's default speed must still be FIELD_SCRIPT_TEXT_SPEED"
         );
     }
 }

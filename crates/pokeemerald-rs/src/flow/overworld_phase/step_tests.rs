@@ -150,6 +150,166 @@ fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_play
     );
 }
 
+/// Issue #1392 regression: an ordinary field dialog must read (and repair)
+/// the live save's `optionsTextSpeed` exactly as upstream's
+/// `GetPlayerTextSpeedDelay` repairs `gSaveBlock2Ptr->optionsTextSpeed` in
+/// place (`pokeemerald/src/menu.c:481-488`) -- the same write-back
+/// `start_menu`'s `player_text_speed` already performs for the SAVE prompt.
+/// `AssetPack::load_default` is unavailable headless (this module's other
+/// tests' own notes), so the dialog box itself never actually opens here;
+/// what this proves is that the interaction path reads and repairs the
+/// saved value on the very same frame, before it ever hands the pack load a
+/// chance to fail.
+#[test]
+fn a_field_dialog_interaction_repairs_an_out_of_range_saved_text_speed() {
+    /// An `optionsTextSpeed` above `OPTIONS_TEXT_SPEED_FAST` (`2`) --
+    /// invalid, same as `pokeemerald/include/constants/global.h:127-129`.
+    const OUT_OF_RANGE_TEXT_SPEED: u8 = 5;
+    /// `OPTIONS_TEXT_SPEED_MID`: what an invalid value repairs to.
+    const REPAIRED_MID_TEXT_SPEED: u8 = 1;
+
+    // One tile east of Mom, facing west -- directly adjacent (module docs'
+    // `ONE_F` fixture notes, matching this file's other Mom-interaction
+    // tests).
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = OUT_OF_RANGE_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, REPAIRED_MID_TEXT_SPEED,
+        "an out-of-range saved optionsTextSpeed must be repaired to MID the moment a field \
+         dialog interaction reads it, exactly as GetPlayerTextSpeedDelay repairs \
+         gSaveBlock2Ptr->optionsTextSpeed in place"
+    );
+}
+
+/// The complement: a saved `optionsTextSpeed` already in range must survive
+/// a field dialog interaction unchanged -- only an invalid value is ever
+/// repaired.
+#[test]
+fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
+    const FAST_TEXT_SPEED: u8 = 2;
+
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = FAST_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, FAST_TEXT_SPEED,
+        "a saved optionsTextSpeed already within range must not be rewritten"
+    );
+}
+
+/// Proves the dialog `phase.step` opens paces at the saved `text_speed`
+/// option: the two tests above only prove `resolve_step_events` reads and
+/// repairs the saved option, not that the dialog it opens paces at it --
+/// `AssetPack::load_default` is unavailable headless, so neither one opens
+/// a real dialog. A production call that ignored `text_speed` and passed a
+/// fixed [`engine::text::render::TextSpeed::Mid`] into
+/// `NpcDialog::open_at_speed` regardless of the saved option would still
+/// leave every other text-speed test in this file green.
+///
+/// This test points `phase.pack_source` at a synthetic, on-disk pack
+/// ([`crate::pack_source::PackSource::Test`]) built the same way
+/// `crate::overworld::dialog::tests`' own fixture is, so `phase.step`'s
+/// real dialog-open call succeeds, then drives the *opened* dialog through
+/// ordinary frames exactly as `frame_tests`' real-pack Mom test does, and
+/// asserts a FAST-saved session reveals its message in fewer frames than a
+/// SLOW-saved one (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph,
+/// `pokeemerald/src/menu.c:77-82`).
+#[test]
+fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed() {
+    use crate::pack_source::PackSource;
+    use crate::pack_test_support::{image_entry, pack_bytes, palette_entry};
+
+    const MESSAGE_BOX_WIDTH: u32 = 56;
+    const MESSAGE_BOX_HEIGHT: u32 = 16;
+    const FRAME_BIT_DEPTH: u8 = 4;
+    const FONT_BIT_DEPTH: u8 = 2;
+    const PALETTE_COLOUR_COUNT: u16 = 16;
+    const PRINT_FRAME_BUDGET: usize = 64;
+    /// Mom's real script text ([`crate::overworld::npc_scripts::script_text`])
+    /// starts well past the third glyph -- plenty of room for FAST/SLOW to
+    /// diverge before either dialog panics on a missing font glyph.
+    const GLYPH_TARGET: usize = 3;
+    const OPTIONS_TEXT_SPEED_SLOW: u8 = 0;
+    const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+    let pack_bytes_blob = pack_bytes(vec![
+        image_entry(
+            "text-window/image/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
+            FRAME_BIT_DEPTH,
+            0,
+        ),
+        palette_entry("text-window/palette/message_box", PALETTE_COLOUR_COUNT),
+        image_entry(
+            "font/normal/glyphs",
+            assets::fonts::SHEET_WIDTH,
+            assets::fonts::SHEET_HEIGHT,
+            FONT_BIT_DEPTH,
+            0,
+        ),
+    ]);
+
+    let frames_to_reveal_third_glyph = |saved_text_speed: u8| {
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-step-field-dialog-{saved_text_speed}-{}-{:?}.pack",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, &pack_bytes_blob).expect("the scratch directory is writable");
+        // `PackSource::Test` needs a `'static` path; leaked once per call,
+        // reclaimed only when the test process exits (test-only, matches
+        // this crate's own `Box::leak`-for-`'static`-fixtures idiom).
+        let leaked_path: &'static std::path::Path = Box::leak(path.clone().into_boxed_path());
+
+        // One tile east of Mom, facing west -- directly adjacent (this
+        // file's other Mom-interaction tests' own fixture notes).
+        let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+        phase.pack_source = PackSource::Test(leaked_path);
+        phase.save2.options_text_speed = saved_text_speed;
+
+        phase.step(pressed(Buttons::A));
+        assert!(
+            phase.dialog.is_some(),
+            "the synthetic pack must let the real production path open Mom's dialog"
+        );
+
+        let mut frame = 0;
+        loop {
+            frame += 1;
+            assert!(
+                frame <= PRINT_FRAME_BUDGET,
+                "the third glyph must reveal within the frame budget"
+            );
+            phase.step(ButtonState::new());
+            let dialog = phase
+                .dialog
+                .as_ref()
+                .expect("must still be printing well before waitbuttonpress");
+            if dialog.revealed_glyph_count() >= GLYPH_TARGET {
+                break;
+            }
+        }
+
+        let _ = std::fs::remove_file(&path);
+        frame
+    };
+
+    let fast = frames_to_reveal_third_glyph(OPTIONS_TEXT_SPEED_FAST);
+    let slow = frames_to_reveal_third_glyph(OPTIONS_TEXT_SPEED_SLOW);
+
+    assert!(
+        fast < slow,
+        "the dialog the real step pipeline opens for a FAST-saved session must reveal its \
+         third glyph in fewer frames than a SLOW-saved one, but they took {fast} and {slow}"
+    );
+}
+
 /// The complement: an A press with a direction held, but facing nothing,
 /// must still turn or step exactly as it did before this fix -- the
 /// preempt-movement path introduced for issue #435 must not fire when
