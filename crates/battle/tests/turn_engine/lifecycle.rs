@@ -2,29 +2,42 @@
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction, MAX_LEVEL, STRUGGLE,
+};
+
+/// The friendliest possible outcome for whichever check a draw feeds: a
+/// hit, a critical, or the maximum damage roll.
+const MAX_ROLL: u16 = 0;
+/// A roll every modeled critical-hit stage treats as non-critical.
+const NO_CRIT_ROLL: u16 = 1;
+
+const CHARMANDER: u16 = 4;
+const RATTATA: u16 = 19;
+const BULBASAUR: u16 = 1;
+const TACKLE: MoveId = MoveId(33);
 
 #[test]
 fn take_turn_after_the_battle_ended_is_an_error() {
     let dex = Dex::new();
-    // Level 50 Charmander (fast, strong Tackle) vs level 2 Rattata: the
-    // player one-shots it, so one turn reaches a terminal state.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]); // Rattata
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 
-    // One RNG for the whole battle: battle-start turn number, then the
-    // turn's own turn number, the opponent's move pick, and the player's
-    // hit (accuracy / no crit / best roll / effect chance). No speed-tie
-    // draw at this gap.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new([
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let _ = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(battle.outcome().is_some());
     assert_eq!(rng.draws(), 7);
-    // The rejected call must not draw: the sequence is exhausted, so a
-    // stray draw would panic rather than silently pass.
     let rejected = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap_err();
@@ -38,40 +51,40 @@ fn take_turn_after_the_battle_ended_is_an_error() {
 
 #[test]
 fn full_wild_battle_runs_to_a_faint_and_reports_victory() {
-    let dex = Dex::new();
-    // A genuinely multi-turn, evenly matched fight, hand computed from
-    // the same formulas the unit tests pin:
-    //
-    //   player Rattata L5 max-IV Hardy: atk 12, def 10, speed 13, hp 19
-    //   enemy Bulbasaur L5 max-IV Hardy: atk 11, def 11, speed 11, hp 21
-    //
-    // Rattata is faster, so it moves first every turn.
-    //   Rattata's Tackle: 12*35=420, *4=1680, /11=152, /50=3, +2=5,
-    //     STAB (Normal on a Normal-type) *15/10 = 7 per hit.
-    //   Bulbasaur's Tackle: 11*35=385, *4=1540, /10=154, /50=3, +2=5,
-    //     no STAB (Grass/Poison), Normal is neutral into both = 5.
-    // So Bulbasaur (21 hp) falls on the third player hit (7/14/21) while
-    // Rattata (19 hp) has taken two 5s and is at 9.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
-    let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+    const FULL_TURN: [u16; 10] = [
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+    ];
+    const FINAL_TURN: [u16; 6] = [
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+    ];
 
-    // One scripted RNG for the entire battle, in the module docs' order.
-    // Per full turn: turn number, opponent's move pick, then two hits of
-    // (accuracy / no crit / best roll / effect chance) -- no speed-tie
-    // draw, the speeds differ. The last turn stops after the player's
-    // hit: the enemy faints, so the second mover never acts and never
-    // draws (the effect-chance draw still lands, ahead of tryfaintmon).
-    let mut rng = SequenceRng::new([
-        0, // Battle::new: battle-start turn number
-        0, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 1
-        0, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 2
-        0, 0, 0, 1, 0, 0, // turn 3: player's hit faints the enemy
-    ]);
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(
+        std::iter::once(MAX_ROLL)
+            .chain(FULL_TURN)
+            .chain(FULL_TURN)
+            .chain(FINAL_TURN),
+    );
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
     let mut turns = 0;
     let mut won = false;
-    // Cap the loop so a logic bug fails the test instead of hanging.
     for _ in 0..20 {
         let events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -84,35 +97,29 @@ fn full_wild_battle_runs_to_a_faint_and_reports_victory() {
         }
     }
     assert!(won, "battle did not conclude within 20 turns");
-    assert_eq!(turns, 3, "three player hits of 7 to drop a 21-hp Bulbasaur");
+    assert_eq!(turns, 3);
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
     assert_eq!(battle.enemy().current_hp(), 0);
-    assert_eq!(
-        battle.player().current_hp(),
-        9,
-        "two enemy hits of 5 from 19"
-    );
-    assert_eq!(
-        rng.draws(),
-        27,
-        "1 (battle start) + 10 + 10 (full turns) + 6 (final turn)"
-    );
+    assert_eq!(battle.player().current_hp(), 9);
+    assert_eq!(rng.draws(), 27);
 }
 
 #[test]
 fn losing_the_battle_reports_defeat_and_awards_no_exp() {
     let dex = Dex::new();
-    // Slow L5 Rattata against a fast L50 Charmander: the enemy moves
-    // first and its Tackle overkills the 19-HP player, so the battle
-    // ends in defeat before the player's own queued move ever executes.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     let player_max_hp = player.stats().max_hp;
 
-    // battle start, turn number, enemy pick, enemy hit (accuracy / no
-    // crit / best roll / effect chance). The script is exhausted: the
-    // player's move drawing anything after the loss would panic.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new([
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -123,8 +130,8 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
         vec![
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
-                damage: player_max_hp, // overkill capped at the HP bar
+                move_id: TACKLE,
+                damage: player_max_hp,
                 is_critical: false,
             },
             BattleEvent::Fainted { by_player: true },
@@ -146,15 +153,20 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
 #[test]
 fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
     let dex = Dex::new();
-    // Cmd_getexp case 2 (battle_script_commands.c:3351-:3356): a
-    // MAX_LEVEL recipient gets gBattleMoveDamage = 0 and the state
-    // machine jumps past the "gained EXP" string -- no exp, no message,
-    // so no ExpGained event here either.
-    let player = max_iv_mon(&dex, 4, 100, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+    // Cmd_getexp skips both the "gained EXP" message and MonGainEVs for a
+    // MAX_LEVEL recipient (battle_script_commands.c:3351-3356).
+    let player = max_iv_mon(&dex, CHARMANDER, MAX_LEVEL, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 
-    // battle start, turn number, enemy pick, the player's one-shot hit.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new([
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+        NO_CRIT_ROLL,
+        MAX_ROLL,
+        MAX_ROLL,
+    ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -169,7 +181,7 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
         !events
             .iter()
             .any(|e| matches!(e, BattleEvent::ExpGained(_))),
-        "a level-100 player gains no exp and sees no exp event: {events:?}"
+        "a MAX_LEVEL player gains no exp and sees no exp event: {events:?}"
     );
     assert_eq!(
         battle.player().evs(),
@@ -184,15 +196,10 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
 #[test]
 fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
     let dex = Dex::new();
-    // `apply_damage` is public, so a 0-HP mon is constructible — but
-    // upstream never starts a wild battle around one, and `take_turn`
-    // checks HP only after a hit, so `Battle::new` refuses it.
-    let mut fainted = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let mut fainted = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     fainted.apply_damage(fainted.stats().max_hp);
-    let healthy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let healthy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
 
-    // Empty scripts: a draw before the rejection panics the SequenceRng
-    // rather than silently passing.
     let mut rng = SequenceRng::new([]);
     assert_eq!(
         Battle::new(
@@ -215,42 +222,35 @@ fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
     assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");
 }
 
-/// A wild battle's final knockout normally ends it on the spot — but a
-/// level-up move-learn prompt raised by that knockout's award holds the end
-/// back: upstream runs the whole level-up script, yes/no box included,
-/// before anything after the faint (`HandleFaintedMonActions` completes
-/// `BattleScript_GiveExp` in its case 1 before case 4's
-/// `BattleScript_HandleFaintedMon`, `battle_util.c:1894`-`:1951`). The
-/// `Ended` event and the outcome arrive only with the answer.
+/// `HandleFaintedMonActions` runs the pending level-up prompt to completion
+/// before the deferred `Ended` event follows (`battle_util.c:1894-1951`).
 #[test]
 fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
     use battle::MoveLearnDecision;
 
     const TORCHIC: u16 = 280;
-    const RATTATA: u16 = 19;
     const SCRATCH: MoveId = MoveId(10);
     const GROWL: MoveId = MoveId(45);
-    const TACKLE: MoveId = MoveId(33);
     const LEER: MoveId = MoveId(43);
-    /// `MOVE_PECK` — Torchic's level-16 learnset entry.
     const PECK: MoveId = MoveId(64);
+    const PECK_LEARN_LEVEL: u8 = 16;
+    const EXPERIENCE_SHORT_OF_PECK_LEVEL: u32 = 1;
 
     let dex = Dex::new();
-    // A full-moveset Torchic one experience point short of level 16, so the
-    // knockout's award crosses the threshold and offers Peck with nowhere
-    // to put it.
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     let growth_rate = dex.species(player.species()).unwrap().growth_rate;
-    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let peck_level_experience =
+        assets::experience_for_level(growth_rate, PECK_LEARN_LEVEL).unwrap();
     assert!(player
-        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .apply_experience(
+            &dex,
+            peck_level_experience - EXPERIENCE_SHORT_OF_PECK_LEVEL - player.experience()
+        )
         .unwrap()
         .is_none());
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 
-    // Battle-start turn number; turn number, opponent pick, player's hit
-    // (accuracy / crit / roll / effect chance). No tie draws.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0]);
+    let mut rng = SequenceRng::new([MAX_ROLL; 7]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
     let events = battle
@@ -271,7 +271,7 @@ fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
         None,
         "no outcome while the question is open"
     );
-    assert_eq!(battle.player().level(), 16);
+    assert_eq!(battle.player().level(), PECK_LEARN_LEVEL);
 
     let answered = battle
         .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
@@ -280,8 +280,6 @@ fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
         answered,
         vec![
             BattleEvent::MoveLearnDeclined { move_id: PECK },
-            // The deferred end, and nothing else: a wild battle pays no
-            // money (`Cmd_getmoneyreward` is trainer-only).
             BattleEvent::Ended(BattleOutcome::PlayerWon),
         ]
     );
