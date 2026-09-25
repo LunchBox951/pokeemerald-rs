@@ -451,12 +451,8 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
-        // `trainer_id` is dropped along with the rest of `ActiveBattle::Rival`
-        // the instant `slot` empties, not only on a reported outcome:
-        // `advance_npc_trainer_battle` can also end the battle with no
-        // outcome at all, on a failed turn
-        // (`npc_trainer_battle::finalize_battle_turn`'s own `turn_failed`
-        // abort).
+        // A failed turn ends the battle with no outcome; the whole variant
+        // goes with it either way.
         slot.map(|battle| ActiveBattle::Rival { battle, trainer_id })
     }
 }

@@ -1060,18 +1060,8 @@ impl OverworldPhase {
     }
 
     /// Play one frame of whichever battle currently owns the overworld
-    /// frame, if any -- [`Self::step`]'s single dispatcher. Returns whether
-    /// a battle owned this frame.
-    ///
-    /// Takes [`Self::active_battle`] rather than matching on a borrow: every
-    /// variant's own driver needs `&mut Option<`[`battle::Battle`]`>`
-    /// ([`crate::flow::wild_encounter::advance_wild_battle`],
-    /// [`crate::flow::first_battle::advance_first_battle`],
-    /// [`crate::flow::npc_trainer_battle::advance_npc_trainer_battle`]), so
-    /// each per-variant method hands its own owned battle to a local slot,
-    /// runs that driver, and reports whether the slot is still occupied.
-    /// This is the one place any battle's turn is driven, so a variant can
-    /// never race a sibling's own driver.
+    /// frame, if any -- the one place any battle's turn is driven. Returns
+    /// whether a battle owned this frame.
     pub(super) fn advance_active_battle_frame(&mut self) -> bool {
         let Some(active) = self.active_battle.take() else {
             return false;
