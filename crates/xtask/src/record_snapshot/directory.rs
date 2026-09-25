@@ -45,7 +45,13 @@ impl StagedDirClaim {
                 | rustix::fs::OFlags::CREATE
                 | rustix::fs::OFlags::EXCL
                 | rustix::fs::OFlags::NOFOLLOW,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            // `File::create`'s own 0o666; the process umask narrows it.
+            rustix::fs::Mode::RUSR
+                | rustix::fs::Mode::WUSR
+                | rustix::fs::Mode::RGRP
+                | rustix::fs::Mode::WGRP
+                | rustix::fs::Mode::ROTH
+                | rustix::fs::Mode::WOTH,
         )?;
         std::fs::File::from(fd).write_all(bytes)
     }
