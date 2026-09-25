@@ -21,13 +21,17 @@
 //! sampler end, and `SoundMainRAM` reads exactly that byte for its final
 //! boundary interpolation step (`pokeemerald/src/m4a_1.s:399-407`; see
 //! `crates/xtask/src/extract/wav.rs`'s module docs for the extractor side of
-//! this same contract, issue #1342). This reader keeps parity by reading one
-//! more byte straight from the ROM after the `size` bytes, so the two
-//! backends agree byte-for-byte: a `WaveData` object always has more ROM
-//! after it, so that byte is real. The rare case where it would not be (no
-//! `agbl` override, and the encoder's four-byte alignment padding does not
-//! reach past `size` either) falls back to the same `0` this pack's WAV
-//! extractor documents.
+//! this same contract, issue #1342). This reader always takes the one byte
+//! the ROM holds right after the `size` bytes, because that is the byte
+//! `SoundMainRAM` interpolates toward. For a sample built with an `agbl`
+//! trim (every `sound/direct_sound_samples/*.wav` upstream ships), that byte
+//! is the retained encoded sample and matches the extractor byte-for-byte.
+//! Without a trim, the extractor synthesizes `0` there. The ROM byte is
+//! wav2agb's zero alignment padding when `size` is not a multiple of four,
+//! and so it also agrees. When `size` is a multiple of four, the ROM byte is
+//! the first byte of whatever the linker placed next, and the two backends
+//! can differ. This reader does not detect that case. It uses `0` only when
+//! the read would run off the image.
 //!
 //! A programmable wave is the bare 16-byte table CGB channel 3 plays.
 //!
@@ -165,11 +169,10 @@ pub(crate) fn direct_sound(
         .iter()
         .map(|&byte| i8::from_le_bytes([byte]))
         .collect();
-    // Retain the one byte past `size` that wav2agb's binary payload writer
-    // emits when `agbl` trimmed the header below the unoverridden sampler
-    // end (module docs above; `converter.cpp:77-90,399-401`). A real
-    // `WaveData` always has more ROM after it, so this only falls back to
-    // the extractor's documented `0` for a hand-built or truncated image.
+    // Retain the ROM byte past `size`: the sample `SoundMainRAM`
+    // interpolates toward (module docs above; `converter.cpp:77-90,399-401`).
+    // It is read unconditionally; `0` stands in only when the read runs off
+    // the image.
     let guard = reader
         .u8(base + len_usize(WAVE_HEADER_BYTES) + len_usize(size))
         .unwrap_or(0);
