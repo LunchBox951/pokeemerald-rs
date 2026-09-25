@@ -27584,6 +27584,12 @@
           "rust_target": "crates/rendering/src/effects.rs",
           "spec": "S-2",
           "status": "rewritten"
+        },
+        "normal_palette_fade": {
+          "reason": "palette_fade::NormalPaletteFade reimplements the front-end NORMAL_FADE subset of BeginNormalPaletteFade (palette.c:156-199) and UpdatePaletteFade's normal-mode dispatch (palette.c:114-131) plus UpdateNormalPaletteFade's BG/OBJ scheduler (palette.c:406-490) and IsSoftwarePaletteFadeFinishing's four-then-done finishing polls (palette.c:807-828), fixed to PALETTES_ALL, zero delay, coefficient 0->16 at deltaY=2, and a black or white target. begin() runs the immediate first (background) update the way BeginNormalPaletteFade calls UpdatePaletteFade before returning; update() alternates background/object halves, stepping the coefficient only once both halves of a pair have processed, and reports Active for exactly four finishing polls before Done, pinned by a begin/update status-trace test (issue #1328). Palette masks other than all, nonzero delay, other start/target coefficients, FAST_FADE/HARDWARE_FADE, palette-buffer/PLTT transfer machinery, PaletteStruct behavior, TintPalette_GrayScale/_SepiaTone/_CustomTone, InvertPlttBuffer, and the rest of palette.c remain pending; flow-level wiring that holds a scene through the fade is issue #1329's, not this artifact's.",
+          "rust_target": "crates/rendering/src/palette_fade.rs",
+          "spec": "S-2",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -28682,6 +28688,14 @@
       "status": "pending"
     },
     "src/util.c": {
+      "artifacts": {
+        "BlendPalette": {
+          "reason": "palette_fade's private blend_channel/blend_pixel reimplement BlendPalette's independent per-channel signed delta over 5-bit BGR555 channels, base + (((target - base) * coeff) >> 4) (util.c:264-278), including the arithmetic-right-shift rounding toward negative infinity for negative (darkening) deltas, then round-trip the result through Bgr555/Rgb888 expansion for the retained composed Framebuffer. Covers only the PALETTES_ALL front-end black/white use through palette_fade::NormalPaletteFade (issue #1328); pinned by an oracle test over representative and boundary BGR555 channels for both targets, and proven apart from effects::brighten/darken's distinct hardware BLDY packed-lane rounding. Every other BlendPalette caller and the rest of util.c remain pending.",
+          "rust_target": "crates/rendering/src/palette_fade.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
