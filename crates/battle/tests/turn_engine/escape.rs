@@ -151,13 +151,8 @@ fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
 
 #[test]
 fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
-    // A +6 Speed stage must change turn order but not escape odds:
-    // `TryRunFromBattle` reads raw speed (`battle_util.c:463`-`:466`) while
-    // `GetWhoStrikesFirst` reads the stage-modified effective speed
-    // (`crate::turn_order::resolve_order`). Bulbasaur L10 (raw 17, +6 stage
-    // -> effective 68) against Rattata L20 (raw 40, neutral) sits on
-    // opposite sides of that comparison depending on which speed is read, so
-    // each leg below pins one accessor.
+    // `TryRunFromBattle` reads raw speed (`battle_util.c:463`-`:466`); turn
+    // order reads stage-modified effective speed instead.
     let dex = Dex::new();
     let stage_boosted = |dex: &Dex| {
         let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId(33)]);
