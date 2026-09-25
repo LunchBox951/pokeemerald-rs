@@ -13,7 +13,10 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// either backend makes to an id's contract needs a bump the other tracks.
 /// See `xtask::extract::TITLE_SCREEN_PALETTE_CUTS` for the current
 /// `title/palette/pokemon_logo` byte contract this version enforces.
-pub const FORMAT_VERSION: u32 = 7;
+/// Version 8 changed every `audio/sample/direct-sound/*` payload to retain
+/// one interpolation-guard sample past its logical count (issue #1342), so
+/// a version-7 pack is refused here instead of failing mid-decode.
+pub const FORMAT_VERSION: u32 = 8;
 
 /// The pack's location, relative to the repository root: a top-level,
 /// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
@@ -96,7 +99,7 @@ mod tests {
     #[test]
     fn magic_and_version_are_the_published_values() {
         assert_eq!(&MAGIC, b"PKMRPACK");
-        assert_eq!(FORMAT_VERSION, 7);
+        assert_eq!(FORMAT_VERSION, 8);
     }
 
     #[test]
