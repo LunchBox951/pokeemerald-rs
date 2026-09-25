@@ -221,7 +221,11 @@ impl ImportedPack {
 /// on the returned [`ImportError::WriteFailed`]; a retry on that name is
 /// refused (`AlreadyExists`) until it is cleared. On Windows the confirmed
 /// file is deleted instead ([`PartialFile::Gone`]), and a retry lands at
-/// the same name. `source` stays the write's own I/O failure either way. A
+/// the same name -- except on a volume that refuses POSIX delete semantics
+/// while another process still holds the file open: there the delete stays
+/// pending, the name keeps refusing a same-name retry until that handle
+/// closes, and the finding is [`PartialFile::MayRemain`]. `source` stays
+/// the write's own I/O failure either way. A
 /// replacement a concurrent writer put there is left alone everywhere,
 /// within the bound `classify_partial_file` states.
 ///
@@ -487,11 +491,18 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
     Ok(found.file_type().is_file() && is_the_created_file(file, &found)?)
 }
 
-/// The identity `GetFileInformationByHandle` reads off an open handle:
-/// volume serial number and file index, the one per-object identity Windows
-/// exposes to a handle regardless of which path was used to open it (`std`'s
-/// equivalent, `MetadataExt::volume_serial_number`/`file_index`, is still
-/// gated on the unstable `windows_by_handle`, rust-lang/rust#63010).
+/// The identity Windows reads off an open handle: volume serial number and
+/// file ID, the one per-object identity it exposes to a handle regardless of
+/// which path was used to open it (`std`'s equivalent,
+/// `MetadataExt::volume_serial_number`/`file_index`, is still gated on the
+/// unstable `windows_by_handle`, rust-lang/rust#63010).
+///
+/// The 128-bit ID `GetFileInformationByHandleEx(FileIdInfo)` returns is
+/// read first: `GetFileInformationByHandle`'s 64-bit file index is not
+/// guaranteed unique on `ReFS` (Dev Drive's file system), whose documented
+/// unique identifier is the 128-bit one. Only a file system that rejects
+/// `FileIdInfo` falls back to the 64-bit index, zero-extended, which is how
+/// NTFS fills the 128-bit form anyway.
 ///
 /// Comparing this after opening `path` fresh, rather than the path metadata
 /// [`is_the_created_file`] compares, is what lets
@@ -501,18 +512,57 @@ fn still_the_created_file(file: &std::fs::File, path: &Path) -> std::io::Result<
 #[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct WindowsFileIdentity {
-    volume_serial_number: u32,
-    file_index: u64,
+    volume_serial_number: u64,
+    file_id: [u8; 16],
 }
 
 #[cfg(windows)]
 impl WindowsFileIdentity {
-    /// Reads the identity of the object `handle` refers to.
+    /// Reads the identity of the object `handle` refers to: the 128-bit
+    /// `FileIdInfo` form, or the 64-bit index where the file system rejects
+    /// that class (`ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED`, or
+    /// `ERROR_INVALID_FUNCTION`). Any other failure surfaces.
     fn of(handle: &std::fs::File) -> std::io::Result<Self> {
         use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        use windows_sys::Win32::Foundation::{
+            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
         };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
+        };
+
+        let mut wide = FILE_ID_INFO::default();
+        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+            .expect("FILE_ID_INFO is far smaller than u32::MAX");
+        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle(),
+                FileIdInfo,
+                std::ptr::from_mut(&mut wide).cast(),
+                size,
+            )
+        };
+        if ok != 0 {
+            return Ok(Self {
+                volume_serial_number: wide.VolumeSerialNumber,
+                file_id: wide.FileId.Identifier,
+            });
+        }
+        let refused = std::io::Error::last_os_error();
+        let unsupported = refused
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            .is_some_and(|code| {
+                matches!(
+                    code,
+                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                )
+            });
+        if !unsupported {
+            return Err(refused);
+        }
 
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
@@ -520,9 +570,12 @@ impl WindowsFileIdentity {
         if ok == 0 {
             return Err(std::io::Error::last_os_error());
         }
+        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        let mut file_id = [0u8; 16];
+        file_id[..8].copy_from_slice(&index.to_le_bytes());
         Ok(Self {
-            volume_serial_number: info.dwVolumeSerialNumber,
-            file_index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+            volume_serial_number: u64::from(info.dwVolumeSerialNumber),
+            file_id,
         })
     }
 }

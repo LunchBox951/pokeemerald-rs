@@ -984,6 +984,48 @@ fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
     );
 }
 
+/// An ancestor retargeted to an empty directory leaves the staging path
+/// reaching nothing while the staged image still sits under the junction's
+/// original target. Cleanup cannot remove it and must say so, folding the
+/// `NotFound` into the returned error the way the non-Windows arm folds its
+/// own, rather than returning the rename error alone.
+#[cfg(windows)]
+#[test]
+fn cleanup_reports_a_staged_image_an_ancestor_retarget_orphaned() {
+    let dir = TempDir::new("staging-cleanup-ancestor-empty");
+    let target = dir.join("a");
+    let empty = dir.join("b");
+    std::fs::create_dir(&target).expect("the link's first target");
+    std::fs::create_dir(&empty).expect("the link's second target");
+
+    let link = dir.join("link");
+    junction(&link, &target);
+    let staging = link.join("staged.tmp");
+
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(staging.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
+
+    std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+    junction(&link, &empty);
+
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("additionally failed to remove the abandoned staging file"),
+        "an orphaned staged image must be reported, not dropped: {err}"
+    );
+    assert!(
+        target.join("staged.tmp").exists(),
+        "the orphan really is still there, under the original target"
+    );
+}
+
 /// The ancestor-retarget test above completes its swap before cleanup ever
 /// starts, so an implementation that re-resolves `path` for both the check
 /// and the delete would already pass it. This exercises the narrower
