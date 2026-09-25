@@ -90,7 +90,7 @@ A tag ruleset makes `v*` release tags immutable once created: no updates, no del
 
 ## Platform support and artifacts
 
-Source builds and native CI support Linux, macOS, and Windows. Published archives currently target Linux and Windows. macOS packaging and platform-specific operator playtesting are not v1 gates; CI evidence carries the same unresolved product status as the other platforms.
+Source builds and native CI support Windows, macOS 13 or later, and desktop Linux; other operating systems are out of scope for v1.0.0.0 (#1312). Published archives currently target Linux and Windows. macOS packaging and platform-specific operator playtesting are not v1 gates; CI evidence carries the same unresolved product status as the other platforms.
 
 Pushes from protected-branch promotion to `unstable` publish versioned nightly prereleases at `v<VERSION>-nightly`; `main` retains `v<VERSION>`. Each tag is bound to its exact promotion commit. Both archives and `SHA256SUMS` upload to a draft before publication; a failed upload leaves the previous release available, and rerunning the failed release job resumes the draft. Published assets are not replaced on retry. Nightlies never become GitHub's latest stable release.
 

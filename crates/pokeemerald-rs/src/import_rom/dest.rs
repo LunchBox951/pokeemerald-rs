@@ -68,32 +68,292 @@ fn next_temp_name(sequence: &AtomicU64) -> OsString {
     ))
 }
 
-/// Get `path`'s own directory entries onto the storage device, or give up.
-///
-/// [`Dest::publish`] syncs the destination through the handle it already
-/// holds; this is for the directories *above* it, which the import creates
-/// but never pins — a newly created directory hangs from a name in its
-/// parent, and that name is durable only once the parent is synced.
-///
-/// Best-effort for the reason [`Dest::publish`]'s sync is: the pack's bytes
-/// are on the disk either way, and not every platform will open a directory
-/// at all. A failure here is a weaker guarantee, not a failed import.
+/// Open `path` as a directory, pinned for real I/O -- in particular,
+/// `fsync` ([`Dest::publish`]), which an `O_PATH` handle cannot do. Needs
+/// read permission on `path`, like any ordinary read-mode `open(2)`.
 #[cfg(unix)]
-pub(super) fn sync_directory(path: &Path) {
-    if let Ok(dir) = rustix::fs::open(
+pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
-    ) {
-        let _ = rustix::fs::fsync(&dir);
-    }
+    )?)
+}
+
+/// The raw `O_EXEC` bit on Apple platforms, which combined with
+/// `O_DIRECTORY` forms Apple's substitute for `O_PATH`:
+/// [`O_SEARCH`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html)
+/// (IEEE Std 1003.1-2008, `<fcntl.h>`), POSIX's access mode checked for
+/// *search* permission on the directory, never read, and never re-checked
+/// for a component walked through it afterwards. Spelled as a raw bit
+/// because `rustix`'s `OFlags` maps only `O_PATH`, absent from Apple's
+/// headers; the value is Apple's own (`O_EXEC 0x40000000`,
+/// <https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h>).
+///
+/// macOS 13 Ventura (`xnu-8792`) is the floor for this bit: an older
+/// kernel silently treats it as an ordinary read-mode open, so
+/// [`open_traversal_directory`]'s last-resort fallback still needs read
+/// permission there. Pre-Ventura macOS sits outside the platform floor
+/// RELEASE.md owns and stays best-effort here.
+#[cfg(target_vendor = "apple")]
+const APPLE_O_EXEC: u32 = 0x4000_0000;
+
+/// Open `path` as a directory, pinned for traversal only (`mkdirat`,
+/// `statat`, `openat`, `unlinkat`) -- `create_directories`'s one
+/// path-resolved component, the first ancestor of its destination that
+/// already exists. `O_PATH` needs no read permission on `path`, unlike
+/// [`open_directory`].
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_traversal_directory`] on FreeBSD: `rustix` maps `OFlags::PATH`
+/// there too (its own cfg list for that flag names `target_os =
+/// "freebsd"` alongside Linux), matching FreeBSD's own `open(2)`/`openat(2)`
+/// man page, which documents `O_PATH` there with the identical "record
+/// only the target path" wording Linux's man page uses. No more
+/// permission than the Linux arm above needs.
+///
+/// FreeBSD 13.1 is the floor: `O_PATH` is on that release's `open(2)`
+/// page and absent from 13.0's.
+#[cfg(target_os = "freebsd")]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_traversal_directory`] on any Apple platform: no `O_PATH` there,
+/// but POSIX's own `O_SEARCH` -- see [`APPLE_O_EXEC`] for exactly what
+/// that buys and where the bit comes from.
+#[cfg(target_vendor = "apple")]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::open(
+        path,
+        rustix::fs::OFlags::from_bits_retain(APPLE_O_EXEC)
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_traversal_directory`]'s last-resort fallback: every other Unix
+/// this builds for (NetBSD, OpenBSD, DragonFly BSD, illumos/Solaris, the
+/// GNU/Hurd, ...) gets [`open_directory`]'s ordinary read-mode open,
+/// unverified against any of those platforms' own documentation here --
+/// see [`APPLE_O_EXEC`]'s and the FreeBSD arm's own docs above for why the
+/// two platforms this project's CI actually builds a non-Linux Unix for do
+/// not fall through to it.
+///
+/// Every one of those Unix systems sits outside the platform floor
+/// RELEASE.md owns, so this arm stays best-effort.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_vendor = "apple"
+    ))
+))]
+pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    open_directory(path)
+}
+
+/// Open `name`, inside the already-pinned directory `parent`, as a
+/// directory of its own, for traversal only -- following a final symlink.
+/// `create_directories`'s way of walking down through a level it found
+/// *already standing* (another process won the create race, or `name` is
+/// the lexical `..` a `$POKEEMERALD_PACK` can spell) without re-resolving
+/// a path: the returned handle becomes the next level's `parent`. For a
+/// level this run just made itself, see [`open_created_directory_at`].
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`] on FreeBSD: real `O_PATH`, for the same reason
+/// [`open_traversal_directory`]'s FreeBSD arm takes it.
+#[cfg(target_os = "freebsd")]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`] on any Apple platform: [`APPLE_O_EXEC`]'s
+/// `O_SEARCH`, for the same reason [`open_traversal_directory`]'s Apple
+/// arm takes it.
+#[cfg(target_vendor = "apple")]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::from_bits_retain(APPLE_O_EXEC)
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`]'s last-resort fallback, unverified in the same
+/// way [`open_traversal_directory`]'s own last-resort fallback is.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_vendor = "apple"
+    ))
+))]
+pub(super) fn open_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_directory_at`] for a level `import_rom::create_directories` just
+/// made with `mkdirat` -- refusing a final symlink instead of following
+/// one.
+///
+/// `mkdirat` cannot itself have produced a symlink, so one sitting at
+/// `name` the instant this reopens it is always somebody else's swap
+/// landed in the gap between the two calls (`mkdirat` hands back no
+/// descriptor of its own to avoid it). Opening through it would hand a
+/// subsequent level's own `mkdirat` an attacker-chosen directory to
+/// descend into, which is worse than merely recording the wrong identity
+/// for this one -- see the module docs.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_created_directory_at`] on FreeBSD: real `O_PATH`, for the same
+/// reason [`open_traversal_directory`]'s FreeBSD arm takes it.
+#[cfg(target_os = "freebsd")]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::PATH
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_created_directory_at`] on any Apple platform: [`APPLE_O_EXEC`]'s
+/// `O_SEARCH`, for the same reason [`open_traversal_directory`]'s Apple
+/// arm takes it.
+#[cfg(target_vendor = "apple")]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::from_bits_retain(APPLE_O_EXEC)
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// [`open_created_directory_at`]'s last-resort fallback, unverified in the
+/// same way [`open_traversal_directory`]'s own last-resort fallback is.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_vendor = "apple"
+    ))
+))]
+pub(super) fn open_created_directory_at(
+    parent: &std::os::fd::OwnedFd,
+    name: &OsStr,
+) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        parent,
+        name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?)
+}
+
+/// Reopen the directory `dir` (possibly an `O_PATH` handle) names, for real
+/// I/O -- in particular `fsync`, for `sync_created_directories`'s Unix arm.
+/// Needs read permission `open_traversal_directory` did not, so a parent
+/// this run cannot read is a sync silently skipped, best-effort like
+/// [`Dest::publish`]'s own.
+#[cfg(unix)]
+pub(super) fn reopen_for_sync(dir: &std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd> {
+    Ok(rustix::fs::openat(
+        dir,
+        ".",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?)
 }
 
 /// Get `path`'s own directory entries onto the storage device, or give up.
 ///
-/// The path-based spelling of the Unix arm above, and the same best-effort
-/// contract. Windows will not open a directory as a file, so this is a
-/// no-op there — exactly as it is for [`Dest::publish`]'s own sync.
+/// `import_rom::sync_created_directories`'s off-Unix arm: no descriptor is
+/// pinned there, so a level created is still addressed by path. Windows
+/// will not open a directory as a file, so this is a no-op there --
+/// exactly as it is for [`Dest::publish`]'s own sync.
 #[cfg(not(unix))]
 pub(super) fn sync_directory(path: &Path) {
     let _ = File::open(path).and_then(|dir| dir.sync_all());
@@ -126,15 +386,8 @@ impl Dest {
     /// Whatever `open(2)` reports: the directory is gone, is not a
     /// directory, or is not searchable by this user.
     pub(super) fn open(dir: &Path) -> io::Result<Self> {
-        let dir = rustix::fs::open(
-            dir,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )?;
         Ok(Self {
-            dir,
+            dir: open_directory(dir)?,
             temp_sequence: AtomicU64::new(0),
         })
     }
