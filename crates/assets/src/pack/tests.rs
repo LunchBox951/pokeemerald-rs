@@ -1294,10 +1294,13 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 /// - `sc88pro_flute` — `base_frequency` `3_425_024` is that sample's `agbp`
 ///   override verbatim, deliberately *not* `sample_rate * 1024`
 ///   (3344 * 1024 = `3_424_256`); `loop_start` 1312 is its `smpl` loop
-///   start; `data.len()` 1874 is its `agbl` override, one less than the
-///   naive loop end (inclusive `smpl` end 1874, plus one, = 1875). All read
-///   straight off `sound/direct_sound_samples/sc88pro_flute.wav`'s own
-///   chunks and match `tools/wav2agb`'s `converter.cpp:392-402` arithmetic.
+///   start; `sample_count()` 1874 is its `agbl` override, one less than the
+///   naive loop end (inclusive `smpl` end 1874, plus one, = 1875). `data()`
+///   holds 1875 values: wav2agb's payload writer still emits sample 1874
+///   (`-8`, equal to the loop-start sample), and the pack retains it as the
+///   interpolation guard (issue #1342). All read straight off
+///   `sound/direct_sound_samples/sc88pro_flute.wav`'s own chunks and match
+///   `tools/wav2agb`'s `converter.cpp:77-90,392-402` arithmetic.
 /// - `programmable-wave/01` — the 16 bytes of
 ///   `sound/programmable_wave_samples/01.pcm`, copied through unchanged.
 ///
@@ -1326,12 +1329,17 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         assert_ne!(sample.base_frequency, 0, "`{id}` should carry a pitch word");
         if let Some(start) = sample.loop_start() {
             let start = usize::try_from(start).expect("a real loop start fits a usize");
+            let count = usize::try_from(sample.sample_count()).expect("a real count fits a usize");
             assert!(
-                start < sample.data().len(),
-                "`{id}`'s loop start {start} is past its {} samples",
-                sample.data().len()
+                start < count,
+                "`{id}`'s loop start {start} is past its {count} logical samples"
             );
         }
+        assert_eq!(
+            sample.data().len(),
+            usize::try_from(sample.sample_count()).expect("a real count fits a usize") + 1,
+            "`{id}` should retain exactly one interpolation-guard sample"
+        );
         decoded += 1;
     }
 
@@ -1365,7 +1373,13 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
     };
     assert_eq!(flute.base_frequency, 3_425_024);
     assert_eq!(flute.loop_start(), Some(1312));
-    assert_eq!(flute.data().len(), 1874);
+    // `agbl` sets the logical count to 1874; the pack retains the one
+    // encoded sample past it for the mixer's final interpolation step
+    // (issue #1342), which for this loop is the loop-start value.
+    assert_eq!(flute.sample_count(), 1874);
+    assert_eq!(flute.data().len(), 1875);
+    assert_eq!(flute.data()[1874], -8);
+    assert_eq!(flute.data()[1874], flute.data()[1312]);
 
     let wave_bytes = pack
         .raw("audio/sample/programmable-wave/01")
