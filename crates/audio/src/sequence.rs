@@ -233,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn reserved_jump_table_slots_decode_as_fine() {
+        // gMPlayJumpTable's unpatched ply_fine aliases must terminate like FINE, not
+        // reject as unknown commands (m4a_1.s:1256-1268; m4a_tables.c:6-44; m4a.c:287-305).
+        for opcode in [0xB6, 0xB7, 0xB8, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB] {
+            assert_eq!(
+                decode_track(&[opcode, VOICE, 0]).unwrap(),
+                vec![Event::Fine],
+                "opcode {opcode:#04x}"
+            );
+        }
+    }
+
+    #[test]
     fn note_length_comes_from_clock_table() {
         let short = decode_track(&[NOTE_1, 60, 100]).unwrap();
         assert_eq!(

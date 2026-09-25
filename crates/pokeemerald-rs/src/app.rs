@@ -96,7 +96,7 @@
 //!
 //! It drives [`App::step`] (pump input, advance `flow::advance_scene`'s
 //! title arm, pace, present) and compares against title frames composed
-//! independently via [`title::load_default`], so no assertion can pass by
+//! independently via [`title::load_repo`], so no assertion can pass by
 //! comparing a value with itself. The presented-frame assertions read
 //! `platform::Platform::last_presented` -- the frame the null backend
 //! actually received -- rather than [`App::frame`], which `step` sets
@@ -119,9 +119,10 @@
 //!
 //! This is the evidence for I-2 "boots to the title screen". Before it, the
 //! pack-backed title coverage (`animated_frame_returns_the_presented_tick`,
-//! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) all called
-//! [`title::load_default`]/`compose` directly, and went through neither
-//! construction nor presentation.
+//! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) built the
+//! scene directly, through [`title::load_repo`] or `TitleScene::from_pack`,
+//! and called `compose` on it, going through neither construction nor
+//! presentation.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
@@ -450,9 +451,13 @@ impl App {
     /// leak into anything else this process loads afterwards.
     ///
     /// Persistence is deliberately disabled so a scenario always starts on
-    /// the no-save menu and never reads or writes a player's save file. No
-    /// BGM is started either -- a scenario asserts frames, not audio, and
-    /// [`App::new`] alone owns the real device.
+    /// the no-save menu and never reads or writes a player's save file --
+    /// `SaveSlot::none`, not `SaveSlot::disabled`: this boots as a fresh
+    /// `Empty` medium (nothing has ever been saved), not upstream's
+    /// missing-flash-chip `NoFlash` verdict, so NEW GAME still gets the
+    /// boot-defaulted options a real never-saved boot would (`SaveSlot::none`'s
+    /// own doc comment). No BGM is started either -- a scenario asserts
+    /// frames, not audio, and [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///
@@ -463,7 +468,7 @@ impl App {
         Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )
     }
@@ -486,7 +491,7 @@ impl App {
         let mut app = Self::boot(
             title::load_repo,
             || Ok(Platform::new_headless()),
-            SaveSlot::disabled,
+            SaveSlot::none,
             crate::pack_source::PackSource::Repo,
         )?;
         app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {

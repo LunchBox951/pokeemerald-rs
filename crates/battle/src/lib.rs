@@ -53,6 +53,12 @@
 //! different number of `Random()` calls, and a shared stream that advanced
 //! the wrong number of steps is wrong for the rest of the battle.
 //!
+//! [`secondary::ensure_admissible`]'s Serene Grace screen is status-dependent
+//! rather than static, so a residual that cures a primary status can flip a
+//! verdict construction already gave. `Battle` re-screens the enemy's
+//! admissible moves once at the start of every turn, before that turn's own
+//! RNG, restoring the guarantee above for the life of the battle.
+//!
 //! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
 //! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
 //! flag: crit suppression ([`hit::resolve_hit`]'s `suppress_crit`, see
@@ -150,7 +156,10 @@
 //! primary status the same way, applied inside
 //! [`pokemon::BattlePokemon::attacking_stat`] and
 //! [`pokemon::BattlePokemon::defending_stat`] so both damage paths inherit
-//! them; [`paralyze::ensure_admissible`] admits both holders.
+//! them. The paralysis pipeline still reads Limber and the accuracy
+//! abilities ([`paralyze`], `accuracy_check`) but no longer refuses a Shed
+//! Skin holder at admission: Shed Skin's own end-turn cure draw lives in
+//! `Battle::residual_effects` instead (issue #944).
 //! [`ability::hustle_attack`] raises a Hustle holder's raw physical Attack
 //! 150% the same way, before the same stage multiply
 //! (`pokeemerald/src/pokemon.c:3205-3206`), so the real damage path, the
@@ -197,9 +206,10 @@
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
 //! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power, Guts, Marvel
-//! Scale, Compound Eyes, and Hustle (all ten above), Run Away, Shadow Tag,
-//! and Arena Trap ([`escape::ensure_admissible`], the wild-battle Run
-//! selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
+//! Scale, Compound Eyes, Hustle, and Shed Skin (all eleven above), Run
+//! Away, Shadow Tag,
+//! Arena Trap, and Magnet Pull ([`escape::ensure_admissible`], the
+//! wild-battle Run selection gate), Limber ([`paralyze::ParalyzeOutcome::LimberProtected`]),
 //! Levitate's Ground-move damage immunity ([`hit::damage_before_roll`] —
 //! grounding effects like Gravity and Smack Down are not modelled, so
 //! Levitate is otherwise unconditional; see `ensure_admissible` for its
@@ -208,10 +218,7 @@
 //! ([`hit::damage_before_roll`], propagated
 //! through drain, multi-hit, and fixed damage — Foresight and the
 //! two-turn-move distinction upstream's `AttacksThisTurn` check makes are not
-//! modelled, so the block is unconditional wherever it applies),
-//! Synchronize's paralysis reflection
-//! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
-//! stays refused, see [`secondary::ensure_admissible`]), and the four
+//! modelled, so the block is unconditional wherever it applies), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —
@@ -219,9 +226,8 @@
 //! [`status1::Status1::Paralysed`] and [`status1::Status1::Poisoned`]
 //! (confusion, sleep, freeze, burn, toxic — see [`status1`]'s module docs),
 //! weather, multi/double battles, Mist/Substitute/Safeguard/Protect, and the
-//! two abilities that still read a holder's primary status or the draw
-//! that inflicts it — Shed Skin and (poison only) Serene Grace (see
-//! [`paralyze::ensure_admissible`] and [`secondary::ensure_admissible`]) —
+//! one ability that still reads a holder's primary status for a poison
+//! landing only — Serene Grace (see [`secondary::ensure_admissible`]) —
 //! and the move effects the eight
 //! pipelines still do not cover — the secondary-effect trampolines
 //! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31, of which

@@ -206,6 +206,33 @@ fn push_notes(
     Ok(())
 }
 
+/// The tick period of a time signature's bar, in the compiler's internal
+/// whole-note-relative ticks. Zero periods are rejected here so every caller
+/// shares one arithmetic implementation and one error path.
+fn time_signature_period(numerator: u8, denominator_exponent: u8) -> Result<u32, MidiError> {
+    let period = (DEFAULT_WHOLE_NOTE_TICKS * u32::from(numerator)) >> denominator_exponent;
+    if period == 0 {
+        return Err(MidiError::ZeroTimeSignature);
+    }
+    Ok(period)
+}
+
+/// Rejects a zero-period time signature anywhere in a track, including tracks
+/// with no playable channel, matching [`super::parse`]'s own per-track
+/// time-signature validation (see its module docs).
+fn validate_time_signatures(events: &[(u32, RawEvent)]) -> Result<(), MidiError> {
+    for &(_, event) in events {
+        if let RawEvent::TimeSignature {
+            numerator,
+            denominator_exponent,
+        } = event
+        {
+            time_signature_period(numerator, denominator_exponent)?;
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compile_track(
     channel: u8,
@@ -273,11 +300,7 @@ fn compile_track(
                 numerator,
                 denominator_exponent,
             } => {
-                let period =
-                    (DEFAULT_WHOLE_NOTE_TICKS * u32::from(numerator)) >> denominator_exponent;
-                if period == 0 {
-                    return Err(MidiError::ZeroTimeSignature);
-                }
+                let period = time_signature_period(numerator, denominator_exponent)?;
                 items.push((converted, ItemKind::TimingGridChange(period)));
             }
             RawEvent::LoopBegin => items.push((converted, ItemKind::LoopBegin)),
@@ -490,6 +513,7 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
     let mut include_tempo = true;
     for track_data in &track_slices {
         let parsed = parse::parse_track(track_data)?;
+        validate_time_signatures(&parsed.events)?;
         for channel in 0..MIDI_CHANNEL_COUNT {
             let channel_events: Vec<(u32, RawEvent)> = parsed
                 .events

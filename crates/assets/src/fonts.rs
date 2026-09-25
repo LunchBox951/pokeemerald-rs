@@ -1,84 +1,52 @@
-//! Latin font glyph access (S-4, issue #114): per-glyph bitmap and advance
-//! width for the five upstream Latin fonts the v1 text-rendering path needs.
+//! Per-glyph bitmap and advance-width access for the five upstream Latin
+//! fonts modeled by [`FontId`].
 //!
-//! **Glyph bitmaps are not in this crate.** Per the same Discussion #71
-//! policy A that keeps tileset/sprite graphics and map layout grid bytes out
-//! of the workspace (see `crate::pack`'s and `crate::map_layouts`'s module
-//! docs), each font's glyph *sheet* — the decoded, indexed-colour bitmap
-//! `cargo xtask extract` reads from `graphics/fonts/latin_*.png`
-//! (`crates/xtask/src/extract/mod.rs`'s `FONTS` list) — lives in the local,
-//! gitignored asset pack, reachable via
-//! [`AssetPack::font`](crate::pack::AssetPack::font). This module is the
-//! decode layer that pack bytes feed once read: [`FontGlyphSheet::new`]
-//! validates a fetched [`FontImageRef`] and [`FontGlyphSheet::glyph`] slices
-//! out one glyph's pixels. [`FontImageRef`] binds the fetched bitmap to the
-//! [`FontId`] used for its pack lookup, so a sheet cannot accidentally pair
-//! one font's pixels with another font's advance-width table.
+//! Glyph *bitmaps* live in the gitignored asset pack, not in this crate;
+//! fetch one through [`AssetPack::font`](crate::pack::AssetPack::font),
+//! which returns it already bound as a [`FontImageRef`]. Binding the
+//! [`ImageRef`] to the [`FontId`] it was fetched under keeps one font's
+//! pixels from being paired with another font's width table.
+//! [`FontGlyphSheet::new`] validates a bound image; [`FontGlyphSheet::glyph`]
+//! and [`OwnedFontGlyphSheet::glyph`] slice out one glyph's pixels.
 //!
-//! **Advance widths are ordinary Rust data**, unlike the bitmaps. Upstream's
-//! per-glyph width tables (`gFontNormalLatinGlyphWidths` and its four
-//! siblings, `pokeemerald/src/fonts.c`) are a small (512 bytes each), stable
-//! table of constants — not compiled graphics — so they're transcribed
-//! directly as `static` arrays below (`SMALL_WIDTHS`.."), reachable through
-//! [`FontId::glyph_widths`] / [`FontId::glyph_width`]. No extraction step
-//! touches them; they never need `./init.sh` or `cargo xtask extract` to be
-//! available.
+//! Advance *widths* are ordinary Rust data: the five `static` tables below
+//! are transcribed from upstream's `gFont*LatinGlyphWidths` arrays
+//! (`pokeemerald/src/fonts.c`) and reached through [`FontId::glyph_widths`]
+//! and [`FontId::glyph_width`].
 //!
 //! # Sheet layout
 //!
-//! Every one of the five sheets this crate covers is a 256x512 indexed
-//! bitmap: [`GLYPH_COLUMNS`] (16) columns by [`GLYPH_ROWS`] (32) rows of
-//! [`GLYPH_SIZE`]-square (16x16) glyph cells, [`GLYPH_COUNT`] (512) glyphs
-//! total, glyph id `n` at column `n % GLYPH_COLUMNS`, row `n / GLYPH_COLUMNS`
-//! — read directly off the on-disk PNG's pixel grid with no further
-//! transform. This matches upstream's own indexing: `GetGlyphWidth_Normal`
-//! (`pokeemerald/src/text.c`) and its four siblings index
-//! `gFont*LatinGlyphWidths[glyphId]` directly, with no offset, and
-//! `gbagfx`'s `ConvertToLatinFont`/`ConvertFromLatinFont`
-//! (`pokeemerald/tools/gbagfx/font.c`) place glyph `row*16 + column` at
-//! pixel rect `(column*16, row*16)`..`(column*16+16, row*16+16)` when
-//! converting the runtime `.latfont` binary to and from the checked-in,
-//! human-editable PNG — i.e. the PNG on disk is already the simple glyph
-//! grid this module reads, and the tile-planar `.latfont` shuffling only
-//! ever happens inside upstream's own build tooling, never in this crate.
+//! Every sheet is [`SHEET_WIDTH`] x [`SHEET_HEIGHT`] pixels: [`GLYPH_ROWS`]
+//! rows of [`GLYPH_COLUMNS`] [`GLYPH_SIZE`]-square cells, glyph id `n` at
+//! column `n % GLYPH_COLUMNS`, row `n / GLYPH_COLUMNS`. The on-disk PNG is
+//! already this row-major grid: upstream's tile-planar `.latfont` layout
+//! (`gbagfx`'s `ConvertToLatinFont`/`ConvertFromLatinFont`,
+//! `pokeemerald/tools/gbagfx/font.c`) exists only inside its own build
+//! tooling, and this crate never reproduces that shuffle.
 //!
-//! Decoded glyph pixels are palette-index bytes `0..=3` (upstream's fixed
-//! 4-colour bg/fg/shadow/box font palette, `gbagfx`'s `SetFontPalette`
-//! (`pokeemerald/tools/gbagfx/font.c`) — not extracted anywhere in this
-//! crate, since it's a fixed constant, not upstream game data; a renderer
-//! maps those four indices to real on-screen colours itself.
+//! Decoded pixels are palette indices `0..=`[`MAX_PALETTE_INDEX`] into
+//! upstream's fixed 4-colour font palette; a renderer maps those indices to
+//! real colours itself.
 //!
-//! # Which fonts, and why only these five
+//! # Which fonts
 //!
-//! [`FontId`] models exactly the five upstream `FONT_*` ids
-//! (`pokeemerald/include/text.h`) that have their own Latin glyph sheet and
-//! width table: `FONT_SMALL`, `FONT_NORMAL`, `FONT_SHORT`, `FONT_NARROW`,
-//! `FONT_SMALL_NARROW`. `FONT_SHORT_COPY_1`..`_3` are not modelled
-//! separately — upstream's own `sFontInfos`/`sFontWidthFunctions`
-//! (`pokeemerald/src/text.c`) point them at the exact same
-//! `GetGlyphWidth_Short`/`gFontShortLatinGlyphWidths` as `FONT_SHORT`, so
-//! they're the same font under a different id, reachable here as
-//! [`FontId::Short`]. The Japanese fonts are **excluded**: an English
-//! retail cartridge never renders them, so a lone player cannot reach them
-//! (`docs/acceptance/v1.md`'s exclusion rule); the two
-//! `unused_frlg_*down_arrow` sheets (which belong to no `FONT_*` id at all)
-//! are dead upstream assets with no live caller —
-//! `sUnusedFRLGBlankedDownArrow`/`sUnusedFRLGDownArrow`
-//! (`pokeemerald/src/text.c:73-74`) are defined and never read — and are
-//! excluded on the same ground. `FONT_BRAILLE` is a
-//! different case — it is single-player content, drawn by
-//! `ScrCmd_braillemessage` (`pokeemerald/src/scrcmd.c:1482`) for the Regi
-//! puzzle's braille signs (Sealed Chamber, Desert Ruins, Island Cave,
-//! Ancient Tomb) — so it is not modelled yet: deferred, still in v1 scope
-//! under `C-3`.
+//! [`FontId`] models the five upstream `FONT_*` ids that own a distinct
+//! Latin glyph sheet and width table. `FONT_SHORT_COPY_1`..`_3` are not
+//! separate variants: upstream points them at the same
+//! `GetGlyphWidth_Short`/`gFontShortLatinGlyphWidths` pair as `FONT_SHORT`
+//! (`pokeemerald/src/text.c`), so [`FontId::Short`] covers all four ids.
+//! The Japanese fonts have no [`FontId`] variant: no lone English-cartridge
+//! player can reach them (`docs/acceptance/v1.md`'s exclusion rule).
+//! `FONT_BRAILLE` is reachable single-player content (the Regi puzzle's
+//! braille signs) but is out of this module's scope: it has no glyph sheet
+//! or width table here.
 
 use crate::error::AssetError;
 use crate::pack::ImageRef;
 
-/// Number of glyphs in every Latin font sheet: upstream's
-/// `gFont*LatinGlyphWidths` tables (`pokeemerald/src/fonts.c`) are each 512
-/// bytes, and the matching `graphics/fonts/latin_*.png` sheets are each a
-/// [`GLYPH_COLUMNS`] x [`GLYPH_ROWS`] grid of that many glyph cells.
+/// Number of glyphs in one font sheet (`GLYPH_COLUMNS * GLYPH_ROWS`):
+/// upstream's `gFont*LatinGlyphWidths` tables (`pokeemerald/src/fonts.c`)
+/// are each this many bytes long.
 pub const GLYPH_COUNT: usize = 512;
 
 /// A glyph cell's width and height in pixels (every glyph occupies a square
@@ -100,8 +68,12 @@ pub const SHEET_HEIGHT: u32 = GLYPH_ROWS * GLYPH_SIZE;
 /// Number of pixels in one decoded glyph bitmap (`GLYPH_SIZE * GLYPH_SIZE`).
 pub const GLYPH_PIXELS: usize = (GLYPH_SIZE * GLYPH_SIZE) as usize;
 
+/// Largest valid palette index a decoded pixel may hold: upstream's font
+/// palette is fixed at four colours (background, foreground, shadow, box).
+pub const MAX_PALETTE_INDEX: u8 = 3;
+
 /// One of the five upstream Latin fonts this crate has glyph data for. See
-/// the module docs for why exactly these five `FONT_*` ids.
+/// the module docs for which `FONT_*` ids these are and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FontId {
     /// `FONT_SMALL`.
@@ -118,8 +90,7 @@ pub enum FontId {
 }
 
 impl FontId {
-    /// Every [`FontId`] this crate models, in the same order
-    /// `crates/xtask/src/extract/mod.rs`'s `FONTS` list extracts them.
+    /// Every [`FontId`] this crate models.
     pub const ALL: [Self; 5] = [
         Self::Small,
         Self::Normal,
@@ -156,9 +127,8 @@ impl FontId {
         }
     }
 
-    /// The advance width of `glyph_id` in pixels, or `None` if out of range.
-    /// Every real upstream glyph id is `0..GLYPH_COUNT`; this only returns
-    /// `None` for a caller-supplied id beyond that.
+    /// The advance width of `glyph_id` in pixels, or `None` if
+    /// `glyph_id >= GLYPH_COUNT`.
     #[must_use]
     pub fn glyph_width(self, glyph_id: u16) -> Option<u8> {
         self.glyph_widths().get(usize::from(glyph_id)).copied()
@@ -170,23 +140,20 @@ impl FontId {
 pub struct Glyph {
     /// Advance width in pixels (upstream `gFont*LatinGlyphWidths[glyphId]`).
     pub advance_width: u8,
-    /// `GLYPH_SIZE * GLYPH_SIZE` palette-index bytes, `0..=3` (upstream's
-    /// fixed 4-colour bg/fg/shadow/box font palette — see the module docs),
+    /// [`GLYPH_PIXELS`] palette-index bytes in `0..=`[`MAX_PALETTE_INDEX`],
     /// row-major within the glyph cell.
     pub pixels: [u8; GLYPH_PIXELS],
 }
 
 /// A borrowed font image bound to the [`FontId`] used to fetch it.
 ///
-/// In production, only [`AssetPack::font`](crate::pack::AssetPack::font)
-/// constructs this handle: keeping the identity and raw image together
-/// prevents callers from pairing (for example) Normal pixels with Small
-/// advance widths when constructing a [`FontGlyphSheet`]. Downstream crates
-/// that need a synthetic in-memory sheet in their own unit tests (e.g.
-/// `engine`'s glyph renderer, issue #124) use
-/// [`FontImageRef::new_for_tests`] behind the `test-support` feature from
-/// their `[dev-dependencies]` — the pairing guarantee stays intact for
-/// production builds.
+/// Only [`AssetPack::font`](crate::pack::AssetPack::font) constructs this
+/// handle in production. Keeping the identity and raw image together
+/// prevents a caller from pairing, for example, Normal pixels with Small
+/// advance widths when building a [`FontGlyphSheet`]. A caller that needs a
+/// synthetic in-memory sheet for its own tests bypasses that pairing through
+/// `FontImageRef::new_for_tests` behind the `test-support` feature, kept in
+/// `[dev-dependencies]` so production builds never gain the bypass.
 #[derive(Debug, Clone, Copy)]
 pub struct FontImageRef<'a> {
     font: FontId,
@@ -200,12 +167,8 @@ impl<'a> FontImageRef<'a> {
         Self { font, image }
     }
 
-    /// Test-only seam: bind an arbitrary `image` to `font` for building
-    /// synthetic [`FontGlyphSheet`] fixtures.
-    ///
-    /// Bypasses the pack-mediated pairing guarantee documented on the type,
-    /// so it is gated behind the `test-support` feature — enable it only
-    /// from `[dev-dependencies]`, never in a production dependency edge.
+    /// Bind an arbitrary `image` to `font`, bypassing the pack-mediated
+    /// pairing guarantee documented on the type. `test-support`-only.
     #[cfg(feature = "test-support")]
     #[must_use]
     pub const fn new_for_tests(font: FontId, image: ImageRef<'a>) -> Self {
@@ -228,8 +191,7 @@ impl<'a> FontImageRef<'a> {
 /// A borrowed, validated view over one font's glyph sheet bitmap.
 ///
 /// Wraps a [`FontImageRef`] fetched from
-/// [`AssetPack::font`](crate::pack::AssetPack::font) — this module ships no
-/// sheet bytes of its own; see the module docs.
+/// [`AssetPack::font`](crate::pack::AssetPack::font).
 #[derive(Debug, Clone, Copy)]
 pub struct FontGlyphSheet<'a> {
     font: FontId,
@@ -243,12 +205,11 @@ impl<'a> FontGlyphSheet<'a> {
     /// # Errors
     ///
     /// Returns [`AssetError::FontSheetWrongShape`] if `image`'s dimensions
-    /// aren't exactly [`SHEET_WIDTH`] x [`SHEET_HEIGHT`] — every real
-    /// upstream Latin font sheet is — or
+    /// aren't exactly [`SHEET_WIDTH`] x [`SHEET_HEIGHT`], or
     /// [`AssetError::FontSheetWrongPixelCount`] if its pixel buffer doesn't
     /// contain exactly one palette index per pixel, or
-    /// [`AssetError::FontSheetInvalidPixel`] if any pixel is outside the
-    /// four-colour `0..=3` range.
+    /// [`AssetError::FontSheetInvalidPixel`] if any pixel exceeds
+    /// [`MAX_PALETTE_INDEX`].
     pub const fn new(source: FontImageRef<'a>) -> Result<Self, AssetError> {
         let font = source.font;
         let image = source.image;
@@ -269,7 +230,7 @@ impl<'a> FontGlyphSheet<'a> {
         }
         let mut index = 0;
         while index < image.pixels.len() {
-            if image.pixels[index] > 3 {
+            if image.pixels[index] > MAX_PALETTE_INDEX {
                 return Err(AssetError::FontSheetInvalidPixel(
                     font.pack_name(),
                     index,
@@ -328,14 +289,9 @@ impl<'a> FontGlyphSheet<'a> {
     }
 }
 
-/// Read access to one font's glyphs, however the sheet's bytes happen to be
-/// held — pack-borrowed ([`FontGlyphSheet`]) or owned
+/// Read access to one font's glyphs, independent of whether the sheet's
+/// bytes are pack-borrowed ([`FontGlyphSheet`]) or owned
 /// ([`OwnedFontGlyphSheet`]).
-///
-/// The seam a renderer generic over sheet ownership needs: `engine`'s glyph
-/// printer keeps a sheet alive for as long as it is printing, which a
-/// caller whose sheet outlives no pack (see [`OwnedFontGlyphSheet`]'s docs)
-/// cannot satisfy with a borrowed one.
 pub trait GlyphSource {
     /// The font these glyphs belong to.
     fn font(&self) -> FontId;
@@ -354,21 +310,9 @@ impl GlyphSource for FontGlyphSheet<'_> {
     }
 }
 
-/// A validated glyph sheet that **owns** its bitmap bytes, rather than
-/// borrowing them from a live [`AssetPack`](crate::pack::AssetPack).
-///
-/// The pack's own accessors are zero-copy by design (see [`crate::pack`]'s
-/// module docs): every [`ImageRef`] borrows from the pack's buffer, so a
-/// [`FontGlyphSheet`] cannot outlive the pack it was fetched from. That
-/// suits a caller that decodes everything it needs in one pass and drops
-/// the pack. A caller that instead keeps a *live* printer across frames
-/// (`engine::text::render::Printer` holds its sheet for the duration of a
-/// message) would need the pack alive for exactly as long as itself —
-/// either a self-referential struct, a leak, or process-global state, none
-/// of which this workspace allows `(oop-boundaries)`. Copying the (128 KiB)
-/// sheet out once at load time, here, is the alternative: the owning scene
-/// then holds every byte it renders, the pack is dropped immediately, and a
-/// later reload picks up whatever is on disk *then*.
+/// A validated glyph sheet that **owns** its bitmap bytes, so it can outlive
+/// the [`AssetPack`](crate::pack::AssetPack) it was built from, unlike
+/// [`FontGlyphSheet`], which borrows from the pack's buffer.
 ///
 /// Built by [`FontGlyphSheet::to_owned_sheet`] or [`OwnedFontGlyphSheet::new`];
 /// both validate through [`FontGlyphSheet::new`] first, so an
@@ -377,9 +321,9 @@ impl GlyphSource for FontGlyphSheet<'_> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedFontGlyphSheet {
     font: FontId,
-    /// The source image's declared bit depth, carried through unchanged so
-    /// [`sheet`](Self::sheet)'s view is byte-for-byte the one that was
-    /// validated (the field is informational — see [`ImageRef::bit_depth`]).
+    /// The source image's bit depth, carried through unchanged for
+    /// [`sheet`](Self::sheet)'s view (informational only — see
+    /// [`ImageRef::bit_depth`]).
     bit_depth: u8,
     pixels: Vec<u8>,
 }
@@ -437,11 +381,8 @@ impl GlyphSource for OwnedFontGlyphSheet {
     }
 }
 
-// --- GENERATED: transcribed from pokeemerald/src/fonts.c ---
-// Translating a table of constants (no code transliteration) -- see the
-// module docs. To regenerate: for each `gFont*LatinGlyphWidths` array in
-// that file, copy its 512 comma-separated values verbatim into the matching
-// `static` below, preserving order.
+// Transcribed from upstream's `gFont*LatinGlyphWidths` arrays
+// (`pokeemerald/src/fonts.c`), one entry per glyph id in the same order.
 
 /// `gFontSmallLatinGlyphWidths` (`pokeemerald/src/fonts.c`).
 static SMALL_WIDTHS: [u8; GLYPH_COUNT] = [
@@ -550,7 +491,7 @@ static SMALL_NARROW_WIDTHS: [u8; GLYPH_COUNT] = [
 mod tests {
     use super::{
         FontGlyphSheet, FontId, FontImageRef, GlyphSource, OwnedFontGlyphSheet, GLYPH_COUNT,
-        GLYPH_PIXELS, SHEET_HEIGHT, SHEET_WIDTH,
+        GLYPH_PIXELS, GLYPH_SIZE, MAX_PALETTE_INDEX, SHEET_HEIGHT, SHEET_WIDTH,
     };
     use crate::error::AssetError;
     use crate::pack::ImageRef;
@@ -581,19 +522,18 @@ mod tests {
 
     #[test]
     fn known_upstream_widths_match_gfontnormallatinglyphwidths() {
-        // Spot-check a handful of `gFontNormalLatinGlyphWidths` entries
-        // (`pokeemerald/src/fonts.c`) directly against the transcribed
-        // source array, by index.
         assert_eq!(FontId::Normal.glyph_width(0), Some(3));
         assert_eq!(FontId::Normal.glyph_width(44), Some(9));
         assert_eq!(FontId::Normal.glyph_width(163), Some(6));
         assert_eq!(FontId::Normal.glyph_width(511), Some(3));
     }
 
-    /// FNV-1a 64-bit hash, matching the change locator in `xtask::record_snapshot`.
+    /// FNV-1a 64-bit hash.
     fn fnv1a64(bytes: &[u8]) -> u64 {
-        bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+        bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(PRIME)
         })
     }
 
@@ -617,10 +557,8 @@ mod tests {
         }
     }
 
-    /// Build a synthetic [`ImageRef`] the exact shape a real font sheet
-    /// would be ([`SHEET_WIDTH`] x [`SHEET_HEIGHT`]), filled with a simple,
-    /// checkable pattern: pixel value = `(x % 4)` -- cheap to hand-verify
-    /// without needing real upstream art (per the issue's CI caveat).
+    /// Wrap `pixels` in an [`ImageRef`] shaped like a real font sheet
+    /// ([`SHEET_WIDTH`] x [`SHEET_HEIGHT`]).
     fn synthetic_sheet(pixels: &[u8]) -> ImageRef<'_> {
         ImageRef {
             width: SHEET_WIDTH,
@@ -634,11 +572,14 @@ mod tests {
         FontImageRef::new(font, synthetic_sheet(pixels))
     }
 
+    /// A full-sheet pixel buffer with a simple, checkable pattern: pixel
+    /// value = `x` modulo the palette size ([`MAX_PALETTE_INDEX`] + 1).
     fn patterned_pixels() -> Vec<u8> {
+        let palette_size = u32::from(MAX_PALETTE_INDEX) + 1;
         let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
         for y in 0..SHEET_HEIGHT {
             for x in 0..SHEET_WIDTH {
-                pixels[(y * SHEET_WIDTH + x) as usize] = u8::try_from(x % 4).unwrap();
+                pixels[(y * SHEET_WIDTH + x) as usize] = u8::try_from(x % palette_size).unwrap();
             }
         }
         pixels
@@ -676,6 +617,22 @@ mod tests {
     fn rejects_out_of_palette_pixel() {
         let mut pixels = patterned_pixels();
         let invalid_index = pixels.len() / 2;
+        let invalid_value = MAX_PALETTE_INDEX + 1;
+        pixels[invalid_index] = invalid_value;
+        let err = FontGlyphSheet::new(synthetic_font_image(FontId::Normal, &pixels)).unwrap_err();
+        assert_eq!(
+            err,
+            AssetError::FontSheetInvalidPixel("normal", invalid_index, invalid_value)
+        );
+    }
+
+    #[test]
+    fn rejects_literal_palette_index_four() {
+        // Upstream's font palette is fixed at four colours, so index 4 is the
+        // first invalid value regardless of `MAX_PALETTE_INDEX`.
+        assert_eq!(MAX_PALETTE_INDEX, 3);
+        let mut pixels = patterned_pixels();
+        let invalid_index = pixels.len() / 2;
         pixels[invalid_index] = 4;
         let err = FontGlyphSheet::new(synthetic_font_image(FontId::Normal, &pixels)).unwrap_err();
         assert_eq!(
@@ -693,12 +650,14 @@ mod tests {
         let glyph = sheet.glyph(0).unwrap();
         assert_eq!(glyph.advance_width, FontId::Normal.glyph_width(0).unwrap());
         assert_eq!(glyph.pixels.len(), GLYPH_PIXELS);
-        // Every row of glyph 0 is columns 0..16 of the pattern: x % 4.
-        for local_y in 0..16usize {
-            for local_x in 0..16usize {
+        // Glyph 0 is the sheet's origin cell, so its local coordinates equal
+        // the pattern's global ones.
+        let palette_size = usize::from(MAX_PALETTE_INDEX) + 1;
+        for local_y in 0..GLYPH_SIZE as usize {
+            for local_x in 0..GLYPH_SIZE as usize {
                 assert_eq!(
-                    glyph.pixels[local_y * 16 + local_x],
-                    u8::try_from(local_x % 4).unwrap(),
+                    glyph.pixels[local_y * GLYPH_SIZE as usize + local_x],
+                    u8::try_from(local_x % palette_size).unwrap(),
                     "mismatch at ({local_x}, {local_y})"
                 );
             }
@@ -707,21 +666,22 @@ mod tests {
 
     #[test]
     fn glyph_at_a_nonzero_row_and_column_slices_the_right_cell() {
-        // Glyph id 17 = column 1, row 1 (17 = 1*16 + 1) -> pixel rect
-        // x in 16..32, y in 16..32.
+        // Literal geometry on purpose: upstream's sheet is 16 columns of
+        // 16x16 cells, so glyph 17 is column 1, row 1, the pixel rectangle
+        // x in 16..32, y in 16..32. Deriving these from the crate's own
+        // constants would let the fixture drift with the implementation.
         let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
         for y in 16..32u32 {
             for x in 16..32u32 {
-                pixels[(y * SHEET_WIDTH + x) as usize] = 3;
+                pixels[(y * SHEET_WIDTH + x) as usize] = MAX_PALETTE_INDEX;
             }
         }
         let image = synthetic_font_image(FontId::Small, &pixels);
         let sheet = FontGlyphSheet::new(image).unwrap();
 
         let glyph = sheet.glyph(17).unwrap();
-        assert!(glyph.pixels.iter().all(|&p| p == 3));
+        assert!(glyph.pixels.iter().all(|&p| p == MAX_PALETTE_INDEX));
 
-        // A neighboring cell (glyph 18, column 2 row 1) should be untouched.
         let neighbor = sheet.glyph(18).unwrap();
         assert!(neighbor.pixels.iter().all(|&p| p == 0));
     }
@@ -746,9 +706,6 @@ mod tests {
         }
     }
 
-    /// An owned sheet must decode exactly what the borrowed one it was
-    /// copied from does — same font id, same glyphs, same out-of-range
-    /// behaviour — so a caller can swap one for the other freely.
     #[test]
     fn an_owned_sheet_decodes_the_same_glyphs_as_the_borrowed_one_it_copied() {
         let pixels = patterned_pixels();
@@ -762,9 +719,6 @@ mod tests {
         assert_eq!(owned.glyph(u16::try_from(GLYPH_COUNT).unwrap()), None);
     }
 
-    /// The owned sheet outliving the buffer it was built from is the whole
-    /// point (see its docs): dropping the source pixels must leave it
-    /// perfectly usable.
     #[test]
     fn an_owned_sheet_outlives_the_bytes_it_was_built_from() {
         let owned = {
@@ -776,9 +730,6 @@ mod tests {
         assert_eq!(glyph.pixels.len(), GLYPH_PIXELS);
     }
 
-    /// [`OwnedFontGlyphSheet::new`] validates before copying, exactly as
-    /// [`FontGlyphSheet::new`] does — a malformed image must error, not
-    /// produce an owned sheet full of junk.
     #[test]
     fn building_an_owned_sheet_rejects_a_malformed_image() {
         let pixels = vec![0u8; 16];
@@ -797,9 +748,6 @@ mod tests {
         ));
     }
 
-    /// Both sheet kinds satisfy [`GlyphSource`], so a renderer generic over
-    /// it (`engine::text::render::Printer`) sees identical behaviour from
-    /// either.
     #[test]
     fn both_sheet_kinds_report_the_same_glyphs_through_the_glyph_source_trait() {
         fn first_glyph_width<S: GlyphSource>(source: &S) -> (FontId, u8) {
