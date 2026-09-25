@@ -150,6 +150,58 @@ fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_play
     );
 }
 
+/// Issue #1392 regression: an ordinary field dialog must read (and repair)
+/// the live save's `optionsTextSpeed` exactly as upstream's
+/// `GetPlayerTextSpeedDelay` repairs `gSaveBlock2Ptr->optionsTextSpeed` in
+/// place (`pokeemerald/src/menu.c:481-488`) -- the same write-back
+/// `start_menu`'s `player_text_speed` already performs for the SAVE prompt.
+/// `AssetPack::load_default` is unavailable headless (this module's other
+/// tests' own notes), so the dialog box itself never actually opens here;
+/// what this proves is that the interaction path reads and repairs the
+/// saved value on the very same frame, before it ever hands the pack load a
+/// chance to fail.
+#[test]
+fn a_field_dialog_interaction_repairs_an_out_of_range_saved_text_speed() {
+    /// An `optionsTextSpeed` above `OPTIONS_TEXT_SPEED_FAST` (`2`) --
+    /// invalid, same as `pokeemerald/include/constants/global.h:127-129`.
+    const OUT_OF_RANGE_TEXT_SPEED: u8 = 5;
+    /// `OPTIONS_TEXT_SPEED_MID`: what an invalid value repairs to.
+    const REPAIRED_MID_TEXT_SPEED: u8 = 1;
+
+    // One tile east of Mom, facing west -- directly adjacent (module docs'
+    // `ONE_F` fixture notes, matching this file's other Mom-interaction
+    // tests).
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = OUT_OF_RANGE_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, REPAIRED_MID_TEXT_SPEED,
+        "an out-of-range saved optionsTextSpeed must be repaired to MID the moment a field \
+         dialog interaction reads it, exactly as GetPlayerTextSpeedDelay repairs \
+         gSaveBlock2Ptr->optionsTextSpeed in place"
+    );
+}
+
+/// The complement: a saved `optionsTextSpeed` already in range must survive
+/// a field dialog interaction unchanged -- only an invalid value is ever
+/// repaired.
+#[test]
+fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
+    const FAST_TEXT_SPEED: u8 = 2;
+
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.save2.options_text_speed = FAST_TEXT_SPEED;
+
+    phase.step(pressed(Buttons::A));
+
+    assert_eq!(
+        phase.save2.options_text_speed, FAST_TEXT_SPEED,
+        "a saved optionsTextSpeed already within range must not be rewritten"
+    );
+}
+
 /// The complement: an A press with a direction held, but facing nothing,
 /// must still turn or step exactly as it did before this fix -- the
 /// preempt-movement path introduced for issue #435 must not fire when

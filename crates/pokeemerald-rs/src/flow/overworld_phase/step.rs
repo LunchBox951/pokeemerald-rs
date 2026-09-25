@@ -25,6 +25,7 @@ use engine::overworld::{
     WarpTrigger,
 };
 use engine::save::Coords16;
+use engine::text::render::TextSpeed;
 use platform::{ButtonState, Buttons};
 
 use crate::flow::wild_encounter;
@@ -42,6 +43,18 @@ use super::OverworldPhase;
 /// `:621`/`:628`), so this tick already reads as latched to every region,
 /// unlike a fresh room's own 0.
 const TILESET_ANIM_WRAP_PERIOD: u32 = 256;
+
+/// `gSaveBlock2Ptr->optionsTextSpeed` values above this are invalid; upstream
+/// treats them exactly like `OPTIONS_TEXT_SPEED_MID`
+/// (`pokeemerald/include/constants/global.h:127-129`). Duplicated from
+/// `super::start_menu`'s own private copy: same upstream constant, two
+/// independent field-message call sites (this module and the SAVE prompt).
+const OPTIONS_TEXT_SPEED_FAST: u8 = 2;
+
+/// The saved value `GetPlayerTextSpeedDelay` repairs an out-of-range
+/// `optionsTextSpeed` to, in `gSaveBlock2Ptr` itself
+/// (`pokeemerald/src/menu.c:483-484`).
+const OPTIONS_TEXT_SPEED_MID: u8 = 1;
 
 /// This frame's pre-movement field-input decisions.
 struct PreMovementFieldInput {
@@ -732,7 +745,8 @@ impl OverworldPhase {
             }
             match interaction {
                 Some(InteractionOutcome::Dialog(tokens)) => {
-                    match NpcDialog::open(self.pack_source, tokens) {
+                    let text_speed = self.field_dialog_text_speed();
+                    match NpcDialog::open_at_speed(self.pack_source, tokens, text_speed) {
                         Ok(dialog) => self.dialog = Some(dialog),
                         Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                     }
@@ -746,6 +760,17 @@ impl OverworldPhase {
 
         self.begin_step_battle(first_battle_triggered, encounter);
         self.commit_start_menu(start_menu);
+    }
+
+    /// The saved `optionsTextSpeed`, repaired and read exactly as upstream's
+    /// `GetPlayerTextSpeedDelay` (`pokeemerald/src/menu.c:481-488`) --
+    /// mirroring `start_menu`'s `player_text_speed` write-back for the SAVE
+    /// prompt.
+    fn field_dialog_text_speed(&mut self) -> TextSpeed {
+        if self.save2.options_text_speed > OPTIONS_TEXT_SPEED_FAST {
+            self.save2.options_text_speed = OPTIONS_TEXT_SPEED_MID;
+        }
+        TextSpeed::from_raw_option(self.save2.options_text_speed)
     }
 
     /// The token stream a [`NpcDialog`] should open with this frame, or
