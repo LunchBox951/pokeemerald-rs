@@ -1,16 +1,3 @@
-//! Headless full-wild-battle integration tests (S-6, issue #159's DoD):
-//!
-//! - a scripted full wild battle under fixed RNG runs move-vs-move to a
-//!   faint and reports victory;
-//! - a second scenario covers a successful run-away.
-//!
-//! These exercise the crate's public surface only (as an external caller
-//! would), tying together [`battle::wild::build_wild_pokemon`] (the wild
-//! encounter's own personality/nature/IV RNG draws) with
-//! [`battle::Battle`]'s turn engine. Unit-level, RNG-draw-count-pinned tests
-//! for the individual formulas (accuracy/crit/damage/turn-order/escape) live
-//! alongside each module in `src/`.
-
 #[expect(
     dead_code,
     reason = "the escape and move-selection fixtures in this shared module are used only by turn_engine's test binary"
@@ -28,31 +15,26 @@ use common::{max_iv_mon as fixed_mon, SequenceRng as ScriptedRng, MAX_IVS};
 fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     let dex = Dex::new();
 
-    // Player: level-50 Charmander (species 4) knowing Tackle (move 33).
-    // Enemy: a level-5 wild Rattata (species 19), built through the actual
-    // wild-encounter RNG path (nature/personality/IV draws), also knowing
-    // Tackle, so the same accuracy/crit/damage formulas are exercised on
-    // both sides.
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
 
-    // One RNG for the whole scenario -- wild-mon construction, battle start,
-    // and the turn itself -- so the assertion at the end pins the battle's
-    // total draw count, not just each phase in isolation.
+    let minimum_damage_variance_roll: u16 = 15;
     let mut rng = ScriptedRng::new([
         // build_wild_pokemon (5 draws):
-        0, // PickWildMonNature: 0 % 25 = Hardy
-        0, 0, // CreateMonWithNature: personality 0 (nature Hardy) matches first try
-        0, 0, // CreateBoxMon IVs: both draws 0 -> all IVs 0
+        0, // wild nature
+        0, // personality, first attempt
+        0, // personality, second draw
+        0, // wild IV draw 1
+        0, // wild IV draw 2
         // Battle::new (1 draw):
-        0, // BattleStartClearSetData's gRandomTurnNumber
+        0, // battle-start turn number
         // the turn (6 draws):
-        0, // TryDoEventsBeforeFirstTurn's gRandomTurnNumber
-        0, // the wild mon's move pick: 0 % 4 = slot 0, accepted first try
+        0, // turn number
+        0, // opponent's move selection
         // no turn-order draw: the player is far faster, so no speed tie
-        0,  // accuracy: roll 1 <= 95 -> hits
-        1,  // crit: 1 % 16 != 0 -> no crit
-        15, // damage roll: worst case, 85%
-        0,  // seteffectwithchance's discarded effect-chance roll
+        0, // accuracy roll
+        1, // critical-hit roll
+        minimum_damage_variance_roll,
+        0, // discarded effect-chance roll
     ]);
 
     let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
@@ -62,8 +44,6 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
 
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).expect("Battle::new");
 
-    // The level-50 attacker's Tackle one-shots a level-5 Rattata even at the
-    // worst (85%) damage roll and without a crit, so one turn is enough.
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .expect("take_turn");
@@ -113,8 +93,6 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         "5 (wild construction) + 1 (battle start) + 6 (the turn)"
     );
 
-    // The battle is over: no further turns are valid -- and the rejected call
-    // must not draw either. The script is exhausted, so a stray draw panics.
     let rejected = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap_err();
@@ -129,16 +107,10 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
 #[test]
 fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     let dex = Dex::new();
-    // Player: level-50 Charmander (fast). Enemy: level-5 wild Rattata
-    // (slow), built via the real wild-encounter RNG path.
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
 
-    // One RNG for the whole scenario: 5 construction draws, the battle-start
-    // turn number, the turn's own turn number, and the wild mon's move pick.
-    // try_run_from_battle itself draws nothing -- it succeeds unconditionally
-    // when the player's *raw* speed is at least the opponent's -- but the
-    // opponent has still selected a move by then, since action selection
-    // completes for both battlers before the run resolves.
+    // Draw order: five wild-construction draws, battle-start turn number,
+    // turn number, then opponent move selection; guaranteed escape rolls nothing.
     let mut rng = ScriptedRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
     let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
         .expect("wild Rattata construction");
@@ -168,7 +140,6 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
         "TryRunFromBattle increments runTries after the unconditional \
          same-speed-or-faster success too (battle_util.c:475)"
     );
-    // Running away costs no HP on either side -- no move was ever used.
     assert_eq!(battle.player().current_hp(), player_hp_before);
     assert_eq!(battle.enemy().current_hp(), enemy_hp_before);
     assert_eq!(
@@ -181,23 +152,17 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
 #[test]
 fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     let dex = Dex::new();
-    // Horn Drill (move 32) has real base power but EFFECT_OHKO's own
-    // battle script, so a power-only filter would have let it into the
-    // ordinary damage pipeline -- wrong damage and a desynchronised RNG
-    // stream. (Sonic Boom stood here until issue #321's `fixed_damage`
-    // pipeline made it executable; the point it pins is unchanged.)
-    // Pin the asset row this test leans on: if the extracted table ever
-    // drifted Horn Drill off EFFECT_OHKO (38) or its token base power 1,
-    // this test would silently stop guarding the OHKO boundary.
+    // Horn Drill has nonzero power but an unsupported OHKO effect, so a
+    // power-only check would admit it to the wrong damage/RNG path.
+    let horn_drill_ohko_effect = MoveEffect(38);
+    let horn_drill_token_power = 1;
     let horn_drill = dex.move_data(MoveId(32)).unwrap();
-    assert_eq!(horn_drill.effect, MoveEffect(38));
-    assert_eq!(horn_drill.power, 1);
+    assert_eq!(horn_drill.effect, horn_drill_ohko_effect);
+    assert_eq!(horn_drill.power, horn_drill_token_power);
 
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
     let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(32)]);
 
-    // An empty script: a refused battle must not draw at all, so any draw
-    // here panics rather than quietly passing.
     let mut rng = ScriptedRng::new([]);
     assert_eq!(
         Battle::new(dex, player, enemy, false, &mut rng).err(),
@@ -206,17 +171,9 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     assert_eq!(rng.draws(), 0);
 }
 
-/// A full scripted battle exercised only through the public API, tying
-/// `Battle::new_with_player_reserves` together with the turn engine the way
-/// an owning flow would: `PlayerLost` arrives only once both party members
-/// have fainted, each carrying its own final identity and state.
 #[test]
 fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     let dex = Dex::new();
-    // A fast, overwhelming L50 Charmander one-shots either fragile L5
-    // active in turn order, exactly like the immediate-loss fixture this
-    // issue corrects -- first the active Rattata, then the Squirtle
-    // reserve behind it.
     let player = fixed_mon(&dex, 19, 5, vec![MoveId(33)]);
     let player_max_hp = player.stats().max_hp;
     let reserve = fixed_mon(&dex, 7, 5, vec![MoveId(33)]);
@@ -224,11 +181,8 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     let enemy = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
     let tackle_max_pp = dex.move_data(MoveId(33)).unwrap().pp;
 
-    // Turn 1: battle start, turn number, enemy pick, enemy hit (accuracy /
-    // no crit / best roll / effect chance) -- the active is overkilled
-    // before it can act. Turn 2: turn number, enemy pick, enemy hit again
-    // -- the reserve, now active, meets the same fate. No battle-start
-    // draw the second time: that is `Battle::new`'s alone.
+    // RNG order: battle-start number; then, per turn, turn number,
+    // opponent move selection, accuracy, crit, damage, and effect-chance rolls.
     let mut rng = ScriptedRng::new([0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0]);
     let mut battle =
         Battle::new_with_player_reserves(dex, player, vec![reserve], enemy, false, &mut rng)
@@ -277,11 +231,6 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
     assert_eq!(rng.draws(), 13);
 
-    // The final report carries both members' terminal state: the original
-    // active's overkill and the reserve's own overkill, each never having
-    // acted, so neither spent any PP. The members keep the order they were
-    // passed in -- the Rattata that started active, then the Squirtle
-    // reserve -- though the Squirtle is the one `Battle::player` reports.
     assert_eq!(battle.player().species(), SpeciesId(7));
     let members: Vec<_> = battle.player_members().collect();
     assert_eq!(members.len(), 2);
@@ -296,10 +245,6 @@ fn an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn() {
 #[test]
 fn an_impossible_battler_cannot_be_built_at_all() {
     let dex = Dex::new();
-    // Level and individual values are checked at the one construction
-    // boundary, so no out-of-range battler ever reaches the stat or damage
-    // formulas. (These are Pokémon IVs -- per-stat rolls capped at 31 by
-    // MAX_IV_MASK -- not cryptographic initialization vectors.)
     assert_eq!(
         BattlePokemon::new(&dex, SpeciesId(1), 101, MAX_IVS, 0, vec![MoveId(33)]),
         Err(BattleError::InvalidLevel(101))
@@ -315,8 +260,7 @@ fn an_impossible_battler_cannot_be_built_at_all() {
         ),
         Err(BattleError::InvalidIv(99))
     ));
-    // An empty moveset would make the wild opponent's rejection loop spin
-    // forever; MOVE_NONE is the placeholder for an *unfilled* slot.
+    // Reject an empty moveset before wild move selection can spin forever.
     assert_eq!(
         BattlePokemon::new(&dex, SpeciesId(1), 5, MAX_IVS, 0, vec![]),
         Err(BattleError::InvalidMoveCount(0))
