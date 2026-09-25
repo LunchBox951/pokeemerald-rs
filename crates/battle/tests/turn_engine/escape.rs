@@ -12,17 +12,11 @@ use battle::{
 #[test]
 fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
     let dex = Dex::new();
-    // Player far faster than the enemy: try_run_from_battle succeeds
-    // unconditionally (player_speed >= enemy_speed), no escape draw.
     let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let player_hp = player.current_hp();
     let enemy_hp = enemy.current_hp();
 
-    // Battle-start turn number, the turn's turn number, and the wild
-    // mon's move pick -- which happens even though it never gets to act,
-    // because action selection completes for both battlers before the
-    // run is resolved.
     let mut rng = SequenceRng::new([0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -44,7 +38,6 @@ fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
         "upstream increments runTries outside the roll branch, so even \
          the no-roll fast-path success counts the attempt"
     );
-    // Neither mon took any action/damage.
     assert_eq!(battle.player().current_hp(), player_hp);
     assert_eq!(battle.enemy().current_hp(), enemy_hp);
 }
@@ -52,15 +45,11 @@ fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
 #[test]
 fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     let dex = Dex::new();
-    // Player slower than the enemy: forces the RNG-driven branch, fed a
-    // roll that fails (see crate::escape's own tests for the formula).
     let player = slow_runner_rattata(&dex);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast Charmander
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
 
-    // draws: battle-start turn number, turn number, opponent's move pick,
-    // escape roll (65000 & 0xFF = 232 >= speedVar 19 -> failure), then
-    // the enemy's hit (accuracy / no crit / best roll / effect chance).
-    let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0, 0]);
+    let escape_roll_that_fails: u16 = 65_000;
+    let mut rng = SequenceRng::new([0, 0, 0, escape_roll_that_fails, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
@@ -70,7 +59,6 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
             success: false,
         }
     );
-    // The enemy's move resolved afterward (by_player: false).
     assert!(events.iter().any(|e| matches!(
         e,
         BattleEvent::Hit {
@@ -82,23 +70,21 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     assert_eq!(rng.draws(), 8);
 }
 
-// After a failed run, the all-spent enemy's forced Struggle executes at its
-// own turn-order slot like an ordinary move.
 #[test]
 fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
     let dex = Dex::new();
-    let player = slow_runner_rattata(&dex); // slow: the run fails
+    let player = slow_runner_rattata(&dex);
     let player_max_hp = player.stats().max_hp;
-    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast
+    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // battle start, turn number, escape roll (fails) -- no selection
-    // draw, the all-spent enemy's forced-Struggle pick bypasses the
-    // rejection loop -- then the forced Struggle's three draws (accuracy,
-    // crit, damage-variance).
-    let mut rng = SequenceRng::new([0, 0, 65000, 0, 1, 0]);
+    // The all-spent enemy's forced Struggle pick bypasses the move-selection
+    // draw, so the script has no selection entry between the escape roll and
+    // Struggle's own three draws.
+    let escape_roll_that_fails: u16 = 65_000;
+    let mut rng = SequenceRng::new([0, 0, escape_roll_that_fails, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -137,18 +123,15 @@ fn a_failed_run_lets_the_enemys_forced_struggle_execute_afterward() {
 #[test]
 fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
     let dex = Dex::new();
-    // Upstream fidelity for the same all-spent enemy when the fallback
-    // never has to act: the player's run resolves first and succeeds, so
-    // the battle ends PlayerRan -- upstream's forced Struggle never
-    // executes either, and no error is reported.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast: run succeeds
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
     let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // battle start + turn number only: no selection draw (forced pick),
-    // no escape draw (raw speed >= raw speed succeeds unconditionally).
+    // The all-spent enemy's forced pick skips the selection draw, and the
+    // player's raw speed >= the enemy's raw speed skips the escape roll,
+    // leaving only Battle::new's draw and this turn's turn-number draw.
     let mut rng = SequenceRng::new([0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -168,26 +151,26 @@ fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
 
 #[test]
 fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
-    // The same +6 Speed stage must change turn order but NOT escape
-    // odds: TryRunFromBattle reads raw gBattleMons speed
-    // (battle_util.c:463-:465) while GetWhoStrikesFirst reads the
-    // stage-modified effective Speed. Bulbasaur L10 (raw 17, +6 stage ->
-    // effective 68) vs Rattata L20 (raw 40, neutral) puts the two on
-    // opposite sides of the comparison, so each leg pins its accessor.
+    // A +6 Speed stage must change turn order but not escape odds:
+    // `TryRunFromBattle` reads raw speed (`battle_util.c:463`-`:466`) while
+    // `GetWhoStrikesFirst` reads the stage-modified effective speed
+    // (`crate::turn_order::resolve_order`). Bulbasaur L10 (raw 17, +6 stage
+    // -> effective 68) against Rattata L20 (raw 40, neutral) sits on
+    // opposite sides of that comparison depending on which speed is read, so
+    // each leg below pins one accessor.
     let dex = Dex::new();
     let stage_boosted = |dex: &Dex| {
-        let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId(33)]); // Bulbasaur
+        let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId(33)]);
         mon.stages_mut().speed = StatStage::new(6).unwrap();
         mon
     };
 
-    // Leg 1 -- escape: raw 17 < raw 40, so the run takes the RNG branch
-    // and draws (speedVar = 17*128/40 = 54; roll 10 < 54 -> success).
-    // Were escape fed the effective 68 >= 40, it would succeed
-    // *unconditionally*, consume no escape draw, and leave the script's
-    // last value unread.
-    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]); // Rattata L20
-    let mut rng = SequenceRng::new([0, 0, 0, 10]);
+    // Raw 17 < raw 40 forces the RNG branch, where a roll below the computed
+    // threshold escapes. Effective 68 >= 40 would instead escape
+    // unconditionally and leave this roll undrawn.
+    let escape_roll_below_threshold: u16 = 10;
+    let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
+    let mut rng = SequenceRng::new([0, 0, 0, escape_roll_below_threshold]);
     let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
@@ -201,35 +184,30 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
          a raw-speed comparison must make)"
     );
 
-    // Leg 2 -- turn order: effective 68 > 40, so the boosted Bulbasaur
-    // moves first despite its raw 17 < 40. Were turn order fed raw
-    // speeds, the enemy's hit would come first.
-    //
-    // Damage pins, hand computed: Bulbasaur L10 Tackle (atk 17) into
-    // Rattata L20 (def 25): 17*35 = 595, *(2*10/5+2 = 6) = 3570, /25 =
-    // 142, /50 = 2, +2 = 4 (no STAB, neutral). Rattata L20 Tackle (atk
-    // 33) into Bulbasaur L10 (def 17): 33*35 = 1155, *(2*20/5+2 = 10) =
-    // 11550, /17 = 679, /50 = 13, +2 = 15, STAB -> 22. Both survive
-    // (48-hp Rattata, 32-hp Bulbasaur).
+    // Effective 68 > 40 seats the boosted Bulbasaur first despite its raw
+    // 17 < 40; reading raw speed for turn order would seat the enemy first
+    // instead.
     let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
+    let bulbasaur_tackle_damage = 4;
+    let rattata_tackle_damage = 22;
     assert_eq!(
         events,
         vec![
             BattleEvent::Hit {
                 by_player: true,
                 move_id: MoveId(33),
-                damage: 4,
+                damage: bulbasaur_tackle_damage,
                 is_critical: false,
             },
             BattleEvent::Hit {
                 by_player: false,
                 move_id: MoveId(33),
-                damage: 22,
+                damage: rattata_tackle_damage,
                 is_critical: false,
             },
         ],
@@ -241,23 +219,25 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
 
 #[test]
 fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
-    // The +30-per-previous-attempt term (TryRunFromBattle's
-    // `gBattleStruct->runTries * 30`): one roll value fails on turn 1
-    // and succeeds on turn 2 *only* because the counter fed the formula.
-    // Rattata L5 (speed 13) vs Charmander L10 (speed 21): speedVar =
-    // 13*128/21 = 79 on the first try, 109 on the second. Roll 90 sits
-    // between them: 90 >= 79 fails, 90 < 109 escapes. An engine that
-    // tracked run_tries but fed the formula 0 would fail turn 2 as well
-    // and panic this script by drawing for the enemy's move.
     let dex = Dex::new();
     let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
 
+    // The same roll fails turn 1's escape threshold and clears turn 2's
+    // higher one, so turn 2 can only succeed if run_tries fed the formula.
+    let roll_between_unboosted_and_boosted_thresholds: u16 = 90;
     let mut rng = SequenceRng::new([
-        0, // battle start
-        0, 0, 90, // turn 1: turn number, pick, escape roll -> fail
-        0, 1, 0, 0, // ...so the enemy acts: its 4-draw hit (9 damage)
-        0, 0, 90, // turn 2: same roll now beats 79+30 -> escape
+        0,
+        0,
+        0,
+        roll_between_unboosted_and_boosted_thresholds,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        roll_between_unboosted_and_boosted_thresholds,
     ]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
@@ -290,22 +270,13 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
 #[test]
 fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
     let dex = Dex::new();
-    // The same mirror match as the test above (Rattata L5 both sides,
-    // effective Speed 13), but the player runs. A chosen Run makes
-    // SetActionsAndBattlersTurnOrder short-circuit to `turnOrderId = 5`
-    // (`battle_main.c:4784`-`:4813`), seating the runner first without
-    // ever reaching GetWhoStrikesFirst -- so even with tied speeds the
-    // turn must not consume the mid-turn tie draw. The escape roll is
-    // skipped too (player_speed >= enemy_speed succeeds
-    // unconditionally), leaving exactly the turn number and the wild
-    // mon's selection pick.
+    // A chosen Run makes `SetActionsAndBattlersTurnOrder` short-circuit to
+    // `turnOrderId = 5` (`battle_main.c:4784`-`:4813`), seating the runner
+    // first without ever reaching `GetWhoStrikesFirst`'s speed-tie draw --
+    // so an equal-speed Run must not consume that draw either.
     let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let mut rng = SequenceRng::new([
-        0, 0, // Battle::new: battle-start turn number + initial-seeding tie
-        0, // the turn's own turn number
-        0, // selection: 0 % 4 -> slot 0, the wild mon's only move
-    ]);
+    let mut rng = SequenceRng::new([0, 0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         rng.draws(),
@@ -333,24 +304,20 @@ fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
 #[test]
 fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
     let dex = Dex::new();
-    // gBattleStruct->runTries is a byte: the 256th failed attempt wraps
-    // it to 0, resetting the +30 escape bonus. 256 failed runs are
-    // reachable: the enemy's Tackle slot is drained up front, so every
-    // turn its pick (draw 0 -> slot 0) fails via FailedNoPp -- no
-    // damage, no PP change -- while Scratch in slot 1 keeps the moveset
-    // only *partially* spent (an all-spent moveset would divert to the
-    // forced-Struggle fallback instead).
-    let player = slow_runner_rattata(&dex); // slow: runs can fail
-    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // fast
+    let player = slow_runner_rattata(&dex);
+    // Draining only the first move keeps the enemy's moveset partially
+    // spent, so its pick always fails via FailedNoPp instead of diverting
+    // to the forced-Struggle fallback exercised above.
+    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // Escape roll 255 always fails: speedVar is a byte, so
-    // `speed_var > 255` is false for every possible speedVar.
-    // Per turn: turn number, pick, escape roll -- 3 draws, no move draws.
+    // A byte-valued escape threshold can never exceed 255, so this roll
+    // fails every one of the 256 attempts regardless of the run_tries bonus.
+    let escape_roll_that_always_fails: u16 = 255;
     let script = std::iter::once(0u16)
-        .chain((0..256).flat_map(|_| [0u16, 0, 255]))
+        .chain((0..256).flat_map(|_| [0u16, 0, escape_roll_that_always_fails]))
         .collect::<Vec<_>>();
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -380,7 +347,6 @@ fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
 
 #[test]
 fn the_slow_runner_fixture_does_not_carry_run_away() {
-    // Guards slow_runner_rattata's ability slot; see its doc for why.
     let dex = Dex::new();
     let runner = slow_runner_rattata(&dex);
     assert_ne!(
@@ -393,16 +359,10 @@ fn the_slow_runner_fixture_does_not_carry_run_away() {
 #[test]
 fn run_away_escapes_without_an_escape_roll_or_a_run_try() {
     let dex = Dex::new();
-    // Rattata's primary ability is Run Away; the default (even) personality
-    // used by `max_iv_mon` selects ability slot 0. The runner is much slower
-    // than the enemy, which would otherwise force the RNG-driven branch.
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     assert_eq!(player.ability(), AbilityId::RUN_AWAY);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast Charmander
+    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
 
-    // Battle-start turn number, the turn's own turn number, and the wild
-    // mon's move pick. Run Away's non-Pyramid branch draws nothing for an
-    // escape roll (`pokeemerald/src/battle_util.c:427`-`:447`).
     let mut rng = SequenceRng::new([0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -428,9 +388,10 @@ fn run_away_escapes_without_an_escape_roll_or_a_run_try() {
 #[test]
 fn shadow_tag_refuses_a_nominally_successful_run() {
     let dex = Dex::new();
-    // Fast enough to have escaped unconditionally were the selection admitted.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // Charmander
-    let enemy = max_iv_mon(&dex, 202, 5, vec![MoveId(33)]); // Wobbuffet
+    // Faster than the enemy, so only Shadow Tag explains the refusal.
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let wobbuffet_species_id = 202;
+    let enemy = max_iv_mon(&dex, wobbuffet_species_id, 5, vec![MoveId(33)]);
     assert_eq!(enemy.ability(), AbilityId::SHADOW_TAG);
 
     let mut rng = SequenceRng::new([0]);
@@ -456,10 +417,13 @@ fn shadow_tag_refuses_a_nominally_successful_run() {
 #[test]
 fn arena_trap_refuses_a_grounded_nominally_successful_run() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast, grounded Charmander
+    // Faster than the enemy and grounded, so only Arena Trap explains the
+    // refusal.
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
-        332, // Trapinch
+        trapinch_species_id,
         5,
         vec![MoveId(33)],
         SECONDARY_ABILITY_PERSONALITY,
@@ -483,19 +447,19 @@ fn arena_trap_refuses_a_grounded_nominally_successful_run() {
 #[test]
 fn arena_trap_exempts_a_levitate_runner() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 93, 5, vec![MoveId(33)]); // Haunter
+    let haunter_species_id = 93;
+    let player = max_iv_mon(&dex, haunter_species_id, 5, vec![MoveId(33)]);
     assert_eq!(player.ability(), AbilityId::LEVITATE);
+    let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
-        332, // Trapinch
+        trapinch_species_id,
         5,
         vec![MoveId(33)],
         SECONDARY_ABILITY_PERSONALITY,
     );
     assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
 
-    // Battle-start, turn number, pick; Haunter's raw Speed (16) already
-    // exceeds Trapinch's (7), so escape is unconditional and draws nothing.
     let mut rng = SequenceRng::new([0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -508,25 +472,26 @@ fn arena_trap_exempts_a_levitate_runner() {
             },
             BattleEvent::Ended(BattleOutcome::PlayerRan),
         ],
-        "Arena Trap does not apply to a Levitate holder (`battle_main.c:4056`)"
+        "Arena Trap does not apply to a Levitate holder (`battle_main.c:4054`)"
     );
 }
 
 #[test]
 fn arena_trap_exempts_a_flying_runner() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 16, 5, vec![MoveId(33)]); // Pidgey: Normal/Flying
+    let pidgey_species_id = 16;
+    let player = max_iv_mon(&dex, pidgey_species_id, 5, vec![MoveId(33)]);
+    assert!(player.types().contains(&Type::Flying));
+    let trapinch_species_id = 332;
     let enemy = max_iv_mon_with_personality(
         &dex,
-        332, // Trapinch
+        trapinch_species_id,
         5,
         vec![MoveId(33)],
         SECONDARY_ABILITY_PERSONALITY,
     );
     assert_eq!(enemy.ability(), AbilityId::ARENA_TRAP);
 
-    // Battle-start, turn number, pick; Pidgey's raw Speed (12) already
-    // exceeds Trapinch's (7), so escape is unconditional and draws nothing.
     let mut rng = SequenceRng::new([0, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -539,17 +504,19 @@ fn arena_trap_exempts_a_flying_runner() {
             },
             BattleEvent::Ended(BattleOutcome::PlayerRan),
         ],
-        "Arena Trap does not apply to a Flying-type runner (`battle_main.c:4057`)"
+        "Arena Trap does not apply to a Flying-type runner (`battle_main.c:4055`)"
     );
 }
 
 #[test]
 fn magnet_pull_refuses_a_steel_type_nominally_successful_run() {
     let dex = Dex::new();
-    // Fast enough to have escaped unconditionally were the selection admitted.
-    let player = max_iv_mon(&dex, 382, 50, vec![MoveId(33)]); // Aron
+    // Faster than the enemy, so only Magnet Pull explains the refusal.
+    let aron_species_id = 382;
+    let player = max_iv_mon(&dex, aron_species_id, 50, vec![MoveId(33)]);
     assert!(player.types().contains(&Type::Steel));
-    let enemy = max_iv_mon(&dex, 81, 5, vec![MoveId(33)]); // Magnemite
+    let magnemite_species_id = 81;
+    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId(33)]);
     assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
 
     let mut rng = SequenceRng::new([0]);
@@ -569,9 +536,10 @@ fn magnet_pull_refuses_a_steel_type_nominally_successful_run() {
 #[test]
 fn magnet_pull_does_not_refuse_a_non_steel_runner() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // Charmander
+    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
     assert!(!player.types().contains(&Type::Steel));
-    let enemy = max_iv_mon(&dex, 81, 5, vec![MoveId(33)]); // Magnemite
+    let magnemite_species_id = 81;
+    let enemy = max_iv_mon(&dex, magnemite_species_id, 5, vec![MoveId(33)]);
     assert_eq!(enemy.ability(), AbilityId::MAGNET_PULL);
 
     let mut rng = SequenceRng::new([0, 0, 0]);
