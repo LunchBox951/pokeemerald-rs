@@ -53,11 +53,11 @@
 //! different number of `Random()` calls, and a shared stream that advanced
 //! the wrong number of steps is wrong for the rest of the battle.
 //!
-//! [`secondary::ensure_admissible`]'s Serene Grace/Synchronize screen is
-//! status-dependent rather than static, so a residual that cures a primary
-//! status can flip a verdict construction already gave. `Battle` re-screens
-//! the enemy's admissible moves once at the start of every turn, before that
-//! turn's own RNG, restoring the guarantee above for the life of the battle.
+//! [`secondary::ensure_admissible`]'s Serene Grace screen is status-dependent
+//! rather than static, so a residual that cures a primary status can flip a
+//! verdict construction already gave. `Battle` re-screens the enemy's
+//! admissible moves once at the start of every turn, before that turn's own
+//! RNG, restoring the guarantee above for the life of the battle.
 //!
 //! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
 //! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
@@ -218,10 +218,7 @@
 //! ([`hit::damage_before_roll`], propagated
 //! through drain, multi-hit, and fixed damage — Foresight and the
 //! two-turn-move distinction upstream's `AttacksThisTurn` check makes are not
-//! modelled, so the block is unconditional wherever it applies),
-//! Synchronize's paralysis reflection
-//! ([`paralyze::resolve_synchronize_reflection`] — its poison reflection
-//! stays refused, see [`secondary::ensure_admissible`]), and the four
+//! modelled, so the block is unconditional wherever it applies), and the four
 //! stat-drop guards — Clear Body, White Smoke, Keen Eye,
 //! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
 //! guard left unmodelled there; [`secondary`] models it for poison) —

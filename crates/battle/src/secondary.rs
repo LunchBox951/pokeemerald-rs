@@ -185,24 +185,24 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
 /// Rejects an [`EFFECT_POISON_HIT`] move when landing the status would
 /// activate an unsupported ability interaction.
 ///
-/// A no-op whenever the poison guards already refuse the target. Synchronize is
-/// also accepted when the attacker already carries a primary status, whose
-/// reflection then exits silently
-/// (`battle_script_commands.c:2334`-`:2335`). Upstream's poison case admits
-/// Guts and Marvel Scale (`battle_script_commands.c:2299-2340`); their
-/// status-dependent damage reads (`pokemon.c:3211-3214`) are modelled by
+/// A no-op whenever the poison guards already refuse the target. Upstream's
+/// poison case admits Guts and Marvel Scale
+/// (`battle_script_commands.c:2299-2340`); their status-dependent damage
+/// reads (`pokemon.c:3211-3214`) are modelled by
 /// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
 /// newly poisoning either holder is admitted. Shed Skin is likewise admitted:
 /// its end-turn cure draw lives in `Battle::residual_effects` instead of
-/// here.
+/// here. The defender's Synchronize is admitted too:
+/// [`resolve_synchronize_poison_reflection`] models the move-end reflection
+/// onto the original attacker, so there is nothing left here to refuse.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
 /// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
 /// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
-/// the attacker's Serene Grace or the defender's Synchronize, when the move
-/// would newly poison the defender.
+/// the attacker's Serene Grace, when the move would newly poison the
+/// defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -220,14 +220,6 @@ pub fn ensure_admissible(
     if attacker.ability() == AbilityId::SERENE_GRACE && poison_can_land(move_type, defender) {
         return Err(BattleError::UnportedAbilityInteraction(
             AbilityId::SERENE_GRACE,
-        ));
-    }
-    if !poison_can_land(move_type, defender) {
-        return Ok(());
-    }
-    if defender.ability() == AbilityId::SYNCHRONIZE && attacker.status1().is_healthy() {
-        return Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SYNCHRONIZE,
         ));
     }
     Ok(())
@@ -286,6 +278,53 @@ pub fn spend_effect_chance_draw(
         .battle_type()
         .ok_or(BattleError::UnsupportedMoveType(move_id))?;
     Ok(poison_can_land(move_type, defender))
+}
+
+/// The result of reflecting a Synchronize holder's poison back onto the
+/// original attacker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynchronizePoisonReflectionOutcome {
+    /// The original attacker's [`AbilityId::IMMUNITY`] protected it.
+    ImmunityProtected,
+    /// The original attacker's Poison or Steel typing protected it.
+    TypeProtected,
+    /// The original attacker already carries a primary status, so the
+    /// reflection writes nothing.
+    AlreadyStatused,
+    /// The original attacker must be poisoned.
+    Applied,
+}
+
+/// Resolves a Synchronize poison reflection against `attacker`, the battler
+/// whose move just poisoned a Synchronize holder: `SetMoveEffect`'s
+/// `STATUS1_POISON` case re-entered through `MOVE_EFFECT_AFFECTS_USER` with
+/// `primary == TRUE` (`battle_util.c:2971`-`:2986`,
+/// `battle_script_commands.c:2299`-`:2340`), which runs neither `typecalc`
+/// nor `accuracycheck`.
+///
+/// `primary == TRUE` always takes the guarded prevention branches ahead of
+/// the existing-status no-op, unlike the initial hit's own chance-based
+/// landing (`poison_can_land`, gated on `HITMARKER_STATUS_ABILITY_EFFECT`
+/// and `primary`/`certain` too): an [`AbilityId::IMMUNITY`] holder or a
+/// Poison- or Steel-typed attacker produces its own prevention observable
+/// here, where the initial hit's guard would have refused silently. Only a
+/// normally typed, non-Immunity attacker that already carries a primary
+/// status falls through to the silent no-op.
+#[must_use]
+pub fn resolve_synchronize_poison_reflection(
+    attacker: &BattlePokemon,
+) -> SynchronizePoisonReflectionOutcome {
+    if attacker.ability() == AbilityId::IMMUNITY {
+        return SynchronizePoisonReflectionOutcome::ImmunityProtected;
+    }
+    let types = attacker.types();
+    if types.contains(&Type::Poison) || types.contains(&Type::Steel) {
+        return SynchronizePoisonReflectionOutcome::TypeProtected;
+    }
+    if !attacker.status1().is_healthy() {
+        return SynchronizePoisonReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizePoisonReflectionOutcome::Applied
 }
 
 #[cfg(test)]
