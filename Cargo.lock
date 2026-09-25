@@ -460,6 +460,7 @@ version = "0.0.35+gamepatch.6"
 dependencies = [
  "assets",
  "pack-format",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1345,6 +1346,7 @@ version = "0.0.35+gamepatch.6"
 dependencies = [
  "assets",
  "pack-format",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

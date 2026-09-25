@@ -17,6 +17,11 @@ use crate::save::store::FLASH_IMAGE_LEN;
 // warning, and warnings are denied.
 #[cfg(target_os = "linux")]
 use super::fill_new_file;
+#[cfg(windows)]
+use super::{
+    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
+    WindowsFileIdentity,
+};
 #[cfg(unix)]
 use crate::save::file::SaveFileError;
 
@@ -914,6 +919,207 @@ fn a_staged_image_cannot_be_opened_or_removed_while_its_hold_lives() {
         store.flash_image(),
         "the save must hold the bytes written under the hold"
     );
+}
+
+/// Points the directory junction at `link` at `target`, replacing whatever
+/// it named before. Unlike a directory symlink this needs no privilege, so
+/// the ancestor-retarget regressions below never have to skip (mirrors
+/// `crates/rom-import/src/lib.rs`'s test helper of the same shape).
+#[cfg(windows)]
+fn junction(link: &Path, target: &Path) {
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("cmd runs mklink");
+    assert!(
+        status.success(),
+        "mklink /J {} {}: {status}",
+        link.display(),
+        target.display()
+    );
+}
+
+/// Issue #1132's "swapped entry must survive" regression: the peer never
+/// touches the staged entry itself, only an *ancestor* the staging path
+/// walks through, after [`StagedSave::release_hold`] has already given up
+/// the deny-all hold ([`StagedSave::remove_after`] releases it before this
+/// call even runs). Only the identity `remove_through_verified_handle`
+/// binds to the handle it opens for the delete -- not a fresh trust in
+/// whatever the path now resolves to -- can tell the two apart.
+#[cfg(windows)]
+#[test]
+fn cleanup_leaves_a_file_reached_through_a_retargeted_ancestor_alone() {
+    let dir = TempDir::new("staging-cleanup-ancestor-swap");
+    let target = dir.join("a");
+    let elsewhere = dir.join("b");
+    std::fs::create_dir(&target).expect("the link's first target");
+    std::fs::create_dir(&elsewhere).expect("the link's second target");
+    let victim = elsewhere.join("staged.tmp");
+    std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+    let link = dir.join("link");
+    junction(&link, &target);
+    let staging = link.join("staged.tmp");
+
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(staging.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
+
+    std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+    junction(&link, &elsewhere);
+
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err:?}");
+    assert_eq!(
+        std::fs::read(&victim).expect("the unrelated file survives"),
+        b"someone else's file",
+        "cleanup must never remove a file the path only reaches through a retargeted ancestor"
+    );
+}
+
+/// An ancestor retargeted to an empty directory leaves the staging path
+/// reaching nothing while the staged image still sits under the junction's
+/// original target. Cleanup cannot remove it and must say so, folding the
+/// `NotFound` into the returned error the way the non-Windows arm folds its
+/// own, rather than returning the rename error alone.
+#[cfg(windows)]
+#[test]
+fn cleanup_reports_a_staged_image_an_ancestor_retarget_orphaned() {
+    let dir = TempDir::new("staging-cleanup-ancestor-empty");
+    let target = dir.join("a");
+    let empty = dir.join("b");
+    std::fs::create_dir(&target).expect("the link's first target");
+    std::fs::create_dir(&empty).expect("the link's second target");
+
+    let link = dir.join("link");
+    junction(&link, &target);
+    let staging = link.join("staged.tmp");
+
+    let mut staged = stage_at_first_free_name(
+        std::iter::once(staging.clone()),
+        create_new_exclusive,
+        &vec![0u8; FLASH_IMAGE_LEN],
+    )
+    .expect("the exclusive staging write must succeed");
+
+    std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+    junction(&link, &empty);
+
+    let err = staged.remove_after(std::io::Error::other("the rename failed"));
+
+    assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("additionally failed to remove the abandoned staging file"),
+        "an orphaned staged image must be reported, not dropped: {err}"
+    );
+    assert!(
+        target.join("staged.tmp").exists(),
+        "the orphan really is still there, under the original target"
+    );
+}
+
+/// The ancestor-retarget test above completes its swap before cleanup ever
+/// starts, so an implementation that re-resolves `path` for both the check
+/// and the delete would already pass it. This exercises the narrower
+/// window: `before_delete` retargets the ancestor after
+/// `remove_through_verified_handle_with` has already opened and
+/// identity-checked its handle, and only then may it delete. A handle-bound
+/// delete must still remove exactly the object it opened; it must never
+/// reach whatever the retargeted path now resolves to.
+#[cfg(windows)]
+#[test]
+fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
+    let dir = TempDir::new("staging-cleanup-race-window");
+    let target = dir.join("a");
+    let elsewhere = dir.join("b");
+    std::fs::create_dir(&target).expect("the link's first target");
+    std::fs::create_dir(&elsewhere).expect("the link's second target");
+    let victim = elsewhere.join("staged.tmp");
+    std::fs::write(&victim, b"someone else's file").expect("the unrelated file exists");
+
+    let link = dir.join("link");
+    junction(&link, &target);
+    let staging = link.join("staged.tmp");
+    let created = target.join("staged.tmp");
+
+    let file = create_new_exclusive(&staging).expect("the exclusive staging write must succeed");
+    let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+    drop(file);
+
+    remove_through_verified_handle_with(&staging, identity, |_handle| {
+        std::fs::remove_dir(&link).expect("the peer drops the ancestor junction");
+        junction(&link, &elsewhere);
+    })
+    .expect("a retarget after the check must not stop the handle-bound delete");
+
+    assert!(
+        !created.exists(),
+        "the delete must remove the object identity was checked against, through its handle"
+    );
+    assert_eq!(
+        std::fs::read(&victim).expect("the unrelated file survives"),
+        b"someone else's file",
+        "a retarget landing after the check must never redirect the delete onto it"
+    );
+}
+
+/// A directory opens only with `FILE_FLAG_BACKUP_SEMANTICS`; without it the
+/// verifying open fails as access denied and cleanup reports a staging file
+/// that is already gone as left behind.
+#[cfg(windows)]
+#[test]
+fn cleanup_leaves_a_directory_that_took_the_staging_name_alone() {
+    let dir = TempDir::new("staging-cleanup-directory-swap");
+    let staging = dir.join("staged.tmp");
+    let file = create_new_exclusive(&staging).expect("the exclusive staging create succeeds");
+    let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+    drop(file);
+    std::fs::remove_file(&staging).expect("the peer removes the staged file");
+    std::fs::create_dir(&staging).expect("the peer plants a directory at its name");
+
+    let removal = remove_through_verified_handle(&staging, identity)
+        .expect("a directory at the name is identified, not an open failure");
+
+    assert_eq!(removal, VerifiedRemoval::NotOurs);
+    assert!(
+        staging.is_dir(),
+        "the peer's directory must survive cleanup"
+    );
+}
+
+/// A scanner or indexer opening the freshly written staging file must not
+/// turn cleanup into a sharing violation, and a POSIX delete must free the
+/// name while that reader still holds its handle.
+#[cfg(windows)]
+#[test]
+fn cleanup_deletes_a_staged_file_another_process_still_reads() {
+    let dir = TempDir::new("staging-cleanup-shared-reader");
+    let staging = dir.join("staged.tmp");
+    let file = create_new_exclusive(&staging).expect("the exclusive staging create succeeds");
+    let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+    drop(file);
+    let reader = std::fs::File::open(&staging).expect("a sharing reader opens the staged file");
+
+    let removal = remove_through_verified_handle(&staging, identity)
+        .expect("a sharing reader must not refuse the verified delete");
+
+    match removal {
+        VerifiedRemoval::Unlinked => {
+            create_new_exclusive(&staging)
+                .expect("an unlinked staging name is free for a same-name retry at once");
+        }
+        VerifiedRemoval::Pending => {}
+        VerifiedRemoval::NotOurs => panic!("the verified file was still at its name"),
+    }
+    drop(reader);
 }
 
 #[test]
