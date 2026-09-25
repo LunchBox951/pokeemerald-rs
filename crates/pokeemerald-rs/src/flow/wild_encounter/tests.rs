@@ -15,7 +15,7 @@
 //!   driver's run attempt, so "full battle to an outcome" is pinned on the
 //!   move-vs-move path too.
 
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId};
 use battle::{Battle, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, StatStage, MAX_IV};
 use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE, MB_TALL_GRASS};
 use engine::overworld::warp::{trigger_door_warp, WarpTrigger};
@@ -1315,4 +1315,40 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
     );
     assert_eq!(phase.save1().location.x, 4);
     assert_eq!(phase.save1().location.y, 2);
+}
+
+/// Shadow Tag, Arena Trap, and Magnet Pull can refuse [`advance_wild_battle`]'s
+/// standing Run; no fightable land table may roll a species holding one.
+#[test]
+fn no_fightable_land_table_can_roll_a_trapping_opponent() {
+    const TRAPPING_ABILITIES: &[AbilityId] = &[
+        AbilityId::SHADOW_TAG,
+        AbilityId::ARENA_TRAP,
+        AbilityId::MAGNET_PULL,
+    ];
+    let dex = Dex::new();
+
+    for header in assets::WildEncounterTable::new()
+        .iter()
+        .filter(|header| super::map_wild_table_fightable(header.map))
+    {
+        let Some(land) = &header.land else {
+            continue;
+        };
+        for slot in &land.mons {
+            let abilities = dex
+                .species(slot.species)
+                .expect("a screened table only names known species")
+                .abilities;
+            assert!(
+                !abilities
+                    .iter()
+                    .any(|ability| TRAPPING_ABILITIES.contains(ability)),
+                "{} passes the fightability screen yet can roll {:?} ({abilities:?}), \
+                 whose trap would refuse the driver's Run selection",
+                header.map.name(),
+                slot.species,
+            );
+        }
+    }
 }
