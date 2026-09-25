@@ -98,7 +98,7 @@ checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 
 [[package]]
 name = "assets"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "pack-format",
 ]
@@ -111,7 +111,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "platform",
 ]
@@ -124,7 +124,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "battle"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "assets",
 ]
@@ -429,7 +429,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51a91c9b32ac4e8105dec255e849e0d66e27d7c34d184364fb93e469db08f690"
 dependencies = [
  "drm-sys",
- "rustix 1.1.4",
+ "rustix 1.1.5",
 ]
 
 [[package]]
@@ -456,7 +456,7 @@ checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "engine"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "assets",
  "pack-format",
@@ -547,7 +547,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "windows-link",
 ]
 
@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "pack-format"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 
 [[package]]
 name = "percent-encoding"
@@ -1218,7 +1218,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "cpal",
  "softbuffer",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "pokeemerald-rs"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "assets",
  "audio",
@@ -1237,7 +1237,7 @@ dependencies = [
  "platform",
  "rendering",
  "rom-import",
- "rustix 1.1.4",
+ "rustix 1.1.5",
 ]
 
 [[package]]
@@ -1250,7 +1250,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "windows-sys 0.61.2",
 ]
 
@@ -1337,11 +1337,11 @@ dependencies = [
 
 [[package]]
 name = "rendering"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 
 [[package]]
 name = "rom-import"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "assets",
  "pack-format",
@@ -1371,9 +1371,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
  "bitflags 2.13.0",
  "errno",
@@ -1539,7 +1539,7 @@ dependencies = [
  "objc2-quartz-core 0.3.2",
  "raw-window-handle",
  "redox_syscall 0.5.18",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "tiny-xlib",
  "tracing",
  "wasm-bindgen",
@@ -1798,7 +1798,7 @@ checksum = "2857dd20b54e916ec7253b3d6b4d5c4d7d4ca2c33c2e11c6c76a99bd8744755d"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -1811,7 +1811,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "645c7c96bb74690c3189b5c9cb4ca1627062bb23693a4fad9d8c3de958260144"
 dependencies = [
  "bitflags 2.13.0",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -1833,7 +1833,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "wayland-client",
  "xcursor",
 ]
@@ -2218,7 +2218,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "x11rb-protocol",
 ]
 
@@ -2255,7 +2255,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.0.32+gamepatch.0"
+version = "0.0.35+gamepatch.3"
 dependencies = [
  "assets",
  "pack-format",

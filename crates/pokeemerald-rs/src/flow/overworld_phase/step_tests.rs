@@ -1441,3 +1441,73 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
          step is collision-blocked must still be able to open the menu"
     );
 }
+
+/// A forced-movement landing must not run `CheckStandardWildEncounter`
+/// (`pokeemerald/src/field_control_avatar.c:116-122`, `:162`, `:667-684`).
+#[test]
+fn a_forced_movement_landing_must_not_run_the_wild_encounter_check() {
+    use engine::overworld::metatile_behavior::{MB_MUDDY_SLOPE, MB_NORMAL};
+
+    let landing_onto = |behavior: u8| {
+        let scene =
+            crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (6, 4), behavior);
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 5), 3, Direction::North),
+            None,
+        );
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::UP));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the fixture tile"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained, so the next call is this \
+             port's T_TILE_CENTER for it"
+        );
+        assert_eq!(
+            (
+                phase.wild.immunity_steps(),
+                phase.wild.prev_metatile_behavior()
+            ),
+            (0, MB_NORMAL),
+            "setup: the completed step is only observed on the call after the \
+             animation drains"
+        );
+        // The landing call, with no input of its own.
+        phase.step(ButtonState::new());
+        phase
+    };
+
+    // Fixture precondition: an ordinary landing *does* reach
+    // `CheckStandardWildEncounter`, so the bookkeeping below is a real
+    // observation of that call and not an inert counter.
+    let ordinary = landing_onto(MB_NORMAL);
+    assert_eq!(
+        (
+            ordinary.wild.immunity_steps(),
+            ordinary.wild.prev_metatile_behavior()
+        ),
+        (1, MB_NORMAL),
+        "fixture precondition: an unforced landing spends one immunity step \
+         and records the tile it stepped onto"
+    );
+
+    let forced = landing_onto(MB_MUDDY_SLOPE);
+    assert_eq!(
+        (
+            forced.wild.immunity_steps(),
+            forced.wild.prev_metatile_behavior()
+        ),
+        (0, MB_NORMAL),
+        "a forced-movement landing leaves `checkStandardWildEncounter` unset \
+         upstream, so `CheckStandardWildEncounter` never runs and the \
+         immunity counter and remembered behaviour stay exactly as the \
+         previous step left them"
+    );
+}

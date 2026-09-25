@@ -401,7 +401,14 @@ impl OverworldPhase {
             // what defers a completed step to the call after the one that
             // drained its animation (the "Frame shape" section above owns
             // the derivation).
-            let stepped_onto = self.pending_landing.take_if(|_| !self.player.in_transit());
+            //
+            // `field_input_suppressed` withholds a forced landing from every
+            // completed-step consumer below, per upstream's `tookStep`/
+            // `checkStandardWildEncounter` exclusion (`field_control_avatar.c:116-122`).
+            let stepped_onto = self
+                .pending_landing
+                .take_if(|_| !self.player.in_transit())
+                .filter(|_| !self.player.field_input_suppressed());
             // The Route 101 scripted first-battle coord-event trigger (issue
             // #231, `super::first_battle_trigger`'s own "Precedence" section:
             // it outranks the door warp, the wild-encounter roll, and the

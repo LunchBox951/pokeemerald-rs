@@ -1,6 +1,6 @@
 use super::{
-    ensure_admissible, ensure_resolvable, is_paralyze_effect, resolve_paralyze_move,
-    resolve_synchronize_reflection, ParalyzeOutcome, SynchronizeReflectionOutcome, EFFECT_PARALYZE,
+    ensure_resolvable, is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection,
+    ParalyzeOutcome, SynchronizeReflectionOutcome, EFFECT_PARALYZE,
 };
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -379,20 +379,21 @@ fn resolve_synchronize_reflection_is_blocked_by_the_attackers_own_limber() {
 const SEVIPER: SpeciesId = SpeciesId(379);
 
 #[test]
-fn a_shed_skin_defender_is_refused_before_the_accuracy_draw() {
+fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE]);
     let defender = mon(&dex, SEVIPER, 10, vec![TACKLE]);
     assert_eq!(defender.ability(), assets::AbilityId::SHED_SKIN);
     let mut rng = SequenceRng::new([0]);
-    let refused =
-        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap_err();
+    let outcome =
+        resolve_paralyze_move(&dex, THUNDER_WAVE, &attacker, &defender, &mut rng).unwrap();
     assert_eq!(
-        refused,
-        BattleError::UnportedAbilityInteraction(assets::AbilityId::SHED_SKIN),
-        "the unmodelled end-turn cure roll fails closed"
+        outcome,
+        ParalyzeOutcome::Applied,
+        "Shed Skin's end-turn cure draw lives in Battle::residual_effects, \
+         so this pipeline never refuses it"
     );
-    assert_eq!(rng.draws(), 0, "the refusal precedes accuracycheck");
+    assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
 #[test]
@@ -423,7 +424,7 @@ fn an_already_poisoned_shed_skin_defender_is_admitted_not_refused() {
     assert_eq!(
         outcome,
         ParalyzeOutcome::AlreadyStatused,
-        "the STATUS1_ANY guard exits before ensure_admissible ever reads Shed Skin"
+        "the STATUS1_ANY guard exits before any ability is read"
     );
 }
 
@@ -497,18 +498,22 @@ fn a_marvel_scale_defender_is_newly_paralysed_not_refused() {
     assert_eq!(rng.draws(), 1, "only accuracycheck draws");
 }
 
-/// The stat-reading pair is admitted for every paralyzing move, not just one,
-/// since the interaction is modelled generically at the accessor boundary.
+/// Every ability this crate admits for a fresh paralysis -- the stat-reading
+/// pair at the accessor boundary, and Shed Skin's end-turn cure draw -- is
+/// admitted for every paralyzing move, not just one.
 #[test]
-fn every_paralyze_move_admits_the_stat_reading_abilities() {
+fn every_paralyze_move_admits_every_modelled_ability() {
     let dex = Dex::new();
     let attacker = mon(&dex, WURMPLE, 10, vec![THUNDER_WAVE, STUN_SPORE, GLARE]);
-    for species in [MACHOP, MILOTIC] {
+    for species in [MACHOP, MILOTIC, SEVIPER] {
         let defender = mon(&dex, species, 10, vec![TACKLE]);
         for move_id in [THUNDER_WAVE, STUN_SPORE, GLARE] {
+            let mut rng = SequenceRng::new([0]);
+            let outcome =
+                resolve_paralyze_move(&dex, move_id, &attacker, &defender, &mut rng).unwrap();
             assert_eq!(
-                ensure_admissible(&dex, move_id, &attacker, &defender),
-                Ok(()),
+                outcome,
+                ParalyzeOutcome::Applied,
                 "{move_id:?} against {species:?}"
             );
         }

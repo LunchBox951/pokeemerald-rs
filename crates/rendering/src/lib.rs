@@ -14,7 +14,10 @@
 //! `WINOUT`, [`window`]), color special effects (alpha blend, brighten,
 //! darken, [`effects`]), and mosaic ([`mosaic`]), all controlled by the
 //! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
-//! delegates to it with [`compositor::FrameEffects::default`].
+//! delegates to it with [`compositor::FrameEffects::default`]. Affine OBJ
+//! mosaic sampling reruns once per hardware-window span rather than once per
+//! scanline, restarting its held source column at each span's own start
+//! (`sprite::SpriteLayer::sample_affine_local`).
 //!
 //! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
 //! a shared per-scanline OAM admission stage (`oam_budget`, private but see
