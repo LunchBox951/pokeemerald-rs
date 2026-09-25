@@ -158,6 +158,11 @@ pub enum PartialFile {
     /// caller acts on it, so a retry belongs at a fresh name rather than at
     /// a deletion aimed by pathname. The off-Windows outcome; see
     /// [`RemovalFailed`](Self::RemovalFailed) for Windows's equivalent.
+    ///
+    /// On Windows it also covers a volume without POSIX delete semantics,
+    /// where cleanup could only mark the file delete-on-close: another
+    /// process's open handle keeps the name, refusing a same-name retry,
+    /// until that handle closes.
     MayRemain,
     /// The path could not be read, so whether a partial file is there is
     /// unknown. Carries why; the write failure itself is still `source`.

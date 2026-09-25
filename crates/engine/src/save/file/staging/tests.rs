@@ -18,7 +18,10 @@ use crate::save::store::FLASH_IMAGE_LEN;
 #[cfg(target_os = "linux")]
 use super::fill_new_file;
 #[cfg(windows)]
-use super::{remove_through_verified_handle_with, WindowsFileIdentity};
+use super::{
+    remove_through_verified_handle, remove_through_verified_handle_with, VerifiedRemoval,
+    WindowsFileIdentity,
+};
 #[cfg(unix)]
 use crate::save::file::SaveFileError;
 
@@ -1024,6 +1027,57 @@ fn deletion_survives_an_ancestor_retargeted_between_the_check_and_the_delete() {
         b"someone else's file",
         "a retarget landing after the check must never redirect the delete onto it"
     );
+}
+
+/// A directory opens only with `FILE_FLAG_BACKUP_SEMANTICS`; without it the
+/// verifying open fails as access denied and cleanup reports a staging file
+/// that is already gone as left behind.
+#[cfg(windows)]
+#[test]
+fn cleanup_leaves_a_directory_that_took_the_staging_name_alone() {
+    let dir = TempDir::new("staging-cleanup-directory-swap");
+    let staging = dir.join("staged.tmp");
+    let file = create_new_exclusive(&staging).expect("the exclusive staging create succeeds");
+    let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+    drop(file);
+    std::fs::remove_file(&staging).expect("the peer removes the staged file");
+    std::fs::create_dir(&staging).expect("the peer plants a directory at its name");
+
+    let removal = remove_through_verified_handle(&staging, identity)
+        .expect("a directory at the name is identified, not an open failure");
+
+    assert_eq!(removal, VerifiedRemoval::NotOurs);
+    assert!(
+        staging.is_dir(),
+        "the peer's directory must survive cleanup"
+    );
+}
+
+/// A scanner or indexer opening the freshly written staging file must not
+/// turn cleanup into a sharing violation, and a POSIX delete must free the
+/// name while that reader still holds its handle.
+#[cfg(windows)]
+#[test]
+fn cleanup_deletes_a_staged_file_another_process_still_reads() {
+    let dir = TempDir::new("staging-cleanup-shared-reader");
+    let staging = dir.join("staged.tmp");
+    let file = create_new_exclusive(&staging).expect("the exclusive staging create succeeds");
+    let identity = WindowsFileIdentity::of(&file).expect("identity reads back off the handle");
+    drop(file);
+    let reader = std::fs::File::open(&staging).expect("a sharing reader opens the staged file");
+
+    let removal = remove_through_verified_handle(&staging, identity)
+        .expect("a sharing reader must not refuse the verified delete");
+
+    match removal {
+        VerifiedRemoval::Unlinked => {
+            create_new_exclusive(&staging)
+                .expect("an unlinked staging name is free for a same-name retry at once");
+        }
+        VerifiedRemoval::Pending => {}
+        VerifiedRemoval::NotOurs => panic!("the verified file was still at its name"),
+    }
+    drop(reader);
 }
 
 #[test]
