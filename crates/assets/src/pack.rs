@@ -1,82 +1,15 @@
-//! The local asset pack loader (S-4, F-3, issue #81 / Discussion #71
-//! policy A).
+//! Read side of the local asset pack. [`AssetPack::load`] parses the
+//! directory [`pack_format`] writes (which owns the on-disk layout, the id
+//! scheme, and the writer `cargo xtask extract` drives); this module's
+//! methods look up and decode individual entries.
 //!
-//! `cargo xtask extract` (`crates/xtask/src/extract`) reads the developer's
-//! local, gitignored `pokeemerald/` checkout and writes a deterministic,
-//! versioned pack file — tileset tile graphics, palettes, and player/NPC
-//! sprite sheets, keyed by normalized asset ids (see that module's docs for
-//! the id scheme). This module is its read side.
+//! The pack file is never committed, embedded in a binary, or produced by
+//! CI — it only exists after a developer runs `cargo xtask extract`. Every
+//! accessor that needs its bytes surfaces that absence as
+//! [`PackError::NotFound`], whose message names the command to run.
 //!
-//! The container format belongs to [`pack_format`]: the layout, its
-//! constants, the writer `xtask::extract` drives, and the directory parser
-//! this module calls. That shared, dependency-free format crate is what
-//! keeps `xtask` and `assets` decoupled from each other while leaving one
-//! file to change.
-//!
-//! The pack itself is **never committed, never a CI artifact, never
-//! embedded in a binary** (owner decision, Discussion #71). It exists only
-//! on a developer's disk after they run `./init.sh` then
-//! `cargo xtask extract`. Every accessor here that needs the pack's bytes
-//! therefore has a real failure mode for "it isn't there yet" —
-//! [`PackError::NotFound`] — with a message that says exactly what to run,
-//! per the issue's "clear diagnostic" requirement.
-//!
-//! # A second error type, deliberately
-//!
-//! [`error::PackError`] is its own enum rather than added variants on
-//! [`crate::error::AssetError`] — see [`crate::error`]'s module docs for
-//! why (in short: `AssetError` is used inside `const fn` table
-//! initializers elsewhere in this crate, which requires every value it can
-//! hold to have a `const`-evaluable destructor; `PackError` needs owned
-//! `String`/`PathBuf` payloads, which don't qualify).
-//!
-//! # Typed access
-//!
-//! [`AssetPack::tileset`] returns a [`TilesetHandle`] bundling a tileset's
-//! tile bitmap, its 16 palettes, and its raw metatile tables.
-//! [`AssetPack::sprite`] and [`AssetPack::sprite_palette`] reach the
-//! player/NPC sprite sheets and the two player palettes.
-//! [`AssetPack::layout_map`] / [`AssetPack::layout_border`] reach a map
-//! layout's grid/border bytes — deliberately raw byte accessors, not a
-//! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
-//! decode, this crate's pack loader stays decoupled from it (same rationale
-//! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
-//! other; see this module's docs). [`AssetPack::entries`] walks the raw
-//! directory for callers that need the pack's contents rather than one
-//! asset. [`AssetPack::font`] reaches a Latin
-//! font's glyph sheet (S-4, issue #114) as a
-//! [`FontImageRef`] bound to its [`FontId`], with
-//! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
-//! [`AssetPack::text_window_frame`] / [`AssetPack::message_box`] bundle a
-//! border frame's tile bitmap with its palette (see [`WindowFrameHandle`]);
-//! [`AssetPack::text_window_extra_palette`] reaches the four additional
-//! textbox colour palettes. [`AssetPack::song`], [`AssetPack::voicegroup`],
-//! and [`AssetPack::sample`] (S-4, issue #184, `#115` child 5) look up the
-//! `audio/song/*`, `audio/voicegroup/*`, and `audio/sample/*` entries
-//! `xtask::extract::midi` / `xtask::extract::voicegroups` /
-//! `xtask::extract::audio_samples` write and decode them through
-//! [`crate::audio::Song`]/[`crate::audio::VoiceGroup`]/[`crate::audio::Sample`]'s
-//! own `decode` — unlike [`layout_map`](AssetPack::layout_map)/
-//! [`font`](AssetPack::font), which hand back undecoded views for a sibling
-//! module to interpret, these three schemas' `decode` already lives in [`crate::audio`]
-//! itself, so there is no separate decode layer for this crate's pack loader
-//! to stay decoupled from. The lower-level [`AssetPack::image`] /
-//! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
-//! by its full id (used directly for e.g. `title/image/*` entries, which
-//! have no bundling handle of their own).
-//!
-//! # Format
-//!
-//! [`pack_format`]'s crate docs are the spec: the header/directory layout,
-//! the per-kind metadata, the id scheme, and the writer's determinism
-//! rules. This module does not restate it.
-//!
-//! # Module layout
-//!
-//! [`error`] (`PackError`), [`format`] (the [`pack_format`] seam), and
-//! [`handles`] (the borrowed typed views) are split out one-concept-per-file
-//! `(oop-boundaries)`; this file is just [`AssetPack`] itself — loading and
-//! the typed accessor methods.
+//! [`PackError`] is a separate enum from [`crate::error::AssetError`] —
+//! see [`crate::error`] for why.
 
 mod error;
 mod format;
@@ -93,27 +26,25 @@ pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
 use format::kind_label;
 
-/// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
-/// a 24x24 source sheet (upstream `sWindowFrames`,
+/// A border frame's 3x3 grid of 8x8 tiles (upstream `sWindowFrames`,
 /// `graphics/text_window/1.png`..`20.png`).
 const FRAME_WIDTH: u32 = 24;
-/// See [`FRAME_WIDTH`].
 const FRAME_HEIGHT: u32 = 24;
-/// The default message-box sheet (upstream `gMessageBox_Gfx`,
-/// `graphics/text_window/message_box.png`) is a 56x16 (7x2-tile) strip,
-/// distinct from the border frames' 24x24 shape.
+
+/// The default message-box strip (upstream `gMessageBox_Gfx`,
+/// `graphics/text_window/message_box.png`), a different shape from the
+/// selectable border frames above.
 const MESSAGE_BOX_WIDTH: u32 = 56;
-/// See [`MESSAGE_BOX_WIDTH`].
 const MESSAGE_BOX_HEIGHT: u32 = 16;
 
-/// A loaded asset pack: the whole file's bytes, plus a parsed, id-sorted
-/// directory for lookups.
+/// Every tileset carries this many palette banks.
+const TILESET_PALETTE_COUNT: usize = 16;
+
+/// A loaded asset pack: its bytes plus an id-sorted directory for lookups.
 ///
-/// Cheap to query (binary search over an in-memory `Vec`, no per-call I/O)
-/// once loaded. Not `Clone` — packs are tens of entries to low hundreds of
-/// KiB; callers are expected to load once and hold a reference (or an
-/// `Rc`/`Arc` of their own choosing — this crate imposes no policy there,
-/// `no global mutable state`).
+/// Cheap to query once loaded (an in-memory binary search, no per-call
+/// I/O). Not `Clone` — hold a reference, or your own `Rc`/`Arc`, rather
+/// than reloading.
 #[derive(Debug)]
 pub struct AssetPack {
     bytes: Vec<u8>,
@@ -121,18 +52,13 @@ pub struct AssetPack {
 }
 
 impl AssetPack {
-    /// The pack's default location, resolved at runtime by
-    /// [`pack_format::default_pack_path`] (see it for the full order):
-    /// `$POKEEMERALD_PACK`, then the OS user-data directory, then the
-    /// running executable's directory, then this checkout's
-    /// `assets-pack/pokeemerald.pack`.
+    /// The pack's default location: see [`pack_format::default_pack_path`]
+    /// for the full resolution order (env var, then OS user-data directory,
+    /// then the executable's own directory, then this checkout's bundled
+    /// pack — last, since a shipped binary resolves through the earlier
+    /// rungs and only a developer checkout needs it).
     ///
-    /// The compile-time rung names the *build* machine's checkout, so it is
-    /// last: a shipped binary and its ROM importer resolve through the
-    /// earlier rungs, and a developer checkout with nothing configured still
-    /// finds the bundled pack.
-    ///
-    /// Never fails: the last rung always yields a path, and a path that does
+    /// Never fails: the last rung always yields a path; a path that does
     /// not exist surfaces as [`PackError::NotFound`] from
     /// [`load`](Self::load).
     #[must_use]
@@ -141,11 +67,10 @@ impl AssetPack {
     }
 
     /// The checkout's own pack: `<repo root>/assets-pack/pokeemerald.pack`,
-    /// where `cargo xtask extract` writes —
-    /// [`pack_format::repo_pack_path`], [`default_path`](Self::default_path)'s
-    /// last rung. A checkout-validation gate asks for it by name rather than
-    /// through the resolver, whose earlier rungs read whichever pack the
-    /// developer has installed (issue #412).
+    /// where `cargo xtask extract` writes — [`default_path`](Self::default_path)'s
+    /// last rung, named directly so a checkout-validation gate reads this
+    /// pack rather than whichever one the resolver's earlier rungs find
+    /// installed.
     #[must_use]
     pub fn repo_pack_path() -> PathBuf {
         pack_format::repo_pack_path()
@@ -160,25 +85,20 @@ impl AssetPack {
         Self::load(&Self::default_path())
     }
 
-    /// Load the pack `cargo xtask extract` writes into *this checkout*,
-    /// [`repo_pack_path`](Self::repo_pack_path) — deliberately not
-    /// [`load_default`](Self::load_default).
+    /// Load the pack `cargo xtask extract` writes into *this checkout*
+    /// ([`repo_pack_path`](Self::repo_pack_path)), not whichever pack
+    /// [`default_path`](Self::default_path) resolves to.
     ///
-    /// For gates that mean to validate the checkout rather than to play the
-    /// game. [`default_path`](Self::default_path)'s first two rungs are the
-    /// two destinations `pokeemerald-rs --import-rom` writes to, so a gate
-    /// resolving through it reads whichever pack the developer has
-    /// installed: an extractor regression can pass against an older user
-    /// pack, and a stale user pack can fail a checkout that is fine
-    /// `(test-ratchet)`. `xtask::extract::run` refuses the resolver for the
-    /// write side for the same reason; this is the read side of that
-    /// refusal.
+    /// For gates that validate the checkout rather than play the game:
+    /// `default_path`'s earlier rungs can resolve to an already-installed
+    /// pack, letting an extractor regression pass against a stale one, or
+    /// a stale user pack fail a checkout that is otherwise fine
+    /// `(test-ratchet)`.
     ///
     /// # Errors
     ///
-    /// See [`load`](Self::load). [`PackError::NotFound`] here means exactly
-    /// "run `cargo xtask extract` first", with no ambiguity about which
-    /// pack was looked for.
+    /// See [`load`](Self::load). [`PackError::NotFound`] here means "run
+    /// `cargo xtask extract` first".
     pub fn load_repo() -> Result<Self, PackError> {
         Self::load(&Self::repo_pack_path())
     }
@@ -187,11 +107,10 @@ impl AssetPack {
     ///
     /// # Errors
     ///
-    /// Returns [`PackError::NotFound`] (the required "missing pack"
-    /// diagnostic) if `path` does not exist; [`PackError::ReadFailed`]
+    /// [`PackError::NotFound`] if `path` does not exist; [`PackError::ReadFailed`]
     /// for any other I/O failure; [`PackError::BadMagic`],
-    /// [`PackError::UnsupportedVersion`], [`PackError::Truncated`],
-    /// or [`PackError::BadEntryKind`] if the file exists but is not a
+    /// [`PackError::UnsupportedVersion`], [`PackError::Truncated`], or
+    /// [`PackError::BadEntryKind`] if the file exists but is not a
     /// well-formed pack at [`FORMAT_VERSION`].
     pub fn load(path: &Path) -> Result<Self, PackError> {
         let bytes = std::fs::read(path).map_err(|e| {
@@ -205,32 +124,28 @@ impl AssetPack {
         Ok(Self { bytes, entries })
     }
 
-    /// Return the exact, complete byte buffer retained when this pack was
-    /// loaded.
+    /// The exact byte buffer retained when this pack was loaded — the same
+    /// allocation every typed accessor decodes.
     ///
-    /// This is a read-only view of the same allocation every typed accessor
-    /// decodes. Callers that record pack provenance can therefore hash the
-    /// bytes actually used for decoding without reopening the source path and
-    /// racing a replacement of that file.
+    /// Lets a caller hash the bytes actually used for decoding without
+    /// reopening the source path and racing a replacement of that file.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Walk the directory: every entry's id, kind metadata, and the
-    /// `offset`/`length` its payload occupies in [`bytes`](Self::bytes), in
-    /// the id-sorted order the format guarantees.
+    /// Walk the directory in id-sorted order: every entry's id, kind
+    /// metadata, and the `offset`/`length` its payload occupies in
+    /// [`bytes`](Self::bytes).
     ///
-    /// The typed accessors reach one known asset. This is for callers that
-    /// need to know what a pack *contains*: comparing two packs entry by
-    /// entry, or auditing coverage, with no lookup id to start from.
+    /// For callers that need to know what a pack *contains*, not one
+    /// known asset by id.
     pub fn entries(&self) -> impl Iterator<Item = &DirectoryEntry> {
         self.entries.iter()
     }
 
-    /// Binary-search the directory for `id`, relying on
-    /// [`pack_format::parse_directory`]'s guarantee that entry ids are
-    /// strictly ascending and unique.
+    /// Relies on [`pack_format::parse_directory`]'s guarantee that entry
+    /// ids are strictly ascending and unique.
     fn find(&self, id: &str) -> Result<&DirectoryEntry, PackError> {
         self.entries
             .binary_search_by(|e| e.id.as_str().cmp(id))
@@ -302,18 +217,16 @@ impl AssetPack {
     }
 
     /// Look up an `audio/song/*` entry by its normalized pack name (e.g.
-    /// `"mus_title"` — see `xtask::extract::midi`'s module docs for the id
-    /// scheme and which song the pack currently ships) and decode it
-    /// through [`crate::audio::Song::decode`].
+    /// `"mus_title"` — see `xtask::extract::midi` for the id scheme) and
+    /// decode it through [`crate::audio::Song::decode`].
     ///
     /// # Errors
     ///
     /// [`PackError::UnknownAsset`] if no song with this name is in the
     /// pack; [`PackError::WrongKind`] if an entry exists under that id but
-    /// isn't [`EntryKind::Raw`]; [`PackError::AudioDecode`] if the entry is
-    /// [`EntryKind::Raw`] but its bytes are not a well-formed
-    /// [`crate::audio::Song`] — see [`Song::decode`]'s own docs on what is
-    /// (and is not) validated.
+    /// isn't [`EntryKind::Raw`]; [`PackError::AudioDecode`] if the bytes
+    /// are not a well-formed [`crate::audio::Song`] — see [`Song::decode`]
+    /// for what is (and is not) validated.
     pub fn song(&self, name: &str) -> Result<Song, PackError> {
         let id = format!("audio/song/{name}");
         let bytes = self.raw(&id)?;
@@ -321,25 +234,17 @@ impl AssetPack {
     }
 
     /// Look up an `audio/voicegroup/*` entry by its stable pack id (e.g. a
-    /// [`Song::voicegroup`] reference, or a
-    /// [`crate::audio::KeySplitVoice`]/[`crate::audio::RhythmVoice`] child
-    /// reference — see `xtask::extract::voicegroups`'s module docs for the
-    /// id scheme and which groups the pack currently ships) and decode it
-    /// through [`crate::audio::VoiceGroup::decode`]. `id`'s own string is
-    /// already the full pack id (e.g. `"audio/voicegroup/title"`), matching
-    /// how every [`VoiceGroupId`] in this crate is stored — no separate
-    /// `name`-to-id formatting step, unlike [`song`](Self::song).
+    /// [`Song::voicegroup`] reference — see `xtask::extract::voicegroups`
+    /// for the id scheme) and decode it through
+    /// [`crate::audio::VoiceGroup::decode`]. `id`'s string is already the
+    /// full pack id, unlike [`song`](Self::song)'s bare name.
     ///
     /// # Errors
     ///
     /// Same as [`song`](Self::song), with [`VoiceGroup`] in place of
-    /// [`Song`]; in particular, a slot's own
-    /// [`crate::audio::KeySplitVoice::children`]/
-    /// [`crate::audio::RhythmVoice::children`] or
-    /// [`crate::audio::DirectSoundVoice::sample`]/
-    /// [`crate::audio::ProgrammableWaveVoice::wave`] reference is not
-    /// resolved here — walk the returned [`VoiceGroup`]'s own slots and call
-    /// this method (or [`sample`](Self::sample)) again for each reference a
+    /// [`Song`]. A slot's own child/sample reference is not resolved
+    /// here — walk the returned [`VoiceGroup`]'s slots and call this
+    /// method (or [`sample`](Self::sample)) again for each reference a
     /// caller needs to follow.
     pub fn voicegroup(&self, id: &VoiceGroupId) -> Result<VoiceGroup, PackError> {
         let bytes = self.raw(&id.0)?;
@@ -349,13 +254,10 @@ impl AssetPack {
         })
     }
 
-    /// Look up an `audio/sample/*` entry by its stable pack id (e.g. a
-    /// [`crate::audio::DirectSoundVoice::sample`]/
-    /// [`crate::audio::ProgrammableWaveVoice::wave`] reference — see
-    /// `xtask::extract::audio_samples`'s module docs for the id scheme and
-    /// which samples the pack currently ships) and decode it through
-    /// [`crate::audio::Sample::decode`]. `id`'s own string is already the
-    /// full pack id, same as [`voicegroup`](Self::voicegroup)'s `id`.
+    /// Look up an `audio/sample/*` entry by its stable pack id (see
+    /// `xtask::extract::audio_samples` for the id scheme) and decode it
+    /// through [`crate::audio::Sample::decode`]. `id`'s string is already
+    /// the full pack id, same as [`voicegroup`](Self::voicegroup).
     ///
     /// # Errors
     ///
@@ -369,9 +271,8 @@ impl AssetPack {
     }
 
     /// Bundle one tileset's tile bitmap, 16 palettes, and raw metatile
-    /// tables. `name` is the tileset's normalized name (e.g. `"general"`,
-    /// `"brendans_mays_house"` — see `xtask::extract::mod`'s module docs
-    /// for the five tilesets the pack currently ships).
+    /// tables. `name` is the tileset's normalized name (e.g. `"general"`
+    /// — see `xtask::extract::mod` for the id scheme).
     ///
     /// # Errors
     ///
@@ -383,11 +284,15 @@ impl AssetPack {
     pub fn tileset(&self, name: &str) -> Result<TilesetHandle<'_>, PackError> {
         let tiles = self.image(&format!("tileset/{name}/tiles"))?;
 
-        let mut palettes: [Option<PaletteRef<'_>>; 16] = [None; 16];
+        let mut palettes: [Option<PaletteRef<'_>>; TILESET_PALETTE_COUNT] =
+            [None; TILESET_PALETTE_COUNT];
         for (slot, palette) in palettes.iter_mut().enumerate() {
             *palette = Some(self.palette(&format!("tileset/{name}/palette/{slot:02}"))?);
         }
-        #[allow(clippy::missing_panics_doc)] // every slot was just filled above
+        #[expect(
+            clippy::missing_panics_doc,
+            reason = "every slot is populated by the loop above"
+        )]
         let palettes = palettes.map(|p| p.expect("every slot filled by the loop above"));
 
         let metatiles = self.raw(&format!("tileset/{name}/metatiles"))?;
@@ -412,12 +317,11 @@ impl AssetPack {
         self.image(&format!("sprite/{path}"))
     }
 
-    /// Look up a sprite palette by name: `"brendan"`/`"may"` (the two player
-    /// characters' own in-game palettes) or `"npc_1"`..`"npc_4"` (the four
-    /// generic NPC palette banks issue #161's object-event rendering draws
-    /// from) — see `xtask::extract::mod`'s module docs for exactly which
-    /// palettes the pack extracts and why the rest of the NPC roster's own
-    /// per-character palettes are not among them.
+    /// Look up a sprite palette by name: `"brendan"`/`"may"` (the two
+    /// player characters' own in-game palettes) or `"npc_1"`..`"npc_4"`
+    /// (the four generic NPC palette banks object-event rendering draws
+    /// from) — see `xtask::extract::mod` for exactly which palettes the
+    /// pack extracts.
     ///
     /// # Errors
     ///
@@ -426,16 +330,15 @@ impl AssetPack {
         self.palette(&format!("sprite/palette/{who}"))
     }
 
-    /// Look up a map layout's grid bytes (`map.bin`) by its normalized pack
-    /// name (e.g. `"littleroot_town"` — see `xtask::extract::mod`'s module
-    /// docs for the id scheme and which layouts the pack currently ships).
+    /// Look up a map layout's grid bytes (`map.bin`) by its normalized
+    /// pack name (e.g. `"littleroot_town"` — see `xtask::extract::mod`
+    /// for the id scheme).
     ///
     /// Hand the returned bytes to
     /// [`MapLayout::grid`](crate::map_layouts::MapLayout::grid) or
-    /// [`LayoutGrid::new`](crate::map_layouts::LayoutGrid::new) to decode —
-    /// this crate's pack loader and its map-layout decode layer stay
-    /// decoupled by design (see this module's docs), so this method only
-    /// fetches bytes; it never constructs a `LayoutGrid` itself.
+    /// [`LayoutGrid::new`](crate::map_layouts::LayoutGrid::new) to
+    /// decode; this method only fetches bytes, it never decodes them
+    /// itself.
     ///
     /// # Errors
     ///
@@ -444,11 +347,9 @@ impl AssetPack {
         self.raw(&format!("layout/{name}/map"))
     }
 
-    /// Look up a map layout's border bytes (`border.bin`) by its normalized
-    /// pack name. Hand the returned bytes to
-    /// [`BorderGrid::new`](crate::map_layouts::BorderGrid::new) to decode
-    /// (see [`layout_map`](Self::layout_map)'s docs on why this stays a raw
-    /// byte accessor).
+    /// Look up a map layout's border bytes (`border.bin`) by its
+    /// normalized pack name. Hand the returned bytes to
+    /// [`BorderGrid::new`](crate::map_layouts::BorderGrid::new) to decode.
     ///
     /// # Errors
     ///
@@ -457,13 +358,13 @@ impl AssetPack {
         self.raw(&format!("layout/{name}/border"))
     }
 
-    /// Look up a Latin font's glyph sheet by its typed identity. The returned
-    /// [`FontImageRef`] is bound to that identity, preventing a caller from
-    /// combining one font's pixels with another font's width table. Hand it to
-    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to decode
-    /// individual glyphs — this crate's pack loader and its font decode
-    /// layer stay decoupled by design (see this module's docs), so this
-    /// method only fetches and identity-binds the raw sheet bitmap.
+    /// Look up a Latin font's glyph sheet by its typed identity. The
+    /// returned [`FontImageRef`] is bound to that identity, preventing a
+    /// caller from combining one font's pixels with another font's width
+    /// table. Hand it to
+    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to
+    /// decode individual glyphs; this method only fetches and
+    /// identity-binds the raw sheet bitmap.
     ///
     /// # Errors
     ///
@@ -474,35 +375,32 @@ impl AssetPack {
     }
 
     /// Bundle one text-window border frame's tile bitmap and palette.
-    /// `frame_id` is Emerald's zero-based `sWindowFrames` index (`0..=19`);
-    /// it is translated to the one-based source filenames
-    /// `1.png`..`20.png`. Like upstream `GetWindowFrameTilesPal`, an id at or
-    /// above `WINDOW_FRAMES_COUNT` falls back to frame id `0` (source file
-    /// `1.png`). The palette comes from the source PNG's own `PLTE` chunk,
-    /// not a sibling `.pal` file — see
-    /// `xtask::extract::png::decode_palette`'s docs.
+    /// `frame_id` is Emerald's zero-based `sWindowFrames` index (`0..=19`),
+    /// translated to the one-based source filenames `1.png`..`20.png`.
+    /// Like upstream `GetWindowFrameTilesPal`, an id at or above
+    /// `WINDOW_FRAMES_COUNT` falls back to frame id `0`. The palette
+    /// comes from the source PNG's own `PLTE` chunk, not a sibling `.pal`
+    /// file — see `xtask::extract::png::decode_palette`.
     ///
     /// # Errors
     ///
-    /// [`PackError::UnknownAsset`] if the selected frame is absent from the
-    /// pack (including when an older pack predates it); the same
-    /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
-    /// [`palette`](Self::palette);
-    /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
-    /// not the exact 16-colour/32-byte bank the handle documents;
+    /// [`PackError::UnknownAsset`] if the selected frame is absent from
+    /// the pack; the same [`PackError::WrongKind`] cases as
+    /// [`image`](Self::image) / [`palette`](Self::palette);
+    /// [`PackError::MalformedTextWindowPalette`] if the palette entry
+    /// isn't the exact bank [`WindowFrameHandle`] documents;
     /// [`PackError::TextWindowImageWrongDimensions`] if the tile bitmap
-    /// is not the exact shape this frame kind requires (24x24 here — a
-    /// 3x3 grid of 8x8 tiles, upstream's border layout);
-    /// [`PackError::MalformedTextWindowImage`] if the tile bitmap's
+    /// isn't 24x24; [`PackError::MalformedTextWindowImage`] if its
     /// payload length disagrees with its declared `width * height`;
-    /// [`PackError::TextWindowPixelOutsidePalette`] if the tile bitmap
-    /// holds a pixel index its bundled palette cannot map.
+    /// [`PackError::TextWindowPixelOutsidePalette`] if it holds a pixel
+    /// index its bundled palette cannot map.
     pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
         const WINDOW_FRAMES_COUNT: u8 = 20;
+        const FIRST_SOURCE_NUMBER: u8 = 1;
         let source_number = if frame_id < WINDOW_FRAMES_COUNT {
-            frame_id + 1
+            frame_id + FIRST_SOURCE_NUMBER
         } else {
-            1
+            FIRST_SOURCE_NUMBER
         };
         self.window_frame(
             &format!("text-window/image/{source_number}"),
@@ -513,10 +411,9 @@ impl AssetPack {
     }
 
     /// Bundle the default message-box tile bitmap and palette (upstream
-    /// `gMessageBox_Gfx`/`gMessageBox_Pal`, `pokeemerald/src/graphics.c`) —
-    /// the frame every standard overworld/battle text box uses, distinct
-    /// from the 20 selectable [`text_window_frame`](Self::text_window_frame)
-    /// options menu frames.
+    /// `gMessageBox_Gfx`/`gMessageBox_Pal`) — the frame every standard
+    /// overworld/battle text box uses, distinct from the 20 selectable
+    /// [`text_window_frame`](Self::text_window_frame) options.
     ///
     /// # Errors
     ///
@@ -530,11 +427,12 @@ impl AssetPack {
         )
     }
 
-    /// Look up one of the four additional textbox colour palettes (`n` is
-    /// `1..=4`, upstream `text_pal1.pal`..`text_pal4.pal`,
-    /// `sTextWindowPalettes[1..=4]` — slot `0` is
-    /// [`message_box`](Self::message_box)'s own palette, not reachable
-    /// through this accessor).
+    /// Look up textbox colour palette `n` (upstream
+    /// `sTextWindowPalettes[n]`). `n` is passed straight through to the
+    /// pack id; the pack only extracts `text_pal1`..`text_pal4` (upstream's
+    /// four "extra" banks), so `n = 0` misses the pack rather than
+    /// returning [`message_box`](Self::message_box)'s own palette, which
+    /// is stored under a different id.
     ///
     /// # Errors
     ///
@@ -544,13 +442,10 @@ impl AssetPack {
         self.text_window_palette(&format!("text-window/palette/text_pal{n}"))
     }
 
-    /// Look up a text-window palette and enforce the exact one-GBA-bank
-    /// shape (16 declared colours, 32 payload bytes) every typed
-    /// text-window accessor documents. Extraction validates this on write
-    /// (`xtask::extract`'s text-window pairing checks), but the read side
-    /// must not trust pack metadata: a corrupt or hand-built pack could
-    /// otherwise hand out a [`WindowFrameHandle`] whose 16-colour
-    /// invariant is false.
+    /// Enforce the one-GBA-bank shape every text-window accessor's
+    /// palette must have. Extraction validates this on write, but the
+    /// read side must not trust pack metadata — a corrupt or hand-built
+    /// pack could otherwise defeat [`WindowFrameHandle`]'s invariant.
     fn text_window_palette(&self, id: &str) -> Result<PaletteRef<'_>, PackError> {
         const TEXT_WINDOW_PALETTE_COLORS: u16 = 16;
         const TEXT_WINDOW_PALETTE_BYTES: usize = 32;
@@ -567,17 +462,11 @@ impl AssetPack {
         Ok(palette)
     }
 
-    /// Bundle a text-window frame's tile bitmap and palette, validating
-    /// the pair on read like [`text_window_palette`](Self::text_window_palette)
-    /// does for the palette alone: the read side must not trust pack
-    /// contents. A tile bitmap that is not the exact shape its frame kind
-    /// requires, whose payload length disagrees with its own declared
-    /// `width * height` (violating [`ImageRef`]'s documented pixel-count
-    /// invariant), or holding a pixel its 16-colour palette cannot map
-    /// (possible in a corrupt or hand-built pack carrying an
-    /// 8-bit-indexed image), is rejected here rather than handed to a
-    /// renderer to index out of bounds. Extraction enforces the same pair
-    /// rule on write (`xtask::extract`'s text-window pairing checks).
+    /// Bundle a text-window frame's tile bitmap and palette, re-checking
+    /// the pair on read (dimensions, declared pixel count, and every
+    /// pixel index against the palette) so a corrupt or hand-built pack
+    /// can't reach a renderer and index out of bounds, even though
+    /// extraction enforces the same pairing on write.
     fn window_frame(
         &self,
         image_id: &str,
