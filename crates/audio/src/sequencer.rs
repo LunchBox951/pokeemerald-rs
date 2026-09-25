@@ -2606,7 +2606,7 @@ mod tests {
     }
 
     /// `FadeOutBody`'s terminal step stops every track outright
-    /// (`m4a.c:750`-`:757`) and `TrackStop` turns the CGB channel off as it
+    /// (`m4a.c:715`-`:743`) and `TrackStop` turns the CGB channel off as it
     /// goes (`m4a_1.s:1490`-`:1493`), so the PSG voice is gone after that
     /// frame -- not merely scaled to zero in the output buffer.
     #[test]
