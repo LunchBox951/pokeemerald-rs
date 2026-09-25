@@ -8,7 +8,7 @@ use engine::overworld::wild_encounter::WildEncounter;
 use crate::flow::save_continue_tests::new_game_phase;
 use crate::new_game;
 
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 /// Route 101's slot-0 land table entry -- the same fightable wild species
 /// `crate::flow::wild_encounter::tests` exercises.
@@ -84,10 +84,9 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_a_rolled_wild_encounter() {
         slot: 0,
     }));
 
-    let battle = phase
-        .wild_battle
-        .as_ref()
-        .expect("the healthy trailing member must fight, not be refused as fainted");
+    let Some(ActiveBattle::Wild(battle)) = phase.active_battle.as_ref() else {
+        panic!("the healthy trailing member must fight, not be refused as fainted");
+    };
     assert_eq!(battle.player().species(), selected_species);
     assert!(
         phase.party_lead.is_none(),
@@ -104,10 +103,9 @@ fn a_healthy_slot_behind_a_fainted_lead_fights_the_route_103_rival() {
 
     phase.begin_route103_rival_battle();
 
-    let battle = phase
-        .rival_battle
-        .as_ref()
-        .expect("the healthy trailing member must fight, not be refused as fainted");
+    let Some(ActiveBattle::Rival { battle, .. }) = phase.active_battle.as_ref() else {
+        panic!("the healthy trailing member must fight, not be refused as fainted");
+    };
     assert_eq!(battle.player().species(), selected_species);
 }
 
@@ -132,7 +130,7 @@ fn an_all_fainted_continued_party_still_refuses_a_wild_battle() {
     }));
 
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "an all-fainted party must not enter battle"
     );
 }
@@ -147,13 +145,16 @@ fn a_won_trainer_battle_merges_write_back_into_the_selected_slot() {
     let slot0_before = phase.save1.player_party[0];
 
     phase.begin_route103_rival_battle();
-    assert!(phase.rival_battle.is_some(), "setup: the battle must start");
+    assert!(
+        phase.is_rival_battle_active(),
+        "setup: the battle must start"
+    );
 
     for _ in 0..50 {
-        if phase.rival_battle.is_none() {
+        if !phase.is_rival_battle_active() {
             break;
         }
-        phase.advance_route103_rival_battle_frame();
+        phase.advance_active_battle_frame();
     }
     assert_eq!(
         phase.rival_battle_outcome,
@@ -215,7 +216,7 @@ fn an_egg_over_a_fainted_party_still_refuses_a_wild_battle() {
     }));
 
     assert!(
-        phase.wild_battle.is_none(),
+        !phase.is_wild_battle_active(),
         "an egg must not be sent into a wild battle"
     );
 }

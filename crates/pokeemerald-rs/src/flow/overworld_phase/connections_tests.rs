@@ -560,7 +560,7 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
             "grass step {index} is inside the window the crossing restarted, so it must not \
              draw at all"
         );
-        assert!(phase.wild_battle.is_none());
+        assert!(!phase.is_wild_battle_active());
     }
     assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
 

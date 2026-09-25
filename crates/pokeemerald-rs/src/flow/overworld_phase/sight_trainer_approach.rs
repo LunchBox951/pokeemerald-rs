@@ -62,7 +62,7 @@ use crate::authored_message;
 use crate::overworld::NpcDialog;
 
 use super::sight_trainer_trigger::SightTrainerOutcome;
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 /// How long the exclamation-mark icon lives, in frames:
 /// `sSpriteAnim_Icons1`'s single `ANIMCMD_FRAME(0, 60)`
@@ -563,8 +563,10 @@ impl OverworldPhase {
             return SightTrainerOutcome::Refused;
         };
         self.party_lead = None;
-        self.sight_trainer_battle = Some(approach.battle);
-        self.sight_trainer_id = Some(approach.trainer_id);
+        self.active_battle = Some(ActiveBattle::SightTrainer {
+            battle: approach.battle,
+            trainer_id: approach.trainer_id,
+        });
         // Mirrors `begin_route103_rival_battle`'s own
         // `restart_immunity_steps` call -- see that method's own
         // doc comment for why this is kept for stream-order parity

@@ -152,7 +152,7 @@ use engine::overworld::MapRuntime;
 
 use crate::flow::first_battle;
 
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 /// `MAP_ROUTE101` — the only map this trigger is wired to.
 const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
@@ -424,14 +424,14 @@ impl OverworldPhase {
         self.first_battle_trigger_at(runtime, x, y, self.player.previous_elevation())
     }
 
-    /// Start the scripted first battle in [`OverworldPhase::first_battle`]
-    /// (module docs) — the trigger's counterpart to
+    /// Start the scripted first battle in [`OverworldPhase::active_battle`]'s
+    /// `First` variant (module docs) — the trigger's counterpart to
     /// [`OverworldPhase::begin_wild_battle`], deliberately not sharing that
     /// method: this battle is [`crate::flow::first_battle::start_first_battle`]
     /// off [`OverworldPhase::party_lead`], not a rolled
-    /// [`engine::overworld::WildEncounter`], and it is stored in its own
-    /// field so [`OverworldPhase::step`]'s frame-ownership check
-    /// ([`OverworldPhase::advance_first_battle_frame`]) can drive it with
+    /// [`engine::overworld::WildEncounter`], and it is dispatched by
+    /// [`OverworldPhase::advance_active_battle_frame`]'s own `First` arm
+    /// ([`OverworldPhase::advance_first_battle_frame`]), which drives it with
     /// [`crate::flow::first_battle::advance_first_battle`]'s `UseMove`
     /// policy instead of [`crate::flow::wild_encounter::advance_wild_battle`]'s
     /// `Run` one — issue #187's `BattleError::RunForbidden` would turn every
@@ -483,7 +483,7 @@ impl OverworldPhase {
         match first_battle::start_first_battle(lead, player_trainer_id, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
-                self.first_battle = Some(battle);
+                self.active_battle = Some(ActiveBattle::First(battle));
                 // `CB2_StartFirstBattle` calls
                 // `RestartWildEncounterImmunitySteps` on its way into the
                 // fight (`src/battle_setup.c:941`), and this port models
@@ -499,10 +499,10 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress scripted first battle, if there is
-    /// one — the frame-ownership gate [`OverworldPhase::step`] defers to,
-    /// mirroring [`OverworldPhase::advance_wild_battle_frame`]'s shape
-    /// exactly except for which driver it calls.
+    /// Play one frame of an in-progress scripted first battle (issue #231)
+    /// — [`OverworldPhase::advance_active_battle_frame`]'s `First` arm,
+    /// mirroring [`OverworldPhase::advance_wild_battle_frame`]'s shape exactly
+    /// except for which driver it calls.
     ///
     /// Nothing here touches `VAR_ROUTE101_STATE` directly:
     /// [`OverworldPhase::begin_first_battle`] already consumed the trigger
@@ -517,19 +517,18 @@ impl OverworldPhase {
     /// reported — `Route101_EventScript_BirchsBag`'s own post-battle tail,
     /// which does advance `VAR_ROUTE101_STATE` again, past this trigger's
     /// own `TRIGGER_CONSUMED_STATE`, to its terminal `3`.
-    pub(super) fn advance_first_battle_frame(&mut self) -> bool {
-        if self.first_battle.is_none() {
-            return false;
-        }
-        if let Some(outcome) = first_battle::advance_first_battle(
-            &mut self.first_battle,
-            &mut self.party_lead,
-            &mut self.rng,
-        ) {
+    pub(super) fn advance_first_battle_frame(
+        &mut self,
+        battle: battle::Battle,
+    ) -> Option<ActiveBattle> {
+        let mut slot = Some(battle);
+        if let Some(outcome) =
+            first_battle::advance_first_battle(&mut slot, &mut self.party_lead, &mut self.rng)
+        {
             eprintln!("first battle: ended -- {outcome:?}");
             self.first_battle_outcome = Some(outcome);
             self.conclude_first_battle();
         }
-        true
+        slot.map(ActiveBattle::First)
     }
 }

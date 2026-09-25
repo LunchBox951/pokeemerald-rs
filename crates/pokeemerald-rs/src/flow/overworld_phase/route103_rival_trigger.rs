@@ -101,7 +101,7 @@
 //! `CB2_EndTrainerBattle` never takes on a loss.
 //! [`advance_route103_rival_battle_frame`] now reproduces exactly that
 //! ordering: set both [`FLAG_HIDE_ROUTE_103_RIVAL`] and
-//! [`TRAINER_FLAGS_START`]` + `[`OverworldPhase::rival_trainer_id`] on
+//! [`TRAINER_FLAGS_START`]` + `[`ActiveBattle::Rival`]'s own `trainer_id` on
 //! [`battle::BattleOutcome::PlayerWon`] ("The generic trainer-defeated flag"
 //! section above, and `RivalEnd`'s own real effect, unaffected by this
 //! issue), or call [`super::white_out::OverworldPhase::white_out`] on
@@ -171,7 +171,7 @@ use engine::save::PlayerGender;
 use crate::flow::npc_trainer_battle;
 use crate::flow::route103_rival::{self, PlayerStarter, Rival};
 
-use super::OverworldPhase;
+use super::{ActiveBattle, OverworldPhase};
 
 /// `MAP_ROUTE103` -- the only map this trigger, and
 /// [`setup_rival_gfx_id_on_transition`], are wired to.
@@ -298,8 +298,9 @@ pub(super) fn is_rival_trigger(map: assets::MapId, script: &str) -> bool {
 }
 
 impl OverworldPhase {
-    /// Start the Route 103 rival battle in [`OverworldPhase::rival_battle`]
-    /// (module docs, step 2) -- the interaction-trigger counterpart of
+    /// Start the Route 103 rival battle in [`OverworldPhase::active_battle`]'s
+    /// `Rival` variant (module docs, step 2) -- the interaction-trigger
+    /// counterpart of
     /// [`super::first_battle_trigger::OverworldPhase::begin_first_battle`],
     /// called the instant [`is_rival_trigger`] fires rather than from a
     /// step landing.
@@ -347,7 +348,6 @@ impl OverworldPhase {
     /// screen only moves the refusal ahead of the party build's draws.
     pub(super) fn begin_route103_rival_battle(&mut self) {
         self.rival_battle_outcome = None;
-        self.rival_trainer_id = None;
         eprintln!(
             "route 103 rival: interaction trigger reached -- starting the scripted rival \
              battle (issue #248)"
@@ -383,8 +383,10 @@ impl OverworldPhase {
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
-                self.rival_battle = Some(battle);
-                self.rival_trainer_id = Some(trainer);
+                self.active_battle = Some(ActiveBattle::Rival {
+                    battle,
+                    trainer_id: trainer,
+                });
                 // Mirrors `begin_first_battle`'s own
                 // `RestartWildEncounterImmunitySteps` call
                 // (`CB2_StartFirstBattle`-equivalent reasoning): unobservable
@@ -398,22 +400,23 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress Route 103 rival battle, if there is
-    /// one -- the frame-ownership gate [`super::step::OverworldPhase::step`]
-    /// defers to, mirroring
+    /// Play one frame of an in-progress Route 103 rival battle (issue #248)
+    /// -- [`OverworldPhase::advance_active_battle_frame`]'s `Rival` arm,
+    /// mirroring
     /// [`super::first_battle_trigger::OverworldPhase::advance_first_battle_frame`]'s
-    /// shape with two additions on
-    /// [`battle::BattleOutcome::PlayerWon`]: sets
+    /// shape, with two additions on [`battle::BattleOutcome::PlayerWon`]: sets
     /// [`FLAG_HIDE_ROUTE_103_RIVAL`] and the fought trainer's
     /// [`TRAINER_FLAGS_START`] flag, on no other outcome -- matching
     /// `CB2_EndTrainerBattle`'s non-defeat/defeat `if`/`else if` split.
-    pub(super) fn advance_route103_rival_battle_frame(&mut self) -> bool {
-        if self.rival_battle.is_none() {
-            return false;
-        }
+    pub(super) fn advance_route103_rival_battle_frame(
+        &mut self,
+        battle: battle::Battle,
+        trainer_id: assets::trainers::TrainerId,
+    ) -> Option<ActiveBattle> {
         self.take_field_lock();
+        let mut slot = Some(battle);
         let outcome = npc_trainer_battle::advance_npc_trainer_battle(
-            &mut self.rival_battle,
+            &mut slot,
             &mut self.party_lead,
             &mut self.save1.money,
             &mut self.rng,
@@ -428,17 +431,15 @@ impl OverworldPhase {
                          the rival may remain interactable"
                     );
                 }
-                if let Some(trainer_id) = self.rival_trainer_id {
-                    if let Err(error) = self
-                        .save1
-                        .event_data
-                        .flag_set(TRAINER_FLAGS_START + trainer_id.0)
-                    {
-                        eprintln!(
-                            "route 103 rival: couldn't set trainer {trainer_id:?}'s defeated \
-                             flag ({error}) -- it may re-trigger"
-                        );
-                    }
+                if let Err(error) = self
+                    .save1
+                    .event_data
+                    .flag_set(TRAINER_FLAGS_START + trainer_id.0)
+                {
+                    eprintln!(
+                        "route 103 rival: couldn't set trainer {trainer_id:?}'s defeated \
+                         flag ({error}) -- it may re-trigger"
+                    );
                 }
             }
             // `CB2_EndTrainerBattle`'s `IsPlayerDefeated` branch
@@ -450,15 +451,8 @@ impl OverworldPhase {
                 self.white_out();
             }
         }
-        // Cleared whenever the battle slot itself empties, not only on a
-        // reported outcome: `advance_npc_trainer_battle` can also end the
-        // battle with no outcome at all, on a failed turn
-        // (`npc_trainer_battle::finalize_battle_turn`'s own `turn_failed`
-        // abort) -- an id retained past that point would be stale the
-        // instant a fresh trigger reuses this field.
-        if self.rival_battle.is_none() {
-            self.rival_trainer_id = None;
-        }
-        true
+        // A failed turn ends the battle with no outcome; the whole variant
+        // goes with it either way.
+        slot.map(|battle| ActiveBattle::Rival { battle, trainer_id })
     }
 }
