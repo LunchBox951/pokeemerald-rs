@@ -183,13 +183,15 @@ fn agbl_override_keeps_the_post_end_interpolation_sample() {
     // trims the logical count to 5. `SoundMainRAM` prefetches the retained
     // sample for its final interpolation step before the voice retires
     // (m4a_1.s:399-407), so the decoder must keep it rather than repeat the
-    // last logical sample or substitute a loop-start value.
-    let data = [128u8, 129, 130, 131, 132, 128];
+    // last logical sample or substitute a loop-start value. The post-end
+    // byte decodes to 10, distinct from the synthesized `0` fallback and
+    // from the last logical sample, so neither substitution passes.
+    let data = [128u8, 129, 130, 131, 132, 138];
     let agbl = u32_chunk(5);
     let bytes = build_wav(PCM_U8, 8000, &[(b"agbl", &agbl)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.sample_count, 5);
-    assert_eq!(sample.data, vec![0, 1, 2, 3, 4, 0]);
+    assert_eq!(sample.data, vec![0, 1, 2, 3, 4, 10]);
 }
 
 #[test]
