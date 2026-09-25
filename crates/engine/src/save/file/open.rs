@@ -85,13 +85,35 @@ fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
 /// on a FIFO's other end.
 #[cfg(unix)]
 mod open_flags {
-    // Linux's `<bits/fcntl-linux.h>` and `<asm-generic/errno.h>`.
-    #[cfg(target_os = "linux")]
+    // Linux's generic `<asm-generic/fcntl.h>` `O_NOFOLLOW`/`O_LARGEFILE`
+    // pair, which x86's `<bits/fcntl-linux.h>` and riscv64's `<asm/fcntl.h>`
+    // (which does not override it) both keep unchanged: `O_NOFOLLOW` is
+    // `0x20000` and `O_LARGEFILE` -- unused here -- is `0x8000`.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "riscv64")
+    ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
+    // Linux arm's and aarch64's `<asm/fcntl.h>` swap that pair: `O_NOFOLLOW`
+    // is `0x8000` and `O_LARGEFILE` is `0x20000`. Using the generic value
+    // here would ask for `O_LARGEFILE`, a 64-bit-build no-op, instead of
+    // `O_NOFOLLOW`, and let a symlink swapped in after the pre-open check
+    // through.
+    #[cfg(all(target_os = "linux", any(target_arch = "arm", target_arch = "aarch64")))]
+    pub(super) const O_NOFOLLOW: i32 = 0x0000_8000;
+    // No Linux arch this crate builds for overrides `<asm-generic/fcntl.h>`'s
+    // `O_NONBLOCK` or `<asm-generic/errno.h>`'s `ELOOP`.
     #[cfg(target_os = "linux")]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
     #[cfg(target_os = "linux")]
     pub(super) const ELOOP: i32 = 40;
+
+    // aarch64's `O_NOFOLLOW` is the one value here that CI, which builds
+    // only for x86_64, never compiles; a cross `cargo check --target
+    // aarch64-unknown-linux-gnu -p engine` catches a wrong value moved here,
+    // and this pins the value itself once that check runs.
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    const _: () = assert!(O_NOFOLLOW == 0x0000_8000);
 
     // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
     #[cfg(not(target_os = "linux"))]
