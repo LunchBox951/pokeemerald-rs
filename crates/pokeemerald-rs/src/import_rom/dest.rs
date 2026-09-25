@@ -111,6 +111,9 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
 /// request an ordinary read-mode open. A write-and-search-only parent
 /// therefore still needs read permission there, as it does on
 /// [`open_traversal_directory`]'s last-resort fallback.
+///
+/// Pre-Ventura macOS sits outside the v1.0.0.0 platform floor (#1312) and
+/// stays best-effort here.
 #[cfg(target_vendor = "apple")]
 const APPLE_O_EXEC: u32 = 0x4000_0000;
 
@@ -167,6 +170,9 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
 /// see [`APPLE_O_EXEC`]'s and the FreeBSD arm's own docs above for why the
 /// two platforms this project's CI actually builds a non-Linux Unix for do
 /// not fall through to it.
+///
+/// Every one of those Unix systems sits outside the v1.0.0.0 platform floor
+/// (#1312), so this arm stays best-effort.
 #[cfg(all(
     unix,
     not(any(
