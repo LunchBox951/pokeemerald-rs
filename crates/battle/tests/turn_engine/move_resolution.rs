@@ -72,10 +72,12 @@ const BOTH_TACKLES_MISS: [u16; 5] = [
     TACKLE_ACCURACY_ROLL_MISSES,
     TACKLE_ACCURACY_ROLL_MISSES,
 ];
-/// Battle start, turn number, the enemy's forced-Struggle pick (drawn even
-/// though nothing is chosen), then the player's ordinary hit and the forced
-/// Struggle's hit, with no selection or trailing effect-chance draw behind
-/// the forced pick.
+/// Battle start and turn number, then the player's ordinary hit (accuracy,
+/// crit, damage-variance, effect-chance) and the enemy's forced Struggle
+/// (accuracy, crit, damage-variance, no trailing effect-chance). Struggle
+/// draws no selection pick: `choose_enemy_move` returns `None` before
+/// drawing once every move is spent
+/// (`crates/battle/src/battle/opponent_ai.rs`).
 const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 9] = [0, 0, 0, 1, 0, 0, 0, 1, 0];
 /// Battle start, turn number, the enemy's pick, then both battlers' ordinary
 /// hits landing in turn order.
