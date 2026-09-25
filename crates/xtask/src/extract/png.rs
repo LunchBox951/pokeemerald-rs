@@ -2,9 +2,10 @@
 //!
 //! [`decode`] accepts non-interlaced, indexed images with 2-, 4-, or 8-bit
 //! pixels and PNG's standard compression and filter methods. It verifies each
-//! parsed chunk's CRC, ignores ancillary chunks, and returns unpacked
-//! palette-index pixels in scanline order. [`decode_palette`] reads an embedded
-//! `PLTE` chunk for assets whose in-game palette comes from the PNG itself.
+//! parsed chunk's CRC, ignores ancillary chunks, rejects any byte following
+//! the `IEND` chunk, and returns unpacked palette-index pixels in scanline
+//! order. [`decode_palette`] reads an embedded `PLTE` chunk for assets whose
+//! in-game palette comes from the PNG itself.
 
 use std::fmt;
 
@@ -48,6 +49,9 @@ pub enum PngError {
     },
     /// A chunk's CRC does not match its type and data.
     ChunkCrcMismatch([u8; 4]),
+    /// One or more bytes followed the `IEND` chunk, PNG's required
+    /// terminator.
+    TrailingData,
     /// The `PLTE` chunk is missing, empty, or contains a partial RGB entry.
     MissingOrBadPalette,
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
@@ -75,6 +79,7 @@ impl fmt::Display for PngError {
                 "PNG {} chunk CRC mismatch",
                 String::from_utf8_lossy(kind)
             ),
+            Self::TrailingData => write!(f, "PNG has trailing data after its IEND chunk"),
             Self::MissingOrBadPalette => {
                 write!(
                     f,
@@ -189,6 +194,9 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
     }
     if !saw_iend {
         return Err(PngError::Truncated);
+    }
+    if !rest.is_empty() {
+        return Err(PngError::TrailingData);
     }
     Ok(chunks)
 }
@@ -648,6 +656,32 @@ mod tests {
 
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Truncated);
+    }
+
+    #[test]
+    fn rejects_bytes_appended_after_iend() {
+        let mut png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 1, 1, &[0]);
+        png.push(0xFF);
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::TrailingData,
+            "a byte after IEND makes the file malformed, not a decodable image with trailing data to discard"
+        );
+    }
+
+    #[test]
+    fn rejects_a_syntactically_valid_chunk_appended_after_iend() {
+        let mut png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 1, 1, &[0]);
+        png.extend_from_slice(&chunk(*b"abCD", &[]));
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::TrailingData,
+            "an extra, otherwise well-formed chunk after IEND is still trailing data"
+        );
     }
 
     #[test]
