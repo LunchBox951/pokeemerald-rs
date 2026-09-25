@@ -185,22 +185,24 @@ fn poison_can_land(move_type: Type, defender: &BattlePokemon) -> bool {
 /// Rejects an [`EFFECT_POISON_HIT`] move when landing the status would
 /// activate an unsupported ability interaction.
 ///
-/// A no-op whenever the poison guards already refuse the target. Synchronize is
-/// also accepted when the attacker already carries a primary status, whose
-/// reflection then exits silently
-/// (`battle_script_commands.c:2334`-`:2335`). Upstream's poison case admits
-/// Guts and Marvel Scale (`battle_script_commands.c:2299-2340`); their
-/// status-dependent damage reads (`pokemon.c:3211-3214`) are modelled by
+/// A no-op whenever the poison guards already refuse the target. Upstream's
+/// poison case admits Guts and Marvel Scale
+/// (`battle_script_commands.c:2299-2340`); their status-dependent damage
+/// reads (`pokemon.c:3211-3214`) are modelled by
 /// [`BattlePokemon::attacking_stat`] and [`BattlePokemon::defending_stat`], so
-/// newly poisoning either holder is admitted.
+/// newly poisoning either holder is admitted. Shed Skin is likewise admitted:
+/// its end-turn cure draw lives in `Battle::residual_effects` instead of
+/// here. The defender's Synchronize is admitted too:
+/// [`resolve_synchronize_poison_reflection`] models the move-end reflection
+/// onto the original attacker, so there is nothing left here to refuse.
 ///
 /// # Errors
 ///
 /// Returns [`BattleError::UnknownMove`] when `move_id` is not in `dex`,
 /// [`BattleError::UnsupportedMoveType`] when its type cannot participate in
 /// battle calculations, or [`BattleError::UnportedAbilityInteraction`] for
-/// the attacker's Serene Grace, or the defender's Synchronize or Shed Skin,
-/// when the move would newly poison the defender.
+/// the attacker's Serene Grace, when the move would newly poison the
+/// defender.
 pub fn ensure_admissible(
     dex: &Dex,
     move_id: MoveId,
@@ -220,18 +222,7 @@ pub fn ensure_admissible(
             AbilityId::SERENE_GRACE,
         ));
     }
-    if !poison_can_land(move_type, defender) {
-        return Ok(());
-    }
-    match defender.ability() {
-        AbilityId::SHED_SKIN => Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SHED_SKIN,
-        )),
-        AbilityId::SYNCHRONIZE if attacker.status1().is_healthy() => Err(
-            BattleError::UnportedAbilityInteraction(AbilityId::SYNCHRONIZE),
-        ),
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 /// Spends the post-damage effect-chance draw for `move_id`.
@@ -287,6 +278,43 @@ pub fn spend_effect_chance_draw(
         .battle_type()
         .ok_or(BattleError::UnsupportedMoveType(move_id))?;
     Ok(poison_can_land(move_type, defender))
+}
+
+/// The result of reflecting a Synchronize holder's poison back onto the
+/// original attacker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SynchronizePoisonReflectionOutcome {
+    /// The original attacker's [`AbilityId::IMMUNITY`] protected it.
+    ImmunityProtected,
+    /// The original attacker's Poison or Steel typing protected it.
+    TypeProtected,
+    /// The original attacker already carries a primary status, so the
+    /// reflection writes nothing.
+    AlreadyStatused,
+    /// The original attacker must be poisoned.
+    Applied,
+}
+
+/// Resolves a Synchronize poison reflection against `attacker`: `SetMoveEffect`'s
+/// `STATUS1_POISON` case re-entered through `MOVE_EFFECT_AFFECTS_USER` with
+/// `primary == TRUE`, which protects an Immunity or Poison-/Steel-typed
+/// attacker ahead of the existing-status no-op
+/// (`battle_util.c:2971`-`:2986`, `battle_script_commands.c:2299`-`:2340`).
+#[must_use]
+pub fn resolve_synchronize_poison_reflection(
+    attacker: &BattlePokemon,
+) -> SynchronizePoisonReflectionOutcome {
+    if attacker.ability() == AbilityId::IMMUNITY {
+        return SynchronizePoisonReflectionOutcome::ImmunityProtected;
+    }
+    let types = attacker.types();
+    if types.contains(&Type::Poison) || types.contains(&Type::Steel) {
+        return SynchronizePoisonReflectionOutcome::TypeProtected;
+    }
+    if !attacker.status1().is_healthy() {
+        return SynchronizePoisonReflectionOutcome::AlreadyStatused;
+    }
+    SynchronizePoisonReflectionOutcome::Applied
 }
 
 #[cfg(test)]
