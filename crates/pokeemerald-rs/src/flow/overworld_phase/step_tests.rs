@@ -202,23 +202,22 @@ fn a_field_dialog_interaction_leaves_an_in_range_saved_text_speed_untouched() {
     );
 }
 
-/// Slice-review regression for issue #1392: the two tests above only prove
-/// `resolve_step_events` *reads and repairs* the saved option, not that the
-/// dialog it actually opens paces at it -- `AssetPack::load_default` is
-/// unavailable headless, so neither one ever opens a real dialog. A
-/// production call that ignored `text_speed` and passed a fixed
-/// [`engine::text::render::TextSpeed::Mid`] into `NpcDialog::open_at_speed`
-/// regardless of the saved option would still leave every text-speed test
-/// in this file green.
+/// Proves the dialog `phase.step` opens paces at the saved `text_speed`
+/// option: the two tests above only prove `resolve_step_events` reads and
+/// repairs the saved option, not that the dialog it opens paces at it --
+/// `AssetPack::load_default` is unavailable headless, so neither one opens
+/// a real dialog. A production call that ignored `text_speed` and passed a
+/// fixed [`engine::text::render::TextSpeed::Mid`] into
+/// `NpcDialog::open_at_speed` regardless of the saved option would still
+/// leave every other text-speed test in this file green.
 ///
-/// This one closes that hole by pointing `phase.pack_source` at a synthetic,
-/// on-disk pack ([`crate::pack_source::PackSource::Test`], added for this
-/// exact gap) built the same way `crate::overworld::dialog::tests`' own
-/// fixture is, so `phase.step`'s real dialog-open call succeeds -- then
-/// drives the *opened* dialog through ordinary frames exactly as
-/// `frame_tests`' real-pack Mom test does, and asserts a FAST-saved session
-/// reveals its message in fewer frames than a SLOW-saved one
-/// (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph,
+/// This test points `phase.pack_source` at a synthetic, on-disk pack
+/// ([`crate::pack_source::PackSource::Test`]) built the same way
+/// `crate::overworld::dialog::tests`' own fixture is, so `phase.step`'s
+/// real dialog-open call succeeds, then drives the *opened* dialog through
+/// ordinary frames exactly as `frame_tests`' real-pack Mom test does, and
+/// asserts a FAST-saved session reveals its message in fewer frames than a
+/// SLOW-saved one (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph,
 /// `pokeemerald/src/menu.c:77-82`).
 #[test]
 fn a_field_dialog_opened_by_the_real_step_pipeline_paces_at_the_saved_text_speed() {

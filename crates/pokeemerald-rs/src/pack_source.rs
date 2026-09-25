@@ -40,9 +40,7 @@ pub(crate) enum PackSource {
     /// A fixed path, for a test that must drive a real pack load through
     /// the production dialog-open path (`OverworldPhase::resolve_step_events`)
     /// without touching [`Self::Runtime`]'s or [`Self::Repo`]'s real
-    /// resolved locations (issue #1392's slice review: proving the saved
-    /// speed reaches an actually-opened dialog, not just the `NpcDialog`
-    /// constructor it calls). The path must outlive the test: callers
+    /// resolved locations. The path must outlive the test: callers
     /// `Box::leak` it once.
     #[cfg(test)]
     Test(&'static std::path::Path),
