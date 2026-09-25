@@ -27,7 +27,15 @@ use std::cell::RefCell;
 /// One opaque sprite-layer result for cross-layer composition.
 ///
 /// A better-priority transparent texel can update `priority` and
-/// `semi_transparent` without replacing `color`.
+/// `semi_transparent` without replacing `color` or `color_semi_transparent`
+/// — mirroring mGBA's flag-only overwrite, which keeps the stored pixel's
+/// color bits while replacing only its order/reblend/target-1 flag bits
+/// (`mgba/src/gba/renderers/software-obj.c:120-126`). So `semi_transparent`
+/// and `color_semi_transparent` can name two different entries: the one that
+/// currently owns priority (and thus forced-alpha eligibility for blending
+/// against a second target) versus the one that actually supplied `color`
+/// (and thus whether that stored color is eligible for mGBA's draw-time
+/// brighten/darken variant, `software-obj.c:177-203`) `(behavioral-fidelity)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The topmost opaque sprite color.
@@ -37,12 +45,108 @@ pub struct SpritePixel {
     /// Whether the sprite that set [`priority`](Self::priority) forces alpha
     /// blending.
     pub semi_transparent: bool,
+    /// Whether the sprite that supplied [`color`](Self::color) is itself
+    /// [`ObjMode::SemiTransparent`] — separate from
+    /// [`semi_transparent`](Self::semi_transparent) because a later,
+    /// better-priority transparent texel can promote priority without
+    /// replacing the stored color (see this struct's docs).
+    pub color_semi_transparent: bool,
+    /// The column where the hardware-window span that wrote
+    /// [`priority`](Self::priority) begins. mGBA bakes an OBJ's
+    /// `FLAG_TARGET_1` and `FLAG_REBLEND` from the span whose pass writes the
+    /// pixel (`software-obj.c:159,176-192`), which is the queried column's
+    /// own span except for an affine mosaic trailing spill written by an
+    /// earlier one (`software-obj.c:227-242`); `0` without window spans.
+    pub span_start: usize,
+    /// The column where the span that wrote [`color`](Self::color) begins,
+    /// whose effects enable chose mGBA's brighten/darken variant palette at
+    /// draw time (`software-obj.c:176-208`). Separate from
+    /// [`span_start`](Self::span_start) for the same flag-only-overwrite
+    /// reason as [`color_semi_transparent`](Self::color_semi_transparent).
+    pub color_span_start: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct CachedScanlineAdmission {
     scanline: usize,
     admission: OamAdmission,
+}
+
+/// One scanline's hardware-window spans, as sprite sampling reruns them.
+///
+/// mGBA reruns sprite preprocessing once per span (`software-obj.c:227-242`,
+/// `video-software.c:1052-1062`); see
+/// [`SpriteLayer::sample_affine_local`](SpriteLayer::sample_affine_local) for
+/// why that matters past a span's own columns.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WindowSpans<'a> {
+    /// The ascending, `0`-led screen columns where each span begins
+    /// ([`crate::window::WindowConfig::scanline_span_starts`]).
+    starts: &'a [usize],
+    /// Positionally paired with `starts`: whether that span runs the OBJ pass
+    /// at all.
+    draws_obj: &'a [bool],
+    /// Positionally paired with `starts`: whether that span's own rank
+    /// outranks `OBJWIN`, dropping an `OBJWIN` entry's whole pass
+    /// (`software-obj.c:161`) `(behavioral-fidelity)`.
+    suppresses_objwin: &'a [bool],
+}
+
+impl<'a> WindowSpans<'a> {
+    /// The single OBJ-drawing, non-suppressing span a caller without window
+    /// state sees.
+    pub(crate) const WHOLE_SCANLINE: Self = Self {
+        starts: &[0],
+        draws_obj: &[true],
+        suppresses_objwin: &[false],
+    };
+
+    /// Pairs span starts with each span's OBJ participation and
+    /// OBJWIN-suppression rank, positionally.
+    pub(crate) fn new(
+        starts: &'a [usize],
+        draws_obj: &'a [bool],
+        suppresses_objwin: &'a [bool],
+    ) -> Self {
+        debug_assert_eq!(
+            starts.len(),
+            draws_obj.len(),
+            "each span start needs its own OBJ participation flag"
+        );
+        debug_assert_eq!(
+            starts.len(),
+            suppresses_objwin.len(),
+            "each span start needs its own OBJWIN-suppression rank"
+        );
+        Self {
+            starts,
+            draws_obj,
+            suppresses_objwin,
+        }
+    }
+
+    /// Returns the index of the span containing `x`.
+    fn index_at(self, x: usize) -> usize {
+        self.starts
+            .partition_point(|&start| start <= x)
+            .saturating_sub(1)
+    }
+
+    /// Returns where span `index` begins, or `0` for an absent span.
+    fn span_start(self, index: usize) -> usize {
+        self.starts.get(index).copied().unwrap_or(0)
+    }
+
+    /// Returns whether span `index` runs the OBJ pass; an absent span draws.
+    fn span_draws_obj(self, index: usize) -> bool {
+        self.draws_obj.get(index).copied().unwrap_or(true)
+    }
+
+    /// Returns whether span `index`'s own rank drops a whole `OBJWIN` pass
+    /// `(behavioral-fidelity)`.
+    fn span_suppresses_objwin(self, index: usize) -> bool {
+        self.suppresses_objwin.get(index).copied().unwrap_or(false)
+    }
 }
 
 /// Resolves borrowed sprite data into display pixels and an object-window mask.
@@ -146,7 +250,7 @@ impl<'a> SpriteLayer<'a> {
     /// when no opaque sprite covers the coordinate.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, MosaicSize::NONE, false)
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
     }
 
     /// Resolves a sprite pixel after applying `mosaic` to enabled entries.
@@ -158,23 +262,30 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, false)
+        self.resolve_pixel_inner(x, y, mosaic, WindowSpans::WHOLE_SCANLINE)
     }
 
-    /// Resolves a mosaic sprite pixel, optionally skipping OBJ-window entries.
+    /// Resolves a mosaic sprite pixel, honoring hardware-window state.
     ///
-    /// WIN0 and WIN1 outrank OBJWIN, so mGBA skips OBJ-window entries while
+    /// WIN0 and WIN1 outrank OBJWIN, so mGBA drops a whole OBJWIN pass while
     /// drawing those regions (`software-obj.c:161`,
-    /// `video-software.c:131-134`).
+    /// `video-software.c:131-134`) -- per the *writing* span, which
+    /// [`WindowSpans::span_suppresses_objwin`] carries in, not the queried
+    /// column's own.
+    ///
+    /// `window_spans` carries this scanline's hardware-window spans
+    /// ([`WindowSpans::WHOLE_SCANLINE`] when the caller has no span state);
+    /// see [`Self::sample_affine_local`] for what it seeds and why an affine
+    /// mosaic sample may need a span other than the one containing `x`.
     #[must_use]
     pub(crate) fn resolve_pixel_with_mosaic_windowed(
         &self,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        skip_objwin_entries: bool,
+        window_spans: WindowSpans<'_>,
     ) -> Option<SpritePixel> {
-        self.resolve_pixel_inner(x, y, mosaic, skip_objwin_entries)
+        self.resolve_pixel_inner(x, y, mosaic, window_spans)
     }
 
     fn resolve_pixel_inner(
@@ -182,7 +293,7 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-        skip_objwin_entries: bool,
+        window_spans: WindowSpans<'_>,
     ) -> Option<SpritePixel> {
         if x >= Framebuffer::WIDTH || y >= Framebuffer::HEIGHT {
             return None;
@@ -194,11 +305,14 @@ impl<'a> SpriteLayer<'a> {
                 if !admission.is_admitted(index) {
                     continue;
                 }
-                if skip_objwin_entries && entry.mode() == ObjMode::Window {
-                    continue;
-                }
 
-                let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
+                // See `sample_affine_local`'s docs for what this changes. An
+                // `OBJWIN` entry's own suppression is decided per writing
+                // span inside sampling, not here from the queried column.
+                let slot_contested = resolved.is_some();
+                let (texel, writer_span) =
+                    self.sample_entry_mosaic(entry, x, y, mosaic, window_spans, slot_contested);
+                let span_start = window_spans.span_start(writer_span);
                 if matches!(texel, Texel::Outside) {
                     continue;
                 }
@@ -209,16 +323,21 @@ impl<'a> SpriteLayer<'a> {
                 match (entry.mode(), texel) {
                     (ObjMode::Window, Texel::Opaque(_)) => {}
                     (mode, Texel::Opaque(color)) => {
+                        let semi_transparent = mode == ObjMode::SemiTransparent;
                         resolved = Some(SpritePixel {
                             color,
                             priority: entry.priority(),
-                            semi_transparent: mode == ObjMode::SemiTransparent,
+                            semi_transparent,
+                            color_semi_transparent: semi_transparent,
+                            span_start,
+                            color_span_start: span_start,
                         });
                     }
                     (mode, Texel::Transparent) => {
                         if let Some(pixel) = resolved.as_mut() {
                             pixel.priority = entry.priority();
                             pixel.semi_transparent = mode == ObjMode::SemiTransparent;
+                            pixel.span_start = span_start;
                         }
                     }
                     (_, Texel::Outside) => unreachable!("outside texels were skipped"),
@@ -253,43 +372,74 @@ impl<'a> SpriteLayer<'a> {
                 if !admission.is_admitted(index) || entry.mode() != ObjMode::Window {
                     return false;
                 }
+                // OBJWIN is a per-pixel mask, not a hardware-window span, so
+                // it never restarts an affine mosaic hold
+                // (`behavioral-fidelity`).
                 matches!(
-                    self.sample_entry_mosaic(entry, x, y, mosaic),
-                    Texel::Opaque(_)
+                    self.sample_entry_mosaic(
+                        entry,
+                        x,
+                        y,
+                        mosaic,
+                        WindowSpans::WHOLE_SCANLINE,
+                        false
+                    ),
+                    (Texel::Opaque(_), _)
                 )
             })
         })
     }
 
+    /// Samples one entry's texel at `(x, y)`, paired with the index of the
+    /// window span whose pass wrote it.
+    ///
+    /// The writing span matches `x`'s own for every path but an affine
+    /// mosaic trailing spill, which can be written by an earlier span; see
+    /// [`Self::sample_affine_local`] for what `slot_contested` changes there.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-    ) -> Texel {
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
+        let own_span = window_spans.index_at(x);
         let mosaic = if entry.mosaic() {
             mosaic
         } else {
             MosaicSize::NONE
         };
         let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
-            return Texel::Outside;
+            return (Texel::Outside, own_span);
         };
         if entry.mode() == ObjMode::Window {
             // mGBA applies only vertical mosaic to OBJ-window sampling (`video-software.c:1027,1042-1050`; `software-obj.c:287-304,344-361`).
             let vertical_only = mosaic.vertical_only();
             if matches!(entry.affine(), AffineMode::Regular) {
+                if window_spans.span_suppresses_objwin(own_span) {
+                    return (Texel::Outside, own_span);
+                }
                 let (_, ly) = vertical_only.snap_local((dx, dy), (x, y), entry.bounding_box());
-                self.sample_local(entry, dx, ly)
+                (self.sample_local(entry, dx, ly), own_span)
             } else {
-                self.sample_affine_local(entry, dx, dy, x, y, vertical_only)
+                self.sample_affine_local(
+                    entry,
+                    dx,
+                    dy,
+                    x,
+                    y,
+                    vertical_only,
+                    window_spans,
+                    slot_contested,
+                )
             }
         } else if matches!(entry.affine(), AffineMode::Regular) {
             let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-            self.sample_local(entry, lx, ly)
+            (self.sample_local(entry, lx, ly), own_span)
         } else {
-            self.sample_affine_local(entry, dx, dy, x, y, mosaic)
+            self.sample_affine_local(entry, dx, dy, x, y, mosaic, window_spans, slot_contested)
         }
     }
 
@@ -376,12 +526,22 @@ impl<'a> SpriteLayer<'a> {
         Texel::Opaque(color.to_rgb888())
     }
 
-    /// Samples an affine entry from one footprint-local coordinate for each
-    /// horizontal mosaic block.
+    /// Samples an affine entry from one footprint-local coordinate per
+    /// mosaic block, seeding each window span's hold from `inX - 1` at its
+    /// own start, and returns the texel the span it was drawn under produces,
+    /// paired with that span's index (`software-obj.c:227-242`).
+    /// `slot_contested` mirrors mGBA's same-entry write lock: a contested
+    /// pixel stops the spill search at the first candidate span, an
+    /// unclaimed one prefers the first opaque one (`software-obj.c:79-85`).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        reason = "x < Framebuffer::WIDTH, so the mosaic block origin fits in i32"
+        clippy::cast_sign_loss,
+        reason = "x < Framebuffer::WIDTH, so the mosaic block origin, window span start, and sprite trailing edge fit in i32 and, once clamped non-negative, in usize"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors mGBA's per-span preprocessing inputs (entry, footprint, screen coordinate, mosaic, window spans, slot contention)"
     )]
     fn sample_affine_local(
         &self,
@@ -391,28 +551,87 @@ impl<'a> SpriteLayer<'a> {
         x: usize,
         y: usize,
         mosaic: MosaicSize,
-    ) -> Texel {
-        const LOCAL_COLUMN_BEFORE_FOOTPRINT: i32 = -1;
-
+        window_spans: WindowSpans<'_>,
+        slot_contested: bool,
+    ) -> (Texel, usize) {
         let (_, local_y) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
-        let entry_x = i32::from(entry.x());
-        let block_origin_x = mosaic.snap(x, y).0 as i32;
-        let local_x = if block_origin_x >= entry_x {
-            block_origin_x - entry_x
+        // Shared by both `sample_entry_mosaic` branches; the contract is on
+        // `floor_dy_to_wrap_boundary_bottom`.
+        let local_y = if mosaic.vertical() > 1 {
+            entry.floor_dy_to_wrap_boundary_bottom(local_y)
         } else {
-            // mGBA seeds a leading partial block from `inX - 1` (`software-obj.c:241`).
-            LOCAL_COLUMN_BEFORE_FOOTPRINT
+            local_y
+        };
+        let entry_x = i32::from(entry.x());
+        let (width, _) = entry.bounding_box();
+        let block_origin_x = mosaic.snap(x, y).0 as i32;
+
+        let sample_from_span_start = |window_span_start: i32| {
+            let pass_start_x = entry_x.max(window_span_start);
+            let held_screen_x = if block_origin_x >= pass_start_x {
+                block_origin_x
+            } else {
+                pass_start_x - 1
+            };
+            sprite_affine::sample_texel(
+                entry,
+                self.matrices,
+                self.tileset_4bpp,
+                self.tileset_8bpp,
+                self.palette,
+                held_screen_x - entry_x,
+                local_y,
+            )
         };
 
-        sprite_affine::sample_texel(
-            entry,
-            self.matrices,
-            self.tileset_4bpp,
-            self.tileset_8bpp,
-            self.palette,
-            local_x,
-            local_y,
-        )
+        // mGBA drops an OBJWIN entry's whole pass per writing span
+        // (`software-obj.c:161`), so every candidate span below is filtered
+        // by its own rank, never the queried column's `(behavioral-fidelity)`.
+        let objwin_entry = entry.mode() == ObjMode::Window;
+        let span_admits_entry =
+            |span: usize| !(objwin_entry && window_spans.span_suppresses_objwin(span));
+
+        if dx < width {
+            let span = window_spans.index_at(x);
+            if !span_admits_entry(span) {
+                return (Texel::Outside, span);
+            }
+            return (
+                sample_from_span_start(window_spans.span_start(span) as i32),
+                span,
+            );
+        }
+
+        let raw_edge = (entry_x + width as i32).max(0) as usize;
+        let last_span = window_spans.index_at(x);
+        let candidate_spans = (window_spans.index_at(raw_edge)..=last_span)
+            .filter(|&span| window_spans.span_draws_obj(span) && span_admits_entry(span));
+
+        if slot_contested {
+            // A contested slot blocks every span but this entry's first
+            // candidate one, so take that first result, whatever it is.
+            return candidate_spans
+                .map(|span| {
+                    (
+                        sample_from_span_start(window_spans.span_start(span) as i32),
+                        span,
+                    )
+                })
+                .find(|(texel, _)| !matches!(texel, Texel::Outside))
+                .unwrap_or((Texel::Outside, last_span));
+        }
+
+        let mut transparent_fallback = None;
+        for span in candidate_spans {
+            let texel = sample_from_span_start(window_spans.span_start(span) as i32);
+            if matches!(texel, Texel::Opaque(_)) {
+                return (texel, span);
+            }
+            if transparent_fallback.is_none() && matches!(texel, Texel::Transparent) {
+                transparent_fallback = Some((texel, span));
+            }
+        }
+        transparent_fallback.unwrap_or((Texel::Outside, last_span))
     }
 }
 
@@ -429,7 +648,7 @@ pub(crate) enum Texel {
 
 #[cfg(test)]
 mod tests {
-    use super::SpriteLayer;
+    use super::{SpriteLayer, WindowSpans};
     use crate::affine::AffineMatrix;
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
@@ -817,13 +1036,14 @@ mod tests {
         let entries = [opaque_priority_two, objwin_hole_priority_zero];
         let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
 
+        let suppressing_span = WindowSpans::new(&[0], &[true], &[true]);
         let suppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, true)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, suppressing_span)
             .unwrap();
         assert_eq!(suppressed.priority, 2);
 
         let unsuppressed = layer
-            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, false)
+            .resolve_pixel_with_mosaic_windowed(0, 0, MosaicSize::NONE, WindowSpans::WHOLE_SCANLINE)
             .unwrap();
         assert_eq!(unsuppressed.priority, 0);
     }
@@ -1126,6 +1346,124 @@ mod tests {
                     .map(|p| p.color),
                 Some(BLUE.to_rgb888()),
                 "screen x = {x}"
+            );
+        }
+    }
+
+    /// A 64x64 texture for a double-size affine sprite whose box ends
+    /// exactly at the Y-space boundary: source row 0 (top) is red, and
+    /// source row 63 (bottom) marks columns 0 and 1 green so both the
+    /// normal color path and the OBJWIN transparency path can distinguish
+    /// "own row" from "forced bottom row".
+    fn wrap_boundary_affine_double_size_texture() -> (Vec<u8>, Palette) {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BITS_PER_PIXEL: usize = 4;
+        const TEXTURE_TILES_PER_ROW: usize = 64 / BitDepth::TILE_DIM;
+        const TILE_COUNT: usize = TEXTURE_TILES_PER_ROW * TEXTURE_TILES_PER_ROW;
+        const TOP_ROW: usize = 0;
+        const BOTTOM_ROW: usize = 63;
+
+        let mut bytes = vec![0u8; TILE_COUNT * BPP4_TILE_BYTES];
+        let mut set_pixel = |x: usize, y: usize, index: u8| {
+            let bytes_per_tile_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+            let tile_index =
+                (y / BitDepth::TILE_DIM) * TEXTURE_TILES_PER_ROW + (x / BitDepth::TILE_DIM);
+            let (local_x, local_y) = (x % BitDepth::TILE_DIM, y % BitDepth::TILE_DIM);
+            let byte = tile_index * BPP4_TILE_BYTES
+                + local_y * bytes_per_tile_row
+                + local_x / PIXELS_PER_BYTE;
+            bytes[byte] |= index << ((local_x % PIXELS_PER_BYTE) * BITS_PER_PIXEL);
+        };
+        set_pixel(0, TOP_ROW, RED_INDEX);
+        set_pixel(0, BOTTOM_ROW, GREEN_INDEX);
+        set_pixel(1, BOTTOM_ROW, GREEN_INDEX);
+
+        (
+            bytes,
+            palette_with_colors(&[(RED_INDEX, RED), (GREEN_INDEX, GREEN)]),
+        )
+    }
+
+    fn wrap_boundary_double_size_affine_entry(y: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            y,
+            FIRST_TILE,
+            FIRST_PALETTE_BANK,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            SIXTY_FOUR_PIXEL_SQUARE_SIZE,
+            HIGHEST_OBJ_PRIORITY,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 })
+    }
+
+    fn half_scale_matrix() -> AffineMatrix {
+        let two_times_magnification = AffineMatrix::ONE / 2;
+        AffineMatrix::new(two_times_magnification, 0, 0, two_times_magnification)
+    }
+
+    /// A double-size affine box (128 tall) at raw Y=128 ends exactly at the
+    /// Y-space boundary, the case `OamEntry::floor_dy_to_wrap_boundary_bottom`
+    /// documents.
+    #[test]
+    fn affine_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y).with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert_eq!(
+            layer.resolve_pixel(0, usize::from(RAW_Y)).map(|p| p.color),
+            Some(RED.to_rgb888()),
+            "without mosaic, the top row samples its own source row"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(0, y, vertical_mosaic)
+                    .map(|p| p.color),
+                Some(GREEN.to_rgb888()),
+                "screen y = {y}"
+            );
+        }
+    }
+
+    /// The OBJWIN affine path shares `sample_affine_local` with the normal
+    /// affine path, so it must be pinned to the same forced bottom row.
+    #[test]
+    fn affine_objwin_mosaic_box_ending_at_y_space_samples_its_bottom_row() {
+        const RAW_Y: u8 = 128;
+        const SCREEN_X: usize = 2;
+        const VERTICAL_MOSAIC_SIZE: u8 = 2;
+
+        let (bytes, palette) = wrap_boundary_affine_double_size_texture();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let entries = [wrap_boundary_double_size_affine_entry(RAW_Y)
+            .with_mode(ObjMode::Window)
+            .with_mosaic(true)];
+        let matrices = [half_scale_matrix()];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette)
+            .with_affine_matrices(&matrices);
+        let vertical_mosaic = MosaicSize::new(1, VERTICAL_MOSAIC_SIZE);
+
+        assert!(
+            !layer.objwin_mask(SCREEN_X, usize::from(RAW_Y)),
+            "without mosaic, the top row's source column is transparent"
+        );
+        for y in usize::from(RAW_Y)..Framebuffer::HEIGHT {
+            assert!(
+                layer.objwin_mask_with_mosaic(SCREEN_X, y, vertical_mosaic),
+                "screen y = {y}"
             );
         }
     }

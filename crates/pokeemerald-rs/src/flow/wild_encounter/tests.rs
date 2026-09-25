@@ -16,7 +16,9 @@
 //!   move-vs-move path too.
 
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, StatStage, MAX_IV};
+use battle::{
+    Battle, BattleError, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, StatStage, MAX_IV,
+};
 use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE, MB_TALL_GRASS};
 use engine::overworld::warp::{trigger_door_warp, WarpTrigger};
 use engine::overworld::{wild_encounter::WildEncounter, Direction, PlayerState};
@@ -1315,4 +1317,67 @@ fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
     );
     assert_eq!(phase.save1().location.x, 4);
     assert_eq!(phase.save1().location.y, 2);
+}
+
+/// Every ability slot a fightable land table can roll admits
+/// [`advance_wild_battle`]'s standing Run against every possible lead.
+#[test]
+fn no_fightable_land_table_can_roll_a_trapping_opponent() {
+    const ABILITY_SLOT_PERSONALITIES: [u32; 2] = [0, 1];
+    let dex = Dex::new();
+    let species_count =
+        u16::try_from(assets::SpeciesTable::new().len()).expect("species ids fit in u16");
+    let ability_slot_mon = |species: SpeciesId, level: u8, personality: u32| {
+        let ivs = Ivs {
+            hp: MAX_IV,
+            attack: MAX_IV,
+            defense: MAX_IV,
+            speed: MAX_IV,
+            sp_attack: MAX_IV,
+            sp_defense: MAX_IV,
+        };
+        BattlePokemon::new(&dex, species, level, ivs, personality, vec![MoveId(33)])
+    };
+    let leads: Vec<BattlePokemon> = (0..species_count)
+        .map(SpeciesId)
+        .flat_map(|species| {
+            ABILITY_SLOT_PERSONALITIES
+                .map(
+                    |personality| match ability_slot_mon(species, 5, personality) {
+                        Err(BattleError::PlaceholderSpecies) => None,
+                        lead => Some(lead.expect("every real species can lead")),
+                    },
+                )
+                .into_iter()
+                .flatten()
+        })
+        .collect();
+
+    for header in assets::WildEncounterTable::new()
+        .iter()
+        .filter(|header| super::map_wild_table_fightable(header.map))
+    {
+        let Some(land) = &header.land else {
+            continue;
+        };
+        for slot in &land.mons {
+            for personality in ABILITY_SLOT_PERSONALITIES {
+                let opponent = ability_slot_mon(slot.species, slot.min_level, personality)
+                    .expect("a screened table only names buildable species");
+                for lead in &leads {
+                    assert_eq!(
+                        battle::escape::ensure_admissible(lead, &opponent),
+                        Ok(()),
+                        "{} passes the fightability screen yet can roll {:?} with {:?}, \
+                         whose trap refuses the driver's Run for a {:?} lead with {:?}",
+                        header.map.name(),
+                        slot.species,
+                        opponent.ability(),
+                        lead.species(),
+                        lead.ability(),
+                    );
+                }
+            }
+        }
+    }
 }
