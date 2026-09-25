@@ -369,10 +369,8 @@ fn a_pattern_nested_past_the_engines_stack_terminates_like_fine() {
 
 #[test]
 fn a_fourth_pattern_terminates_without_reading_its_target() {
-    // ply_patt checks patternLevel against 3 before it saves the return
-    // address or reads the pattern pointer, so the fourth PATT must
-    // terminate the track even when its target is missing entirely
-    // (m4a_1.s:851-867).
+    // ply_patt checks patternLevel before reading the pattern pointer, so a
+    // missing fourth target must not stop the terminate-like-Fine outcome (m4a_1.s:851-867).
     let mut bytes = vec![CMD_PATT];
     bytes.extend((ROM_BASE + 5).to_le_bytes());
     bytes.extend([CMD_PATT]);
