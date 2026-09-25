@@ -346,13 +346,34 @@ fn tiles_round_trip_at_8bpp() {
 }
 
 #[test]
-fn packing_tiles_keeps_only_the_low_nibble_at_4bpp() {
-    // A raster whose indices exceed 15 (an 8-bit-indexed PNG feeding a 4bpp
-    // ROM sheet, e.g. the title screen's press-start banner) packs to the
-    // low nibble, which is all a 4bpp tile can hold.
-    let pixels = vec![0x1Au8; 64];
+fn packing_tiles_rejects_an_out_of_range_low_nibble_index_at_4bpp() {
+    // An 8-bit-indexed PNG feeding a 4bpp ROM sheet (e.g. the title screen's
+    // press-start banner) can carry an index the 4bpp tile cannot hold.
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 16;
+    pixels[1] = 15;
+    assert_eq!(
+        tiles_from_image(&pixels, 4, 8, 8, None).unwrap_err(),
+        EntryShapeError::ImagePaletteIndexOutOfRange { index: 16 }
+    );
+}
+
+#[test]
+fn packing_tiles_rejects_an_out_of_range_high_nibble_index_at_4bpp() {
+    let mut pixels = vec![0u8; 64];
+    pixels[0] = 15;
+    pixels[1] = 16;
+    assert_eq!(
+        tiles_from_image(&pixels, 4, 8, 8, None).unwrap_err(),
+        EntryShapeError::ImagePaletteIndexOutOfRange { index: 16 }
+    );
+}
+
+#[test]
+fn packing_tiles_packs_palette_index_15_unchanged_at_4bpp() {
+    let pixels = vec![15u8; 64];
     let tiles = tiles_from_image(&pixels, 4, 8, 8, None).unwrap();
-    assert!(tiles.iter().all(|&b| b == 0xAA), "{tiles:?}");
+    assert_eq!(tiles, vec![0xFFu8; 32]);
 }
 
 #[test]

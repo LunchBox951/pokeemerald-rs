@@ -948,3 +948,67 @@ fn a_soundproof_block_is_not_reported_as_a_prevented_stat_loss() {
          loss as prevented, got {events:?}"
     );
 }
+
+#[test]
+fn a_depleted_serene_grace_poison_slot_still_selects_and_fails_no_pp() {
+    let dex = Dex::new();
+    // Dunsparce's primary ability slot is Serene Grace, so a landable
+    // Poison Sting against a healthy, non-Poison/Steel target is exactly
+    // what `secondary::ensure_admissible` refuses -- but only while the
+    // slot still has PP. Drained, `Cmd_attackcanceler`'s no-PP jump
+    // (`battle_script_commands.c:934`-`:939`) aborts before that check
+    // could matter, so construction and the per-turn re-screen must both
+    // accept it exactly like a drained unsupported-effect slot already
+    // does above.
+    let player = slow_runner_rattata(&dex); // slow: the run fails; healthy and poisonable
+    let mut enemy = max_iv_mon(&dex, 206, 10, vec![MoveId(40), MoveId(33)]); // Poison Sting, Tackle
+    assert_eq!(enemy.ability(), AbilityId::SERENE_GRACE);
+    let tackle_pp = enemy.moves()[1].pp;
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    assert_eq!(
+        enemy.moves()[0].pp,
+        0,
+        "fixture sanity: the slot is drained"
+    );
+
+    // battle start, turn number, selection (draw 0 -> slot 0: the drained
+    // Poison Sting), escape roll (fails). No draw follows: the failed
+    // move draws zero, so any admissibility or effect-pipeline draw would
+    // panic this exactly-sized script.
+    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng)
+        .expect("a depleted Serene-Grace-conflicting slot must not block construction");
+    let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            },
+            BattleEvent::FailedNoPp {
+                by_player: false,
+                move_id: MoveId(40),
+            },
+        ]
+    );
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        0,
+        "the spent slot is left at 0, never clamped or underflowed"
+    );
+    assert_eq!(
+        battle.enemy().moves()[1].pp,
+        tackle_pp,
+        "the unpicked slot is untouched"
+    );
+    assert_eq!(
+        rng.draws(),
+        4,
+        "no admissibility or effect-pipeline draws for the failed move"
+    );
+    assert!(battle.outcome().is_none());
+}

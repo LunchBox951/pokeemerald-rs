@@ -14,6 +14,7 @@ use crate::paralyze::{
     is_paralyze_effect, resolve_paralyze_move, resolve_synchronize_reflection, ParalyzeOutcome,
     SynchronizeReflectionOutcome,
 };
+use crate::secondary::{resolve_synchronize_poison_reflection, SynchronizePoisonReflectionOutcome};
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
@@ -153,6 +154,7 @@ impl Battle {
                 // (`data/battle_scripts_1.s:265`-`:266`), but `SetMoveEffect`
                 // leads with an `hp == 0` guard
                 // (`battle_script_commands.c:2261`-`:2264`).
+                let mut poisoned_synchronize_holder = false;
                 if resolution.poisons_defender {
                     let defender = if attacker_is_player {
                         &mut self.enemy
@@ -161,6 +163,7 @@ impl Battle {
                     };
                     if !defender.is_fainted() {
                         defender.set_status1(Status1::Poisoned);
+                        poisoned_synchronize_holder = defender.ability() == AbilityId::SYNCHRONIZE;
                         events.push(BattleEvent::Poisoned {
                             by_player: attacker_is_player,
                             move_id,
@@ -175,6 +178,11 @@ impl Battle {
                     self.apply_struggle_recoil(attacker_is_player, hp_lost, events);
                 }
                 self.settle_faint(!attacker_is_player, events);
+                // See `BattleEvent::PoisonedBySynchronize`'s docs for why the
+                // reflection runs here, after the target's own faint check.
+                if poisoned_synchronize_holder {
+                    self.reflect_synchronize_poison(attacker_is_player, move_id, events);
+                }
             }
         }
         Ok(())
@@ -432,6 +440,50 @@ impl Battle {
                 };
                 original_attacker.set_status1(Status1::Paralysed);
                 events.push(BattleEvent::ParalyzedBySynchronize {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+        }
+    }
+
+    /// Reflects a Synchronize holder's freshly-applied poison back onto the
+    /// original attacker, re-entering `SetMoveEffect` for
+    /// `MOVE_EFFECT_AFFECTS_USER` (`src/battle_util.c:2971`-`:2986`); see
+    /// [`resolve_synchronize_poison_reflection`] for the guard order.
+    fn reflect_synchronize_poison(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let original_attacker = if attacker_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        match resolve_synchronize_poison_reflection(original_attacker) {
+            SynchronizePoisonReflectionOutcome::ImmunityProtected => {
+                events.push(BattleEvent::SynchronizeImmunityProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizePoisonReflectionOutcome::TypeProtected => {
+                events.push(BattleEvent::SynchronizePoisonOrSteelTypeProtected {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            SynchronizePoisonReflectionOutcome::AlreadyStatused => {}
+            SynchronizePoisonReflectionOutcome::Applied => {
+                let original_attacker = if attacker_is_player {
+                    &mut self.player
+                } else {
+                    &mut self.enemy
+                };
+                original_attacker.set_status1(Status1::Poisoned);
+                events.push(BattleEvent::PoisonedBySynchronize {
                     by_player: attacker_is_player,
                     move_id,
                 });
