@@ -1,7 +1,9 @@
-//! The cross-layer priority compositor: up to four regular BG layers plus
-//! the sprite layer, combined into one frame (S-2 slice 2).
+//! The cross-layer priority compositor: composites up to four BG layers
+//! (regular or affine) and one sprite layer into a [`Framebuffer`], with
+//! hardware windows, color special effects, and mosaic available through
+//! [`compose_frame_with_effects`].
 //!
-//! Ports the BG/OBJ ordering rules verified against
+//! Priority ordering, verified against
 //! `mgba/src/gba/renderers/video-software.c` and `software-obj.c`:
 //!
 //! - A **lower [`priority`](BgSlot::new) number composites in front**,
@@ -17,19 +19,6 @@
 //!   so on).
 //! - At equal priority among sprites, the **lower OAM index wins** — see
 //!   [`SpriteLayer::resolve_pixel`](crate::sprite::SpriteLayer::resolve_pixel).
-//!
-//! Affine BG layers slot in as of S-2 slice 3 (issue #98) via
-//! [`BgSlot::new_affine`] — [`compose_frame`]'s own signature is unchanged
-//! `(behavioral-fidelity)`.
-//!
-//! S-2 slice 4 (issue #99) adds hardware windows (`WIN0`/`WIN1`/`OBJWIN`),
-//! color special effects (alpha blend, brighten, darken), and mosaic via
-//! [`compose_frame_with_effects`] and the [`FrameEffects`] parameter
-//! struct — [`compose_frame`] becomes a thin delegation to
-//! [`compose_frame_with_effects`] with [`FrameEffects::default`], which
-//! disables every slice-4 feature and so reproduces this slice's output
-//! byte-for-byte, keeping [`compose_frame`]'s own signature (and every
-//! existing caller) unchanged `(behavioral-fidelity)`.
 
 use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
@@ -41,9 +30,7 @@ use crate::palette::Rgb888;
 use crate::sprite::{SpriteLayer, SpritePixel, WindowSpans};
 use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
 
-/// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
-/// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
-/// overflow, [`AffineBgLayer`]) — see [`BgSlot::new`]/[`BgSlot::new_affine`].
+/// A BG slot's per-pixel sampling mode: regular (scrolling) or affine.
 #[derive(Debug, Clone, Copy)]
 enum BgKind<'a> {
     Regular {
@@ -60,11 +47,8 @@ enum BgKind<'a> {
     },
 }
 
-/// One of up to four BG layers (regular or affine) participating in
-/// priority composition, paired with the register-level state the GBA PPU
-/// consults alongside the tile/palette data itself: which of BG0..BG3 this
-/// is (breaks same-priority ties), the layer's priority, its per-pixel
-/// sampling mode, and whether it's enabled at all.
+/// Up to four of these compose into one frame: a regular or affine BG layer
+/// plus the per-frame register state that governs its priority and sampling.
 #[derive(Debug, Clone, Copy)]
 pub struct BgSlot<'a> {
     kind: BgKind<'a>,
@@ -99,12 +83,11 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Build an affine BG slot (S-2 slice 3, issue #98). `bg_index` and
-    /// `priority` are masked exactly as in [`new`](Self::new). `ref_x`/
-    /// `ref_y` are the frame's latched reference point in 20.8 fixed point
-    /// (see [`crate::bg_affine`]'s module docs for why one static
-    /// reference point per frame is the behaviorally-correct model of how
-    /// pokeemerald drives `BG2X`/`BG2Y`).
+    /// Build an affine BG slot. `bg_index` and `priority` are masked exactly
+    /// as in [`new`](Self::new). `ref_x`/`ref_y` are the frame's latched
+    /// reference point in 20.8 fixed point (see [`crate::bg_affine`]'s module
+    /// docs for why one static reference point per frame is the
+    /// behaviorally-correct model of how pokeemerald drives `BG2X`/`BG2Y`).
     #[must_use]
     #[allow(clippy::too_many_arguments)] // Mirrors the affine BG's full per-frame register set.
     pub const fn new_affine(
@@ -132,10 +115,8 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Return a copy of this slot with its mosaic bit (`BGxCNT`'s mosaic
-    /// bit) replaced — S-2 slice 4, issue #99. A builder rather than a
-    /// `new`/`new_affine` parameter so every pre-slice-4 call site keeps
-    /// working unchanged; defaults to `false`.
+    /// Return a copy of this slot with its mosaic bit (`BGxCNT`'s mosaic bit)
+    /// replaced; defaults to `false`.
     #[must_use]
     pub const fn with_mosaic(mut self, mosaic: bool) -> Self {
         self.mosaic = mosaic;
@@ -145,18 +126,15 @@ impl<'a> BgSlot<'a> {
     /// Sample this slot's resolved color at `(x, y)`, dispatching to the
     /// regular or affine layer per [`BgKind`]. When this slot's mosaic bit is
     /// set, `(x, y)` is first snapped to `bg_mosaic`'s block origin
-    /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op regardless
-    /// of the slot's own mosaic bit, which is what keeps
-    /// [`compose_frame`]'s output byte-for-byte unaffected by this slice.
+    /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op.
     ///
     /// `bg_open` is whether [`crate::window`] currently permits this slot's
     /// BG index to *composite* at `(x, y)`; `hold_active` is whether its
     /// affine mosaic hold should keep advancing regardless of that — see
     /// [`AffineMosaicHold`]'s docs for why the two can differ. The caller
-    /// always passes both (rather than skipping the call when closed) so a
-    /// `Some` `affine_mosaic_hold` is told about every column. Every other
-    /// slot kind ignores both and returns `None` on `!bg_open`, exactly as
-    /// the caller's own pre-existing early-`continue` did.
+    /// always passes both, rather than skipping the call when closed, so a
+    /// `Some` `affine_mosaic_hold` is told about every column; only the
+    /// returned color, not that bookkeeping, is gated on `bg_open`.
     fn sample(
         &self,
         x: usize,
@@ -189,8 +167,6 @@ impl<'a> BgSlot<'a> {
                     snapped_y,
                     bg_mosaic.horizontal(),
                 );
-                // Only the returned color, not the state update above, is
-                // gated on `bg_open` -- see this function's docs.
                 return if bg_open { sample } else { None };
             }
         }
@@ -222,13 +198,12 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Whether this slot is an affine [`Overflow::Wrap`] layer at a decoded
-    /// horizontal mosaic size mGBA bypasses entirely — the `Wrap` sibling of
-    /// the same decoded-size gate
+    /// Whether this slot is a `Wrap`-overflow affine layer at a horizontal
+    /// mosaic size mGBA bypasses entirely — the same decoded-size gate
     /// [`AffineBgLayer::sample_column_with_mosaic_hold`] applies for
-    /// `Overflow::Transparent`; see its docs for the mGBA derivation. Only
-    /// `Wrap` needs a separate check here: it never reaches that function's
-    /// retry/hold path at all `(behavioral-fidelity)`.
+    /// `Overflow::Transparent`, but only `Wrap` needs it checked here since it
+    /// never reaches that function's retry/hold path. See that function's
+    /// docs for the mGBA derivation.
     fn wrap_affine_bypasses_horizontal_mosaic(&self, bg_mosaic: MosaicSize) -> bool {
         matches!(
             self.kind,
@@ -243,8 +218,7 @@ impl<'a> BgSlot<'a> {
     /// mosaic-enabled, affine [`Overflow::Transparent`] slot does.
     /// [`Overflow::Wrap`] and regular BGs snap to the block origin
     /// statelessly; see
-    /// [`AffineBgLayer::sample_column_with_mosaic_hold`]'s docs for why
-    /// `Overflow::Transparent` alone needs retry/hold state.
+    /// [`AffineBgLayer::sample_column_with_mosaic_hold`] for why.
     fn needs_affine_mosaic_hold(&self) -> bool {
         self.enabled
             && self.mosaic
@@ -258,11 +232,9 @@ impl<'a> BgSlot<'a> {
     }
 }
 
-/// A candidate pixel's ordering key: `(priority, layer_rank)`. Lower sorts
-/// in front. A sprite's `layer_rank` is always `0`, strictly less than any
-/// BG's `1 + bg_index` — so a sprite wins any same-priority tie against a
-/// BG, and BGs break same-priority ties by ascending `bg_index`, matching
-/// the ordering rules in the module docs.
+/// A candidate's `(priority, layer_rank)` sort key (lower sorts in front),
+/// per the module docs' ordering. A sprite's `layer_rank` is `0`; a BG's is
+/// `1 + bg_index`.
 type OrderKey = (u8, u8);
 /// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
 /// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
@@ -272,9 +244,9 @@ type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
-/// Candidates arrive in the same order the old stable sort saw them
-/// (sprite, then BG slots), so strict comparisons preserve the existing
-/// first-seen tie-break for duplicate order keys.
+/// Candidates arrive in a fixed order (sprite, then BG slots in slot order),
+/// so a strict `<` comparison keeps the first-seen candidate as the
+/// tie-break for duplicate order keys.
 fn insert_candidate(
     front: &mut Option<Candidate>,
     next: &mut Option<Candidate>,
@@ -305,10 +277,8 @@ fn insert_candidate(
 /// opaque layer are left at the framebuffer's default backdrop
 /// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)).
 ///
-/// A thin delegation to [`compose_frame_with_effects`] with
-/// [`FrameEffects::default`] (S-2 slice 4, issue #99) — every window/color
-/// effect/mosaic feature is disabled by that default, so this function's
-/// output, and its signature, are unaffected by that slice
+/// Behaviorally identical to calling [`compose_frame_with_effects`] with
+/// every window, color-effect, and mosaic feature disabled
 /// `(behavioral-fidelity)`.
 #[must_use]
 pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Framebuffer {
@@ -316,14 +286,11 @@ pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Fram
 }
 
 /// Bundled optional per-frame effects for [`compose_frame_with_effects`]:
-/// hardware windows, color special effects, and mosaic (S-2 slice 4, issue
-/// #99).
+/// hardware windows, color special effects, and mosaic.
 ///
 /// [`Default`] disables every one of them (no active window, no color
-/// effect, no mosaic, black backdrop) — this is what makes
-/// [`compose_frame`] byte-for-byte equivalent to calling
-/// [`compose_frame_with_effects`] with a default `FrameEffects`
-/// `(behavioral-fidelity)`.
+/// effect, no mosaic, black backdrop) — see [`compose_frame`] for what that
+/// makes it equivalent to.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameEffects {
     /// Hardware window configuration (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`).
@@ -339,14 +306,13 @@ pub struct FrameEffects {
 }
 
 /// [`compose_frame`], extended with hardware windows, color special
-/// effects, and mosaic (S-2 slice 4, issue #99).
+/// effects, and mosaic.
 ///
-/// Per pixel: gather every enabled BG slot's and (if not window-masked) the
-/// sprite layer's opaque contribution, sort by the module docs' priority
-/// ordering, then resolve the front (topmost) one through
-/// [`effects::resolve_pixel_color`] against the layer immediately behind it
-/// (or the backdrop, if nothing else was drawn) — see that function's docs
-/// for exactly which second target a pixel is allowed to blend against.
+/// Per pixel: composes every enabled BG's and (if not window-masked) the
+/// sprite's opaque contribution by the module docs' priority ordering, then
+/// resolves the front layer through [`effects::resolve_pixel_color`] against
+/// the next layer or the backdrop — see that function's docs for which
+/// second target is eligible.
 #[must_use]
 pub fn compose_frame_with_effects(
     sprites: &SpriteLayer<'_>,
@@ -690,8 +656,6 @@ mod tests {
         let layer_a = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
         let layer_b = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
 
-        // BG1 (worse priority 3) vs BG0 (better priority 0, but declared
-        // second) -- priority must win over bg_index/declaration order.
         let slots = [
             BgSlot::new(layer_a, 1, 3, 0, 0, true),
             BgSlot::new(layer_b, 0, 0, 0, 0, true),
@@ -709,13 +673,11 @@ mod tests {
 
     #[test]
     fn bg_vs_bg_same_priority_lower_bg_index_wins() {
-        let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1); // will be bg_index 2
-        let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2); // will be bg_index 0
+        let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1);
+        let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2);
         let layer_a = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
         let layer_b = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
 
-        // Same priority (1) for both; bg_index 0 must win over bg_index 2
-        // despite being declared second in the slice.
         let slots = [
             BgSlot::new(layer_a, 2, 1, 0, 0, true),
             BgSlot::new(layer_b, 0, 1, 0, 0, true),
@@ -748,8 +710,6 @@ mod tests {
     fn sprite_vs_bg_same_priority_sprite_wins() {
         let (ts, pal, tm) = opaque_bg_fixture(1);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        // BG at priority 2, best (lowest) bg_index (0) — still must lose to
-        // a same-priority sprite.
         let slots = [BgSlot::new(bg_layer, 0, 2, 0, 0, true)];
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
@@ -782,14 +742,13 @@ mod tests {
     fn sprite_lower_priority_number_beats_a_better_indexed_bg() {
         let (ts, pal, tm) = opaque_bg_fixture(1);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        // BG at the best possible priority (0).
         let slots = [BgSlot::new(bg_layer, 0, 0, 0, 0, true)];
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
         sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
         let sprite_palette = Palette::new(sprite_colors);
-        // Sprite at a WORSE priority (3) than the BG (0) -- the BG must win.
+        // The sprite's priority is worse than the BG's, so the BG must win.
         let entries = [OamEntry::new(
             0,
             0,
@@ -818,8 +777,7 @@ mod tests {
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
         let slots = [BgSlot::new(bg_layer, 0, 3, 0, 0, true)];
 
-        // A fully transparent (all index-0) sprite at the best priority --
-        // it must not occlude the BG at all.
+        // 0x00 fills every texel with palette index 0 (transparent).
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0x00u8; 32]).unwrap();
         let sprite_palette = Palette::new([Bgr555::default(); Palette::LEN]);
         let entries = [OamEntry::new(
@@ -846,20 +804,17 @@ mod tests {
 
     #[test]
     fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
-        // Finding 1: opaque sprite B (priority 2) sits under sprite A
-        // (priority 0), whose texel at this pixel is a transparent hole; a BG
-        // sits between them at priority 1. On hardware A's hole upgrades B's
-        // stored OBJ order to priority 0, so the OBJ layer (still showing B's
-        // color) beats the BG — even though B's own priority (2) is worse
-        // than the BG's (1). Pre-fix the OBJ pixel carried priority 2 and the
-        // BG wrongly won.
+        // B (OAM index 0, opaque, priority 2) sits under A (OAM index 1,
+        // transparent, priority 0), with the BG between them at priority 1.
+        // On hardware, A's transparent texel upgrades B's already-stored OBJ
+        // order to priority 0, so the OBJ layer (still B's color) beats the
+        // BG even though B's own priority (2) is worse than the BG's (1)
+        // (`mgba/src/gba/renderers/software-obj.c:76-85,116-125`).
         let (ts, pal, tm) = opaque_bg_fixture(7);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
 
-        // A single shared 4bpp tileset: tile 0 fully opaque (B draws it),
-        // tile 1 fully transparent (A draws it). B is OAM index 0 so it
-        // writes first; A (index 1) then upgrades the order via its hole.
+        // Tile 0 is opaque (drawn by B); tile 1 is transparent (drawn by A).
         let mut two_tiles = [0u8; 64];
         two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0 -> index 15 everywhere
         let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
@@ -924,10 +879,10 @@ mod tests {
         (tileset, palette, tilemap)
     }
 
-    /// A single 8x8-tile *affine* BG layer whose columns 0..8 each carry a
-    /// distinct opaque color (channel `column + 1`) -- distinguishes "holds
-    /// its own column's texel" from "holds a neighbor's" at column
-    /// granularity, unlike [`opaque_affine_bg_fixture`]'s single flat color.
+    /// A single affine BG tile whose first row (y=0) has a distinct opaque
+    /// color per column (channel `column + 1`) -- distinguishes "holds its
+    /// own column's texel" from "holds a neighbor's" at column granularity,
+    /// unlike [`opaque_affine_bg_fixture`]'s single flat color.
     fn gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
         let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
         let mut bytes = vec![0u8; tile_byte_len];
@@ -970,10 +925,7 @@ mod tests {
 
     #[test]
     fn affine_bg_slot_participates_in_priority_ordering_like_a_regular_bg() {
-        // An affine BG (priority 0, best) must beat a regular BG (priority
-        // 1) at the same pixel, exactly as two regular BGs would — proving
-        // BgSlot::new_affine slots into compose_frame's existing ordering
-        // without changing compose_frame's own signature.
+        // Affine slots share compose_frame's ordering, not a separate path.
         let (affine_tiles, affine_palette, affine_tilemap) = opaque_affine_bg_fixture(9);
         let affine_layer = AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_tilemap);
         let (regular_tiles, regular_palette, regular_map) = opaque_bg_fixture(1);
