@@ -85,16 +85,8 @@ fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
 /// on a FIFO's other end.
 #[cfg(unix)]
 mod open_flags {
-    // Linux's generic `<asm-generic/fcntl.h>` `O_NOFOLLOW`/`O_LARGEFILE`
-    // pair -- `O_NOFOLLOW` is `0x20000` and `O_LARGEFILE`, unused here, is
-    // `0x8000` -- which every Linux `target_arch` not named in the override
-    // below keeps unmodified: x86 and x86_64's `<bits/fcntl-linux.h>` plus
-    // riscv32, riscv64, mips, mips64, sparc, sparc64, s390x, csky, and
-    // loongarch64's own `<asm/fcntl.h>`, none of which touch this pair.
-    // Verified against the vendored `libc` 0.2.189 sources for each of
-    // those targets (`unix/linux_like/linux/gnu/{b32,b64}/<arch>/mod.rs`),
-    // which all report `O_NOFOLLOW == 0x20000`; this is the fallback branch
-    // precisely because it is every arch's value except the override set.
+    // Linux's generic `<asm-generic/fcntl.h>`: `O_NOFOLLOW` is `0x20000`,
+    // unmodified outside the arm/aarch64/powerpc/powerpc64/m68k override below.
     #[cfg(all(
         target_os = "linux",
         not(any(
@@ -107,15 +99,7 @@ mod open_flags {
     ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
     // arm's, aarch64's, powerpc's, powerpc64's, and m68k's `<asm/fcntl.h>`
-    // each swap that pair instead: `O_NOFOLLOW` is `0x8000` there and
-    // `O_LARGEFILE` is `0x20000`. Using the generic value on one of these
-    // targets would ask for `O_LARGEFILE`, a 64-bit-build no-op, instead of
-    // `O_NOFOLLOW`, and let a symlink swapped in after the pre-open check
-    // through. Verified against vendored `libc` 0.2.189
-    // (`gnu/b32/arm`, `gnu/b64/aarch64`, `gnu/b32/powerpc`,
-    // `gnu/b64/powerpc64`, and `gnu/b32/m68k`'s `mod.rs`, all `0x8000`,
-    // corroborated by musl's arm/aarch64/powerpc `mod.rs` reporting the
-    // same value independent of libc).
+    // swap the pair: `O_NOFOLLOW` is `0x8000` there instead of `0x20000`.
     #[cfg(all(
         target_os = "linux",
         any(
@@ -127,18 +111,15 @@ mod open_flags {
         )
     ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0000_8000;
-    // No Linux arch this crate builds for overrides `<asm-generic/fcntl.h>`'s
-    // `O_NONBLOCK` or `<asm-generic/errno.h>`'s `ELOOP`.
+    // `<asm-generic/fcntl.h>`'s `O_NONBLOCK` and `<asm-generic/errno.h>`'s `ELOOP`;
+    // MIPS and SPARC each override both, tracked in #1436.
     #[cfg(target_os = "linux")]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
     #[cfg(target_os = "linux")]
     pub(super) const ELOOP: i32 = 40;
 
-    // x86_64 takes the generic branch above and aarch64 takes the override;
-    // pinning both here means an edit that moves either arch to the wrong
-    // branch fails compilation on whichever target actually builds it --
-    // x86_64 in this crate's own CI, aarch64 under a cross `cargo check
-    // --target aarch64-unknown-linux-gnu -p engine`.
+    // Pins x86_64 to the generic branch and aarch64 to the override branch
+    // so a misrouted arch fails compilation instead of using the wrong flag.
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     const _: () = assert!(O_NOFOLLOW == 0x0002_0000);
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
