@@ -2,10 +2,11 @@
 //!
 //! [`decode`] accepts non-interlaced, indexed images with 2-, 4-, or 8-bit
 //! pixels and PNG's standard compression and filter methods. It verifies each
-//! parsed chunk's CRC, ignores ancillary chunks, rejects any byte following
-//! the `IEND` chunk, and returns unpacked palette-index pixels in scanline
-//! order. [`decode_palette`] reads an embedded `PLTE` chunk for assets whose
-//! in-game palette comes from the PNG itself.
+//! parsed chunk's CRC, ignores unknown ancillary chunks, rejects unknown
+//! critical chunks and any byte following the `IEND` chunk, and returns
+//! unpacked palette-index pixels in scanline order. [`decode_palette`] reads
+//! an embedded `PLTE` chunk for assets whose in-game palette comes from the
+//! PNG itself.
 
 use std::fmt;
 
@@ -52,6 +53,9 @@ pub enum PngError {
     /// One or more bytes followed the `IEND` chunk, PNG's required
     /// terminator.
     TrailingData,
+    /// A chunk type this decoder does not recognize has its critical bit
+    /// set, so it may carry semantics required to interpret the image.
+    UnknownCriticalChunk([u8; 4]),
     /// The `PLTE` chunk is missing, empty, or contains a partial RGB entry.
     MissingOrBadPalette,
     /// The `PLTE` chunk exceeds PNG's 256-entry limit.
@@ -80,6 +84,11 @@ impl fmt::Display for PngError {
                 String::from_utf8_lossy(kind)
             ),
             Self::TrailingData => write!(f, "PNG has trailing data after its IEND chunk"),
+            Self::UnknownCriticalChunk(kind) => write!(
+                f,
+                "PNG has unrecognized critical chunk {}",
+                String::from_utf8_lossy(kind)
+            ),
             Self::MissingOrBadPalette => {
                 write!(
                     f,
@@ -135,6 +144,9 @@ const TWO_BIT_DEPTH: u8 = 2;
 const FOUR_BIT_DEPTH: u8 = 4;
 const EIGHT_BIT_DEPTH: u8 = 8;
 const RGB_CHANNEL_COUNT: usize = 3;
+/// Bit 5 of a chunk type's first byte: 0 for critical (uppercase), 1 for
+/// ancillary (lowercase), per the PNG spec's chunk naming conventions.
+const CHUNK_ANCILLARY_BIT: u8 = 0x20;
 const MAX_PALETTE_ENTRIES: usize = 256;
 const CRC32_REFLECTED_ISO_3309_POLYNOMIAL: u32 = 0xEDB8_8320;
 
@@ -182,6 +194,10 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
         let crc_input = &rest[CHUNK_LENGTH_SIZE..data_end];
         if crc32(crc_input) != stored_crc {
             return Err(PngError::ChunkCrcMismatch(kind));
+        }
+        let is_known = matches!(kind, IHDR | PLTE | IDAT | IEND);
+        if !is_known && kind[0] & CHUNK_ANCILLARY_BIT == 0 {
+            return Err(PngError::UnknownCriticalChunk(kind));
         }
         let data = &rest[data_start..data_end];
         let is_end = kind == IEND;
@@ -682,6 +698,46 @@ mod tests {
             PngError::TrailingData,
             "an extra, otherwise well-formed chunk after IEND is still trailing data"
         );
+    }
+
+    #[test]
+    fn rejects_an_unknown_critical_chunk() {
+        const UNKNOWN_CRITICAL: [u8; 4] = *b"AaAA";
+        let mut png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 1, 1, &[0]);
+        let iend_size = chunk(super::IEND, &[]).len();
+        let insert_at = png.len() - iend_size;
+        png.splice(insert_at..insert_at, chunk(UNKNOWN_CRITICAL, &[]));
+
+        let err = decode(&png).unwrap_err();
+        assert_eq!(
+            err,
+            PngError::UnknownCriticalChunk(UNKNOWN_CRITICAL),
+            "a chunk with an uppercase first byte is critical and must be understood, not ignored"
+        );
+    }
+
+    #[test]
+    fn decode_palette_rejects_an_unknown_critical_chunk() {
+        const UNKNOWN_CRITICAL: [u8; 4] = *b"AaAA";
+        let mut png = indexed_png_with_palette(&[(1, 2, 3)]);
+        let iend_size = chunk(super::IEND, &[]).len();
+        let insert_at = png.len() - iend_size;
+        png.splice(insert_at..insert_at, chunk(UNKNOWN_CRITICAL, &[]));
+
+        let err = decode_palette(&png).unwrap_err();
+        assert_eq!(err, PngError::UnknownCriticalChunk(UNKNOWN_CRITICAL));
+    }
+
+    #[test]
+    fn ignores_an_unknown_ancillary_chunk() {
+        const UNKNOWN_ANCILLARY: [u8; 4] = *b"abCD";
+        let mut png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 1, 1, &[0]);
+        let iend_size = chunk(super::IEND, &[]).len();
+        let insert_at = png.len() - iend_size;
+        png.splice(insert_at..insert_at, chunk(UNKNOWN_ANCILLARY, &[]));
+
+        let image = decode(&png).unwrap();
+        assert_eq!(image.pixels, vec![0]);
     }
 
     #[test]
