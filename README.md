@@ -1,6 +1,6 @@
 # pokeemerald-rs
 
-A from-scratch native Rust port of Pokémon Emerald for Windows, macOS 13 or later, and desktop Linux with no GBA emulation. Other operating systems are out of scope for v1.0.0.0 (#1312). The project reproduces the game's observable behaviour in idiomatic Rust instead of copying its internal structure `(behavioral-fidelity)`.
+A from-scratch native Rust port of Pokémon Emerald for Windows, macOS, and desktop Linux with no GBA emulation. The project reproduces the game's observable behaviour in idiomatic Rust instead of copying its internal structure `(behavioral-fidelity)`.
 
 > **Status: pre-alpha.** `v1.0.0.0` means the complete single-player game. See [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for the binding definition and current criterion markers, and the live [milestones](../../milestones?state=all) for roadmap progress.
 
@@ -98,7 +98,7 @@ A development checkout can also build the pack with `--import-rom` from a ROM, a
 
 ## Release channels
 
-The three player channels are stable (`main`), beta (`stable`), and nightly (`unstable`); `dev` is developer integration. Source builds are CI-verified on Windows, macOS 13 or later, and desktop Linux; other operating systems are out of scope for v1.0.0.0 (#1312). Published archives currently target Linux and Windows. See [`RELEASE.md`](RELEASE.md).
+The three player channels are stable (`main`), beta (`stable`), and nightly (`unstable`); `dev` is developer integration. See [`RELEASE.md`](RELEASE.md#platform-support-and-artifacts) for supported platforms and published artifacts.
 
 ## Dependencies
 

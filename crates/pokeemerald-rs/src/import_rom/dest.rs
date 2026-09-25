@@ -80,40 +80,21 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     )?)
 }
 
-/// The raw `O_EXEC` bit ([`O_SEARCH`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html)
-/// is `O_EXEC | O_DIRECTORY`) on Apple platforms -- their substitute for
-/// Linux's `O_PATH`, taken from Apple's own header
-/// (<https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h>,
-/// `O_EXEC 0x40000000`).
+/// The raw `O_EXEC` bit on Apple platforms, which combined with
+/// `O_DIRECTORY` forms Apple's substitute for `O_PATH`:
+/// [`O_SEARCH`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html)
+/// (IEEE Std 1003.1-2008, `<fcntl.h>`), POSIX's access mode checked for
+/// *search* permission on the directory, never read, and never re-checked
+/// for a component walked through it afterwards. Spelled as a raw bit
+/// because `rustix`'s `OFlags` maps only `O_PATH`, absent from Apple's
+/// headers; the value is Apple's own (`O_EXEC 0x40000000`,
+/// <https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h>).
 ///
-/// POSIX, not Apple, is what makes it the right substitute: `open()` and
-/// `openat()` (IEEE Std 1003.1-2008, `<fcntl.h>`) specify `O_SEARCH` as a
-/// fifth access mode beside `O_RDONLY`/`O_WRONLY`/`O_RDWR`/`O_EXEC`, and
-/// are explicit that a descriptor opened with it is checked for *search*
-/// permission on the directory, never read, and (for `openat`) is never
-/// checked again for a component walked through it afterwards -- exactly
-/// the trade this module wants: enough to `openat`/`statat`/`mkdirat`/
-/// `unlinkat` a name inside the directory, nothing that lets it list what
-/// is there.
-///
-/// It is spelled as a raw bit because nothing here names it: `rustix`'s
-/// `OFlags` maps only `O_PATH`, which Apple's headers do not define, and
-/// `libc` is not a direct dependency of this crate.
-/// [`rustix::fs::OFlags::from_bits_retain`] is that crate's own escape
-/// hatch for a bit its enum does not carry, and its libc backend passes an
-/// `OFlags`'s raw bits straight through to the syscall, the same path
-/// `OFlags::LARGEFILE` takes on Linux.
-///
-/// macOS 13 Ventura (`xnu-8792`) is the floor: `bsd/sys/fcntl.h` does not
-/// define the bit before it, and an older kernel carries the unrecognized
-/// high bit through unchanged (`#define FFLAGS(oflags) ((oflags) + 1)`)
-/// while the low `O_ACCMODE` bits this constant leaves at zero make the
-/// request an ordinary read-mode open. A write-and-search-only parent
-/// therefore still needs read permission there, as it does on
-/// [`open_traversal_directory`]'s last-resort fallback.
-///
-/// Pre-Ventura macOS sits outside the v1.0.0.0 platform floor (#1312) and
-/// stays best-effort here.
+/// macOS 13 Ventura (`xnu-8792`) is the floor for this bit: an older
+/// kernel silently treats it as an ordinary read-mode open, so
+/// [`open_traversal_directory`]'s last-resort fallback still needs read
+/// permission there. Pre-Ventura macOS sits outside the platform floor
+/// RELEASE.md owns and stays best-effort here.
 #[cfg(target_vendor = "apple")]
 const APPLE_O_EXEC: u32 = 0x4000_0000;
 
@@ -171,8 +152,8 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
 /// two platforms this project's CI actually builds a non-Linux Unix for do
 /// not fall through to it.
 ///
-/// Every one of those Unix systems sits outside the v1.0.0.0 platform floor
-/// (#1312), so this arm stays best-effort.
+/// Every one of those Unix systems sits outside the platform floor
+/// RELEASE.md owns, so this arm stays best-effort.
 #[cfg(all(
     unix,
     not(any(

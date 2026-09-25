@@ -109,44 +109,24 @@
 //! reason: a failed import's cleanup runs an arbitrary interval after they
 //! were created, long enough for another account to rename one away and
 //! put an unrelated directory at the same name. [`undo_created_directories`]
-//! removes a level only relative to the parent handle that level was
-//! created through, and only once that parent's own lookup of the name
-//! still identifies the directory this run made (`fstat`'s device and
-//! inode, checked immediately before `unlinkat`). That check narrows the
-//! window from the whole cleanup call down to the gap between the check and
-//! the removal itself — two syscalls, not one, because no Unix this ships
-//! to can remove a directory by the descriptor that names it: `unlinkat`
-//! always re-resolves the name it is given. A rename that swaps a
-//! different directory into that exact name inside that gap is still
-//! removed; nothing portable closes a window that narrow. What the check
-//! does promise is everything outside it — a rename anywhere before the
-//! check is caught, and a name that resolves to something else *at check
-//! time* is left standing rather than guessed at, harmless litter rather
-//! than a directory some other process is about to write into. Off Unix,
-//! created levels are still addressed by path, like the destination
+//! removes a level only relative to the parent handle it was created
+//! through, and only once that parent's own lookup of the name still
+//! identifies the directory this run made (`fstat`'s device and inode,
+//! checked immediately before `unlinkat`). That narrows the race to the gap
+//! between the check and the removal itself, which nothing portable closes
+//! further; anything caught earlier is refused, and a name that resolves to
+//! something else at check time is left standing as harmless litter. Off
+//! Unix, created levels are still addressed by path, like the destination
 //! itself.
 //!
-//! A device and inode pair only names one directory while that inode is
-//! allocated. Another account that removes an empty created level and makes
-//! a new one at the same name commonly gets the same inode number straight
-//! back (ext4 and XFS both do), which a bare comparison would accept. Each
-//! level's own descriptor is therefore held open until cleanup is done:
-//! the inode it pins stays allocated after its name is gone, so a
-//! replacement cannot carry its number. A level whose reopen right after
-//! `mkdirat` itself failed (a full descriptor table, say) has no pin, so
-//! cleanup leaves it standing rather than trust device and inode alone.
-//!
-//! That identity is captured by reopening the level `mkdirat` just made,
-//! which is itself two syscalls, not one — `mkdirat` returns no descriptor
-//! of its own. An account that can write the parent can still win a swap
-//! landed in exactly that gap, the same way it can win one against
-//! [`Dest::open`]'s single `open`; no portable directory-creation call
-//! closes that further. What the reopen refuses outright is a *symlink*
-//! landed there instead (`O_NOFOLLOW`): `mkdirat` never produces one, so
-//! one sitting at the name the instant it is reopened is always somebody
-//! else's, and following it would hand a subsequent level's `mkdirat` an
-//! attacker-chosen directory to descend into rather than merely recording
-//! a wrong identity for this one.
+//! That identity comes from a lookup (`statat`) right after `mkdirat`
+//! succeeds, not a descriptor `mkdirat` never hands back. The level is then
+//! reopened and the descriptor held open until cleanup runs, pinning its
+//! inode so a later directory reusing the same freed inode number is not
+//! mistaken for this one. A level whose reopen itself failed has no pin, so
+//! cleanup leaves it standing rather than trust identity alone. The reopen
+//! also refuses a symlink planted at the name (`O_NOFOLLOW`); no portable
+//! call closes either gap further.
 
 mod dest;
 
@@ -743,18 +723,10 @@ fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
 
 /// A directory level [`create_directories`] made, and what
 /// [`sync_created_directories`] and [`undo_created_directories`] use to find
-/// it again.
-///
-/// On Unix this is the parent [`create_directories`] created the level
-/// through, pinned open, plus the level's own basename, the identity
-/// (`fstat`'s device and inode) captured the moment it was made, and the
-/// level's own descriptor, held open until the record is dropped -- so a
-/// later rename that leaves a different directory at the same name is not
-/// mistaken for this one, and neither is one made after this level was
-/// removed outright and its freed inode number handed straight back. See
-/// the module docs. Off Unix there is no
-/// descriptor to pin (`rustix` is Unix-only), so this stays the path alone,
-/// re-resolved each time, as it always was.
+/// it again. See the module docs for why cleanup needs the parent handle,
+/// basename, identity, and pinned descriptor kept here on Unix; off Unix
+/// there is no descriptor to pin (`rustix` is Unix-only), so this stays the
+/// path alone, re-resolved each time.
 #[derive(Debug)]
 #[cfg(unix)]
 struct CreatedDirectory {
@@ -779,10 +751,9 @@ struct CreatedDirectory {
     /// signedness differ across Unixes this ships to (`i32` on macOS, `u64`
     /// on Linux).
     identity: rustix::fs::Stat,
-    /// This level itself, held open for as long as the record lives so its
-    /// inode stays allocated and no replacement can carry its number
-    /// (module docs). `None` only when the reopen right after `mkdirat`
-    /// failed; cleanup then leaves that level standing.
+    /// This level itself, held open until cleanup runs; see the module docs
+    /// for what the pin captures and why. `None` only when the reopen right
+    /// after `mkdirat` failed, so cleanup leaves that level standing.
     own: Option<std::rc::Rc<std::os::fd::OwnedFd>>,
 }
 
