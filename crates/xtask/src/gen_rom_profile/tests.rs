@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pack_format::{image_entry_from_tiles, palette_entry, PackWriter};
+use pack_format::{image_entry, image_entry_from_tiles, palette_entry, PackWriter};
 use rom_import::fixture::RomFixture;
 use rom_import::Encoding;
 
@@ -804,6 +804,76 @@ fn no_song_at_all_is_refused_by_the_same_singleton_check() {
         assert!(
             matches!(&err, GenRomProfileError::StructMismatch { id, .. } if id == "audio/song/*"),
             "{err:?}"
+        );
+    });
+}
+
+#[test]
+fn an_eight_bit_sheet_with_indices_above_fifteen_is_still_located() {
+    // `title/image/pokemon_logo` is an 8-bit-indexed PNG using indices up
+    // to 223. `rom_depths(8)` speculatively probes 4bpp as well, so the
+    // 4bpp packing of this raster must not abort the whole search.
+    let tiles: Vec<u8> = (0..4 * 64u32)
+        .map(|index| u8::try_from(16 + index % 208).expect("fits in u8"))
+        .collect();
+    let entry =
+        image_entry_from_tiles("title/image/x".into(), &tiles, 8, 16, 16, None).expect("entry");
+    let rom = RomFixture::new()
+        .emerald_header()
+        .write(0x50_0000, &tiles)
+        .finish();
+
+    with_context("wide-index-sheet", &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        let plans = locate_images(ctx, &[ImageQuery::raw("title/image/x")], &mut report)
+            .expect("an 8bpp sheet is located despite the speculative 4bpp probe");
+        assert_eq!(plans[0].addr, 0x0850_0000);
+        assert_eq!(plans[0].rom_bit_depth, 8);
+    });
+}
+
+#[test]
+fn a_four_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
+    // Unlike the 8bpp probe above, a 4bpp entry has only one candidate
+    // depth (`rom_depths(4)` is `&[4]`), so this is never a speculative
+    // probe: an out-of-range index here is a malformed pack, and must
+    // surface as `EntryShape`, not read as the art simply not being
+    // anywhere in the ROM.
+    let mut pixels = vec![0u8; 8 * 8];
+    pixels[0] = 16;
+    let entry = image_entry("sprite/x".into(), 8, 8, 4, pixels).expect("entry");
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context("wide-index-four-bit-sheet", &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        let err = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report)
+            .expect_err("an out-of-range 4bpp index is a malformed pack, not a missing image");
+        assert!(
+            matches!(&err, GenRomProfileError::EntryShape { id, .. } if id == "sprite/x"),
+            "{err}"
+        );
+    });
+}
+
+#[test]
+fn a_two_bit_sheet_with_an_index_above_fifteen_is_an_entry_shape_error() {
+    // A 2bpp entry's sole ROM candidate is 4bpp too (`rom_depths(2)` is
+    // `&[4]`), exactly like the 4bpp case above, and just as
+    // non-speculative: there is no narrower depth being guessed at, so an
+    // out-of-range index here must also reach `EntryShape`, not read as a
+    // rejected speculative probe that leaves the art merely not found.
+    let mut pixels = vec![0u8; 8 * 8];
+    pixels[0] = 16;
+    let entry = image_entry("sprite/x".into(), 8, 8, 2, pixels).expect("entry");
+    let rom = RomFixture::new().emerald_header().finish();
+
+    with_context("wide-index-two-bit-sheet", &rom, vec![entry], |ctx| {
+        let mut report = Vec::new();
+        let err = locate_images(ctx, &[ImageQuery::raw("sprite/x")], &mut report)
+            .expect_err("an out-of-range index packed to 4bpp is a malformed pack");
+        assert!(
+            matches!(&err, GenRomProfileError::EntryShape { id, .. } if id == "sprite/x"),
+            "{err}"
         );
     });
 }

@@ -36,7 +36,7 @@ use rom_import::Encoding;
 
 use super::error::GenRomProfileError;
 use super::locate::to_addr;
-use super::pack_source::{image_tiles, metatile_candidates};
+use super::pack_source::{image_tiles, metatile_candidates, PackSource};
 use super::plan::{ImagePlan, ReportLine, Resolution};
 use super::Context;
 
@@ -109,16 +109,54 @@ fn symbol_fragments(id: &str) -> Vec<String> {
     Vec::new()
 }
 
-/// Which ROM bit depths could produce a pack entry of this depth.
+/// Which ROM bit depths could produce a pack entry of this depth, the
+/// entry's own depth first and any narrower depth after it.
 ///
-/// A 4bpp entry can only have come from 4bpp tiles. An 8bpp entry usually
-/// came from 8bpp tiles, but not always: the title screen's press-start
-/// banner is an 8-bit-indexed PNG whose indices all fit a nibble, and
-/// upstream stores it as 4bpp.
+/// A 4bpp entry can only have come from 4bpp tiles, and a 2bpp entry's sole
+/// candidate is 4bpp too; both are authoritative, so a palette index that
+/// does not fit there is a malformed pack. An 8bpp entry usually came from
+/// 8bpp tiles, but not always: the title screen's press-start banner is an
+/// 8-bit-indexed PNG whose indices all fit a nibble, and upstream stores it
+/// as 4bpp. That second candidate is a speculative probe, so a raster whose
+/// indices do not fit it is simply not stored at that depth
+/// ([`probe_image_tiles`]).
 fn rom_depths(pack_bit_depth: u8) -> &'static [u8] {
     match pack_bit_depth {
         8 => &[8, 4],
         _ => &[4],
+    }
+}
+
+/// [`image_tiles`] for a speculative narrower-depth candidate of
+/// [`rom_depths`]: an out-of-range palette index resolves to `None`, the
+/// raster was never stored at this depth, rather than aborting the search.
+///
+/// # Errors
+///
+/// Same as [`image_tiles`], except
+/// [`pack_format::EntryShapeError::ImagePaletteIndexOutOfRange`] resolves to
+/// `Ok(None)`.
+fn probe_image_tiles(
+    pack: &PackSource,
+    id: &str,
+    rom_bit_depth: u8,
+    metatile: (u32, u32),
+) -> Result<Option<Vec<u8>>, GenRomProfileError> {
+    let asset = pack.get(id)?;
+    let (width, height, _) = asset.image_shape(id)?;
+    match pack_format::tiles_from_image(
+        &asset.payload,
+        rom_bit_depth,
+        width,
+        height,
+        Some(metatile),
+    ) {
+        Ok(tiles) => Ok(Some(tiles)),
+        Err(pack_format::EntryShapeError::ImagePaletteIndexOutOfRange { .. }) => Ok(None),
+        Err(err) => Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: err.to_string(),
+        }),
     }
 }
 
@@ -159,10 +197,21 @@ pub fn locate_images(
         // over it: a malformed pack's dimensions drive the metatile walk
         // and the tile packing, so they must be backed by real bytes.
         let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
-        for &rom_bit_depth in rom_depths(pack_bit_depth) {
+        for (depth_index, &rom_bit_depth) in rom_depths(pack_bit_depth).iter().enumerate() {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
-                let tiles = image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?;
+                // Only a later `rom_depths` candidate is a guess (its docs
+                // own why); the first is authoritative and reports as is.
+                let tiles = if depth_index == 0 {
+                    image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                } else {
+                    let Some(tiles) =
+                        probe_image_tiles(ctx.pack, &query.id, rom_bit_depth, metatile)?
+                    else {
+                        continue;
+                    };
+                    tiles
+                };
                 let full = tiles.len();
                 // Upstream cuts art short in two ways -- `-num_tiles`, and
                 // dropping trailing all-zero tiles -- and the two do not

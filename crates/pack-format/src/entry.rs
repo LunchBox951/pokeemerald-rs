@@ -39,6 +39,13 @@ pub enum EntryShapeError {
         /// The pixel buffer's actual length.
         len: usize,
     },
+    /// A 4bpp source raster has a palette index outside `0..=15`. It is
+    /// rejected rather than masked because masking would alias it to a
+    /// different colour.
+    ImagePaletteIndexOutOfRange {
+        /// The rejected palette index.
+        index: u8,
+    },
     /// An image built from GBA tiles had a width or height that is not a
     /// whole multiple of 8, so it does not decompose into 8x8 tiles.
     /// Carries the declared dimensions.
@@ -102,6 +109,10 @@ impl fmt::Display for EntryShapeError {
             Self::ImageSizeMismatch { width, height, len } => write!(
                 f,
                 "image is {width}x{height} but its pixel buffer is {len} bytes"
+            ),
+            Self::ImagePaletteIndexOutOfRange { index } => write!(
+                f,
+                "image has palette index {index}, expected 0..=15 for 4bpp"
             ),
             Self::NotTileAligned { width, height } => {
                 write!(f, "image {width}x{height} is not a multiple of 8x8 tiles")
@@ -338,8 +349,8 @@ pub fn image_entry_from_tiles(
 /// truncates to the tile count the ROM actually stores; only trailing tiles
 /// a round trip would zero-fill may be dropped.
 ///
-/// Only the low nibble of each pixel survives at `bit_depth` 4, which is the
-/// same information a 4bpp tile can hold.
+/// The 4bpp pixel-value contract is enforced by
+/// [`EntryShapeError::ImagePaletteIndexOutOfRange`].
 ///
 /// # Errors
 ///
@@ -348,7 +359,8 @@ pub fn image_entry_from_tiles(
 /// multiple of 8; [`EntryShapeError::MetatileMisaligned`] if a metatile
 /// shape does not divide the tile grid;
 /// [`EntryShapeError::ImageSizeMismatch`] if `pixels` is not exactly
-/// `width_px * height_px` bytes.
+/// `width_px * height_px` bytes; [`EntryShapeError::ImagePaletteIndexOutOfRange`],
+/// per its own doc.
 pub fn tiles_from_image(
     pixels: &[u8],
     bit_depth: u8,
@@ -386,6 +398,11 @@ pub fn tiles_from_image(
             len: pixels.len(),
         });
     }
+    if bit_depth == 4 {
+        if let Some(&index) = pixels.iter().find(|&&index| index > 0x0F) {
+            return Err(EntryShapeError::ImagePaletteIndexOutOfRange { index });
+        }
+    }
 
     let tile_count = (tiles_wide as usize) * (tiles_high as usize);
     if tile_count == 0 {
@@ -415,8 +432,9 @@ pub fn tiles_from_image(
             if bit_depth == 8 {
                 out_row.copy_from_slice(src);
             } else {
+                // Both nibbles are already checked to fit `0..=15` above.
                 for (byte, pair) in out_row.iter_mut().zip(src.chunks_exact(2)) {
-                    *byte = (pair[0] & 0x0F) | (pair[1] << 4);
+                    *byte = pair[0] | (pair[1] << 4);
                 }
             }
         }
