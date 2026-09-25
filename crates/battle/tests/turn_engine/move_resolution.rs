@@ -1,18 +1,113 @@
-//! Move-resolution results and the events exposed to callers.
+//! Which `BattleEvent` a resolved move reports, and how the turn continues
+//! around it.
+//!
+//! The admission rules and formulas live in `battle::hit`, `battle::damage`,
+//! `battle::multi_hit`, and `battle::ability`; a hit's own draw order is
+//! pinned in `crate::hit`. What is pinned here is the turn wiring those
+//! cannot reach on their own: event classification (`Hit`, `Missed`,
+//! `NoEffect`, `LevitateBlocked`, `WonderGuardBlocked`, `MultiHit`), PP spent
+//! on a miss or a block, forced Struggle, and an overkill hit's reported
+//! damage.
 
 use crate::common::{max_iv_mon, SequenceRng};
-use assets::MoveId;
+use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
+
+/// `MOVE_TACKLE`.
+const TACKLE: MoveId = MoveId(33);
+/// `MOVE_SCRATCH`.
+const SCRATCH: MoveId = MoveId(10);
+/// `MOVE_BONE_RUSH` (`EFFECT_MULTI_HIT`, Ground, 80 accuracy).
+const BONE_RUSH: MoveId = MoveId(198);
+/// `MOVE_WATER_GUN` (`EFFECT_HIT`, Water, power 40): neutral against both
+/// Bug and Ghost.
+const WATER_GUN: MoveId = MoveId(55);
+/// `MOVE_DRAGON_RAGE` (`EFFECT_DRAGON_RAGE`, fixed 40 damage): neutral
+/// against Bug and Ghost (no chart row).
+const DRAGON_RAGE: MoveId = MoveId(82);
+/// `MOVE_FAINT_ATTACK` (`EFFECT_ALWAYS_HIT`, Dark, power 60): super
+/// effective against Ghost, neutral against Bug.
+const FAINT_ATTACK: MoveId = MoveId(185);
+/// `MOVE_PIN_MISSILE` (`EFFECT_MULTI_HIT`, Bug): not very effective against
+/// Ghost, neutral against Bug.
+const PIN_MISSILE: MoveId = MoveId(42);
+/// `MOVE_POISON_STING` (`EFFECT_POISON_HIT`, 30% secondary chance): not
+/// very effective against Ghost, neutral against Bug.
+const POISON_STING: MoveId = MoveId(40);
+
+/// `SPECIES_BULBASAUR`.
+const BULBASAUR: u16 = 1;
+/// `SPECIES_CHARMANDER`.
+const CHARMANDER: u16 = 4;
+/// `SPECIES_RATTATA`: the fast mover against [`GASTLY`] and [`SHEDINJA`] in
+/// this file's fixtures.
+const RATTATA: u16 = 19;
+/// `SPECIES_GASTLY`: Ghost/Poison (immune to Normal-type damage), Levitate
+/// in its only ability slot. Base Speed 80 is higher than [`RATTATA`]'s 72,
+/// but the level-10-versus-5 gap used here still makes Rattata faster.
+const GASTLY: u16 = 92;
+/// `SPECIES_DUNSPARCE`: Serene Grace in its primary ability slot (secondary
+/// slot is Run Away).
+const DUNSPARCE: u16 = 206;
+/// `SPECIES_SHEDINJA`: Bug/Ghost, Wonder Guard in its only ability slot;
+/// always 1 HP, so any landed hit faints it.
+const SHEDINJA: u16 = 303;
+
+/// A roll that fails a run attempt.
+const RUN_ROLL_FAILS: u16 = 65000;
+/// A roll that fails [`TACKLE`]'s 95 accuracy (`95 % 100 + 1 == 96`).
+const TACKLE_ACCURACY_ROLL_MISSES: u16 = 95;
+/// A roll that fails [`BONE_RUSH`]'s 80 accuracy (`80 % 100 + 1 == 81`).
+const BONE_RUSH_ACCURACY_ROLL_MISSES: u16 = 80;
+
+/// Battle start, turn number, the enemy's rejection-loop pick (index 1,
+/// [`SCRATCH`]), the run roll failing, then the enemy's ordinary hit.
+const RUN_FAILS_THEN_ENEMY_SCRATCH_HITS: [u16; 8] = [0, 0, 1, RUN_ROLL_FAILS, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, then both battlers'
+/// [`TACKLE`] missing in turn order.
+const BOTH_TACKLES_MISS: [u16; 5] = [
+    0,
+    0,
+    0,
+    TACKLE_ACCURACY_ROLL_MISSES,
+    TACKLE_ACCURACY_ROLL_MISSES,
+];
+/// Battle start, turn number, the enemy's forced-Struggle pick (drawn even
+/// though nothing is chosen), then the player's ordinary hit and the forced
+/// Struggle's hit, with no selection or trailing effect-chance draw behind
+/// the forced pick.
+const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 9] = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+/// Battle start, turn number, the enemy's pick, then both battlers' ordinary
+/// hits landing in turn order.
+const BOTH_BATTLERS_HIT: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, then the player's one-shot
+/// hit; the enemy faints before its own turn.
+const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, then the player's first (and
+/// only attempted) multi-hit swing -- accuracy, hit-count offset, crit, and
+/// effect-chance -- stopped after one attempt, then the enemy's ordinary
+/// hit.
+const MULTI_HIT_STOPS_AT_FIRST_ATTEMPT: [u16; 11] = [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, [`DRAGON_RAGE`]'s accuracy
+/// and (discarded) effect-chance draws -- fixed damage skips the
+/// crit/variance draws -- then the enemy's ordinary hit.
+const FIXED_DAMAGE_MOVE_THEN_ENEMY_HIT: [u16; 9] = [0, 0, 0, 0, 0, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, then [`FAINT_ATTACK`]'s
+/// always-hit crit, damage-variance, and effect-chance draws; the enemy
+/// faints before its own turn.
+const ALWAYS_HIT_FAINTS_BEFORE_ENEMY_TURN: [u16; 6] = [0, 0, 0, 1, 0, 0];
+/// Battle start, turn number, the enemy's pick, [`BONE_RUSH`]'s single
+/// failed accuracy roll (no hit-count, crit, or effect-chance draw behind a
+/// miss), then the enemy's ordinary hit.
+const MULTI_HIT_MOVE_MISSES_THEN_ENEMY_HIT: [u16; 8] =
+    [0, 0, 0, BONE_RUSH_ACCURACY_ROLL_MISSES, 0, 1, 0, 0];
 
 #[test]
 fn every_move_event_names_the_move_that_was_used() {
     let dex = Dex::new();
-    // Slow player (Bulbasaur), so the run fails and the *enemy* acts -- the
-    // side whose move a caller cannot otherwise know, since it comes out of
-    // the rejection loop rather than from the caller.
-    let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
-    let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
+    let player = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, SCRATCH]);
+    let mut rng = SequenceRng::new(RUN_FAILS_THEN_ENEMY_SCRATCH_HITS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert!(
@@ -20,18 +115,17 @@ fn every_move_event_names_the_move_that_was_used() {
             e,
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(10),
+                move_id: SCRATCH,
                 ..
             }
         )),
-        "the enemy's rejection-loop pick (Scratch, slot 1) must be named: {events:?}"
+        "the enemy's rejection-loop pick must be named: {events:?}"
     );
 
-    // And the player's own move on a miss (accuracy roll 95 -> 96 > 95).
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let mut rng = SequenceRng::new([0, 0, 0, 95, 95]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut rng = SequenceRng::new(BOTH_TACKLES_MISS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -40,38 +134,27 @@ fn every_move_event_names_the_move_that_was_used() {
         events[0],
         BattleEvent::Missed {
             by_player: true,
-            move_id: MoveId(33),
+            move_id: TACKLE,
         }
     );
-    // A miss still spends PP: BattleScript_PrintMoveMissed re-runs
-    // attackstring/ppreduce (`battle_scripts_1.s:273`-`:275`), so the
-    // deduction survives the failed accuracycheck at `:244`.
+    // A missed move still spends PP: `BattleScript_PrintMoveMissed` re-runs
+    // `ppreduce` after the failed `accuracycheck`
+    // (`battle_scripts_1.s:244`,`:273-275`).
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
-
-// The first mover's hit commits, and the forced Struggle that follows it in
-// turn order executes in the same turn.
 
 #[test]
 fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
     let dex = Dex::new();
-    // Rattata (speed 13) moves first; Bulbasaur (speed 11) second, with
-    // every slot spent -- upstream forces Struggle for it at selection
-    // time (drawing nothing), and its own turn-order slot runs right
-    // after the first mover's.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
-    let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
     let enemy_hp = enemy.current_hp();
-    let player_hp = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]).current_hp();
+    let player_hp = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]).current_hp();
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // 1 (battle start) + turn number + 4 (the player's ordinary hit) + 3
-    // (the enemy's forced Struggle: accuracy, crit, damage-variance -- no
-    // trailing effect-chance draw and no selection draw for the forced
-    // pick). The script is exhausted, so a stray draw would panic.
-    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    let mut rng = SequenceRng::new(FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -82,7 +165,7 @@ fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: TACKLE,
                 damage: 7,
                 is_critical: false,
             },
@@ -101,7 +184,6 @@ fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
         "the first mover's ordinary hit and the forced Struggle that \
          follows it must both commit"
     );
-    // ...and both really did commit: HP and PP moved on both sides.
     assert_eq!(battle.enemy().current_hp(), enemy_hp - 7 - 1);
     assert_eq!(battle.player().current_hp(), player_hp - 6);
     assert_eq!(battle.player().moves()[0].pp, 34);
@@ -110,75 +192,62 @@ fn a_forced_struggle_follows_the_first_movers_hit_in_the_same_turn() {
         0,
         "the forced pick spends no PP"
     );
-    assert_eq!(rng.draws(), 9);
+    assert_eq!(rng.draws(), FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT.len());
     assert!(battle.outcome().is_none());
 }
 
 #[test]
 fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
     let dex = Dex::new();
-    // Rattata L10 (speed 22) outspeeds Gastly L5 (speed 14). The
-    // player's Tackle cannot touch the Ghost (NoEffect), but the turn
-    // does not end there: the second mover still acts.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, the player's immune hit
-    // (still 4 draws -- see crate::hit), the enemy's ordinary hit (4).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
 
-    // Gastly L5 Tackle into Rattata L10, hand computed: attack
-    // (2*35+31)*5/100+5 = 10; defense (2*35+31)*10/100+5 = 15;
-    // 10*35 = 350, *(2*5/5+2 = 4) = 1400, /15 = 93, /50 = 1, +2 = 3;
-    // no STAB (Gastly is Ghost/Poison, Tackle Normal), neutral, 100%.
+    let enemy_tackle_damage = 3;
     assert_eq!(
         events,
         vec![
             BattleEvent::NoEffect {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: TACKLE,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
-                damage: 3,
+                move_id: TACKLE,
+                damage: enemy_tackle_damage,
                 is_critical: false,
             },
         ]
     );
-    assert_eq!(battle.player().current_hp(), player_hp_before - 3);
+    assert_eq!(
+        battle.player().current_hp(),
+        player_hp_before - enemy_tackle_damage
+    );
     assert_eq!(
         battle.enemy().current_hp(),
         enemy_hp_before,
         "an immune hit deals nothing"
     );
-    assert_eq!(rng.draws(), 11);
+    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
     assert!(battle.outcome().is_none(), "nobody fainted; no Ended event");
-    // A type-immune hit still spends PP: ppreduce (`battle_scripts_1.s:247`)
-    // runs before typecalc (`:251`) decides the immunity.
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
 
 #[test]
 fn an_overkill_hit_reports_only_the_hp_actually_lost() {
     let dex = Dex::new();
-    // Level 50 Charmander's Tackle against a level 2 Rattata computes
-    // far more damage than the Rattata's max HP; the Hit event must
-    // report the HP actually lost (the cap), not the raw formula result.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
 
-    // Battle-start turn number; turn's turn number; opponent's move
-    // pick; player's hit (accuracy pass / no crit / best damage roll /
-    // effect chance).
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(PLAYER_ACTS_ALONE);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -206,25 +275,12 @@ fn an_overkill_hit_reports_only_the_hp_actually_lost() {
 #[test]
 fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
     let dex = Dex::new();
-    // `MOVE_BONE_RUSH` (`EFFECT_MULTI_HIT`, Ground) against Gastly, whose
-    // only ability slot is Levitate (its second slot is `NONE`, so
-    // `ability()` always resolves to Levitate regardless of personality).
-    // Rattata L10 (speed 22) outspeeds Gastly L5 (speed 14), so the player
-    // moves first.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(198)]);
-    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![BONE_RUSH]);
+    let enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::LEVITATE);
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, then the multi-hit pipeline's
-    // four draws for the player's first (and only attempted) hit --
-    // accuracy, hit-count offset, the first attempt's crit roll, and the
-    // trailing effect chance, matching `Cmd_typecalc`'s Levitate branch
-    // (`battle_script_commands.c:1375`-`:1383`), which zeroes the move
-    // before `adjustnormaldamage` and the multi-hit script's
-    // `jumpifmovehadnoeffect` stops the loop before a second hit is
-    // attempted -- then the enemy's ordinary Tackle (4).
-    let script = [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(MULTI_HIT_STOPS_AT_FIRST_ATTEMPT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -248,7 +304,7 @@ fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
         events[0],
         BattleEvent::LevitateBlocked {
             by_player: true,
-            move_id: MoveId(198),
+            move_id: BONE_RUSH,
         },
         "the multi-hit loop must stop at the Levitate-block branch on its \
          first attempt: {events:?}"
@@ -258,25 +314,22 @@ fn a_ground_multi_hit_move_does_not_affect_a_levitate_holder() {
         enemy_hp_before,
         "a Levitate holder takes no Ground damage"
     );
-    assert_eq!(rng.draws(), script.len());
-    // A no-effect hit still spends PP: ppreduce runs before typecalc
-    // decides the immunity, exactly as the ordinary single-hit case does.
+    assert_eq!(rng.draws(), MULTI_HIT_STOPS_AT_FIRST_ATTEMPT.len());
     assert_eq!(battle.player().moves()[0].pp, 9);
 }
 
-/// `Cmd_typecalc`'s Levitate branch (`battle_script_commands.c:1375-1383`)
-/// sets `B_MSG_GROUND_MISS`, not the ordinary type-immunity string
-/// (`battle_message.c:71` vs. `:73`), so it must not collapse into
+/// Levitate selects the Ground-miss result rather than the ordinary
+/// type-immunity result in `Cmd_typecalc` (`battle_script_commands.c:1375-1383`;
+/// `battle_message.c:71,73`), so it must not collapse into
 /// [`BattleEvent::NoEffect`].
 #[test]
 fn a_levitate_block_is_reported_distinctly_from_a_typing_immunity() {
     let dex = Dex::new();
-    // Bone Rush (Ground, MULTI_HIT) into Gastly, whose only ability is
-    // Levitate; Rattata L10 outspeeds Gastly L5.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(198)]);
-    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![BONE_RUSH]);
+    let enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::LEVITATE);
     let enemy_hp_before = enemy.current_hp();
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0]);
+    let mut rng = SequenceRng::new(MULTI_HIT_STOPS_AT_FIRST_ATTEMPT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -300,34 +353,24 @@ fn a_levitate_block_is_reported_distinctly_from_a_typing_immunity() {
     assert!(
         events.contains(&BattleEvent::LevitateBlocked {
             by_player: true,
-            move_id: MoveId(198),
+            move_id: BONE_RUSH,
         }),
         "the Levitate block must be reported distinctly: {events:?}"
     );
 }
 
-/// `Cmd_typecalc`'s Wonder Guard branch (`battle_script_commands.c:1409-1418`)
-/// blocks any powered move that is not strictly super effective, so a
+/// Wonder Guard blocks any powered move that is not strictly super
+/// effective, in `Cmd_typecalc` (`battle_script_commands.c:1409-1418`), so a
 /// neutral Water Gun must leave Shedinja's HP untouched.
 #[test]
 fn wonder_guard_blocks_a_neutral_ordinary_hit() {
     let dex = Dex::new();
-    // Water Gun (Water, `EFFECT_HIT`, power 40) into Shedinja, whose only
-    // ability slot is Wonder Guard (its second slot is `NONE`). Water is
-    // neutral on both Bug and Ghost, so the type chart alone would let the
-    // hit through. Rattata L10 (speed 22) outspeeds Shedinja L5, the same
-    // pairing `an_immune_first_hit_reports_no_effect_and_the_turn_continues`
-    // uses against Gastly.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(55)]);
-    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![WATER_GUN]);
+    let enemy = max_iv_mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, the player's blocked hit
-    // (accuracy, crit, damage-variance, and effect-chance draws, exactly
-    // like an ordinary hit -- see crate::hit), the enemy's ordinary Tackle
-    // (4 draws).
-    let script = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -347,7 +390,7 @@ fn wonder_guard_blocks_a_neutral_ordinary_hit() {
         events[0],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
-            move_id: MoveId(55),
+            move_id: WATER_GUN,
         },
         "the Wonder Guard block must be reported distinctly: {events:?}"
     );
@@ -357,26 +400,18 @@ fn wonder_guard_blocks_a_neutral_ordinary_hit() {
         "Wonder Guard takes no damage from a hit that is not strictly super \
          effective: {events:?}"
     );
-    assert_eq!(rng.draws(), script.len());
+    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
 }
 
-/// The same Wonder Guard branch reaches fixed damage, which upstream also
-/// gates on `gBattleMoves[gCurrentMove].power` -- always nonzero for Dragon
-/// Rage (`crates/battle/src/fixed_damage.rs`).
 #[test]
 fn wonder_guard_blocks_a_neutral_fixed_damage_move() {
     let dex = Dex::new();
-    // Dragon Rage (Dragon, `EFFECT_DRAGON_RAGE`, literal 40) into Shedinja:
-    // the chart has no Dragon-versus-Bug or Dragon-versus-Ghost row, so the
-    // matchup is neutral and only Wonder Guard can block it.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(82)]);
-    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![DRAGON_RAGE]);
+    let enemy = max_iv_mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, Dragon Rage's accuracy and
-    // (discarded) effect-chance draws, the enemy's ordinary Tackle (4).
-    let script = [0, 0, 0, 0, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(FIXED_DAMAGE_MOVE_THEN_ENEMY_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -396,7 +431,7 @@ fn wonder_guard_blocks_a_neutral_fixed_damage_move() {
         events[0],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
-            move_id: MoveId(82),
+            move_id: DRAGON_RAGE,
         },
         "the Wonder Guard block must be reported distinctly: {events:?}"
     );
@@ -405,26 +440,17 @@ fn wonder_guard_blocks_a_neutral_fixed_damage_move() {
         enemy_hp_before,
         "Wonder Guard takes no fixed damage from a neutral matchup: {events:?}"
     );
-    assert_eq!(rng.draws(), script.len());
+    assert_eq!(rng.draws(), FIXED_DAMAGE_MOVE_THEN_ENEMY_HIT.len());
 }
 
-/// Wonder Guard permits a strictly super-effective hit through unblocked, so
-/// the block above is a targeted admission check, not a general immunity.
 #[test]
 fn wonder_guard_permits_a_super_effective_hit() {
     let dex = Dex::new();
-    // Faint Attack (Dark, `EFFECT_ALWAYS_HIT`, power 60) is super effective
-    // against Shedinja's Ghost type and neutral against its Bug type, so the
-    // aggregate bucket is `SuperEffective` and Wonder Guard must let it
-    // through. Shedinja's HP is always 1, so any landed hit faints it.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(185)]);
-    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![FAINT_ATTACK]);
+    let enemy = max_iv_mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
 
-    // battle start, turn number, enemy pick, Faint Attack's always-hit crit,
-    // damage-variance, and effect-chance draws -- no accuracy draw, and no
-    // enemy turn once Shedinja faints.
-    let script = [0, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(ALWAYS_HIT_FAINTS_BEFORE_ENEMY_TURN);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -450,25 +476,15 @@ fn wonder_guard_permits_a_super_effective_hit() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// The multi-hit pipeline reaches the same Wonder Guard check through
-/// [`crate::hit::damage_before_roll`]'s shared boundary, mirroring
-/// `a_ground_multi_hit_move_does_not_affect_a_levitate_holder`.
 #[test]
 fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
     let dex = Dex::new();
-    // Pin Missile (Bug, `EFFECT_MULTI_HIT`) into Shedinja: Bug has no chart
-    // row against Bug and is not-very-effective against Ghost, so the
-    // aggregate bucket is `NotVeryEffective`, not `SuperEffective`.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(42)]);
-    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![PIN_MISSILE]);
+    let enemy = max_iv_mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, then the multi-hit pipeline's
-    // four draws for the player's first (and only attempted) hit --
-    // accuracy, hit-count offset, the first attempt's crit roll, and the
-    // trailing effect chance -- then the enemy's ordinary Tackle (4).
-    let script = [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(MULTI_HIT_STOPS_AT_FIRST_ATTEMPT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -492,7 +508,7 @@ fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
         events[0],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
-            move_id: MoveId(42),
+            move_id: PIN_MISSILE,
         },
         "the multi-hit loop must stop at the Wonder Guard branch on its \
          first attempt: {events:?}"
@@ -503,30 +519,19 @@ fn wonder_guard_stops_a_multi_hit_move_on_its_first_attempt() {
         "a Wonder Guard holder takes no damage from a not-very-effective \
          multi-hit move"
     );
-    assert_eq!(rng.draws(), script.len());
+    assert_eq!(rng.draws(), MULTI_HIT_STOPS_AT_FIRST_ATTEMPT.len());
 }
 
-/// Serene Grace's preflight refusal (`secondary::ensure_admissible`) must
-/// not fire when Wonder Guard would foreclose the secondary anyway: the
-/// block carries `MOVE_RESULT_MISSED`, so the poison chance never gets a
-/// chance to apply (`battle_script_commands.c:1409-1418`).
 #[test]
 fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
     let dex = Dex::new();
-    // Dunsparce (species 206): Serene Grace in its primary ability slot.
-    // Poison Sting (MoveId 40, `EFFECT_POISON_HIT`) is not-very-effective
-    // against Shedinja's Ghost type and has no chart row against Bug, so
-    // only Wonder Guard blocks it.
-    let player = max_iv_mon(&dex, 206, 10, vec![MoveId(40)]);
-    let enemy = max_iv_mon(&dex, 303, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING]);
+    assert_eq!(player.ability(), AbilityId::SERENE_GRACE);
+    let enemy = max_iv_mon(&dex, SHEDINJA, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    // battle start, turn number, enemy pick, the player's blocked hit
-    // (accuracy, crit, damage-variance, and effect-chance draws, exactly
-    // like an ordinary hit -- see crate::hit), the enemy's ordinary Tackle
-    // (4 draws).
-    let script = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -536,7 +541,7 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
         events[0],
         BattleEvent::WonderGuardBlocked {
             by_player: true,
-            move_id: MoveId(40),
+            move_id: POISON_STING,
         },
         "the turn must run and report Wonder Guard's block, not refuse \
          admission over Serene Grace: {events:?}"
@@ -547,29 +552,23 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
         "Wonder Guard takes no damage from a hit that is not strictly \
          super effective: {events:?}"
     );
-    assert_eq!(rng.draws(), script.len());
+    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
 }
 
-/// `Cmd_accuracycheck` calls `CheckWonderGuardAndLevitate` inside its
-/// failed-roll branch (`battle_script_commands.c:1175-1186`), whose Levitate
-/// arm replaces the generic miss with the Ground-miss result
-/// (`:1435-1443`). A multi-hit move that misses a Levitate holder must
-/// therefore reach the caller as [`BattleEvent::LevitateBlocked`], not
+/// `Cmd_accuracycheck` reclassifies a failed accuracy roll through
+/// `CheckWonderGuardAndLevitate` (`battle_script_commands.c:1175-1186`,
+/// `:1435-1443`), so a multi-hit move that misses a Levitate holder must
+/// reach the caller as [`BattleEvent::LevitateBlocked`], not
 /// [`BattleEvent::Missed`], and must not roll a hit count.
 #[test]
 fn a_missed_ground_multi_hit_move_reports_levitate_rather_than_a_generic_miss() {
     let dex = Dex::new();
-    // Bone Rush (Ground, MULTI_HIT, 80 accuracy) into Gastly, whose only
-    // ability is Levitate; Rattata L10 outspeeds Gastly L5.
-    let player = max_iv_mon(&dex, 19, 10, vec![MoveId(198)]);
-    let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, RATTATA, 10, vec![BONE_RUSH]);
+    let enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), AbilityId::LEVITATE);
     let enemy_hp_before = enemy.current_hp();
-    // Battle start, turn number, and the enemy's pick; then the player's sole
-    // accuracy draw (80 -> 81 > 80, a miss) with no hit-count, critical, or
-    // trailing effect-chance draw behind it; then the enemy's ordinary
-    // Tackle (4).
-    let script = [0, 0, 0, 80, 0, 1, 0, 0];
-    let mut rng = SequenceRng::new(script);
+
+    let mut rng = SequenceRng::new(MULTI_HIT_MOVE_MISSES_THEN_ENEMY_HIT);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -579,7 +578,7 @@ fn a_missed_ground_multi_hit_move_reports_levitate_rather_than_a_generic_miss() 
         events[0],
         BattleEvent::LevitateBlocked {
             by_player: true,
-            move_id: MoveId(198),
+            move_id: BONE_RUSH,
         },
         "a failed accuracy roll must still report Levitate: {events:?}"
     );
@@ -596,9 +595,8 @@ fn a_missed_ground_multi_hit_move_reports_levitate_rather_than_a_generic_miss() 
     assert_eq!(battle.enemy().current_hp(), enemy_hp_before);
     assert_eq!(
         rng.draws(),
-        script.len(),
+        MULTI_HIT_MOVE_MISSES_THEN_ENEMY_HIT.len(),
         "reclassifying the miss adds no draw"
     );
-    // `ppreduce` runs before `accuracycheck`, so a miss still costs PP.
     assert_eq!(battle.player().moves()[0].pp, 9);
 }
