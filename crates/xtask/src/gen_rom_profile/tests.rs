@@ -676,16 +676,29 @@ fn audio_upstream(dir: &Path) -> PathBuf {
     upstream
 }
 
+/// A distinctive byte appended past `pcm`'s declared count: the retained
+/// interpolation guard `extract::wav` always keeps (its module docs; issue
+/// #1342).
+const AUDIO_GUARD_SAMPLE: u8 = 0x2A;
+
+/// `pcm` with [`AUDIO_GUARD_SAMPLE`] appended, matching the buffer both the
+/// checkout extractor and the ROM importer retain past the logical count.
+fn with_audio_guard(pcm: &[u8]) -> Vec<u8> {
+    let mut out = pcm.to_vec();
+    out.push(AUDIO_GUARD_SAMPLE);
+    out
+}
+
 /// The pack payload of one `DirectSound` sample, in the wire format
 /// `extract::audio_samples` writes: kind, freq, loop flag, loop start,
-/// count, PCM.
+/// logical sample count, PCM, and the retained guard byte.
 fn audio_direct_sound_payload(frequency: u32, pcm: &[u8]) -> Vec<u8> {
     let mut payload = vec![0u8];
     payload.extend_from_slice(&frequency.to_le_bytes());
     payload.push(0);
     payload.extend_from_slice(&0u32.to_le_bytes());
     payload.extend_from_slice(&u32::try_from(pcm.len()).expect("small").to_le_bytes());
-    payload.extend_from_slice(pcm);
+    payload.extend_from_slice(&with_audio_guard(pcm));
     payload
 }
 
@@ -710,7 +723,7 @@ fn audio_rom(pcm: &[u8]) -> Vec<u8> {
     RomFixture::new()
         .emerald_header()
         .write(0x10_0000, &header)
-        .write(0x10_0010, pcm)
+        .write(0x10_0010, &with_audio_guard(pcm))
         .write(0x20_0000, &slot)
         .write(0x30_0000, &song_header)
         // gSongTable at 0x0850_0000; MUS_TITLE is index 1.

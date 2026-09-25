@@ -196,10 +196,19 @@ fn convert_direct_sound(pack: &AssetPack, v: &DirectSoundVoice) -> Result<Instru
             expected: "DirectSound",
         });
     };
-    let wave = Arc::new(match ds.loop_start() {
-        Some(start) => WaveData::looping(ds.base_frequency, start, ds.data().to_vec()),
-        None => WaveData::one_shot(ds.base_frequency, ds.data().to_vec()),
-    });
+    // `ds.data()` always holds one more value than `ds.sample_count()`: a
+    // retained interpolation guard past the logical end (issue #1342;
+    // `DirectSoundSample`'s docs). Narrow `WaveData` back to that logical
+    // length so looping and one-shot retirement key off it, while the guard
+    // stays available to `voice.rs`'s boundary interpolation lookahead.
+    let logical_len = usize::try_from(ds.sample_count()).unwrap_or(usize::MAX);
+    let wave = Arc::new(
+        match ds.loop_start() {
+            Some(start) => WaveData::looping(ds.base_frequency, start, ds.data().to_vec()),
+            None => WaveData::one_shot(ds.base_frequency, ds.data().to_vec()),
+        }
+        .with_logical_len(logical_len),
+    );
     let tone = ToneData::new(wave, convert_envelope(v.envelope));
     let tone = if v.mode == DirectSoundMode::Fixed {
         tone.fixed()

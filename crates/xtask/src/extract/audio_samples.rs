@@ -66,12 +66,17 @@ const DIRECT_SOUND_FIXED_PAYLOAD_SIZE: usize =
     SAMPLE_KIND_SIZE + BASE_FREQUENCY_SIZE + LOOP_FLAG_SIZE + LOOP_START_SIZE + SAMPLE_COUNT_SIZE;
 const PROGRAMMABLE_WAVE_PAYLOAD_SIZE: usize = SAMPLE_KIND_SIZE + PROGRAMMABLE_WAVE_SIZE;
 
-fn encode_direct_sound(base_frequency: u32, loop_start: Option<u32>, data: &[i8]) -> Vec<u8> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "wav::decode bounds its output length with a u32 sample count"
-    )]
-    let sample_count = data.len() as u32;
+/// Encodes one `DirectSound` sample.
+///
+/// `data` always holds exactly one more value than `sample_count`: a
+/// retained interpolation-guard sample past the logical end (see
+/// `wav.rs`'s module docs and `assets::DirectSoundSample`).
+fn encode_direct_sound(
+    base_frequency: u32,
+    loop_start: Option<u32>,
+    sample_count: u32,
+    data: &[i8],
+) -> Vec<u8> {
     let loop_start_field = loop_start.unwrap_or_default();
 
     let mut payload = Vec::with_capacity(DIRECT_SOUND_FIXED_PAYLOAD_SIZE + data.len());
@@ -102,7 +107,12 @@ fn direct_sound_entry(upstream: &Path, name: &str) -> Result<PackEntry, ExtractE
 
     Ok(pack_format::raw_entry(
         format!("audio/sample/direct-sound/{name}"),
-        encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data),
+        encode_direct_sound(
+            sample.base_frequency,
+            sample.loop_start,
+            sample.sample_count,
+            &sample.data,
+        ),
     ))
 }
 
@@ -156,7 +166,7 @@ mod tests {
 
     const FLUTE_BASE_FREQUENCY: u32 = 3_425_024;
     const FLUTE_LOOP_START: u32 = 1_312;
-    const FLUTE_SAMPLE_COUNT: usize = 1_874;
+    const FLUTE_SAMPLE_COUNT: u32 = 1_874;
     const PROGRAMMABLE_WAVE_01: [u8; PROGRAMMABLE_WAVE_SIZE] = [
         0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9, 0x63, 0x10, 0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9, 0x63,
         0x10,
@@ -204,9 +214,20 @@ mod tests {
         let flute = wav::decode(&flute_source).expect("the flute sample source should decode");
         assert_eq!(flute.base_frequency, FLUTE_BASE_FREQUENCY);
         assert_eq!(flute.loop_start, Some(FLUTE_LOOP_START));
-        assert_eq!(flute.data.len(), FLUTE_SAMPLE_COUNT);
-        let flute_payload =
-            encode_direct_sound(flute.base_frequency, flute.loop_start, &flute.data);
+        assert_eq!(flute.sample_count, FLUTE_SAMPLE_COUNT);
+        // `data` retains one interpolation-guard sample past `sample_count`:
+        // flute's raw source has one more encoded sample than its `agbl`
+        // override (issue #1342).
+        assert_eq!(
+            flute.data.len(),
+            usize::try_from(FLUTE_SAMPLE_COUNT + 1).unwrap()
+        );
+        let flute_payload = encode_direct_sound(
+            flute.base_frequency,
+            flute.loop_start,
+            flute.sample_count,
+            &flute.data,
+        );
         assert_pack_contains(&pack, &flute_payload, "the flute sample's encoded payload");
 
         let wave_path = repo_root().join("pokeemerald/sound/programmable_wave_samples/01.pcm");
@@ -249,10 +270,11 @@ mod tests {
 
     #[test]
     fn encode_direct_sound_matches_the_documented_wire_format() {
+        // `pcm` is the buffer: 4 logical samples plus one retained guard.
         let pcm = [-1, 0, 1, 127, -128];
-        let bytes = encode_direct_sound(0x0012_3456, Some(42), &pcm);
+        let sample_count = 4;
+        let bytes = encode_direct_sound(0x0012_3456, Some(42), sample_count, &pcm);
         let encoded_pcm = [0xFF, 0x00, 0x01, 0x7F, 0x80];
-        let sample_count = u32::try_from(pcm.len()).unwrap();
 
         let mut expected = vec![SAMPLE_KIND_DIRECT_SOUND];
         expected.extend_from_slice(&0x0012_3456u32.to_le_bytes());
@@ -266,9 +288,9 @@ mod tests {
     #[test]
     fn encode_direct_sound_one_shot_writes_a_false_loop_flag_and_zero_start() {
         let pcm = [-128, -1, 0, 1, 127];
-        let bytes = encode_direct_sound(1 << 20, None, &pcm);
+        let sample_count = 4;
+        let bytes = encode_direct_sound(1 << 20, None, sample_count, &pcm);
         let encoded_pcm = [0x80, 0xFF, 0x00, 0x01, 0x7F];
-        let sample_count = u32::try_from(pcm.len()).unwrap();
 
         let mut expected = vec![SAMPLE_KIND_DIRECT_SOUND];
         expected.extend_from_slice(&(1u32 << 20).to_le_bytes());
@@ -283,7 +305,7 @@ mod tests {
     /// the expected bytes here are literals that fail if a mirror constant drifts.
     #[test]
     fn encoders_write_the_literal_schema_kind_tags() {
-        assert_eq!(encode_direct_sound(0, None, &[])[0], 0);
+        assert_eq!(encode_direct_sound(0, None, 0, &[])[0], 0);
         assert_eq!(
             encode_programmable_wave(&[0u8; PROGRAMMABLE_WAVE_SIZE])[0],
             1

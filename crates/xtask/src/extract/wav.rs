@@ -17,17 +17,28 @@
 //!   converted to signed 8-bit PCM with wav2agb's floor-and-clamp operation
 //!   (`wav_file.cpp:235-297`, `converter.cpp:56-92`).
 //!
-//! `WavSample::data` keeps the logical sample count written to the compiled
-//! header. wav2agb applies `agbl` to that header word but writes the binary
-//! payload through the unoverridden sampler end and then pads to four bytes
-//! (`converter.cpp:77-92`, `:399-426`). Bytes past `agbl` and alignment padding
-//! are omitted. The native mixer supplies the boundary value itself: it wraps a
-//! loop to `loop_start`, repeats a one-shot's final logical sample during the
-//! last interpolation, and retires the voice after its cursor passes the end
-//! (`crates/audio/src/voice.rs`). The unused assembly-output path appends a
-//! guard sample, but this tree builds samples through binary output, so that
-//! byte is likewise outside this schema (`audio_rules.mk:24-26`,
-//! `converter.cpp:56-92`, `:452-457`).
+//! `WavSample::sample_count` is the logical sample count written to the
+//! compiled header: `agbl` overrides only that header word
+//! (`converter.cpp:399-401`). wav2agb's binary payload writer ignores the
+//! override and always emits every sample through the *unoverridden* sampler
+//! end, then zero-pads to a four-byte boundary (`converter.cpp:77-90`,
+//! confirmed live because `-b` binary output, not the unused assembly path,
+//! is what `audio_rules.mk:22,26` builds into the ROM). `SoundMainRAM`
+//! prefetches the sample immediately after the logical end for its final
+//! linear-interpolation step before a loop wraps or a one-shot retires
+//! (`m4a_1.s:399-407`), so that extra encoded byte is observable, not inert
+//! padding.
+//!
+//! `WavSample::data` therefore always holds exactly `sample_count + 1`
+//! values: the `sample_count` logical samples, followed by one retained
+//! interpolation-guard sample. When `agbl` trims the logical count below the
+//! unoverridden sampler end, that guard is the real encoded sample wav2agb
+//! would have retained. Otherwise (no override, or an override at or past
+//! that natural boundary) wav2agb's own payload has nothing left to retain
+//! there; this decoder documents that boundary as `0`, matching wav2agb's
+//! zero alignment padding. No `.wav` this pack extracts exercises that
+//! fallback: every `sound/direct_sound_samples/*.wav` sets `agbl` below its
+//! raw sample count (issue #1342's asset audit).
 //!
 //! Missing required chunks, unsupported fields, partial records, misaligned
 //! sample data, and out-of-range loop metadata fail closed.
@@ -170,6 +181,9 @@ impl std::error::Error for WavError {}
 pub(super) struct WavSample {
     pub(super) base_frequency: u32,
     pub(super) loop_start: Option<u32>,
+    /// The logical sample count written to the compiled header (`agbl`'s
+    /// resolved value). `data` holds exactly one more value than this.
+    pub(super) sample_count: u32,
     pub(super) data: Vec<i8>,
 }
 
@@ -505,10 +519,30 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
         }
     }
 
+    // wav2agb's binary payload writer runs to the unoverridden sampler end
+    // regardless of `agbl` (converter.cpp:77-90); retain that one extra
+    // encoded sample when it exists so `data` matches the compiled binary
+    // the mixer actually interpolates against (m4a_1.s:399-407).
+    let has_natural_guard = sample_count < metadata.unoverridden_sample_count;
+    let retained_len = if has_natural_guard {
+        sample_count + 1
+    } else {
+        sample_count
+    };
+    let mut sample_data = decode_pcm(format, data, retained_len);
+    if !has_natural_guard {
+        // No natural sample exists past the logical end (no override, or an
+        // override at/past the unoverridden boundary); wav2agb's own payload
+        // has nothing there but zero alignment padding, so this decoder
+        // documents that boundary the same way.
+        sample_data.push(0);
+    }
+
     Ok(WavSample {
         base_frequency,
         loop_start: metadata.loop_start,
-        data: decode_pcm(format, data, sample_count),
+        sample_count,
+        data: sample_data,
     })
 }
 

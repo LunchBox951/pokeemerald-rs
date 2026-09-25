@@ -137,7 +137,11 @@ fn one_shot_u8_sample_decodes() {
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.base_frequency, 3344 * 1024);
     assert_eq!(sample.loop_start, None);
-    assert_eq!(sample.data, vec![-10, 0, 10, 0, -20]);
+    assert_eq!(sample.sample_count, 5);
+    // No `agbl` override and no `smpl` loop: wav2agb's payload writer stops
+    // exactly at the logical end, so there is no natural guard sample and
+    // this decoder documents the boundary as zero.
+    assert_eq!(sample.data, vec![-10, 0, 10, 0, -20, 0]);
 }
 
 #[test]
@@ -147,18 +151,60 @@ fn looped_sample_uses_inclusive_smpl_end_when_agbl_is_absent() {
     let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.loop_start, Some(1));
-    assert_eq!(sample.data, vec![0, 1, 2, 3]);
+    assert_eq!(sample.sample_count, 4);
+    // `smpl`'s inclusive loop end already caps wav2agb's payload at 4
+    // samples, with no override to trim it further, so there is no natural
+    // guard sample here either.
+    assert_eq!(sample.data, vec![0, 1, 2, 3, 0]);
 }
 
 #[test]
 fn agbl_override_shortens_the_decoded_data() {
+    // The fixture gives `smpl` an inclusive end of 3 (an unoverridden count
+    // of 4), then trims the logical count to 2 with `agbl`. wav2agb's binary
+    // payload writer ignores `agbl` and still emits all 4 samples
+    // (converter.cpp:77-90), so the retained sample past the logical end is
+    // the *real* encoded sample at index 2, not the unoverridden boundary
+    // itself and not a synthesized value (issue #1342).
     let data = [128u8, 129, 130, 131, 132, 133];
     let smpl = smpl_chunk(60, 0, 1, 3);
     let agbl = u32_chunk(2);
     let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![0, 1]);
+    assert_eq!(sample.sample_count, 2);
+    assert_eq!(sample.data, vec![0, 1, 2]);
     assert_eq!(sample.loop_start, Some(1));
+}
+
+#[test]
+fn agbl_override_keeps_the_post_end_interpolation_sample() {
+    // A one-shot analogue of the fixture above: no `smpl` loop, so the
+    // unoverridden sampler end is the full raw sample count (6), and `agbl`
+    // trims the logical count to 5. `SoundMainRAM` prefetches the retained
+    // sample for its final interpolation step before the voice retires
+    // (m4a_1.s:399-407), so the decoder must keep it rather than repeat the
+    // last logical sample or substitute a loop-start value.
+    let data = [128u8, 129, 130, 131, 132, 128];
+    let agbl = u32_chunk(5);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 5);
+    assert_eq!(sample.data, vec![0, 1, 2, 3, 4, 0]);
+}
+
+#[test]
+fn no_natural_guard_sample_synthesizes_a_documented_zero() {
+    // wav2agb's binary payload writer never writes past the unoverridden
+    // sampler end and then zero-pads to a four-byte boundary
+    // (converter.cpp:77-90); when `agbl` is absent (or does not trim below
+    // that end) there is no retained sample for the mixer's `current + 1`
+    // interpolation read to land on (m4a_1.s:399-407), so this decoder
+    // documents that boundary as the padding value upstream would produce.
+    let data = [128u8, 129, 130];
+    let bytes = build_wav(PCM_U8, 8000, &[], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.sample_count, 3);
+    assert_eq!(sample.data, vec![0, 1, 2, 0]);
 }
 
 #[test]
@@ -216,7 +262,8 @@ fn zero_agbl_falls_back_to_the_inclusive_smpl_end() {
     let agbl = u32_chunk(0);
     let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![0, 1, 2, 3]);
+    assert_eq!(sample.sample_count, 4);
+    assert_eq!(sample.data, vec![0, 1, 2, 3, 0]);
     assert_eq!(sample.loop_start, Some(1));
 }
 
@@ -248,7 +295,9 @@ fn s16_format_decodes() {
     data.extend_from_slice(&i16::MAX.to_le_bytes());
     let bytes = build_wav(PCM_S16, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![-128, 0, 127]);
+    // No `smpl`/`agbl`: no natural guard sample, so the boundary is the
+    // documented synthesized zero.
+    assert_eq!(sample.data, vec![-128, 0, 127, 0]);
 }
 
 #[test]
@@ -256,7 +305,7 @@ fn s24_format_sign_extends_and_decodes() {
     let data = [0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x7F];
     let bytes = build_wav(PCM_S24, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![-128, 0, 127]);
+    assert_eq!(sample.data, vec![-128, 0, 127, 0]);
 }
 
 #[test]
@@ -266,7 +315,7 @@ fn f32_format_decodes() {
     data.extend_from_slice(&0.0f32.to_le_bytes());
     let bytes = build_wav(IEEE_FLOAT_F32, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![-128, 0]);
+    assert_eq!(sample.data, vec![-128, 0, 0]);
 }
 
 #[test]
@@ -277,7 +326,7 @@ fn s32_format_decodes() {
     }
     let bytes = build_wav(PCM_S32, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![-128, 0, 64, 127]);
+    assert_eq!(sample.data, vec![-128, 0, 64, 127, 0]);
 }
 
 #[test]
@@ -288,7 +337,7 @@ fn f64_format_decodes() {
     }
     let bytes = build_wav(IEEE_FLOAT_F64, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.data, vec![-128, 0, 64, 127]);
+    assert_eq!(sample.data, vec![-128, 0, 64, 127, 0]);
 }
 
 #[test]

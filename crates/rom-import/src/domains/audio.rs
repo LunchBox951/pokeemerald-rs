@@ -16,6 +16,19 @@
 //! DPCM-compressed and refused: the pack stores PCM only, and no instrument
 //! in scope is compressed.
 //!
+//! wav2agb's binary payload writer emits one more encoded sample past `size`
+//! whenever an `agbl` override trimmed the header below the unoverridden
+//! sampler end, and `SoundMainRAM` reads exactly that byte for its final
+//! boundary interpolation step (`pokeemerald/src/m4a_1.s:399-407`; see
+//! `crates/xtask/src/extract/wav.rs`'s module docs for the extractor side of
+//! this same contract, issue #1342). This reader keeps parity by reading one
+//! more byte straight from the ROM after the `size` bytes, so the two
+//! backends agree byte-for-byte: a `WaveData` object always has more ROM
+//! after it, so that byte is real. The rare case where it would not be (no
+//! `agbl` override, and the encoder's four-byte alignment padding does not
+//! reach past `size` either) falls back to the same `0` this pack's WAV
+//! extractor documents.
+//!
 //! A programmable wave is the bare 16-byte table CGB channel 3 plays.
 //!
 //! # Voicegroups
@@ -147,13 +160,22 @@ pub(crate) fn direct_sound(
             field: "WaveData.size",
         });
     }
-    let data = reader
+    let mut data: Vec<i8> = reader
         .slice_at(base + len_usize(WAVE_HEADER_BYTES), len_usize(size))?
         .iter()
         .map(|&byte| i8::from_le_bytes([byte]))
         .collect();
+    // Retain the one byte past `size` that wav2agb's binary payload writer
+    // emits when `agbl` trimmed the header below the unoverridden sampler
+    // end (module docs above; `converter.cpp:77-90,399-401`). A real
+    // `WaveData` always has more ROM after it, so this only falls back to
+    // the extractor's documented `0` for a hand-built or truncated image.
+    let guard = reader
+        .u8(base + len_usize(WAVE_HEADER_BYTES) + len_usize(size))
+        .unwrap_or(0);
+    data.push(i8::from_le_bytes([guard]));
     let looping = status & WAVE_STATUS_LOOP != 0;
-    let sample = DirectSoundSample::new(freq, looping.then_some(loop_start), data)
+    let sample = DirectSoundSample::new(freq, looping.then_some(loop_start), size, data)
         .map_err(|source| ImportError::Audio { id, source })?;
     Ok(raw_entry(
         id.to_owned(),

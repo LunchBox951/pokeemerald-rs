@@ -298,7 +298,7 @@ fn synthetic_pack() -> Vec<u8> {
             kind_tag: 2,
             meta: vec![],
             payload: Sample::DirectSound(
-                DirectSoundSample::new(12345, Some(2), vec![-1, 0, 1, 2]).unwrap(),
+                DirectSoundSample::new(12345, Some(2), 3, vec![-1, 0, 1, 2]).unwrap(),
             )
             .encode(),
         },

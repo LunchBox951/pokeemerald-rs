@@ -574,6 +574,68 @@ mod synthetic_pack {
         }
     }
 
+    fn direct_sound_voicegroup(wave_id: &str) -> VoiceGroup {
+        VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
+            base_key: 60,
+            pan: None,
+            sample: SampleId(wave_id.to_owned()),
+            envelope: flat_envelope(),
+            mode: DirectSoundMode::Resampled,
+        })])
+        .expect("one slot is well under VOICE_SLOT_COUNT")
+    }
+
+    // The returned guard outlives the pack in the caller's scope so the
+    // scratch file is removed on every exit path, panics included.
+    fn pack_with_direct_sound_sample(
+        test_name: &str,
+        sample: DirectSoundSample,
+    ) -> (AssetPack, TempPackGuard) {
+        let vg_id = "audio/voicegroup/fixtest_direct_sound";
+        let wave_id = "audio/sample/fixtest_direct_sound_wave";
+        let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), 0, None, vec![vec![]])
+            .expect("a one-empty-track song is well-formed");
+        let temp_pack = write_pack(
+            test_name,
+            &[
+                ("audio/song/fixtest", song.encode()),
+                (vg_id, direct_sound_voicegroup(wave_id).encode()),
+                (wave_id, Sample::DirectSound(sample).encode()),
+            ],
+        );
+        let pack = AssetPack::load(temp_pack.path()).expect("the synthetic pack must parse");
+        (pack, temp_pack)
+    }
+
+    #[test]
+    fn direct_sound_conversion_narrows_the_wave_to_its_logical_sample_count() {
+        // `data`'s last value (99) is the retained interpolation guard past
+        // `sample_count` (2); the pack-to-runtime conversion must narrow the
+        // `WaveData` back to that logical length so the mixer's loop/one-shot
+        // boundary (`crates/audio/src/voice.rs`) never treats the guard as a
+        // genuine playable sample (issue #1342).
+        let sample = DirectSoundSample::new(1 << 20, Some(0), 2, vec![10, -10, 99])
+            .expect("a two-sample looping wave with a retained guard is well-formed");
+        let (pack, _pack_guard) = pack_with_direct_sound_sample("direct-sound-logical-len", sample);
+        let song = load_song_from_pack(&pack, "fixtest").expect("the synthetic song loads");
+        match song.voice(0) {
+            Some(Instrument::DirectSound(tone)) => {
+                assert_eq!(
+                    tone.wave.len(),
+                    3,
+                    "the buffer must keep the retained guard"
+                );
+                assert_eq!(
+                    tone.wave.logical_len(),
+                    2,
+                    "the wave must be narrowed to the sample's logical count, not its buffer \
+                     length"
+                );
+            }
+            other => panic!("slot 0 must convert to DirectSound, got {other:?}"),
+        }
+    }
+
     // The returned guard outlives the pack in the caller's scope so the
     // scratch file is removed on every exit path, panics included.
     fn pack_with_priority(test_name: &str, priority: u8) -> (AssetPack, TempPackGuard) {
@@ -685,7 +747,7 @@ mod synthetic_pack {
         const CHILD_VG_ID: &str = "audio/voicegroup/keysplit_children";
 
         let wave = Sample::DirectSound(
-            DirectSoundSample::new(1 << 20, Some(0), vec![100; 64])
+            DirectSoundSample::new(1 << 20, Some(0), 63, vec![100; 64])
                 .expect("a looping 64-sample wave is well-formed"),
         );
         // `voice(1)` splits on the played key: 60 selects child 0 (`Empty`), 61 selects

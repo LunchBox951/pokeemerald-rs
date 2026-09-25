@@ -42,6 +42,18 @@ pub enum AudioError {
     /// A `DirectSound` sample has more values than its `u32` wire length can encode. The
     /// value is the sample count.
     SampleTooLong(usize),
+    /// A `DirectSound` sample's buffer does not hold exactly one more value
+    /// than its logical sample count.
+    ///
+    /// The buffer always retains one interpolation-guard value past the
+    /// logical end, matching wav2agb's binary payload writer, which emits
+    /// through the unoverridden sampler end regardless of `agbl`
+    /// (`crates/xtask/src/extract/wav.rs`'s module docs;
+    /// `pokeemerald/src/m4a_1.s:399-407`).
+    DirectSoundBufferLength {
+        sample_count: u32,
+        buffer_len: usize,
+    },
     /// A loop start is not before the end of its PCM payload.
     ///
     /// Upstream computes the loop length as `size - loopStart`, so a valid
@@ -72,6 +84,10 @@ pub enum AudioError {
 }
 
 impl fmt::Display for AudioError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps every audio-pack diagnostic together"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Truncated => write!(f, "audio-pack entry: truncated or corrupt"),
@@ -129,6 +145,14 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack sample: {len} samples exceeds the maximum of {}",
                 u32::MAX
+            ),
+            Self::DirectSoundBufferLength {
+                sample_count,
+                buffer_len,
+            } => write!(
+                f,
+                "audio-pack sample: buffer of {buffer_len} value(s) does not hold \
+                 exactly one more than the logical sample count {sample_count}"
             ),
             Self::LoopStartOutOfRange {
                 loop_start,
