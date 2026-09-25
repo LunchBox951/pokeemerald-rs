@@ -939,9 +939,8 @@ fn create_directories_with_hooks(
             // A level that stands as a directory now is no failure, whoever
             // made it — `create_dir_all`'s own rule. It is simply not this
             // run's to record, though anything nested under it still has to
-            // be created through it. This one keeps following a final
-            // symlink, matching what `Path::is_dir` (and so the pre-fd
-            // version of this same check) always tolerated here.
+            // be created through it. A final symlink to a directory counts,
+            // as it does for `Path::is_dir`.
             Err(mkdir_err) => {
                 let already_a_directory =
                     rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
@@ -967,9 +966,8 @@ fn create_directories_with_hooks(
     Ok(created)
 }
 
-/// [`create_directories`]'s off-Unix arm: no descriptor to pin, so this
-/// stays exactly what it was before the Unix arm started pinning --
-/// [`fs::create_dir`] per level, addressed by path.
+/// [`create_directories`]'s off-Unix arm: no descriptor to pin, so each
+/// level is [`fs::create_dir`] addressed by path.
 #[cfg(not(unix))]
 fn create_directories(
     dir: &Path,
@@ -1086,7 +1084,7 @@ fn undo_created_directories(created: &[CreatedDirectory]) {
 }
 
 /// [`undo_created_directories`]'s off-Unix arm: no identity to check, so
-/// this stays exactly what it was before the Unix arm started pinning.
+/// each recorded level is removed by path.
 #[cfg(not(unix))]
 fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
