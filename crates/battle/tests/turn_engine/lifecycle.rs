@@ -1,10 +1,8 @@
 //! Battle lifecycle, terminal outcomes, and experience-award behavior.
 //!
-//! Every scripted RNG here follows `Battle`'s draw order: one battle-start
-//! turn-number draw, then per turn the `start_turn` turn-number refresh,
-//! the opponent's move pick, and for each hit that resolves its accuracy,
-//! critical, damage-variance, and effect-chance draws. No matchup below
-//! ties on Speed, so `resolve_order` never draws.
+//! Scripted RNGs hold, in order, the battle-start draw, then per turn the
+//! turn-number refresh, the opponent's move pick, and each resolved hit's
+//! own draws as `battle::hit` pins them. No matchup below ties on Speed.
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
 use assets::{MoveId, SpeciesId};
