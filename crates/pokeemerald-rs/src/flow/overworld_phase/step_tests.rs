@@ -1,0 +1,1513 @@
+//! Tests for [`super::OverworldPhase::step`] and related stepping/collision
+//! behaviour.
+
+use super::step::InteractionOutcome;
+use super::test_support::*;
+use super::{OverworldPhase, SyntheticStartMenu};
+use crate::new_game;
+use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::rng::Rng;
+use platform::{ButtonState, Buttons};
+
+/// Regression for the new-game-to-overworld RNG handoff: trainer-id
+/// initialization consumes exactly one `Random()` draw (the id's high half
+/// -- the low half is the seed itself, not a second draw;
+/// `new_game::init_save_blocks`'s module docs), and encounters must continue
+/// from that advanced state rather than restarting at seed 0 or skipping an
+/// extra draw that was never really spent.
+#[test]
+fn new_game_rng_stream_continues_after_the_trainer_id_draw() {
+    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    let mut expected = Rng::new(new_game::NEW_GAME_RNG_SEED);
+    expected.next_u16();
+
+    assert_eq!(
+        phase.rng.state(),
+        expected.state(),
+        "the phase must retain the RNG state after the one trainer-id draw"
+    );
+    // Independently-derived ground truth (issue #313): `ISO_RANDOMIZE1(0) ==
+    // 1_103_515_245 * 0 + 24_691 == 24_691 == 0x0000_6073`.
+    assert_eq!(phase.rng.state(), 0x0000_6073);
+}
+
+/// Senior review regression, headless: upstream discards an A press made
+/// *during* a tile crossing outright -- `FieldGetPlayerInput` only sets
+/// `input->pressedAButton` at `T_TILE_CENTER`/`T_NOT_MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:95-107`), the gate every
+/// `TryStartInteractionScript` call site sits behind (`:172`). Same
+/// position, same facing, same fresh A edge, only
+/// [`PlayerState::in_transit`] differing: mid-step must find nothing, at
+/// rest must find Mom.
+///
+/// Approaches Mom from the east rather than from the south: `(2, 7)`, the
+/// tile directly below her, is the rival's mom's tile -- she is hidden on a
+/// fresh save since the truck-intro flags landed ([`ONE_F`]'s docs), so the
+/// route is kept only for stability, not necessity. `(3, 6)` and `(4, 6)` are
+/// both clear of visible object events.
+#[test]
+fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
+    // Two tiles east of Mom, facing west.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // Already facing west, so a held Left steps immediately onto (3, 6) --
+    // the tile from which Mom, at (2, 6), is directly ahead.
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(phase.player.position(), (3, 6));
+    assert_eq!(phase.player.facing(), Direction::West);
+    assert!(
+        phase.player.in_transit(),
+        "the step's walk animation must still be running"
+    );
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_none(),
+            "an A press during a tile crossing must be discarded"
+        );
+    }
+
+    // Drain the rest of the crossing with no input held.
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert!(!phase.player.in_transit(), "the crossing must have settled");
+    assert_eq!(phase.player.position(), (3, 6), "same tile as above");
+    assert_eq!(phase.player.facing(), Direction::West, "same facing");
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_some(),
+            "at rest, the identical press must find Mom and her recognized \
+             script"
+        );
+        assert!(
+            phase
+                .interaction_tokens_this_frame(ButtonState::new(), &runtime)
+                .is_none(),
+            "and only a fresh A edge interacts at all"
+        );
+    }
+}
+
+/// Issue #435 regression: a same-frame A-plus-direction press must resolve
+/// the interaction lookup against the PRE-movement facing, and a hit must
+/// preempt this frame's movement outright -- see [`OverworldPhase::step`]'s
+/// "NPC dialog routing" section for the upstream citations. Before this
+/// fix, a perpendicular direction held alongside A would turn the player
+/// before the interaction lookup ran, missing Mom.
+///
+/// `AssetPack::load_default` (needed to actually render a dialog box) is
+/// unavailable headless, so this checks the interaction lookup's own
+/// outcome directly (the same pattern
+/// `a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`
+/// uses) rather than `phase.dialog` -- the real-pack acceptance test in
+/// `frame_tests` already covers the box actually opening.
+#[test]
+fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_player() {
+    // Two tiles east of Mom is too far; one tile east, facing west, is
+    // exactly adjacent (module docs' `ONE_F` fixture notes).
+    let start = PlayerState::new((3, 6), 3, Direction::West);
+    let mut phase = synthetic_phase(start, None);
+
+    {
+        let runtime = runtime_for(&phase);
+        // North is perpendicular to the player's West facing -- a step in
+        // that direction would turn the player away from Mom if movement
+        // ran first.
+        let outcome =
+            phase.interaction_tokens_this_frame(pressed(Buttons::A | Buttons::UP), &runtime);
+        assert!(
+            matches!(outcome, Some(InteractionOutcome::Dialog(_))),
+            "the pre-movement facing (still West) must find Mom and her recognized script, \
+             even with a perpendicular direction also pressed this frame"
+        );
+    }
+
+    // Drive the identical buttons through the real `step()` pipeline: the
+    // interaction must claim the frame before `advance_or_skip_for_preempt`
+    // can turn or step the player.
+    phase.step(pressed(Buttons::A | Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (3, 6),
+        "an interaction that fires this frame must preempt the step"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "and the turn too -- PlayerStep never runs once the interaction claims the frame"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation may have started either"
+    );
+}
+
+/// The complement: an A press with a direction held, but facing nothing,
+/// must still turn or step exactly as it did before this fix -- the
+/// preempt-movement path introduced for issue #435 must not fire when
+/// [`OverworldPhase::interaction_tokens_this_frame`] finds no object event.
+#[test]
+fn a_pressed_with_a_direction_while_facing_nothing_turns_normally() {
+    // One tile further east than the fixture above: (3, 6) ahead is clear
+    // of visible object events (module docs' `ONE_F` fixture notes).
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert!(
+        phase.dialog.is_none(),
+        "no object event stands ahead of this tile -- nothing to interact with"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "an A press with no interaction to preempt movement must still let the direction turn \
+         the player, exactly as a direction alone would"
+    );
+}
+
+/// An object event with a real, non-`"0x0"` script this port does not model
+/// yet still consumes the frame: `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) returns TRUE for any non-NULL script, so
+/// `PlayerStep` never runs (`overworld.c:1444-1455`).
+#[test]
+fn a_pressed_with_a_perpendicular_direction_facing_an_unmodelled_script_does_not_turn() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+
+    phase.step(pressed(Buttons::A | Buttons::LEFT));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "facing a visible object event with a real (unmodelled) script, an A press consumes \
+         the frame upstream -- the perpendicular direction must not turn the player"
+    );
+    assert_eq!(phase.player.position(), (4, 6));
+}
+
+/// The faced object really is a visible object event carrying a real script.
+#[test]
+fn the_faced_vigoroth_is_visible_with_a_real_script() {
+    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::North), None);
+    let runtime = runtime_for(&phase);
+    let object =
+        engine::overworld::facing_object_event(&phase.player, &runtime, &phase.save1.event_data)
+            .expect("the Vigoroth at (4, 5) must be visible on a fresh save");
+    assert_eq!(object.script, "PlayersHouse_1F_EventScript_Vigoroth1");
+    assert!(crate::overworld::npc_scripts::script_text(object.script).is_none());
+}
+
+/// The `"0x0"` NULL-script sentinel and a real unmodelled script differ:
+/// Fallarbor Town's Battle Tent corridor attendant at `(2, 6)` carries
+/// `"0x0"` and no hide flag, so an A press on it must not consume the
+/// frame and the perpendicular direction still turns the player.
+#[test]
+fn a_null_script_does_not_preempt_movement_unlike_an_unmodelled_script() {
+    const CORRIDOR: assets::MapId = assets::MapId("MAP_FALLARBOR_TOWN_BATTLE_TENT_CORRIDOR");
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        CORRIDOR,
+        PlayerState::new((3, 6), 3, Direction::West),
+        None,
+    );
+
+    {
+        let header = assets::MapHeaderTable::new().header(CORRIDOR).unwrap();
+        let events = assets::MapEventsTable::new().resolve(CORRIDOR).unwrap();
+        let runtime = phase.scene.runtime(CORRIDOR, header, events);
+        let object = engine::overworld::facing_object_event(
+            &phase.player,
+            &runtime,
+            &phase.save1.event_data,
+        )
+        .expect("the corridor attendant at (2, 6) must be visible and faced");
+        assert_eq!(object.script, "0x0", "the NULL-script sentinel");
+    }
+
+    phase.step(pressed(Buttons::A | Buttons::UP));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a `\"0x0\"` script is upstream's NULL no-op: it must not consume the frame, so the \
+         perpendicular direction still turns the player"
+    );
+}
+
+/// Headless counterpart to the real-pack acceptance test: while a dialog is
+/// open, [`OverworldPhase::step`] must not feed movement to the player at
+/// all (module docs' "NPC dialog routing" section -- upstream's `lock`,
+/// which stops `RunFieldInput` being polled while a message box owns
+/// input). Dropping that early return lets the held direction through and
+/// fails here, with no local pack needed.
+#[test]
+fn an_open_dialog_freezes_movement_until_it_closes() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    // Facing south already, so an un-frozen held Down would step
+    // immediately -- no turn-in-place frame to absorb it. (7, 5), the tile
+    // below, is clear of visible object events, so this test measures the
+    // dialog freeze and nothing else -- unlike (4, 5), which a Vigoroth now
+    // occupies solidly; see [`ONE_F`]'s docs.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.player.position(),
+            (7, 4),
+            "movement must be frozen while a dialog is open"
+        );
+        assert!(!phase.player.in_transit(), "no step may even have started");
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "and no turn either"
+    );
+    assert!(phase.dialog.is_some(), "the dialog must still be open");
+
+    // Confirm through the trailing prompt (same held-A-across-the-window
+    // reasoning as this module's real-pack dialog test) and let it close.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // Control returns: the very next held Down steps.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (7, 5),
+        "ordinary movement must resume once the box has closed"
+    );
+}
+
+/// The field lock ends an in-flight turn the moment it engages
+/// (`PlayerFreeze`, `field_player_avatar.c:1039-1046`), so a dialog must not freeze it.
+#[test]
+fn a_dialog_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    use engine::text::Token;
+
+    // One tile east of Mom (module docs' `ONE_F` fixture notes), facing
+    // South so a held Left is a turn, not a step.
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+    assert_eq!(phase.player.position(), (3, 6), "a turn must not move");
+
+    // Reachability: the next frame's A press really does find Mom while
+    // that window is still draining.
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "an A press one frame into the turn's busy window must still interact with Mom"
+        );
+    }
+
+    // The box the A press opens, in this pack-less suite's headless stand-in
+    // form.
+    phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]));
+
+    // It owns far more frames than the eight-frame window is long.
+    for _ in 0..20 {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert!(phase.dialog.is_some(), "the box must still be open");
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // The first field frame after the box closes must act on the held
+    // direction, not sit in a window frozen before the box opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the message box that opened inside it"
+    );
+}
+
+/// `START` holds the field lock too (`start_menu.c:581-591`), so it clears
+/// a pending turn's busy window like a dialog does.
+#[test]
+fn a_start_menu_opened_inside_a_turns_busy_window_must_not_swallow_input_after_it_closes() {
+    let temp = crate::flow::tests::TempSave::new("start-menu-turn-lock-976");
+    let mut save_slot = temp.slot();
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the held direction must turn the player in place, starting the busy window"
+    );
+
+    phase.start_menu = Some(crate::start_menu::synthetic_start_menu());
+    for _ in 0..20 {
+        assert!(phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot));
+    }
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::B), &mut save_slot),
+        "B still owns the closing frame"
+    );
+    assert!(
+        phase.start_menu().is_none(),
+        "B must have closed the synthetic menu"
+    );
+
+    // The first field frame after the menu closes must act on the held
+    // direction, not sit in a window frozen before the menu opened.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.player.facing(),
+        Direction::East,
+        "the turn's busy window must not survive the start menu that opened inside it"
+    );
+}
+
+/// `ShowStartMenu` freezes the player before its own frame is drawn
+/// (`start_menu.c:581-591`), so the turn ends on the frame START lands.
+#[test]
+fn a_fresh_start_ends_a_turns_busy_window_on_the_frame_the_menu_opens() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    phase.step(held(Buttons::UP));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns in place and starts the busy window"
+    );
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_some(),
+        "setup: the injected build must really have opened a menu"
+    );
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the menu's own opening frame is composed after this step returns, so the \
+         turn must already be over by then -- not one frame later"
+    );
+}
+
+/// The interaction claiming the frame is upstream's lock
+/// (`field_control_avatar.c:172`); the box itself needs a pack this suite lacks.
+#[test]
+fn an_a_press_interaction_ends_a_turns_busy_window_on_the_frame_it_claims() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::South), None);
+
+    phase.step(held(Buttons::LEFT));
+    assert!(
+        phase.player.turn_frames_remaining() > 0,
+        "setup: the held direction turns the player toward Mom, starting the busy window"
+    );
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            matches!(
+                phase.interaction_tokens_this_frame(pressed(Buttons::A), &runtime),
+                Some(InteractionOutcome::Dialog(_))
+            ),
+            "setup: the next frame's A press really does claim the frame"
+        );
+    }
+
+    phase.step(pressed(Buttons::A));
+    assert_eq!(
+        phase.player.turn_frames_remaining(),
+        0,
+        "the claimed frame is composed after this step returns, so the turn must \
+         already be over by then -- not one frame later"
+    );
+}
+
+/// Mutation guard for [`OverworldPhase::step`]'s tileset-animation tick
+/// (issue #160): `self.tick` must advance by exactly one per `step` call,
+/// and must keep advancing while a dialog box is open -- an explicit
+/// fidelity claim in the field's own docs (upstream's
+/// `UpdateTilesetAnimations` runs every `VBlank` regardless of message-box
+/// state, so background tiles keep animating behind a frozen player).
+/// Nothing else in the suite observes `tick` on a headless phase: deleting
+/// the increment, moving it below `step`'s dialog early-return, or making it
+/// conditional must all fail here.
+#[test]
+fn step_advances_the_tileset_animation_tick_once_per_frame_even_behind_a_dialog() {
+    use engine::text::Token;
+
+    // No dialog: one tick per frame, moving or not.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    assert_eq!(phase.tick, 0, "a freshly built phase starts at tick 0");
+    phase.step(ButtonState::new());
+    assert_eq!(phase.tick, 1, "an idle frame still advances the animation");
+    for expected in 2..=WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.tick,
+            u32::from(expected),
+            "every frame of a walk step advances the tick exactly once"
+        );
+    }
+
+    // Dialog open: movement is frozen (see
+    // `an_open_dialog_freezes_movement_until_it_closes`), the tick is not.
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    let mut frozen = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+    for expected in 1..=10u32 {
+        frozen.step(held(Buttons::DOWN));
+        assert_eq!(
+            frozen.tick, expected,
+            "tileset animation must keep running while a dialog freezes movement"
+        );
+    }
+    assert!(
+        frozen.dialog.is_some(),
+        "the dialog must still be open -- otherwise the frames above weren't frozen ones"
+    );
+    assert_eq!(
+        frozen.player.position(),
+        (7, 4),
+        "and movement really was frozen for all of them"
+    );
+}
+
+/// Wrapping [`OverworldPhase::tick`] past `u32::MAX` lands on
+/// `step::TILESET_ANIM_WRAP_PERIOD` (256), not 0: tick 0 reads to
+/// `tileset_anims::latched_frame` as a fresh room with no region fired yet,
+/// while 256 is a tick every configured cadence has already latched by
+/// (`tileset_anims` module docs). `synthetic_phase` fabricates real
+/// `general`-tileset animation frames, so `phase.tick` alone drives the
+/// boundary.
+#[test]
+fn wrapping_the_tileset_animation_tick_lands_on_the_upstream_period_not_zero() {
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    phase.tick = u32::MAX;
+
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.tick, 256,
+        "the tick that wraps past u32::MAX must land where tick 256 already is, \
+         not back at the fresh-room tick 0"
+    );
+
+    for expected in 257..=261u32 {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.tick, expected,
+            "counting must resume normally from the wrap target"
+        );
+    }
+}
+
+/// Issue #852: [`OverworldPhase::advance_start_menu_frame`] (`start_menu.rs`)
+/// keeps the animation running while the field start menu owns the frame,
+/// exactly as [`OverworldPhase::step`] does while a dialog does, and both
+/// call sites must wrap `tick` to the same already-latched tick. A synthetic
+/// already-open menu ([`crate::start_menu::synthetic_start_menu`]) needs no
+/// local pack, so this reaches the real wrap without one.
+#[test]
+fn wrapping_the_tick_through_the_start_menu_frame_also_lands_on_the_upstream_period() {
+    let temp = crate::flow::tests::TempSave::new("start-menu-tick-wrap-852");
+    let mut save_slot = temp.slot();
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    phase.start_menu = Some(crate::start_menu::synthetic_start_menu());
+    phase.tick = u32::MAX;
+
+    assert!(
+        phase.advance_start_menu_frame(ButtonState::new(), &mut save_slot),
+        "an already-open menu must keep owning the frame"
+    );
+    assert_eq!(
+        phase.tick, 256,
+        "the start-menu frame path must wrap the same way step() does, not back to 0"
+    );
+}
+
+/// The other half of the [`OverworldPhase`] tick wiring (issue #160): every
+/// map (re)load restarts the room's animation counter at 0, mirroring
+/// upstream's `InitTilesetAnimations` call sites
+/// (`pokeemerald/src/overworld.c`). Real-pack, because both constructors
+/// under test load rooms: [`OverworldPhase::load_default`] must hand back a
+/// phase at tick 0, and [`OverworldPhase::warp_to`] must reset a
+/// *already-advanced* counter -- deleting `self.tick = 0` from `warp_to`
+/// leaves the destination map's flowers/water mid-cycle and must fail here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn loading_a_room_and_warping_both_restart_the_tileset_animation_tick() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.tick, 0,
+        "a freshly loaded room starts its animation counter at 0"
+    );
+
+    // Advance the counter well past 0 (idle frames: the spawn tile is the
+    // stair warp, so this deliberately holds nothing).
+    for _ in 0..37 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.tick, 37, "37 steps, 37 ticks");
+
+    phase.warp_to(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+    assert_eq!(
+        phase.tick, 0,
+        "a warp is a map load: the destination map's animated tiles must start \
+         from their own tick 0, not from the departed map's counter"
+    );
+}
+
+/// Issue #207 review, round 2: the production starter *wiring*, not just the
+/// starter constructor -- [`OverworldPhase::load_default`] must hand back a
+/// phase whose party lead is the provisional starter, or a real playthrough
+/// rolls I-4 encounters it can never fight. Mutation-pinned: deleting
+/// `load_default`'s `party_lead` assignment fails only here, because every
+/// pack-free test builds its phase through `for_test`, which deliberately
+/// leaves the lead `None`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn load_default_hands_back_a_fightable_provisional_starter() {
+    let phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("a fresh game starts with the provisional starter (issue #207 review)");
+    assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+    assert_eq!(lead.level(), new_game::PROVISIONAL_STARTER_LEVEL);
+    assert!(!lead.is_fainted(), "the lead must be able to fight");
+}
+
+/// The finding-1 regression at the phase level, on real map data: holding a
+/// direction into a visible NPC must stop the player on the adjacent tile.
+/// Before object-event collision landed, [`OverworldPhase::step`] walked the
+/// avatar straight through Mom.
+///
+/// Uses [`ONE_F`]'s real object events (Mom at `(2, 6)`, visible on a fresh
+/// save) over a synthetic open layout, so no extracted pack is needed --
+/// every tile on the approach is walkable as far as the *grid* is
+/// concerned, which is what makes the stop attributable to Mom alone.
+#[test]
+fn holding_a_direction_into_a_visible_npc_stops_the_player_adjacent_to_it() {
+    // Two tiles below Mom, facing north; approach from the east ((4, 6) ->
+    // (3, 6) -> blocked by Mom) -- see ONE_F's note on the (2, 7) routes.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // First step lands on (3, 6), the tile east of Mom.
+    phase.step(held(Buttons::LEFT));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert_eq!(phase.player.position(), (3, 6));
+    assert!(!phase.player.in_transit());
+
+    // Keep holding: every further poll is denied, and the player never
+    // reaches (2, 6). A generous budget, so this fails on *any* frame that
+    // lets the step through, not just the first.
+    for _ in 0..(4 * u32::from(WALK_FRAMES_PER_TILE)) {
+        phase.step(held(Buttons::LEFT));
+        assert_eq!(
+            phase.player.position(),
+            (3, 6),
+            "the player must stop on the tile adjacent to Mom, never enter hers"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "a blocked step must not start a walk animation"
+        );
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "bumping into an NPC leaves the avatar facing it (PlayerNotOnBikeCollide)"
+    );
+
+    // And that same standing position interacts, proving the stop is
+    // adjacency rather than the interaction lookup and the collision check
+    // disagreeing about where Mom is.
+    let runtime = runtime_for(&phase);
+    assert!(
+        phase
+            .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+            .is_some(),
+        "the tile the player was stopped on must be the tile Mom is \
+         interactable from"
+    );
+}
+
+/// The complement, same fixture shape: a *hidden* object event does not
+/// block. `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s Dad
+/// (`OBJ_EVENT_GFX_NORMAN` at `(5, 6)`) is hidden by
+/// `EventScript_ResetAllMapFlags`' `setflag FLAG_HIDE_PLAYERS_HOUSE_DAD`
+/// (`pokeemerald/data/scripts/new_game.inc`), and upstream never spawns a
+/// hidden template (`event_object_movement.c:1670-1672`) -- so the player
+/// walks over his tile exactly as if it were empty.
+#[test]
+fn a_hidden_npcs_tile_is_walkable() {
+    let mut phase = synthetic_phase(PlayerState::new((5, 7), 3, Direction::North), None);
+    let dad = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_NORMAN")
+        .expect("1F's object events include Dad");
+    assert_eq!(
+        (dad.x, dad.y),
+        (5, 6),
+        "fixture precondition: Dad's real map.json position"
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(dad, &phase.save1().event_data),
+        "fixture precondition: a fresh save hides Dad"
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (5, 6),
+        "a hidden object event's tile must be walkable"
+    );
+}
+
+/// I-3 scene-flow test: once in the overworld, a held direction is fed
+/// to the player every frame -- "the player movable" (issue #149's own
+/// scope item 4). A turn always succeeds regardless of the room's
+/// collision layout (only a *step* can be blocked), so this is a safe
+/// assertion without depending on the real map's exact geometry.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn overworld_movement_input_turns_the_player() {
+    // `OverworldPhase::load_default` itself (not a hand-built struct
+    // literal) so this also exercises the save-state wiring (finding
+    // 1) the same way production reaches this state.
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "starts facing south"
+    );
+
+    phase.step(held(Buttons::UP));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a fresh directional input first turns the player to face it"
+    );
+
+    // The retained save state mirrors the logical tile after every step
+    // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves).
+    // Walk south far enough to guarantee at least one accepted step in
+    // the open room, then assert the mirror holds wherever we ended up.
+    for _ in 0..40 {
+        phase.step(held(Buttons::DOWN));
+    }
+    let (x, y) = phase.player.position();
+    assert_eq!(
+        (
+            i32::from(phase.save1().pos.x),
+            i32::from(phase.save1().pos.y)
+        ),
+        (x, y),
+        "save1.pos must track the player's logical tile, not the spawn"
+    );
+    assert_ne!(
+        (x, y),
+        new_game::SPAWN_POSITION,
+        "walking south from the spawn must actually move the player"
+    );
+}
+
+// -- The bedroom bed (S-5, issue #218) --------------------------------------
+
+/// The bed's **side columns**, which are walkable end to end and must stay
+/// that way. The bed sits at layout-local `x=0..2, y=4..6` with an authored
+/// `0 -> 4 -> 0` elevation run down each side column
+/// (`assets::MetatileCell::from_raw`'s decode of
+/// `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
+/// cross-checked directly against the real pack here). Walking straight up
+/// the west column from the room's south wall, across the bed's raised
+/// edge, and out its north side is `COLLISION_NONE` at *every* step, in
+/// both this port and upstream: [`engine::overworld::elevation_mismatch`]
+/// is byte-for-byte upstream `IsElevationMismatchAt`
+/// (`event_object_movement.c:7707-7723`), and that function's only
+/// mover-side input is `currentElevation` -- never `previousElevation` --
+/// so the current-vs-previous split cannot change this outcome (full
+/// derivation: `engine::overworld::player::PlayerState::step`'s "Elevation
+/// adoption" doc section). This test pins that *parity* against the real
+/// map: the escape issue #218 reports is a different step (see
+/// [`bedroom_bed_center_pillow_cannot_be_crossed_lengthwise`], which pins
+/// the tile that actually was permitted here and blocked upstream), and
+/// "fixing" it by tightening the transition wildcard globally would break
+/// both these columns, the bedroom's own stair warp (issue #163), and every
+/// bridge/staircase landing built on the identical rule.
+///
+/// It also pins the render-side half of issue #218 directly:
+/// `previous_elevation` retains the bed's raised `4` across the transition
+/// tile on its far side rather than resetting to the wildcard -- the exact
+/// render-selection input `crate::overworld::avatar::priority_for_elevation`
+/// consumes (unit-tested there; this is the real-map source of the values
+/// it's fed).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "fixture precondition: the spawn map is the bedroom carrying the bed"
+    );
+
+    // South of the bed, on open floor, already facing its west column.
+    phase.player = PlayerState::new((0, 7), 3, Direction::North);
+
+    // Each segment: the first `step` call of a fresh (non-transit) poll
+    // commits the tile move immediately (StepOutcome::Advanced sets
+    // position synchronously); the drain loop matches this module's other
+    // multi-tile real-pack walks (e.g. `taking_the_stairs_does_not_land_...`).
+    let walk_one_tile_north = |phase: &mut OverworldPhase| {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    };
+
+    // (0,7) -> (0,6): onto the bed's south-edge transition tile.
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 6));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "transition wildcard adopted into elevation; previous_elevation \
+         still reads the floor behind"
+    );
+
+    // (0,6) -> (0,5): onto the bed's raised elevation-4 edge itself --
+    // COLLISION_NONE, not COLLISION_ELEVATION_MISMATCH: the transition
+    // wildcard on the *mover's* side (elevation 0) is compatible with any
+    // destination.
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 5));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (4, 4),
+        "the raised edge is real, non-transition elevation: both fields \
+         adopt it"
+    );
+
+    // (0,5) -> (0,4): onto the bed's north-edge transition tile -- again
+    // COLLISION_NONE: the *destination* being the wildcard is unconditionally
+    // compatible, regardless of the mover's concrete elevation (4).
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 4));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 4),
+        "previous_elevation must still read the raised edge's 4 while \
+         standing on the wildcard, not reset by it"
+    );
+
+    // (0,4) -> (0,3): out the bed's north side onto ordinary floor --
+    // COLLISION_NONE, matching upstream exactly (see this test's own doc
+    // comment for why this step is not, and must not become, the "fix").
+    walk_one_tile_north(&mut phase);
+    assert_eq!(
+        phase.player.position(),
+        (0, 3),
+        "the full side-column crossing succeeds in both this port and \
+         upstream -- these columns are faithful via elevation, and are not \
+         where the issue's escape lives (see \
+         bedroom_bed_center_pillow_cannot_be_crossed_lengthwise)"
+    );
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (3, 3)
+    );
+}
+
+/// The issue #218 escape itself, on the real map: the bed's **center pillow
+/// tile** at layout-local `(1, 4)` carries metatile `0x284`, whose attribute
+/// entry in `data/tilesets/secondary/brendans_mays_house/metatile_attributes.bin`
+/// is `0x00C0` -- behavior `MB_IMPASSABLE_SOUTH_AND_NORTH`. Its collision
+/// bits are `0` and its elevation (`3`) matches the floor north of it, so
+/// neither of the two checks this port ran before could see it, and the
+/// avatar could walk lengthwise off the bed and out through its headboard.
+/// Upstream refuses both halves of that crossing inside
+/// `GetCollisionAtCoords` via `IsMetatileDirectionallyImpassable`
+/// (`event_object_movement.c:4663, 4715-4722`), now modeled as
+/// [`engine::overworld::directionally_impassable`].
+///
+/// Walks the real route rather than teleporting onto the pillow: up the
+/// bed's west side column to `(0, 4)` (the same walk the sibling test
+/// above pins as faithful), then east onto the pillow -- which upstream
+/// *does* allow, since `0xC0` walls off only the north and south edges --
+/// and only then north, which must not complete. The mirror (entering the
+/// pillow southward from `(1, 3)`) is checked from a placed start, since
+/// `(1, 3)` is not reachable from the pillow once the fix is in.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "fixture precondition: the spawn map is the bedroom carrying the bed"
+    );
+
+    let walk = |phase: &mut OverworldPhase, buttons: Buttons| {
+        phase.step(held(buttons));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    };
+
+    // Up the west side column to the bed's north-west corner, exactly as
+    // `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+    // walks it.
+    phase.player = PlayerState::new((0, 7), 3, Direction::North);
+    for expected in [(0, 6), (0, 5), (0, 4)] {
+        walk(&mut phase, Buttons::UP);
+        assert_eq!(phase.player.position(), expected);
+    }
+
+    // East onto the pillow. Permitted -- `MB_IMPASSABLE_SOUTH_AND_NORTH`
+    // leaves the east/west edges open, which is the only reason the tile is
+    // reachable at all. No turn frame is spent: `runningState` is still
+    // MOVING from the walk above, which is upstream's corner-cut
+    // (CheckMovementInputNotOnBike -- PlayerState::step's "# Turn vs. step"
+    // docs).
+    walk(&mut phase, Buttons::RIGHT);
+    assert_eq!(
+        phase.player.position(),
+        (1, 4),
+        "the pillow tile is enterable sideways in upstream too"
+    );
+    assert_eq!(
+        phase.player.elevation(),
+        3,
+        "the pillow is authored at elevation 3 -- the same as the floor \
+         north of it, which is why the elevation check cannot be what \
+         blocks the next step"
+    );
+
+    // North, out through the headboard: the escape this issue reports.
+    // Blocked by the standing tile's own behavior. Before the fix this
+    // landed on (1, 3). The first held frame is stepped explicitly so the
+    // collision *outcome* is pinned too: a blocked step must cancel before
+    // transit ever starts, not start-then-snap-back to the same tile.
+    phase.step(held(Buttons::UP));
+    assert!(
+        !phase.player.in_transit(),
+        "a blocked northward exit must never enter transit"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.position(),
+        (1, 4),
+        "MB_IMPASSABLE_SOUTH_AND_NORTH on the tile the avatar stands on \
+         must stop a northward exit (IsMetatileDirectionallyImpassable's \
+         gOppositeDirectionBlockedMetatileFuncs half)"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a blocked step still turns the avatar, like walking into a wall"
+    );
+
+    // The mirror: stepping *onto* the pillow from the floor north of it is
+    // blocked by the destination tile's behavior instead -- same
+    // no-transit collision outcome, opposite function table.
+    phase.player = PlayerState::new((1, 3), 3, Direction::South);
+    phase.step(held(Buttons::DOWN));
+    assert!(
+        !phase.player.in_transit(),
+        "a blocked southward entry must never enter transit"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.position(),
+        (1, 3),
+        "the same tile must also refuse entry from the north \
+         (IsMetatileDirectionallyImpassable's gDirectionBlockedMetatileFuncs \
+         half)"
+    );
+}
+
+/// Issue #908 regression: a same-frame `A`-plus-`START` press must resolve
+/// this port's counterpart to `TryStartInteractionScript`
+/// (`field_control_avatar.c:172`) before `pressedStartButton`
+/// (`:182-187`) ever gets a look, because upstream's own
+/// `ProcessPlayerFieldInput` checks the interaction branch first and
+/// returns `TRUE` out of it before the `START` branch is even reached.
+///
+/// Stands the player where
+/// [`a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts`]
+/// settles -- one tile east of Mom, at rest, already facing her -- so the
+/// same real, recognized interaction backs `field_input_claimed` here.
+/// Asserted at [`OverworldPhase::start_menu_may_open`] directly, the same
+/// decision [`OverworldPhase::step`]'s own "Field start menu ordering"
+/// section feeds from a real
+/// [`OverworldPhase::interaction_tokens_this_frame`] lookup every frame;
+/// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`]
+/// is this same claim driven through `step` itself, with a menu that
+/// genuinely builds.
+#[test]
+fn start_does_not_preempt_a_same_frame_npc_interaction() {
+    let phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    let buttons = pressed(Buttons::A | Buttons::START);
+
+    let interaction_found = {
+        let runtime = runtime_for(&phase);
+        phase
+            .interaction_tokens_this_frame(buttons, &runtime)
+            .is_some()
+    };
+    assert!(
+        interaction_found,
+        "the fixture must face an NPC whose script this port recognizes"
+    );
+
+    assert!(
+        !phase.start_menu_may_open(buttons, interaction_found),
+        "a same-frame interaction must refuse a fresh START the same frame \
+         (field_control_avatar.c:172 returns TRUE before :182)"
+    );
+    // Positive control: the same fixture, told nothing else claimed the
+    // frame, is where a fresh START normally works -- so the refusal above
+    // is really the interaction claim, not some other gate this fixture
+    // happens to fail.
+    assert!(
+        phase.start_menu_may_open(buttons, false),
+        "the fixture must otherwise be a frame START can open"
+    );
+}
+
+/// A same-frame `START` press whose menu fails to build must not cost that
+/// frame's movement ([`OverworldPhase::build_start_menu`]'s own doc comment
+/// on why the menu is built ahead of movement).
+#[test]
+fn a_failed_pack_load_on_start_does_not_cost_the_frames_movement() {
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Fails;
+
+    // Already facing west (module docs' `ONE_F` fixture notes): holding
+    // Left begins a step immediately, no separate turn frame first.
+    let mut buttons = ButtonState::new();
+    buttons.update(Buttons::LEFT);
+    buttons.update(Buttons::LEFT | Buttons::START);
+    phase.step(buttons);
+
+    assert!(
+        phase.start_menu().is_none(),
+        "a failed build must leave no menu open"
+    );
+    assert!(
+        phase.player.in_transit(),
+        "a failed pack load must leave START exactly as inert as a refused \
+         gate -- the held-direction step must still have started"
+    );
+}
+
+/// Issue #908, end to end: the ordering
+/// [`start_does_not_preempt_a_same_frame_npc_interaction`] pins at the gate
+/// directly, driven through the real [`OverworldPhase::step`] instead, with
+/// [`OverworldPhase::synthetic_start_menu`] standing in for a real
+/// pack load so a menu can genuinely open in a test.
+///
+/// Three same-frame outcomes, one fixture: `A`+`START` next to Mom leaves
+/// `START` inert; `START` alone opens a menu from inside `step` itself;
+/// and an opening menu preempts that frame's movement, the mirror of
+/// [`a_failed_pack_load_on_start_does_not_cost_the_frames_movement`].
+#[test]
+fn step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open() {
+    let mut with_interaction = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    with_interaction.synthetic_start_menu = SyntheticStartMenu::Builds;
+    with_interaction.step(pressed(Buttons::A | Buttons::START));
+    assert!(
+        with_interaction.start_menu().is_none(),
+        "a same-frame interaction must claim the frame ahead of a fresh \
+         START, even when the menu would really have built"
+    );
+
+    let mut alone = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    alone.synthetic_start_menu = SyntheticStartMenu::Builds;
+    alone.step(pressed(Buttons::START));
+    assert!(
+        alone.start_menu().is_some(),
+        "with nothing else claiming the frame, START must open the menu \
+         from inside step itself"
+    );
+
+    let mut walking = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    walking.synthetic_start_menu = SyntheticStartMenu::Builds;
+    let mut buttons = ButtonState::new();
+    buttons.update(Buttons::LEFT);
+    buttons.update(Buttons::LEFT | Buttons::START);
+    walking.step(buttons);
+    assert!(walking.start_menu().is_some(), "the menu must have opened");
+    assert!(
+        !walking.player.in_transit() && walking.player.position() == (4, 6),
+        "upstream never calls PlayerStep on a frame ProcessPlayerFieldInput \
+         claims -- no step may have begun either"
+    );
+}
+
+/// Issue #436, end to end: an already-owning sight-trainer approach must
+/// keep outranking a fresh `START` driven through
+/// [`OverworldPhase::step`] itself, with the same injected build as above
+/// so the menu really would have opened. The *trigger* frame is
+/// `sight_trainer_tests::start_does_not_preempt_the_sight_trainer_scan_on_its_trigger_frame`.
+#[test]
+fn step_keeps_an_owning_sight_trainer_approach_ahead_of_a_fresh_start() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    phase.begin_synthetic_sight_approach_for_test();
+
+    phase.step(pressed(Buttons::START));
+    assert!(
+        phase.start_menu().is_none(),
+        "the approach owns the frame ahead of pressedStartButton \
+         (field_control_avatar.c:182), even when the menu would have built"
+    );
+}
+
+/// Observed through the suppressed encounter roll, as
+/// `a_door_warp_frame_never_reaches_the_encounter_roll` does.
+#[test]
+fn a_door_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE};
+
+    const CAVE: assets::MapId = assets::MapId("MAP_GRANITE_CAVE_B1F");
+    const FLOOR: (u16, u16) = (7, 5);
+    const DOOR: (u16, u16) = (8, 5);
+
+    let events = assets::MapEventsTable::new()
+        .resolve(CAVE)
+        .expect("Granite Cave B1F resolves in the generated map-events table");
+    assert!(
+        events
+            .warp_events
+            .iter()
+            .any(|w| (w.x, w.y) == (8, 5) && w.elevation == 3),
+        "fixture precondition: the door tile carries a warp event stored at elevation 3"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(FLOOR, MB_CAVE, 3), (DOOR, MB_ANIMATED_DOOR, 0)],
+        ),
+        CAVE,
+        PlayerState::new((6, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+    // Same screen override as `a_door_warp_frame_never_reaches_the_encounter_roll`.
+    phase.wild_table_screen = Some((CAVE, true));
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (7, 5));
+
+    // The floor tile's landing call -- upstream's `T_TILE_CENTER` CB1, which
+    // is also where the next crossing starts under a still-held direction
+    // (`OverworldPhase::step`'s "Frame shape" docs, issue #1039).
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "fixture precondition: an unsuppressed roll really does overwrite this"
+    );
+    assert_eq!(phase.player.position(), (8, 5));
+
+    // The rest of the door crossing's animation.
+    for _ in 0..WALK_FRAMES_PER_TILE - 1 {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert!(!phase.player.in_transit());
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "the landed transition cell is the collision elevation; the retained \
+         previousElevation upstream looks warps up at is still 3"
+    );
+
+    // The door tile's own landing call.
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_CAVE,
+        "the door warp must fire on the landing call -- upstream resolves it at \
+         PlayerGetElevation()'s retained 3 (field_player_avatar.c:1192-1195) -- so \
+         ProcessPlayerFieldInput returns before CheckStandardWildEncounter and the \
+         door tile's own behavior is never recorded"
+    );
+}
+
+/// End-to-end landing check for the arrow lookup on the landing call; the
+/// pack-free `landing_call_arrow_elevation_tests` in `step.rs` pins the
+/// lookup itself.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_landing_call_arrow_warp_is_looked_up_at_the_retained_previous_elevation() {
+    use engine::overworld::metatile_behavior::MB_SOUTH_ARROW_WARP;
+
+    const CENTER: assets::MapId = assets::MapId("MAP_OLDALE_TOWN_POKEMON_CENTER_1F");
+    const DOORMAT: (u16, u16) = (7, 8);
+
+    let events = assets::MapEventsTable::new()
+        .resolve(CENTER)
+        .expect("Oldale Town's Pokémon Center resolves in the generated map-events table");
+    let doormat = events.warp_events[0];
+    assert_eq!((doormat.x, doormat.y), (7, 8));
+    assert_eq!(
+        doormat.elevation, 3,
+        "fixture precondition: the doormat's warp event is stored at elevation 3"
+    );
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles_at_elevations(
+            10,
+            10,
+            &[(DOORMAT, MB_SOUTH_ARROW_WARP, 0)],
+        ),
+        CENTER,
+        PlayerState::new((7, 7), 3, Direction::South),
+        None,
+    );
+
+    // The poll stays shut while the step is outstanding (`arrow_poll_open`),
+    // which includes the call that drains the walk animation (issue #1039).
+    for frame in 1..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.map_id, CENTER,
+            "the arrow warp must not fire while the step is outstanding (frame \
+             {frame} of {WALK_FRAMES_PER_TILE})"
+        );
+    }
+    assert_eq!(phase.player.position(), (7, 8));
+    assert!(
+        !phase.player.in_transit(),
+        "frame {WALK_FRAMES_PER_TILE} drains the walk animation"
+    );
+    assert!(
+        phase.mid_step(),
+        "but the landing is observed on the call after it"
+    );
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3)
+    );
+
+    // The landing call.
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_OLDALE_TOWN"),
+        "the completed crossing's arrow warp must land -- a lookup at the \
+         collision elevation 0 misses the warp event stored at 3 and leaves \
+         the player standing on the doormat"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the warp lands the player at rest, not mid-step"
+    );
+}
+
+/// The same ordering as
+/// [`step_lets_a_same_frame_npc_interaction_beat_a_menu_that_would_really_open`],
+/// driven through [`crate::flow::advance_scene`]'s dispatch rather than
+/// [`OverworldPhase::step`] directly.
+#[test]
+fn advance_scene_lets_a_same_frame_npc_interaction_beat_a_fresh_start() {
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+    let mut slot = crate::game_save::SaveSlot::disabled();
+
+    let (next, _frame) = crate::flow::advance_scene(
+        crate::flow::AppScene::Overworld(Box::new(phase)),
+        pressed(Buttons::A | Buttons::START),
+        &mut slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+
+    let crate::flow::AppScene::Overworld(phase) = next else {
+        panic!("a START press must leave the overworld in place");
+    };
+    assert!(
+        phase.start_menu().is_none(),
+        "the dispatch must weigh a fresh START inside step, behind the \
+         same-frame interaction -- not open the menu ahead of it"
+    );
+}
+
+/// `FieldGetPlayerInput` leaves `pressedStartButton` unset on a
+/// forced-movement tile (`pokeemerald/src/field_control_avatar.c:92-113`),
+/// so `ProcessPlayerFieldInput` never reaches `ShowStartMenu` (`:180-186`).
+#[test]
+fn a_fresh_start_on_a_forced_movement_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_MUDDY_SLOPE,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the forced-movement tile"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "forced movement is armed on the standing tile, so upstream never sets \
+         pressedStartButton on that frame at all"
+    );
+}
+
+/// `forcedMove` comes from `MetatileBehavior_IsForcedMovementTile`, which
+/// includes `MB_CRACKED_FLOOR` (`pokeemerald/src/metatile_behavior.c:338-351`),
+/// so a cracked floor suppresses START on its landing frame too.
+#[test]
+fn a_fresh_start_on_a_cracked_floor_landing_tile_must_not_open_the_menu() {
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (6, 4),
+        engine::overworld::metatile_behavior::MB_CRACKED_FLOOR,
+    );
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((6, 5), 3, Direction::North),
+        None,
+    );
+    phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (6, 4),
+        "setup: the held step must have crossed onto the cracked floor"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "setup: the crossing must have drained, so the next frame is this port's \
+         first T_TILE_CENTER CB1 for it"
+    );
+
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_none(),
+        "MB_CRACKED_FLOOR is a forced-movement tile for FieldGetPlayerInput, so \
+         upstream never sets pressedStartButton on that frame at all"
+    );
+}
+
+/// A player whose forced step is collision-blocked parks at `T_NOT_MOVING`,
+/// the gate arm that admits START whatever `forcedMove` says
+/// (`pokeemerald/src/field_control_avatar.c:95`).
+#[test]
+fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_menu() {
+    use engine::overworld::metatile_behavior::{MB_IMPASSABLE_SOUTH_AND_NORTH, MB_MUDDY_SLOPE};
+
+    let blocked_slope_phase = || {
+        let scene = crate::overworld::tests::synthetic_scene_with_special_tiles(
+            10,
+            10,
+            &[
+                ((6, 4), MB_MUDDY_SLOPE),
+                ((6, 5), MB_IMPASSABLE_SOUTH_AND_NORTH),
+            ],
+        );
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 3), 3, Direction::South),
+            None,
+        );
+        phase.synthetic_start_menu = SyntheticStartMenu::Builds;
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::DOWN));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the muddy slope"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained"
+        );
+        phase
+    };
+
+    // Fixture precondition: the slope's forced southward step is blocked by
+    // the impassable-north tile at (6, 5), which is precisely why upstream
+    // falls through to the keypad -- the port already honours that for
+    // movement.
+    let mut steerable = blocked_slope_phase();
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+        steerable.step(held(Buttons::LEFT));
+    }
+    assert_eq!(
+        steerable.player.position(),
+        (5, 4),
+        "fixture precondition: a blocked forced direction leaves the player \
+         steerable off the tile"
+    );
+
+    let mut phase = blocked_slope_phase();
+    // The landing's own T_TILE_CENTER frame, where upstream does suppress
+    // buttons on a forced tile -- consumed with no input.
+    phase.step(ButtonState::new());
+    // T_NOT_MOVING from here on: nothing is animating and the forced step
+    // never started.
+    phase.step(pressed(Buttons::START));
+
+    assert!(
+        phase.start_menu().is_some(),
+        "upstream's T_NOT_MOVING arm sets pressedStartButton even on a \
+         forced-movement tile, so a player stranded on a slope whose forced \
+         step is collision-blocked must still be able to open the menu"
+    );
+}
+
+/// A forced-movement landing must not run `CheckStandardWildEncounter`
+/// (`pokeemerald/src/field_control_avatar.c:116-122`, `:162`, `:667-684`).
+#[test]
+fn a_forced_movement_landing_must_not_run_the_wild_encounter_check() {
+    use engine::overworld::metatile_behavior::{MB_MUDDY_SLOPE, MB_NORMAL};
+
+    let landing_onto = |behavior: u8| {
+        let scene =
+            crate::overworld::tests::synthetic_scene_with_special_tile(10, 10, (6, 4), behavior);
+        let mut phase = OverworldPhase::for_test(
+            scene,
+            ONE_F,
+            PlayerState::new((6, 5), 3, Direction::North),
+            None,
+        );
+        for _ in 0..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(held(Buttons::UP));
+        }
+        assert_eq!(
+            phase.player.position(),
+            (6, 4),
+            "setup: the held step must have crossed onto the fixture tile"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "setup: the crossing must have drained, so the next call is this \
+             port's T_TILE_CENTER for it"
+        );
+        assert_eq!(
+            (
+                phase.wild.immunity_steps(),
+                phase.wild.prev_metatile_behavior()
+            ),
+            (0, MB_NORMAL),
+            "setup: the completed step is only observed on the call after the \
+             animation drains"
+        );
+        // The landing call, with no input of its own.
+        phase.step(ButtonState::new());
+        phase
+    };
+
+    // Fixture precondition: an ordinary landing *does* reach
+    // `CheckStandardWildEncounter`, so the bookkeeping below is a real
+    // observation of that call and not an inert counter.
+    let ordinary = landing_onto(MB_NORMAL);
+    assert_eq!(
+        (
+            ordinary.wild.immunity_steps(),
+            ordinary.wild.prev_metatile_behavior()
+        ),
+        (1, MB_NORMAL),
+        "fixture precondition: an unforced landing spends one immunity step \
+         and records the tile it stepped onto"
+    );
+
+    let forced = landing_onto(MB_MUDDY_SLOPE);
+    assert_eq!(
+        (
+            forced.wild.immunity_steps(),
+            forced.wild.prev_metatile_behavior()
+        ),
+        (0, MB_NORMAL),
+        "a forced-movement landing leaves `checkStandardWildEncounter` unset \
+         upstream, so `CheckStandardWildEncounter` never runs and the \
+         immunity counter and remembered behaviour stay exactly as the \
+         previous step left them"
+    );
+}

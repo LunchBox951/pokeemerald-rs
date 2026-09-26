@@ -1,40 +1,63 @@
-//! The software mixer: owns the active [`Voice`]s, sums them into interleaved
-//! stereo `f32`, and clips.
+//! Owns active DirectSound and CGB voices and renders interleaved stereo frames.
 //!
-//! Behavioural model of `SoundMainRAM`'s outer channel loop (`m4a_1.s:153`):
-//! every active voice steps its envelope once per frame, then adds its
-//! contribution to the shared buffer. The hardware sums into 8-bit lanes that
-//! wrap; here contributions accumulate in `i32` and are **clipped** (not
-//! wrapped) to the `s8` range on the way out, then normalised to `[-1.0, 1.0)`
-//! for the `f32` producer `(no-verbatim)`. Clipping rather than wrapping is a
-//! deliberate, benign fidelity choice for this slice — the wrap-and-carry
-//! behaviour of the packed DMA lanes is a deferred quirk.
+//! DirectSound admission preserves the fixed channel-array scan from
+//! `ply_note` (`m4a_1.s:1669..1718`). The first free slot wins. If the pool is
+//! full, a released voice outranks every sounding candidate; otherwise the
+//! weakest voice that the incoming priority and track can displace wins. At
+//! equal priority, the incoming note displaces its own or a later track; a full
+//! tie displaces the last slot.
+//! CGB voices apply the same priority and track test to their one fixed hardware
+//! slot (`m4a_1.s:1647..1668`).
+//!
+//! Reverb seeds an `i32` accumulator before DirectSound voices render and
+//! commits only that clipped frame to the delay before CGB voices add their
+//! own signal (ring contract: `crate::reverb`). Upstream instead sums packed
+//! 8-bit lanes with wrapping carry between adjacent samples (`m4a_1.s:396..437`).
 
+use crate::cgb_envelope::CgbEnvelopeCadence;
+use crate::cgb_voice::CgbVoice;
 use crate::pitch::SAMPLES_PER_FRAME;
+use crate::psg::FrameSequencer128Hz;
+use crate::reverb::Reverb;
 use crate::voice::{StereoAcc, Voice};
 
-/// Default global mix level (`0..=15`). Emerald's `m4aSoundInit` reconfigures
-/// the driver the instant it starts, calling `m4aSoundMode` with
-/// `12 << SOUND_MODE_MASVOL_SHIFT` (`m4a.c:78`..`:81`); the generic
-/// `SoundInit` placeholder of `15` (`m4a.c:383`) never reaches gameplay.
+#[cfg(test)]
+#[path = "mixer_priority.rs"]
+mod priority_tests;
+
+#[cfg(test)]
+#[path = "mixer_cgb_envelope.rs"]
+mod cgb_envelope_cadence_tests;
+
+/// Emerald's default DirectSound mix level, on a scale from 0 to 15
+/// ([`CgbVoice::begin_frame`](crate::cgb_voice::CgbVoice::begin_frame)'s doc
+/// explains why this never reaches CGB voices).
 pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 
-/// Default DirectSound voice cap. The hardware allows up to
-/// `MAX_DIRECTSOUND_CHANNELS` (12); Emerald's `m4aSoundInit` configures `5`
-/// via `5 << SOUND_MODE_MAXCHN_SHIFT` (`m4a.c:78`..`:81`), overriding the
-/// generic `SoundInit` placeholder of `8` (`m4a.c:384`). New notes past the cap
-/// are dropped for this slice (priority-based voice stealing is out of scope).
+/// Emerald's default DirectSound voice cap.
 pub const DEFAULT_MAX_VOICES: usize = 5;
+
+const MAX_SWEEP_TICKS_PER_FRAME: usize =
+    (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
+
+#[derive(Clone, Copy, Debug)]
+enum VoiceSlot {
+    DirectSound(usize),
+    Cgb(usize),
+}
 
 /// Owns the playing voices and renders them to interleaved stereo `f32`.
 #[derive(Debug)]
 pub struct Mixer {
-    voices: Vec<Voice>,
+    direct_sound_slots: Vec<Option<Voice>>,
+    cgb_slots: [Option<CgbVoice>; 4],
     master_volume: u8,
-    max_voices: usize,
-    /// Reusable per-frame accumulator, sized to [`SAMPLES_PER_FRAME`], so
-    /// steady-state rendering does not allocate.
-    scratch: Vec<StereoAcc>,
+    next_note_on_ordinal: u64,
+    mix_buffer: Vec<StereoAcc>,
+    reverb: Reverb,
+    sweep_clock: FrameSequencer128Hz,
+    sweep_ticks: Vec<usize>,
+    cgb_envelope_cadence: CgbEnvelopeCadence,
 }
 
 impl Default for Mixer {
@@ -44,37 +67,70 @@ impl Default for Mixer {
 }
 
 impl Mixer {
-    /// A mixer with an explicit master volume and voice cap.
+    /// A mixer with an explicit DirectSound master volume and voice cap.
     #[must_use]
     pub fn new(master_volume: u8, max_voices: usize) -> Self {
         Self {
-            voices: Vec::new(),
+            direct_sound_slots: std::iter::repeat_with(|| None).take(max_voices).collect(),
+            cgb_slots: [None, None, None, None],
             master_volume,
-            max_voices,
-            scratch: vec![(0, 0); SAMPLES_PER_FRAME],
+            next_note_on_ordinal: 0,
+            mix_buffer: vec![(0, 0); SAMPLES_PER_FRAME],
+            reverb: Reverb::new(0),
+            sweep_clock: FrameSequencer128Hz::default(),
+            sweep_ticks: Vec::with_capacity(MAX_SWEEP_TICKS_PER_FRAME),
+            cgb_envelope_cadence: CgbEnvelopeCadence::default(),
         }
     }
 
-    /// Number of voices currently sounding.
+    /// Set the song-header reverb level. Zero disables reverb.
+    #[must_use]
+    pub(crate) fn with_reverb_level(mut self, level: u8) -> Self {
+        self.reverb = Reverb::new(level);
+        self
+    }
+
+    fn take_note_on_ordinal(&mut self) -> u64 {
+        let ordinal = self.next_note_on_ordinal;
+        self.next_note_on_ordinal += 1;
+        ordinal
+    }
+
+    /// Number of voices currently sounding, DirectSound and CGB combined.
     #[must_use]
     pub fn voice_count(&self) -> usize {
-        self.voices.len()
+        self.live_direct_sound_voices().count()
+            + self.cgb_slots.iter().filter(|slot| slot.is_some()).count()
     }
 
-    /// Whether any voice is active.
+    /// Whether any voice (DirectSound or CGB) is active.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        self.voices.is_empty()
+        self.direct_sound_slots.iter().all(Option::is_none)
+            && self.cgb_slots.iter().all(Option::is_none)
     }
 
-    /// Read-only view of the live voices, for the sequencer's own tests to
-    /// inspect mid-note volume/pitch updates.
+    /// Whether the master-mix reverb still holds delayed samples that can
+    /// produce a wet tail after all voices have stopped.
+    pub(crate) fn has_pending_reverb(&self) -> bool {
+        self.reverb.has_pending_samples()
+    }
+
+    fn live_direct_sound_voices(&self) -> impl Iterator<Item = &Voice> {
+        self.direct_sound_slots.iter().flatten()
+    }
+
     #[cfg(test)]
-    pub(crate) fn voices(&self) -> &[Voice] {
-        &self.voices
+    pub(crate) fn voices(&self) -> Vec<&Voice> {
+        self.live_direct_sound_voices().collect()
     }
 
-    /// The global mix level.
+    #[cfg(test)]
+    pub(crate) fn cgb_voices(&self) -> &[Option<CgbVoice>; 4] {
+        &self.cgb_slots
+    }
+
+    /// The DirectSound mix level.
     #[must_use]
     pub fn master_volume(&self) -> u8 {
         self.master_volume
@@ -83,93 +139,191 @@ impl Mixer {
     /// The DirectSound voice cap.
     #[must_use]
     pub fn max_voices(&self) -> usize {
-        self.max_voices
+        self.direct_sound_slots.len()
     }
 
-    /// Add a voice, honouring the voice cap. Returns `false` (dropping the
-    /// voice) when already at capacity.
-    pub fn add_voice(&mut self, voice: Voice) -> bool {
-        if self.voices.len() >= self.max_voices {
+    /// Start a DirectSound voice if a free, released, or lower-ranked slot is available.
+    pub fn add_voice(&mut self, mut voice: Voice) -> bool {
+        let Some(slot) = self.select_direct_sound_slot(voice.priority(), voice.track()) else {
             return false;
+        };
+        voice.set_seq(self.take_note_on_ordinal());
+        self.direct_sound_slots[slot] = Some(voice);
+        true
+    }
+
+    fn select_direct_sound_slot(&self, priority: u8, track: Option<usize>) -> Option<usize> {
+        let mut candidate_priority = priority;
+        let mut candidate_track = track;
+        let mut candidate_slot = None;
+        let mut only_released_voices_compete = false;
+
+        for (index, slot) in self.direct_sound_slots.iter().enumerate() {
+            let Some(voice) = slot else {
+                return Some(index);
+            };
+            if voice.is_stopping() {
+                if !only_released_voices_compete {
+                    only_released_voices_compete = true;
+                    candidate_priority = voice.priority();
+                    candidate_track = voice.track();
+                    candidate_slot = Some(index);
+                    continue;
+                }
+            } else if only_released_voices_compete {
+                continue;
+            }
+
+            let voice_priority = voice.priority();
+            if voice_priority < candidate_priority
+                || (voice_priority == candidate_priority && voice.track() >= candidate_track)
+            {
+                candidate_priority = voice_priority;
+                candidate_track = voice.track();
+                candidate_slot = Some(index);
+            }
         }
-        self.voices.push(voice);
+
+        candidate_slot
+    }
+
+    /// Start a CGB voice if its fixed hardware slot is reusable.
+    pub fn add_cgb_voice(&mut self, mut voice: CgbVoice) -> bool {
+        let slot = voice.channel().slot();
+        if let Some(occupant) = &self.cgb_slots[slot] {
+            let reusable = occupant.is_stopping()
+                || occupant.priority() < voice.priority()
+                || (occupant.priority() == voice.priority() && occupant.track() >= voice.track());
+            if !reusable {
+                return false;
+            }
+        }
+        voice.set_seq(self.take_note_on_ordinal());
+        self.cgb_slots[slot] = Some(voice);
         true
     }
 
     /// Tick every voice's note-off gate down by one sequencer tick.
     pub fn tick_gates(&mut self) {
-        for voice in &mut self.voices {
+        for voice in self.direct_sound_slots.iter_mut().flatten() {
+            voice.tick_gate();
+        }
+        for voice in self.cgb_slots.iter_mut().flatten() {
             voice.tick_gate();
         }
     }
 
-    /// Release the *newest* still-sounding voice on `track` whose MIDI key is
-    /// `key` (end-of-tie), then stop.
+    /// Release the newest voice on `track` with the given MIDI `key`.
     ///
-    /// This mirrors `ply_endtie` (`m4a_1.s:1819`): it walks the track's channel
-    /// chain from the head and stops the first channel matching `track->key`.
-    /// Note-on prepends each new channel at the head of that chain (`ply_note`,
-    /// `m4a_1.s:1724`), so "first in the chain" is the most recently started
-    /// voice. We store voices oldest-first, so the scan runs in reverse. A track
-    /// can hold several voices with the same key (overlapping ties); an `EOT`
-    /// retires exactly one — the newest.
+    /// A CGB candidate must be [`CgbVoice::is_end_tie_eligible`] rather than
+    /// merely non-stopping (that method's doc); DirectSound has no such
+    /// divergence and keeps the plain `!is_stopping()` test.
     pub fn note_off_track(&mut self, track: usize, key: u8) {
-        for voice in self.voices.iter_mut().rev() {
-            if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
-                voice.note_off();
-                break;
+        let direct_sound_matches = self
+            .direct_sound_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
+            .filter(|(_, voice)| {
+                voice.track() == Some(track) && !voice.is_stopping() && voice.midi_key() == key
+            })
+            .map(|(index, voice)| (voice.seq(), VoiceSlot::DirectSound(index)));
+        let cgb_matches = self
+            .cgb_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, voice)| voice.as_ref().map(|voice| (index, voice)))
+            .filter(|(_, voice)| {
+                voice.track() == track && voice.is_end_tie_eligible() && voice.midi_key() == key
+            })
+            .map(|(index, voice)| (voice.seq(), VoiceSlot::Cgb(index)));
+
+        let newest_match = direct_sound_matches
+            .chain(cgb_matches)
+            .max_by_key(|(ordinal, _)| *ordinal)
+            .map(|(_, slot)| slot);
+
+        match newest_match {
+            Some(VoiceSlot::DirectSound(index)) => {
+                if let Some(voice) = &mut self.direct_sound_slots[index] {
+                    voice.note_off();
+                }
             }
+            Some(VoiceSlot::Cgb(index)) => {
+                if let Some(voice) = &mut self.cgb_slots[index] {
+                    voice.note_off();
+                }
+            }
+            None => {}
         }
     }
 
-    /// Release every still-sounding voice on `track` (track-end / `FINE`).
-    ///
-    /// Mirrors `ply_fine` (`m4a_1.s:750`): it walks the track's channel chain
-    /// and sets `SOUND_CHANNEL_SF_STOP` on every channel still flagged
-    /// `SOUND_CHANNEL_SF_ON`, releasing it, before the track is cleared. Without
-    /// this a track owning a tied voice (`gate_time == 0`, never auto-releasing)
-    /// or a looping wave would leave that voice sounding forever.
+    /// Release every voice on `track` and give up its allocation ownership.
     pub fn release_track(&mut self, track: usize) {
-        for voice in &mut self.voices {
+        for voice in self.direct_sound_slots.iter_mut().flatten() {
+            if voice.track() == Some(track) {
+                if !voice.is_stopping() {
+                    voice.note_off();
+                }
+                voice.detach_track();
+            }
+        }
+        for voice in self.cgb_slots.iter_mut().flatten() {
             if voice.track() == track && !voice.is_stopping() {
                 voice.note_off();
             }
         }
     }
 
-    /// Rewrite the live base volumes of `track`'s channels from updated track
-    /// `volMR`/`volML` (`MPT_FLG_VOLCHG`).
-    ///
-    /// Mirrors `MPlayMain`'s per-tick re-run of `ChnVolSetAsm` for each ON
-    /// channel of a flagged track (`m4a_1.s:1394`): each voice keeps its own
-    /// velocity, so a mid-note `VOL`/`PAN` change is audible on the held note.
+    /// Stop every voice on `track` and vacate its slot immediately, matching
+    /// `TrackStop`'s channel clears (`m4a_1.s:1480`-`:1500`) rather than
+    /// [`Self::release_track`]'s graceful note-off.
+    pub fn stop_track(&mut self, track: usize) {
+        for slot in &mut self.direct_sound_slots {
+            if let Some(voice) = slot {
+                if voice.track() == Some(track) {
+                    *slot = None;
+                }
+            }
+        }
+        for slot in &mut self.cgb_slots {
+            if let Some(voice) = slot {
+                if voice.track() == track {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// Apply updated track volume and panning to every live voice on `track`.
     pub fn set_track_volume(&mut self, track: usize, vol_mr: u8, vol_ml: u8) {
-        for voice in &mut self.voices {
+        for voice in self.direct_sound_slots.iter_mut().flatten() {
+            if voice.track() == Some(track) {
+                voice.set_track_volume(vol_mr, vol_ml);
+            }
+        }
+        for voice in self.cgb_slots.iter_mut().flatten() {
             if voice.track() == track {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
     }
 
-    /// Rewrite the live playback frequency of `track`'s channels from updated
-    /// track `keyM`/`pitM` (`MPT_FLG_PITCHG`).
-    ///
-    /// Mirrors `MPlayMain`'s per-tick pitch re-run for each ON channel of a
-    /// flagged track (`m4a_1.s:1403`..`:1451`): it recomputes the played
-    /// frequency from the channel's stored key plus the track's updated key/fine
-    /// offset via `MidiKeyToFreq`, so a mid-note `BEND`/`BENDR`/`KEYSH`/`TUNE`
-    /// bends the held note.
+    /// Apply updated track pitch to every live voice on `track`.
     pub fn set_track_pitch(&mut self, track: usize, key_m: i32, pit_m: u8) {
-        for voice in &mut self.voices {
+        for voice in self.direct_sound_slots.iter_mut().flatten() {
+            if voice.track() == Some(track) {
+                voice.set_track_pitch(key_m, pit_m);
+            }
+        }
+        for voice in self.cgb_slots.iter_mut().flatten() {
             if voice.track() == track {
                 voice.set_track_pitch(key_m, pit_m);
             }
         }
     }
 
-    /// Render exactly one frame ([`SAMPLES_PER_FRAME`] stereo samples) into
-    /// `out`, which must hold `SAMPLES_PER_FRAME * 2` interleaved `f32`s
-    /// (`[l, r, l, r, …]`). Retires voices that fell silent.
+    /// Render one frame of interleaved stereo samples and retire silent voices.
     ///
     /// # Panics
     ///
@@ -181,192 +335,74 @@ impl Mixer {
             "mix_frame expects one frame of interleaved stereo",
         );
 
-        for acc in &mut self.scratch {
-            *acc = (0, 0);
-        }
-        for voice in &mut self.voices {
-            voice.begin_frame(self.master_volume);
-            voice.render(&mut self.scratch);
-        }
-        self.voices.retain(Voice::is_active);
+        self.reverb.seed_frame(&mut self.mix_buffer);
 
-        for (frame, acc) in self.scratch.iter().enumerate() {
-            out[frame * 2] = clip(acc.0);
-            out[frame * 2 + 1] = clip(acc.1);
+        for slot in &mut self.direct_sound_slots {
+            if let Some(voice) = slot {
+                voice.begin_frame(self.master_volume);
+                voice.render(&mut self.mix_buffer);
+                if !voice.is_active() {
+                    *slot = None;
+                }
+            }
+        }
+
+        // Clip and commit the DirectSound-only frame before CGB renders, so
+        // CGB output never enters the DirectSound reverb ring (m4a_1.s:88..119).
+        for sample in &mut self.mix_buffer {
+            *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
+        }
+        self.reverb.commit_frame(&self.mix_buffer);
+
+        self.sweep_clock
+            .advance_into(self.mix_buffer.len(), &mut self.sweep_ticks);
+        debug_assert!(
+            self.sweep_ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
+            "a frame's tick buffer must never have to grow",
+        );
+        let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
+        for slot in &mut self.cgb_slots {
+            if let Some(voice) = slot {
+                voice.begin_frame(extra_envelope_iteration);
+                voice.render(&mut self.mix_buffer, &self.sweep_ticks);
+                if !voice.is_active() {
+                    *slot = None;
+                }
+            }
+        }
+
+        for sample in &mut self.mix_buffer {
+            *sample = (clip_to_s8(sample.0), clip_to_s8(sample.1));
+        }
+
+        for (frame, &(left, right)) in self.mix_buffer.iter().enumerate() {
+            out[frame * 2] = normalise_s8(left);
+            out[frame * 2 + 1] = normalise_s8(right);
         }
     }
 }
 
-/// Clip a summed accumulator to the `s8` range and normalise to `[-1.0, 1.0)`.
-fn clip(sample: i32) -> f32 {
-    // Clamped to `[-128, 127]`, every value is exactly representable in `f32`.
-    #[allow(clippy::cast_precision_loss)]
-    let clamped = sample.clamp(-128, 127) as f32;
-    clamped / 128.0
+fn clip_to_s8(sample: i32) -> i32 {
+    sample.clamp(-128, 127)
+}
+
+fn normalise_s8(sample: i32) -> f32 {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "clamped to [-128, 127] by clip_to_s8, every value is exactly \
+                  representable in f32"
+    )]
+    let value = sample as f32;
+    value / 128.0
 }
 
 #[cfg(test)]
-// Expected values are computed from small integer terms and compared with an
-// epsilon; the casts are exact for these magnitudes. Silence checks compare
-// exactly-representable `0.0`/`-1.0` values on purpose.
-#[allow(clippy::cast_precision_loss, clippy::float_cmp)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::envelope::Adsr;
-    use crate::pitch::{DIV_FREQ, FRAC_BITS};
-    use crate::sample::WaveData;
-
-    fn unity_freq() -> u32 {
-        (1 << FRAC_BITS) / DIV_FREQ
-    }
-
-    fn constant_voice(level: i8, track: usize) -> Voice {
-        keyed_voice(level, track, 60, 0xFF, 0xFF)
-    }
-
-    fn keyed_voice(level: i8, track: usize, key: u8, right: u8, left: u8) -> Voice {
-        // A long constant wave so a whole frame renders without ending; a `0`
-        // gate makes it tied (it only stops on an explicit note-off).
-        let data = vec![level; SAMPLES_PER_FRAME + 4];
-        let wave = Arc::new(WaveData::one_shot(0, data));
-        Voice::new(
-            wave,
-            Adsr::flat(),
-            unity_freq(),
-            right,
-            left,
-            127,
-            0,
-            key,
-            track,
-            0,
-            0,
-        )
-    }
-
-    #[test]
-    fn empty_mixer_renders_silence() {
-        let mut mixer = Mixer::default();
-        let mut out = vec![9.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        assert!(out.iter().all(|&s| s == 0.0));
-        assert!(mixer.is_idle());
-    }
-
-    #[test]
-    fn single_voice_is_scaled_and_normalised() {
-        // Pin master volume to 15 so the documented `254` env gain holds; this
-        // test exercises the mixing math, not the Emerald default (12).
-        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
-        mixer.add_voice(constant_voice(50, 0));
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        // env gain 254, contribution (254*50)>>8 = 49, /128.
-        let expected = (((254 * 50) >> 8) as f32) / 128.0;
-        assert!((out[0] - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn two_voices_sum() {
-        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
-        mixer.add_voice(constant_voice(40, 0));
-        mixer.add_voice(constant_voice(30, 1));
-        assert_eq!(mixer.voice_count(), 2);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        let a = (254 * 40) >> 8;
-        let b = (254 * 30) >> 8;
-        let expected = ((a + b) as f32) / 128.0;
-        assert!((out[0] - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn loud_sum_clips_to_full_scale() {
-        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
-        // Four hard-driven voices sum past the s8 range and must clip.
-        for track in 0..4 {
-            mixer.add_voice(constant_voice(127, track));
-        }
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        // Each contributes (254*127)>>8 = 125; 4*125 = 500 clips to 127.
-        assert!((out[0] - (127.0 / 128.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn negative_sum_clips_to_minus_one() {
-        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
-        for track in 0..4 {
-            mixer.add_voice(constant_voice(-128, track));
-        }
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        assert!((out[0] - (-1.0)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn note_off_track_stops_only_the_first_matching_voice() {
-        // Two overlapping voices share key 60 on track 0; a third holds key 64.
-        // `EOT` retires exactly one key-60 voice, leaving the other still
-        // sounding (mirrors `ply_endtie`'s break-on-first-match).
-        let mut mixer = Mixer::default();
-        mixer.add_voice(keyed_voice(50, 0, 60, 0xFF, 0xFF));
-        mixer.add_voice(keyed_voice(50, 0, 60, 0xFF, 0xFF));
-        mixer.add_voice(keyed_voice(50, 0, 64, 0xFF, 0xFF));
-        mixer.note_off_track(0, 60);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        // Only the first key-60 voice was released and retired.
-        assert_eq!(mixer.voice_count(), 2);
-    }
-
-    #[test]
-    fn note_off_track_matches_the_requested_key() {
-        // Key 60 is panned hard-left, key 64 hard-right, both on track 0. An
-        // `EOT` on key 64 stops only that voice, silencing the right channel
-        // while the left keeps sounding.
-        let mut mixer = Mixer::default();
-        mixer.add_voice(keyed_voice(60, 0, 60, 0x00, 0xFF));
-        mixer.add_voice(keyed_voice(60, 0, 64, 0xFF, 0x00));
-        mixer.note_off_track(0, 64);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        let left: f32 = out.iter().step_by(2).map(|s| s.abs()).sum();
-        let right: f32 = out.iter().skip(1).step_by(2).map(|s| s.abs()).sum();
-        assert_eq!(mixer.voice_count(), 1);
-        assert!(left > 0.0, "surviving key-60 voice should keep sounding");
-        assert_eq!(right, 0.0, "released key-64 voice should be silent");
-    }
-
-    #[test]
-    fn note_off_track_releases_the_newest_matching_voice() {
-        // Upstream `ply_note` prepends each new channel at the head of the
-        // track's chain and `ply_endtie` stops the first match — the newest
-        // voice. Two key-60 voices overlap on track 0: the older is panned
-        // hard-left, the newer hard-right. An `EOT` must retire the newer
-        // (right) voice, leaving the left one sounding. Before the fix the scan
-        // ran oldest-first and silenced the left channel instead.
-        let mut mixer = Mixer::default();
-        mixer.add_voice(keyed_voice(60, 0, 60, 0x00, 0xFF)); // older: left only
-        mixer.add_voice(keyed_voice(60, 0, 60, 0xFF, 0x00)); // newer: right only
-        mixer.note_off_track(0, 60);
-        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
-        mixer.mix_frame(&mut out);
-        let left: f32 = out.iter().step_by(2).map(|s| s.abs()).sum();
-        let right: f32 = out.iter().skip(1).step_by(2).map(|s| s.abs()).sum();
-        assert_eq!(mixer.voice_count(), 1);
-        assert!(left > 0.0, "older left voice should keep sounding");
-        assert_eq!(right, 0.0, "newer right voice should be released");
-    }
-
-    #[test]
-    fn voice_cap_drops_extra_notes() {
-        let mut mixer = Mixer::new(DEFAULT_MASTER_VOLUME, 2);
-        assert!(mixer.add_voice(constant_voice(10, 0)));
-        assert!(mixer.add_voice(constant_voice(10, 1)));
-        assert!(!mixer.add_voice(constant_voice(10, 2)));
-        assert_eq!(mixer.voice_count(), 2);
-    }
-}
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    reason = "expected values are computed from small integer terms whose casts \
+              are exact at these magnitudes, and silence checks compare \
+              exactly-representable 0.0/-1.0 values on purpose"
+)]
+#[path = "mixer_mixing.rs"]
+mod tests;

@@ -1,6 +1,10 @@
-# Canonical label set for the repository. Kept lean (lean-docs) and stable so
-# contributors inherit a clear workflow from the start. Apply with a label-sync
-# action or `gh label` against this file.
+# Managed baseline label set for the repository: every label below should
+# exist, but this file is additive, not canonical or exhaustive — live GitHub
+# may carry further topical labels this baseline doesn't enumerate. Kept lean
+# (lean-docs) and stable so contributors inherit a clear workflow from the
+# start. Apply with `gh label create`/`gh label edit` (or an additive
+# label-sync step) against this file; never destructively sync labels that
+# only exist live.
 
 # --- Subsystem / area ---
 - name: roadmap
@@ -37,6 +41,9 @@
 - name: needs-review
   color: "d4c5f9"
   description: Awaiting maintainer or routine review before it can advance.
+- name: needs-split
+  color: "c5def5"
+  description: Valid work too large for one agent session; a later pass splits it into sub-issues.
 - name: needs-operator
   color: "e99695"
   description: Blocked on a genuine human decision, incl. player-channel promotion signoff.

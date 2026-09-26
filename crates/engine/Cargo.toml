@@ -2,7 +2,35 @@
 name = "engine"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Workspace-local path dependency, not an external crate -- `minimal-deps`
+# owner approval does not apply (see `pokeemerald-rs`'s `Cargo.toml` for the
+# identical reasoning). `overworld` (issue #108) reuses `assets`' typed map
+# headers/connections/events and its `LayoutGrid`/`MetatileAttributeTable`
+# decode layer rather than redefining them; `assets` depends only on the std-only
+# `pack-format`, so this does not drag anything new into engine's build.
+assets = { path = "../assets" }
+pack-format = { path = "../pack-format" }
+
+# The one external crate this package names (`minimal-deps`; S-4, issue
+# #1132): closes `StagedSave::remove_after`'s Windows handle-bound cleanup
+# delete (see `WindowsFileIdentity` in `src/save/file/staging.rs`). Approval
+# trail, exact version, and feature boundary are recorded in the dependency
+# ledger (`README.md`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+# The same workspace-local crate with its test-only seam enabled: unit tests
+# build synthetic font sheets via FontImageRef::new_for_tests. The feature is
+# dev-only, so production builds keep the pack-mediated pairing guarantee.
+assets = { path = "../assets", features = ["test-support"] }

@@ -1,0 +1,916 @@
+//! [`Status1::Paralysed`], the full-paralysis attacker gate, and
+//! [`BattleScript_EffectParalyze`] (Thunder Wave/Stun Spore/Glare), driven
+//! through real turns.
+//!
+//! Unit-level draw shapes are pinned inside `battle::status1` (the
+//! full-paralysis draw) and `battle::paralyze` (the type/status guards and
+//! the accuracy draw). What is pinned **here** is the wiring only a turn can
+//! show: that the full-paralysis draw runs before PP is ever touched, that a
+//! cancelled mover keeps its PP while a mover whose move merely fails inside
+//! its own script (immunity) still spends it, and that the quarter-speed
+//! modifier really reorders who acts first.
+
+use crate::common::{
+    max_iv_mon, max_iv_mon_with_personality, SequenceRng, MAX_IVS, SECONDARY_ABILITY_PERSONALITY,
+};
+use assets::{MoveId, SpeciesId};
+use battle::{Battle, BattleEvent, BattlePokemon, Dex, PlayerAction, Status1, STRUGGLE};
+
+/// `MOVE_TACKLE`.
+const TACKLE: MoveId = MoveId(33);
+/// `MOVE_THUNDER_WAVE` (`EFFECT_PARALYZE`).
+const THUNDER_WAVE: MoveId = MoveId(86);
+/// `MOVE_ABSORB` (`EFFECT_ABSORB`), the drain pipeline's own double-faint
+/// fixture move (`turn_engine/pipelines.rs`).
+const ABSORB: MoveId = MoveId(71);
+
+/// `SPECIES_RATTATA`: base Speed 72, the fast mover in every fixture below.
+const RATTATA: u16 = 19;
+/// `SPECIES_CHARMANDER`, level 50 against level-2 Rattata: one-shots it, the
+/// same overkill fixture `move_resolution.rs`'s own test uses.
+const CHARMANDER: u16 = 4;
+/// `SPECIES_BULBASAUR`: the enemy fixture `move_resolution.rs`'s own
+/// forced-Struggle test survives a Rattata Tackle from, reused here so this
+/// module does not need to re-derive that damage figure.
+const BULBASAUR: u16 = 1;
+/// `SPECIES_TENTACOOL`: Clear Body in ability slot 0, **Liquid Ooze** in slot
+/// 1, so an odd personality (`turn_engine/pipelines.rs`'s own convention)
+/// fields the ability whose recoil produces this module's double faint.
+const TENTACOOL: u16 = 72;
+/// `SPECIES_GASTLY`: Ghost/Poison, immune to the Normal-type Tackle used to
+/// keep a target alive without hand-computing damage.
+const GASTLY: u16 = 92;
+/// `SPECIES_ZIGZAGOON`: an ordinary Normal-type target for Thunder Wave.
+const ZIGZAGOON: u16 = 288;
+/// `SPECIES_SANDSHREW`: pure Ground, immune to Thunder Wave's Electric type.
+const SANDSHREW: u16 = 27;
+/// `SPECIES_MAKUHITA`: Fighting/Fighting, Guts in ability slot 1 (Thick Fat
+/// is slot 0).
+const MAKUHITA: u16 = 335;
+/// `SPECIES_MILOTIC`: Water/Water, Marvel Scale in its primary (and only)
+/// ability slot.
+const MILOTIC: u16 = 329;
+
+#[test]
+fn full_paralysis_cancels_before_the_no_pp_abort_and_retains_pp() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE, MoveId(45)]); // Tackle, Growl
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    enemy.set_status1(Status1::Paralysed);
+    assert_eq!(enemy.moves()[0].pp, 0, "fixture sanity: slot 0 has no PP");
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // rejection-loop pick (0 -> slot 0, the drained Tackle, since the loop
+    // ignores PP), the player's immune Tackle (4 draws), the enemy's
+    // full-paralysis draw (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::NoEffect {
+                by_player: true,
+                move_id: TACKLE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "the drained slot must report FullyParalyzed, never FailedNoPp -- \
+         the canceller draw precedes the no-PP abort: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        0,
+        "cancellation never reaches ppreduce"
+    );
+    assert_eq!(rng.draws(), 8);
+}
+
+#[test]
+fn a_fully_paralysed_mover_emits_no_move_event_and_keeps_its_pp() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, GASTLY, 5, vec![TACKLE]);
+    player.set_status1(Status1::Paralysed);
+    let starting_pp = player.moves()[0].pp;
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // (only) selection, the enemy's immune Tackle into the Ghost player (4
+    // draws), the player's full-paralysis draw (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::NoEffect {
+                by_player: false,
+                move_id: TACKLE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: true,
+                move_id: TACKLE,
+            },
+        ]
+    );
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        starting_pp,
+        "a cancelled move never spends PP"
+    );
+}
+
+#[test]
+fn paralysis_quarters_speed_and_removes_a_would_be_tie() {
+    let dex = Dex::new();
+    // A mirror match ties on raw Speed (module docs, `turn_engine/turn_order.rs`).
+    // Paralysing the player breaks the tie in the *enemy's* favor without any
+    // tie-break draw, proving turn order reads the quartered speed and not
+    // the stage-scaled one.
+    let mut player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    player.set_status1(Status1::Paralysed);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the enemy's ordinary Tackle (4 draws: this mirror match
+    // survives it, `turn_engine/turn_order.rs`'s own fixture), the player's
+    // full-paralysis draw (residue 1 -> proceeds normally), then the
+    // player's own ordinary Tackle (4 more draws).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        matches!(
+            events[0],
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "the enemy, no longer tied, must act first: {events:?}"
+    );
+    assert!(
+        matches!(
+            events[1],
+            BattleEvent::Hit {
+                by_player: true,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "residue 1 (not 0 mod 4) lets the paralysed player act second: {events:?}"
+    );
+    assert_eq!(
+        rng.draws(),
+        12,
+        "no tie-break draw: quartering already separated the two speeds"
+    );
+}
+
+#[test]
+fn thunder_wave_inflicts_paralysis_which_then_gates_the_same_turns_later_mover() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let thunder_wave_pp = dex.move_data(THUNDER_WAVE).unwrap().pp;
+    let tackle_pp = dex.move_data(TACKLE).unwrap().pp;
+    let enemy = max_iv_mon(&dex, ZIGZAGOON, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the type
+    // and already-paralysed guards draw nothing), the enemy's own
+    // full-paralysis draw against the status the player's move just wrote
+    // (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "the paralysis this turn's earlier move wrote gates the later mover \
+         in the very same turn: {events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(battle.player().moves()[0].pp, thunder_wave_pp - 1);
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        tackle_pp,
+        "the cancelled Tackle never reached ppreduce"
+    );
+}
+
+#[test]
+fn a_type_immune_thunder_wave_still_spends_pp_unlike_a_cancelled_move() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let thunder_wave_pp = dex.move_data(THUNDER_WAVE).unwrap().pp;
+    let enemy = max_iv_mon(&dex, SANDSHREW, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's immune Thunder Wave (0 draws: the type guard
+    // precedes accuracy), the enemy's ordinary Tackle (4 draws).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::NoEffect {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        }
+    );
+    assert!(matches!(
+        events[1],
+        BattleEvent::Hit {
+            by_player: false,
+            move_id: TACKLE,
+            ..
+        }
+    ));
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        thunder_wave_pp - 1,
+        "ppreduce runs before typecalc's immunity verdict, unlike a \
+         full-paralysis cancellation, which never reaches ppreduce"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+    assert_eq!(rng.draws(), 7);
+}
+
+#[test]
+fn a_paralysed_forced_struggle_enemy_is_cancelled_before_the_struggle_error() {
+    // Struggle still shares `BattleScript_HitFromAtkCanceler` with every
+    // ordinary move (`data/battle_scripts_1.s:241`-`:247`), so a paralysed
+    // enemy forced into it draws the same full-paralysis check first --
+    // this crate's honest "cannot execute Struggle" stop only applies past
+    // that gate, not before it.
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, BULBASAUR, 5, vec![TACKLE]);
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    enemy.set_status1(Status1::Paralysed);
+
+    // battle-start turn number, the turn's own turn number (no selection
+    // draw: every enemy slot is spent, so the rejection loop short-circuits
+    // to Struggle without drawing), the player's ordinary Tackle (4 draws;
+    // this exact fixture is `move_resolution.rs`'s own forced-Struggle
+    // pairing, so it is known to survive), the enemy's full-paralysis draw
+    // against its forced Struggle (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        matches!(
+            events[0],
+            BattleEvent::Hit {
+                by_player: true,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "the player's earlier hit still committed: {events:?}"
+    );
+    assert_eq!(
+        events[1],
+        BattleEvent::FullyParalyzed {
+            by_player: false,
+            move_id: STRUGGLE,
+        },
+        "cancelled by its own paralysis draw, not upstream's unmodelled \
+         Struggle mechanics: {events:?}"
+    );
+    assert_eq!(rng.draws(), 7);
+    assert!(
+        battle.outcome().is_none(),
+        "a full-paralysis cancellation is not an error: the turn completes \
+         normally, unlike an uncancelled forced Struggle"
+    );
+}
+
+/// `data/battle_scripts_1.s:1013`-`:1014`: `typecalc` then
+/// `jumpifmovehadnoeffect BattleScript_ButItFailed`. `typecalc`'s
+/// `ModulateDmgByType(TYPE_MUL_NO_EFFECT)` sets `MOVE_RESULT_DOESNT_AFFECT_FOE`
+/// (`src/battle_script_commands.c:1327`), and `BattleScript_ButItFailed`
+/// (`:2058`-`:2061`) only *adds* `MOVE_RESULT_FAILED` before `resultmessage`.
+/// With both bits set and `MOVE_RESULT_MISSED` clear, `Cmd_resultmessage`
+/// falls to its `default:` arm and picks `STRINGID_ITDOESNTAFFECT`
+/// (`src/battle_script_commands.c:2090`-`:2093`), not `STRINGID_BUTITFAILED`
+/// -- the same verdict an ordinary type-immune hit already gets.
+#[test]
+fn a_type_immune_thunder_wave_reports_no_effect_not_a_plain_failure() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, SANDSHREW, 5, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's immune Thunder Wave (0 draws: the type guard
+    // precedes accuracy), the enemy's ordinary Tackle (4 draws).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events[0],
+        BattleEvent::NoEffect {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "Electric cannot touch a pure Ground target, so typecalc's \
+         DOESNT_AFFECT_FOE decides the message: {events:?}"
+    );
+}
+
+/// `Cmd_cleareffectsonfaint`'s `hp == 0` branch zeroes the corpse's
+/// `status1` before `FaintClearSetData` runs
+/// (`battle_script_commands.c:3063`-`:3077`), so a paralysed battler that
+/// faints leaves battle healthy.
+#[test]
+fn a_faint_clears_the_corpse_primary_status() {
+    let dex = Dex::new();
+    // Level 50 Charmander one-shots a level 2 Rattata, so one turn reaches
+    // the faint; the paralysed enemy never acts, so it never draws.
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+    enemy.set_status1(Status1::Paralysed);
+
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "fixture sanity: the enemy must faint this turn: {events:?}"
+    );
+    assert_eq!(battle.enemy().current_hp(), 0);
+    assert_eq!(
+        battle.enemy().status1(),
+        Status1::Healthy,
+        "faint settlement must zero the corpse's primary status"
+    );
+}
+
+/// The double-faint arm of the drain pipeline (`execute_drain_move`) settles
+/// both corpses through its own loop, not [`Battle::settle_faint`], so it
+/// needs its own pin: a Liquid Ooze kill zeroes the recoiling *attacker's*
+/// primary status exactly as it zeroes the *target's*.
+#[test]
+fn a_double_faint_clears_both_corpses_primary_status() {
+    let dex = Dex::new();
+    let mut player =
+        BattlePokemon::new(&dex, SpeciesId(BULBASAUR), 50, MAX_IVS, 0, vec![ABSORB]).unwrap();
+    let player_max_hp = player.stats().max_hp;
+    // Leave the attacker on less HP than the Liquid Ooze recoil will take,
+    // matching `turn_engine/pipelines.rs`'s own fixture exactly.
+    player.apply_damage(player_max_hp - 6);
+    player.set_status1(Status1::Paralysed);
+    // Odd personality selects ability slot 1: Liquid Ooze, not Clear Body.
+    let mut enemy =
+        BattlePokemon::new(&dex, SpeciesId(TENTACOOL), 5, MAX_IVS, 1, vec![TACKLE]).unwrap();
+    enemy.set_status1(Status1::Paralysed);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the paralysed *attacker's* own full-paralysis draw
+    // (residue 1 -> proceeds -- `Battle::act` gates the user's own move
+    // too, not only a defender), then Absorb's 3 draws (accuracy, crit,
+    // damage roll -- drain has no trailing effect-chance draw).
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 1, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: true })
+            && events.contains(&BattleEvent::Fainted { by_player: false }),
+        "fixture sanity: both sides must faint this turn: {events:?}"
+    );
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Healthy,
+        "the recoiling attacker's own corpse is cleared too"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Healthy);
+}
+
+/// The mirror of [`a_faint_clears_the_corpse_primary_status`]: nothing
+/// clears paralysis just because the *other* battler went down. Upstream's
+/// `Cmd_cleareffectsonfaint` only ever touches the fainted battler's own
+/// `status1` (`battle_script_commands.c:3063`-`:3068`).
+#[test]
+fn a_surviving_paralysed_winner_keeps_its_status_after_the_opponent_faints() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    player.set_status1(Status1::Paralysed);
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's full-paralysis draw (residue 1 -> proceeds),
+    // the player's ordinary Tackle (4 draws) that one-shots the enemy.
+    let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "fixture sanity: the enemy must faint this turn: {events:?}"
+    );
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "the winner did not faint, so its own paralysis outlives the win"
+    );
+}
+
+/// `SPECIES_RALTS`: Psychic (not immune to Thunder Wave), **Synchronize** in
+/// its primary ability slot, and a Route 102 wild encounter.
+const RALTS: u16 = 392;
+
+#[test]
+fn thunder_wave_against_a_synchronize_target_reflects_paralysis_at_move_end() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::SYNCHRONIZE,
+        "fixture sanity: the primary slot fields Synchronize"
+    );
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the
+    // reflection itself draws nothing), the enemy's own full-paralysis draw
+    // against its own Tackle, now that the reflection paralysed it too
+    // (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Synchronize is admitted: the reflection is modelled");
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "the initial status and its message precede MOVEEND_SYNCHRONIZE_TARGET's \
+         reflection, which precedes the rest of move-end processing: {events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "Synchronize passes the paralysis back to the battler that inflicted it"
+    );
+    assert_eq!(rng.draws(), 5, "the reflection consumes no RNG of its own");
+}
+
+/// `SPECIES_PERSIAN`: Normal, Limber in its only ability slot, faster than
+/// Ralts even unquartered.
+const PERSIAN: u16 = 53;
+
+#[test]
+fn a_limber_original_attacker_blocks_its_own_reflected_paralysis() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, PERSIAN, 5, vec![THUNDER_WAVE]);
+    assert_eq!(player.ability(), assets::AbilityId::LIMBER);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+
+    // Same shape as the reflection test above: Persian's own Limber blocks
+    // the reflection rather than the accuracy draw or typecalc, so the draw
+    // count and positions are unchanged.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::SynchronizeLimberProtected {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Healthy,
+        "Limber protects the original attacker from the reflection"
+    );
+}
+
+/// `SPECIES_ONIX`: Rock/Ground, immune to Thunder Wave's Electric type, and
+/// faster than Ralts.
+const ONIX: u16 = 95;
+
+#[test]
+fn synchronize_reflects_paralysis_onto_a_type_immune_original_attacker() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, ONIX, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+
+    // Same shape again: Ralts is not itself type-immune to Thunder Wave, so
+    // the initial hit lands and reflects. The reflection re-enters
+    // `SetMoveEffect` without `typecalc`, so Onix's own Ground typing --
+    // immune to the Electric move it just used -- does not block it.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "type effectiveness never gates the reflection: {events:?}"
+    );
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "a type-immune original attacker is still paralysed by the reflection"
+    );
+}
+
+/// `ppreduce` (`data/battle_scripts_1.s:1010`) runs ahead of every guard, so
+/// the already-paralysed exit still costs PP — and, reaching that exit before
+/// `seteffectprimary`, never triggers a reflection.
+#[test]
+fn an_already_paralysed_synchronize_defender_spends_pp_and_reports_the_status() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let mut enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    enemy.set_status1(Status1::Paralysed);
+    let mut rng = SequenceRng::new([0; 16]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let pp_before = battle.player().moves()[0].pp;
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("the pick is admitted: this interaction is fully modelled");
+
+    assert_eq!(
+        events[0],
+        BattleEvent::AlreadyParalyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(
+        battle.player().moves()[0].pp,
+        pp_before - 1,
+        "ppreduce precedes the guard that ended the move"
+    );
+    assert_eq!(battle.player().status1(), Status1::Healthy);
+}
+
+/// A paralysed attacker is admitted against a Synchronize defender: the
+/// reflection re-enters `SetMoveEffect` against a battler that already carries
+/// a primary status, whose paralysis case writes nothing
+/// (`src/battle_script_commands.c:2422`-`:2423`). The turn therefore runs the
+/// attack canceller like any other.
+#[test]
+fn a_paralysed_attacker_reaches_the_canceller_against_a_synchronize_defender() {
+    // A level-50 attacker outspeeds the level-5 defender even quartered, so it
+    // is the first mover and draw 3 -- its full-paralysis check -- decides the
+    // turn: a multiple of 4 cancels the move, anything else lets it through to
+    // a landing Thunder Wave. Draws 0..3 are the two turn numbers and the
+    // enemy's slot-0 pick; the rest feed accuracy and the enemy's Tackle.
+    for (paralysis_draw, cancelled) in [(4u16, true), (5u16, false)] {
+        let dex = Dex::new();
+        let mut player = max_iv_mon(&dex, RATTATA, 50, vec![THUNDER_WAVE]);
+        player.set_status1(Status1::Paralysed);
+        let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+        let mut rng = SequenceRng::new([0, 0, 0, paralysis_draw, 5, 5, 5, 5, 5, 5, 5, 5]);
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .expect("a paralysed attacker leaves Synchronize no target, so the pick is admitted");
+
+        let expected = if cancelled {
+            BattleEvent::FullyParalyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            }
+        } else {
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            }
+        };
+        assert_eq!(events[0], expected, "{events:?}");
+        assert_eq!(
+            battle.enemy().status1(),
+            if cancelled {
+                Status1::Healthy
+            } else {
+                Status1::Paralysed
+            },
+            "a cancelled move never reaches seteffectprimary"
+        );
+        assert_eq!(
+            battle.player().status1(),
+            Status1::Paralysed,
+            "the attacker's own status is never rewritten by the reflection"
+        );
+    }
+}
+
+/// `SPECIES_SEVIPER`: Poison, Shed Skin in its primary ability slot.
+const SEVIPER: u16 = 379;
+/// `SPECIES_ABRA`: Psychic, raw Speed 15 at level 5 -- faster than
+/// [`SEVIPER`]'s 13, so the player's Thunder Wave resolves first with no
+/// speed-tie draw.
+const ABRA: u16 = 63;
+
+/// Shed Skin's end-turn cure draw lives in `Battle::residual_effects`
+/// instead of the pre-turn admission screen, so a fresh paralysis on a Shed
+/// Skin holder is applied like any other, and that same end-turn pass then
+/// rolls its own cure chance for the newly statused holder
+/// (`src/battle_util.c:2620`-`:2621`).
+#[test]
+fn a_shed_skin_defender_is_newly_paralysed_not_refused() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, ABRA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, SEVIPER, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), assets::AbilityId::SHED_SKIN);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw), the enemy's
+    // own full-paralysis draw against the status the player's move just
+    // wrote (residue 0 -> cancelled), then that same battler's end-turn
+    // Shed Skin draw (residue 1 -> miss, the status survives the turn).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Shed Skin's cure draw lives in the residual pass, so the pick is admitted");
+
+    assert_eq!(
+        events[0],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::ShedSkinCured { .. })),
+        "the scripted miss must leave the status uncured this turn: {events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
+    );
+}
+
+/// Shed Skin admits a Synchronize reflection just like a direct hit: the
+/// end-turn cure draw that used to justify refusing both now runs from the
+/// residual pass instead.
+#[test]
+fn a_shed_skin_attacker_is_paralysed_by_a_synchronize_reflection_not_refused() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, SEVIPER, 5, vec![THUNDER_WAVE]);
+    assert_eq!(player.ability(), assets::AbilityId::SHED_SKIN);
+    let enemy = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(enemy.ability(), assets::AbilityId::SYNCHRONIZE);
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the
+    // reflection itself draws nothing), the enemy's own full-paralysis draw
+    // against its own Tackle now that the reflection paralysed it too
+    // (residue 0 -> cancelled), then the player's own end-turn Shed Skin
+    // draw against the status the reflection just wrote (residue 1 -> miss).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Synchronize is admitted: the reflection is modelled");
+
+    assert_eq!(
+        events,
+        vec![
+            BattleEvent::Paralyzed {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::ParalyzedBySynchronize {
+                by_player: true,
+                move_id: THUNDER_WAVE,
+            },
+            BattleEvent::FullyParalyzed {
+                by_player: false,
+                move_id: TACKLE,
+            },
+        ],
+        "{events:?}"
+    );
+    assert_eq!(
+        battle.player().status1(),
+        Status1::Paralysed,
+        "Synchronize passes the paralysis back to the Shed Skin attacker, \
+         and the scripted miss leaves it uncured this turn"
+    );
+    assert_eq!(
+        rng.draws(),
+        6,
+        "the end-turn Shed Skin cure draw must be consumed, not skipped"
+    );
+}
+
+/// A spent slot never reaches `seteffectprimary` — `Cmd_attackcanceler` aborts
+/// it at `battle_script_commands.c:934`-`:939` — so it carries no ability
+/// interaction to screen, and the battle must still start.
+#[test]
+fn a_depleted_enemy_paralyze_slot_does_not_block_a_synchronize_lead() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RALTS, 5, vec![TACKLE]);
+    assert_eq!(player.ability(), assets::AbilityId::SYNCHRONIZE);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE, TACKLE]);
+    for _ in 0..enemy.moves()[0].pp {
+        enemy.deduct_pp(0).unwrap();
+    }
+    assert_eq!(enemy.moves()[0].pp, 0, "fixture sanity: slot 0 is spent");
+
+    let mut rng = SequenceRng::new([0; 4]);
+    let battle = Battle::new(dex, player, enemy, false, &mut rng);
+
+    assert!(
+        battle.is_ok(),
+        "a spent Thunder Wave cannot paralyse the Synchronize lead: {:?}",
+        battle.err()
+    );
+}
+
+/// Guts and Marvel Scale are modelled as raw physical Attack/Defense
+/// modifiers in [`battle::BattlePokemon::attacking_stat`] and
+/// [`battle::BattlePokemon::defending_stat`], so the pick is admitted and
+/// paralysis lands exactly like it would against any other ability.
+#[test]
+fn thunder_wave_newly_paralyses_a_healthy_guts_defender() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon_with_personality(
+        &dex,
+        MAKUHITA,
+        5,
+        vec![TACKLE],
+        SECONDARY_ABILITY_PERSONALITY,
+    );
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::GUTS,
+        "fixture sanity: personality 25 fields the secondary ability slot"
+    );
+
+    // battle-start turn number, the turn's own turn number, the enemy's
+    // selection, the player's Thunder Wave (one accuracy draw -- the type
+    // and already-paralysed guards draw nothing), the enemy's own
+    // full-paralysis draw against the status the player's move just wrote
+    // (residue 0 -> cancelled).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Guts is modelled, so the pick is admitted");
+
+    assert_eq!(
+        events[0],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}
+
+#[test]
+fn thunder_wave_newly_paralyses_a_healthy_marvel_scale_defender() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, RATTATA, 5, vec![THUNDER_WAVE]);
+    let enemy = max_iv_mon(&dex, MILOTIC, 5, vec![TACKLE]);
+    assert_eq!(
+        enemy.ability(),
+        assets::AbilityId::MARVEL_SCALE,
+        "fixture sanity: the primary slot fields Marvel Scale"
+    );
+
+    // Unlike the Guts fixture above, level-5 Milotic (raw Speed 14) outpaces
+    // level-5 Rattata (raw Speed 13), so the enemy's ordinary Tackle resolves
+    // first this turn (accuracy, crit, damage roll, discarded effect chance:
+    // 4 draws) and the player's Thunder Wave -- which lands second and pays
+    // only its own accuracy draw -- never gets a same-turn full-paralysis
+    // check to cancel, since Milotic already moved.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .expect("Marvel Scale is modelled, so the pick is admitted");
+
+    assert!(
+        matches!(
+            events[0],
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: TACKLE,
+                ..
+            }
+        ),
+        "the faster Milotic acts first: {events:?}"
+    );
+    assert_eq!(
+        events[1],
+        BattleEvent::Paralyzed {
+            by_player: true,
+            move_id: THUNDER_WAVE,
+        },
+        "{events:?}"
+    );
+    assert_eq!(battle.enemy().status1(), Status1::Paralysed);
+}

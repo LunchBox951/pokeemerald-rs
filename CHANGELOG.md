@@ -1,15 +1,16 @@
 # Changelog
 
-All notable changes to `pokeemerald-rs` are documented here.
+This file contains concise curated release summaries. GitHub Releases own detailed release history.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning is **not** semver: it follows this project's `FINAL.MAJOR.MINOR.PATCH`
-scheme, recorded without the `v` prefix in the root [`VERSION`](VERSION) file and
-tagged with the prefix. See [`RELEASE.md`](RELEASE.md) for the version rules.
-While `FINAL` is `0`, every release is a prerelease.
+Versioning follows the repository's `FINAL.MAJOR.MINOR.PATCH` scheme rather than SemVer. [`RELEASE.md`](RELEASE.md) owns the version rules; pre-1.0 releases are prereleases.
 
 ## [Unreleased]
 
-_Nothing released yet — the repository is still in its initial setup._
+Changes on `dev` since the latest published release.
 
-[Unreleased]: https://github.com/LunchBox951/pokeemerald-rs/commits/main
+## [0.0.0.0] - 2026-07-31
+
+Initial prerelease establishing the repository release path. See the [GitHub Release](https://github.com/LunchBox951/pokeemerald-rs/releases/tag/v0.0.0.0) for its recorded artifacts and details.
+
+[Unreleased]: https://github.com/LunchBox951/pokeemerald-rs/compare/v0.0.0.0...dev
+[0.0.0.0]: https://github.com/LunchBox951/pokeemerald-rs/releases/tag/v0.0.0.0

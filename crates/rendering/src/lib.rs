@@ -1,44 +1,82 @@
 //! Rendering subsystem (S-2): 240x160 tile / sprite / layer renderer.
 //!
-//! Slice 1 (issue #50, merged) stood up the crate's headless-testable core:
-//! an owned [`Framebuffer`], faithful GBA BGR555 -> RGB888 palette
-//! conversion ([`Bgr555::to_rgb888`]), 4bpp/8bpp indexed tile decoding
-//! ([`Tileset`]), and a single regular (non-affine) background tile layer
-//! compositor ([`BgLayer`]).
-//!
-//! Slice 2 (issue #64) adds an OAM-equivalent sprite layer ([`OamEntry`],
-//! [`SpriteLayer`]), wrapping regular-BG scroll offsets
-//! ([`BgLayer::composite_scrolled`]), and the cross-layer priority
-//! compositor ([`compose_frame`]) that orders up to four BG layers plus
+//! Headless, testable core: an owned [`Framebuffer`], faithful GBA
+//! BGR555 -> RGB888 palette conversion ([`Bgr555::to_rgb888`]), and
+//! 4bpp/8bpp indexed tile decoding ([`Tileset`]). Regular ([`BgLayer`])
+//! and affine/rotation-scaling ([`AffineBgLayer`]) background tile
+//! layers, plus an OAM-equivalent sprite layer ([`SpriteLayer`],
+//! [`OamEntry`]) with affine and double-size sampling, all composite
+//! through [`compose_frame`], which orders up to four BG layers plus
 //! sprites the way the GBA PPU does.
 //!
-//! Affine transforms (BG or sprite), windows (`WIN0`/`WIN1`/`OBJWIN`), alpha
-//! blending/brightness effects, and mosaic are out of scope for both slices;
-//! wiring this crate into `platform`'s presentation surface is a future
-//! integration issue `(constitution-vs-roadmap)`.
+//! [`compositor::compose_frame_with_effects`] extends composition with
+//! the full hardware effect group: windows (`WIN0`/`WIN1`/`OBJWIN`/
+//! `WINOUT`, [`window`]), color special effects (alpha blend, brighten,
+//! darken, [`effects`]), and mosaic ([`mosaic`]), all controlled by the
+//! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
+//! delegates to it with [`compositor::FrameEffects::default`]. Affine OBJ
+//! mosaic sampling reruns once per hardware-window span rather than once per
+//! scanline, restarting its held source column at each span's own start
+//! (`sprite::SpriteLayer::sample_affine_local`).
+//!
+//! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
+//! a shared per-scanline OAM admission stage (`oam_budget`, private but see
+//! [`sprite`]'s module docs) modelling the GBA's fixed per-scanline OBJ
+//! cycle budget (S-2, issue #329) — a late sprite past the budget is
+//! dropped from both consistently, the way real hardware (and the pinned
+//! mgba renderer) drops it.
+//!
+//! The `pokeemerald_rs` crate's `frame` module bridges this crate's
+//! [`Framebuffer`] to `platform`'s presentation surface, converting a
+//! composed frame into `platform`'s pixel format for the frame loop
+//! (windowed or headless) to present.
+//!
+//! [`palette_fade`] models the front-end's normal CPU palette fade
+//! (`BeginNormalPaletteFade`/`UpdatePaletteFade`'s `NORMAL_FADE` scheduling,
+//! `pokeemerald/src/palette.c`) over a retained [`Framebuffer`], using
+//! `BlendPalette`'s per-channel signed delta (`pokeemerald/src/util.c`) —
+//! deliberately distinct from [`effects::brighten`]/[`effects::darken`]'s
+//! hardware `BLDY` packed-lane rounding.
 //!
 //! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
 //! Behaviour is transcribed from `pokeemerald/src/palette.c`,
-//! `pokeemerald/src/bg.c`, and `pokeemerald/src/sprite.c` — verified against
-//! `mgba`'s software renderer as the hardware-behaviour reference — never
-//! copied verbatim `(no-verbatim, behavioral-fidelity)`.
+//! `pokeemerald/src/bg.c`, `pokeemerald/src/sprite.c`, and
+//! `pokeemerald/src/util.c` — verified against `mgba`'s software renderer as
+//! the hardware-behaviour reference — never copied verbatim
+//! `(no-verbatim, behavioral-fidelity)`.
 
+pub mod affine;
 pub mod bg;
+pub mod bg_affine;
 pub mod compositor;
+pub mod effects;
 pub mod error;
 pub mod framebuffer;
+pub mod mosaic;
 pub mod oam;
+mod oam_budget;
 pub mod palette;
+pub mod palette_fade;
 pub mod sprite;
+mod sprite_affine;
 pub mod tile;
 pub mod tilemap;
+pub mod window;
 
+pub use affine::AffineMatrix;
 pub use bg::BgLayer;
-pub use compositor::{compose_frame, BgSlot};
+pub use bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
+pub use compositor::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
+pub use effects::{
+    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, LayerKind, LayerTargets,
+};
 pub use error::RenderError;
 pub use framebuffer::Framebuffer;
-pub use oam::{obj_dimensions, OamEntry, ObjShape};
+pub use mosaic::{MosaicConfig, MosaicSize};
+pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
 pub use palette::{Bgr555, Palette, Rgb888};
+pub use palette_fade::{NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
 pub use sprite::{SpriteLayer, SpritePixel};
 pub use tile::{BitDepth, Tile, Tileset};
 pub use tilemap::{ScreenEntry, Tilemap};
+pub use window::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};

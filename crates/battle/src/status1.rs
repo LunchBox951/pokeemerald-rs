@@ -1,0 +1,237 @@
+//! Primary status ([`Status1`]), the attacker-side gate that keeps a
+//! paralysed battler from acting roughly a quarter of the time, the end-turn
+//! poison residual's damage floor, and Shed Skin's end-turn cure draw.
+//!
+//! `gBattleMons[].status1` is a persistent field distinct from the volatile
+//! `status2`/`gStatuses3` bits [`crate::volatile::Volatiles`] carries: a
+//! primary status outlives a switch, where a volatile does not. This slice
+//! models [`Status1::Healthy`], [`Status1::Paralysed`], and
+//! [`Status1::Poisoned`] — confusion, sleep, freeze, burn, and toxic are
+//! unported, so a battler can never reach any status this enum has no
+//! variant for.
+//!
+//! Upstream's `status1` is a bitfield with one flag per status
+//! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every
+//! infliction path this crate models refuses a nonzero field
+//! (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`), so a
+//! single-valued enum loses nothing.
+
+use crate::damage::BattleRng;
+
+/// One battler's primary status condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Status1 {
+    /// No primary status.
+    #[default]
+    Healthy,
+    /// Paralysed: [`draws_full_paralysis`] may cancel this battler's chosen
+    /// move before it acts (`pokeemerald/src/battle_util.c:2188`-`:2199`),
+    /// and turn order quarters its effective Speed
+    /// (`pokeemerald/src/battle_main.c:4650`-`:4651`).
+    Paralysed,
+    /// Poisoned: [`poison_residual_damage`] fires every end of turn
+    /// (`ENDTURN_POISON`, `pokeemerald/src/battle_util.c:1525`-`:1535`).
+    Poisoned,
+}
+
+impl Status1 {
+    /// Whether this status is [`Status1::Paralysed`].
+    #[must_use]
+    pub const fn is_paralysed(self) -> bool {
+        matches!(self, Self::Paralysed)
+    }
+
+    /// Whether this status is [`Status1::Poisoned`].
+    #[must_use]
+    pub const fn is_poisoned(self) -> bool {
+        matches!(self, Self::Poisoned)
+    }
+
+    /// Whether this status is [`Status1::Healthy`] — the guard every
+    /// infliction path this crate models shares
+    /// (`pokeemerald/src/battle_script_commands.c:2334`-`:2335`).
+    #[must_use]
+    pub const fn is_healthy(self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+}
+
+/// `Random() % 4 == 0` -- the denominator of the full-paralysis chance
+/// (`pokeemerald/src/battle_util.c:2189`).
+const FULL_PARALYSIS_CHANCE_DENOMINATOR: u16 = 4;
+
+/// Draws whether a paralysed battler is fully unable to act this turn —
+/// `CANCELER_PARALYZED` (`pokeemerald/src/battle_util.c:2188`-`:2199`).
+///
+/// Draws nothing, and returns `false`, for a battler that is not paralysed:
+/// upstream's `&&` short-circuits before its own `Random()` call.
+#[must_use]
+pub fn draws_full_paralysis(status1: Status1, rng: &mut impl BattleRng) -> bool {
+    status1.is_paralysed()
+        && rng
+            .next_u16()
+            .is_multiple_of(FULL_PARALYSIS_CHANCE_DENOMINATOR)
+}
+
+/// The denominator of `ENDTURN_POISON`'s damage fraction
+/// (`pokeemerald/src/battle_util.c:1528`).
+const POISON_DAMAGE_DENOMINATOR: u32 = 8;
+
+/// `ENDTURN_POISON`'s damage for a battler with `max_hp`: an eighth of
+/// maximum HP, floored to at least one, drawing nothing
+/// (`pokeemerald/src/battle_util.c:1528-1530`).
+#[must_use]
+pub const fn poison_residual_damage(max_hp: u32) -> u32 {
+    let damage = max_hp / POISON_DAMAGE_DENOMINATOR;
+    if damage == 0 {
+        1
+    } else {
+        damage
+    }
+}
+
+/// The denominator of Shed Skin's end-turn cure chance
+/// (`pokeemerald/src/battle_util.c:2621`).
+const SHED_SKIN_CURE_CHANCE_DENOMINATOR: u16 = 3;
+
+/// Draws whether a living, statused Shed Skin holder cures its primary
+/// status this residual pass — `ABILITY_SHED_SKIN`'s `ABILITYEFFECT_ENDTURN`
+/// case (`pokeemerald/src/battle_util.c:2620`-`:2621`).
+///
+/// Draws nothing, and returns `false`, for a healthy battler: upstream's
+/// `&&` short-circuits before its own `Random()` call. The caller is
+/// responsible for the case's own `hp != 0` guard
+/// (`pokeemerald/src/battle_util.c:2601`-`:2602`) and ability check; this
+/// function only resolves the chance once both already hold.
+#[must_use]
+pub fn draws_shed_skin_cure(status1: Status1, rng: &mut impl BattleRng) -> bool {
+    !status1.is_healthy()
+        && rng
+            .next_u16()
+            .is_multiple_of(SHED_SKIN_CURE_CHANCE_DENOMINATOR)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{draws_full_paralysis, draws_shed_skin_cure, poison_residual_damage, Status1};
+    use crate::damage::BattleRng;
+
+    struct FixedRng(u16);
+    impl BattleRng for FixedRng {
+        fn next_u16(&mut self) -> u16 {
+            self.0
+        }
+    }
+
+    struct CountingRng {
+        value: u16,
+        draws: u32,
+    }
+    impl BattleRng for CountingRng {
+        fn next_u16(&mut self) -> u16 {
+            self.draws += 1;
+            self.value
+        }
+    }
+
+    #[test]
+    fn a_healthy_battler_draws_nothing_and_is_never_fully_paralysed() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        assert!(!draws_full_paralysis(Status1::Healthy, &mut rng));
+        assert_eq!(rng.draws, 0, "the healthy case must not touch the RNG");
+    }
+
+    #[test]
+    fn a_paralysed_battler_draws_exactly_once() {
+        let mut rng = CountingRng { value: 1, draws: 0 };
+        let _ = draws_full_paralysis(Status1::Paralysed, &mut rng);
+        assert_eq!(rng.draws, 1);
+    }
+
+    #[test]
+    fn one_in_four_values_trigger_full_paralysis() {
+        assert!(draws_full_paralysis(Status1::Paralysed, &mut FixedRng(0)));
+        assert!(draws_full_paralysis(Status1::Paralysed, &mut FixedRng(4)));
+        assert!(!draws_full_paralysis(Status1::Paralysed, &mut FixedRng(1)));
+        assert!(!draws_full_paralysis(Status1::Paralysed, &mut FixedRng(2)));
+        assert!(!draws_full_paralysis(Status1::Paralysed, &mut FixedRng(3)));
+    }
+
+    #[test]
+    fn status1_defaults_to_healthy() {
+        assert_eq!(Status1::default(), Status1::Healthy);
+        assert!(!Status1::default().is_paralysed());
+        assert!(Status1::Paralysed.is_paralysed());
+    }
+
+    #[test]
+    fn each_variant_answers_exactly_its_own_predicates() {
+        for (status, healthy, paralysed, poisoned) in [
+            (Status1::Healthy, true, false, false),
+            (Status1::Paralysed, false, true, false),
+            (Status1::Poisoned, false, false, true),
+        ] {
+            assert_eq!(status.is_healthy(), healthy, "{status:?}");
+            assert_eq!(status.is_paralysed(), paralysed, "{status:?}");
+            assert_eq!(status.is_poisoned(), poisoned, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn poisoned_draws_nothing_for_full_paralysis() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        assert!(!draws_full_paralysis(Status1::Poisoned, &mut rng));
+        assert_eq!(
+            rng.draws, 0,
+            "only Status1::Paralysed drives the full-paralysis draw"
+        );
+    }
+
+    #[test]
+    fn a_healthy_battler_draws_nothing_for_the_shed_skin_cure() {
+        let mut rng = CountingRng { value: 0, draws: 0 };
+        assert!(!draws_shed_skin_cure(Status1::Healthy, &mut rng));
+        assert_eq!(rng.draws, 0, "the healthy case must not touch the RNG");
+    }
+
+    #[test]
+    fn a_statused_battler_draws_exactly_once_for_the_shed_skin_cure() {
+        let mut rng = CountingRng { value: 1, draws: 0 };
+        let _ = draws_shed_skin_cure(Status1::Paralysed, &mut rng);
+        assert_eq!(rng.draws, 1);
+    }
+
+    #[test]
+    fn one_in_three_values_cure_a_statused_shed_skin_holder() {
+        for status in [Status1::Paralysed, Status1::Poisoned] {
+            assert!(draws_shed_skin_cure(status, &mut FixedRng(0)), "{status:?}");
+            assert!(draws_shed_skin_cure(status, &mut FixedRng(3)), "{status:?}");
+            assert!(
+                !draws_shed_skin_cure(status, &mut FixedRng(1)),
+                "{status:?}"
+            );
+            assert!(
+                !draws_shed_skin_cure(status, &mut FixedRng(2)),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn poison_residual_damage_is_an_eighth_of_max_hp_floored_to_one() {
+        assert_eq!(poison_residual_damage(80), 10);
+        assert_eq!(poison_residual_damage(79), 9, "integer division truncates");
+        assert_eq!(poison_residual_damage(8), 1);
+        assert_eq!(
+            poison_residual_damage(7),
+            1,
+            "a fraction below one HP is floored up to one, not zero"
+        );
+        assert_eq!(poison_residual_damage(1), 1);
+        assert_eq!(
+            poison_residual_damage(0),
+            1,
+            "even a zero max HP still floors to one (`battle_util.c:1529-1530`)"
+        );
+    }
+}

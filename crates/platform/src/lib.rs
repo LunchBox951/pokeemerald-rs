@@ -1,5 +1,5 @@
-//! Platform subsystem (S-1): window, input mapping, frame pacing,
-//! `softbuffer` presentation, and audio output.
+//! Platform subsystem: window, input mapping, frame pacing, `softbuffer`
+//! presentation, and audio output.
 //!
 //! Owned types, one per concern `(oop-boundaries)`:
 //!
@@ -13,22 +13,22 @@
 //! - [`present::Letterbox`] and [`present::blit`] — integer-scale +
 //!   letterbox math and the blit that expands a native 240x160 buffer into a
 //!   window-sized `softbuffer` surface.
-//! - [`window::Platform`] — the window itself: owns the `winit` event loop,
-//!   the native window, and the `softbuffer` surface, and exposes all of the
-//!   above behind a small per-frame API (pump events, read button state,
-//!   present a frame, pace to the next one).
+//! - [`window::Platform`] — the window itself (or a headless null
+//!   stand-in, see [`window::Platform::new_headless`]): owns the `winit`
+//!   event loop, the native window, and the `softbuffer` surface, and
+//!   exposes all of the above behind a small per-frame API (pump events,
+//!   read button state, present a frame, pace to the next one).
 //! - [`audio::AudioOutput`] — the audio output device (or a headless null
 //!   stand-in): owns at most one `cpal` output stream and exposes a
-//!   [`ring::Producer`] handle the future `audio` crate (M4A engine, S-3)
-//!   fills from its own thread. `cpal` is owner-approved for exactly this
-//!   crate and use in Discussion #78.
+//!   [`ring::Producer`] handle its caller fills with PCM rendered by the
+//!   `audio` crate's M4A engine.
 //!
 //! CI is headless, so nothing here opens a real window or a real `cpal`
-//! stream in a test; only [`window::Platform`] and [`audio::AudioOutput`]
-//! touch `winit`/`softbuffer`/`cpal` directly, and `AudioOutput` only does so
-//! behind its explicit `open` constructor — its `null` constructor and the
-//! `ring`/`resample` modules it is built on are pure logic with full
-//! unit-test coverage.
+//! stream in a test; only [`window::Platform::new`] and
+//! [`audio::AudioOutput::open`] touch `winit`/`softbuffer`/`cpal` directly.
+//! Both have an explicit, always-available null-backend counterpart
+//! (`Platform::new_headless`, `AudioOutput::null`) that tests and the
+//! headless `xtask e2e --suite smoke` run construct instead.
 
 pub mod audio;
 pub mod error;
