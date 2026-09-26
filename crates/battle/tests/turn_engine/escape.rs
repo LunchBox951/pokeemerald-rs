@@ -1,4 +1,9 @@
 //! Escape attempts, run counters, and escape-specific turn behavior.
+//!
+//! Scripted RNGs hold, in order, the battle-start draw, then per turn the
+//! turn-number refresh, the opponent's move pick, the escape roll when the
+//! run is not decided outright, and each resolved hit's own draws as
+//! `battle::hit` pins them.
 
 use crate::common::{
     max_iv_mon, max_iv_mon_with_personality, slow_runner_rattata, SequenceRng,
@@ -218,22 +223,23 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
     let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
 
+    const BATTLE_START: [u16; 1] = [0];
+    /// Turn number, then the enemy's move pick.
+    const TURN_PREAMBLE: [u16; 2] = [0, 0];
+    /// Accuracy, no crit, best damage roll, effect chance.
+    const ENEMY_HIT: [u16; 4] = [0, 1, 0, 0];
     // The same roll fails turn 1's escape threshold and clears turn 2's
     // higher one, so turn 2 can only succeed if run_tries fed the formula.
     let roll_between_unboosted_and_boosted_thresholds: u16 = 90;
-    let mut rng = SequenceRng::new([
-        0,
-        0,
-        0,
-        roll_between_unboosted_and_boosted_thresholds,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        roll_between_unboosted_and_boosted_thresholds,
-    ]);
+    let mut rng = SequenceRng::new(
+        BATTLE_START
+            .into_iter()
+            .chain(TURN_PREAMBLE)
+            .chain([roll_between_unboosted_and_boosted_thresholds])
+            .chain(ENEMY_HIT)
+            .chain(TURN_PREAMBLE)
+            .chain([roll_between_unboosted_and_boosted_thresholds]),
+    );
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
     let turn1 = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
