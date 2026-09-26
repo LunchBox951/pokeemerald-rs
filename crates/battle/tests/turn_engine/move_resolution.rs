@@ -3,11 +3,11 @@
 //!
 //! The admission rules and formulas live in `battle::hit`, `battle::damage`,
 //! `battle::multi_hit`, and `battle::ability`; a hit's own draw order is
-//! pinned in `crate::hit`. What is pinned here is the turn wiring those
-//! cannot reach on their own: event classification (`Hit`, `Missed`,
-//! `NoEffect`, `LevitateBlocked`, `WonderGuardBlocked`, `MultiHit`), PP spent
-//! on a miss or a block, forced Struggle, and an overkill hit's reported
-//! damage.
+//! pinned in `battle::hit`'s unit tests. What is pinned here is the turn
+//! wiring those cannot reach on their own: event classification (`Hit`,
+//! `Missed`, `NoEffect`, `LevitateBlocked`, `WonderGuardBlocked`,
+//! `MultiHit`), PP spent on a miss or a block, forced Struggle, and an
+//! overkill hit's reported damage.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId};
@@ -80,8 +80,10 @@ const BOTH_TACKLES_MISS: [u16; 5] = [
 /// (`crates/battle/src/battle/opponent_ai.rs`).
 const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 9] = [0, 0, 0, 1, 0, 0, 0, 1, 0];
 /// Battle start, turn number, the enemy's pick, then both battlers' ordinary
-/// hits landing in turn order.
-const BOTH_BATTLERS_HIT: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
+/// hit draws (accuracy, crit, damage-variance, effect-chance) in turn order.
+/// An immunity or ability block still spends all four, so which hit lands
+/// is the consuming test's to assert.
+const TWO_ORDINARY_HIT_DRAWS: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
 /// Battle start, turn number, the enemy's pick, then the player's one-shot
 /// hit; the enemy faints before its own turn.
 const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
@@ -206,7 +208,7 @@ fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
 
-    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
+    let mut rng = SequenceRng::new(TWO_ORDINARY_HIT_DRAWS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -237,7 +239,7 @@ fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
         enemy_hp_before,
         "an immune hit deals nothing"
     );
-    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
+    assert_eq!(rng.draws(), TWO_ORDINARY_HIT_DRAWS.len());
     assert!(battle.outcome().is_none(), "nobody fainted; no Ended event");
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
@@ -372,7 +374,7 @@ fn wonder_guard_blocks_a_neutral_ordinary_hit() {
     assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
+    let mut rng = SequenceRng::new(TWO_ORDINARY_HIT_DRAWS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -402,7 +404,7 @@ fn wonder_guard_blocks_a_neutral_ordinary_hit() {
         "Wonder Guard takes no damage from a hit that is not strictly super \
          effective: {events:?}"
     );
-    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
+    assert_eq!(rng.draws(), TWO_ORDINARY_HIT_DRAWS.len());
 }
 
 #[test]
@@ -533,7 +535,7 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
     assert_eq!(enemy.ability(), AbilityId::WONDER_GUARD);
     let enemy_hp_before = enemy.current_hp();
 
-    let mut rng = SequenceRng::new(BOTH_BATTLERS_HIT);
+    let mut rng = SequenceRng::new(TWO_ORDINARY_HIT_DRAWS);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -554,7 +556,7 @@ fn wonder_guard_admits_a_serene_grace_poison_hit_move() {
         "Wonder Guard takes no damage from a hit that is not strictly \
          super effective: {events:?}"
     );
-    assert_eq!(rng.draws(), BOTH_BATTLERS_HIT.len());
+    assert_eq!(rng.draws(), TWO_ORDINARY_HIT_DRAWS.len());
 }
 
 /// `Cmd_accuracycheck` reclassifies a failed accuracy roll through
