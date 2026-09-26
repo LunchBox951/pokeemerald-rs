@@ -219,15 +219,16 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
 
 #[test]
 fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
-    let dex = Dex::new();
-    let player = slow_runner_rattata(&dex);
-    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
-
     const BATTLE_START: [u16; 1] = [0];
     /// Turn number, then the enemy's move pick.
     const TURN_PREAMBLE: [u16; 2] = [0, 0];
     /// Accuracy, no crit, best damage roll, effect chance.
     const ENEMY_HIT: [u16; 4] = [0, 1, 0, 0];
+
+    let dex = Dex::new();
+    let player = slow_runner_rattata(&dex);
+    let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
+
     // The same roll fails turn 1's escape threshold and clears turn 2's
     // higher one, so turn 2 can only succeed if run_tries fed the formula.
     let roll_between_unboosted_and_boosted_thresholds: u16 = 90;
