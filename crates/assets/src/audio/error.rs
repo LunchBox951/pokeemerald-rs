@@ -67,6 +67,9 @@ pub enum AudioError {
     /// A CGB square duty selector exceeds the documented `0..=3` domain. The
     /// value is the out-of-range duty byte.
     SquareDutyOutOfRange(u8),
+    /// A CGB noise period (LFSR width selector) exceeds the documented `0..=1`
+    /// domain. The value is the out-of-range period byte.
+    NoisePeriodOutOfRange(u8),
     /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
     /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
@@ -86,7 +89,7 @@ pub enum AudioError {
 impl fmt::Display for AudioError {
     #[expect(
         clippy::too_many_lines,
-        reason = "one exhaustive match keeps every audio-pack diagnostic together"
+        reason = "one exhaustive match keeps every audio-pack error message together"
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -176,6 +179,11 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack voicegroup: a square duty cycle selector of {duty} \
                  is outside the valid range 0..=3"
+            ),
+            Self::NoisePeriodOutOfRange(period) => write!(
+                f,
+                "audio-pack voicegroup: a noise period selector of {period} \
+                 is outside the valid range 0..=1"
             ),
             Self::UnknownMemAccOp(byte) => {
                 write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")
