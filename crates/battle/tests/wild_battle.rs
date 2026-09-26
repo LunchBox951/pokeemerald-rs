@@ -21,8 +21,8 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     let mut rng = ScriptedRng::new([
         // build_wild_pokemon (5 draws):
         0, // wild nature
-        0, // personality, first attempt
-        0, // personality, second draw
+        0, // personality, first attempt: low half
+        0, // personality, first attempt: high half
         0, // wild IV draw 1
         0, // wild IV draw 2
         // Battle::new (1 draw):
