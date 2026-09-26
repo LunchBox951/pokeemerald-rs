@@ -1002,6 +1002,16 @@ mod tests {
         row
     }
 
+    fn bpp4_tile_with_every_row(
+        palette_indices_by_column: [u8; BitDepth::TILE_DIM],
+    ) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+        for row in bytes.chunks_exact_mut(BitDepth::TILE_DIM / 2) {
+            row.copy_from_slice(&bpp4_row(palette_indices_by_column));
+        }
+        bytes
+    }
+
     fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
         let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
@@ -1106,10 +1116,7 @@ mod tests {
         let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
 
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 15, 15]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1579,10 +1586,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 15, 15]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1652,10 +1656,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 0, 0]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1735,10 +1736,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 0, 0]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
