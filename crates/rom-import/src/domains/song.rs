@@ -247,10 +247,13 @@ fn step(track: &mut Track<'_, '_>, cmd: u8, at: usize) -> Result<Step, ImportErr
             return Ok(Step::Fine);
         }
         CMD_GOTO => track.destination(at)?,
+        // A `PATT` at the engine's stack depth branches straight to
+        // `ply_fine` without reading its target (m4a_1.s:851-867).
+        CMD_PATT if track.state.patterns.len() >= MAX_PATTERN_DEPTH => {
+            track.push(SongEvent::Fine);
+            return Ok(Step::Fine);
+        }
         CMD_PATT => {
-            if track.state.patterns.len() >= MAX_PATTERN_DEPTH {
-                return Err(track.fail(at, SongFault::PatternTooDeep));
-            }
             track.state.patterns.push(at + 4);
             track.destination(at)?
         }

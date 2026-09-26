@@ -15,7 +15,10 @@
 //!
 //! 1. Each `DirectSound` sample's PCM is thousands of unique bytes. Match
 //!    it, step back over the 16-byte `WaveData` header, and check the
-//!    header's frequency, loop point, and size against the pack entry.
+//!    header's frequency, loop point, and size against the pack entry. The
+//!    pack's PCM buffer holds one more byte than `WaveData.size`: a retained
+//!    interpolation guard wav2agb's payload writer always emits
+//!    (`crates/xtask/src/extract/wav.rs`'s module docs).
 //! 2. `voicegroup_title` is the run of 12-byte slots whose `DirectSound`
 //!    and programmable-wave slots point at exactly those samples, in the
 //!    order `title.inc` declares them.
@@ -209,13 +212,19 @@ fn locate_direct_sound(
             }
         })?;
         check_wave_header(ctx, id, addr, &needles[index])?;
-        let data_len = u32::try_from(needles[index].len()).expect("a sample fits in u32");
+        // The needle is the buffer `wav.rs` retains: `data_len` logical
+        // samples plus one interpolation-guard byte wav2agb's payload writer
+        // always emits (`crates/xtask/src/extract/wav.rs`'s module docs).
+        let buffer_len = u32::try_from(needles[index].len()).expect("a sample fits in u32");
+        let data_len = buffer_len
+            .checked_sub(1)
+            .expect("a DirectSound sample always retains its interpolation guard");
         let symbol = format!(
             "{DIRECT_SOUND_SYMBOL}{}",
             id.trim_start_matches(DIRECT_SOUND_PREFIX)
         );
         report.push(
-            ReportLine::unique(id, addr, WAVE_HEADER_BYTES + data_len)
+            ReportLine::unique(id, addr, WAVE_HEADER_BYTES + buffer_len)
                 .symbol(symbol)
                 .note("PCM matched; WaveData header checked"),
         );
@@ -252,7 +261,12 @@ fn check_wave_header(
     let expected_frequency = word(1);
     let expected_looping = payload[5] == 1;
     let expected_loop = if expected_looping { word(6) } else { 0 };
-    let expected_size = u32::try_from(pcm.len()).expect("a sample fits in u32");
+    // `pcm` is the retained buffer: `WaveData.size` logical samples plus one
+    // interpolation-guard byte (module docs above).
+    let expected_size = u32::try_from(pcm.len())
+        .expect("a sample fits in u32")
+        .checked_sub(1)
+        .expect("a DirectSound sample always retains its interpolation guard");
 
     let mismatch = |reason: String| GenRomProfileError::StructMismatch {
         id: id.to_owned(),
@@ -649,7 +663,20 @@ mod tests {
             .collect()
     }
 
-    /// A `DirectSound` pack payload: kind, freq, loop flag, loop start, count, PCM.
+    /// A distinctive byte appended past `data`'s declared count: the
+    /// retained interpolation guard `wav.rs` always keeps (module docs).
+    const GUARD_SAMPLE: u8 = 0xA5;
+
+    /// `data` with [`GUARD_SAMPLE`] appended, matching the buffer `wav.rs`
+    /// and the ROM importer both retain past the logical sample count.
+    fn with_guard(data: &[u8]) -> Vec<u8> {
+        let mut out = data.to_vec();
+        out.push(GUARD_SAMPLE);
+        out
+    }
+
+    /// A `DirectSound` pack payload: kind, freq, loop flag, loop start,
+    /// logical sample count, PCM, and the retained guard byte.
     fn direct_sound_payload(freq: u32, loop_start: Option<u32>, data: &[u8]) -> Vec<u8> {
         let mut payload = vec![0u8];
         payload.extend_from_slice(&freq.to_le_bytes());
@@ -660,11 +687,12 @@ mod tests {
                 .expect("a sample fits in u32")
                 .to_le_bytes(),
         );
-        payload.extend_from_slice(data);
+        payload.extend_from_slice(&with_guard(data));
         payload
     }
 
-    /// A ROM `WaveData` header: type, status, freq, loop start, size.
+    /// A ROM `WaveData` header: type, status, freq, loop start, size (the
+    /// logical sample count).
     fn wave_header(wave_type: u16, status: u16, freq: u32, loop_start: u32, size: u32) -> Vec<u8> {
         let mut header = Vec::with_capacity(16);
         header.extend_from_slice(&wave_type.to_le_bytes());
@@ -675,7 +703,9 @@ mod tests {
         header
     }
 
-    /// Plant one sample at `0x10_0000` and locate it against a one-entry pack.
+    /// Plant one sample at `0x10_0000` and locate it against a one-entry
+    /// pack. `data` is the logical PCM; the retained guard byte is appended
+    /// to what lands in the ROM.
     fn locate_one(
         name: &str,
         header: &[u8],
@@ -685,7 +715,7 @@ mod tests {
         let rom = RomFixture::new()
             .emerald_header()
             .write(0x10_0000, header)
-            .write(0x10_0010, data)
+            .write(0x10_0010, &with_guard(data))
             .finish();
         let entry = pack_format::raw_entry("audio/sample/direct-sound/test".to_owned(), payload);
         with_context(name, &rom, vec![entry], |ctx| {
