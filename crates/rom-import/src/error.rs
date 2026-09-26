@@ -66,8 +66,6 @@ pub enum SongFault {
     UnknownMemAccOp(u8),
     /// `REPT`, which no compiled song carries and the pack cannot hold.
     Repeat,
-    /// `PATT` nested past the engine's three-deep stack.
-    PatternTooDeep,
     /// A control-flow pointer addresses bytes outside the ROM image.
     JumpOutsideRom,
     /// The track exceeds the decoder's execution-context or output-event limit.
@@ -84,7 +82,6 @@ impl fmt::Display for SongFault {
             }
             Self::UnknownMemAccOp(op) => write!(f, "unknown MEMACC operation {op}"),
             Self::Repeat => f.write_str("REPT is not supported"),
-            Self::PatternTooDeep => f.write_str("PATT nested more than three deep"),
             Self::JumpOutsideRom => f.write_str("a jump outside the ROM image"),
             Self::DecodeLimit => f.write_str("track exceeds the decoder state or event limit"),
         }

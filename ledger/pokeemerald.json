@@ -26983,6 +26983,12 @@
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "stubbed"
+        },
+        "ply_patt": {
+          "reason": "ply_patt (m4a_1.s:851-869) pushes the return cursor onto track->patternStack and jumps to the target; at the engine's depth of 3 it branches to ply_fine without reading the target. Reimplemented twice: the runtime Track::call_pattern in crates/audio/src/sequencer.rs (three-entry pattern_return_stack, a fourth nested PATT ends the track), and the extraction decoder in crates/rom-import/src/domains/song.rs, which expands PATT/PEND inline for the pack and terminates a fourth-level PATT as Fine without reading its pointer (PR #1437, issue #1388).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
