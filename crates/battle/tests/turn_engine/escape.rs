@@ -1,6 +1,7 @@
 //! Escape attempts, run counters, and escape-specific turn behavior.
 //!
-//! Scripted RNGs hold, in order, the battle-start draw, then per turn the
+//! Scripted RNGs hold, in order, the battle-start draw (plus a seeding
+//! tie-break when the starting battlers share a Speed), then per turn the
 //! turn-number refresh, the opponent's move pick, the escape roll when the
 //! run is not decided outright, and each resolved hit's own draws as
 //! `battle::hit` pins them.
