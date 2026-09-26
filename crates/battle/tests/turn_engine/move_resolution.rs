@@ -10,8 +10,9 @@
 //! overkill hit's reported damage.
 //!
 //! Every scripted RNG here holds, in order, the battle-start draw, the
-//! turn-number refresh, the enemy's move pick, then each resolved hit's own
-//! draws as `battle::hit` pins them. No matchup below ties on Speed.
+//! turn-number refresh, the enemy's move pick (absent once every move is
+//! spent and Struggle is forced), then each resolved hit's own draws as
+//! `battle::hit` pins them. No matchup below ties on Speed.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId};
