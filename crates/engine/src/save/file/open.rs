@@ -98,11 +98,8 @@ mod open_flags {
         ))
     ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
-    // arm, aarch64, and m68k swap the generic pair in `<asm/fcntl.h>`:
-    // `O_NOFOLLOW` is `0x8000` and `O_LARGEFILE` is `0x20000`. powerpc and
-    // powerpc64 also put `O_NOFOLLOW` at `0x8000`, but with `O_LARGEFILE` at
-    // `0x10000` and `O_DIRECT` at `0x20000`, so the generic value would have
-    // selected `O_DIRECT` there.
+    // `<asm/fcntl.h>` puts `O_NOFOLLOW` at `0x8000` on these: arm, aarch64,
+    // and m68k swap it with `O_LARGEFILE`; powerpc has `O_DIRECT` at `0x20000`.
     #[cfg(all(
         target_os = "linux",
         any(
