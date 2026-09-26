@@ -24,9 +24,9 @@ const SPLASH: MoveId = MoveId(150);
 const FOCUS_ENERGY: MoveId = MoveId(116);
 const CHARGE: MoveId = MoveId(268);
 const DEFENSE_CURL: MoveId = MoveId(111);
-/// The only Electric damaging move this engine currently implements, and
-/// `EFFECT_ALWAYS_HIT` spends no accuracy draw, so the Charge tests' scripts
-/// carry only the draws Charge's own doubling needs to explain.
+/// The only Electric damaging move this engine currently implements. Its
+/// `EFFECT_ALWAYS_HIT` skips only the accuracy draw; crit, damage-variance,
+/// and effect-chance draws still follow. Charge itself draws nothing.
 const SHOCK_WAVE: MoveId = MoveId(351);
 
 /// Grass/Poison; Overgrow occupies ability slot 0, the slot every
@@ -189,8 +189,8 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let player_max_hp = player.stats().max_hp;
     // Leave the attacker on less HP than the 10 the ooze will take.
     player.apply_damage(player_max_hp - 6);
-    // Neither mon's move this turn reads these stages or volatiles; they
-    // exist only so the reset assertions below are non-vacuous.
+    // These survive until the reset assertions below; the crit draw of 1
+    // reads as non-critical at Focus Energy's stage as well as at stage 0.
     player.stages_mut().attack = StatStage::new(2).unwrap();
     player.volatiles_mut().set_focus_energy();
     player.volatiles_mut().set_charge();
@@ -240,7 +240,7 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
 }
 
 /// Mirrors the previous test with attacker and target swapped: the *enemy*
-/// is the Liquid-Ooze attacker here. `checkteamslost` scores a simultaneous
+/// drains a Liquid-Ooze player here. `checkteamslost` scores a simultaneous
 /// double faint as a loss from each side's own total HP
 /// (`battle_script_commands.c:3560`-`:3573`), not from who dealt the
 /// finishing blow, so this still resolves as `PlayerLost`, never
