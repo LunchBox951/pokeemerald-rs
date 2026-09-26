@@ -182,6 +182,30 @@ fn publish_generation<F>(
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
 {
+    publish_generation_with(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        || {},
+    )
+}
+
+/// [`publish_generation`] with a hook between the staging directory's last
+/// identity check and its promoting rename, so tests can land a replacement in
+/// that gap.
+fn publish_generation_with<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -221,7 +245,7 @@ where
             .require_path(&staged_dir)
             .map_err(|error| RecordSnapshotError::Write(staged_dir.clone(), error.to_string()))?;
         staged_dir_claim.release_hold();
-        promote_staged_dir(&staged_dir, &generation_dir, || {})
+        promote_staged_dir(&staged_dir, &generation_dir, before_rename)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
         renamed = true;
         #[cfg(windows)]
@@ -257,6 +281,11 @@ where
     })
 }
 
+// The rename binds to the staging pathname, not to the held handle, so a
+// replacement landing after the last identity check is promoted to the
+// generation name. The held handle's check against that name then refuses to
+// publish the pointer, and the directory is retained and reported like every
+// other failure (#1282's retention policy).
 fn promote_staged_dir(
     staged: &Path,
     generation: &Path,

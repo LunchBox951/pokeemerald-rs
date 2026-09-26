@@ -1714,3 +1714,68 @@ fn a_generation_identity_read_failure_is_reported_with_its_retained_path() {
     assert!(directory.is_dir());
     assert_eq!(std::fs::read(parent).unwrap(), b"foreign");
 }
+
+/// Unix keeps the staging handle open across promotion, so a directory swapped
+/// in after the last pathname check is promoted to the generation name but
+/// never published: the held handle no longer matches it. Both directories
+/// survive for inspection.
+#[cfg(unix)]
+#[test]
+fn a_staging_directory_replaced_after_verification_is_promoted_but_never_published() {
+    let scene = Scene::MainMenuNewGame;
+    let output_dir = scratch_path("staging-replaced-before-rename");
+    let _guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(&output_dir).unwrap();
+    let carried = output_dir.join("carried");
+    let foreign_marker = "foreign.marker";
+
+    let mut staged_dir = None;
+    let swap_the_staging_directory = || {
+        let staged = std::fs::read_dir(&output_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "staged"))
+            .expect("this call's own staging directory must exist by now");
+        std::fs::rename(&staged, &carried).unwrap();
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join(foreign_marker), b"foreign").unwrap();
+        staged_dir = Some(staged);
+    };
+
+    let error = super::publish_generation_with(
+        scene,
+        &output_dir,
+        b"rgb-bytes",
+        b"meta-bytes",
+        || Ok(()),
+        swap_the_staging_directory,
+    )
+    .unwrap_err()
+    .to_string();
+    let staged_dir = staged_dir.expect("the hook must have run");
+    let generation_dir = output_dir.join(
+        staged_dir
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .trim_start_matches('.')
+            .trim_end_matches(".staged"),
+    );
+
+    assert!(
+        error.contains("no longer matches the capture's held directory")
+            && error.contains(&format!("last known path: {}", generation_dir.display())),
+        "{error}"
+    );
+    assert_eq!(visible_generation(&output_dir, scene), None);
+    assert!(
+        generation_dir.join(foreign_marker).is_file() && !staged_dir.exists(),
+        "the replacement was promoted to the generation name and left intact"
+    );
+    assert_eq!(
+        std::fs::read(carried.join(format!("{}.rgb", scene.name()))).unwrap(),
+        b"rgb-bytes",
+        "this call's payloads stay in its own directory"
+    );
+}
