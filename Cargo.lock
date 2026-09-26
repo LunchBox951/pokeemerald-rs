@@ -2263,6 +2263,7 @@ dependencies = [
  "pack-format",
  "pokeemerald-rs",
  "rom-import",
+ "rustix 1.1.5",
 ]
 
 [[package]]
