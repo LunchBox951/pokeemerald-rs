@@ -3489,9 +3489,9 @@ mod tests {
 
     #[test]
     fn forced_alpha_blends_against_the_span_backdrop_variant() {
-        // No BG or OBJ is configured as the second target;
-        // effects::backdrop_variant supplies the span's backdrop as target2
-        // instead.
+        // No BG or OBJ is a second target; the backdrop is the configured
+        // target2, and effects::backdrop_variant resolves its colour to the
+        // span's variant before the blend.
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
         sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
