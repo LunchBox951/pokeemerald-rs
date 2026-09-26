@@ -3,8 +3,8 @@
 //! those modules cannot show because it never runs through a real turn.
 //!
 //! Every script's first three draws are fixed: `Battle::new`'s battle-start
-//! draw, the turn-order draw, and the AI's move selection; each later turn
-//! repeats only the latter two. What follows is the acting move's own draws,
+//! draw, `Battle::start_turn`'s turn-number refresh, and the AI's move
+//! selection; each later turn repeats only the latter two. What follows is the acting move's own draws,
 //! then the opponent's if it still acts. `SequenceRng` panics on exhaustion,
 //! and the trailing `rng.draws() == script.len()` assertion, where present,
 //! catches an under-drawing pipeline too.
@@ -522,8 +522,9 @@ fn splash_reports_that_nothing_happened_and_draws_nothing() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// Focus Energy's crit-stage volatile applies to the *next* move only: a
-/// draw of 4 does not crit at stage 0 (1/16) but does at stage 2 (1/4). The
+/// Focus Energy's crit-stage volatile is a latch that raises every later
+/// move's crit chance: a draw of 4 does not crit at stage 0 (1/16) but does
+/// at stage 2 (1/4). The
 /// control run swaps in Splash so every other draw stays identical,
 /// isolating the volatile as the only explanation for the difference.
 #[test]
