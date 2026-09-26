@@ -4,9 +4,9 @@
 //! methods look up and decode individual entries.
 //!
 //! The pack file is never committed, embedded in a binary, or kept as a CI
-//! artifact — it only exists on a disk where `cargo xtask extract` has run.
-//! Every accessor that needs its bytes surfaces that absence as
-//! [`PackError::NotFound`], whose message names the command to run.
+//! artifact; `cargo xtask extract` is how the project generates one.
+//! Loading a path with no pack at it is [`PackError::NotFound`], whose
+//! message names that command.
 //!
 //! [`PackError`] is a separate enum from [`crate::error::AssetError`] —
 //! see [`crate::error`] for why.
