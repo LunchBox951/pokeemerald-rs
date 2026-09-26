@@ -150,16 +150,9 @@ fn a_pressed_with_a_perpendicular_direction_finds_mom_and_does_not_turn_the_play
     );
 }
 
-/// Issue #1392 regression: an ordinary field dialog must read (and repair)
-/// the live save's `optionsTextSpeed` exactly as upstream's
-/// `GetPlayerTextSpeedDelay` repairs `gSaveBlock2Ptr->optionsTextSpeed` in
-/// place (`pokeemerald/src/menu.c:481-488`) -- the same write-back
-/// `start_menu`'s `player_text_speed` already performs for the SAVE prompt.
-/// `AssetPack::load_default` is unavailable headless (this module's other
-/// tests' own notes), so the dialog box itself never actually opens here;
-/// what this proves is that the interaction path reads and repairs the
-/// saved value on the very same frame, before it ever hands the pack load a
-/// chance to fail.
+/// A field-dialog interaction repairs an out-of-range saved
+/// `optionsTextSpeed` in place on the same frame, as
+/// `GetPlayerTextSpeedDelay` does (`pokeemerald/src/menu.c:481-488`).
 #[test]
 fn a_field_dialog_interaction_repairs_an_out_of_range_saved_text_speed() {
     /// An `optionsTextSpeed` above `OPTIONS_TEXT_SPEED_FAST` (`2`) --

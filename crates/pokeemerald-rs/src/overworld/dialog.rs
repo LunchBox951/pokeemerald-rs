@@ -622,17 +622,9 @@ mod tests {
         panic!("a message of {glyph_count} glyphs must print within {PRINT_FRAME_BUDGET} frames");
     }
 
-    /// Issue #1392 regression: `AddTextPrinterForMessage` -- the printer
-    /// every ordinary field message goes through
-    /// (`pokeemerald/src/field_message_box.c:117-128`) -- paces at
-    /// `GetPlayerTextSpeedDelay()` (`pokeemerald/src/menu.c:191-196`), which
-    /// reads the saved `optionsTextSpeed` (`:481-488`). A field dialog
-    /// opened through [`NpcDialog::from_pack_at_speed`] (the entry point
-    /// `super::OverworldPhase::field_dialog_text_speed` feeds) must
-    /// therefore take its cadence from the caller-supplied, normalized
-    /// speed rather than the fixed [`FIELD_SCRIPT_TEXT_SPEED`] default, so a
-    /// session saved FAST prints the same message in fewer frames than one
-    /// saved SLOW (`sTextSpeedFrameDelays`: 1 vs 8 frames a glyph).
+    /// A dialog opened at a given speed paces at it: FAST prints the same
+    /// message in fewer frames than SLOW (`sTextSpeedFrameDelays`,
+    /// `pokeemerald/src/menu.c:77-82`, `:191-196`).
     #[test]
     fn field_dialogs_pace_at_the_speed_they_are_given() {
         const MESSAGE_GLYPHS: usize = 3;
