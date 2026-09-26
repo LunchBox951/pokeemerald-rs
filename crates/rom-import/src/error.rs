@@ -135,29 +135,41 @@ impl fmt::Display for Lz77Fault {
 /// What the destination held when cleanup looked, after a write failed
 /// part-way through.
 ///
-/// Cleanup removes nothing and has no way to bind a removal to the file it
-/// identified, so this reports one moment's reading rather than the state
-/// of the name now: in a directory another account can write to, the entry
-/// can be replaced the instant after it is read, and on Windows the instant
-/// the importer's deny-all handle drops.
+/// Off Windows this reports one moment's reading rather than the state of
+/// the name now, since nothing is removed there. On Windows cleanup deletes
+/// the confirmed file instead (`confirmed_partial_file`), so `Gone` can
+/// mean an actual removal there.
 ///
 /// It rides *beside* [`ImportError::WriteFailed`]'s `source` rather than
 /// wrapped around it, so the I/O failure itself reaches the caller whole.
 #[derive(Debug)]
 pub enum PartialFile {
     /// Nothing this call created is at the path: either the write failed
-    /// before the file existed, or the name belongs to something else now.
-    /// Either way there is nothing of the importer's to clear.
+    /// before the file existed, the name belongs to something else now, or
+    /// -- on Windows -- cleanup deleted it. Either way there is nothing of
+    /// the importer's to clear.
     Gone,
-    /// A partial file this call created was at the path. Nothing removed
-    /// it, so a retry on the same name is refused (`AlreadyExists`) until
-    /// it is cleared -- but this reading is stale by the time a caller
-    /// acts on it, so a retry belongs at a fresh name rather than at a
-    /// deletion aimed by pathname.
+    /// A partial file this call created was at the path and nothing
+    /// removed it, so a retry on the same name is refused (`AlreadyExists`)
+    /// until it is cleared -- but this reading is stale by the time a
+    /// caller acts on it, so a retry belongs at a fresh name rather than at
+    /// a deletion aimed by pathname. The off-Windows outcome; see
+    /// [`RemovalFailed`](Self::RemovalFailed) for Windows's equivalent.
+    ///
+    /// On Windows it also covers a volume without POSIX delete semantics,
+    /// where cleanup could only mark the file delete-on-close: another
+    /// process's open handle keeps the name, refusing a same-name retry,
+    /// until that handle closes.
     MayRemain,
     /// The path could not be read, so whether a partial file is there is
     /// unknown. Carries why; the write failure itself is still `source`.
     Unreadable(io::Error),
+    /// Windows only: a confirmed partial file could not be deleted through
+    /// the verified handle. Carries why, rather than discarding it the way
+    /// falling back to [`MayRemain`](Self::MayRemain) would; a retry
+    /// belongs at a fresh name exactly as [`MayRemain`](Self::MayRemain)'s
+    /// does.
+    RemovalFailed(io::Error),
 }
 
 /// Anything that can stop a ROM import.
@@ -489,6 +501,11 @@ impl fmt::Display for ImportError {
                         f,
                         " (and the destination could not be read to tell whether a partial \
                          file remains: {why})"
+                    ),
+                    PartialFile::RemovalFailed(why) => write!(
+                        f,
+                        " (a partial file remains there and could not be removed: {why}; \
+                         retry with a fresh destination name)"
                     ),
                 }
             }

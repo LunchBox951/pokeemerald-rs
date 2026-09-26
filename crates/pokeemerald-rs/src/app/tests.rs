@@ -29,7 +29,7 @@ use platform::{ButtonState, Buttons};
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn animated_frame_returns_the_presented_tick() {
-    let scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let scene = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let expected0 = super::to_platform_frame(&scene.compose(0));
     let expected1 = super::to_platform_frame(&scene.compose(1));
     let expected2 = super::to_platform_frame(&scene.compose(2));
@@ -74,7 +74,7 @@ fn animated_frame_returns_the_presented_tick() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boots_to_the_title_screen_through_app_boot() {
-    let reference = crate::title::load_default().expect("run `cargo xtask extract` first");
+    let reference = crate::title::load_repo().expect("run `cargo xtask extract` first");
     let expected0 = reference.compose_frame(0);
     let expected2 = reference.compose_frame(2);
     let expected13 = reference.compose_frame(13);

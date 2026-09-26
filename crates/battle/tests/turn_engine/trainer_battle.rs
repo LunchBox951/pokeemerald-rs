@@ -473,27 +473,11 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
     );
 }
 
-/// Level-up move learning is **unscreened**, exactly as upstream's
-/// `GiveMoveToMon` teaches (issue #252): a Treecko crossing to level 16
-/// learns Pursuit even though `EFFECT_PURSUIT` has no resolver in this
-/// crate ([`battle::hit`]'s module docs — the engine re-targets and
-/// re-powers Pursuit outside the script, so it is deliberately absent from
-/// the plain-hit allow-list despite pointing at `BattleScript_EffectHit`).
-/// This is the successor to the old
-/// `a_crossed_level_does_not_learn_the_learnset_move_yet` deferral pin,
-/// flipped to the upstream behaviour it deferred.
-///
-/// The unexecutable move used to be Absorb, taught at level 6; issue #321's
-/// `drain` pipeline made that one executable, so the pin moved up the same
-/// learnset to the next move the engine still refuses.
-///
-/// The fail-closed half that survives is the *other* one this crate always
-/// had, and this test pins both halves together so neither can drift: the
-/// unexecutable move sits in the player's moveset — which
-/// [`Battle::new`]/[`Battle::new_trainer`] deliberately do not screen, only
-/// the opposing side's — and is refused when it is **selected**, by
-/// `validate_player_move`, ahead of the turn's first RNG draw, with a
-/// recoverable error that leaves the battle usable.
+/// Upstream `GiveMoveToMon` teaches every crossed level's move with no
+/// effect-coverage screen, including moves this crate's turn engine cannot
+/// yet execute: `EFFECT_PURSUIT` retargets and repowers itself outside the
+/// plain-hit script, so it is deliberately absent from [`battle::hit`]'s
+/// allow-list despite resolving to `BattleScript_EffectHit`.
 #[test]
 fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let dex = Dex::new();
@@ -533,8 +517,6 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
         "a freshly learned move's PP starts at the move's own base PP"
     );
 
-    // The fail-closed half: unexecutable *in the player's moveset* is fine;
-    // unexecutable *as this turn's pick* is refused, before any draw.
     let mut rng = SequenceRng::new([u16::MAX; 128]);
     let mut battle = Battle::new_trainer(
         dex,
@@ -572,9 +554,6 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     );
 }
 
-/// A single crossed level learns that level's move into the first empty
-/// slot — the ordinary case `MonTryLearningNewMove`/`GiveMoveToMon` models
-/// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2955`).
 #[test]
 fn a_single_crossed_level_learns_its_learnset_move() {
     let dex = Dex::new();
@@ -606,9 +585,6 @@ fn a_single_crossed_level_learns_its_learnset_move() {
     );
 }
 
-/// `GiveMoveToBoxMon`'s `MON_ALREADY_KNOWS_MOVE` branch
-/// (`pokemon.c:2951`-`:2952`): a mon that already knows the crossed
-/// level's learnset move neither duplicates it nor spends a slot on it.
 #[test]
 fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
     let dex = Dex::new();
@@ -635,19 +611,9 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
     );
 }
 
-/// A multi-level jump processes every crossed level in ascending order,
-/// exactly as upstream's own one-level-at-a-time `Cmd_getexp` loop does
-/// (`battle_script_commands.c` case 3 → case 4 → case 5, looping back to
-/// case 3 until the whole award is spent, each level's write capped at the
-/// next threshold by `Task_GiveExpToMon`,
-/// `battle_controller_player.c:1154`-`:1181`). Torchic crosses four
-/// learnset levels here — 16 Peck, 19 Sand Attack, 25 Fire Spin, 28 Quick
-/// Attack — with one slot already taken, so the first three land *in
-/// learnset order* (no skips: Sand Attack and Fire Spin are not executable
-/// by this crate's turn engine and are taught anyway) and the fourth runs
-/// out of slots and stops the level-up on a player decision (issue #304)
-/// **at level 28**: the rest of the award is unconsumed while the question
-/// is open, so the prompt never shows a mon past the level it names.
+/// Ascending order and the per-level cap mirror upstream's one-level-at-a-
+/// time `Cmd_getexp` loop, each write capped by `Task_GiveExpToMon`
+/// (`battle_controller_player.c:1154`-`:1181`).
 #[test]
 fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     let dex = Dex::new();
@@ -709,12 +675,9 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     assert_eq!(mon.experience(), level_29);
 }
 
-/// A full moveset **asks** rather than silently declining — the
-/// four-known-moves yes/no box (`BattleScript_AskToLearnMove`,
-/// `battle_script_commands.c:5368`-`:5370`), which issue #304 turned from a
-/// recorded divergence into real state the caller has to answer. Both
-/// answers are pinned: declining leaves the moveset alone, replacing swaps
-/// exactly the chosen slot.
+/// A full moveset routes through upstream's yes/no box rather than silently
+/// discarding the move (`BattleScript_AskToLearnMove`,
+/// `battle_script_commands.c:5368`-`:5370`).
 #[test]
 fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     let original_moves = vec![SCRATCH, GROWL, TACKLE, LEER];
@@ -744,7 +707,6 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
         "and nothing about the moveset moves until it is answered"
     );
 
-    // Declining: unchanged, exactly what the pre-#304 silent decline did.
     let mut declined = mon.clone();
     assert!(declined
         .resolve_move_learn(&dex, MoveLearnDecision::Decline)
@@ -760,7 +722,6 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
         original_moves
     );
 
-    // Replacing: only the chosen slot changes, at the new move's base PP.
     mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(2))
         .unwrap();
     assert_eq!(
@@ -774,10 +735,6 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     assert_eq!(mon.moves()[2].pp, dex.move_data(PECK).unwrap().pp);
 }
 
-/// The decision surface, reached the way a player reaches it: through an
-/// NPC trainer battle's own experience award (issue #304). The prompt is
-/// reported as an event, held on the battle, blocks another turn until it is
-/// answered, and the answer performs `RemoveMonPPBonus` + `SetMonMoveSlot`.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
@@ -785,15 +742,13 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
-    // One experience point short of level 16, so the battle's own award is
-    // what crosses the threshold -- and three PP Ups on the slot about to be
-    // given up, so the clear is observable.
     assert!(player
         .apply_experience(&dex, level_16 - 1 - player.experience())
         .unwrap()
         .is_none());
+    let three_pp_ups_on_the_slot_about_to_be_given_up = PpBonuses::from_bits(0b0000_1100);
     let player = player
-        .with_pp_bonuses(&dex, PpBonuses::from_bits(0b0000_1100))
+        .with_pp_bonuses(&dex, three_pp_ups_on_the_slot_about_to_be_given_up)
         .unwrap();
     let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
 
@@ -801,8 +756,6 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let mut battle =
         Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
 
-    // However many Scratches the level-5 Treecko survives; the award lands
-    // on the turn it faints.
     let mut events = Vec::new();
     for _ in 0..8 {
         events = battle
@@ -824,11 +777,8 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         exp_index < prompt_index,
         "the award is applied before the question is asked: {events:?}"
     );
-    // The knockout would end the battle -- the bench is empty -- but the
-    // open question holds everything after the faint back, exactly as
-    // upstream finishes the level-up script before
-    // BattleScript_HandleFaintedMon (`battle_util.c:1894`-`:1951`): no
-    // money, no outcome, no Ended event until the answer.
+    // Upstream finishes the level-up script before running
+    // `BattleScript_HandleFaintedMon` (`battle_util.c:1894`-`:1951`).
     assert_eq!(
         battle.outcome(),
         None,
@@ -867,9 +817,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
                 forgotten: GROWL,
                 slot: 1,
             },
-            // The last prompt resolved releases the deferred aftermath, in
-            // upstream's order: Cmd_getmoneyreward after Cmd_getexp, then
-            // the battle's end.
+            // Upstream's `Cmd_getmoneyreward` follows `Cmd_getexp`.
             BattleEvent::MoneyGained(money),
             BattleEvent::Ended(BattleOutcome::PlayerWon),
         ]
@@ -903,12 +851,6 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     );
 }
 
-/// A knockout that raises a prompt with a bench still waiting holds the
-/// forced send-out back too: upstream completes the level-up script — yes/no
-/// box included — in `HandleFaintedMonActions`' case 1 before case 4 runs
-/// `BattleScript_HandleFaintedMon`'s replacement
-/// (`battle_util.c:1894`-`:1951`). The `TrainerSentOut` event arrives with
-/// the answer, and the battle then plays on normally.
 #[test]
 fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on() {
     let dex = Dex::new();
@@ -976,16 +918,16 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
     );
 }
 
-/// A chain of prompts resolves *fully* before the deferred aftermath runs:
-/// Wynaut's four level-15 learnset entries each ask in turn
-/// (`BattleScript_TryLearnMoveLoop`), and only the last answer releases the
-/// money payout and the battle's end.
+/// Upstream's `BattleScript_TryLearnMoveLoop` exhausts every same-level
+/// learnset entry before running the deferred faint aftermath.
 #[test]
 fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
-    /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
-    /// Counter, Mirror Coat, Safeguard, Destiny Bond (in table order).
     const WYNAUT: u16 = 360;
-    const LEVEL_15_BLOCK: [MoveId; 4] = [MoveId(68), MoveId(243), MoveId(219), MoveId(194)];
+    const COUNTER: MoveId = MoveId(68);
+    const MIRROR_COAT: MoveId = MoveId(243);
+    const SAFEGUARD: MoveId = MoveId(219);
+    const DESTINY_BOND: MoveId = MoveId(194);
+    const LEVEL_15_BLOCK: [MoveId; 4] = [COUNTER, MIRROR_COAT, SAFEGUARD, DESTINY_BOND];
 
     let dex = Dex::new();
     let growth_rate = dex.species(SpeciesId(WYNAUT)).unwrap().growth_rate;
@@ -1016,8 +958,6 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     );
     let money = battle.trainer().expect("a trainer battle").money();
 
-    // The first three answers each surface the next question and nothing
-    // else -- no money, no outcome, no end.
     for pair in LEVEL_15_BLOCK.windows(2) {
         let answered = battle
             .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
@@ -1032,7 +972,6 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
         assert_eq!(battle.outcome(), None);
     }
 
-    // The last answer releases the whole deferred aftermath, in order.
     let answered = battle
         .resolve_move_learn(MoveLearnDecision::Decline, &mut rng)
         .unwrap();
@@ -1050,11 +989,10 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     assert!(battle.pending_move_learn().is_none());
 }
 
-/// Every knocked-out party member pays its own boosted award, so the exp a
-/// multi-mon trainer hands over is the sum of them — pinned alongside the
-/// send-out because the two share the same faint path.
 #[test]
 fn each_knocked_out_party_member_pays_its_own_boosted_award() {
+    const BOOSTED_AWARD_PER_LEVEL_5_STARTER: u32 = 69;
+
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
     let party = vec![
@@ -1068,18 +1006,21 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
     let first = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    // Treecko expYield 65 -> 46 -> 69.
-    assert!(first.contains(&BattleEvent::ExpGained(69)), "{first:?}");
+    assert!(
+        first.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        "{first:?}"
+    );
     let second = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
-    // Torchic expYield 65 as well, so the same award -- but it must be paid
-    // a *second* time rather than folded into the first.
-    assert!(second.contains(&BattleEvent::ExpGained(69)), "{second:?}");
+    assert!(
+        second.contains(&BattleEvent::ExpGained(BOOSTED_AWARD_PER_LEVEL_5_STARTER)),
+        "paid again rather than folded into the first knockout's award: {second:?}"
+    );
 }
 
-/// A replacement must not act on the turn it came out: upstream settles the
-/// send-out in `HandleFaintedMonActions`, *after* both battlers' actions.
+/// Upstream settles the send-out in `HandleFaintedMonActions`, after both
+/// battlers' actions.
 #[test]
 fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
     let dex = Dex::new();
@@ -1114,9 +1055,8 @@ fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
 }
 
 /// `AI_SetupFirstTurn` is the third flag `TRAINER_BRENDAN_ROUTE_103_TREECKO`
-/// carries instead of `AI_SCRIPT_CHECK_VIABILITY`. Both trainers must be
-/// constructible — the pin that this port reproduces the upstream table's
-/// inconsistency rather than normalising it.
+/// carries instead of `AI_SCRIPT_CHECK_VIABILITY` — the pin that this port
+/// reproduces the upstream table's inconsistency rather than normalising it.
 #[test]
 fn both_route_103_ai_flag_shapes_construct_and_play() {
     for trainer in [MAY_ROUTE_103_MUDKIP, BRENDAN_ROUTE_103_TREECKO] {
@@ -1133,14 +1073,12 @@ fn both_route_103_ai_flag_shapes_construct_and_play() {
     }
 }
 
-/// Losing a trainer battle is the ordinary defeat outcome: no money, no
-/// send-out, and the same deferred white-out the wild path documents.
 #[test]
 fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
+    const MAGIKARP: u16 = 129;
+
     let dex = Dex::new();
-    // A level-1 Magikarp (species 129) knowing only Tackle, against a
-    // level-100 Treecko: the rival's Pound ends it in one hit.
-    let player = max_iv_mon(&dex, 129, 1, vec![TACKLE]);
+    let player = max_iv_mon(&dex, MAGIKARP, 1, vec![TACKLE]);
     let party = vec![max_iv_mon(&dex, TREECKO, 100, vec![POUND, LEER])];
 
     let mut rng = SequenceRng::new([0; 32]);
@@ -1171,17 +1109,11 @@ fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
     );
 }
 
-/// The three construction screens `Battle::new_trainer` runs ahead of its
-/// first draw, and the fact that a rejection leaves the shared stream
-/// untouched.
-///
-/// Slash is the pin that the AI screen is genuinely *narrower* than the
-/// execution screen rather than a duplicate of it: `EFFECT_HIGH_CRITICAL` is
-/// an ordinary hit script the turn engine runs happily
-/// ([`battle::is_ordinary_hit_effect`]), but `AI_CheckViability` routes it
-/// to `AI_CV_HighCrit` (`data/battle_ai_scripts.s:1449`), a branch this slice
-/// does not model — and one that draws, so admitting it would desynchronise
-/// the shared stream rather than merely mis-score.
+/// `AI_CheckViability` routes `EFFECT_HIGH_CRITICAL` — an otherwise ordinary
+/// hit script ([`battle::is_ordinary_hit_effect`]) — to `AI_CV_HighCrit`
+/// (`data/battle_ai_scripts.s:1449`), an unmodelled branch that draws RNG;
+/// admitting it would desynchronise the shared stream rather than merely
+/// mis-score it.
 #[test]
 fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
     let dex = Dex::new();
@@ -1198,8 +1130,6 @@ fn an_unscoreable_party_moveset_is_rejected_before_any_draw() {
     assert_eq!(error, BattleError::UnscoreableMoveEffect(SLASH));
 }
 
-/// A trainer whose `aiFlags` set a script this slice does not run is refused
-/// outright rather than silently playing a *different* AI.
 /// `TRAINER_WINONA_1` (`include/constants/opponents.h:274`) carries
 /// `AI_SCRIPT_RISKY` on top of the three Route 103 scripts
 /// (`src/data/trainers.h:3252`).

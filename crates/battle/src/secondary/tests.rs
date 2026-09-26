@@ -1,7 +1,9 @@
 use super::{
-    ensure_admissible, is_poison_hit_effect, is_secondary_effect, spend_effect_chance_draw,
-    trampoline_for_effect, EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT, EFFECT_POISON_HIT,
-    EFFECT_POISON_TAIL, EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER, SECONDARY_TRAMPOLINES,
+    ensure_admissible, is_poison_hit_effect, is_secondary_effect,
+    resolve_synchronize_poison_reflection, spend_effect_chance_draw, trampoline_for_effect,
+    SynchronizePoisonReflectionOutcome, EFFECT_DOUBLE_EDGE, EFFECT_FAKE_OUT, EFFECT_OVERHEAT,
+    EFFECT_POISON_HIT, EFFECT_POISON_TAIL, EFFECT_RAPID_SPIN, EFFECT_SUPERPOWER,
+    SECONDARY_TRAMPOLINES,
 };
 use crate::damage::STRUGGLE;
 use crate::dex::Dex;
@@ -546,17 +548,18 @@ fn a_serene_grace_attacker_is_admitted_once_poison_could_never_land_anyway() {
     );
 }
 
+/// [`resolve_synchronize_poison_reflection`] models the move-end reflection
+/// onto the original attacker, so there is nothing left for admission to
+/// refuse, healthy attacker or not (`battle_util.c:2971-2986`).
 #[test]
-fn a_synchronize_defender_is_refused_unless_the_attacker_is_already_statused() {
+fn a_synchronize_defender_is_admitted_regardless_of_the_attackers_own_status() {
     let dex = Dex::new();
     let attacker = mon(&dex, ZIGZAGOON);
     let defender = mon(&dex, RALTS);
     assert_eq!(defender.ability(), AbilityId::SYNCHRONIZE);
     assert_eq!(
         ensure_admissible(&dex, POISON_STING, &attacker, &defender),
-        Err(BattleError::UnportedAbilityInteraction(
-            AbilityId::SYNCHRONIZE
-        ))
+        Ok(())
     );
 
     let mut statused_attacker = mon(&dex, ZIGZAGOON);
@@ -567,6 +570,66 @@ fn a_synchronize_defender_is_refused_unless_the_attacker_is_already_statused() {
         "an attacker that already carries a primary status leaves the reflection \
          nothing to write"
     );
+}
+
+#[test]
+fn resolve_synchronize_poison_reflection_applies_to_a_healthy_untyped_attacker() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZIGZAGOON);
+    assert_eq!(
+        resolve_synchronize_poison_reflection(&attacker),
+        SynchronizePoisonReflectionOutcome::Applied
+    );
+}
+
+#[test]
+fn resolve_synchronize_poison_reflection_reports_an_existing_status_without_changing_it() {
+    let dex = Dex::new();
+    for status in [Status1::Paralysed, Status1::Poisoned] {
+        let mut attacker = mon(&dex, ZIGZAGOON);
+        attacker.set_status1(status);
+        assert_eq!(
+            resolve_synchronize_poison_reflection(&attacker),
+            SynchronizePoisonReflectionOutcome::AlreadyStatused,
+            "{status:?}"
+        );
+        assert_eq!(
+            attacker.status1(),
+            status,
+            "resolve_synchronize_poison_reflection never mutates its argument"
+        );
+    }
+}
+
+/// Unlike the initial hit's own [`super::poison_can_land`] guard, the
+/// reflection's `primary == TRUE` always takes the guarded prevention
+/// branch: an Immunity attacker earns its own observable here
+/// (`battle_script_commands.c:2300`-`:2319`).
+#[test]
+fn resolve_synchronize_poison_reflection_is_blocked_by_the_attackers_own_immunity() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, ZANGOOSE);
+    assert_eq!(attacker.ability(), AbilityId::IMMUNITY);
+    assert_eq!(
+        resolve_synchronize_poison_reflection(&attacker),
+        SynchronizePoisonReflectionOutcome::ImmunityProtected
+    );
+}
+
+/// `battle_script_commands.c:2320`-`:2329`: a Poison- or Steel-typed
+/// original attacker earns its own prevention observable during the
+/// reflection, where the initial hit's guard refuses silently.
+#[test]
+fn resolve_synchronize_poison_reflection_is_blocked_by_the_attackers_own_poison_or_steel_typing() {
+    let dex = Dex::new();
+    for species in [EKANS, MAGNEMITE] {
+        let attacker = mon(&dex, species);
+        assert_eq!(
+            resolve_synchronize_poison_reflection(&attacker),
+            SynchronizePoisonReflectionOutcome::TypeProtected,
+            "species {species}"
+        );
+    }
 }
 
 /// Shed Skin's end-turn cure draw lives in `Battle::residual_effects`
