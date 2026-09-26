@@ -8,14 +8,16 @@
 //! `Missed`, `NoEffect`, `LevitateBlocked`, `WonderGuardBlocked`,
 //! `MultiHit`), PP spent on a miss or a block, forced Struggle, and an
 //! overkill hit's reported damage.
+//!
+//! Every scripted RNG here holds, in order, the battle-start draw, the
+//! turn-number refresh, the enemy's move pick, then each resolved hit's own
+//! draws as `battle::hit` pins them. No matchup below ties on Speed.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::{AbilityId, MoveId};
 use battle::{Battle, BattleEvent, BattleOutcome, Dex, PlayerAction, STRUGGLE};
 
-/// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
-/// `MOVE_SCRATCH`.
 const SCRATCH: MoveId = MoveId(10);
 /// `MOVE_BONE_RUSH` (`EFFECT_MULTI_HIT`, Ground, 80 accuracy).
 const BONE_RUSH: MoveId = MoveId(198);
@@ -60,11 +62,10 @@ const TACKLE_ACCURACY_ROLL_MISSES: u16 = 95;
 /// A roll that fails [`BONE_RUSH`]'s 80 accuracy (`80 % 100 + 1 == 81`).
 const BONE_RUSH_ACCURACY_ROLL_MISSES: u16 = 80;
 
-/// Battle start, turn number, the enemy's rejection-loop pick (index 1,
-/// [`SCRATCH`]), the run roll failing, then the enemy's ordinary hit.
+/// The enemy's rejection-loop pick is index 1, [`SCRATCH`]; the run fails
+/// and its hit lands.
 const RUN_FAILS_THEN_ENEMY_SCRATCH_HITS: [u16; 8] = [0, 0, 1, RUN_ROLL_FAILS, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, then both battlers'
-/// [`TACKLE`] missing in turn order.
+/// Both [`TACKLE`]s miss in turn order.
 const BOTH_TACKLES_MISS: [u16; 5] = [
     0,
     0,
@@ -72,37 +73,26 @@ const BOTH_TACKLES_MISS: [u16; 5] = [
     TACKLE_ACCURACY_ROLL_MISSES,
     TACKLE_ACCURACY_ROLL_MISSES,
 ];
-/// Battle start and turn number, then the player's ordinary hit (accuracy,
-/// crit, damage-variance, effect-chance) and the enemy's forced Struggle
-/// (accuracy, crit, damage-variance, no trailing effect-chance). Struggle
-/// draws no selection pick: `choose_enemy_move` returns `None` before
-/// drawing once every move is spent
-/// (`crates/battle/src/battle/opponent_ai.rs`).
+/// The player's hit, then the enemy's forced Struggle: no pick draw once
+/// every move is spent, and no trailing effect-chance draw.
 const FORCED_STRUGGLE_FOLLOWS_THE_FIRST_HIT: [u16; 9] = [0, 0, 0, 1, 0, 0, 0, 1, 0];
-/// Battle start, turn number, the enemy's pick, then both battlers' ordinary
-/// hit draws (accuracy, crit, damage-variance, effect-chance) in turn order.
-/// An immunity or ability block still spends all four, so which hit lands
-/// is the consuming test's to assert.
+/// Both battlers' ordinary hit draws in turn order. An immunity or ability
+/// block still spends all four, so which hit lands is the consuming test's
+/// to assert.
 const TWO_ORDINARY_HIT_DRAWS: [u16; 11] = [0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, then the player's one-shot
-/// hit; the enemy faints before its own turn.
+/// The player's one-shot hit; the enemy faints before its own turn.
 const PLAYER_ACTS_ALONE: [u16; 7] = [0, 0, 0, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, then the player's first (and
-/// only attempted) multi-hit swing -- accuracy, hit-count offset, crit, and
-/// effect-chance -- stopped after one attempt, then the enemy's ordinary
-/// hit.
+/// The player's first multi-hit swing (accuracy, hit-count offset, crit,
+/// effect-chance), stopped after one attempt, then the enemy's hit.
 const MULTI_HIT_STOPS_AT_FIRST_ATTEMPT: [u16; 11] = [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, [`DRAGON_RAGE`]'s accuracy
-/// and (discarded) effect-chance draws -- fixed damage skips the
-/// crit/variance draws -- then the enemy's ordinary hit.
+/// [`DRAGON_RAGE`] draws accuracy and a discarded effect-chance only, then
+/// the enemy's hit.
 const FIXED_DAMAGE_MOVE_THEN_ENEMY_HIT: [u16; 9] = [0, 0, 0, 0, 0, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, then [`FAINT_ATTACK`]'s
-/// always-hit crit, damage-variance, and effect-chance draws; the enemy
-/// faints before its own turn.
+/// [`FAINT_ATTACK`] skips the accuracy draw; the enemy faints before its
+/// own turn.
 const ALWAYS_HIT_FAINTS_BEFORE_ENEMY_TURN: [u16; 6] = [0, 0, 0, 1, 0, 0];
-/// Battle start, turn number, the enemy's pick, [`BONE_RUSH`]'s single
-/// failed accuracy roll (no hit-count, crit, or effect-chance draw behind a
-/// miss), then the enemy's ordinary hit.
+/// [`BONE_RUSH`] misses on its one accuracy roll and spends nothing more,
+/// then the enemy's hit.
 const MULTI_HIT_MOVE_MISSES_THEN_ENEMY_HIT: [u16; 8] =
     [0, 0, 0, BONE_RUSH_ACCURACY_ROLL_MISSES, 0, 1, 0, 0];
 
