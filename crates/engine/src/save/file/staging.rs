@@ -95,6 +95,33 @@ fn fill_new_file(
     use std::io::Write as _;
 
     let file = create_new(path)?;
+    // Captured before the write so a read failure here (never observed off
+    // an object this call just opened) is reported the same way regardless
+    // of what the write below would have done, and so the identity
+    // `StagedSave::remove_after` binds its handle-bound delete to
+    // ([`remove_through_verified_handle`]) is on hand for the whole of this
+    // staged file's life, including after `release_hold` empties the hold.
+    //
+    // A read failure here has no identity to bind a handle-based delete to,
+    // and removing `path` by name would reopen exactly the TOCTOU this
+    // cleanup exists to close (an ancestor could already be retargeted with
+    // no live hold yet to have stopped it) -- so the file is left in place
+    // and the failure is surfaced rather than guessed at.
+    #[cfg(windows)]
+    let identity = match WindowsFileIdentity::of(&file) {
+        Ok(identity) => identity,
+        Err(unreadable) => {
+            drop(file);
+            return Err(std::io::Error::new(
+                unreadable.kind(),
+                format!(
+                    "the staging file at {} was created but its identity could not be read \
+                     to bind a safe removal to it, so it was left in place: {unreadable}",
+                    path.display()
+                ),
+            ));
+        }
+    };
     let result = (|| {
         let mut writer = std::io::BufWriter::new(&file);
         writer.write_all(bytes)?;
@@ -104,7 +131,10 @@ fn fill_new_file(
     #[cfg(not(windows))]
     let hold = file;
     #[cfg(windows)]
-    let hold = Some(file);
+    let hold = WindowsHold {
+        file: Some(file),
+        identity,
+    };
     let mut staged = StagedSave {
         path: path.to_path_buf(),
         hold,
@@ -278,12 +308,21 @@ fn unique_value_mask(width: usize) -> u64 {
 type Hold = std::fs::File;
 
 /// The handle that wrote the staged image, kept open until the image is
-/// promoted or abandoned. What its open handle forbids is documented at
-/// [`create_new_exclusive`]; that includes this process, which is why it is
-/// an `Option`: [`StagedSave::release_hold`] empties it when the name has to
-/// be given up.
+/// promoted or abandoned, alongside the identity [`StagedSave::remove_after`]
+/// binds its handle-bound delete to once that handle is gone (issue #1132).
+/// What the open handle forbids while it lives is documented at
+/// [`create_new_exclusive`]; that includes this process, which is why `file`
+/// is an `Option`: [`StagedSave::release_hold`] empties it when the name has
+/// to be given up, but `identity` outlives it.
 #[cfg(windows)]
-type Hold = Option<std::fs::File>;
+#[derive(Debug)]
+struct WindowsHold {
+    file: Option<std::fs::File>,
+    identity: WindowsFileIdentity,
+}
+
+#[cfg(windows)]
+type Hold = WindowsHold;
 
 /// Ends `hold` where the platform needs it ended: nothing, since the hold
 /// stays for the life of the [`StagedSave`] (see [`Hold`]).
@@ -291,10 +330,271 @@ type Hold = Option<std::fs::File>;
 fn release(_hold: &mut Hold) {}
 
 /// Ends `hold` where the platform needs it ended: drops the handle so the
-/// staging name can be renamed or deleted again (see [`Hold`]).
+/// staging name can be renamed or deleted again (see [`Hold`]). `identity`
+/// is left in place for a cleanup that runs after this.
 #[cfg(windows)]
 fn release(hold: &mut Hold) {
-    drop(hold.take());
+    drop(hold.file.take());
+}
+
+/// The identity Windows reads off an open handle: volume serial number and
+/// file ID, the one per-object identity it exposes to a handle regardless of
+/// which path was used to open it (`std`'s equivalent,
+/// `MetadataExt::volume_serial_number`/`file_index`, is still gated on the
+/// unstable `windows_by_handle`, rust-lang/rust#63010).
+///
+/// The 128-bit ID `GetFileInformationByHandleEx(FileIdInfo)` returns is
+/// read first: `GetFileInformationByHandle`'s 64-bit file index is not
+/// guaranteed unique on `ReFS` (Dev Drive's file system), whose documented
+/// unique identifier is the 128-bit one. Only a file system that rejects
+/// `FileIdInfo` falls back to the 64-bit index, zero-extended, which is how
+/// NTFS fills the 128-bit form anyway.
+///
+/// Comparing this after opening `path` fresh, rather than trusting the live
+/// hold the way [`is_the_held_file`] does before [`StagedSave::release_hold`]
+/// runs, is what lets [`remove_through_verified_handle`] delete through the
+/// very handle it just verified instead of re-resolving `path` a second time
+/// for the delete itself (issue #1132; approval trail in the dependency
+/// ledger, `README.md`).
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsFileIdentity {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
+impl WindowsFileIdentity {
+    /// Reads the identity of the object `handle` refers to: the 128-bit
+    /// `FileIdInfo` form, or the 64-bit index where the file system rejects
+    /// that class (`ERROR_INVALID_PARAMETER`, `ERROR_NOT_SUPPORTED`, or
+    /// `ERROR_INVALID_FUNCTION`). Any other failure surfaces.
+    fn of(handle: &std::fs::File) -> std::io::Result<Self> {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::{
+            ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+            BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO,
+        };
+
+        let mut wide = FILE_ID_INFO::default();
+        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>())
+            .expect("FILE_ID_INFO is far smaller than u32::MAX");
+        // SAFETY: `handle` stays open for this call, `FileIdInfo` takes a `FILE_ID_INFO`, and `size` is that structure's exact size.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                handle.as_raw_handle(),
+                FileIdInfo,
+                std::ptr::from_mut(&mut wide).cast(),
+                size,
+            )
+        };
+        if ok != 0 {
+            return Ok(Self {
+                volume_serial_number: wide.VolumeSerialNumber,
+                file_id: wide.FileId.Identifier,
+            });
+        }
+        let refused = std::io::Error::last_os_error();
+        let unsupported = refused
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            .is_some_and(|code| {
+                matches!(
+                    code,
+                    ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                )
+            });
+        if !unsupported {
+            return Err(refused);
+        }
+
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `handle` stays open for this call, and `info` is a correctly-sized out parameter the API fills in place.
+        let ok = unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &raw mut info) };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+        let mut file_id = [0u8; 16];
+        file_id[..8].copy_from_slice(&index.to_le_bytes());
+        Ok(Self {
+            volume_serial_number: u64::from(info.dwVolumeSerialNumber),
+            file_id,
+        })
+    }
+}
+
+/// Opens `path` for [`remove_through_verified_handle`]'s identity check and
+/// delete: `DELETE | FILE_READ_ATTRIBUTES` access,
+/// `FILE_FLAG_OPEN_REPARSE_POINT` so a reparse point planted at the final
+/// component is not followed underneath the check, and
+/// `FILE_FLAG_BACKUP_SEMANTICS` so a directory that took the name opens and
+/// fails the identity check instead of failing the open as access denied.
+///
+/// The share mode admits every other opener. A deny-all open would fail as
+/// a sharing violation whenever a scanner or indexer still held the freshly
+/// written file, leaving it behind; sharing cannot redirect the check or the
+/// delete, since both go through this handle.
+#[cfg(windows)]
+fn open_for_verified_delete(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+}
+
+/// What [`remove_through_verified_handle`] did about `path`.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifiedRemoval {
+    /// `path` no longer reached the verified object, so nothing was touched.
+    NotOurs,
+    /// The object was deleted with POSIX semantics: its name left the
+    /// directory when the verifying handle closed, even if another process
+    /// still holds the object open.
+    Unlinked,
+    /// The volume refused POSIX semantics, so the object was only marked
+    /// delete-on-close: its name stays in the directory, refusing a
+    /// same-name create, until every other handle to it closes.
+    Pending,
+}
+
+/// Deletes the object `handle` refers to through `handle` itself rather
+/// than a second lookup of its path.
+///
+/// POSIX semantics (`FileDispositionInfoEx`) is tried first, so the name is
+/// gone once `handle` closes whatever other opener remains. A volume or
+/// Windows release without it answers `ERROR_NOT_SUPPORTED`,
+/// `ERROR_INVALID_PARAMETER`, or `ERROR_INVALID_FUNCTION`, and falls back to
+/// the plain `FileDispositionInfo` delete-on-close, reported as
+/// [`VerifiedRemoval::Pending`] because another handle can hold the name.
+#[cfg(windows)]
+fn delete_through_handle(handle: &std::fs::File) -> std::io::Result<VerifiedRemoval> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, FileDispositionInfoEx, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_POSIX_SEMANTICS, FILE_DISPOSITION_INFO, FILE_DISPOSITION_INFO_EX,
+    };
+
+    let posix = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+    };
+    // SAFETY: `FileDispositionInfoEx` takes a `FILE_DISPOSITION_INFO_EX`, which `posix` is.
+    match unsafe { set_file_information(handle, FileDispositionInfoEx, &posix) } {
+        Ok(()) => return Ok(VerifiedRemoval::Unlinked),
+        Err(refused)
+            if refused
+                .raw_os_error()
+                .and_then(|code| u32::try_from(code).ok())
+                .is_some_and(|code| {
+                    matches!(
+                        code,
+                        ERROR_NOT_SUPPORTED | ERROR_INVALID_PARAMETER | ERROR_INVALID_FUNCTION
+                    )
+                }) => {}
+        Err(failed) => return Err(failed),
+    }
+    let legacy = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: `FileDispositionInfo` takes a `FILE_DISPOSITION_INFO`, which `legacy` is.
+    unsafe { set_file_information(handle, FileDispositionInfo, &legacy) }?;
+    Ok(VerifiedRemoval::Pending)
+}
+
+/// `SetFileInformationByHandle` on `handle` with `info` as the buffer.
+///
+/// # Safety
+///
+/// `T` must be the structure `class` documents as its buffer.
+#[cfg(windows)]
+unsafe fn set_file_information<T>(
+    handle: &std::fs::File,
+    class: windows_sys::Win32::Storage::FileSystem::FILE_INFO_BY_HANDLE_CLASS,
+    info: &T,
+) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::SetFileInformationByHandle;
+
+    let size = u32::try_from(std::mem::size_of::<T>())
+        .expect("a file-information structure is far smaller than u32::MAX");
+    // SAFETY: `handle` stays open for the call, the caller guarantees `T` matches `class`, and `size` is `T`'s exact size.
+    let ok = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            class,
+            std::ptr::from_ref(info).cast(),
+            size,
+        )
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Removes the file `identity` names if `path` still reaches it, deleting
+/// through the same handle the identity check opens so no re-lookup of
+/// `path` occurs between the check and the delete. A path that now reaches a
+/// different object is left alone ([`VerifiedRemoval::NotOurs`]). A path
+/// that reaches nothing at all is an error (`NotFound`), not `NotOurs`: an
+/// ancestor retargeted to an empty directory makes the staged image
+/// unreachable without removing it, so
+/// [`StagedSave::remove_after`] reports it as left behind, as the
+/// non-Windows arm's `symlink_metadata` does.
+#[cfg(windows)]
+fn remove_through_verified_handle(
+    path: &Path,
+    identity: WindowsFileIdentity,
+) -> std::io::Result<VerifiedRemoval> {
+    remove_through_verified_handle_with(path, identity, |_handle| {})
+}
+
+/// [`remove_through_verified_handle`] with a hook run between the identity
+/// check and the delete, so a test can land a retarget in exactly that
+/// window without a real race: a test's only other way to reach it would be
+/// two threads racing the OS, which no cheap seam makes deterministic.
+#[cfg(windows)]
+fn remove_through_verified_handle_with(
+    path: &Path,
+    identity: WindowsFileIdentity,
+    before_delete: impl FnOnce(&std::fs::File),
+) -> std::io::Result<VerifiedRemoval> {
+    let handle = open_for_verified_delete(path)?;
+    if WindowsFileIdentity::of(&handle)? != identity {
+        return Ok(VerifiedRemoval::NotOurs);
+    }
+    before_delete(&handle);
+    delete_through_handle(&handle)
+}
+
+/// Folds `cleanup_err` into `source`, keeping `source`'s `ErrorKind` (mirrors
+/// [`StagedSave::remove_after`]'s own fold) and naming `path` as the
+/// abandoned staging file left behind.
+#[cfg(windows)]
+fn fold_cleanup_error(
+    source: &std::io::Error,
+    cleanup_err: &std::io::Error,
+    path: &Path,
+) -> std::io::Error {
+    std::io::Error::new(
+        source.kind(),
+        format!(
+            "{source}; additionally failed to remove the abandoned staging file {}: {cleanup_err}",
+            path.display()
+        ),
+    )
 }
 
 /// Whether `found` describes the very file `hold` holds open: same device
@@ -314,9 +614,13 @@ fn is_the_held_file(hold: &Hold, found: &std::fs::Metadata) -> std::io::Result<b
 /// reading shows.
 ///
 /// On Windows that leaves [`StagedSave::still_ours`]'s regular-file test as
-/// the whole remaining question. On any other non-unix host the hold is an
-/// ordinary handle, and a regular file that replaced the entry would go
-/// undetected.
+/// the whole remaining question -- while the hold lives. Once
+/// [`StagedSave::release_hold`] empties it, [`StagedSave::remove_after`]
+/// no longer goes through `still_ours` at all on Windows; it deletes through
+/// [`remove_through_verified_handle`] instead, bound to the identity
+/// captured when the staged file was created. On any other non-unix host
+/// the hold is an ordinary handle, and a regular file that replaced the
+/// entry would go undetected.
 #[cfg(not(unix))]
 #[expect(
     clippy::unnecessary_wraps,
@@ -354,7 +658,10 @@ impl StagedSave {
     pub(super) fn release_hold(&mut self) {
         release(&mut self.hold);
     }
+}
 
+#[cfg(not(windows))]
+impl StagedSave {
     /// Removes this staged file after `source`, folding a cleanup failure into
     /// the returned error rather than swallowing it -- otherwise a caller who
     /// only sees `source` would never learn a staging file was left behind.
@@ -364,7 +671,9 @@ impl StagedSave {
     ///
     /// The check-then-act bound documented at the rename in
     /// [`SaveFile::write_with`](super::SaveFile::write_with) applies to this
-    /// unlink too.
+    /// unlink too: the check above is by pathname, and the unlink below
+    /// re-resolves `self.path` a second time. This arm serves every host but
+    /// Windows, whose counterpart below deletes through a verified handle.
     pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
         let left_behind = match self.still_ours() {
             Ok(false) => return source,
@@ -384,6 +693,37 @@ impl StagedSave {
                 self.path.display()
             ),
         )
+    }
+}
+
+#[cfg(windows)]
+impl StagedSave {
+    /// [`remove_after`](Self::remove_after)'s handle-bound counterpart to the
+    /// non-Windows arm: releases the hold (a live one would refuse the reopen below
+    /// as a sharing violation) and deletes through
+    /// [`remove_through_verified_handle`], bound to the identity
+    /// [`fill_new_file`] captured when this staged file was created rather
+    /// than to whatever `self.path` resolves to now. That handle-bound
+    /// delete never performs a second lookup of `self.path` for a
+    /// retargeted ancestor -- or a swap the departed hold no longer blocks
+    /// -- to land in. The release-to-rename window
+    /// [`SaveFile::write_with`](super::SaveFile::write_with) documents is
+    /// unrelated: it bounds the *rename*, not this cleanup unlink.
+    ///
+    /// A path that reaches nothing at all is folded into the returned error
+    /// like any other cleanup failure, as the non-Windows arm folds its
+    /// `NotFound`: the staged image may still exist where a retargeted
+    /// ancestor used to point.
+    pub(super) fn remove_after(&mut self, source: std::io::Error) -> std::io::Error {
+        self.release_hold();
+        match remove_through_verified_handle(&self.path, self.hold.identity) {
+            // A delete left pending on a volume without POSIX semantics
+            // still completes once the last other handle closes, as
+            // `std::fs::remove_file`'s own fallback does; nothing is left
+            // behind to report.
+            Ok(_) => source,
+            Err(cleanup_err) => fold_cleanup_error(&source, &cleanup_err, &self.path),
+        }
     }
 }
 

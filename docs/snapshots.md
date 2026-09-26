@@ -18,6 +18,8 @@ Each generation contains:
 
 The recorder stages both payload files before replacing the generation pointer. A failure therefore leaves the previous complete generation visible or leaves no generation on an initial run. Available scenes are `title`, `main-menu-new-game`, and `main-menu-option`. The title capture uses the documented visible “Press Start” frame.
 
+Once a capture has created its staging directory, failing retains that directory, or the unpublished generation directory it was promoted to, and reports its last known path; a failure to create the staging directory reports the path it could not create. Inspect retained directories before removing them manually: another process may have moved or replaced an entry. Automatic directory cleanup cannot make deletion conditional on the identity held by the capture. Linux and macOS promotion atomically refuse an occupied generation name.
+
 ## Verification contract
 
 Snapshots are agent-verification artifacts. Use them to detect and inspect visual changes during implementation and review. A hash mismatch proves bytes changed; a matching non-cryptographic hash does not prove equality. Claim identical output only after exact byte comparison.

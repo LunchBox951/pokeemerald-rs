@@ -45,11 +45,19 @@ pub enum Sample {
 /// Upstream `WaveData` with a nonzero `type` stores DPCM that
 /// `SoundMainRAM_Unk1` expands while mixing (`pokeemerald/src/m4a_1.s`).
 /// Extraction must expand such data before constructing this type.
+///
+/// `data()` always holds exactly one more value than [`Self::sample_count`]:
+/// a retained interpolation-guard sample past the logical end. `sample_count`
+/// is where a loop wraps or a one-shot retires; the trailing value exists
+/// only for the mixer's boundary interpolation lookahead
+/// (`crates/xtask/src/extract/wav.rs`'s module docs;
+/// `pokeemerald/src/m4a_1.s:399-407`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectSoundSample {
     /// The pre-scaled pitch constant expected by the mixer.
     pub base_frequency: u32,
     loop_start: Option<u32>,
+    sample_count: u32,
     data: Vec<i8>,
 }
 
@@ -62,19 +70,33 @@ impl DirectSoundSample {
     ///
     /// # Errors
     ///
-    /// Returns [`AudioError::SampleTooLong`] when the PCM length does not fit
-    /// the encoded `u32` sample count.
+    /// Returns [`AudioError::SampleTooLong`] when the buffer length does not
+    /// fit the encoded `u32` sample count.
+    ///
+    /// Returns [`AudioError::DirectSoundBufferLength`] when `data` does not
+    /// hold exactly one more value than `sample_count` (the retained
+    /// interpolation guard).
     ///
     /// Returns [`AudioError::LoopStartOutOfRange`] when a loop starts at or
-    /// after the end of the PCM data. Upstream derives the loop length as
+    /// after `sample_count`. Upstream derives the loop length as
     /// `size - loopStart`, so every loop must contain a sample
     /// (`pokeemerald/src/m4a_1.s`).
     pub fn new(
         base_frequency: u32,
         loop_start: Option<u32>,
+        sample_count: u32,
         data: Vec<i8>,
     ) -> Result<Self, AudioError> {
-        let sample_count = checked_sample_count(data.len())?;
+        let buffer_len = checked_sample_count(data.len())?;
+        let expected_len = sample_count
+            .checked_add(1)
+            .ok_or(AudioError::SampleTooLong(data.len()))?;
+        if buffer_len != expected_len {
+            return Err(AudioError::DirectSoundBufferLength {
+                sample_count,
+                buffer_len: data.len(),
+            });
+        }
         if let Some(start) = loop_start {
             if start >= sample_count {
                 return Err(AudioError::LoopStartOutOfRange {
@@ -86,14 +108,23 @@ impl DirectSoundSample {
         Ok(Self {
             base_frequency,
             loop_start,
+            sample_count,
             data,
         })
     }
 
-    /// Returns the signed 8-bit PCM samples in playback order.
+    /// Returns the signed 8-bit PCM samples in playback order, including the
+    /// trailing interpolation-guard value past [`Self::sample_count`].
     #[must_use]
     pub fn data(&self) -> &[i8] {
         &self.data
+    }
+
+    /// Returns the logical sample count: where a loop wraps or a one-shot
+    /// retires. One less than `data().len()`.
+    #[must_use]
+    pub fn sample_count(&self) -> u32 {
+        self.sample_count
     }
 
     /// Returns the first sample replayed after the end, or `None` for one-shot playback.
@@ -111,10 +142,6 @@ pub struct ProgrammableWave {
 
 impl Sample {
     /// Encodes the sample into its asset-pack representation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if this module's private `DirectSound` sample-count invariant is broken.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut writer = Writer::new();
@@ -124,9 +151,7 @@ impl Sample {
                 writer.u32(sample.base_frequency);
                 writer.bool(sample.loop_start.is_some());
                 writer.u32(sample.loop_start.unwrap_or_default());
-                let sample_count = checked_sample_count(sample.data.len())
-                    .expect("DirectSoundSample preserves its validated sample count");
-                writer.u32(sample_count);
+                writer.u32(sample.sample_count);
                 for &value in &sample.data {
                     writer.i8(value);
                 }
@@ -155,17 +180,23 @@ impl Sample {
                 let looping = reader.bool()?;
                 let loop_start_field = reader.u32()?;
                 let loop_start = looping.then_some(loop_start_field);
-                let sample_count =
-                    usize::try_from(reader.u32()?).map_err(|_| AudioError::Truncated)?;
+                let sample_count = reader.u32()?;
+                // The wire format always retains one interpolation-guard
+                // value past `sample_count` (see `DirectSoundSample`'s docs).
+                let buffer_len = usize::try_from(sample_count)
+                    .ok()
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or(AudioError::Truncated)?;
                 let mut data =
-                    Vec::with_capacity(sample_count.min(MAX_PREALLOCATED_DIRECT_SOUND_SAMPLES));
-                for _ in 0..sample_count {
+                    Vec::with_capacity(buffer_len.min(MAX_PREALLOCATED_DIRECT_SOUND_SAMPLES));
+                for _ in 0..buffer_len {
                     data.push(reader.i8()?);
                 }
                 reader.expect_eof()?;
                 Ok(Self::DirectSound(DirectSoundSample::new(
                     base_frequency,
                     loop_start,
+                    sample_count,
                     data,
                 )?))
             }
@@ -193,7 +224,7 @@ mod tests {
     #[test]
     fn decode_rejects_trailing_bytes_after_either_kind() {
         let direct_sound =
-            Sample::DirectSound(DirectSoundSample::new(13_379, None, vec![0, 1, -1]).unwrap());
+            Sample::DirectSound(DirectSoundSample::new(13_379, None, 2, vec![0, 1, -1]).unwrap());
         let wave = Sample::ProgrammableWave(ProgrammableWave {
             table: [7; PROGRAMMABLE_WAVE_BYTE_COUNT],
         });
@@ -211,24 +242,27 @@ mod tests {
     #[test]
     fn direct_sound_one_shot_round_trips() {
         assert_round_trip(&Sample::DirectSound(
-            DirectSoundSample::new(1 << 20, None, vec![-128, -1, 0, 1, 127]).unwrap(),
+            DirectSoundSample::new(1 << 20, None, 4, vec![-128, -1, 0, 1, 127]).unwrap(),
         ));
     }
 
     #[test]
     fn direct_sound_looping_round_trips() {
-        let data = (0..100i32)
+        // 101 values: 100 logical samples plus the retained guard.
+        let data = (0..101i32)
             .map(|index| i8::try_from(index % 7 - 3).expect("value is in -3..=3"))
             .collect();
         assert_round_trip(&Sample::DirectSound(
-            DirectSoundSample::new(0x0012_3456, Some(42), data).unwrap(),
+            DirectSoundSample::new(0x0012_3456, Some(42), 100, data).unwrap(),
         ));
     }
 
     #[test]
-    fn direct_sound_empty_data_round_trips() {
+    fn direct_sound_zero_sample_count_round_trips() {
+        // Even a sample with no logical playback still carries its one
+        // retained guard value, so the buffer is never truly empty.
         assert_round_trip(&Sample::DirectSound(
-            DirectSoundSample::new(0, None, vec![]).unwrap(),
+            DirectSoundSample::new(0, None, 0, vec![0]).unwrap(),
         ));
     }
 
@@ -255,11 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn constructor_rejects_a_loop_start_at_or_past_the_data_length() {
-        for (loop_start, data) in [(3u32, vec![0i8, 1, 2]), (9_999, vec![0, 1, 2]), (0, vec![])] {
-            let sample_count = u32::try_from(data.len()).unwrap();
+    fn constructor_rejects_a_loop_start_at_or_past_the_sample_count() {
+        for (loop_start, sample_count, data) in [
+            (3u32, 3u32, vec![0i8, 1, 2, 9]),
+            (9_999, 3, vec![0, 1, 2, 9]),
+            (0, 0, vec![0]),
+        ] {
             assert_eq!(
-                DirectSoundSample::new(1, Some(loop_start), data),
+                DirectSoundSample::new(1, Some(loop_start), sample_count, data),
                 Err(AudioError::LoopStartOutOfRange {
                     loop_start,
                     sample_count,
@@ -269,9 +306,23 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_a_loop_start_at_or_past_the_decoded_data_length() {
+    fn constructor_rejects_a_buffer_that_is_not_exactly_one_more_than_the_sample_count() {
+        for (sample_count, data) in [(3u32, vec![0i8, 1, 2]), (3, vec![0, 1, 2, 9, 9])] {
+            let buffer_len = data.len();
+            assert_eq!(
+                DirectSoundSample::new(1, None, sample_count, data),
+                Err(AudioError::DirectSoundBufferLength {
+                    sample_count,
+                    buffer_len,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_a_loop_start_at_or_past_the_decoded_sample_count() {
         let sample =
-            Sample::DirectSound(DirectSoundSample::new(1, Some(2), vec![0i8, 1, 2]).unwrap());
+            Sample::DirectSound(DirectSoundSample::new(1, Some(2), 3, vec![0i8, 1, 2, 9]).unwrap());
         let mut bytes = sample.encode();
         let loop_start_offset =
             std::mem::size_of::<u8>() + std::mem::size_of::<u32>() + std::mem::size_of::<u8>();
@@ -290,8 +341,9 @@ mod tests {
 
     #[test]
     fn truncated_input_is_rejected() {
-        let bytes = Sample::DirectSound(DirectSoundSample::new(1, Some(0), vec![1, 2, 3]).unwrap())
-            .encode();
+        let bytes =
+            Sample::DirectSound(DirectSoundSample::new(1, Some(0), 2, vec![1, 2, 3]).unwrap())
+                .encode();
         for cut in 0..bytes.len() {
             assert!(Sample::decode(&bytes[..cut]).is_err());
         }
@@ -299,8 +351,9 @@ mod tests {
 
     #[test]
     fn the_accessor_returns_the_payload_the_constructor_was_given() {
-        let sample = DirectSoundSample::new(1, None, vec![-1, 0, 1]).unwrap();
+        let sample = DirectSoundSample::new(1, None, 2, vec![-1, 0, 1]).unwrap();
         assert_eq!(sample.data(), &[-1, 0, 1]);
+        assert_eq!(sample.sample_count(), 2);
     }
 
     #[test]

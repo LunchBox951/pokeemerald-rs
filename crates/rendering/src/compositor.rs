@@ -1,7 +1,9 @@
-//! The cross-layer priority compositor: up to four regular BG layers plus
-//! the sprite layer, combined into one frame (S-2 slice 2).
+//! The cross-layer priority compositor: composites up to four BG layers
+//! (regular or affine) and one sprite layer into a [`Framebuffer`], with
+//! hardware windows, color special effects, and mosaic available through
+//! [`compose_frame_with_effects`].
 //!
-//! Ports the BG/OBJ ordering rules verified against
+//! Priority ordering, verified against
 //! `mgba/src/gba/renderers/video-software.c` and `software-obj.c`:
 //!
 //! - A **lower [`priority`](BgSlot::new) number composites in front**,
@@ -17,19 +19,6 @@
 //!   so on).
 //! - At equal priority among sprites, the **lower OAM index wins** — see
 //!   [`SpriteLayer::resolve_pixel`](crate::sprite::SpriteLayer::resolve_pixel).
-//!
-//! Affine BG layers slot in as of S-2 slice 3 (issue #98) via
-//! [`BgSlot::new_affine`] — [`compose_frame`]'s own signature is unchanged
-//! `(behavioral-fidelity)`.
-//!
-//! S-2 slice 4 (issue #99) adds hardware windows (`WIN0`/`WIN1`/`OBJWIN`),
-//! color special effects (alpha blend, brighten, darken), and mosaic via
-//! [`compose_frame_with_effects`] and the [`FrameEffects`] parameter
-//! struct — [`compose_frame`] becomes a thin delegation to
-//! [`compose_frame_with_effects`] with [`FrameEffects::default`], which
-//! disables every slice-4 feature and so reproduces this slice's output
-//! byte-for-byte, keeping [`compose_frame`]'s own signature (and every
-//! existing caller) unchanged `(behavioral-fidelity)`.
 
 use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
@@ -41,9 +30,7 @@ use crate::palette::Rgb888;
 use crate::sprite::{SpriteLayer, SpritePixel, WindowSpans};
 use crate::window::{WindowConfig, WindowLayerEnable, WindowRegion};
 
-/// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
-/// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
-/// overflow, [`AffineBgLayer`]) — see [`BgSlot::new`]/[`BgSlot::new_affine`].
+/// A BG slot's per-pixel sampling mode: regular (scrolling) or affine.
 #[derive(Debug, Clone, Copy)]
 enum BgKind<'a> {
     Regular {
@@ -60,11 +47,8 @@ enum BgKind<'a> {
     },
 }
 
-/// One of up to four BG layers (regular or affine) participating in
-/// priority composition, paired with the register-level state the GBA PPU
-/// consults alongside the tile/palette data itself: which of BG0..BG3 this
-/// is (breaks same-priority ties), the layer's priority, its per-pixel
-/// sampling mode, and whether it's enabled at all.
+/// Up to four of these compose into one frame: a regular or affine BG layer
+/// plus the per-frame register state that governs its priority and sampling.
 #[derive(Debug, Clone, Copy)]
 pub struct BgSlot<'a> {
     kind: BgKind<'a>,
@@ -99,12 +83,11 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Build an affine BG slot (S-2 slice 3, issue #98). `bg_index` and
-    /// `priority` are masked exactly as in [`new`](Self::new). `ref_x`/
-    /// `ref_y` are the frame's latched reference point in 20.8 fixed point
-    /// (see [`crate::bg_affine`]'s module docs for why one static
-    /// reference point per frame is the behaviorally-correct model of how
-    /// pokeemerald drives `BG2X`/`BG2Y`).
+    /// Build an affine BG slot. `bg_index` and `priority` are masked exactly
+    /// as in [`new`](Self::new). `ref_x`/`ref_y` are the frame's latched
+    /// reference point in 20.8 fixed point (see [`crate::bg_affine`]'s module
+    /// docs for why one static reference point per frame is the
+    /// behaviorally-correct model of how pokeemerald drives `BG2X`/`BG2Y`).
     #[must_use]
     #[allow(clippy::too_many_arguments)] // Mirrors the affine BG's full per-frame register set.
     pub const fn new_affine(
@@ -132,10 +115,8 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Return a copy of this slot with its mosaic bit (`BGxCNT`'s mosaic
-    /// bit) replaced — S-2 slice 4, issue #99. A builder rather than a
-    /// `new`/`new_affine` parameter so every pre-slice-4 call site keeps
-    /// working unchanged; defaults to `false`.
+    /// Return a copy of this slot with its mosaic bit (`BGxCNT`'s mosaic bit)
+    /// replaced; defaults to `false`.
     #[must_use]
     pub const fn with_mosaic(mut self, mosaic: bool) -> Self {
         self.mosaic = mosaic;
@@ -145,18 +126,15 @@ impl<'a> BgSlot<'a> {
     /// Sample this slot's resolved color at `(x, y)`, dispatching to the
     /// regular or affine layer per [`BgKind`]. When this slot's mosaic bit is
     /// set, `(x, y)` is first snapped to `bg_mosaic`'s block origin
-    /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op regardless
-    /// of the slot's own mosaic bit, which is what keeps
-    /// [`compose_frame`]'s output byte-for-byte unaffected by this slice.
+    /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op.
     ///
     /// `bg_open` is whether [`crate::window`] currently permits this slot's
     /// BG index to *composite* at `(x, y)`; `hold_active` is whether its
     /// affine mosaic hold should keep advancing regardless of that — see
     /// [`AffineMosaicHold`]'s docs for why the two can differ. The caller
-    /// always passes both (rather than skipping the call when closed) so a
-    /// `Some` `affine_mosaic_hold` is told about every column. Every other
-    /// slot kind ignores both and returns `None` on `!bg_open`, exactly as
-    /// the caller's own pre-existing early-`continue` did.
+    /// always passes both, rather than skipping the call when closed, so a
+    /// `Some` `affine_mosaic_hold` is told about every column; only the
+    /// returned color, not that bookkeeping, is gated on `bg_open`.
     fn sample(
         &self,
         x: usize,
@@ -189,8 +167,6 @@ impl<'a> BgSlot<'a> {
                     snapped_y,
                     bg_mosaic.horizontal(),
                 );
-                // Only the returned color, not the state update above, is
-                // gated on `bg_open` -- see this function's docs.
                 return if bg_open { sample } else { None };
             }
         }
@@ -222,13 +198,12 @@ impl<'a> BgSlot<'a> {
         }
     }
 
-    /// Whether this slot is an affine [`Overflow::Wrap`] layer at a decoded
-    /// horizontal mosaic size mGBA bypasses entirely — the `Wrap` sibling of
-    /// the same decoded-size gate
+    /// Whether this slot is a `Wrap`-overflow affine layer at a horizontal
+    /// mosaic size mGBA bypasses entirely — the same decoded-size gate
     /// [`AffineBgLayer::sample_column_with_mosaic_hold`] applies for
-    /// `Overflow::Transparent`; see its docs for the mGBA derivation. Only
-    /// `Wrap` needs a separate check here: it never reaches that function's
-    /// retry/hold path at all `(behavioral-fidelity)`.
+    /// `Overflow::Transparent`, but only `Wrap` needs it checked here since it
+    /// never reaches that function's retry/hold path. See that function's
+    /// docs for the mGBA derivation.
     fn wrap_affine_bypasses_horizontal_mosaic(&self, bg_mosaic: MosaicSize) -> bool {
         matches!(
             self.kind,
@@ -243,8 +218,7 @@ impl<'a> BgSlot<'a> {
     /// mosaic-enabled, affine [`Overflow::Transparent`] slot does.
     /// [`Overflow::Wrap`] and regular BGs snap to the block origin
     /// statelessly; see
-    /// [`AffineBgLayer::sample_column_with_mosaic_hold`]'s docs for why
-    /// `Overflow::Transparent` alone needs retry/hold state.
+    /// [`AffineBgLayer::sample_column_with_mosaic_hold`] for why.
     fn needs_affine_mosaic_hold(&self) -> bool {
         self.enabled
             && self.mosaic
@@ -258,11 +232,9 @@ impl<'a> BgSlot<'a> {
     }
 }
 
-/// A candidate pixel's ordering key: `(priority, layer_rank)`. Lower sorts
-/// in front. A sprite's `layer_rank` is always `0`, strictly less than any
-/// BG's `1 + bg_index` — so a sprite wins any same-priority tie against a
-/// BG, and BGs break same-priority ties by ascending `bg_index`, matching
-/// the ordering rules in the module docs.
+/// A candidate's `(priority, layer_rank)` sort key (lower sorts in front),
+/// per the module docs' ordering. A sprite's `layer_rank` is `0`; a BG's is
+/// `1 + bg_index`.
 type OrderKey = (u8, u8);
 /// `(order, color, kind, forced_alpha, color_semi_transparent)` — the last
 /// two fields mirror [`SpritePixel`](crate::sprite::SpritePixel)'s
@@ -272,9 +244,9 @@ type Candidate = (OrderKey, Rgb888, LayerKind, bool, bool);
 
 /// Insert a layer into the two frontmost candidates for one pixel.
 ///
-/// Candidates arrive in the same order the old stable sort saw them
-/// (sprite, then BG slots), so strict comparisons preserve the existing
-/// first-seen tie-break for duplicate order keys.
+/// Candidates arrive in a fixed order (sprite, then BG slots in slot order),
+/// so a strict `<` comparison keeps the first-seen candidate as the
+/// tie-break for duplicate order keys.
 fn insert_candidate(
     front: &mut Option<Candidate>,
     next: &mut Option<Candidate>,
@@ -305,25 +277,20 @@ fn insert_candidate(
 /// opaque layer are left at the framebuffer's default backdrop
 /// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)).
 ///
-/// A thin delegation to [`compose_frame_with_effects`] with
-/// [`FrameEffects::default`] (S-2 slice 4, issue #99) — every window/color
-/// effect/mosaic feature is disabled by that default, so this function's
-/// output, and its signature, are unaffected by that slice
-/// `(behavioral-fidelity)`.
+/// Behaviorally identical to calling [`compose_frame_with_effects`] with
+/// [`FrameEffects::default()`]: every window, color-effect, and mosaic
+/// feature disabled and the default black backdrop `(behavioral-fidelity)`.
 #[must_use]
 pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Framebuffer {
     compose_frame_with_effects(sprites, bg_slots, &FrameEffects::default())
 }
 
 /// Bundled optional per-frame effects for [`compose_frame_with_effects`]:
-/// hardware windows, color special effects, and mosaic (S-2 slice 4, issue
-/// #99).
+/// hardware windows, color special effects, and mosaic.
 ///
 /// [`Default`] disables every one of them (no active window, no color
-/// effect, no mosaic, black backdrop) — this is what makes
-/// [`compose_frame`] byte-for-byte equivalent to calling
-/// [`compose_frame_with_effects`] with a default `FrameEffects`
-/// `(behavioral-fidelity)`.
+/// effect, no mosaic, black backdrop) — see [`compose_frame`] for what that
+/// makes it equivalent to.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FrameEffects {
     /// Hardware window configuration (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`).
@@ -339,14 +306,13 @@ pub struct FrameEffects {
 }
 
 /// [`compose_frame`], extended with hardware windows, color special
-/// effects, and mosaic (S-2 slice 4, issue #99).
+/// effects, and mosaic.
 ///
-/// Per pixel: gather every enabled BG slot's and (if not window-masked) the
-/// sprite layer's opaque contribution, sort by the module docs' priority
-/// ordering, then resolve the front (topmost) one through
-/// [`effects::resolve_pixel_color`] against the layer immediately behind it
-/// (or the backdrop, if nothing else was drawn) — see that function's docs
-/// for exactly which second target a pixel is allowed to blend against.
+/// Per pixel: composes every enabled BG's and (if not window-masked) the
+/// sprite's opaque contribution by the module docs' priority ordering, then
+/// resolves the front layer through [`effects::resolve_pixel_color`] against
+/// the next layer or the backdrop — see that function's docs for which
+/// second target is eligible.
 #[must_use]
 pub fn compose_frame_with_effects(
     sprites: &SpriteLayer<'_>,
@@ -690,8 +656,6 @@ mod tests {
         let layer_a = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
         let layer_b = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
 
-        // BG1 (worse priority 3) vs BG0 (better priority 0, but declared
-        // second) -- priority must win over bg_index/declaration order.
         let slots = [
             BgSlot::new(layer_a, 1, 3, 0, 0, true),
             BgSlot::new(layer_b, 0, 0, 0, 0, true),
@@ -709,13 +673,11 @@ mod tests {
 
     #[test]
     fn bg_vs_bg_same_priority_lower_bg_index_wins() {
-        let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1); // will be bg_index 2
-        let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2); // will be bg_index 0
+        let (tiles_x, palette_x, map_x) = opaque_bg_fixture(1);
+        let (tiles_y, palette_y, map_y) = opaque_bg_fixture(2);
         let layer_a = crate::bg::BgLayer::new(&tiles_x, &palette_x, &map_x);
         let layer_b = crate::bg::BgLayer::new(&tiles_y, &palette_y, &map_y);
 
-        // Same priority (1) for both; bg_index 0 must win over bg_index 2
-        // despite being declared second in the slice.
         let slots = [
             BgSlot::new(layer_a, 2, 1, 0, 0, true),
             BgSlot::new(layer_b, 0, 1, 0, 0, true),
@@ -748,8 +710,6 @@ mod tests {
     fn sprite_vs_bg_same_priority_sprite_wins() {
         let (ts, pal, tm) = opaque_bg_fixture(1);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        // BG at priority 2, best (lowest) bg_index (0) — still must lose to
-        // a same-priority sprite.
         let slots = [BgSlot::new(bg_layer, 0, 2, 0, 0, true)];
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
@@ -782,14 +742,13 @@ mod tests {
     fn sprite_lower_priority_number_beats_a_better_indexed_bg() {
         let (ts, pal, tm) = opaque_bg_fixture(1);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        // BG at the best possible priority (0).
         let slots = [BgSlot::new(bg_layer, 0, 0, 0, 0, true)];
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
         sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
         let sprite_palette = Palette::new(sprite_colors);
-        // Sprite at a WORSE priority (3) than the BG (0) -- the BG must win.
+        // The sprite's priority is worse than the BG's, so the BG must win.
         let entries = [OamEntry::new(
             0,
             0,
@@ -818,8 +777,7 @@ mod tests {
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
         let slots = [BgSlot::new(bg_layer, 0, 3, 0, 0, true)];
 
-        // A fully transparent (all index-0) sprite at the best priority --
-        // it must not occlude the BG at all.
+        // 0x00 fills every texel with palette index 0 (transparent).
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0x00u8; 32]).unwrap();
         let sprite_palette = Palette::new([Bgr555::default(); Palette::LEN]);
         let entries = [OamEntry::new(
@@ -846,20 +804,17 @@ mod tests {
 
     #[test]
     fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
-        // Finding 1: opaque sprite B (priority 2) sits under sprite A
-        // (priority 0), whose texel at this pixel is a transparent hole; a BG
-        // sits between them at priority 1. On hardware A's hole upgrades B's
-        // stored OBJ order to priority 0, so the OBJ layer (still showing B's
-        // color) beats the BG — even though B's own priority (2) is worse
-        // than the BG's (1). Pre-fix the OBJ pixel carried priority 2 and the
-        // BG wrongly won.
+        // B (OAM index 0, opaque, priority 2) sits under A (OAM index 1,
+        // transparent, priority 0), with the BG between them at priority 1.
+        // On hardware, A's transparent texel upgrades B's already-stored OBJ
+        // order to priority 0, so the OBJ layer (still B's color) beats the
+        // BG even though B's own priority (2) is worse than the BG's (1)
+        // (`mgba/src/gba/renderers/software-obj.c:76-85,116-125`).
         let (ts, pal, tm) = opaque_bg_fixture(7);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
-        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
 
-        // A single shared 4bpp tileset: tile 0 fully opaque (B draws it),
-        // tile 1 fully transparent (A draws it). B is OAM index 0 so it
-        // writes first; A (index 1) then upgrades the order via its hole.
+        // Tile 0 is opaque (drawn by B); tile 1 is transparent (drawn by A).
         let mut two_tiles = [0u8; 64];
         two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0 -> index 15 everywhere
         let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
@@ -924,10 +879,10 @@ mod tests {
         (tileset, palette, tilemap)
     }
 
-    /// A single 8x8-tile *affine* BG layer whose columns 0..8 each carry a
-    /// distinct opaque color (channel `column + 1`) -- distinguishes "holds
-    /// its own column's texel" from "holds a neighbor's" at column
-    /// granularity, unlike [`opaque_affine_bg_fixture`]'s single flat color.
+    /// A single affine BG tile whose first row (y=0) has a distinct opaque
+    /// color per column (channel `column + 1`) -- distinguishes "holds its
+    /// own column's texel" from "holds a neighbor's" at column granularity,
+    /// unlike [`opaque_affine_bg_fixture`]'s single flat color.
     fn gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) {
         let tile_byte_len = BitDepth::Bpp8.tile_byte_len();
         let mut bytes = vec![0u8; tile_byte_len];
@@ -970,10 +925,7 @@ mod tests {
 
     #[test]
     fn affine_bg_slot_participates_in_priority_ordering_like_a_regular_bg() {
-        // An affine BG (priority 0, best) must beat a regular BG (priority
-        // 1) at the same pixel, exactly as two regular BGs would — proving
-        // BgSlot::new_affine slots into compose_frame's existing ordering
-        // without changing compose_frame's own signature.
+        // Affine slots share compose_frame's ordering, not a separate path.
         let (affine_tiles, affine_palette, affine_tilemap) = opaque_affine_bg_fixture(9);
         let affine_layer = AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_tilemap);
         let (regular_tiles, regular_palette, regular_map) = opaque_bg_fixture(1);
@@ -1026,16 +978,42 @@ mod tests {
         assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
     }
 
-    // -- S-2 slice 4 (issue #99): windows, color effects, mosaic -----------
+    fn bpp4_tile_with_top_left_2x2(
+        palette_indices_by_row: [[u8; 2]; 2],
+    ) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+        const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / 2;
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+        for (row, [left, right]) in palette_indices_by_row.into_iter().enumerate() {
+            bytes[row * BYTES_PER_ROW] = (right << 4) | left;
+        }
+        bytes
+    }
 
-    /// A 4bpp tile whose top-left 2x2 block has a distinct opaque color per
-    /// pixel — (0,0)=index 1, (1,0)=index 2, (0,1)=index 3, (1,1)=index 4 —
-    /// so mosaic block-snapping (which forces a whole block to read the
-    /// block origin's pixel) is observable, unlike a uniformly-opaque tile.
+    fn bpp4_row(
+        palette_indices_by_column: [u8; BitDepth::TILE_DIM],
+    ) -> [u8; BitDepth::TILE_DIM / 2] {
+        let mut row = [0u8; BitDepth::TILE_DIM / 2];
+        for (byte, [left, right]) in row
+            .iter_mut()
+            .zip(palette_indices_by_column.as_chunks::<2>().0)
+        {
+            *byte = (right << 4) | left;
+        }
+        row
+    }
+
+    fn bpp4_tile_with_every_row(
+        palette_indices_by_column: [u8; BitDepth::TILE_DIM],
+    ) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+        for row in bytes.chunks_exact_mut(BitDepth::TILE_DIM / 2) {
+            row.copy_from_slice(&bpp4_row(palette_indices_by_column));
+        }
+        bytes
+    }
+
     fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x21; // (0,0)=index 1, (1,0)=index 2
-        bytes[4] = 0x43; // (0,1)=index 3, (1,1)=index 4
+        let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(1, 0, 0);
@@ -1050,9 +1028,6 @@ mod tests {
 
     #[test]
     fn no_effects_default_reproduces_compose_frame_byte_for_byte() {
-        // A non-trivial mixed scene (two BGs at different priorities plus a
-        // sprite) composed both ways must match exactly -- the explicit
-        // "no-effects default" regression the DoD calls for.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(3);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(6);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -1089,13 +1064,8 @@ mod tests {
 
     #[test]
     fn window_gates_a_bg_layer_by_region_even_though_its_own_enable_bit_is_on() {
-        // BG0 (red, priority 0 -- otherwise always wins) is only enabled
-        // inside WIN0 (x<4); BG1 (blue, priority 1) is only enabled via
-        // WINOUT (outside every window). Both slots' own `enabled` bit is
-        // `true` throughout -- only the window's per-region bg-enable bit
-        // gates visibility here.
-        let (tiles_r, palette_r, map_r) = opaque_bg_fixture(9); // red channel
-        let (tiles_b, _palette_b, map_b) = opaque_bg_fixture(0); // blue via a dedicated color below
+        let (tiles_r, palette_r, map_r) = opaque_bg_fixture(9);
+        let (tiles_b, _palette_b, map_b) = opaque_bg_fixture(0);
         let layer_r = crate::bg::BgLayer::new(&tiles_r, &palette_r, &map_r);
         let mut blue_colors = [Bgr555::default(); Palette::LEN];
         blue_colors[15] = Bgr555::from_channels(0, 0, 9);
@@ -1142,25 +1112,14 @@ mod tests {
 
     #[test]
     fn objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color() {
-        // A mode-2 (OBJWIN) sprite covering the right half of an 8x8 tile
-        // only contributes a mask -- BG0 is enabled only where that mask is
-        // set (via `obj_window`'s enable bits), and the mask sprite's own
-        // (loud, distinctive) color must never appear on screen.
         let (tiles, palette, map) = opaque_bg_fixture(9);
         let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
 
-        // Each row is 4 bytes covering column pairs (0,1) (2,3) (4,5) (6,7);
-        // a byte's low nibble is its left pixel, high nibble its right
-        // (tile.rs's decode order). `0x00, 0x00, 0xFF, 0xFF` per row makes
-        // columns 0..4 transparent and columns 4..8 opaque (index 15).
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 15, 15]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
-        mask_colors[15] = Bgr555::from_channels(0, 31, 31); // a loud color that must never render
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31);
         let mask_palette = Palette::new(mask_colors);
         let entries = [OamEntry::new(
             0,
@@ -1227,9 +1186,6 @@ mod tests {
         };
         let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
 
-        // The whole 2x2 block containing (0,0)..(1,1) must all read the
-        // block origin's color (index 1), not each pixel's own distinct
-        // color.
         let origin_color = Bgr555::from_channels(1, 0, 0).to_rgb888();
         assert_eq!(fb.pixel(0, 0), Some(origin_color));
         assert_eq!(
@@ -1253,8 +1209,6 @@ mod tests {
     fn mosaic_only_applies_to_bg_slots_with_their_own_mosaic_bit_set() {
         let (tileset, palette, tilemap) = quadrant_bg_fixture();
         let layer = crate::bg::BgLayer::new(&tileset, &palette, &tilemap);
-        // Mosaic is NOT requested on this slot, even though a 2x2 BG mosaic
-        // size is configured for the frame.
         let slot = BgSlot::new(layer, 0, 0, 0, 0, true);
         let entries: [OamEntry; 0] = [];
         let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
@@ -1277,14 +1231,8 @@ mod tests {
 
     #[test]
     fn affine_mosaic_retries_the_next_pixel_when_the_block_origin_is_out_of_bounds() {
-        // The identity matrix with the reference point one texture pixel to
-        // the left puts screen x=0 at texture x=-1 (out of bounds under
-        // `Overflow::Transparent`) and screen x=1 at texture x=0. mGBA's
-        // mode-2 mosaic fetch `continue`s past an out-of-bounds coordinate
-        // without reloading `mosaicWait`, so the next horizontal pixel
-        // retries the fetch and draws -- and, since the block is 4 wide, x=2
-        // and x=3 then hold that retried value rather than each
-        // independently re-snapping to the rejected origin
+        // mGBA's out-of-bounds mode-2 mosaic fetch leaves `mosaicWait`
+        // unchanged, so the next column's retry seeds the hold instead
         // (`MODE_2_COORD_NO_OVERFLOW`/`MODE_2_MOSAIC`,
         // `mgba/src/gba/renderers/software-bg.c:24-42`) `(behavioral-fidelity)`.
         let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
@@ -1339,16 +1287,6 @@ mod tests {
 
     #[test]
     fn affine_mosaic_wrap_overflow_still_snaps_to_the_block_origin() {
-        // `Overflow::Wrap` always succeeds (it masks into range), so it never
-        // hits the retry path -- the pre-existing block-origin snap already
-        // matches mGBA's overflow-branch affine mosaic exactly. This guards
-        // both sides of that: above
-        // `BgSlot::wrap_affine_bypasses_horizontal_mosaic`'s decoded-size
-        // gate a 4-wide block must still collapse to its origin's texel, and
-        // that origin must stay wrapped rather than going transparent. A
-        // per-column gradient is what makes snapping visible; the reference
-        // point sits one texture pixel left, so the block origin wraps to
-        // texture column 7 and the next block lands on column 3.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let one_texture_pixel = i32::from(AffineMatrix::ONE);
@@ -1393,10 +1331,6 @@ mod tests {
 
     #[test]
     fn affine_mosaic_wrap_overflow_bypasses_snapping_at_a_decoded_block_size_of_two() {
-        // `BgSlot::wrap_affine_bypasses_horizontal_mosaic`'s docs cite the
-        // mGBA decoded-size gate this proves: a 2-wide BG mosaic must leave
-        // x=0 and x=1 sampling their own per-column-gradient texel, not both
-        // snapped to column 0.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let slot = BgSlot::new_affine(
@@ -1435,21 +1369,12 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_reopens_seeded_from_the_snapped_origin_not_the_pre_gap_hold() {
-        // mGBA re-invokes its mode-2 background draw routine (and re-derives
-        // `mosaicWait` and the snapped block origin) once per hardware-window
-        // region in which the layer is enabled
+        // mGBA restarts the mode-2 draw routine once per hardware-window
+        // region, re-seeding its mosaic hold from that region's own snapped
+        // block origin rather than resuming the pre-gap hold
         // (`mgba/src/gba/renderers/video-software.c:628-675`,
-        // `mgba/src/gba/renderers/software-private.h:173-192`), so a window
-        // gap must reset the retry/hold state rather than merely hide it. The
-        // reopened span is then seeded from the *snapped block origin*
-        // column, not left blank and not resuming the pre-gap hold
-        // (`software-bg.c:66-73`).
-        //
-        // A per-column gradient (distinct color per texture column) makes
-        // all three outcomes distinguishable at x=5: the pre-gap hold (from
-        // x=0..2) is column 0's color; a naive "start blank" would be
-        // `None`; the correct seed is column 4's color (the snapped origin
-        // for block 4 at x=5).
+        // `software-private.h:173-192`, `software-bg.c:66-73`)
+        // `(behavioral-fidelity)`.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let slot = BgSlot::new_affine(
@@ -1467,9 +1392,6 @@ mod tests {
         let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
         let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
 
-        // WIN0 excludes BG0 for x in [3, 5); WINOUT (everywhere else)
-        // includes it, so BG0 is open at x=0..3, closed at x=3..5, and open
-        // again at x=5..8.
         let bg0_off = WindowLayerEnable::NONE;
         let mut bg0_on = WindowLayerEnable::NONE;
         bg0_on.bg[0] = true;
@@ -1524,24 +1446,15 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_does_not_cross_a_same_enabled_window_region_boundary() {
-        // mGBA partitions a scanline into hardware-window regions and never
-        // coalesces adjacent regions with equal control bits -- it
-        // re-invokes its background draw routine (and re-derives mosaic hold
-        // state fresh from that region's own start column) once per region,
-        // even where the same BG stays enabled across the boundary between
-        // two of them (`mgba/src/gba/renderers/video-software.c:628-675,458-505`).
-        // WIN0 [0, 5) and WINOUT both enable BG0 here, so BG0's own enable
-        // bit never toggles -- x=5 is still a region boundary (WIN0 ->
-        // WINOUT), and the hold must not survive it.
-        //
-        // An 8x horizontal scale makes screen x map to texture x =
-        // 8*(screen_x - 3), landing each screen column in a different one
-        // of 8 flat-colored tiles a few columns apart.
+        // mGBA restarts BG drawing per hardware-window region and never
+        // coalesces adjacent regions sharing the same control bits
+        // (`mgba/src/gba/renderers/video-software.c:458-505,628-675`)
+        // `(behavioral-fidelity)`.
         let (tiles, palette, tilemap) = eight_tile_gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let scale = 8 * AffineMatrix::ONE;
         let matrix = AffineMatrix::new(scale, 0, 0, AffineMatrix::ONE);
-        let reference_x = -24 * i32::from(AffineMatrix::ONE); // texture x = 8*(screen_x - 3)
+        let reference_x = -24 * i32::from(AffineMatrix::ONE);
         let slot = BgSlot::new_affine(
             layer,
             0,
@@ -1596,24 +1509,15 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_does_not_cross_a_zero_width_window_boundary() {
-        // A WIN0 with equal horizontal endpoints matches no pixel, but mGBA
-        // still splits the scanline around it: `_breakWindowInner` inserts
-        // the prefix segment [0, 5), the empty segment [5, 5), and the
-        // suffix segment [5, 240) as three distinct windows
-        // (`mgba/src/gba/renderers/video-software.c:458-496`), and the
-        // scanline loop re-invokes the mode-2 draw routine -- re-deriving
-        // `mosaicWait` and the snapped block origin from that segment's own
-        // start column -- once per segment
-        // (`video-software.c:628-675`, `software-private.h:173-192`). So
-        // x=5 is a hold-resetting boundary here for exactly the same reason
-        // it is in `affine_mosaic_hold_does_not_cross_a_same_enabled_window_region_boundary`,
-        // whose geometry and expectations this mirrors with WIN0 [0, 5)
-        // replaced by the zero-width WIN0 [5, 5).
+        // mGBA's `_breakWindowInner` still splits the scanline around a
+        // zero-width WIN0, resetting the mosaic hold at the split
+        // (`mgba/src/gba/renderers/video-software.c:458-496,628-675`)
+        // `(behavioral-fidelity)`.
         let (tiles, palette, tilemap) = eight_tile_gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let scale = 8 * AffineMatrix::ONE;
         let matrix = AffineMatrix::new(scale, 0, 0, AffineMatrix::ONE);
-        let reference_x = -24 * i32::from(AffineMatrix::ONE); // texture x = 8*(screen_x - 3)
+        let reference_x = -24 * i32::from(AffineMatrix::ONE);
         let slot = BgSlot::new_affine(
             layer,
             0,
@@ -1667,13 +1571,6 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_survives_an_objwin_mask_edge() {
-        // See `AffineMosaicHold`'s docs for why an OBJWIN mask edge must not
-        // reset the hold. BG0 is enabled both by WINOUT and by OBJWIN here,
-        // so it stays visible on both sides of the mask edge at x=4.
-        //
-        // Reference x=-3 texture pixels puts screen x=0..2 out of bounds
-        // (texture x=-3..-1), screen x=3 at texture x=0 (column 0, channel 1)
-        // -- the block-4 hold then covers x=3..6.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let one_texture_pixel = i32::from(AffineMatrix::ONE);
@@ -1689,13 +1586,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        // A mode-window sprite masking columns 4..8 (as in
-        // `objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color`),
-        // putting the OBJWIN edge at x=4, inside the x=3..6 hold span.
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 15, 15]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1750,14 +1641,6 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_advances_through_pixels_hidden_by_objwin() {
-        // See `affine_mosaic_hold_participates`'s docs for why a column
-        // OBJWIN hides must still advance the hold. WINOUT enables BG0 but
-        // OBJWIN does not, so masked columns draw nothing while the hold
-        // keeps advancing underneath.
-        //
-        // Same setup as the mask-edge test above: reference x=-3 texture
-        // pixels and a block-4 hold spanning x=3..6, holding column 0's
-        // (channel 1) texel.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let one_texture_pixel = i32::from(AffineMatrix::ONE);
@@ -1773,14 +1656,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        // A mode-window sprite masking only columns 4 and 5: row bytes
-        // `0x00, 0x00, 0xFF, 0x00` leave column pairs (0,1) and (2,3)
-        // transparent, (4,5) opaque, and (6,7) transparent again (tile.rs's
-        // decode order, as in the sibling mask-edge test above).
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 0, 0]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1808,7 +1684,7 @@ mod tests {
             windows: WindowConfig {
                 win0: None,
                 win1: None,
-                obj_window: Some(WindowLayerEnable::NONE), // OBJWIN never enables BG0
+                obj_window: Some(WindowLayerEnable::NONE),
                 winout: bg0_on,
             },
             mosaic: crate::mosaic::MosaicConfig {
@@ -1845,17 +1721,6 @@ mod tests {
 
     #[test]
     fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot_show() {
-        // The mirror image of the two OBJWIN tests above: here WINOUT
-        // disables BG0 and only OBJWIN enables it, so an *unmasked* column
-        // both composites nothing (OBJWIN doesn't cover it, and WINOUT
-        // wouldn't show it anyway) and must still let the hold advance --
-        // `affine_mosaic_hold_participates`'s OR must not depend on which of
-        // its two terms happens to be the one composited elsewhere.
-        //
-        // Same reference/mosaic setup as the sibling tests: reference x=-3
-        // texture pixels and a block-4 hold spanning x=3..6, holding column
-        // 0's (channel 1) texel. The mask (columns 4,5 opaque) leaves x=3
-        // and x=6 unmasked.
         let (tiles, palette, tilemap) = gradient_affine_bg_fixture();
         let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
         let one_texture_pixel = i32::from(AffineMatrix::ONE);
@@ -1871,10 +1736,7 @@ mod tests {
         )
         .with_mosaic(true);
 
-        let mut mask_tile = [0u8; 32];
-        for row in mask_tile.chunks_exact_mut(4) {
-            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0x00]);
-        }
+        let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 0, 0]);
         let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
         let mut mask_colors = [Bgr555::default(); Palette::LEN];
         mask_colors[15] = Bgr555::from_channels(0, 31, 31);
@@ -1902,8 +1764,8 @@ mod tests {
             windows: WindowConfig {
                 win0: None,
                 win1: None,
-                obj_window: Some(bg0_on),        // only OBJWIN enables BG0
-                winout: WindowLayerEnable::NONE, // WINOUT never does
+                obj_window: Some(bg0_on),
+                winout: WindowLayerEnable::NONE,
             },
             mosaic: crate::mosaic::MosaicConfig {
                 bg: MosaicSize::new(4, 1),
@@ -1936,9 +1798,7 @@ mod tests {
 
     #[test]
     fn mosaic_snaps_obj_sampling_to_its_block_origin() {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x21; // (0,0)=index 1, (1,0)=index 2
-        bytes[4] = 0x43; // (0,1)=index 3, (1,1)=index 4
+        let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0, 1, 0);
@@ -1981,16 +1841,14 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_hold_restarts_at_a_hardware_window_span_boundary() {
-        // mGBA re-invokes sprite preprocessing once per hardware-window span
-        // and seeds an affine OBJ's mosaic hold from the column one left of
-        // that span's start, not the screen-aligned block origin
-        // (`mgba/src/gba/renderers/video-software.c:1052-1062`,
-        // `software-obj.c:227-242,49-70`).
+        // mGBA seeds each window span's affine OBJ mosaic hold from the
+        // column one left of that span's start, not the screen-aligned block
+        // origin (`mgba/src/gba/renderers/video-software.c:1052-1062`,
+        // `software-obj.c:227-242,49-70`) `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[2] = 0x32; // row 0: col 4 -> index 2, col 5 -> index 3
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 2, 3, 0, 0]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2068,19 +1926,14 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_survives_a_later_window_span() {
-        // mGBA rounds an affine mosaic OBJ's trailing edge past its own span
-        // end when the sprite's raw right edge binds it instead of the span,
-        // and the once-per-scanline sprite buffer keeps that spill visible
-        // under a later span (`software-obj.c:227-242`).
-        //
-        // Identity 8x8 affine OBJ at x = 1, OBJ mosaic H = 4, WIN0 opening at
-        // x = 10. Raw right edge 9 rounds to 12, so x = 10..=11 are the spill
-        // of block [8, 12) and must still show source col 7.
+        // mGBA can round an affine mosaic OBJ's trailing edge past its own
+        // span, and the once-per-scanline sprite buffer keeps that spill
+        // visible under a later span (`software-obj.c:227-242`)
+        // `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2147,9 +2000,6 @@ mod tests {
         );
     }
 
-    /// The `affine_obj_mosaic_trailing_spill_survives_a_later_window_span`
-    /// sprite, green at source col 7, composed under `color` with only one
-    /// of `WINOUT` and `WIN0` enabling effects.
     fn compose_trailing_spill_under_effects(
         color: EffectsConfig,
         winout_effects: bool,
@@ -2158,7 +2008,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[3] = 0x20; // row 0: col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([0, 0, 0, 0, 0, 0, 0, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[2] = Bgr555::from_channels(0, 0x1F, 0);
@@ -2208,7 +2058,6 @@ mod tests {
         compose_frame_with_effects(&sprites, &[], &effects)
     }
 
-    /// `BLDCNT` brightening OBJ at full `EVY`, with no second target.
     const OBJ_FULL_BRIGHTEN: EffectsConfig = EffectsConfig {
         effect: ColorEffect::Brighten,
         target1: LayerTargets {
@@ -2226,8 +2075,6 @@ mod tests {
         evy: 16,
     };
 
-    /// `BLDCNT` alpha-blending OBJ onto the backdrop at `EVA` 0, `EVB` 16, so
-    /// a blended pixel is exactly the backdrop.
     const OBJ_ALPHA_ONTO_BACKDROP: EffectsConfig = EffectsConfig {
         effect: ColorEffect::AlphaBlend,
         target1: LayerTargets {
@@ -2247,13 +2094,10 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_keeps_its_writer_spans_brighten() {
-        // mGBA bakes an OBJ's brighten variant into the sprite buffer during
-        // the span that writes it (`software-obj.c:176-203`), and a later
-        // span only composites that stored color (`software-obj.c:424-430`,
-        // `software-private.h:54-65`). The WINOUT pass writes the spill at
-        // x = 10..=11, so WIN0's disabled effects cannot undo the brighten:
-        // green (0, 31, 0) at EVY 16 is `c + (31 - c) * 16 / 16` = 31 per
-        // channel, white.
+        // mGBA bakes an OBJ's color-effect variant into the sprite buffer
+        // during the writing span; a later span only composites that stored
+        // color (`software-obj.c:176-203,424-430`, `software-private.h:54-65`)
+        // `(behavioral-fidelity)`.
         let fb = compose_trailing_spill_under_effects(OBJ_FULL_BRIGHTEN, true, false);
         let white = Bgr555::from_channels(0x1F, 0x1F, 0x1F).to_rgb888();
 
@@ -2272,9 +2116,6 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_ignores_the_later_spans_brighten() {
-        // The mirror of `affine_obj_mosaic_trailing_spill_keeps_its_writer_spans_brighten`:
-        // WINOUT stores the spill from its normal palette, so WIN0's enabled
-        // effects leave it green (`software-obj.c:176-203`).
         let fb = compose_trailing_spill_under_effects(OBJ_FULL_BRIGHTEN, false, true);
         let green = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
 
@@ -2293,12 +2134,10 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_keeps_its_writer_spans_target1() {
-        // mGBA sets an OBJ's `FLAG_TARGET_1` from the span whose pass writes
-        // it (`software-obj.c:159,180-189`) and the alpha postpass blends
-        // every stored target-1 pixel without rechecking any window
-        // (`video-software.c:963-981`). WINOUT enables effects and writes the
-        // spill at x = 10..=11, so it still blends inside WIN0, whose own
-        // effects are off: `EVA` 0 and `EVB` 16 leave the black backdrop.
+        // mGBA sets an OBJ's `FLAG_TARGET_1` from the writing span, and the
+        // alpha postpass blends every stored target-1 pixel without
+        // rechecking any window (`software-obj.c:159,180-189`,
+        // `video-software.c:963-981`) `(behavioral-fidelity)`.
         let fb = compose_trailing_spill_under_effects(OBJ_ALPHA_ONTO_BACKDROP, true, false);
 
         assert_eq!(
@@ -2312,8 +2151,6 @@ mod tests {
             "x=10 is WINOUT's target-1 spill and still blends inside WIN0"
         );
 
-        // The mirror: WINOUT writes the spill without `FLAG_TARGET_1`, so
-        // WIN0's enabled effects cannot blend it.
         let fb = compose_trailing_spill_under_effects(OBJ_ALPHA_ONTO_BACKDROP, false, true);
         let green = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
 
@@ -2330,17 +2167,11 @@ mod tests {
         // A span ending exactly at the sprite's raw right edge never rounds
         // (`condition == end`); the next span, starting at that same edge,
         // owns the rounding instead and seeds its own hold
-        // (`software-obj.c:227-241`).
-        //
-        // Identity 8x8 affine OBJ at x = 2 (raw right edge 10), OBJ mosaic H
-        // = 4, WIN0 opening at x = 10 (exactly the raw edge). The leading
-        // block [8, 12) is split: x = 8..=9 hold source col 6 from the
-        // WINOUT pass, and x = 10..=11 hold source col 7, restarted by WIN0.
+        // (`software-obj.c:227-241`) `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2420,17 +2251,11 @@ mod tests {
         // mGBA skips a span's sprite pass entirely when its control disables
         // OBJ (`video-software.c:1052-1062`); an identity matrix's later
         // OBJ-enabled span still fails its own bounds test, so the spill
-        // stays unwritten (`software-obj.c:241`, `49-70`).
-        //
-        // Identity 8x8 affine OBJ at x = 1 (raw right edge 9), OBJ mosaic
-        // H = 4, WIN0 opening at x = 10 with OBJ on, WINOUT with OBJ off. The
-        // spill columns x = 10..=11 belong to the skipped WINOUT pass, so the
-        // backdrop shows through.
+        // stays unwritten (`software-obj.c:241,49-70`) `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2500,17 +2325,13 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_renders_from_a_later_obj_enabled_span() {
-        // Same geometry as
-        // `affine_obj_mosaic_trailing_spill_needs_its_owning_span_to_draw_obj`,
-        // but the matrix mirrors x (pa = -1.0): mGBA reruns the trailing-edge
-        // rounding in every span whose own end doesn't bind it, so the
-        // OBJ-enabled WIN0 pass draws the spill itself once the skipped
-        // WINOUT pass leaves it unwritten (`software-obj.c:227-242`).
+        // mGBA reruns trailing-edge rounding independently in every span
+        // whose own end doesn't bind it (`software-obj.c:227-242`)
+        // `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2586,17 +2407,13 @@ mod tests {
 
     #[test]
     fn affine_obj_mosaic_trailing_spill_prefers_an_opaque_span() {
-        // Same mirrored geometry as
-        // `affine_obj_mosaic_trailing_spill_renders_from_a_later_obj_enabled_span`,
-        // except WINOUT also draws OBJ. Its pass holds source col 1, which is
-        // palette index zero, so it writes nothing into the unwritten sprite
-        // slot; the WIN0 pass then rounds the trailing edge itself and writes
-        // source col 0 (`software-obj.c:227-242`, `49-70`).
+        // mGBA's transparent-pixel write leaves the sprite buffer slot
+        // available to a later span's opaque fetch
+        // (`software-obj.c:49-70,227-242`) `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01; // row 0: col 0 -> index 1, col 1 -> index 0
-        bytes[3] = 0x23; // row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2667,9 +2484,8 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 64];
-        bytes[..32].fill(0x44); // tile 0: B's opaque fill, palette index 4 (green)
-        bytes[32] = 0x01; // tile 1 row 0: col 0 -> index 1, col 1 -> index 0
-        bytes[35] = 0x23; // tile 1 row 0: col 6 -> index 3, col 7 -> index 2
+        bytes[..32].fill(0x44);
+        bytes[32..36].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2679,20 +2495,20 @@ mod tests {
         let b_opaque_prio1 = OamEntry::new(
             8,
             0,
-            0, // tile 0 (opaque green fill)
+            0,
             0,
             BitDepth::Bpp4,
             false,
             false,
             ObjShape::Square,
             0,
-            1, // worse priority than the affine entry
+            1,
             true,
         );
         let affine_prio0 = OamEntry::new(
             1,
             0,
-            1, // tile 1 (the mosaic pattern)
+            1,
             0,
             BitDepth::Bpp4,
             false,
@@ -2746,32 +2562,26 @@ mod tests {
 
     #[test]
     fn objwin_affine_mosaic_spill_written_in_winout_still_promotes_inside_win0() {
-        // mGBA drops an OBJWIN sprite per *writing pass*, not per reader
-        // column (`software-obj.c:161`, `video-software.c:131-134`): a
-        // WINOUT pass's OBJWIN hole still promotes a worse-priority OBJ under
-        // its trailing spill, even where that spill lands inside WIN0.
+        // mGBA suppresses OBJWIN per writing pass, not per column reading its
+        // spill (`software-obj.c:161`, `video-software.c:131-134`)
+        // `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
-        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9); // red BG0
+        const HOLE: u8 = 0;
+        let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9);
         let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
-        let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)]; // BG0 at priority 1
+        let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)];
 
-        // Tile 0: solid index 15 (the normal OBJ). Tile 1 row 0: index 5
-        // everywhere but source column 5, the hole the spill holds.
         let mut tile_bytes = [0u8; 64];
         tile_bytes[..32].fill(0xFF);
-        tile_bytes[32] = 0x55; // source columns 0, 1
-        tile_bytes[33] = 0x55; // source columns 2, 3
-        tile_bytes[34] = 0x05; // source column 4 -> index 5, column 5 -> hole
-        tile_bytes[35] = 0x55; // source columns 6, 7
+        tile_bytes[32..36].copy_from_slice(&bpp4_row([5, 5, 5, 5, 5, HOLE, 5, 5]));
         let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 9, 0); // green: the normal OBJ
-        sprite_colors[5] = Bgr555::from_channels(0, 31, 31); // must never render
+        sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
+        sprite_colors[5] = Bgr555::from_channels(0, 31, 31);
         let sprite_palette = Palette::new(sprite_colors);
 
         let entries = [
-            // OAM 0: normal OBJ over x = 8..=15, worst priority, opaque.
             OamEntry::new(
                 8,
                 0,
@@ -2785,10 +2595,6 @@ mod tests {
                 3,
                 true,
             ),
-            // OAM 1: affine mosaic OBJWIN sprite at x = 1 (raw right edge 9,
-            // rounded to 12 by OBJ mosaic H = 4). Its 4x horizontal
-            // magnification keeps the spill columns inside the texture, where
-            // source column 5 is the transparent hole.
             OamEntry::new(
                 1,
                 0,
@@ -2820,8 +2626,6 @@ mod tests {
         bg0_and_obj.obj = true;
         let effects = FrameEffects {
             windows: WindowConfig {
-                // WIN0 opens at x = 10, so the spill of block [8, 12) crosses
-                // out of the WINOUT pass that wrote it.
                 win0: Some((
                     WindowRect::new(WindowRange::new(10, 240), WindowRange::new(0, 1)),
                     bg0_and_obj,
@@ -2868,11 +2672,7 @@ mod tests {
 
     #[test]
     fn alpha_blend_end_to_end_over_two_bg_layers() {
-        // BG0 (r channel 0, priority 0, target1) alpha-blended with BG1 (r
-        // channel 31 -> byte 255, priority 1, target2) at eva=evb=8 (50/50)
-        // must land on the same 8-bit-oracle midpoint effects::alpha_blend
-        // computes in isolation (see effects tests'
-        // alpha_blend_hand_computed_50_50): (0*8+255*8)/16 = 127.
+        // eva=evb=8 (50/50) blend of r channels 0 and 255: (0*8+255*8)/16 = 127.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(0);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(31);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -2910,9 +2710,9 @@ mod tests {
 
     #[test]
     fn semi_transparent_obj_forces_blend_end_to_end_overriding_brighten() {
-        // BLDCNT selects BRIGHTEN, and OBJ is not even configured target1 --
-        // but a semi-transparent (OAM mode 1) sprite over a target2 BG must
-        // still alpha-blend, per OamEntry::with_mode's docs.
+        // OBJ is not configured target1 here, but a semi-transparent OBJ
+        // still forces alpha blend regardless of BLDCNT's selected effect
+        // (OamEntry::with_mode's contract).
         let (tiles, palette, map) = opaque_bg_fixture(31);
         let bg_layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
@@ -2953,8 +2753,8 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        // Same eva=evb=8 blend of r channels 0 and 255 as
-        // alpha_blend_end_to_end_over_two_bg_layers above: 127.
+        // eva=evb=8 blend of the sprite's r=0 and the BG's r=255:
+        // (0*8+255*8)/16 = 127.
         assert_eq!(
             fb.pixel(0, 0),
             Some(Rgb888 { r: 127, g: 0, b: 0 }),
@@ -2996,8 +2796,6 @@ mod tests {
 
     #[test]
     fn backdrop_blending_end_to_end_when_nothing_is_behind_the_front_layer() {
-        // A single BG (black, target1) alpha-blended against the backdrop
-        // (white, target2-backdrop) when nothing else is drawn underneath.
         let (tiles, palette, map) = opaque_bg_fixture(0);
         let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
@@ -3026,8 +2824,8 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        // eva=evb=8 blend of (0,0,0) and (255,255,255) per channel (8-bit
-        // oracle, module docs): (0*8+255*8)/16 = 127 on every channel.
+        // eva=evb=8 blend of black (0,0,0) and white (255,255,255) per
+        // channel: (0*8+255*8)/16 = 127 on every channel.
         assert_eq!(
             fb.pixel(0, 0),
             Some(Rgb888 {
@@ -3041,12 +2839,12 @@ mod tests {
 
     #[test]
     fn objwin_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
-        // Finding 1 end-to-end: opaque sprite B (priority 2, OAM index 0) sits
-        // under a priority-0 OBJWIN-mode sprite whose texel here is a
-        // transparent hole; a BG sits between them at priority 1. mgba's
-        // SPRITE_DRAW_PIXEL_*_OBJWIN transparent branch upgrades B's stored OBJ
-        // order to 0, so the OBJ layer (still B's color) beats the BG, even
-        // though B's own priority (2) is worse than the BG's (1).
+        // Opaque sprite B (priority 2) sits under a priority-0 OBJWIN-mode
+        // sprite whose texel here is a transparent hole, with a BG between
+        // them at priority 1. Per SpritePixel's flag-only-overwrite contract,
+        // that transparent texel upgrades B's stored priority to 0 without
+        // replacing its color, so the OBJ layer beats the BG despite B's own
+        // priority (2) being worse than the BG's (1).
         let (ts, pal, tm) = opaque_bg_fixture(7);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
         let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
@@ -3096,8 +2894,6 @@ mod tests {
             "the OBJWIN hole upgrades B to priority 0, beating the BG"
         );
 
-        // Control: without the OBJWIN sprite, B stays priority 2 and the
-        // priority-1 BG wins.
         let control_entries = [b_opaque_prio2];
         let control_sprites = SpriteLayer::new(&control_entries, &shared, &shared, &palette);
         let control_fb = compose_frame(&control_sprites, &slots);
@@ -3111,15 +2907,11 @@ mod tests {
     #[test]
     fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
         // A transparent, better-priority semi-transparent OBJ promotes
-        // priority over an already
-        // variant-brightened worse-priority Normal OBJ without replacing its
-        // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
-        // that worse-priority Normal OBJ's own draw-time variant into its
-        // stored color (`software-obj.c:177-203`), keeps that color through
-        // the promoting entry's flag-only overwrite (`software-obj.c:120-126`),
-        // and brightens the surviving pixel again in the reblend postpass
-        // (`video-software.c:982-1013`) -- a double brighten this crate must
-        // reproduce.
+        // priority over an already-brightened worse-priority Normal OBJ
+        // without replacing its color (SpritePixel::color_semi_transparent).
+        // mGBA re-brightens that surviving color again in its reblend
+        // postpass (`video-software.c:982-1013`), so this crate must double-
+        // brighten it too.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(1); // BG0: priority 1, not target2
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(2); // BG1: priority 2, target2
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -3205,7 +2997,7 @@ mod tests {
 
     #[test]
     fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
-        // End-to-end: a semi-transparent OBJ (forced alpha) sits over BG_a
+        // A semi-transparent OBJ (forced alpha) sits over BG_a
         // (priority 1, its immediate neighbour, NOT a target2) with BG_b
         // (priority 2, a target2) enabled deeper in the frame. See
         // effects::resolve_pixel_color's contract for why a global target2
@@ -3222,7 +3014,7 @@ mod tests {
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
@@ -3268,8 +3060,6 @@ mod tests {
             "a deeper enabled target2 BG clears the variant, but the surviving reblend OBJ is postprocessed to white"
         );
 
-        // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
-        // survives -> the OBJ is brightened to white.
         let mut control_color = base_color;
         control_color.target2 = LayerTargets::default();
         let control_effects = FrameEffects {
@@ -3284,24 +3074,14 @@ mod tests {
         );
     }
 
-    // -- S-2, issue #329: per-scanline OAM admission budget ----------------
-
     #[test]
     fn compositor_agrees_between_the_objwin_mask_and_visible_sprite_layer_under_exhaustion() {
-        // The OBJWIN mask and the visible OBJ layer are gated by the exact
-        // same per-scanline OAM admission stage (`crate::oam_budget`), so
-        // they must move together as the scanline's cycle budget is
-        // exhausted or not -- neither can show a late sprite the other has
-        // already dropped.
-        //
-        // Two late entries: an OBJWIN-mode sprite at x=0 (would enable BG1
-        // there via the `obj_window` mask) and a Normal-mode sprite at
-        // x=100 (would beat BG0 there by priority). Both cost 62 (64-px
-        // wide, on-screen x) -- identical to the transparent fillers ahead
-        // of them -- so the documented 1210-budget cutoff at OAM index 19
-        // (`oam_budget.rs`) applies uniformly across the whole array: 19
-        // fillers exhaust the budget before either late entry is reached,
-        // 17 fillers leave both comfortably inside it.
+        // Both late entries cost 62 (64px wide, on-screen), identical to the
+        // filler sprites ahead of them, so the oam_budget cutoff at OAM index
+        // 19 (`oam_budget.rs`) applies uniformly: 19 fillers exhaust it
+        // before either late entry is reached, 17 leave both inside it. The
+        // OBJWIN mask and the visible OBJ layer both read that one cached
+        // admission decision (`crate::oam_budget`), so they move together.
         let (bg0_tiles, bg0_palette, bg0_map) = opaque_bg_fixture(9);
         let bg0 = crate::bg::BgLayer::new(&bg0_tiles, &bg0_palette, &bg0_map);
         let (bg1_tiles, bg1_palette, bg1_map) = opaque_bg_fixture(4);
@@ -3315,7 +3095,7 @@ mod tests {
         two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0: opaque (index 15)
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31);
         let sprite_palette = Palette::new(sprite_colors);
 
         let wide_64 = |x_raw: u16, tile: u16| {
@@ -3627,16 +3407,13 @@ mod tests {
 
     #[test]
     fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
-        // End-to-end version of effects::resolve_pixel_color's
-        // `objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer`
-        // unit test: OBJWIN enabled with a blend-enable bit that differs
-        // from WINOUT's own is mGBA's `objwinSlowPath`
-        // (`mgba/src/gba/renderers/software-obj.c:176,180-192`), and it
-        // reblends a plain Normal-mode OBJ even though BLDCNT never marks it
-        // as a target1 layer.
+        // OBJWIN enabled with a blend-enable bit that differs from WINOUT's
+        // own triggers mGBA's `objwinSlowPath` (`software-obj.c:176,180-192`),
+        // which reblends a plain Normal-mode OBJ even though BLDCNT never
+        // marks it as a target1 layer.
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
@@ -3712,12 +3489,12 @@ mod tests {
 
     #[test]
     fn forced_alpha_blends_against_the_span_backdrop_variant() {
-        // A semi-transparent OBJ forces alpha with no second target below
-        // it, blending against the span's backdrop variant
-        // (`effects::backdrop_variant`), not the raw backdrop.
+        // No BG or OBJ is a second target; the backdrop is the configured
+        // target2, and effects::backdrop_variant resolves its colour to the
+        // span's variant before the blend.
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
