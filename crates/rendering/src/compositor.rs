@@ -278,8 +278,8 @@ fn insert_candidate(
 /// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)).
 ///
 /// Behaviorally identical to calling [`compose_frame_with_effects`] with
-/// every window, color-effect, and mosaic feature disabled
-/// `(behavioral-fidelity)`.
+/// [`FrameEffects::default()`]: every window, color-effect, and mosaic
+/// feature disabled and the default black backdrop `(behavioral-fidelity)`.
 #[must_use]
 pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Framebuffer {
     compose_frame_with_effects(sprites, bg_slots, &FrameEffects::default())
