@@ -85,13 +85,45 @@ fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
 /// on a FIFO's other end.
 #[cfg(unix)]
 mod open_flags {
-    // Linux's `<bits/fcntl-linux.h>` and `<asm-generic/errno.h>`.
-    #[cfg(target_os = "linux")]
+    // Linux's generic `<asm-generic/fcntl.h>`: `O_NOFOLLOW` is `0x20000`,
+    // unmodified outside the arm/aarch64/powerpc/powerpc64/m68k override below.
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "arm",
+            target_arch = "aarch64",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "m68k"
+        ))
+    ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0002_0000;
+    // arm's, aarch64's, powerpc's, powerpc64's, and m68k's `<asm/fcntl.h>`
+    // swap the pair: `O_NOFOLLOW` is `0x8000` there instead of `0x20000`.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "arm",
+            target_arch = "aarch64",
+            target_arch = "powerpc",
+            target_arch = "powerpc64",
+            target_arch = "m68k"
+        )
+    ))]
+    pub(super) const O_NOFOLLOW: i32 = 0x0000_8000;
+    // `<asm-generic/fcntl.h>`'s `O_NONBLOCK` and `<asm-generic/errno.h>`'s `ELOOP`;
+    // MIPS and SPARC each override both, tracked in #1436.
     #[cfg(target_os = "linux")]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
     #[cfg(target_os = "linux")]
     pub(super) const ELOOP: i32 = 40;
+
+    // Pins x86_64 to the generic branch and aarch64 to the override branch
+    // so a misrouted arch fails compilation instead of using the wrong flag.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const _: () = assert!(O_NOFOLLOW == 0x0002_0000);
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    const _: () = assert!(O_NOFOLLOW == 0x0000_8000);
 
     // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
     #[cfg(not(target_os = "linux"))]
