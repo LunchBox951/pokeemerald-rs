@@ -5,9 +5,9 @@
 //! is its `MAP_NUM`. [`MapHeader::group`] and [`MapHeader::num`] store those
 //! positions.
 //!
-//! [`MusicId`] stores the numeric `MUS_*` value; its associated constants,
-//! such as [`MusicId::MUS_PETALBURG`], give header literals a name instead
-//! of a bare number. [`RegionMapSectionId`], [`MapId`], and
+//! [`MusicId`] stores the numeric `MUS_*` value; module-private associated
+//! constants named after the upstream `MUS_*` symbols give header literals a
+//! name instead of a bare number. [`RegionMapSectionId`], [`MapId`], and
 //! [`crate::map_layouts::LayoutId`] hold their symbolic identity directly.
 //! [`Weather`], [`MapType`], [`BattleScene`], and [`Direction`] are typed
 //! enums and need no separate symbol.
@@ -26,122 +26,64 @@ pub const MAP_GROUP_COUNT: usize = 34;
 pub struct MusicId(pub u16);
 
 impl MusicId {
-    /// First used by `UnusedContestHall1`.
-    pub const MUS_GSC_PEWTER: Self = Self(357);
-    /// First used by `Route101`.
-    pub const MUS_ROUTE101: Self = Self(359);
-    /// First used by `Route110`.
-    pub const MUS_ROUTE110: Self = Self(360);
-    /// First used by `Route120`.
-    pub const MUS_ROUTE120: Self = Self(361);
-    /// First used by `PetalburgCity`.
-    pub const MUS_PETALBURG: Self = Self(362);
-    /// First used by `OldaleTown`.
-    pub const MUS_OLDALE: Self = Self(363);
-    /// First used by `DewfordTown_Gym`.
-    pub const MUS_GYM: Self = Self(364);
-    /// First used by `RusturfTunnel`.
-    pub const MUS_PETALBURG_WOODS: Self = Self(366);
-    /// First used by `LilycoveCity_LilycoveMuseum_1F`.
-    pub const MUS_LILYCOVE_MUSEUM: Self = Self(373);
-    /// First used by `Route122`.
-    pub const MUS_ROUTE122: Self = Self(374);
-    /// First used by `SlateportCity_OceanicMuseum_1F`.
-    pub const MUS_OCEANIC_MUSEUM: Self = Self(375);
-    /// First used by `AbandonedShip_Deck`.
-    pub const MUS_ABANDONED_SHIP: Self = Self(381);
-    /// First used by `FortreeCity`.
-    pub const MUS_FORTREE: Self = Self(382);
-    /// First used by `LittlerootTown_ProfessorBirchsLab`.
-    pub const MUS_BIRCH_LAB: Self = Self(383);
-    /// First used by `FallarborTown_BattleTentLobby`.
-    pub const MUS_B_TOWER_RS: Self = Self(384);
-    /// First used by `MeteorFalls_1F_1R`.
-    pub const MUS_CAVE_OF_ORIGIN: Self = Self(386);
-    /// First used by `VerdanturfTown`.
-    pub const MUS_VERDANTURF: Self = Self(398);
-    /// First used by `MauvilleCity`.
-    pub const MUS_RUSTBORO: Self = Self(399);
-    /// First used by `OldaleTown_PokemonCenter_1F`.
-    pub const MUS_POKE_CENTER: Self = Self(400);
-    /// First used by `Route104`.
-    pub const MUS_ROUTE104: Self = Self(401);
-    /// First used by `Route119`.
-    pub const MUS_ROUTE119: Self = Self(402);
-    /// First used by `OldaleTown_Mart`.
-    pub const MUS_POKE_MART: Self = Self(404);
-    /// First used by `LittlerootTown`.
-    pub const MUS_LITTLEROOT: Self = Self(405);
-    /// First used by `MtChimney`.
-    pub const MUS_MT_CHIMNEY: Self = Self(406);
-    /// First used by `LilycoveCity`.
-    pub const MUS_LILYCOVE: Self = Self(408);
-    /// First used by `Underwater_Route124`.
-    pub const MUS_UNDERWATER: Self = Self(411);
-    /// First used by `Route113`.
-    pub const MUS_ROUTE113: Self = Self(418);
-    /// First used by `EverGrandeCity`.
-    pub const MUS_EVER_GRANDE: Self = Self(422);
-    /// First used by `MauvilleCity_GameCorner`.
-    pub const MUS_GAME_CORNER: Self = Self(426);
-    /// First used by `DewfordTown`.
-    pub const MUS_DEWFORD: Self = Self(427);
-    /// First used by `SafariZone_Northwest`.
-    pub const MUS_SAFARI_ZONE: Self = Self(428);
-    /// First used by `EverGrandeCity_SidneysRoom`.
-    pub const MUS_VICTORY_ROAD: Self = Self(429);
-    /// First used by `AquaHideout_1F`.
-    pub const MUS_AQUA_MAGMA_HIDEOUT: Self = Self(430);
-    /// First used by `SSTidalCorridor`.
-    pub const MUS_SAILING: Self = Self(431);
-    /// First used by `MtPyre_1F`.
-    pub const MUS_MT_PYRE: Self = Self(432);
-    /// First used by `SlateportCity`.
-    pub const MUS_SLATEPORT: Self = Self(433);
-    /// First used by `MtPyre_Exterior`.
-    pub const MUS_MT_PYRE_EXTERIOR: Self = Self(434);
-    /// First used by `RustboroCity_PokemonSchool`.
-    pub const MUS_SCHOOL: Self = Self(435);
-    /// First used by `FallarborTown`.
-    pub const MUS_FALLARBOR: Self = Self(437);
-    /// First used by `DesertRuins`.
-    pub const MUS_SEALED_CHAMBER: Self = Self(438);
-    /// First used by `ContestHall`.
-    pub const MUS_CONTEST: Self = Self(440);
-    /// First used by `SootopolisCity`.
-    pub const MUS_SOOTOPOLIS: Self = Self(445);
-    /// First used by `EverGrandeCity_HallOfFame`.
-    pub const MUS_HALL_OF_FAME_ROOM: Self = Self(447);
-    /// First used by `Route110_TrickHouseEntrance`.
-    pub const MUS_TRICK_HOUSE: Self = Self(448);
-    /// First used by `LilycoveCity_ContestLobby`.
-    pub const MUS_CONTEST_LOBBY: Self = Self(452);
-    /// First used by `BattleFrontier_OutsideWest`.
-    pub const MUS_B_FRONTIER: Self = Self(457);
-    /// First used by `BattleFrontier_BattleArenaLobby`.
-    pub const MUS_B_ARENA: Self = Self(458);
-    /// First used by `BattleFrontier_BattlePyramidLobby`.
-    pub const MUS_B_PYRAMID: Self = Self(461);
-    /// First used by `BattleFrontier_BattlePalaceLobby`.
-    pub const MUS_B_PALACE: Self = Self(463);
-    /// First used by `BattleFrontier_BattleTowerLobby`.
-    pub const MUS_B_TOWER: Self = Self(465);
-    /// First used by `BattleFrontier_BattleDomePreBattleRoom`.
-    pub const MUS_B_DOME: Self = Self(467);
-    /// First used by `BattleFrontier_BattlePikeLobby`.
-    pub const MUS_B_PIKE: Self = Self(468);
-    /// First used by `BattleFrontier_BattleFactoryLobby`.
-    pub const MUS_B_FACTORY: Self = Self(469);
-    /// First used by `BattleFrontier_BattleDomeLobby`.
-    pub const MUS_B_DOME_LOBBY: Self = Self(473);
-    /// First used by `AlteringCave`.
-    pub const MUS_RG_SEVII_CAVE: Self = Self(543);
-    /// First used by `NavelRock_Exterior`.
-    pub const MUS_RG_SEVII_ROUTE: Self = Self(545);
-    /// First used by `Route118`.
-    pub const MUS_ROUTE118: Self = Self(32767);
-    /// First used by `CaveOfOrigin_B1F`.
-    pub const MUS_NONE: Self = Self(65535);
+    const MUS_GSC_PEWTER: Self = Self(357);
+    const MUS_ROUTE101: Self = Self(359);
+    const MUS_ROUTE110: Self = Self(360);
+    const MUS_ROUTE120: Self = Self(361);
+    const MUS_PETALBURG: Self = Self(362);
+    const MUS_OLDALE: Self = Self(363);
+    const MUS_GYM: Self = Self(364);
+    const MUS_PETALBURG_WOODS: Self = Self(366);
+    const MUS_LILYCOVE_MUSEUM: Self = Self(373);
+    const MUS_ROUTE122: Self = Self(374);
+    const MUS_OCEANIC_MUSEUM: Self = Self(375);
+    const MUS_ABANDONED_SHIP: Self = Self(381);
+    const MUS_FORTREE: Self = Self(382);
+    const MUS_BIRCH_LAB: Self = Self(383);
+    const MUS_B_TOWER_RS: Self = Self(384);
+    const MUS_CAVE_OF_ORIGIN: Self = Self(386);
+    const MUS_VERDANTURF: Self = Self(398);
+    const MUS_RUSTBORO: Self = Self(399);
+    const MUS_POKE_CENTER: Self = Self(400);
+    const MUS_ROUTE104: Self = Self(401);
+    const MUS_ROUTE119: Self = Self(402);
+    const MUS_POKE_MART: Self = Self(404);
+    const MUS_LITTLEROOT: Self = Self(405);
+    const MUS_MT_CHIMNEY: Self = Self(406);
+    const MUS_LILYCOVE: Self = Self(408);
+    const MUS_UNDERWATER: Self = Self(411);
+    const MUS_ROUTE113: Self = Self(418);
+    const MUS_EVER_GRANDE: Self = Self(422);
+    const MUS_GAME_CORNER: Self = Self(426);
+    const MUS_DEWFORD: Self = Self(427);
+    const MUS_SAFARI_ZONE: Self = Self(428);
+    const MUS_VICTORY_ROAD: Self = Self(429);
+    const MUS_AQUA_MAGMA_HIDEOUT: Self = Self(430);
+    const MUS_SAILING: Self = Self(431);
+    const MUS_MT_PYRE: Self = Self(432);
+    const MUS_SLATEPORT: Self = Self(433);
+    const MUS_MT_PYRE_EXTERIOR: Self = Self(434);
+    const MUS_SCHOOL: Self = Self(435);
+    const MUS_FALLARBOR: Self = Self(437);
+    const MUS_SEALED_CHAMBER: Self = Self(438);
+    const MUS_CONTEST: Self = Self(440);
+    const MUS_SOOTOPOLIS: Self = Self(445);
+    const MUS_HALL_OF_FAME_ROOM: Self = Self(447);
+    const MUS_TRICK_HOUSE: Self = Self(448);
+    const MUS_CONTEST_LOBBY: Self = Self(452);
+    const MUS_B_FRONTIER: Self = Self(457);
+    const MUS_B_ARENA: Self = Self(458);
+    const MUS_B_PYRAMID: Self = Self(461);
+    const MUS_B_PALACE: Self = Self(463);
+    const MUS_B_TOWER: Self = Self(465);
+    const MUS_B_DOME: Self = Self(467);
+    const MUS_B_PIKE: Self = Self(468);
+    const MUS_B_FACTORY: Self = Self(469);
+    const MUS_B_DOME_LOBBY: Self = Self(473);
+    const MUS_RG_SEVII_CAVE: Self = Self(543);
+    const MUS_RG_SEVII_ROUTE: Self = Self(545);
+    const MUS_ROUTE118: Self = Self(32767);
+    const MUS_NONE: Self = Self(65535);
 
     /// Returns the numeric `MUS_*` value.
     #[must_use]
