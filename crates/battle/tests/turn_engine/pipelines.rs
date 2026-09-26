@@ -1,20 +1,13 @@
-//! `battle`'s move pipelines beyond the ordinary hit and stat-change ones
-//! -- drain, fixed damage, multi-hit, flag-only, and defense-curl --
-//! driven through real turns.
+//! Turn-level coverage for `battle`'s drain, fixed-damage, multi-hit,
+//! flag-only, and defense-curl move pipelines: whatever a unit test inside
+//! those modules cannot show because it never runs through a real turn.
 //!
-//! The arithmetic and the RNG-draw shapes are pinned at unit level inside
-//! `battle`'s own `drain` / `fixed_damage` / `multi_hit` / `flag_move` /
-//! `defense_curl` modules. What is pinned **here** is the wiring only a turn
-//! can show: that the drain heals from the HP the target actually lost, that
-//! Liquid Ooze's damage lands on the attacker in the script's message
-//! order, that the multi-hit loop really stops at a knocked-out target
-//! without spending the abandoned hits' draws, that the volatiles a flag
-//! move sets are read by the *next* move and expire on schedule, and that
-//! Defense Curl's volatile is written before its Defense raise even when
-//! that raise is capped.
-//!
-//! Every script is exact-length, so a pipeline that draws one time too many
-//! panics rather than quietly desynchronising.
+//! Every script's first three draws are fixed: `Battle::new`'s battle-start
+//! draw, `Battle::start_turn`'s turn-number refresh, and the AI's move
+//! selection; each later turn repeats only the latter two. What follows is the acting move's own draws,
+//! then the opponent's if it still acts. `SequenceRng` panics on exhaustion,
+//! and the trailing `rng.draws() == script.len()` assertion, where present,
+//! catches an under-drawing pipeline too.
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
 use assets::MoveId;
@@ -23,42 +16,39 @@ use battle::{
     Volatiles,
 };
 
-/// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
-/// `MOVE_ABSORB` (`EFFECT_ABSORB`).
 const ABSORB: MoveId = MoveId(71);
-/// `MOVE_SONIC_BOOM` (`EFFECT_SONICBOOM`).
 const SONIC_BOOM: MoveId = MoveId(49);
-/// `MOVE_DOUBLE_SLAP` (`EFFECT_MULTI_HIT`).
 const DOUBLE_SLAP: MoveId = MoveId(3);
-/// `MOVE_SPLASH` / `MOVE_FOCUS_ENERGY` / `MOVE_CHARGE`, the flag-only three.
 const SPLASH: MoveId = MoveId(150);
 const FOCUS_ENERGY: MoveId = MoveId(116);
 const CHARGE: MoveId = MoveId(268);
-/// `MOVE_DEFENSE_CURL` — `EFFECT_DEFENSE_CURL`.
 const DEFENSE_CURL: MoveId = MoveId(111);
-/// `MOVE_SHOCK_WAVE` — `EFFECT_ALWAYS_HIT`, and the only Electric damaging
-/// move this engine can execute, so the one that can show Charge acting.
+/// An Electric move whose `EFFECT_ALWAYS_HIT` skips only the accuracy draw;
+/// crit, damage-variance, and effect-chance draws still follow. Charge
+/// itself draws nothing.
 const SHOCK_WAVE: MoveId = MoveId(351);
 
-/// `SPECIES_BULBASAUR`: Grass/Poison, **Overgrow** in ability slot 0.
+/// Grass/Poison; Overgrow occupies ability slot 0, the slot every
+/// [`max_iv_mon`] (even personality) call selects.
 const BULBASAUR: u16 = 1;
-/// `SPECIES_SQUIRTLE`: pure Water, one ability slot.
 const SQUIRTLE: u16 = 7;
-/// `SPECIES_TENTACOOL`: Clear Body in slot 0, **Liquid Ooze** in slot 1, so
-/// an odd personality fields the ability this pipeline exposes.
+const RATTATA: u16 = 19;
+/// Clear Body occupies ability slot 0 and Liquid Ooze slot 1, so these
+/// tests pass [`LIQUID_OOZE_PERSONALITY`] to field Liquid Ooze instead.
 const TENTACOOL: u16 = 72;
-/// `SPECIES_MACHOP`: bulky and slow enough at level 20 to survive a charged
-/// Shock Wave and still move second.
 const MACHOP: u16 = 66;
 
-/// The `gHpDealt`-not-`gBattleMoveDamage` contract, driven through a real
-/// turn: an overkill Absorb heals half the HP the target **actually lost**
-/// — `Cmd_datahpupdate`'s cap — never half of the formula's raw output.
-///
-/// Swapping `execute_drain_move`'s clamped figure for the raw damage passes
-/// every unit test in `battle::drain` and fails here, which is why this pin
-/// lives at turn level.
+/// `CreateBoxMon` selects a two-ability species' ability slot as
+/// `personality & 1`; every Liquid Ooze test passes this odd value to
+/// [`max_iv_mon_with_personality`] to field Tentacool's slot-1 ability
+/// instead of its slot-0 Clear Body.
+const LIQUID_OOZE_PERSONALITY: u32 = 1;
+
+/// An overkill Absorb heals half the HP the target actually lost --
+/// upstream's `Cmd_datahpupdate` cap on `gHpDealt` -- never half of
+/// `gBattleMoveDamage`'s raw formula output, a distinction only a real turn
+/// can expose.
 #[test]
 fn an_overkill_absorb_drains_half_the_hp_actually_removed() {
     let dex = Dex::new();
@@ -67,13 +57,12 @@ fn an_overkill_absorb_drains_half_the_hp_actually_removed() {
     let mut player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let player_max_hp = player.stats().max_hp;
     player.apply_damage(10);
-    let mut enemy = max_iv_mon(&dex, 19, 2, vec![TACKLE]); // Rattata
+    let mut enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
     enemy.apply_damage(enemy_max_hp - 5);
 
-    // 1 (battle start) + turn number + enemy selection + Absorb's 3
-    // (accuracy, crit, damage roll). The enemy faints, so it never acts and
-    // the script ends exactly here.
+    // Absorb's 3 (accuracy, crit, damage roll); the enemy faints and never
+    // gets to act.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -118,7 +107,7 @@ fn a_full_hp_absorb_still_reports_the_drain_and_heals_nothing() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let player_max_hp = player.stats().max_hp;
-    let mut enemy = max_iv_mon(&dex, 19, 2, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
     enemy.apply_damage(enemy_max_hp - 5);
 
@@ -139,18 +128,17 @@ fn a_full_hp_absorb_still_reports_the_drain_and_heals_nothing() {
     assert_eq!(battle.player().current_hp(), player_max_hp);
 }
 
-/// Liquid Ooze: the same magnitude, taken off the **attacker**, with the
-/// script's other string (`B_MSG_ABSORB_OOZE`) in place of the drain one —
-/// never both.
+/// Liquid Ooze turns the same magnitude into damage on the attacker, with
+/// `LiquidOoze` replacing `Drained` -- never both -- as the script's
+/// alternate message-table entry.
 #[test]
 fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let player_max_hp = player.stats().max_hp;
     player.apply_damage(30);
-    // Personality 1 is odd, so `CreateBoxMon`'s `abilityNum = personality &
-    // 1` selects Tentacool's slot-1 ability, Liquid Ooze.
-    let enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
+    let enemy =
+        max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], LIQUID_OOZE_PERSONALITY);
     let enemy_max_hp = enemy.stats().max_hp;
     assert_eq!(enemy.ability(), battle::LIQUID_OOZE);
     assert_eq!(enemy_max_hp, 20, "Tentacool's level-5 maximum HP");
@@ -161,8 +149,6 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
 
-    // The overkill hit removes all 20 HP, so the drain magnitude is 10 --
-    // and the sign flip makes those 10 the attacker's loss.
     assert_eq!(
         events[0],
         BattleEvent::Hit {
@@ -190,20 +176,12 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
-/// `tryfaintmon BS_ATTACKER` comes **before** `tryfaintmon BS_TARGET`
-/// (`data/battle_scripts_1.s:358`-`:359`), so an attacker its own Liquid
-/// Ooze victim killed faints first in the event stream — but **both**
-/// `tryfaintmon`s still run: upstream doesn't decide `gBattleOutcome`
-/// until `Cmd_checkteamslost` runs later, from
-/// `BattleScript_HandleFaintedMon`'s leading `checkteamslost`
-/// (`data/battle_scripts_1.s:2831`), by which point both faints already
-/// happened. This engine's last mon on each side going down together
-/// means upstream's `checkteamslost` ORs in both `B_OUTCOME_WON` and
-/// `B_OUTCOME_LOST` (`battle_script_commands.c:3560`-`:3573`) — but
-/// `B_OUTCOME_DREW` is dispatched through the exact same
-/// `HandleEndTurn_BattleLost` handler as an outright loss
-/// (`battle_main.c:557`-`:559`), never the win path, so the target's
-/// faint is still reported even though the outcome is an ordinary defeat.
+/// `tryfaintmon BS_ATTACKER` runs before `tryfaintmon BS_TARGET`
+/// (`data/battle_scripts_1.s:358`-`:359`), so a Liquid-Ooze attacker that
+/// kills itself still faints first in the event stream even though both
+/// faints are reported. A simultaneous double faint resolves through the
+/// same loss handler as an outright defeat, never the win path
+/// (`battle_script_commands.c:3560`-`:3573`, `battle_main.c:557`-`:559`).
 #[test]
 fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let dex = Dex::new();
@@ -211,12 +189,13 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let player_max_hp = player.stats().max_hp;
     // Leave the attacker on less HP than the 10 the ooze will take.
     player.apply_damage(player_max_hp - 6);
-    // Battle scratch no move in this turn reads: it exists only so every
-    // part of the faint-reset assertion below is non-vacuous.
+    // These survive until the reset assertions below; the crit draw of 1
+    // reads as non-critical at Focus Energy's stage as well as at stage 0.
     player.stages_mut().attack = StatStage::new(2).unwrap();
     player.volatiles_mut().set_focus_energy();
     player.volatiles_mut().set_charge();
-    let mut enemy = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
+    let mut enemy =
+        max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], LIQUID_OOZE_PERSONALITY);
     enemy.stages_mut().attack = StatStage::new(2).unwrap();
     enemy.volatiles_mut().set_focus_energy();
     enemy.volatiles_mut().set_charge();
@@ -252,47 +231,35 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     );
     assert_eq!(battle.player().current_hp(), 0);
     assert_eq!(battle.enemy().current_hp(), 0, "the target died too");
-    // FaintClearSetData clears each corpse's battle scratch before rewards
-    // or outcome settle, and the drain path's custom double-faint
-    // settlement must match settle_faint on that.
+    // Double-faint settlement must clear scratch state on both corpses like
+    // the ordinary faint path does.
     assert_eq!(battle.player().stages(), StatStages::default());
     assert_eq!(battle.enemy().stages(), StatStages::default());
     assert_eq!(battle.player().volatiles(), Volatiles::default());
     assert_eq!(battle.enemy().volatiles(), Volatiles::default());
 }
 
-/// The mirror of the test above with the roles swapped: the *enemy* is the
-/// one draining a Liquid-Ooze player, so the enemy is `BS_ATTACKER` and the
-/// player is `BS_TARGET`. A simultaneous double faint here must still
-/// resolve as `PlayerLost`, not `PlayerWon` -- upstream's `checkteamslost`
-/// scores the player's own total HP independently of who was attacking
-/// (`battle_script_commands.c:3560`-`:3573`), and `B_OUTCOME_DREW` runs
-/// through the loss handler regardless of which side dealt the finishing
-/// blow (`battle_main.c:557`-`:559`). An engine that let the enemy's faint
-/// win the race here would hand the player a victory (and an EXP award)
-/// for a battle upstream scores as a loss.
+/// Mirrors the previous test with attacker and target swapped: the *enemy*
+/// drains a Liquid-Ooze player here. `checkteamslost` scores a simultaneous
+/// double faint as a loss from each side's own total HP
+/// (`battle_script_commands.c:3560`-`:3573`), not from who dealt the
+/// finishing blow, so this still resolves as `PlayerLost`, never
+/// `PlayerWon`.
 #[test]
 fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
     let dex = Dex::new();
-    // The roles are swapped from the test above: the *enemy* Bulbasaur is
-    // `BS_ATTACKER` this time, so it is the one left on less HP than the
-    // ooze recoil will take, and the player's Tentacool -- holding Liquid
-    // Ooze in ability slot 1 -- is `BS_TARGET`, at its natural full HP
-    // exactly as the target was in the test above.
-    let player = max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], 1);
+    let player =
+        max_iv_mon_with_personality(&dex, TENTACOOL, 5, vec![TACKLE], LIQUID_OOZE_PERSONALITY);
     let mut enemy = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
     let enemy_max_hp = enemy.stats().max_hp;
     enemy.apply_damage(enemy_max_hp - 6);
 
     // Bulbasaur (enemy, level 50) outruns Tentacool (player, level 5), so
-    // the enemy's Absorb resolves first -- `Order::DefenderFirst`, exactly
-    // mirroring the test above's `Order::AttackerFirst`. The player's
-    // chosen Tackle never runs: the battle is already over by the time
-    // its slot in turn order comes up. Draws: battle start, turn number,
-    // enemy pick (Absorb, its only move), then Absorb's ordinary 4
-    // (accuracy, crit, damage roll, effect chance) -- identical to the
-    // test above's script, since the arithmetic only depends on which
-    // *species* is attacking, not which struct field holds it.
+    // the enemy's Absorb resolves first and the player's Tackle never
+    // runs -- the battle is over before its turn-order slot comes up.
+    // Absorb's 3 (accuracy, crit, damage roll) match the test above's
+    // script: the arithmetic depends on species, not which struct field
+    // holds it.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -326,25 +293,25 @@ fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
     assert_eq!(battle.enemy().current_hp(), 0);
 }
 
-/// Overgrow through a whole turn: the same Absorb from the same battler
-/// deals 12 instead of 8 once its HP reaches a third of its maximum, and
-/// drains proportionally more.
-///
-/// Bulbasaur level 5 has 21 maximum HP, so the gate (`hp <= maxHP / 3`) is
-/// 7. Absorb's power goes 20 -> 30 and the damage 8 -> 12
-/// (`battle::drain`'s unit tests pin both figures as named constants).
+/// The same Absorb from the same battler deals more, and drains
+/// proportionally more, once its HP crosses Overgrow's third-of-max-HP
+/// gate -- pinned as named constants in `battle::drain`'s own unit tests;
+/// this pin exercises only the turn-level wiring.
 #[test]
 fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
-    // 1 (battle start) + turn number + enemy selection + Absorb's 3 +
-    // the enemy's Tackle (4). Bulbasaur (speed 11) outruns Squirtle
-    // (speed 10), so no speed-tie draw and the player moves first.
+    /// `hp <= max_hp / 3` -- Bulbasaur's level-5 21 maximum HP puts this at 7.
+    const OVERGROW_HP_GATE: u32 = 7;
+
+    // Absorb's 3 + the enemy's Tackle (4); Bulbasaur (speed 11) outruns
+    // Squirtle (speed 10), so no speed-tie draw.
     let script = [0, 0, 0, 0, 1, 0, 0, 1, 0, 0];
 
     let run = |remaining_hp: u32| {
         let dex = Dex::new();
         let mut player = max_iv_mon(&dex, BULBASAUR, 5, vec![ABSORB]);
-        assert_eq!(player.stats().max_hp, 21);
-        player.apply_damage(21 - remaining_hp);
+        let player_max_hp = player.stats().max_hp;
+        assert_eq!(player_max_hp, 21, "Bulbasaur's level-5 maximum HP");
+        player.apply_damage(player_max_hp - remaining_hp);
         let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
 
         let mut rng = SequenceRng::new(script);
@@ -357,7 +324,7 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     };
 
     // One HP above the gate: the ordinary figures.
-    let (events, hp) = run(8);
+    let (events, hp) = run(OVERGROW_HP_GATE + 1);
     assert_eq!(
         &events[..2],
         [
@@ -376,12 +343,12 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
     );
     assert_eq!(
         hp,
-        8 + 4 - 4,
+        OVERGROW_HP_GATE + 1 + 4 - 4,
         "healed 4, then took the enemy's 4-damage Tackle"
     );
 
     // Exactly at the gate: Overgrow fires.
-    let (events, hp) = run(7);
+    let (events, hp) = run(OVERGROW_HP_GATE);
     assert_eq!(
         &events[..2],
         [
@@ -398,11 +365,12 @@ fn overgrow_boosts_the_players_absorb_once_its_hp_is_low() {
             },
         ]
     );
-    assert_eq!(hp, 7 + 6 - 4);
+    assert_eq!(hp, OVERGROW_HP_GATE + 6 - 4);
 }
 
-/// A fixed-damage move deals its literal through the turn and costs **2**
-/// draws where an ordinary move costs 4 — no crit roll, no damage roll.
+/// A fixed-damage move deals its literal figure and spends only 2 draws
+/// (accuracy, then the discarded effect chance) where an ordinary damaging
+/// move spends 4 -- no crit roll, no damage roll.
 #[test]
 fn sonic_boom_deals_a_flat_twenty_for_two_draws() {
     let dex = Dex::new();
@@ -410,8 +378,7 @@ fn sonic_boom_deals_a_flat_twenty_for_two_draws() {
     let enemy = max_iv_mon(&dex, SQUIRTLE, 50, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
 
-    // 1 (battle start) + turn number + enemy selection + Sonic Boom's 2
-    // (accuracy, the discarded effect chance) + the enemy's Tackle (4).
+    // Sonic Boom's 2 + the enemy's Tackle (4).
     let script = [0, 0, 0, 0, 0, 0, 1, 0, 0];
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -441,10 +408,8 @@ fn double_slap_reports_each_hit_then_the_hit_count() {
     let player = max_iv_mon(&dex, BULBASAUR, 5, vec![DOUBLE_SLAP]);
     let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
 
-    // 1 (battle start) + turn number + enemy selection
-    //   + Double Slap: accuracy, hit count (mask 0 -> 2 hits),
-    //     then crit+roll per hit, then one trailing effect chance
-    //   + the enemy's Tackle (4).
+    // Double Slap: accuracy, hit count (mask 0 -> 2 hits), crit+roll per
+    // hit, one trailing effect chance; then the enemy's Tackle (4).
     let script = [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -475,14 +440,11 @@ fn double_slap_reports_each_hit_then_the_hit_count() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// The loop's `jumpifhasnohp BS_TARGET` guard is checked at the **top** of
-/// each iteration, so the killing hit completes and is reported, the
-/// hit-count string reports the hits that landed, and the abandoned
-/// iterations spend **no draws at all**.
-///
-/// The script rolls 5 hits at a target that can absorb only two, and is
-/// exactly long enough for those two: a third iteration's crit draw would
-/// run off the end and panic.
+/// `jumpifhasnohp BS_TARGET` is checked at the top of each loop iteration:
+/// the hit that knocks the target out still completes and is reported, but
+/// the iterations after it are abandoned and spend no draws at all -- a
+/// third iteration's crit draw would run off the end of this script and
+/// panic.
 #[test]
 fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
     let dex = Dex::new();
@@ -490,9 +452,9 @@ fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
     let mut enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
     enemy.apply_damage(enemy.stats().max_hp - 5);
 
-    // 1 (battle start) + turn number + enemy selection
-    //   + accuracy, hit count (mask 3 -> redraw, mask 3 -> 5 hits),
-    //     crit+roll, crit+roll, the trailing effect chance.
+    // Accuracy, hit count (mask 3 -> redraw, mask 3 again -> 5 hits), then
+    // crit+roll for each of the two hits this 5-HP target can actually
+    // absorb, and the trailing effect chance.
     let script = [0, 0, 0, 0, 3, 3, 1, 0, 1, 0, 0];
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -535,16 +497,13 @@ fn a_multi_hit_move_abandons_its_remaining_hits_without_spending_their_draws() {
     );
 }
 
-/// Splash spends a PP, prints, and does nothing else — **including drawing
-/// nothing**, which the exact-length script enforces.
 #[test]
 fn splash_reports_that_nothing_happened_and_draws_nothing() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, BULBASAUR, 5, vec![SPLASH]);
     let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
 
-    // 1 (battle start) + turn number + enemy selection + Splash's *zero*
-    // + the enemy's Tackle (4).
+    // Splash's zero + the enemy's Tackle (4).
     let script = [0, 0, 0, 0, 1, 0, 0];
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -563,21 +522,17 @@ fn splash_reports_that_nothing_happened_and_draws_nothing() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// Focus Energy's `STATUS2_FOCUS_ENERGY` is worth `+2` crit-chance stages to
-/// the **next** move: a draw of `4` does not crit at stage 0 (1/16) but does
-/// at stage 2 (1/4). The control run replaces Focus Energy with Splash and
-/// keeps every other draw identical, so only the volatile can explain the
-/// difference.
+/// Focus Energy's crit-stage volatile is a latch that raises every later
+/// move's crit chance: a draw of 4 does not crit at stage 0 (1/16) but does
+/// at stage 2 (1/4). The
+/// control run swaps in Splash so every other draw stays identical,
+/// isolating the volatile as the only explanation for the difference.
 #[test]
 fn focus_energy_raises_the_next_moves_crit_chance() {
-    // turn 1: turn number, enemy selection, the flag move's zero, the
-    //         enemy's Tackle (4).
-    // turn 2: turn number, enemy selection, Tackle's 4 (crit draw `4`),
-    //         the enemy's Tackle (4).
     let script = [
         0, // battle start
-        0, 0, 0, 1, 0, 0, // turn 1
-        0, 0, 0, 4, 0, 0, 0, 1, 0, 0, // turn 2
+        0, 0, 0, 1, 0, 0, // turn 1: the flag move's zero + the enemy's Tackle (4)
+        0, 0, 0, 4, 0, 0, 0, 1, 0, 0, // turn 2: Tackle (crit draw 4) + enemy's Tackle (4)
     ];
 
     let run = |first_move: MoveId| {
@@ -636,9 +591,9 @@ fn focus_energy_raises_the_next_moves_crit_chance() {
     );
 }
 
-/// Using Focus Energy twice fails the second time — the script's own
-/// `jumpifstatus2` at `data/battle_scripts_1.s:889`, not
-/// `Cmd_setfocusenergy`'s unreachable `else`.
+/// A second Focus Energy fails from the script's own `jumpifstatus2` gate
+/// (`data/battle_scripts_1.s:889`), not an unreachable branch in
+/// `Cmd_setfocusenergy`.
 #[test]
 fn a_second_focus_energy_reports_that_it_failed() {
     let dex = Dex::new();
@@ -672,19 +627,18 @@ fn a_second_focus_energy_reports_that_it_failed() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// Charge doubles an Electric move for the Charge turn and exactly **one**
-/// turn after it, then expires — `ENDTURN_CHARGE` decrements the timer once
-/// per end of turn (`src/battle_util.c:1743`-`:1745`).
+/// Charge doubles an Electric move for its own turn and exactly one turn
+/// after, then expires -- `ENDTURN_CHARGE` decrements the timer once per
+/// end of turn (`src/battle_util.c:1743`-`:1745`).
 #[test]
 fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, BULBASAUR, 20, vec![CHARGE, SHOCK_WAVE]);
     let enemy = max_iv_mon(&dex, MACHOP, 20, vec![TACKLE]);
 
-    // turn 1: turn number, enemy selection, Charge's zero, the enemy's
-    //         Tackle (4).
-    // turns 2 and 3: turn number, enemy selection, Shock Wave's 3 (it is
-    //         EFFECT_ALWAYS_HIT, so no accuracy draw), the enemy's Tackle (4).
+    // turn 1: Charge's zero + the enemy's Tackle (4).
+    // turns 2-3: Shock Wave's 3 (EFFECT_ALWAYS_HIT skips the accuracy
+    //            draw) + the enemy's Tackle (4).
     let script = [
         0, // battle start
         0, 0, 0, 1, 0, 0, // turn 1
@@ -731,31 +685,25 @@ fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
     assert_eq!(rng.draws(), script.len(), "Charge itself draws nothing");
 }
 
-/// A failed run still burns the turn -- and upstream still runs
-/// `DoBattlerEndTurnEffects` for it (`src/battle_main.c:3961`-`:3968`,
-/// gated only on `gBattleOutcome == 0`, which a merely-failed escape never
-/// sets). Charge's timer has to tick down on that turn exactly as it would
-/// on any other, closing the doubling window on schedule even though the
-/// player spent the turn trying to flee instead of attacking. Regression
-/// test for a failed-run path that returned before
-/// [`Battle::residual_effects`] and left the timer one tick too high.
+/// A failed run still burns the turn, and upstream still runs
+/// `DoBattlerEndTurnEffects` for it -- gated only on `gBattleOutcome == 0`,
+/// which a merely-failed escape never sets
+/// (`src/battle_main.c:3961`-`:3968`) -- so Charge's timer ticks down on
+/// this turn exactly as it would on any other.
 #[test]
 fn a_failed_run_still_ticks_the_charge_timer_down() {
     let dex = Dex::new();
-    // Machop (raw speed 25) is slower than Bulbasaur (raw speed 29), so a
-    // chosen Run takes the RNG branch: speedVar = 25*128/29 = 110, and a
-    // roll of 200 always fails it (110 > 200 is false).
     let player = max_iv_mon(&dex, MACHOP, 20, vec![CHARGE, SHOCK_WAVE]);
     let enemy = max_iv_mon(&dex, BULBASAUR, 20, vec![TACKLE]);
 
     // Bulbasaur is faster, so it acts first in both non-Run turns.
-    // turn 1: turn number, pick, Bulbasaur's Tackle (acc, crit, dmg,
-    //         effect chance), Charge (0 draws).
-    // turn 2: turn number, pick, the escape roll (fails), Bulbasaur's
-    //         Tackle again -- this is the turn the fix must still tick
-    //         Charge's timer down on.
-    // turn 3: turn number, pick, Bulbasaur's Tackle, Shock Wave (crit,
-    //         dmg, effect chance -- EFFECT_ALWAYS_HIT skips accuracy).
+    // turn 1: Bulbasaur's Tackle (4) + Charge (0 draws).
+    // turn 2: the escape roll (200; always fails -- Machop's raw speed 25
+    //         is slower than Bulbasaur's 29, so speedVar = 25*128/29 = 110
+    //         and 110 > 200 is false) + Bulbasaur's Tackle (4). This is the
+    //         turn the fix must still tick Charge's timer down on.
+    // turn 3: Bulbasaur's Tackle (4) + Shock Wave's 3 (EFFECT_ALWAYS_HIT
+    //         skips the accuracy draw).
     let script = [
         0, // battle start
         0, 0, 0, 1, 0, 0, // turn 1
@@ -809,18 +757,13 @@ fn a_failed_run_still_ticks_the_charge_timer_down() {
     assert_eq!(rng.draws(), script.len());
 }
 
-/// `BattleScript_EffectDefenseCurl` (`data/battle_scripts_1.s:2014`-`:2025`):
-/// the volatile and the Defense raise both land, and the whole move draws
-/// no RNG -- no accuracy check, no critical-hit roll, no damage roll, no
-/// secondary-effect roll, matching every other raising effect.
 #[test]
 fn defense_curl_sets_its_volatile_and_raises_defense_and_draws_nothing() {
     let dex = Dex::new();
     let player = max_iv_mon(&dex, BULBASAUR, 5, vec![DEFENSE_CURL]);
     let enemy = max_iv_mon(&dex, SQUIRTLE, 5, vec![TACKLE]);
 
-    // 1 (battle start) + turn number + enemy selection + Defense Curl's
-    // *zero* + the enemy's Tackle (4).
+    // Defense Curl's zero + the enemy's Tackle (4).
     let script = [0, 0, 0, 0, 1, 0, 0];
     let mut rng = SequenceRng::new(script);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
