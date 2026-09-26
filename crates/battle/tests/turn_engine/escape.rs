@@ -273,10 +273,8 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
 #[test]
 fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
     let dex = Dex::new();
-    // A chosen Run makes `SetActionsAndBattlersTurnOrder` short-circuit to
-    // `turnOrderId = 5` (`battle_main.c:4784`-`:4813`), seating the runner
-    // first without ever reaching `GetWhoStrikesFirst`'s speed-tie draw --
-    // so an equal-speed Run must not consume that draw either.
+    // A Run is seated first before `GetWhoStrikesFirst` can draw a
+    // speed tie (`battle_main.c:4784-4813`).
     let player = slow_runner_rattata(&dex);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0, 0, 0, 0]);
