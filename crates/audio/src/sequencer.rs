@@ -1,34 +1,9 @@
-//! The owned sequencer: the tick engine that walks each track's decoded
-//! events, turns them into note-ons/offs, and drives the [`Mixer`].
+//! An owned M4A sequencer: decodes each track's events, applies them to
+//! per-track state, and drives the [`Mixer`] one V-blank frame at a time
+//! (`MPlayMain`, `m4a_1.s:1129`).
 //!
-//! Behavioural port of `MPlayMain` (`m4a_1.s:1129`) plus the volume/pitch
-//! resolution in `TrkVolPitSet` (`m4a.c:765`) and `ChnVolSetAsm`
-//! (`m4a_1.s:1508`). Tempo accumulates at `TEMPO_UNIT` per tick; each tick
-//! counts note-off gates down, then processes commands until every track is
-//! blocked on a `Wait`. Rendering happens one frame at a time, matching
-//! `SoundMain`'s once-per-V-blank cadence.
-//!
-//! This slice also executes pattern control flow (`PATT`/`PEND`/`REPT`,
-//! `m4a_1.s:851`..`:910`) and per-tick LFO/vibrato (`MPlayMain`'s wait-tick
-//! tail, `m4a_1.s:1285`..`:1330`), and dispatches `VOICE` to either a
-//! DirectSound or a CGB PSG instrument — resolving key-split/rhythm
-//! indirection first, and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
-//! (`ply_note`, `m4a_1.s:1580`..`:1609`, `:1757`..`:1758`; `ply_xiecv`/
-//! `ply_xiecl`, `m4a.c:1591`..`:1600`).
-//!
-//! `PRIO` is executed too: the track priority it sets combines with the song
-//! header's into each note's effective note-on priority (see
-//! [`Sequencer::note_priority`]), which drives [`crate::mixer::Mixer`]'s
-//! channel reuse/steal/refuse search.
-//!
-//! `MEMACC` is executed too (`ply_memacc`, `m4a.c:1437`..`:1521`), using a
-//! private accumulator area for each [`Sequencer`] and safe no-ops for
-//! out-of-range cell addresses.
-//!
-//! Out of scope for this slice (decoded but not executed): the remaining
-//! `XCMD` sub-commands (tone overrides, wave swap, portamento wait) and
-//! `PORT` — neither is ever emitted by `tools/mid2agb`
-//! (`crates/assets/src/audio.rs`'s "Deferred commands").
+//! `PORT` and every `XCMD` besides the pseudo-echo pair (`xIECV`/`xIECL`)
+//! decode but never execute.
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
@@ -45,30 +20,32 @@ const XCMD_IECV: u8 = 0x08;
 /// `m4a_tables.c:253`).
 const XCMD_IECL: u8 = 0x09;
 
-/// Tempo units per tick; `MPlayMain` fires a tick each time `tempoC` crosses
-/// `150` (`subs r0, 150`).
+/// Ticks fire each time the accumulator crosses this threshold
+/// (`subs r0, 150`, `m4a_1.s:1169`).
 const TEMPO_UNIT: u16 = 150;
 
-/// Default track volume when a track plays a note before any `VOL` command.
-/// (Upstream leaves `track->vol` at `0`; this crate defaults to full so a
-/// minimal hand-authored sequence is audible — a deliberate convenience.)
+/// Default track volume before any `VOL` command. Upstream leaves
+/// `track->vol` at `0`; this crate defaults to full so a minimal
+/// hand-authored sequence is audible.
 const DEFAULT_TRACK_VOLUME: u8 = 127;
 
 /// Default pitch-bend range (`track->bendRange = 2`, `m4a_1.s:1223`).
 const DEFAULT_BEND_RANGE: u8 = 2;
 
-/// Default LFO rate (`track->lfoSpeed = 0x16`, `m4a_1.s:1226`); harmless
-/// while `lfo_depth` defaults to `0` (`m4a_1.s:1288`).
+/// Default LFO rate (`track->lfoSpeed = 0x16`, `m4a_1.s:1226`).
 const DEFAULT_LFO_SPEED: u8 = 22;
 
 /// Max nested `PATT` depth (`track->patternStack`'s capacity, `ply_patt`,
 /// `m4a_1.s:851`).
 const MAX_PATTERN_DEPTH: usize = 3;
 
-/// Default `volX` input to `TrkVolPitSet` (`m4a.c:772`) absent an active
-/// fade; `FadeOutBody` overwrites every track's `volX` while fading
-/// (`m4a.c:750`-`:757`).
+/// Default `volX` input to `TrkVolPitSet` absent an active fade
+/// (`m4a.c:772`).
 const TRACK_VOLUME_SCALE: u8 = 0x40;
+
+/// Upper bound of `SOUND_MODE_REVERB_VAL`, the byte upstream masks the
+/// resolved reverb level into (`m4a_internal.h:12`, `m4a.c:445`).
+const MAX_REVERB_LEVEL: u8 = 127;
 
 /// Safety bound on commands processed for one track in one tick, so a
 /// malformed loop with no `Wait` cannot hang the mixer.
@@ -98,7 +75,6 @@ const MEMACC_CELL_GE: u8 = 15;
 const MEMACC_CELL_LE: u8 = 16;
 const MEMACC_CELL_LT: u8 = 17;
 
-/// One [`Sequencer`]'s zero-initialized `MEMACC` cells.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct MemAccArea {
     cells: [u8; MEM_ACC_LEN],
@@ -133,7 +109,6 @@ impl ModulationTarget {
     }
 }
 
-/// Per-track runtime state (the mutable half of `struct MusicPlayerTrack`).
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrackState {
     cursor: usize,
@@ -141,16 +116,15 @@ struct TrackState {
     ended: bool,
     voice: usize,
     vol: u8,
-    /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`); a fade
-    /// step writes it here for every existing track (`m4a.c:750`-`:757`).
+    /// This track's `volX` input to `TrkVolPitSet` (`m4a.c:772`).
     vol_x: u8,
     pan: i8,
     bend: i8,
     bend_range: u8,
     tune: i8,
     key_shift: i8,
-    /// The track's current MIDI key (`track->key`): the raw key of the last
-    /// note, reused when an `EOT` omits its key operand (`m4a_1.s:1830`).
+    /// Reused as the match key when [`Event::EndOfTie`] omits its key
+    /// operand (`m4a_1.s:1830`).
     key: u8,
     lfo_depth: u8,
     modulation_target: ModulationTarget,
@@ -162,21 +136,20 @@ struct TrackState {
     pattern_return_stack: [usize; MAX_PATTERN_DEPTH],
     pattern_depth: usize,
     repeat_counter: u8,
-    /// Active pseudo-echo volume (`xIECV`, `track->pseudoEchoVolume`);
-    /// applies only to voices started after it last changed (`m4a_1.s:1757`..`:1758`).
+    /// Applies only to voices started after it last changed
+    /// (`m4a_1.s:1757`-`:1758`).
     pseudo_echo_volume: u8,
-    /// Active pseudo-echo length (`xIECL`, `track->pseudoEchoLength`); see
-    /// [`Self::pseudo_echo_volume`].
+    /// Same snapshot-timing rule as [`Self::pseudo_echo_volume`].
     pseudo_echo_length: u8,
-    /// This track's own note priority (`PRIO`, `track->priority`); combined
-    /// into each new note's effective priority by [`Sequencer::note_priority`].
+    /// Combined into each new note's priority by
+    /// [`Sequencer::note_priority`].
     priority: u8,
-    /// Mirrors `MPT_FLG_VOLCHG` (`m4a_internal.h:266`): a volume input changed
-    /// since the last [`Sequencer::propagate_dirty_tracks`] pass.
+    /// Set when a volume input changed since the last
+    /// [`Sequencer::propagate_dirty_tracks`] pass (`MPT_FLG_VOLCHG`,
+    /// `m4a_internal.h:266`).
     vol_dirty: bool,
-    /// Mirrors `MPT_FLG_PITCHG` (`m4a_internal.h:268`); see
-    /// [`Self::vol_dirty`]'s sibling for the pitch-affecting commands
-    /// (`KEYSH`/`BEND`/`BENDR`/`TUNE`) and a pitch-target LFO step.
+    /// [`Self::vol_dirty`]'s counterpart for the pitch-affecting commands
+    /// and a pitch-target LFO step (`MPT_FLG_PITCHG`, `m4a_internal.h:268`).
     pitch_dirty: bool,
 }
 
@@ -194,8 +167,6 @@ impl TrackState {
             bend_range: DEFAULT_BEND_RANGE,
             tune: 0,
             key_shift: 0,
-            // Upstream zeroes `track->key` at init; no `EOT` should fire before
-            // a note sets it in real data.
             key: 0,
             lfo_depth: 0,
             modulation_target: ModulationTarget::PITCH,
@@ -209,8 +180,6 @@ impl TrackState {
             repeat_counter: 0,
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
-            // Zeroed with the rest of a freshly cleared track (`Clear64byte`,
-            // `m4a_1.s:1219`); only `PRIO` raises it again.
             priority: 0,
             vol_dirty: false,
             pitch_dirty: false,
@@ -267,14 +236,9 @@ pub struct Sequencer {
     song: Song,
     tracks: Vec<TrackState>,
     mixer: Mixer,
-    /// Tempo increment per frame (BPM); accumulates into `tempo_c`.
     tempo_i: u16,
     tempo_c: u16,
-    /// `MEMACC`'s accumulator area (see [`MemAccArea`]).
     mem_acc: MemAccArea,
-    /// Set by the fade's terminal step, matching `MUSICPLAYER_STATUS_PAUSE`
-    /// (`m4a.c:740`): the tracks are stopped and no longer tick, while the
-    /// mixer keeps running (`m4a_1.s:20`-`:119`).
     paused: bool,
 }
 
@@ -306,10 +270,8 @@ impl Sequencer {
     /// bit in `SongHeader::reverb`, `m4a_internal.h:12`..`:13`;
     /// `m4a.c:661`..`:662`).
     ///
-    /// `reverb_level` clamps to `0..=127` (`SOUND_MODE_REVERB_VAL`,
-    /// `m4a_internal.h:12`), the same bound [`Song::with_reverb`] enforces
-    /// at the header-ingest boundary; upstream itself masks the byte
-    /// (`soundInfo->reverb = temp & SOUND_MODE_REVERB_VAL`, `m4a.c:445`).
+    /// `reverb_level` clamps to the same `SOUND_MODE_REVERB_VAL` bound
+    /// [`Song::with_reverb`] enforces at the header-ingest boundary.
     #[must_use]
     pub fn with_resolved_reverb(
         song: Song,
@@ -319,7 +281,8 @@ impl Sequencer {
     ) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
-        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(reverb_level.min(127));
+        let mixer = Mixer::new(master_volume, max_voices)
+            .with_reverb_level(reverb_level.min(MAX_REVERB_LEVEL));
         Self {
             song,
             tracks,
@@ -394,7 +357,7 @@ impl Sequencer {
     /// this frame's tick, where upstream's `FadeOutBody` runs
     /// (`m4a_1.s:1152`-`:1169`). The fade raises the same dirty flag as a
     /// `VOL` command (`m4a.c:753`-`:757`), so this tick's `Fine` or `Note`
-    /// consumes it and [`Self::propagate_dirty_tracks`] applies the rest.
+    /// consumes it and the post-tick propagation pass applies the rest.
     ///
     /// The terminal step (`volX == 0`) instead pauses the sequencer: every
     /// track stops and no tick runs again, while the mixer keeps rendering
@@ -411,13 +374,9 @@ impl Sequencer {
         self.mixer.mix_frame(out);
     }
 
-    /// Stops every not-yet-ended track's voices outright, matching
-    /// `TrackStop` (`m4a_1.s:1469`-`:1506`), and latches
-    /// `MUSICPLAYER_STATUS_PAUSE` (`m4a.c:720`-`:740`). Runs its body once:
-    /// `FadeOutBody` returns before touching the tracks again while the
-    /// player is paused (`m4a.c:713`-`:716`), yet `SoundMain` and its
-    /// `SoundMainRAM_Reverb` keep mixing every frame regardless
-    /// (`m4a_1.s:20`-`:119`).
+    /// Stops every not-yet-ended track's voices outright and latches
+    /// `paused`, matching `TrackStop` (`m4a_1.s:1469`-`:1506`) and
+    /// `MUSICPLAYER_STATUS_PAUSE` (`m4a.c:720`-`:740`).
     fn pause(&mut self) {
         if self.paused {
             return;
@@ -431,8 +390,6 @@ impl Sequencer {
         }
     }
 
-    /// `FadeOutBody`'s track pass (`m4a.c:750`-`:757`): writes `volX` into
-    /// every live track whose value changes and raises `vol_dirty`.
     fn stage_fade_volume(&mut self, vol_x: u8) {
         for track in &mut self.tracks {
             if !track.ended && track.vol_x != vol_x {
@@ -447,17 +404,13 @@ impl Sequencer {
     ///
     /// # Overflow
     ///
-    /// `tempo_c += tempo_i` never overflows its `u16`s: the loop below always
-    /// leaves `tempo_c < TEMPO_UNIT` (149 at most), and every `tempo_i`
-    /// ingestion point ([`Song::new`]'s initial tempo, [`Event::Tempo`]'s
-    /// runtime assignment in [`Self::handle_event`]) clamps to
-    /// [`MAX_TEMPO_BPM`] (510) — `149 + 510` stays far under `u16::MAX`.
+    /// `tempo_c += tempo_i` never overflows: the loop below always leaves
+    /// `tempo_c < TEMPO_UNIT`, and every `tempo_i` ingestion point
+    /// ([`Song::new`]'s initial tempo, [`Event::Tempo`]'s runtime assignment
+    /// in [`Self::handle_event`]) clamps to [`MAX_TEMPO_BPM`], so their sum
+    /// stays far under `u16::MAX`.
     fn advance_frame(&mut self) {
         if self.paused {
-            // A paused player's sequence never resumes: its tracks were
-            // stopped and their flags cleared (`m4a.c:720`-`:740`), so
-            // `MPlayMain` has nothing left to advance whatever the caller
-            // asks for. Only `SoundMain` keeps running (`m4a_1.s:20`-`:119`).
             return;
         }
         debug_assert!(self.tempo_c < TEMPO_UNIT);
@@ -474,8 +427,6 @@ impl Sequencer {
 
     fn do_tick(&mut self) {
         self.mixer.tick_gates();
-        // Disjoint field borrows so each track can touch the shared mixer
-        // and the shared MEMACC accumulator area.
         let Self {
             song,
             tracks,
@@ -510,8 +461,6 @@ impl Sequencer {
         }
     }
 
-    /// Process one track for one tick: run commands until it blocks on a
-    /// `Wait`, then consume one tick of that wait.
     fn process_track(
         song: &Song,
         track: &mut TrackState,
@@ -530,15 +479,11 @@ impl Sequencer {
             loop {
                 guard += 1;
                 if guard > MAX_COMMANDS_PER_TICK {
-                    // A guarded end still honors `ply_fine`'s voice-release
-                    // and dirty-flag cleanup, like every other end path.
                     Self::finish_track(track, mixer, track_id);
                     break;
                 }
                 if track.cursor >= events.len() {
-                    // A stream lacking `FINE` still ends cleanly
-                    // (`decode_track` allows it), but must still honor
-                    // `ply_fine`'s voice-release and dirty-flag cleanup.
+                    // `decode_track` allows a stream with no trailing `FINE`.
                     Self::finish_track(track, mixer, track_id);
                     break;
                 }
@@ -577,8 +522,6 @@ impl Sequencer {
             }
             Event::Goto(index) => track.cursor = index,
             Event::Voice(v) => track.voice = usize::from(v),
-            // `ply_vol`/`ply_pan` store the operand and raise the flag
-            // (`m4a_1.s:969`-`:990`); the post-tick pass applies it.
             Event::Volume(v) => {
                 track.vol = v;
                 track.vol_dirty = true;
@@ -587,16 +530,12 @@ impl Sequencer {
                 track.pan = p;
                 track.vol_dirty = true;
             }
-            // `bpm` already carries `clamp_tempo`'s bound when it came from
-            // `decode_track`'s `TEMPO` arm, but this also runs on an
-            // `Event::Tempo` converted from the normalized asset-pack schema
-            // (`assets::audio::song::SongEvent::Tempo`), which round-trips an
-            // unbounded on-disk `u16` -- so the clamp is re-applied here
-            // too, guarding `tempo_c`'s accumulation against a malformed
-            // pack.
+            // Also reached from an `Event::Tempo` converted from the
+            // asset-pack schema, which round-trips an unbounded on-disk
+            // `u16`; re-applying `clamp_tempo` here guards `tempo_c`'s
+            // accumulation against a malformed pack even though
+            // `decode_track`'s own `TEMPO` arm already clamped it.
             Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
-            // `ply_keysh`/`ply_bend`/`ply_bendr`/`ply_tune` store the operand
-            // and raise the flag (`m4a_1.s:933`-`:1052`).
             Event::KeyShift(k) => {
                 track.key_shift = k;
                 track.pitch_dirty = true;
@@ -613,17 +552,15 @@ impl Sequencer {
                 track.tune = t;
                 track.pitch_dirty = true;
             }
-            // `ply_mod`/`ply_lfos` only zero `modM` and raise the flag
-            // matching the *current* modulation target when depth/speed
-            // drops to zero (`clear_modM`, `m4a_1.s:1859`-`:1874`).
             Event::Modulation(depth) => {
                 track.lfo_depth = depth;
                 if depth == 0 {
                     Self::reset_lfo(track);
                 }
             }
-            // `ply_modt` raises both flags only when the target changes
-            // (`m4a_1.s:1027`-`:1041`).
+            // Raises both flags, not just one, since whichever domain the
+            // old target drove needs its modulation cleared too
+            // (`ply_modt`, `m4a_1.s:1027`-`:1041`).
             Event::ModType(kind) => {
                 let target = ModulationTarget::from_command(kind);
                 if track.modulation_target != target {
@@ -639,10 +576,9 @@ impl Sequencer {
                 }
             }
             Event::LfoDelay(delay) => track.lfo_delay = delay,
-            // `ply_prio` stores the operand on the track
-            // (`m4a_1.s:912`..`:917`); it takes effect only for notes
-            // started afterwards, since `ply_note` reads it when it stamps
-            // a channel (`m4a_1.s:1628`..`:1633`).
+            // Takes effect only for notes started afterwards; an
+            // already-sounding voice keeps the priority it was stamped
+            // with (`ply_prio`, `m4a_1.s:912`..`:917`).
             Event::Priority(priority) => track.priority = priority,
             Event::Note {
                 key,
@@ -659,16 +595,17 @@ impl Sequencer {
                     if track.lfo_delay != 0 {
                         Self::reset_lfo(track);
                     }
-                    // A successful allocation applied the track's current
-                    // volume and pitch to the new voice, so upstream masks
-                    // the flags byte with `0xF0` (`m4a_1.s:1802`-`:1805`).
+                    // Allocation already applied the current volume and
+                    // pitch to the new voice, so both flags are consumed
+                    // here rather than left for the next propagation pass
+                    // (`m4a_1.s:1802`-`:1805`).
                     track.vol_dirty = false;
                     track.pitch_dirty = false;
                 }
             }
             Event::EndOfTie { key } => {
-                // With an operand, `ply_endtie` stores it as the new `track->key`
-                // and matches on it; without one, it matches the current key.
+                // An operand becomes the track's new persistent key, not
+                // just this call's match target (`ply_endtie`).
                 let match_key = match key {
                     Some(k) => {
                         track.key = k;
@@ -684,8 +621,6 @@ impl Sequencer {
                 }
             }
             Event::PatternEnd => track.return_from_pattern(),
-            // `ply_xiecv`/`ply_xiecl` store the raw byte on the track
-            // (`m4a.c:1591`..`:1600`).
             Event::Xcmd {
                 kind: XCMD_IECV,
                 value,
@@ -875,9 +810,8 @@ impl Sequencer {
     /// any key-split/rhythm indirection to a concrete leaf instrument first,
     /// and dispatching to either a DirectSound or a CGB PSG voice depending
     /// on that leaf's kind.
-    // A flat per-instrument-kind dispatch: long by construction (five leaf
-    // kinds, each threading the same handful of resolved values), not
-    // logically complex -- mirrors `handle_event`'s same allowance.
+    // Long by construction, one match arm per instrument kind, not by
+    // complexity.
     #[allow(clippy::too_many_lines)]
     fn note_on(
         song: &Song,
@@ -901,7 +835,8 @@ impl Sequencer {
 
         // Floored at 0 (`m4a_1.s:1760`..`:1766`), then wrapped modulo 256 by
         // `MidiKeyToFreq`/`MidiKeyToCgbFreq`'s `u8 key` (`m4a.c:23`, `:810`).
-        let note_key = u8::try_from((i32::from(pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
+        let note_key =
+            u8::try_from((i32::from(pitch_key) + key_m).max(0) & i32::from(u8::MAX)).unwrap_or(0);
         let gate = u16::from(gate);
         let echo_volume = track.pseudo_echo_volume;
         let echo_length = track.pseudo_echo_length;
@@ -1018,7 +953,6 @@ impl Sequencer {
                 .with_pitch_key(pitch_key)
                 .with_priority(priority),
             ),
-            // `resolve_instrument` never returns an indirection as the leaf.
             Instrument::KeySplit(_) | Instrument::Rhythm(_) => false,
         }
     }
@@ -1069,8 +1003,8 @@ fn track_volume(track: &TrackState) -> (u8, u8) {
     // `TrkVolPitSet` stores these wide products into byte fields, so peaks wrap
     // instead of saturating (`m4a.c:787`..`:788`).
     (
-        u8::try_from(right & 0xFF).unwrap_or(0),
-        u8::try_from(left & 0xFF).unwrap_or(0),
+        u8::try_from(right & u32::from(u8::MAX)).unwrap_or(0),
+        u8::try_from(left & u32::from(u8::MAX)).unwrap_or(0),
     )
 }
 
@@ -1083,11 +1017,18 @@ fn track_pitch(track: &TrackState) -> (i32, u8) {
 
     // `TrkVolPitSet` stores the key offset and fine adjustment in byte fields
     // (`m4a.c:803`..`:804`); the former is later loaded as signed.
-    let key_offset = u8::try_from((pitch >> 8) & 0xFF).unwrap_or(0);
+    let key_offset = u8::try_from((pitch >> 8) & i32::from(u8::MAX)).unwrap_or(0);
     let key_offset = i32::from(i8::from_le_bytes([key_offset]));
-    let fine_adjust = u8::try_from(pitch & 0xFF).unwrap_or(0);
+    let fine_adjust = u8::try_from(pitch & i32::from(u8::MAX)).unwrap_or(0);
     (key_offset, fine_adjust)
 }
+
+/// Quarter of the 8-bit LFO phase's wraparound period; the falling half of
+/// the triangle wave spans `[LFO_QUARTER_PERIOD, 3 * LFO_QUARTER_PERIOD)`.
+const LFO_QUARTER_PERIOD: u8 = 0x40;
+
+/// Half of the 8-bit LFO phase's wraparound period.
+const LFO_HALF_PERIOD: i32 = 0x80;
 
 /// `MPlayMain` selects the triangle half from the stored phase byte, but mirrors
 /// its falling half against the full pre-store sum (`m4a_1.s:1298`..`:1310`).
@@ -1098,8 +1039,8 @@ fn track_pitch(track: &TrackState) -> (i32, u8) {
 )]
 fn lfo_triangle(phase_sum: u16) -> i32 {
     let stored_phase = phase_sum as u8;
-    if (stored_phase.wrapping_sub(0x40) as i8) >= 0 {
-        0x80i32 - i32::from(phase_sum)
+    if (stored_phase.wrapping_sub(LFO_QUARTER_PERIOD) as i8) >= 0 {
+        LFO_HALF_PERIOD - i32::from(phase_sum)
     } else {
         i32::from(stored_phase as i8)
     }
@@ -1136,15 +1077,20 @@ mod tests {
         (1 << pitch::FRAC_BITS) / pitch::DIV_FREQ
     }
 
+    /// Reference key this test module builds voices around.
+    const TEST_REFERENCE_KEY: u8 = 60;
+
+    /// Shift used to both probe and invert [`pitch::midi_key_to_freq`]'s
+    /// fixed-point ratio in [`test_song`], trading ratio precision for
+    /// staying within its public interface.
+    const FREQUENCY_PROBE_SHIFT: u32 = 20;
+
     /// A voicegroup with one loud, long, flat-envelope instrument at unity
-    /// pitch for the reference key 60.
+    /// pitch for [`TEST_REFERENCE_KEY`].
     fn test_song(tracks: Vec<Vec<Event>>, tempo: u16) -> Song {
-        // Choose wave freq so key 60 renders near unity: pick freq that makes
-        // midi_key_to_freq(freq, 60, 0) close to the unity frequency.
         let target = unity_freq();
-        // midi_key_to_freq(freq, 60, 0) ~= freq * ratio60 >> 32; invert roughly.
-        let ratio60 = pitch::midi_key_to_freq(1 << 20, 60, 0);
-        let freq = ((u64::from(target) << 20) / u64::from(ratio60)) as u32;
+        let ratio60 = pitch::midi_key_to_freq(1 << FREQUENCY_PROBE_SHIFT, TEST_REFERENCE_KEY, 0);
+        let freq = ((u64::from(target) << FREQUENCY_PROBE_SHIFT) / u64::from(ratio60)) as u32;
         let wave = Arc::new(WaveData::one_shot(freq, vec![100; SAMPLES_PER_FRAME * 4]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         Song::new(voices, tracks, tempo)
@@ -1187,9 +1133,8 @@ mod tests {
 
     #[test]
     fn new_uses_emerald_init_defaults() {
-        // `m4aSoundInit` reconfigures the driver to master volume 12 and 5
-        // DirectSound channels (`m4a.c:78`..`:81`), not the generic `SoundInit`
-        // placeholders (15/8).
+        // `m4aSoundInit` reconfigures the driver away from the generic
+        // `SoundInit` placeholders (`m4a.c:78`..`:81`).
         assert_eq!(DEFAULT_MASTER_VOLUME, 12);
         assert_eq!(DEFAULT_MAX_VOICES, 5);
         let seq = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
@@ -1220,7 +1165,6 @@ mod tests {
 
     #[test]
     fn a_note_produces_sound_then_the_track_ends() {
-        // VOICE 0; note key 60 vel 127 gate ~ (N04 -> 4 ticks); W48; FINE.
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -1236,7 +1180,6 @@ mod tests {
 
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
         seq.render_frame(&mut out);
-        // The note is on this frame: audible output.
         assert!(out.iter().any(|&s| s.abs() > 0.0));
         assert_eq!(seq.voice_count(), 1);
 
@@ -1302,11 +1245,8 @@ mod tests {
 
     #[test]
     fn with_resolved_reverb_applies_its_explicit_level_over_the_songs_own_header() {
-        // A song whose header never set a reverb level (`Song::reverb`
-        // collapses that to `0`) must still get a pending reverb tail when
-        // the caller supplies an explicit resolved level — this is how the
-        // player crate carries a session's previously configured level
-        // across such a header.
+        // Carries a session's previously configured reverb across a header
+        // that never set one (`Song::reverb` collapses that case to `0`).
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -1359,8 +1299,7 @@ mod tests {
             "the note must start before its gate can release it"
         );
 
-        // One tick per frame at tempo 150; gate 2 releases after ~2 ticks and
-        // the flat envelope (release 0) then retires the voice quickly.
+        // Tempo 150 ticks once per frame, so gate 2 releases well within 7.
         for _ in 0..7 {
             seq.render_frame(&mut out);
         }
@@ -1426,7 +1365,7 @@ mod tests {
         assert_eq!(sequencer.tracks[0], original);
     }
 
-    // --- MEMACC (`ply_memacc`, `m4a.c:1437`..`:1521`) ----------------------
+    // --- MEMACC --------------------------------------------------------
 
     const MEMACC_BRANCH_TARGET: usize = 37;
 
@@ -1693,8 +1632,7 @@ mod tests {
         assert!(first.is_finished());
         assert_eq!(first.mem_acc.read(0), Some(42));
 
-        // Built only once the first song has written a cell and finished, so
-        // a process- or session-carried area would surface here.
+        // Built after `first` already wrote a cell, so a shared area would leak here.
         let second = Sequencer::new(song());
 
         assert_eq!(second.mem_acc.read(0), Some(0));
@@ -1930,8 +1868,6 @@ mod tests {
 
     #[test]
     fn faster_tempo_reaches_the_end_in_fewer_frames() {
-        // The same track at double tempo crosses TEMPO_UNIT twice as often, so
-        // it processes its waits — and reaches FINE — in fewer frames.
         let track = || {
             vec![
                 Event::Voice(0),
@@ -1959,10 +1895,6 @@ mod tests {
 
     #[test]
     fn advance_frame_ticks_only_on_the_frame_that_crosses_tempo_unit() {
-        // Tempo 100 needs two frames to cross TEMPO_UNIT (150): the first
-        // leaves tempo_c short with no tick fired, so the pending Wait(5) is
-        // still undecoded; the second crosses it, decodes the Wait, and
-        // immediately consumes one tick of it.
         let track = vec![Event::Wait(5), Event::Fine];
         let mut seq = Sequencer::new(test_song(vec![track], 100));
 
@@ -1986,10 +1918,9 @@ mod tests {
 
     #[test]
     fn tempo_event_is_clamped_before_it_can_overflow_the_accumulator() {
-        // `tempo_c += tempo_i` (`advance_frame`) is unguarded, so an
-        // out-of-domain `Event::Tempo` -- one a malformed asset pack could
-        // carry, since `SongEvent::Tempo` round-trips an unbounded on-disk
-        // `u16` -- must never reach `tempo_i` un-clamped.
+        // `tempo_c += tempo_i` (`advance_frame`) is unguarded, so a
+        // malformed asset pack's out-of-domain `Event::Tempo` must never
+        // reach `tempo_i` un-clamped.
         let mut seq = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
         apply_test_event(&mut seq, 0, &Event::Tempo(u16::MAX));
         assert_eq!(
@@ -1998,21 +1929,22 @@ mod tests {
         );
 
         // Drive tempo_c to the highest value `advance_frame`'s drain loop
-        // ever leaves behind (`TEMPO_UNIT - 1`) and take one more frame: an
-        // unclamped `tempo_i` of `u16::MAX` would overflow this addition,
-        // but the clamp above keeps the sum (`149 + 510 = 659`) nowhere
-        // near `u16::MAX`.
+        // ever leaves behind and take one more frame: an unclamped
+        // `tempo_i` of `u16::MAX` would overflow this addition, but the
+        // clamp above keeps the sum far under `u16::MAX`.
         seq.tempo_c = TEMPO_UNIT - 1;
         seq.advance_frame();
         assert_eq!(seq.tempo_c, (TEMPO_UNIT - 1 + MAX_TEMPO_BPM) % TEMPO_UNIT);
     }
 
+    /// [`Event::Pan`]'s range minimum.
+    const HARD_LEFT_PAN: i8 = -64;
+
     #[test]
     fn panned_note_is_louder_on_one_side() {
-        // Hard-left pan: left channel should carry more energy than right.
         let track = vec![
             Event::Voice(0),
-            Event::Pan(-64),
+            Event::Pan(HARD_LEFT_PAN),
             Event::Note {
                 key: 60,
                 velocity: 127,
@@ -2127,11 +2059,8 @@ mod tests {
 
     #[test]
     fn end_of_tie_without_operand_stops_only_the_last_keyed_note() {
-        // Two overlapping tied notes (keys 60 then 64). An `EOT` with no
-        // operand resolves to the track's current key (64, the last note),
-        // retiring only that voice; the key-60 note keeps sounding. A later
-        // `EOT` naming key 60 then retires the survivor — proving the omitted
-        // operand resolved to 64, not 60 and not "every voice".
+        // The omitted-operand `EOT` must resolve to key 64 (the current
+        // key), not 60 and not every sounding voice.
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -2154,23 +2083,20 @@ mod tests {
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
         seq.render_frame(&mut out);
-        // Exactly one voice retired: the last-keyed note (64). Before the fix
-        // this stopped both voices, leaving zero.
-        assert_eq!(seq.voice_count(), 1);
+        assert_eq!(
+            seq.voice_count(),
+            1,
+            "only the last-keyed note (64) retires"
+        );
 
-        // Advance until the `EOT{Some(60)}` fires; the survivor was key 60, so
-        // it is now retired too.
         for _ in 0..4 {
             seq.render_frame(&mut out);
         }
-        assert_eq!(seq.voice_count(), 0);
+        assert_eq!(seq.voice_count(), 0, "the key-60 survivor now retires too");
     }
 
     #[test]
     fn fine_releases_a_tied_voice_and_the_song_finishes() {
-        // A tied note (gate 0) never auto-releases; the freq-0 wave never
-        // exhausts, so only FINE's explicit voice release can let
-        // `is_finished()` return true.
         let track = vec![
             Event::Voice(0),
             Event::Note {
@@ -2193,11 +2119,7 @@ mod tests {
 
     #[test]
     fn eof_without_fine_releases_a_tied_voice_and_the_song_finishes() {
-        // Decode a real byte program with no trailing FINE: VOICE 0; TIE
-        // key60 vel127 (gate 0, tied); W02 -- then the stream simply runs
-        // out. `decode_track` accepts this as a clean end (no `Event::Fine`
-        // appears at all), so that acceptance must still release the tied
-        // voice the same way `Event::Fine` does.
+        // VOICE 0; TIE key60 vel127 (gate 0); W02 -- no trailing FINE.
         let bytes = [0xBD, 0x00, 0xCF, 60, 127, 0x82];
         let events = decode_track(&bytes).unwrap();
         assert!(
@@ -2335,12 +2257,9 @@ mod tests {
         let mut seq = Sequencer::new(slow_release_song(track));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
-        // Frame 1 starts the note at full (unfaded) volume.
         seq.render_frame_with_fade(&mut out, None);
         let before = seq.mixer.voices()[0].base_volume();
 
-        // Frame 2 reaches this track's `Fine` and a fade step in the same
-        // tick.
         seq.render_frame_with_fade(&mut out, Some(32));
         assert!(
             seq.tracks[0].ended,
@@ -2372,11 +2291,9 @@ mod tests {
         let mut seq = Sequencer::new(slow_release_song(track));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
-        // Frame 1 starts the note at full (unfaded) volume.
         seq.render_frame_with_fade(&mut out, None);
         let before = seq.mixer.voices()[0].base_volume();
 
-        // Frame 2 reaches `Pan`, then `Fine`, plus a fade step in one tick.
         seq.render_frame_with_fade(&mut out, Some(32));
         assert!(
             seq.tracks[0].ended,
@@ -2405,11 +2322,9 @@ mod tests {
         let mut seq = Sequencer::new(slow_release_song(track));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
-        // Frame 1 starts the note at the default track pan.
         seq.render_frame(&mut out);
         let before = seq.mixer.voices()[0].base_volume();
 
-        // Frame 2 reaches `Pan`, then `Fine`, in one tick.
         seq.render_frame(&mut out);
         assert!(
             seq.tracks[0].ended,
@@ -2436,11 +2351,9 @@ mod tests {
         let mut seq = Sequencer::new(slow_release_song(track));
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
 
-        // Frame 1 starts the note at the default (unbent) pitch.
         seq.render_frame(&mut out);
         let before = seq.mixer.voices()[0].frequency();
 
-        // Frame 2 reaches `Bend`, then `Fine`, in one tick.
         seq.render_frame(&mut out);
         assert!(
             seq.tracks[0].ended,
@@ -2528,9 +2441,6 @@ mod tests {
             .expect("the first note's voice must exist")
             .base_volume();
 
-        // Frame 2 reaches `Pan`, then a new `Note`, in one tick: the note
-        // consumes the pending pan deriving its own voice, so the older
-        // voice must not see it this frame.
         seq.render_frame(&mut out);
         assert_eq!(
             seq.voice_count(),
@@ -2723,16 +2633,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "multiple of FRAME_SAMPLES")]
     fn mix_into_rejects_an_empty_buffer() {
-        // `0` is a multiple of FRAME_SAMPLES arithmetically, but the
-        // contract demands a POSITIVE multiple: an empty buffer must panic
-        // too, not silently render nothing.
         let song = test_song(vec![vec![Event::Fine]], 150);
         let mut seq = Sequencer::new(song);
         let mut out: Vec<f32> = vec![];
         seq.mix_into(&mut out);
     }
 
-    // --- LFO/vibrato -------------------------------------------------------
+    // --- LFO/vibrato -----------------------------------------------------
 
     #[test]
     fn lfo_pitch_modulation_changes_a_held_notes_frequency_over_time() {
@@ -3041,8 +2948,6 @@ mod tests {
             velocity: 127,
             gate: 4,
         };
-        // A `PATT` inside a `PATT` body: each `PEND` returns to its own call
-        // site, so the inner note sounds before the outer body resumes.
         let nested = vec![
             Event::Voice(0),
             Event::Pattern(OUTER_BODY),
@@ -3266,9 +3171,6 @@ mod tests {
 
     #[test]
     fn a_fixed_rate_cgb_square_note_still_produces_sound_through_the_sequencer() {
-        // Plumbing check: `SquareTone::fixed_rate` must reach `CgbVoice`
-        // without breaking playback — the DAC correction math itself is
-        // pinned by `cgb_voice`'s own tests.
         let voices = vec![Instrument::CgbSquare1(SquareTone {
             duty: 2,
             sweep: 0,
@@ -3300,10 +3202,9 @@ mod tests {
 
     /// `SquareTone::fixed_rate` must actually reach [`CgbVoice`]'s DAC
     /// correction through the sequencer, not merely avoid a crash:
-    /// [`cgb_test_track`]'s key 60 lands on the odd register `0x60B`, which
-    /// `cgb_dac_correct` rounds to a different playback rate, so the two
-    /// renders must diverge. A threading bug that pins the flag to either
-    /// constant would make them identical.
+    /// [`cgb_test_track`]'s key lands on a register `cgb_dac_correct`
+    /// rounds to a different playback rate, so the two renders must
+    /// diverge.
     #[test]
     fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
         let tone = |fixed_rate| {
@@ -3327,12 +3228,14 @@ mod tests {
     /// wave channel threads the same flag through `CgbVoice::wave`.
     #[test]
     fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
+        // Decodes to alternating 0/15 samples: a full-swing waveform, so a
+        // playback-rate difference is visible (a constant table would
+        // render identically at any rate).
+        const FULL_SWING_WAVE_RAM: [u8; 16] = [0x0F; 16];
+
         let tone = |fixed_rate| {
             Instrument::CgbWave(WaveTone {
-                // `0x0F` decodes to alternating 0/15 samples -- a full-swing
-                // waveform, so a playback-rate difference is visible (a
-                // constant table would render identically at any rate).
-                table: [0x0F; 16],
+                table: FULL_SWING_WAVE_RAM,
                 adsr: CgbAdsr::flat(),
                 fixed_rate,
             })
