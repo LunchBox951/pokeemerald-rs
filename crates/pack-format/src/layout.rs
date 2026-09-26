@@ -14,7 +14,7 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// See `xtask::extract::TITLE_SCREEN_PALETTE_CUTS` for the current
 /// `title/palette/pokemon_logo` byte contract this version enforces.
 /// Version 8 changed every `audio/sample/direct-sound/*` payload to retain
-/// one interpolation-guard sample past its logical count (issue #1342), so
+/// one interpolation-guard sample past its logical count, so
 /// a version-7 pack is refused here instead of failing mid-decode.
 pub const FORMAT_VERSION: u32 = 8;
 

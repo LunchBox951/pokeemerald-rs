@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(flute.sample_count, FLUTE_SAMPLE_COUNT);
         // `data` retains one interpolation-guard sample past `sample_count`:
         // flute's raw source has one more encoded sample than its `agbl`
-        // override (issue #1342).
+        // override.
         assert_eq!(
             flute.data.len(),
             usize::try_from(FLUTE_SAMPLE_COUNT + 1).unwrap()

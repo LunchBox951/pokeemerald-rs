@@ -165,7 +165,7 @@ fn agbl_override_shortens_the_decoded_data() {
     // payload writer ignores `agbl` and still emits all 4 samples
     // (converter.cpp:77-90), so the retained sample past the logical end is
     // the *real* encoded sample at index 2, not the unoverridden boundary
-    // itself and not a synthesized value (issue #1342).
+    // itself and not a synthesized value.
     let data = [128u8, 129, 130, 131, 132, 133];
     let smpl = smpl_chunk(60, 0, 1, 3);
     let agbl = u32_chunk(2);

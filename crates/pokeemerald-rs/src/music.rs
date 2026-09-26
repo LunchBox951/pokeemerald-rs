@@ -197,8 +197,8 @@ fn convert_direct_sound(pack: &AssetPack, v: &DirectSoundVoice) -> Result<Instru
         });
     };
     // `ds.data()` always holds one more value than `ds.sample_count()`: a
-    // retained interpolation guard past the logical end (issue #1342;
-    // `DirectSoundSample`'s docs). Narrow `WaveData` back to that logical
+    // retained interpolation guard past the logical end
+    // (`DirectSoundSample`'s docs). Narrow `WaveData` back to that logical
     // length so looping and one-shot retirement key off it, while the guard
     // stays available to `voice.rs`'s boundary interpolation lookahead.
     let logical_len = usize::try_from(ds.sample_count()).unwrap_or(usize::MAX);

@@ -677,8 +677,7 @@ fn audio_upstream(dir: &Path) -> PathBuf {
 }
 
 /// A distinctive byte appended past `pcm`'s declared count: the retained
-/// interpolation guard `extract::wav` always keeps (its module docs; issue
-/// #1342).
+/// interpolation guard `extract::wav` always keeps (its module docs).
 const AUDIO_GUARD_SAMPLE: u8 = 0x2A;
 
 /// `pcm` with [`AUDIO_GUARD_SAMPLE`] appended, matching the buffer both the

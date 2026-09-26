@@ -613,7 +613,7 @@ mod synthetic_pack {
         // `sample_count` (2); the pack-to-runtime conversion must narrow the
         // `WaveData` back to that logical length so the mixer's loop/one-shot
         // boundary (`crates/audio/src/voice.rs`) never treats the guard as a
-        // genuine playable sample (issue #1342).
+        // genuine playable sample.
         let sample = DirectSoundSample::new(1 << 20, Some(0), 2, vec![10, -10, 99])
             .expect("a two-sample looping wave with a retained guard is well-formed");
         let (pack, _pack_guard) = pack_with_direct_sound_sample("direct-sound-logical-len", sample);

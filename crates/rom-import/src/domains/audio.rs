@@ -16,22 +16,16 @@
 //! DPCM-compressed and refused: the pack stores PCM only, and no instrument
 //! in scope is compressed.
 //!
-//! wav2agb's binary payload writer emits one more encoded sample past `size`
-//! whenever an `agbl` override trimmed the header below the unoverridden
-//! sampler end, and `SoundMainRAM` reads exactly that byte for its final
-//! boundary interpolation step (`pokeemerald/src/m4a_1.s:399-407`; see
-//! `crates/xtask/src/extract/wav.rs`'s module docs for the extractor side of
-//! this same contract, issue #1342). This reader always takes the one byte
-//! the ROM holds right after the `size` bytes, because that is the byte
-//! `SoundMainRAM` interpolates toward. For a sample built with an `agbl`
-//! trim (every `sound/direct_sound_samples/*.wav` upstream ships), that byte
-//! is the retained encoded sample and matches the extractor byte-for-byte.
-//! Without a trim, the extractor synthesizes `0` there. The ROM byte is
-//! wav2agb's zero alignment padding when `size` is not a multiple of four,
-//! and so it also agrees. When `size` is a multiple of four, the ROM byte is
-//! the first byte of whatever the linker placed next, and the two backends
-//! can differ. This reader does not detect that case. It uses `0` only when
-//! the read would run off the image.
+//! `SoundMainRAM` interpolates toward the byte right after the `size` bytes
+//! (`pokeemerald/src/m4a_1.s:399-407`); `crates/xtask/src/extract/wav.rs`'s
+//! module docs own the guard-sample contract wav2agb's payload writer
+//! produces. This reader always takes that one ROM byte. With an `agbl`
+//! trim it is the retained encoded sample the extractor keeps. Without one,
+//! the ROM holds wav2agb's zero alignment padding, matching the extractor's
+//! synthesized `0`, unless `size` is a multiple of four: then the ROM byte
+//! is whatever the linker placed next and the two backends can differ. This
+//! reader does not detect that case and uses `0` only when the read would
+//! run off the image.
 //!
 //! A programmable wave is the bare 16-byte table CGB channel 3 plays.
 //!

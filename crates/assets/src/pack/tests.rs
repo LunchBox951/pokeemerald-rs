@@ -1298,7 +1298,7 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 ///   naive loop end (inclusive `smpl` end 1874, plus one, = 1875). `data()`
 ///   holds 1875 values: wav2agb's payload writer still emits sample 1874
 ///   (`-8`, equal to the loop-start sample), and the pack retains it as the
-///   interpolation guard (issue #1342). All read straight off
+///   interpolation guard. All read straight off
 ///   `sound/direct_sound_samples/sc88pro_flute.wav`'s own chunks and match
 ///   `tools/wav2agb`'s `converter.cpp:77-90,392-402` arithmetic.
 /// - `programmable-wave/01` — the 16 bytes of
@@ -1374,8 +1374,8 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
     assert_eq!(flute.base_frequency, 3_425_024);
     assert_eq!(flute.loop_start(), Some(1312));
     // `agbl` sets the logical count to 1874; the pack retains the one
-    // encoded sample past it for the mixer's final interpolation step
-    // (issue #1342), which for this loop is the loop-start value.
+    // encoded sample past it for the mixer's final interpolation step,
+    // which for this loop is the loop-start value.
     assert_eq!(flute.sample_count(), 1874);
     assert_eq!(flute.data().len(), 1875);
     assert_eq!(flute.data()[1874], -8);

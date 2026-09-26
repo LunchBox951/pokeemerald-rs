@@ -21,9 +21,9 @@
 //! compiled header: `agbl` overrides only that header word
 //! (`converter.cpp:399-401`). wav2agb's binary payload writer ignores the
 //! override and always emits every sample through the *unoverridden* sampler
-//! end, then zero-pads to a four-byte boundary (`converter.cpp:77-90`,
-//! confirmed live because `-b` binary output, not the unused assembly path,
-//! is what `audio_rules.mk:22,26` builds into the ROM). `SoundMainRAM`
+//! end, then zero-pads to a four-byte boundary (`converter.cpp:77-90`;
+//! `audio_rules.mk:22,26` builds that `-b` binary output into the ROM).
+//! `SoundMainRAM`
 //! prefetches the sample immediately after the logical end for its final
 //! linear-interpolation step before a loop wraps or a one-shot retires
 //! (`m4a_1.s:399-407`), so that extra encoded byte is observable, not inert
@@ -36,9 +36,9 @@
 //! would have retained. Otherwise (no override, or an override at or past
 //! that natural boundary) wav2agb's own payload has nothing left to retain
 //! there; this decoder documents that boundary as `0`, matching wav2agb's
-//! zero alignment padding. No `.wav` this pack extracts exercises that
-//! fallback: every `sound/direct_sound_samples/*.wav` sets `agbl` below its
-//! raw sample count (issue #1342's asset audit).
+//! zero alignment padding. Every `sound/direct_sound_samples/*.wav`
+//! upstream ships sets `agbl` below its raw sample count, so the pack never
+//! exercises that fallback.
 //!
 //! Missing required chunks, unsupported fields, partial records, misaligned
 //! sample data, and out-of-range loop metadata fail closed.

@@ -18,7 +18,7 @@
 //!    header's frequency, loop point, and size against the pack entry. The
 //!    pack's PCM buffer holds one more byte than `WaveData.size`: a retained
 //!    interpolation guard wav2agb's payload writer always emits
-//!    (`crates/xtask/src/extract/wav.rs`'s module docs, issue #1342).
+//!    (`crates/xtask/src/extract/wav.rs`'s module docs).
 //! 2. `voicegroup_title` is the run of 12-byte slots whose `DirectSound`
 //!    and programmable-wave slots point at exactly those samples, in the
 //!    order `title.inc` declares them.
