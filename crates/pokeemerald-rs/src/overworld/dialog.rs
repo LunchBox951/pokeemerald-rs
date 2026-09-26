@@ -26,11 +26,9 @@ use rendering::Framebuffer;
 
 use crate::textbox::{self, FrameAssets};
 
-/// Default cadence for a caller not yet threading a saved [`TextSpeed`]
-/// through [`NpcDialog::open`]/[`NpcDialog::from_pack`]. Upstream always
-/// paces field text via `GetPlayerTextSpeedDelay()`
-/// (`pokeemerald/src/menu.c:191-196,481-488`); see
-/// [`NpcDialog::open_at_speed`].
+/// Cadence for a caller that passes no saved [`TextSpeed`]; upstream paces
+/// field text by `GetPlayerTextSpeedDelay()`
+/// (`pokeemerald/src/menu.c:191-196,481-488`).
 const FIELD_SCRIPT_TEXT_SPEED: TextSpeed = TextSpeed::Mid;
 
 /// Maps A/B button edges and holds to the shared printer input shape.
@@ -108,11 +106,9 @@ impl NpcDialog {
     /// Creates the standard field message box from decoded assets.
     ///
     /// NPC and save messages share this type because both use the standard field
-    /// message resources. `text_speed` stays caller-supplied: save messages and
-    /// the ordinary field-dialog path ([`Self::open_at_speed`]/
-    /// [`Self::from_pack_at_speed`]) pass the saved, normalized option, while a
-    /// caller still on [`Self::open`]/[`Self::from_pack`] gets
-    /// [`FIELD_SCRIPT_TEXT_SPEED`]. Holding A or B accelerates printing.
+    /// message resources. `text_speed` is the caller's: the saved, normalized
+    /// option, or [`FIELD_SCRIPT_TEXT_SPEED`]. Holding A or B accelerates
+    /// printing.
     pub(crate) fn new(
         sheet: OwnedFontGlyphSheet,
         frame: FrameAssets,
@@ -148,11 +144,9 @@ impl NpcDialog {
         Self::from_pack_at_speed(pack, tokens, FIELD_SCRIPT_TEXT_SPEED)
     }
 
-    /// [`Self::from_pack`], at a caller-chosen `text_speed` rather than the
-    /// [`FIELD_SCRIPT_TEXT_SPEED`] default -- the saved, normalized option for
-    /// an ordinary field dialog (issue #1392), mirroring how upstream's
-    /// `AddTextPrinterForMessage` always paces field text through
-    /// `GetPlayerTextSpeedDelay()` (`pokeemerald/src/menu.c:191-196,481-488`).
+    /// [`Self::from_pack`] at a caller-chosen `text_speed`: an ordinary field
+    /// dialog passes the saved, normalized option
+    /// (`pokeemerald/src/menu.c:191-196,481-488`).
     ///
     /// # Errors
     ///
