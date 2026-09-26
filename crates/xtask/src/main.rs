@@ -213,6 +213,8 @@ pub enum Suite {
 }
 
 impl Suite {
+    /// The suite `--suite` names: `smoke`, `full`, or `soak`.
+    ///
     /// # Errors
     ///
     /// Returns [`XtaskError::InvalidSuite`] if `value` is not a known suite.
@@ -243,6 +245,8 @@ pub enum Scene {
 }
 
 impl Scene {
+    /// The scene whose [`Self::name`] is `value`.
+    ///
     /// # Errors
     ///
     /// Returns [`XtaskError::InvalidScene`] if `value` is not a known scene.
@@ -284,6 +288,8 @@ pub enum ScenarioName {
 }
 
 impl ScenarioName {
+    /// The scenario whose [`Self::name`] is `value`.
+    ///
     /// # Errors
     ///
     /// Returns [`XtaskError::InvalidScenario`] for an unknown name.
