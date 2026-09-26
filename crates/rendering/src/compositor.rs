@@ -1848,8 +1848,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[2] = 0x32;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 2, 3, 0, 0]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -1934,8 +1933,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[3] = 0x23;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2010,7 +2008,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[3] = 0x20;
+        bytes[..4].copy_from_slice(&bpp4_row([0, 0, 0, 0, 0, 0, 0, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[2] = Bgr555::from_channels(0, 0x1F, 0);
@@ -2173,8 +2171,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[3] = 0x23;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2258,8 +2255,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[3] = 0x23;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2335,8 +2331,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[3] = 0x23;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2418,8 +2413,7 @@ mod tests {
         use crate::oam::AffineMode;
 
         let mut bytes = [0u8; 32];
-        bytes[0] = 0x01;
-        bytes[3] = 0x23;
+        bytes[..4].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
@@ -2491,8 +2485,7 @@ mod tests {
 
         let mut bytes = [0u8; 64];
         bytes[..32].fill(0x44);
-        bytes[32] = 0x01;
-        bytes[35] = 0x23;
+        bytes[32..36].copy_from_slice(&bpp4_row([1, 0, 0, 0, 0, 0, 3, 2]));
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0x1F, 0, 0);
