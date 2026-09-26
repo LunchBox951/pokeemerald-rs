@@ -1,4 +1,8 @@
 //! Wild move selection, unsupported moves, and PP validation.
+//!
+//! `SequenceRng` panics once its scripted values run out, so a script sized
+//! to exactly the expected draws is itself the proof that nothing further
+//! was drawn.
 
 use crate::common::{max_iv_mon, slow_runner_rattata, SequenceRng};
 use assets::{AbilityId, MoveId};
@@ -7,14 +11,39 @@ use battle::{
     STRUGGLE,
 };
 
+const TACKLE: MoveId = MoveId(33);
+const SCRATCH: MoveId = MoveId(10);
+const POUND: MoveId = MoveId(1);
+const CUT: MoveId = MoveId(15);
+const LEER: MoveId = MoveId(43);
+const GROWL: MoveId = MoveId(45);
+const POISON_STING: MoveId = MoveId(40);
+const SUPERSONIC: MoveId = MoveId(48);
+const HYPER_VOICE: MoveId = MoveId(304);
+const HORN_DRILL: MoveId = MoveId(32);
+const HAZE: MoveId = MoveId(114);
+
+const CHARMANDER: u16 = 4;
+const RATTATA: u16 = 19;
+const VOLTORB: u16 = 100;
+const DUNSPARCE: u16 = 206;
+const TREECKO: u16 = 277;
+const POOCHYENA: u16 = 286;
+
+/// A wild species fast enough that these fixtures' Run draws an escape roll
+/// instead of succeeding for free.
+const FAST_WILD_OPPONENT: u16 = 288;
+
+const FAILED_ESCAPE_ROLL: u16 = 65_000;
+
 #[test]
 fn the_wild_opponent_rejects_move_slots_it_does_not_know() {
     let dex = Dex::new();
-    // A one-move wild mon: only a draw congruent to 0 mod 4 selects a
-    // real slot, every other residue is upstream's MOVE_NONE and is
+    // A one-move wild mon: only a draw congruent to 0 mod 4 selects the
+    // real slot; every other residue is upstream's MOVE_NONE and gets
     // redrawn (battle_controller_opponent.c:1594-1601).
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast: run succeeds
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new([0, 0, 1, 2, 3, 4]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -25,18 +54,19 @@ fn the_wild_opponent_rejects_move_slots_it_does_not_know() {
     assert_eq!(
         rng.draws(),
         6,
-        "1 battle start + 1 turn number + 4 rejection-loop draws"
+        "2 setup draws + 4 rejection-loop draws (residues 1, 2, 3 redrawn, 4 lands)"
     );
 }
 
 #[test]
 fn the_wild_opponent_uses_the_slot_the_rejection_loop_landed_on() {
     let dex = Dex::new();
-    let player = slow_runner_rattata(&dex); // slow: the run fails
-    let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
+    let player = slow_runner_rattata(&dex);
+    let enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, SCRATCH]);
 
-    // draw 1 -> 1 % 4 = 1, a slot this mon knows: Scratch, first try.
-    let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
+    // Slot 1 (Scratch) is a real move, so draw 1 selects it immediately,
+    // with no rejection redraw.
+    let mut rng = SequenceRng::new([0, 0, 1, FAILED_ESCAPE_ROLL, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let _ = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
@@ -54,28 +84,17 @@ fn the_wild_opponent_uses_the_slot_the_rejection_loop_landed_on() {
 
 #[test]
 fn the_rejection_loop_draw_count_matches_the_number_of_unknown_slots() {
-    // `MOD(Random(), MAX_MON_MOVES)` is `% 4`, retried while the slot
-    // holds MOVE_NONE (battle_controller_opponent.c:1599-1601). With
-    // `known` real moves, residues `known..4` are redrawn -- so the draw
-    // count is fully determined by the script, and this pins it for every
-    // moveset size a wild mon can have.
-    for (known, script, expected_draws) in [
-        // one move: 1, 2, 3 all land on MOVE_NONE slots; 4 % 4 == 0 lands.
+    for (known, script, expected_selection_draws) in [
         (1usize, vec![1u16, 2, 3, 4], 4usize),
-        // two moves: slot 3 is MOVE_NONE, slot 1 is real.
         (2, vec![3, 1], 2),
-        // three moves: slot 3 is MOVE_NONE, slot 2 is real.
         (3, vec![3, 2], 2),
-        // four moves: nothing is ever rejected, one draw always.
         (4, vec![3], 1),
     ] {
         let dex = Dex::new();
-        // Tackle/Scratch/Pound/Cut, all plain EFFECT_HIT moves.
-        let all = [MoveId(33), MoveId(10), MoveId(1), MoveId(15)];
-        let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast: the run succeeds
-        let enemy = max_iv_mon(&dex, 19, 5, all[..known].to_vec());
+        let all = [TACKLE, SCRATCH, POUND, CUT];
+        let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+        let enemy = max_iv_mon(&dex, RATTATA, 5, all[..known].to_vec());
         let pp_before: Vec<u8> = enemy.moves().iter().map(|slot| slot.pp).collect();
-        // battle start + turn number, then the scripted selection draws.
         let mut rng = SequenceRng::new([0, 0].into_iter().chain(script));
         let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
         let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -85,42 +104,28 @@ fn the_rejection_loop_draw_count_matches_the_number_of_unknown_slots() {
         );
         assert_eq!(
             rng.draws(),
-            2 + expected_draws,
-            "{known}-move wild mon: 2 pre-selection draws + the rejection loop"
+            2 + expected_selection_draws,
+            "{known}-move wild mon: 2 setup draws + the rejection loop"
         );
-        // The run succeeded, so no move was used and no PP spent: the
-        // draw count above is the whole observable effect of the loop.
-        // Which slot it lands on is pinned separately, by
-        // `the_wild_opponent_uses_the_slot_the_rejection_loop_landed_on`.
         let pp_after: Vec<u8> = battle.enemy().moves().iter().map(|slot| slot.pp).collect();
         assert_eq!(pp_after, pp_before, "{known}-move wild mon spent PP");
     }
 }
 
-// Struggle is forced only when every slot is unusable (`AreAllMovesUnusable`,
-// battle_util.c:1125), drawing nothing at selection, and the forced pick
-// resolves the turn.
-
+/// Struggle is forced only when every known slot is unusable
+/// (`AreAllMovesUnusable`, `pokeemerald/src/battle_util.c:1125`).
 #[test]
 fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
     let dex = Dex::new();
-    // Rattata L50 (speed 92) outspeeds a fragile Charmander L2 (speed 8),
-    // so the *enemy* is both the first mover and every slot is spent --
-    // upstream's forced-Struggle case. The forced pick bypasses the
-    // rejection loop (no selection draw), and its raw damage one-shots
-    // this fragile a player, so the player's own Tackle never reaches a
-    // turn-order slot to draw from.
-    let player = max_iv_mon(&dex, 4, 2, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, CHARMANDER, 2, vec![TACKLE]);
     let player_max_hp = player.stats().max_hp;
-    let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId(33)]);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 50, vec![TACKLE]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // battle start, turn number, the forced Struggle's three draws
-    // (accuracy, crit, damage-variance) -- no selection draw for the
-    // forced pick, and no draw at all for the player's own Tackle, since
-    // the KO stops it from ever getting a turn-order slot.
+    // Rattata L50 outspeeds Charmander L2, so its forced Struggle strikes
+    // first.
     let mut rng = SequenceRng::new([0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -145,7 +150,12 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
             BattleEvent::Ended(BattleOutcome::PlayerLost),
         ]
     );
-    assert_eq!(rng.draws(), 5);
+    assert_eq!(
+        rng.draws(),
+        5,
+        "2 setup + Struggle's 3 draws; no selection draw for the forced \
+         pick, and the KO preempts the player's own queued Tackle"
+    );
     assert_eq!(
         battle.enemy().moves()[0].pp,
         0,
@@ -154,28 +164,22 @@ fn an_all_spent_enemy_moving_first_executes_its_forced_struggle() {
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
 }
 
+/// The wild rejection loop only redraws `MOVE_NONE`, never a depleted real
+/// slot; an ordinary depleted slot's no-PP abort then precedes every other
+/// draw (`battle_script_commands.c:934-939`). Struggle alone is exempt from
+/// that abort.
 #[test]
 fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
     let dex = Dex::new();
-    // Upstream's rejection loop ignores PP, so a spent slot can be
-    // picked -- and then `Cmd_attackcanceler`, the FIRST command of the
-    // hit script, aborts it to BattleScript_NoPPForMove
-    // (battle_script_commands.c:934-:939): "But no PP left!", straight
-    // to MoveEnd. No accuracy/crit/damage/effect-chance draws, no
-    // damage, and no deduction (ppreduce is never reached). Only an
-    // all-spent moveset diverts to Struggle instead, at selection time.
-    let player = slow_runner_rattata(&dex); // slow: the run fails
-    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(10)]); // fast
+    let player = slow_runner_rattata(&dex);
+    let mut enemy = max_iv_mon(&dex, CHARMANDER, 10, vec![TACKLE, SCRATCH]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
     let player_hp_before = player.current_hp();
 
-    // battle start, turn number, selection (draw 0 -> slot 0: Tackle,
-    // spent -- selectable regardless, only MOVE_NONE is rejected),
-    // escape roll (fails). NOTHING after that: the failed move draws
-    // zero, so any move draw would panic this exactly-4-value script.
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    // Draw 0 selects the spent Tackle slot.
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -188,7 +192,7 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
             },
             BattleEvent::FailedNoPp {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: TACKLE,
             },
         ]
     );
@@ -207,23 +211,20 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
         35,
         "the unpicked slot is untouched"
     );
-    assert_eq!(rng.draws(), 4);
+    assert_eq!(
+        rng.draws(),
+        4,
+        "no accuracy, crit, damage, or effect-chance draw for the failed move"
+    );
     assert!(battle.outcome().is_none());
 
-    // And the turn continues around a first mover's failed move: a fast
-    // player acts, then the enemy's spent pick fails, and the turn ends
-    // cleanly with both events -- upstream goes through MoveEnd, not an
-    // abort. Charmander L10 Tackle into Rattata L5, hand computed:
-    // attack (2*52+31)*10/100+5 = 18; defense (2*35+31)*5/100+5 = 10;
-    // 18*35 = 630, *(2*10/5+2 = 6) = 3780, /10 = 378, /50 = 7, +2 = 9;
-    // no STAB (Charmander is Fire), neutral, 100% roll -> 9.
-    let player = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast
-    let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(10)]); // slow
+    // A faster player still acts first; the enemy's spent pick then fails
+    // in the same turn rather than aborting it.
+    let player = max_iv_mon(&dex, CHARMANDER, 10, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE, SCRATCH]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
-    // battle start, turn number, selection (0 -> spent slot 0), the
-    // player's 4-draw hit; the enemy's failed move draws nothing.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -234,31 +235,32 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
         vec![
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(33),
+                move_id: TACKLE,
                 damage: 9,
                 is_critical: false,
             },
             BattleEvent::FailedNoPp {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: TACKLE,
             },
         ]
     );
-    assert_eq!(rng.draws(), 7);
+    assert_eq!(
+        rng.draws(),
+        7,
+        "2 setup + selection + the player's 4-draw hit; the enemy's failed \
+         move draws nothing"
+    );
     assert!(battle.outcome().is_none());
 }
 
+/// A no-PP abort precedes the effect pipeline even for an unsupported move
+/// (`battle_script_commands.c:934-939`).
 #[test]
 fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
     let dex = Dex::new();
-    // Horn Drill (MoveId(32), EFFECT_OHKO) has no supported effect
-    // pipeline -- `unsupported_moves_are_rejected_at_the_right_boundary_
-    // for_each_side` pins the full-PP case. Drained to 0 PP,
-    // `Cmd_attackcanceler`'s no-PP jump (`battle_script_commands.c:934`-
-    // `:939`) aborts before the effect runs, so construction must accept
-    // it, exactly like a drained *supported* move already does above.
-    let player = slow_runner_rattata(&dex); // slow: the run fails
-    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
+    let player = slow_runner_rattata(&dex);
+    let mut enemy = max_iv_mon(&dex, CHARMANDER, 10, vec![TACKLE, HORN_DRILL]);
     let tackle_pp = enemy.moves()[0].pp;
     for _ in 0..enemy.moves()[1].pp {
         enemy.deduct_pp(1).unwrap();
@@ -269,11 +271,8 @@ fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
         "fixture sanity: the unsupported slot is drained"
     );
 
-    // battle start, turn number, selection (draw 1 -> 1 % 4 == 1: the
-    // drained Horn Drill slot), escape roll (fails). No draw follows: the
-    // failed move draws zero, so any effect-pipeline draw would panic this
-    // exactly-sized script.
-    let mut rng = SequenceRng::new([0, 0, 1, 65000]);
+    // Draw 1 selects the drained Horn Drill slot.
+    let mut rng = SequenceRng::new([0, 0, 1, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng)
         .expect("a depleted unsupported-effect slot must not block construction");
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -287,7 +286,7 @@ fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
             },
             BattleEvent::FailedNoPp {
                 by_player: false,
-                move_id: MoveId(32),
+                move_id: HORN_DRILL,
             },
         ]
     );
@@ -309,22 +308,18 @@ fn a_depleted_unsupported_wild_slot_still_constructs_and_fails_no_pp() {
     assert!(battle.outcome().is_none());
 }
 
+/// Soundproof blocks by `sSoundMovesTable` membership alone
+/// (`battle_util.c:2659-2675`), not by move effect.
 #[test]
 fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
     let dex = Dex::new();
-    // Soundproof's pre-PP block (`battle_script_commands.c:932`-`:933`)
-    // reads only `stat_change::soundproof_block`, which needs `move_data`
-    // -- already validated -- and decides on `sSoundMovesTable` membership
-    // alone (`battle_util.c:2659`-`:2675`), so Horn Drill is not blocked and
-    // its unsupported EFFECT_OHKO is never executed: the slot's zero PP lands
-    // on FailedNoPp exactly as it does without Soundproof.
-    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    let player = max_iv_mon(&dex, VOLTORB, 5, vec![TACKLE]);
     assert_eq!(
         player.ability(),
-        AbilityId(43),
+        AbilityId::SOUNDPROOF,
         "fixture sanity: the player holds Soundproof"
     );
-    let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(32)]); // Tackle, Horn Drill
+    let mut enemy = max_iv_mon(&dex, CHARMANDER, 10, vec![TACKLE, HORN_DRILL]);
     for _ in 0..enemy.moves()[1].pp {
         enemy.deduct_pp(1).unwrap();
     }
@@ -334,9 +329,8 @@ fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
         "fixture sanity: the slot is drained"
     );
 
-    // battle start, turn number, selection (draw 1 -> slot 1), escape roll
-    // (fails). Any effect-pipeline draw would exhaust this exact script.
-    let mut rng = SequenceRng::new([0, 0, 1, 65000]);
+    // Draw 1 selects the drained Horn Drill slot.
+    let mut rng = SequenceRng::new([0, 0, 1, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
         .expect("a Soundproof player must not block a depleted unsupported slot");
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -350,32 +344,25 @@ fn a_depleted_unsupported_slot_constructs_even_against_soundproof() {
             },
             BattleEvent::FailedNoPp {
                 by_player: false,
-                move_id: MoveId(32),
+                move_id: HORN_DRILL,
             },
         ]
     );
     assert_eq!(rng.draws(), 4);
 }
 
-/// The other half of the same boundary: a depleted slot this engine cannot
-/// execute is admitted, so Soundproof's pre-PP block must still reach it.
-/// Upstream decides that block on `sSoundMovesTable` membership alone
-/// (`battle_util.c:2659`-`:2675`), never on the move's effect, and runs it
-/// ahead of the no-PP test (`battle_script_commands.c:932`-`:939`).
-/// Supersonic is `EFFECT_CONFUSE`, which no pipeline here resolves -- at full
-/// PP it is refused at construction -- yet drained it must report the block,
-/// not the no-PP failure.
+/// Soundproof's block runs before the no-PP test
+/// (`battle_script_commands.c:932-939`).
 #[test]
 fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    let player = max_iv_mon(&dex, VOLTORB, 5, vec![TACKLE]);
     assert_eq!(
         player.ability(),
         AbilityId::SOUNDPROOF,
         "fixture sanity: the defender must hold Soundproof"
     );
-    // Fast enough that the player's escape is a roll, not a free run.
-    let mut enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(48), MoveId(33)]); // Supersonic, Tackle
+    let mut enemy = max_iv_mon(&dex, FAST_WILD_OPPONENT, 50, vec![SUPERSONIC, TACKLE]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
@@ -385,9 +372,8 @@ fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
         "fixture sanity: the unsupported sound slot is drained"
     );
 
-    // battle start, turn number, selection (draw 0 -> slot 0: the spent
-    // Supersonic), escape roll (fails). The block precedes every later draw.
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    // Draw 0 selects the spent Supersonic slot.
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng)
         .expect("a depleted unsupported slot constructs even against Soundproof");
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -401,7 +387,7 @@ fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
             },
             BattleEvent::SoundproofProtected {
                 by_player: false,
-                move_id: MoveId(48),
+                move_id: SUPERSONIC,
             },
         ]
     );
@@ -411,29 +397,20 @@ fn a_soundproof_defender_blocks_a_depleted_unsupported_sound_slot() {
 #[test]
 fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     let dex = Dex::new();
-    let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
+    let healthy = |dex: &Dex| max_iv_mon(dex, CHARMANDER, 50, vec![TACKLE]);
 
-    // Haze: 0 power, EFFECT_HAZE -- not one of the widened
-    // BattleScript_EffectStatUp/StatDown family's 18 rows (issue #322;
-    // Sand Attack and Screech, which used to stand in for this case, are
-    // executable now -- see `stat_changes.rs`). Horn Drill: power 1 but
-    // EFFECT_OHKO's target-HP-based damage, which the ordinary pipeline
-    // gets wrong in both damage and draw count. Struggle is executable too
-    // -- see `a_wild_moveset_may_now_include_struggle_directly` and
-    // `a_directly_chosen_struggle_deducts_pp_normally`.
     for (bad_move, expected) in [
-        (MoveId(114), BattleError::NonDamagingMove(MoveId(114))),
-        (MoveId(32), BattleError::UnsupportedMoveEffect(MoveId(32))),
+        (HAZE, BattleError::NonDamagingMove(HAZE)),
+        (HORN_DRILL, BattleError::UnsupportedMoveEffect(HORN_DRILL)),
     ] {
-        // The wild mon's moveset is screened at construction: the
-        // rejection loop can land on any slot, so an unsupported one
-        // must never survive to mid-turn.
+        // Construction screens the wild mon's whole moveset, since the
+        // rejection loop can land on any slot.
         let mut rng = SequenceRng::new([]);
         assert_eq!(
             Battle::new(
                 Dex::new(),
                 healthy(&dex),
-                max_iv_mon(&dex, 19, 5, vec![MoveId(33), bad_move]),
+                max_iv_mon(&dex, RATTATA, 5, vec![TACKLE, bad_move]),
                 false,
                 &mut rng
             )
@@ -443,17 +420,16 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
             bad_move.0
         );
 
-        // The player's side constructs fine with the same move in an
-        // unselected slot (construction never screens the player's
-        // moveset) -- and *choosing* it is rejected before any draw,
-        // leaving the battle usable and the stream untouched.
-        let mut rng = SequenceRng::new([0]); // battle start only
+        // Construction never screens the player's moveset, so the same move
+        // in an unselected slot constructs fine; only choosing it is
+        // rejected, before any draw.
+        let mut rng = SequenceRng::new([0]);
         let mut battle = Battle::new(
             Dex::new(),
-            max_iv_mon(&dex, 4, 50, vec![MoveId(33), bad_move]),
-            // A slower, different mon: a mirror match would add a
+            max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, bad_move]),
+            // A different, slower species: a mirror match would add a
             // speed-tie seeding draw this script does not budget.
-            max_iv_mon(&dex, 19, 5, vec![MoveId(33)]),
+            max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]),
             false,
             &mut rng,
         )
@@ -479,32 +455,27 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
 }
 
 #[test]
-fn a_wild_moveset_may_now_include_struggle_directly() {
+fn a_wild_moveset_may_include_struggle_directly() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = max_iv_mon(&dex, 19, 5, vec![STRUGGLE]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![STRUGGLE]);
     let mut rng = SequenceRng::new([0]);
     Battle::new(dex, player, enemy, false, &mut rng)
-        .expect("a directly known Struggle must no longer fail construction");
+        .expect("a directly known Struggle must construct");
 }
 
-/// `HITMARKER_NO_PPDEDUCT` is only set on the forced all-spent substitution
-/// (`pokeemerald/src/battle_util.c:100`-`:104`); a Struggle chosen through an
-/// ordinary real slot -- impossible in real gameplay, but not screened out
-/// here -- spends its own PP exactly like any other move.
+/// `HITMARKER_NO_PPDEDUCT` only applies to the forced all-spent
+/// substitution (`pokeemerald/src/battle_util.c:100-104`).
 #[test]
 fn a_directly_chosen_struggle_deducts_pp_normally() {
     let dex = Dex::new();
-    // Charmander L50 (speed 85) outspeeds Rattata L5 (speed 13); slot 0
-    // (Tackle) is untouched, so picking slot 1 exercises the ordinary pick,
-    // not the all-spent diversion.
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33), STRUGGLE]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, STRUGGLE]);
     let struggle_pp = player.moves()[1].pp;
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
 
-    // battle start, turn number, enemy selection, then Struggle's three
-    // draws (accuracy, crit, damage-variance).
+    // Slot 1 (Struggle) here is the player's own selection, not the
+    // all-spent diversion.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -537,14 +508,13 @@ fn a_directly_chosen_struggle_deducts_pp_normally() {
 }
 
 /// `Cmd_attackcanceler`'s no-PP abort exempts Struggle
-/// (`battle_script_commands.c:934`), so a spent, directly known Struggle
-/// slot the wild rejection loop lands on still executes.
+/// (`battle_script_commands.c:934`).
 #[test]
 fn a_directly_known_struggle_at_zero_pp_still_executes() {
     let dex = Dex::new();
-    let player = slow_runner_rattata(&dex); // slow: the run fails, so the enemy acts
+    let player = slow_runner_rattata(&dex);
     let player_max_hp = player.stats().max_hp;
-    let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), STRUGGLE]); // fast Charmander
+    let mut enemy = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE, STRUGGLE]);
     for _ in 0..enemy.moves()[1].pp {
         enemy.deduct_pp(1).unwrap();
     }
@@ -555,10 +525,8 @@ fn a_directly_known_struggle_at_zero_pp_still_executes() {
     );
     let tackle_pp = enemy.moves()[0].pp;
 
-    // battle start, turn number, selection (draw 1 -> 1 % 4 == 1: the wild
-    // rejection loop ignores PP, so it can land directly on the spent
-    // Struggle slot), escape roll (fails), then Struggle's three draws.
-    let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0]);
+    // Draw 1 selects the spent Struggle slot; the rejection loop ignores PP.
+    let mut rng = SequenceRng::new([0, 0, 1, FAILED_ESCAPE_ROLL, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -583,7 +551,7 @@ fn a_directly_known_struggle_at_zero_pp_still_executes() {
             BattleEvent::Fainted { by_player: true },
             BattleEvent::Ended(BattleOutcome::PlayerLost),
         ],
-        "a zero-PP Struggle must still land, not fail through FailedNoPp: see above"
+        "a zero-PP Struggle must still land, not fail through FailedNoPp"
     );
     assert_eq!(
         battle.enemy().moves()[0].pp,
@@ -601,14 +569,11 @@ fn a_directly_known_struggle_at_zero_pp_still_executes() {
 #[test]
 fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     let dex = Dex::new();
-    // Treecko's actual level-5 learnset is Pound (1) + Leer (43). Wild
-    // Poochyena (286) with Tackle is the Route 101 shape.
-    let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
-    let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
+    // Treecko's real level-5 learnset: Pound and Leer, together.
+    let player = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
+    let enemy = max_iv_mon(&dex, POOCHYENA, 2, vec![TACKLE]);
 
-    // battle start, turn number, pick, the player's 4-draw Pound
-    // (Treecko L5, speed 13, moves first), then the slower L2
-    // Poochyena's 4-draw Tackle back.
+    // Treecko L5 outspeeds Poochyena L2, so Pound lands first.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -619,51 +584,40 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
             e,
             BattleEvent::Hit {
                 by_player: true,
-                move_id: MoveId(1),
+                move_id: POUND,
                 ..
             }
         )),
         "Pound must land: {events:?}"
     );
-    assert_eq!(rng.draws(), 11);
+    assert_eq!(
+        rng.draws(),
+        11,
+        "2 setup + 1 pick + Pound's 4 draws + Tackle's 4 draws back"
+    );
 
-    // And picking Leer (slot 1) on a fresh battle now *executes* rather
-    // than being rejected: before issue #199, a construction-wide
-    // resolvability screen would have rejected it (NonDamagingMove) and
-    // no authentic Treecko could enter any wild battle. Leer is
-    // EFFECT_DEFENSE_DOWN (`pokeemerald/src/data/battle_moves.h:562`-
-    // `:564`), one of the stat-changing family's effects. It costs
-    // exactly one draw -- the accuracy check, and Leer's 100 accuracy
-    // means it cannot miss -- and lowers the wild Poochyena's Defense by
-    // one stage.
+    // A fresh battle picking Leer (slot 1) instead.
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
-    let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
-    // battle start, turn number, pick, Leer's 1-draw accuracy check,
-    // then the enemy's 4-draw Tackle back.
+    let player = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
+    let enemy = max_iv_mon(&dex, POOCHYENA, 2, vec![TACKLE]);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
-    // Poochyena L2's Tackle back, hand computed: atk (2*55+31)*2/100+5
-    // = 7 into Treecko L5's def (2*35+31)*5/100+5 = 10 (Leer lowered
-    // the *enemy's* Defense, not Treecko's): 7*35 = 245, *(2*2/5+2 =
-    // 2) = 490, /10 = 49, /50 = 0 -> physical floor to 1, +2 = 3; no
-    // STAB (Dark using Normal), neutral into Grass, best roll keeps 3.
     assert_eq!(
         events,
         vec![
             BattleEvent::StatFell {
                 by_player: true,
-                move_id: MoveId(43),
+                move_id: LEER,
                 stat: ChangedStat::Defense,
                 new_stage: StatStage::new(-1).unwrap(),
                 magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: false,
-                move_id: MoveId(33),
+                move_id: TACKLE,
                 damage: 3,
                 is_critical: false,
             },
@@ -677,7 +631,8 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     assert_eq!(
         rng.draws(),
         8,
-        "1 (battle start) + 1 (turn number) + 1 (pick) + 1 (Leer) + 4 (Tackle)"
+        "2 setup + 1 pick + Leer's single 100-accuracy draw + Tackle's 4 \
+         draws back"
     );
     assert!(battle.outcome().is_none());
 }
@@ -685,12 +640,12 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
 #[test]
 fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let player = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     let full_pp = player.moves()[0].pp;
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let enemy_pp = enemy.moves()[0].pp;
 
-    let mut rng = SequenceRng::new([0]); // only the battle-start draw
+    let mut rng = SequenceRng::new([0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1);
     let rejected = battle
@@ -704,15 +659,12 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     assert!(battle.outcome().is_none());
 }
 
-// A player whose every known move is unusable is diverted to a forced
-// Struggle that draws nothing and spends no PP (`AreAllMovesUnusable`,
-// `pokeemerald/src/battle_util.c:1125-1139`; `HITMARKER_NO_PPDEDUCT`, `:100-104`).
+/// The forced Struggle substitution sets `HITMARKER_NO_PPDEDUCT`
+/// (`pokeemerald/src/battle_util.c:100-104`).
 #[test]
 fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
     let dex = Dex::new();
-    // Charmander L50 (speed 85) outspeeds Rattata L5 (speed 13), so the
-    // player's forced Struggle strikes first.
-    let mut drained = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let mut drained = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     for _ in 0..drained.moves()[0].pp {
         drained.deduct_pp(0).unwrap();
     }
@@ -721,14 +673,12 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
         0,
         "setup: the only known move must be fully spent"
     );
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let enemy_max_hp = enemy.stats().max_hp;
     let enemy_move_pp = enemy.moves()[0].pp;
 
-    // battle start, turn number, enemy selection (its one move: 0 % 4 == 0
-    // lands immediately, no PP screen in the wild rejection loop), then the
-    // forced Struggle's three draws -- accuracy, crit, damage-variance, and
-    // no trailing effect-chance draw (crate::hit's own module docs).
+    // Charmander L50 outspeeds Rattata L5, so the player's forced Struggle
+    // strikes first.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, drained, enemy, false, &mut rng).unwrap();
     let events = battle
@@ -743,8 +693,8 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
             damage: enemy_max_hp,
             is_critical: false,
         },
-        "Struggle's raw damage far exceeds a level-5 Rattata's whole HP bar, \
-         so the Hit event reports the capped knockout: {events:?}"
+        "Struggle's raw damage exceeds a level-5 Rattata's whole HP bar, so \
+         the Hit event reports the capped knockout: {events:?}"
     );
     assert_eq!(
         events[1],
@@ -753,7 +703,7 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
             move_id: STRUGGLE,
             damage: enemy_max_hp / 4,
         },
-        "a quarter of the 19 HP actually dealt, floored: {events:?}"
+        "a quarter of the HP actually dealt, floored: {events:?}"
     );
     assert_eq!(events[2], BattleEvent::Fainted { by_player: false });
     assert!(
@@ -787,23 +737,27 @@ fn a_fully_drained_single_move_player_forces_struggle_and_spends_no_pp() {
         0,
         "a forced Struggle spends no PP"
     );
-    assert_eq!(rng.draws(), 6);
+    assert_eq!(
+        rng.draws(),
+        6,
+        "2 setup + enemy selection (its one move lands at once, no PP \
+         screen in the wild rejection loop) + Struggle's 3 draws"
+    );
 }
 
-/// The all-spent diversion stands in for a slot upstream's bounded move
-/// cursor could have named (`src/battle_controller_player.c:552`-`:597`), so
-/// an index past the moveset stays a rejected action, not a free Struggle.
+/// Upstream's bounded move cursor can only ever name a real slot
+/// (`pokeemerald/src/battle_controller_player.c:552-597`).
 #[test]
 fn an_out_of_range_slot_is_rejected_even_when_every_move_is_spent() {
     let dex = Dex::new();
-    let mut drained = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let mut drained = max_iv_mon(&dex, CHARMANDER, 50, vec![TACKLE]);
     for _ in 0..drained.moves()[0].pp {
         drained.deduct_pp(0).unwrap();
     }
-    let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    let enemy = max_iv_mon(&dex, RATTATA, 5, vec![TACKLE]);
     let enemy_hp = enemy.current_hp();
 
-    let mut rng = SequenceRng::new([0]); // only the battle-start draw
+    let mut rng = SequenceRng::new([0]);
     let mut battle = Battle::new(dex, drained, enemy, false, &mut rng).unwrap();
     let player_hp = battle.player().current_hp();
     let rejected = battle
@@ -822,31 +776,24 @@ fn an_out_of_range_slot_is_rejected_even_when_every_move_is_spent() {
     assert!(battle.outcome().is_none());
 }
 
-/// `ABILITYEFFECT_MOVES_BLOCK` blocks every `sSoundMovesTable` entry on
-/// membership alone (`battle_util.c:686-692`, `:2659-2675`), not only the sound
-/// moves that lower a stat. Hyper Voice is a damaging entry, so a Soundproof
-/// defender takes no damage and the move reaches no accuracy, critical-hit,
-/// damage, or effect draw. Soundproof and Pressure are the same defender's one
-/// ability, so the blocked move's Pressure-aware cost is one
-/// (`battle_script_commands.c:1205`-`:1228`).
+/// Soundproof blocks by `sSoundMovesTable` membership alone
+/// (`battle_util.c:686-692`, `:2659-2675`), not just moves that lower a
+/// stat.
 #[test]
 fn a_soundproof_defender_blocks_hyper_voice_before_any_move_draw() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    let player = max_iv_mon(&dex, VOLTORB, 5, vec![TACKLE]);
     assert_eq!(
         player.ability(),
         AbilityId::SOUNDPROOF,
         "fixture sanity: the defender must hold Soundproof"
     );
-    // Fast enough that the player's escape is a roll, not a free run.
-    let enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(304), MoveId(33)]); // Hyper Voice, Tackle
+    let enemy = max_iv_mon(&dex, FAST_WILD_OPPONENT, 50, vec![HYPER_VOICE, TACKLE]);
     let starting_hp = player.current_hp();
     let enemy_pp = enemy.moves()[0].pp;
 
-    // battle start, turn number, selection (draw 0 -> slot 0: Hyper Voice),
-    // escape roll (fails); the block precedes any accuracy draw, and the script
-    // ends there, so any move draw exhausts the sequence and panics.
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    // Draw 0 selects Hyper Voice; the block precedes every later draw.
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -859,7 +806,7 @@ fn a_soundproof_defender_blocks_hyper_voice_before_any_move_draw() {
             },
             BattleEvent::SoundproofProtected {
                 by_player: false,
-                move_id: MoveId(304),
+                move_id: HYPER_VOICE,
             },
         ]
     );
@@ -881,25 +828,24 @@ fn a_soundproof_defender_blocks_hyper_voice_before_any_move_draw() {
 }
 
 /// `attackcanceler` blocks a Soundproof holder's sound move before its no-PP
-/// test (`battle_script_commands.c:932-939`), so a spent slot reports the block.
+/// test (`battle_script_commands.c:932-939`).
 #[test]
 fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    let player = max_iv_mon(&dex, VOLTORB, 5, vec![TACKLE]);
     assert_eq!(
         player.ability(),
         AbilityId::SOUNDPROOF,
         "fixture sanity: the defender must hold Soundproof"
     );
-    // Fast enough that the player's escape is a roll, not a free run.
-    let mut enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(45), MoveId(33)]); // Growl, Tackle
+    let mut enemy = max_iv_mon(&dex, FAST_WILD_OPPONENT, 50, vec![GROWL, TACKLE]);
     for _ in 0..enemy.moves()[0].pp {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // battle start, turn number, selection (draw 0 -> slot 0: Growl, spent
-    // but selectable), escape roll (fails); the block precedes any accuracy draw.
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    // Draw 0 selects the spent Growl slot (selectable regardless of PP);
+    // the block precedes any accuracy draw.
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
@@ -912,7 +858,7 @@ fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
             },
             BattleEvent::SoundproofProtected {
                 by_player: false,
-                move_id: MoveId(45),
+                move_id: GROWL,
             },
         ]
     );
@@ -924,22 +870,25 @@ fn a_soundproof_defender_blocks_a_spent_sound_slot_before_the_no_pp_abort() {
     assert_eq!(rng.draws(), 4);
 }
 
-/// Soundproof leaves through `BattleScript_SoundproofProtected`
-/// (`data/battle_scripts_1.s:4158`-`:4164`, `STRINGID_PKMNSXBLOCKSY`): the
-/// ability blocks the move itself. That is a different observable result from
-/// `BattleScript_AbilityNoStatLoss`'s prevented stat drop
-/// (`:4116`-`:4120`, `STRINGID_PKMNPREVENTSSTATLOSSWITH`), which is what
-/// [`BattleEvent::StatLossPrevented`] reports, the way Limber's move-wide block
-/// has its own statless [`BattleEvent::LimberProtected`].
+/// Soundproof's block resolves through `BattleScript_SoundproofProtected`
+/// (`data/battle_scripts_1.s:4158-4164`), a different observable result from
+/// `BattleScript_AbilityNoStatLoss`'s prevented-stat-drop script
+/// (`:4116-4120`) that [`BattleEvent::StatLossPrevented`] reports.
 #[test]
 fn a_soundproof_block_is_not_reported_as_a_prevented_stat_loss() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 100, 5, vec![MoveId(33)]); // Voltorb: Soundproof
+    let player = max_iv_mon(&dex, VOLTORB, 5, vec![TACKLE]);
     assert_eq!(player.ability(), AbilityId::SOUNDPROOF);
-    let enemy = max_iv_mon(&dex, 288, 50, vec![MoveId(45), MoveId(33)]); // Growl, Tackle
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    let enemy = max_iv_mon(&dex, FAST_WILD_OPPONENT, 50, vec![GROWL, TACKLE]);
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::SoundproofProtected { .. })),
+        "the block itself must still be reported: {events:?}"
+    );
     assert!(
         !events
             .iter()
@@ -949,19 +898,13 @@ fn a_soundproof_block_is_not_reported_as_a_prevented_stat_loss() {
     );
 }
 
+/// A depleted slot's no-PP abort (`battle_script_commands.c:934-939`)
+/// precedes the Serene-Grace-conflict admissibility check.
 #[test]
 fn a_depleted_serene_grace_poison_slot_still_selects_and_fails_no_pp() {
     let dex = Dex::new();
-    // Dunsparce's primary ability slot is Serene Grace, so a landable
-    // Poison Sting against a healthy, non-Poison/Steel target is exactly
-    // what `secondary::ensure_admissible` refuses -- but only while the
-    // slot still has PP. Drained, `Cmd_attackcanceler`'s no-PP jump
-    // (`battle_script_commands.c:934`-`:939`) aborts before that check
-    // could matter, so construction and the per-turn re-screen must both
-    // accept it exactly like a drained unsupported-effect slot already
-    // does above.
-    let player = slow_runner_rattata(&dex); // slow: the run fails; healthy and poisonable
-    let mut enemy = max_iv_mon(&dex, 206, 10, vec![MoveId(40), MoveId(33)]); // Poison Sting, Tackle
+    let player = slow_runner_rattata(&dex);
+    let mut enemy = max_iv_mon(&dex, DUNSPARCE, 10, vec![POISON_STING, TACKLE]);
     assert_eq!(enemy.ability(), AbilityId::SERENE_GRACE);
     let tackle_pp = enemy.moves()[1].pp;
     for _ in 0..enemy.moves()[0].pp {
@@ -973,11 +916,8 @@ fn a_depleted_serene_grace_poison_slot_still_selects_and_fails_no_pp() {
         "fixture sanity: the slot is drained"
     );
 
-    // battle start, turn number, selection (draw 0 -> slot 0: the drained
-    // Poison Sting), escape roll (fails). No draw follows: the failed
-    // move draws zero, so any admissibility or effect-pipeline draw would
-    // panic this exactly-sized script.
-    let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+    // Draw 0 selects the drained Poison Sting slot.
+    let mut rng = SequenceRng::new([0, 0, 0, FAILED_ESCAPE_ROLL]);
     let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng)
         .expect("a depleted Serene-Grace-conflicting slot must not block construction");
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
@@ -991,7 +931,7 @@ fn a_depleted_serene_grace_poison_slot_still_selects_and_fails_no_pp() {
             },
             BattleEvent::FailedNoPp {
                 by_player: false,
-                move_id: MoveId(40),
+                move_id: POISON_STING,
             },
         ]
     );
