@@ -1,4 +1,10 @@
 //! Battle lifecycle, terminal outcomes, and experience-award behavior.
+//!
+//! Every scripted RNG here follows `Battle`'s draw order: one battle-start
+//! turn-number draw, then per turn the `start_turn` turn-number refresh,
+//! the opponent's move pick, and for each hit that resolves its accuracy,
+//! critical, damage-variance, and effect-chance draws. No matchup below
+//! ties on Speed, so `resolve_order` never draws.
 
 use crate::common::{max_iv_mon, max_iv_mon_with_personality, SequenceRng};
 use assets::{MoveId, SpeciesId};
@@ -51,6 +57,7 @@ fn take_turn_after_the_battle_ended_is_an_error() {
 
 #[test]
 fn full_wild_battle_runs_to_a_faint_and_reports_victory() {
+    /// Turn-number refresh, opponent's move pick, then both battlers' hits.
     const FULL_TURN: [u16; 10] = [
         MAX_ROLL,
         MAX_ROLL,
@@ -63,6 +70,8 @@ fn full_wild_battle_runs_to_a_faint_and_reports_victory() {
         MAX_ROLL,
         MAX_ROLL,
     ];
+    /// The same, minus the enemy's hit: it faints to the player's before
+    /// its own resolves.
     const FINAL_TURN: [u16; 6] = [
         MAX_ROLL,
         MAX_ROLL,
