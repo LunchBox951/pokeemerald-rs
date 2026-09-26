@@ -40,11 +40,8 @@ const MESSAGE_BOX_HEIGHT: u32 = 16;
 /// Every tileset carries this many palette banks.
 const TILESET_PALETTE_COUNT: usize = 16;
 
-/// A loaded asset pack: its bytes plus an id-sorted directory for lookups.
-///
-/// Cheap to query once loaded (an in-memory binary search, no per-call
-/// I/O). Not `Clone` — hold a reference, or your own `Rc`/`Arc`, rather
-/// than reloading.
+/// A loaded asset pack. Lookups after [`load`](Self::load) touch no I/O;
+/// the pack is not `Clone`, so share one by reference.
 #[derive(Debug)]
 pub struct AssetPack {
     bytes: Vec<u8>,
