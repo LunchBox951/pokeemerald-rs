@@ -9,7 +9,7 @@
 use assets::audio::{MemAccCondition, MemAccOp};
 use assets::{Song, SongEvent, VoiceGroupId};
 
-use super::{decode_track, song, write, CMD_VOICE};
+use super::{decode_track, song, write, CMD_PATT, CMD_VOICE};
 use crate::error::{ImportError, SongFault};
 use crate::fixture::RomFixture;
 use crate::reader::{GbaPtr, RomReader, ROM_BASE};
@@ -193,7 +193,8 @@ fn rom() -> Rom {
     header.extend(at(VOICEGROUP).raw().to_le_bytes());
     header.extend(at(TRACK_A).raw().to_le_bytes());
     header.extend(at(TRACK_B).raw().to_le_bytes());
-    // A pattern nested three deep, for the depth check.
+    // A pattern nested three deep, so the fourth encounter hits the
+    // engine's stack limit and terminates like FINE.
     let deep = at(FAULTS + 0x60).raw().to_le_bytes();
     let mut nested = vec![0xB3];
     nested.extend(deep);
@@ -360,19 +361,31 @@ fn reserved_jump_table_slots_terminate_like_fine() {
 }
 
 #[test]
-fn a_pattern_nested_past_the_engines_stack_is_refused() {
+fn a_pattern_nested_past_the_engines_stack_terminates_like_fine() {
     let rom = rom();
-    let err = decode_track(&rom.reader(), "audio/song/s", 0, at(FAULTS + 0x60)).unwrap_err();
-    assert!(
-        matches!(
-            err,
-            ImportError::Song {
-                fault: SongFault::PatternTooDeep,
-                ..
-            }
-        ),
-        "{err}"
-    );
+    let events = decode_track(&rom.reader(), "audio/song/s", 0, at(FAULTS + 0x60)).unwrap();
+    assert_eq!(events, vec![SongEvent::Fine]);
+}
+
+#[test]
+fn a_fourth_pattern_terminates_without_reading_its_target() {
+    // ply_patt checks patternLevel before reading the pattern pointer, so a
+    // missing fourth target must not stop the terminate-like-Fine outcome (m4a_1.s:851-867).
+    let mut bytes = vec![CMD_PATT];
+    bytes.extend((ROM_BASE + 5).to_le_bytes());
+    bytes.extend([CMD_PATT]);
+    bytes.extend((ROM_BASE + 10).to_le_bytes());
+    bytes.extend([CMD_PATT]);
+    bytes.extend((ROM_BASE + 15).to_le_bytes());
+    bytes.push(CMD_PATT);
+    let events = decode_track(
+        &RomReader::new(&bytes),
+        "audio/song/deep",
+        0,
+        GbaPtr::at(ROM_BASE),
+    )
+    .expect("a fourth PATT terminates the track without dereferencing it");
+    assert_eq!(events, vec![SongEvent::Fine]);
 }
 
 #[test]

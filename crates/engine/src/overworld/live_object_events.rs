@@ -1,16 +1,11 @@
-//! A map-scoped collection of live object-event state, keyed by `local_id`
-//! and seeded in declaration order from a map's authored templates.
+//! A map's live object-event state, seeded once from its authored templates.
 //!
-//! Upstream builds this once per map lifetime with a loop over its authored
-//! `objectEventTemplates`, in array order (`TrySpawnObjectEvents`,
-//! `event_object_movement.c:1645-1673`), delegating each slot's position,
-//! previous position, elevation, facing, and movement initialization to
-//! `InitObjectEventStateFromTemplate` (`event_object_movement.c:1287-1330`).
-//! [`ObjectEventCollection`] models that non-sprite half: every authored
-//! template gets one live [`ObjectEventState`] up front, regardless of hide
-//! flag or camera spawn radius -- both stay query-time concerns of
-//! [`super::visible_object_event_at`] and [`super::object_event_is_in_view`],
-//! not this collection (see its own boundary note).
+//! Upstream spawns templates conditionally as the camera moves
+//! (`TrySpawnObjectEvents`, `event_object_movement.c:1645-1673`, delegating
+//! to `InitObjectEventStateFromTemplate`, `:1287-1330`).
+//! [`ObjectEventCollection`] instead seeds every template unconditionally
+//! and once; hide-flag and spawn-window admission stay query-time concerns
+//! of [`super::visible_object_event_at`] and [`super::object_event_is_in_view`].
 
 use assets::ObjectEvent;
 
@@ -26,40 +21,27 @@ pub struct LiveObjectEvent {
 }
 
 impl LiveObjectEvent {
-    /// Returns the immutable authored metadata (graphics, script, hide flag,
-    /// trainer type/range, declaration position) this entry was seeded from.
+    /// Returns the authored template this entry was seeded from.
     #[must_use]
     pub const fn template(&self) -> &'static ObjectEvent {
         self.template
     }
 
-    /// Returns this entry's live position, elevation, facing, and movement
-    /// state.
+    /// Returns this entry's live state.
     #[must_use]
     pub const fn state(&self) -> &ObjectEventState {
         &self.state
     }
 
     /// Returns mutable access to this entry's live state; the template
-    /// metadata above is never written back to.
+    /// above is never written back to.
     pub fn state_mut(&mut self) -> &mut ObjectEventState {
         &mut self.state
     }
 }
 
-/// One map's live object-event state, keyed by `local_id` and seeded in
-/// declaration order from its authored templates.
-///
-/// Models the non-sprite half of upstream's per-map template loop
-/// (`TrySpawnObjectEvents`, `event_object_movement.c:1645-1673`), which repeatedly, as the camera
-/// moves, spawns each template not yet spawned and still in range and unhidden. This collection
-/// instead seeds every template exactly once, unconditional on hide flag or camera radius, into a
-/// fixed, map-lifetime `Vec` with exactly one live entry per authored template -- sprite/graphics
-/// setup, the camera-radius spawn/despawn lifecycle, and object-event slot reuse are not modelled.
-/// Hide-flag visibility and camera admission remain the query-time concerns
-/// [`super::visible_object_event_at`] and [`super::object_event_is_in_view`] already implement over
-/// the static templates; nothing in this module consumes them yet, and this collection is not yet
-/// wired into any map runtime, rendering, collision, interaction, or sight query.
+/// One map's live object-event state, one entry per authored template, in
+/// declaration order.
 #[derive(Debug, Clone)]
 pub struct ObjectEventCollection {
     entries: Vec<LiveObjectEvent>,
@@ -80,8 +62,9 @@ impl ObjectEventCollection {
         }
     }
 
-    /// Returns the live entry whose template declares `local_id`, following
-    /// upstream's linear `localId` scan (`GetObjectEventIdByLocalId`,
+    /// Returns the entry whose template declares `local_id`, or the first
+    /// such entry in declaration order if `local_id` repeats, matching
+    /// upstream's linear scan (`GetObjectEventIdByLocalId`,
     /// `event_object_movement.c:1275-1285`).
     #[must_use]
     pub fn get(&self, local_id: u8) -> Option<&LiveObjectEvent> {
@@ -90,8 +73,7 @@ impl ObjectEventCollection {
             .find(|entry| entry.template.local_id == local_id)
     }
 
-    /// Returns mutable access to the live entry whose template declares
-    /// `local_id`.
+    /// Returns mutable access to the entry [`Self::get`] would return.
     pub fn get_mut(&mut self, local_id: u8) -> Option<&mut LiveObjectEvent> {
         self.entries
             .iter_mut()
@@ -101,13 +83,12 @@ impl ObjectEventCollection {
     /// Iterates entries at `(x, y, elevation)` by *live* position, in
     /// declaration order.
     ///
-    /// Either the entry's or the query's elevation may be
-    /// [`crate::overworld::collision::ELEVATION_TRANSITION`]. Mirrors upstream's
-    /// `GetObjectEventIdByPosition`/`ObjectEventDoesElevationMatch`
-    /// (`event_object_movement.c:2192-2215`), which scan live
-    /// `currentCoords`/`currentElevation` -- unlike
-    /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`], which scans the
-    /// static templates' authored coordinates instead.
+    /// Unlike [`crate::overworld::map_runtime::MapRuntime::object_events_at`],
+    /// which scans authored template coordinates, this scans live position
+    /// and elevation. Either side's elevation may be
+    /// [`crate::overworld::collision::ELEVATION_TRANSITION`] to match the
+    /// other, mirroring upstream's `GetObjectEventIdByPosition`/
+    /// `ObjectEventDoesElevationMatch` (`event_object_movement.c:2192-2215`).
     pub fn object_events_at(
         &self,
         x: i32,
@@ -226,9 +207,6 @@ mod tests {
 
     #[test]
     fn object_events_at_uses_live_positions_and_preserves_declaration_order() {
-        // Declared in the opposite order from how they end up stacked, so a
-        // result of [1, 2] proves the scan follows declaration order rather
-        // than incidentally matching insertion or walk order.
         let templates = leaked(vec![object(1, 0, 0, 3), object(2, 5, 5, 3)]);
         let mut collection = ObjectEventCollection::from_templates(templates);
 
@@ -264,7 +242,6 @@ mod tests {
             "local_id 2's vacated template tile must no longer report it"
         );
 
-        // Walk local_id 2 onto local_id 1's live tile to stack them.
         for _ in 0..5 {
             collection
                 .get_mut(2)

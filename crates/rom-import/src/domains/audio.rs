@@ -16,6 +16,17 @@
 //! DPCM-compressed and refused: the pack stores PCM only, and no instrument
 //! in scope is compressed.
 //!
+//! `SoundMainRAM` interpolates toward the byte right after the `size` bytes
+//! (`pokeemerald/src/m4a_1.s:399-407`); `crates/xtask/src/extract/wav.rs`'s
+//! module docs own the guard-sample contract wav2agb's payload writer
+//! produces. This reader always takes that one ROM byte. With an `agbl`
+//! trim it is the retained encoded sample the extractor keeps. Without one,
+//! the ROM holds wav2agb's zero alignment padding, matching the extractor's
+//! synthesized `0`, unless `size` is a multiple of four: then the ROM byte
+//! is whatever the linker placed next and the two backends can differ. This
+//! reader does not detect that case and uses `0` only when the read would
+//! run off the image.
+//!
 //! A programmable wave is the bare 16-byte table CGB channel 3 plays.
 //!
 //! # Voicegroups
@@ -147,13 +158,21 @@ pub(crate) fn direct_sound(
             field: "WaveData.size",
         });
     }
-    let data = reader
+    let mut data: Vec<i8> = reader
         .slice_at(base + len_usize(WAVE_HEADER_BYTES), len_usize(size))?
         .iter()
         .map(|&byte| i8::from_le_bytes([byte]))
         .collect();
+    // Retain the ROM byte past `size`: the sample `SoundMainRAM`
+    // interpolates toward (module docs above; `converter.cpp:77-90,399-401`).
+    // It is read unconditionally; `0` stands in only when the read runs off
+    // the image.
+    let guard = reader
+        .u8(base + len_usize(WAVE_HEADER_BYTES) + len_usize(size))
+        .unwrap_or(0);
+    data.push(i8::from_le_bytes([guard]));
     let looping = status & WAVE_STATUS_LOOP != 0;
-    let sample = DirectSoundSample::new(freq, looping.then_some(loop_start), data)
+    let sample = DirectSoundSample::new(freq, looping.then_some(loop_start), size, data)
         .map_err(|source| ImportError::Audio { id, source })?;
     Ok(raw_entry(
         id.to_owned(),

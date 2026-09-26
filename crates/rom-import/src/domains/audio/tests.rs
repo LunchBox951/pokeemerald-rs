@@ -17,7 +17,7 @@ use pack_format::PackWriter;
 use super::{direct_sound, programmable_wave, voicegroup, write};
 use crate::error::ImportError;
 use crate::fixture::RomFixture;
-use crate::reader::{GbaPtr, ROM_BASE};
+use crate::reader::{GbaPtr, RomReader, ROM_BASE};
 use crate::rom::Rom;
 use crate::roots::{AudioRoots, KeysplitRoot, Roots, SampleRoot, SongRoot, VoicegroupRoot};
 
@@ -51,6 +51,13 @@ const PAST_THE_ROM: u32 = 0x00FF_FFFC;
 
 const LOOPED_PCM: [u8; 6] = [0x00, 0x7F, 0x80, 0xFF, 0x01, 0xFE];
 const ONE_SHOT_PCM: [u8; 3] = [1, 2, 3];
+/// The byte wav2agb's binary payload writer would retain past `LOOPED_PCM`'s
+/// declared `WaveData.size`: a real ROM always has one, since it always has
+/// more image after a sample (module docs above).
+const LOOPED_GUARD: u8 = 0x2A;
+/// Same as [`LOOPED_GUARD`], for `ONE_SHOT_PCM`. A different, negative value
+/// so the two guards are not confusable in a failing assertion.
+const ONE_SHOT_GUARD: u8 = 0xF6;
 const WAVE_TABLE: [u8; 16] = [
     0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
 ];
@@ -109,9 +116,14 @@ fn rom() -> Rom {
             LOOPED as usize,
             &wave_data(0, 0x4000, 3_425_024, 2, &LOOPED_PCM),
         )
+        .write(LOOPED as usize + 16 + LOOPED_PCM.len(), &[LOOPED_GUARD])
         .write(
             ONE_SHOT as usize,
             &wave_data(0, 0, 13_700_096, 0, &ONE_SHOT_PCM),
+        )
+        .write(
+            ONE_SHOT as usize + 16 + ONE_SHOT_PCM.len(),
+            &[ONE_SHOT_GUARD],
         )
         .write(DPCM as usize, &wave_data(1, 0, 8, 0, &ONE_SHOT_PCM))
         .write(WAVE as usize, &WAVE_TABLE)
@@ -219,7 +231,10 @@ fn a_looping_sample_keeps_its_loop_and_pitch() {
     };
     assert_eq!(sample.base_frequency, 3_425_024);
     assert_eq!(sample.loop_start(), Some(2));
-    assert_eq!(sample.data(), [0, 127, -128, -1, 1, -2]);
+    assert_eq!(sample.sample_count(), 6);
+    // The guard byte planted right after `LOOPED_PCM` (42) is retained, not
+    // dropped or substituted with `data[loop_start]`.
+    assert_eq!(sample.data(), [0, 127, -128, -1, 1, -2, 42]);
 }
 
 #[test]
@@ -230,7 +245,25 @@ fn a_one_shot_sample_has_no_loop() {
         panic!("a DirectSound entry")
     };
     assert_eq!(sample.loop_start(), None);
-    assert_eq!(sample.data(), [1, 2, 3]);
+    assert_eq!(sample.sample_count(), 3);
+    // 0xF6 as a signed byte is -10.
+    assert_eq!(sample.data(), [1, 2, 3, -10]);
+}
+
+#[test]
+fn a_guard_byte_past_the_image_synthesizes_zero() {
+    // A hand-built image with nothing after its PCM: the guard read runs
+    // off the end, so this falls back to the same `0` the WAV extractor
+    // documents for a sample with no natural retained byte.
+    let bytes = wave_data(0, 0, 1 << 20, 0, &[9, 8, 7]);
+    let reader = RomReader::new(&bytes);
+    let root = sample("audio/sample/direct-sound/at-the-edge", 0, 3);
+    let entry = direct_sound(&reader, &root).expect("a sample with no bytes past its data");
+    let Sample::DirectSound(decoded) = Sample::decode(&entry.payload).unwrap() else {
+        panic!("a DirectSound entry")
+    };
+    assert_eq!(decoded.sample_count(), 3);
+    assert_eq!(decoded.data(), [9, 8, 7, 0]);
 }
 
 #[test]

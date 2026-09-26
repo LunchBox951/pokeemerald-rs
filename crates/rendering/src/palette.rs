@@ -68,7 +68,8 @@ pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
     (c << 3) | (c >> 2)
 }
 
-#[cfg(test)]
+/// The inverse of [`expand_5_to_8`]: the 5-bit palette-RAM precision an
+/// 8-bit channel came from (or blends at), discarding the low 3 bits.
 pub(crate) const fn compress_8_to_5(c: u8) -> u8 {
     c >> 3
 }
