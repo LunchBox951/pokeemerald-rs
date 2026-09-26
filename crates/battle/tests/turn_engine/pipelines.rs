@@ -24,9 +24,9 @@ const SPLASH: MoveId = MoveId(150);
 const FOCUS_ENERGY: MoveId = MoveId(116);
 const CHARGE: MoveId = MoveId(268);
 const DEFENSE_CURL: MoveId = MoveId(111);
-/// The only Electric damaging move this engine currently implements. Its
-/// `EFFECT_ALWAYS_HIT` skips only the accuracy draw; crit, damage-variance,
-/// and effect-chance draws still follow. Charge itself draws nothing.
+/// An Electric move whose `EFFECT_ALWAYS_HIT` skips only the accuracy draw;
+/// crit, damage-variance, and effect-chance draws still follow. Charge
+/// itself draws nothing.
 const SHOCK_WAVE: MoveId = MoveId(351);
 
 /// Grass/Poison; Overgrow occupies ability slot 0, the slot every
