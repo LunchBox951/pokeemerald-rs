@@ -3,9 +3,9 @@
 //! scheme, and the writer `cargo xtask extract` drives); this module's
 //! methods look up and decode individual entries.
 //!
-//! The pack file is never committed, embedded in a binary, or produced by
-//! CI — it only exists after a developer runs `cargo xtask extract`. Every
-//! accessor that needs its bytes surfaces that absence as
+//! The pack file is never committed, embedded in a binary, or kept as a CI
+//! artifact — it only exists on a disk where `cargo xtask extract` has run.
+//! Every accessor that needs its bytes surfaces that absence as
 //! [`PackError::NotFound`], whose message names the command to run.
 //!
 //! [`PackError`] is a separate enum from [`crate::error::AssetError`] —
@@ -53,10 +53,9 @@ pub struct AssetPack {
 
 impl AssetPack {
     /// The pack's default location: see [`pack_format::default_pack_path`]
-    /// for the full resolution order (env var, then OS user-data directory,
-    /// then the executable's own directory, then this checkout's bundled
-    /// pack — last, since a shipped binary resolves through the earlier
-    /// rungs and only a developer checkout needs it).
+    /// for the channel-specific resolution order (env var, then OS
+    /// user-data directory, then the executable's own directory). Only a
+    /// `dev` build falls through to this checkout's bundled pack.
     ///
     /// Never fails: the last rung always yields a path; a path that does
     /// not exist surfaces as [`PackError::NotFound`] from
