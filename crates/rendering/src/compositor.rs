@@ -2672,11 +2672,7 @@ mod tests {
 
     #[test]
     fn alpha_blend_end_to_end_over_two_bg_layers() {
-        // BG0 (r channel 0, priority 0, target1) alpha-blended with BG1 (r
-        // channel 31 -> byte 255, priority 1, target2) at eva=evb=8 (50/50)
-        // must land on the same 8-bit-oracle midpoint effects::alpha_blend
-        // computes in isolation (see effects tests'
-        // alpha_blend_hand_computed_50_50): (0*8+255*8)/16 = 127.
+        // eva=evb=8 (50/50) blend of r channels 0 and 255: (0*8+255*8)/16 = 127.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(0);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(31);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -2714,9 +2710,9 @@ mod tests {
 
     #[test]
     fn semi_transparent_obj_forces_blend_end_to_end_overriding_brighten() {
-        // BLDCNT selects BRIGHTEN, and OBJ is not even configured target1 --
-        // but a semi-transparent (OAM mode 1) sprite over a target2 BG must
-        // still alpha-blend, per OamEntry::with_mode's docs.
+        // OBJ is not configured target1 here, but a semi-transparent OBJ
+        // still forces alpha blend regardless of BLDCNT's selected effect
+        // (OamEntry::with_mode's contract).
         let (tiles, palette, map) = opaque_bg_fixture(31);
         let bg_layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
@@ -2757,8 +2753,8 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        // Same eva=evb=8 blend of r channels 0 and 255 as
-        // alpha_blend_end_to_end_over_two_bg_layers above: 127.
+        // eva=evb=8 blend of the sprite's r=0 and the BG's r=255:
+        // (0*8+255*8)/16 = 127.
         assert_eq!(
             fb.pixel(0, 0),
             Some(Rgb888 { r: 127, g: 0, b: 0 }),
@@ -2800,8 +2796,6 @@ mod tests {
 
     #[test]
     fn backdrop_blending_end_to_end_when_nothing_is_behind_the_front_layer() {
-        // A single BG (black, target1) alpha-blended against the backdrop
-        // (white, target2-backdrop) when nothing else is drawn underneath.
         let (tiles, palette, map) = opaque_bg_fixture(0);
         let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
         let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
@@ -2830,8 +2824,8 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        // eva=evb=8 blend of (0,0,0) and (255,255,255) per channel (8-bit
-        // oracle, module docs): (0*8+255*8)/16 = 127 on every channel.
+        // eva=evb=8 blend of black (0,0,0) and white (255,255,255) per
+        // channel: (0*8+255*8)/16 = 127 on every channel.
         assert_eq!(
             fb.pixel(0, 0),
             Some(Rgb888 {
@@ -2845,12 +2839,12 @@ mod tests {
 
     #[test]
     fn objwin_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
-        // Finding 1 end-to-end: opaque sprite B (priority 2, OAM index 0) sits
-        // under a priority-0 OBJWIN-mode sprite whose texel here is a
-        // transparent hole; a BG sits between them at priority 1. mgba's
-        // SPRITE_DRAW_PIXEL_*_OBJWIN transparent branch upgrades B's stored OBJ
-        // order to 0, so the OBJ layer (still B's color) beats the BG, even
-        // though B's own priority (2) is worse than the BG's (1).
+        // Opaque sprite B (priority 2) sits under a priority-0 OBJWIN-mode
+        // sprite whose texel here is a transparent hole, with a BG between
+        // them at priority 1. Per SpritePixel's flag-only-overwrite contract,
+        // that transparent texel upgrades B's stored priority to 0 without
+        // replacing its color, so the OBJ layer beats the BG despite B's own
+        // priority (2) being worse than the BG's (1).
         let (ts, pal, tm) = opaque_bg_fixture(7);
         let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
         let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
@@ -2900,8 +2894,6 @@ mod tests {
             "the OBJWIN hole upgrades B to priority 0, beating the BG"
         );
 
-        // Control: without the OBJWIN sprite, B stays priority 2 and the
-        // priority-1 BG wins.
         let control_entries = [b_opaque_prio2];
         let control_sprites = SpriteLayer::new(&control_entries, &shared, &shared, &palette);
         let control_fb = compose_frame(&control_sprites, &slots);
@@ -2915,15 +2907,11 @@ mod tests {
     #[test]
     fn transparent_semi_transparent_obj_reblends_a_normal_objs_retained_variant_color() {
         // A transparent, better-priority semi-transparent OBJ promotes
-        // priority over an already
-        // variant-brightened worse-priority Normal OBJ without replacing its
-        // color (SpritePixel::color_semi_transparent, sprite.rs). mGBA bakes
-        // that worse-priority Normal OBJ's own draw-time variant into its
-        // stored color (`software-obj.c:177-203`), keeps that color through
-        // the promoting entry's flag-only overwrite (`software-obj.c:120-126`),
-        // and brightens the surviving pixel again in the reblend postpass
-        // (`video-software.c:982-1013`) -- a double brighten this crate must
-        // reproduce.
+        // priority over an already-brightened worse-priority Normal OBJ
+        // without replacing its color (SpritePixel::color_semi_transparent).
+        // mGBA re-brightens that surviving color again in its reblend
+        // postpass (`video-software.c:982-1013`), so this crate must double-
+        // brighten it too.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(1); // BG0: priority 1, not target2
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(2); // BG1: priority 2, target2
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -3009,7 +2997,7 @@ mod tests {
 
     #[test]
     fn semi_transparent_obj_reblend_brightens_with_a_deeper_enabled_target2_bg() {
-        // End-to-end: a semi-transparent OBJ (forced alpha) sits over BG_a
+        // A semi-transparent OBJ (forced alpha) sits over BG_a
         // (priority 1, its immediate neighbour, NOT a target2) with BG_b
         // (priority 2, a target2) enabled deeper in the frame. See
         // effects::resolve_pixel_color's contract for why a global target2
@@ -3026,7 +3014,7 @@ mod tests {
 
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
@@ -3072,8 +3060,6 @@ mod tests {
             "a deeper enabled target2 BG clears the variant, but the surviving reblend OBJ is postprocessed to white"
         );
 
-        // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
-        // survives -> the OBJ is brightened to white.
         let mut control_color = base_color;
         control_color.target2 = LayerTargets::default();
         let control_effects = FrameEffects {
@@ -3088,24 +3074,14 @@ mod tests {
         );
     }
 
-    // -- S-2, issue #329: per-scanline OAM admission budget ----------------
-
     #[test]
     fn compositor_agrees_between_the_objwin_mask_and_visible_sprite_layer_under_exhaustion() {
-        // The OBJWIN mask and the visible OBJ layer are gated by the exact
-        // same per-scanline OAM admission stage (`crate::oam_budget`), so
-        // they must move together as the scanline's cycle budget is
-        // exhausted or not -- neither can show a late sprite the other has
-        // already dropped.
-        //
-        // Two late entries: an OBJWIN-mode sprite at x=0 (would enable BG1
-        // there via the `obj_window` mask) and a Normal-mode sprite at
-        // x=100 (would beat BG0 there by priority). Both cost 62 (64-px
-        // wide, on-screen x) -- identical to the transparent fillers ahead
-        // of them -- so the documented 1210-budget cutoff at OAM index 19
-        // (`oam_budget.rs`) applies uniformly across the whole array: 19
-        // fillers exhaust the budget before either late entry is reached,
-        // 17 fillers leave both comfortably inside it.
+        // Both late entries cost 62 (64px wide, on-screen), identical to the
+        // filler sprites ahead of them, so the oam_budget cutoff at OAM index
+        // 19 (`oam_budget.rs`) applies uniformly: 19 fillers exhaust it
+        // before either late entry is reached, 17 leave both inside it. The
+        // OBJWIN mask and the visible OBJ layer both read that one cached
+        // admission decision (`crate::oam_budget`), so they move together.
         let (bg0_tiles, bg0_palette, bg0_map) = opaque_bg_fixture(9);
         let bg0 = crate::bg::BgLayer::new(&bg0_tiles, &bg0_palette, &bg0_map);
         let (bg1_tiles, bg1_palette, bg1_map) = opaque_bg_fixture(4);
@@ -3119,7 +3095,7 @@ mod tests {
         two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0: opaque (index 15)
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31);
         let sprite_palette = Palette::new(sprite_colors);
 
         let wide_64 = |x_raw: u16, tile: u16| {
@@ -3431,16 +3407,13 @@ mod tests {
 
     #[test]
     fn objwin_slow_path_reblends_a_normal_obj_that_is_not_a_target1_layer() {
-        // End-to-end version of effects::resolve_pixel_color's
-        // `objwin_slow_path_reblends_an_obj_that_is_not_even_a_target1_layer`
-        // unit test: OBJWIN enabled with a blend-enable bit that differs
-        // from WINOUT's own is mGBA's `objwinSlowPath`
-        // (`mgba/src/gba/renderers/software-obj.c:176,180-192`), and it
-        // reblends a plain Normal-mode OBJ even though BLDCNT never marks it
-        // as a target1 layer.
+        // OBJWIN enabled with a blend-enable bit that differs from WINOUT's
+        // own triggers mGBA's `objwinSlowPath` (`software-obj.c:176,180-192`),
+        // which reblends a plain Normal-mode OBJ even though BLDCNT never
+        // marks it as a target1 layer.
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(31, 31, 31); // white
+        sprite_colors[15] = Bgr555::from_channels(31, 31, 31);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
@@ -3516,12 +3489,12 @@ mod tests {
 
     #[test]
     fn forced_alpha_blends_against_the_span_backdrop_variant() {
-        // A semi-transparent OBJ forces alpha with no second target below
-        // it, blending against the span's backdrop variant
-        // (`effects::backdrop_variant`), not the raw backdrop.
+        // No BG or OBJ is configured as the second target;
+        // effects::backdrop_variant supplies the span's backdrop as target2
+        // instead.
         let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
         let sprite_palette = Palette::new(sprite_colors);
         let entries = [OamEntry::new(
             0,
