@@ -978,10 +978,19 @@ mod tests {
         assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
     }
 
+    fn bpp4_tile_with_top_left_2x2(
+        palette_indices_by_row: [[u8; 2]; 2],
+    ) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+        const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / 2;
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+        for (row, [left, right]) in palette_indices_by_row.into_iter().enumerate() {
+            bytes[row * BYTES_PER_ROW] = (right << 4) | left;
+        }
+        bytes
+    }
+
     fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x21;
-        bytes[4] = 0x43;
+        let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(1, 0, 0);
@@ -1778,9 +1787,7 @@ mod tests {
 
     #[test]
     fn mosaic_snaps_obj_sampling_to_its_block_origin() {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 0x21;
-        bytes[4] = 0x43;
+        let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
         colors[1] = Bgr555::from_channels(0, 1, 0);
