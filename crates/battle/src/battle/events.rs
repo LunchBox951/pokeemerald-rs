@@ -285,6 +285,42 @@ pub enum BattleEvent {
         /// The move that inflicted poison.
         move_id: MoveId,
     },
+    /// A [`BattleEvent::Poisoned`] target's Synchronize reflected the status
+    /// back onto the original attacker after the target's own faint settlement
+    /// (`MOVEEND_SYNCHRONIZE_TARGET`, `battle_util.c:2971`-`:2986`;
+    /// `data/battle_scripts_1.s:265`-`:267`).
+    ///
+    /// This follows the [`BattleEvent::Poisoned`] event it reflects and
+    /// consumes no RNG: the reflection re-enters `SetMoveEffect` without
+    /// `typecalc` or `accuracycheck`.
+    PoisonedBySynchronize {
+        /// Whether the player used the poisoning move.
+        by_player: bool,
+        /// The move whose poison was reflected.
+        move_id: MoveId,
+    },
+    /// A poison reflection's original attacker was protected by its own
+    /// [`AbilityId::IMMUNITY`] (`BattleScript_PSNPrevention`,
+    /// `battle_script_commands.c:2300`-`:2319`).
+    ///
+    /// This follows the [`BattleEvent::Poisoned`] event it reflects.
+    SynchronizeImmunityProtected {
+        /// Whether the player used the poisoning move.
+        by_player: bool,
+        /// The move whose poison was reflected.
+        move_id: MoveId,
+    },
+    /// A poison reflection's original attacker was protected by its own
+    /// Poison or Steel typing (`BattleScript_PSNPrevention`,
+    /// `battle_script_commands.c:2320`-`:2329`).
+    ///
+    /// This follows the [`BattleEvent::Poisoned`] event it reflects.
+    SynchronizePoisonOrSteelTypeProtected {
+        /// Whether the player used the poisoning move.
+        by_player: bool,
+        /// The move whose poison was reflected.
+        move_id: MoveId,
+    },
     /// `STRINGID_PKMNHURTBYPOISON` (`data/battle_scripts_1.s:3736-3737`).
     HurtByPoison {
         /// Whether the player's battler was hurt.

@@ -31,11 +31,19 @@
 //! composed frame into `platform`'s pixel format for the frame loop
 //! (windowed or headless) to present.
 //!
+//! [`palette_fade`] models the front-end's normal CPU palette fade
+//! (`BeginNormalPaletteFade`/`UpdatePaletteFade`'s `NORMAL_FADE` scheduling,
+//! `pokeemerald/src/palette.c`) over a retained [`Framebuffer`], using
+//! `BlendPalette`'s per-channel signed delta (`pokeemerald/src/util.c`) —
+//! deliberately distinct from [`effects::brighten`]/[`effects::darken`]'s
+//! hardware `BLDY` packed-lane rounding.
+//!
 //! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
 //! Behaviour is transcribed from `pokeemerald/src/palette.c`,
-//! `pokeemerald/src/bg.c`, and `pokeemerald/src/sprite.c` — verified against
-//! `mgba`'s software renderer as the hardware-behaviour reference — never
-//! copied verbatim `(no-verbatim, behavioral-fidelity)`.
+//! `pokeemerald/src/bg.c`, `pokeemerald/src/sprite.c`, and
+//! `pokeemerald/src/util.c` — verified against `mgba`'s software renderer as
+//! the hardware-behaviour reference — never copied verbatim
+//! `(no-verbatim, behavioral-fidelity)`.
 
 pub mod affine;
 pub mod bg;
@@ -48,6 +56,7 @@ pub mod mosaic;
 pub mod oam;
 mod oam_budget;
 pub mod palette;
+pub mod palette_fade;
 pub mod sprite;
 mod sprite_affine;
 pub mod tile;
@@ -66,6 +75,7 @@ pub use framebuffer::Framebuffer;
 pub use mosaic::{MosaicConfig, MosaicSize};
 pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
 pub use palette::{Bgr555, Palette, Rgb888};
+pub use palette_fade::{NormalPaletteFade, PaletteFadeStatus, PaletteFadeTarget};
 pub use sprite::{SpriteLayer, SpritePixel};
 pub use tile::{BitDepth, Tile, Tileset};
 pub use tilemap::{ScreenEntry, Tilemap};

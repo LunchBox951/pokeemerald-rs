@@ -1,14 +1,7 @@
 //! Unit tests for [`super::OverworldScene`] and its private helpers.
-//!
-//! [`overworld_scene_from_pack_composes_a_non_blank_deterministic_frame`]
-//! builds a small **synthetic** pack in memory (mirroring
-//! `assets::pack::tests`' fixture style -- CI has no `pokeemerald/`
-//! checkout and no real pack) and exercises the full
-//! `OverworldScene::from_pack` + `compose` pipeline against it. The one
-//! exception, [`real_pack_composes_non_blank_deterministic_overworld_frames`],
-//! is `#[ignore]`d and needs a real local pack.
 
 use std::collections::HashMap;
+use std::mem::size_of;
 
 use super::{
     layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
@@ -17,18 +10,13 @@ use super::{
 use assets::{AssetPack, ImageRef, LayoutId, MapLayout, MovementType, ObjectEvent, TrainerType};
 use engine::overworld::{Direction, PlayerState};
 
-// -- `DEFAULT_ROOM_MAP_ID` ----------------------------------------------------
-
-/// [`DEFAULT_ROOM_MAP_ID`]'s own doc comment: kept as an independent literal
-/// (rather than importing `crate::new_game::SPAWN_MAP_ID`, which would cycle
-/// this module's dependency on `new_game`) -- pin here that the two still
-/// agree, so a future edit to either can't silently drift the other.
+/// `DEFAULT_ROOM_MAP_ID` is a literal rather than an import of
+/// `crate::new_game::SPAWN_MAP_ID`, to avoid a cyclic dependency on
+/// `new_game`; this guards the two values against drifting apart.
 #[test]
 fn default_room_map_id_matches_new_games_spawn_map_id() {
     assert_eq!(DEFAULT_ROOM_MAP_ID, crate::new_game::SPAWN_MAP_ID);
 }
-
-// -- `resolve_tileset_pack_name` / `layout_pack_name` -----------------------
 
 #[test]
 fn resolve_tileset_pack_name_covers_every_bundled_tileset() {
@@ -69,8 +57,6 @@ fn layout_pack_name_strips_the_prefix_and_lowercases() {
         "littleroot_town_professor_birchs_lab_with_table"
     );
 }
-
-// -- `pack_4bpp_region` ------------------------------------------------------
 
 #[test]
 fn pack_4bpp_region_rejects_a_payload_shorter_than_declared_dimensions() {
@@ -151,7 +137,6 @@ fn pack_4bpp_region_packs_palette_index_15_unchanged() {
 
 #[test]
 fn pack_4bpp_region_crops_the_requested_sub_rectangle() {
-    // 16x8 (2x1 tiles): left tile all pixel value 3, right tile all value 4.
     let mut pixels = vec![3u8; 16 * 8];
     for y in 0..8 {
         pixels[y * 16 + 8..y * 16 + 16].fill(4);
@@ -168,8 +153,6 @@ fn pack_4bpp_region_crops_the_requested_sub_rectangle() {
     assert_eq!(tileset.tile(0).unwrap().index(0, 0), 4);
 }
 
-// -- `OverworldSceneError` ---------------------------------------------------
-
 #[test]
 fn is_pack_missing_is_true_only_for_not_found() {
     let missing = OverworldSceneError::from(assets::PackError::NotFound("/x".into()));
@@ -180,9 +163,6 @@ fn is_pack_missing_is_true_only_for_not_found() {
 
 #[test]
 fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
-    // Mirrors `crate::title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`'s
-    // reasoning: this crate's tests run with `cargo test`'s cwd set to
-    // `crates/pokeemerald-rs`, which never has `assets-pack/`.
     if AssetPack::default_path().is_file() {
         return;
     }
@@ -192,12 +172,9 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
 
 #[test]
 fn load_repo_default_room_looks_only_at_the_checkout_pack() {
-    // The point of the repo-pinned loader: it must never consult
-    // `AssetPack::default_path`'s earlier rungs. With no checkout pack
-    // extracted it reports "pack missing" even where a user pack *is*
-    // installed (which `load_default_room` would happily load instead),
-    // so `xtask`'s smoke e2e can never validate the wrong bytes
-    // `(test-ratchet)`.
+    // Unlike `load_default_room`, this loader must never fall back to
+    // `AssetPack::default_path`'s later search rungs: with no checkout pack
+    // it reports "pack missing" even when a user pack is installed.
     if pack_format::repo_pack_path().is_file() {
         return;
     }
@@ -207,10 +184,6 @@ fn load_repo_default_room_looks_only_at_the_checkout_pack() {
 
 #[test]
 fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
-    // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
-    // (this function's own doc comment): `load_room` fails at the same
-    // `AssetPack::load_default` call, before it ever reaches the `map_id`
-    // lookup that's the only thing distinguishing it from `load_default_room`.
     if AssetPack::default_path().is_file() {
         return;
     }
@@ -223,12 +196,9 @@ fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     assert!(err.is_pack_missing());
 }
 
-// -- End-to-end against a synthetic pack -------------------------------------
-
-/// One directory entry for [`write_synthetic_pack`], mirroring
-/// `assets::pack::tests`' own fixture-building style (that module's helper
-/// is private to `assets`, so this is a small independent copy rather than
-/// a shared one).
+/// One directory entry for [`write_synthetic_pack`]; a private copy of
+/// `assets::pack::tests`' own entry shape, which that module does not
+/// export.
 struct Entry {
     id: &'static str,
     kind_tag: u8,
@@ -236,15 +206,40 @@ struct Entry {
     payload: Vec<u8>,
 }
 
-/// Serialize `entries` (sorted by id, as the real format requires -- see
-/// `assets::pack`'s module docs) into a version-1 pack file's bytes.
+const IMAGE_KIND_TAG: u8 = 0;
+const PALETTE_KIND_TAG: u8 = 1;
+const RAW_KIND_TAG: u8 = 2;
+
+const METATILE_RAW_ENTRY_COUNT: usize = 8;
+const BORDER_CELL_COUNT: usize = 4;
+/// `METATILE_LAYER_TYPE_COVERED`'s bit: the bottom/middle layers draw the
+/// opaque tile and the top stays transparent, so the player OBJ (drawn
+/// between the middle and top layers) is never hidden by this fixture's
+/// otherwise-uniform world content.
+const COVERED_LAYER_TYPE_BITS: u16 = 1 << 12;
+const WALKABLE_ELEVATION: u8 = 3;
+const FIRST_SPECIAL_METATILE_ID: u16 = 1;
+const GROUND_PALETTE_INDEX: u8 = 5;
+const SPRITE_PIXEL_PALETTE_INDEX: u8 = 9;
+const RED_BGR555: u16 = 0x001F;
+const BLUE_BGR555: u16 = 0x7C00;
+const TILESET_PALETTE_BANK_COUNT: u8 = 16;
+const SPRITE_PALETTE_COLOR_COUNT: u16 = 16;
+
+/// Serializes `entries`, sorted by id as the pack format requires, into a
+/// pack file's bytes.
 fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
     entries.sort_by(|a, b| a.id.cmp(b.id));
 
-    let header_size = 8 + 4 + 4;
+    let header_size = assets::pack::MAGIC.len() + size_of::<u32>() + size_of::<u32>();
     let mut directory_size = 0usize;
     for e in &entries {
-        directory_size += 2 + e.id.len() + 1 + 8 + 8 + e.meta.len();
+        directory_size += size_of::<u16>()
+            + e.id.len()
+            + size_of::<u8>()
+            + size_of::<u64>()
+            + size_of::<u64>()
+            + e.meta.len();
     }
     let mut offset = header_size + directory_size;
     let mut offsets = Vec::new();
@@ -279,140 +274,120 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
     m
 }
 
-/// A minimal pack covering exactly what [`super::OverworldScene::from_pack`]
-/// needs for one synthetic room: a single-tile "general" tileset (used as
-/// both primary and secondary), a `width` x `height` layout whose every
-/// cell -- and whose border block -- is that tileset's one opaque metatile,
-/// and Brendan's walking sheet/palette. Deliberately the tileset
-/// [`super::tileset_anims`] animates most (issue #160 review): with the
-/// fabricated `tileset/general/anim/...` entries below, every ordinary
-/// `from_pack` test keeps exercising the animated copy/patch/decode
-/// compose path in default CI, not just in the ignored real-pack tests.
-/// The animated regions all land in the primary block's padding here
-/// (this fixture's single metatile only references tile 0), so patched
-/// frames never change a composed pixel.
 fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     synthetic_overworld_pack_bytes_for("general", width, height)
 }
 
 /// [`synthetic_overworld_pack_bytes`], parameterized on the tileset pack
-/// name so a test can also build the *unanimated*-primary shape (e.g.
+/// name so a test can also build the *unanimated*-primary shape, e.g.
 /// `petalburg` -- a real bundled secondary tileset [`super::tileset_anims`]
-/// declares no regions for). Animation frame entries are fabricated only
-/// for `general`, the animated case.
+/// declares no regions for.
 fn synthetic_overworld_pack_bytes_for(tileset: &str, width: u16, height: u16) -> Vec<u8> {
     write_synthetic_pack(synthetic_overworld_pack_entries_for(tileset, width, height))
 }
 
-/// The entries behind [`synthetic_overworld_pack_bytes_for`], exposed so a
-/// test can corrupt one deliberately before writing the pack (e.g. the
-/// wrong-size animation-frame rejection test below).
+/// The entries behind [`synthetic_overworld_pack_bytes_for`]: one opaque
+/// metatile covering a `width` x `height` layout for `tileset`, plus
+/// Brendan's walking sheet/palette. Exposed directly so a test can corrupt
+/// one entry deliberately before writing the pack.
+///
+/// [`push_general_anim_frames`]'s frames (fabricated only for `"general"`)
+/// land in tile padding this fixture's one metatile never references, so
+/// `AnimatedTileset` patching stays exercised without changing a composed
+/// pixel.
 fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) -> Vec<Entry> {
-    // A single opaque 8x8 tile, every pixel palette index 5.
-    let tile_pixels = vec![5u8; 8 * 8];
+    let tile_pixels = vec![GROUND_PALETTE_INDEX; 8 * 8];
 
-    // metatiles.bin: one metatile (id 0), every one of its 8 raw entries
-    // pointing at combined tile index 0, palette bank 0, no flip -- raw
-    // `u16` value `0x0000` for all 8.
-    let metatiles: Vec<u8> = std::iter::repeat_n(0u16.to_le_bytes(), 8)
+    let metatiles: Vec<u8> = std::iter::repeat_n(0u16.to_le_bytes(), METATILE_RAW_ENTRY_COUNT)
         .flatten()
         .collect();
-    // metatile_attributes.bin: metatile 0 is `METATILE_LAYER_TYPE_COVERED`
-    // (1) -- bottom/middle draw the opaque tile, top stays transparent, so
-    // the player OBJ (drawn between the middle and top layers) is never
-    // hidden by this fixture's otherwise-uniform world content.
-    let metatile_attrs = (1u16 << 12).to_le_bytes().to_vec();
+    let metatile_attrs = COVERED_LAYER_TYPE_BITS.to_le_bytes().to_vec();
 
-    // A `width` x `height` grid, every cell metatile 0, elevation 3
-    // (`MetatileCell{metatile_id:0, collision:0, elevation:3}.pack()`).
     let grid_cell = assets::MetatileCell {
         metatile_id: 0,
         collision: 0,
-        elevation: 3,
+        elevation: WALKABLE_ELEVATION,
     }
     .pack();
     let cells = usize::from(width) * usize::from(height);
     let grid: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), cells)
         .flatten()
         .collect();
-    let border: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), 4)
+    let border: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), BORDER_CELL_COUNT)
         .flatten()
         .collect();
 
-    // Palette bank 0: color index 5 (matching `tile_pixels`) is bright red
-    // (raw BGR555 `0x001F`); every other bank is empty.
     let bank0_payload = {
-        let mut p = vec![0u8; 5 * 2]; // indices 0..4, unused, zeroed.
-        p.extend_from_slice(&0x001Fu16.to_le_bytes()); // index 5: red.
+        let mut p = vec![0u8; usize::from(GROUND_PALETTE_INDEX) * 2];
+        p.extend_from_slice(&RED_BGR555.to_le_bytes());
         p
     };
 
     let mut entries = vec![
         Entry {
             id: leaked(format!("tileset/{tileset}/tiles")),
-            kind_tag: 0,
+            kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(8, 8, 4),
             payload: tile_pixels,
         },
         Entry {
             id: leaked(format!("tileset/{tileset}/metatiles")),
-            kind_tag: 2,
+            kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: metatiles,
         },
         Entry {
             id: leaked(format!("tileset/{tileset}/metatile-attributes")),
-            kind_tag: 2,
+            kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: metatile_attrs,
         },
         Entry {
             id: "layout/map_test/map",
-            kind_tag: 2,
+            kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: grid,
         },
         Entry {
             id: "layout/map_test/border",
-            kind_tag: 2,
+            kind_tag: RAW_KIND_TAG,
             meta: vec![],
             payload: border,
         },
         Entry {
             id: "sprite/brendan/walking",
-            kind_tag: 0,
+            kind_tag: IMAGE_KIND_TAG,
             meta: image_meta(144, 32, 8),
-            // Every pixel palette index 9 (opaque, distinct from the world
-            // tileset's index 5).
-            payload: vec![9u8; 144 * 32],
+            // Opaque and distinct from GROUND_PALETTE_INDEX, so a composed
+            // frame can tell the sprite layer from the world layer.
+            payload: vec![SPRITE_PIXEL_PALETTE_INDEX; 144 * 32],
         },
         Entry {
             id: "sprite/palette/brendan",
-            kind_tag: 1,
-            meta: 16u16.to_le_bytes().to_vec(),
+            kind_tag: PALETTE_KIND_TAG,
+            meta: SPRITE_PALETTE_COLOR_COUNT.to_le_bytes().to_vec(),
             payload: {
-                let mut p = vec![0u8; 9 * 2]; // indices 0..9, unused, zeroed.
-                p.extend_from_slice(&0x7C00u16.to_le_bytes()); // index 9: blue.
-                p.resize(32, 0);
+                let mut p = vec![0u8; usize::from(SPRITE_PIXEL_PALETTE_INDEX) * 2];
+                p.extend_from_slice(&BLUE_BGR555.to_le_bytes());
+                p.resize(usize::from(SPRITE_PALETTE_COLOR_COUNT) * 2, 0);
                 p
             },
         },
     ];
-    for slot in 0..16u8 {
+    for slot in 0..TILESET_PALETTE_BANK_COUNT {
         let id: &'static str = leaked(format!("tileset/{tileset}/palette/{slot:02}"));
         entries.push(Entry {
             id,
-            kind_tag: 1,
-            meta: 0u16.to_le_bytes().to_vec(), // color_count 0, filled in below for bank 0.
+            kind_tag: PALETTE_KIND_TAG,
+            meta: 0u16.to_le_bytes().to_vec(),
             payload: vec![],
         });
     }
-    // Overwrite the bank-0 placeholder with the real payload above.
     if let Some(bank0) = entries
         .iter_mut()
         .find(|e| e.id == format!("tileset/{tileset}/palette/00"))
     {
-        bank0.meta = 6u16.to_le_bytes().to_vec();
+        bank0.meta = (u16::from(GROUND_PALETTE_INDEX) + 1).to_le_bytes().to_vec();
         bank0.payload = bank0_payload;
     }
 
@@ -424,15 +399,11 @@ fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) 
     entries
 }
 
-/// [`synthetic_overworld_pack_entries_for`]'s `"general"` entries, with one
-/// extra metatile per entry of `specials` (ids `1..`, each carrying that
-/// entry's behavior) appended to `metatiles`/`metatile-attributes` and each
-/// entry's own grid cell switched to reference its metatile -- everything
-/// else (collision, elevation, tile/palette bytes) stays exactly as the
-/// uniform fixture built it, so every special cell renders identically and
-/// differs only in the one byte `MapRuntime::metatile_behavior` reads. See
-/// [`synthetic_scene_with_special_tile`]/[`synthetic_scene_with_special_tiles`],
-/// which wrap this into a scene.
+/// [`synthetic_overworld_pack_entries_for`]'s `"general"` entries, with an
+/// extra metatile per entry of `specials` appended: same collision,
+/// elevation, and tile/palette bytes as the uniform fixture, differing only
+/// in the one byte `MapRuntime::metatile_behavior` reads, so every special
+/// cell renders identically to an ordinary one.
 fn synthetic_overworld_pack_entries_with_special_tiles(
     width: u16,
     height: u16,
@@ -441,11 +412,7 @@ fn synthetic_overworld_pack_entries_with_special_tiles(
     let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
 
     for (index, ((sx, sy), special_behavior)) in specials.iter().copied().enumerate() {
-        // metatiles.bin: each new metatile's raw entries are identical to
-        // metatile 0's (same combined tile index 0) -- only the *attribute*
-        // table below tells them apart, which is all `metatile_behavior`
-        // consults.
-        let metatile: Vec<u8> = std::iter::repeat_n(0u16.to_le_bytes(), 8)
+        let metatile: Vec<u8> = std::iter::repeat_n(0u16.to_le_bytes(), METATILE_RAW_ENTRY_COUNT)
             .flatten()
             .collect();
         let metatiles = entries
@@ -454,30 +421,23 @@ fn synthetic_overworld_pack_entries_with_special_tiles(
             .expect("the general fixture always fabricates its own metatiles entry");
         metatiles.payload.extend_from_slice(&metatile);
 
-        // metatile_attributes.bin: the new metatile keeps the same COVERED
-        // layer type as metatile 0 (fixture docs on why COVERED -- the player
-        // OBJ must never be hidden by it), only `behavior` differs.
-        let attr = ((1u16 << 12) | u16::from(special_behavior)).to_le_bytes();
+        let attr = (COVERED_LAYER_TYPE_BITS | u16::from(special_behavior)).to_le_bytes();
         let attrs = entries
             .iter_mut()
             .find(|e| e.id == "tileset/general/metatile-attributes")
             .expect("the general fixture always fabricates its own metatile-attributes entry");
         attrs.payload.extend_from_slice(&attr);
 
-        // layout/map_test/map: retarget this position's own cell to the new
-        // metatile id -- same collision (0, walkable) and elevation (3) as
-        // every other cell in the uniform fixture, so only its behavior
-        // differs.
         assert!(
             sx < width && sy < height,
             "special tile ({sx}, {sy}) must lie inside the {width}x{height} fixture"
         );
-        let metatile_id =
-            u16::try_from(index + 1).expect("a fixture never needs 65k special tiles");
+        let metatile_id = u16::try_from(index + usize::from(FIRST_SPECIAL_METATILE_ID))
+            .expect("a fixture never needs 65k special tiles");
         let cell = assets::MetatileCell {
             metatile_id,
             collision: 0,
-            elevation: 3,
+            elevation: WALKABLE_ELEVATION,
         }
         .pack();
         let grid = entries
@@ -491,14 +451,9 @@ fn synthetic_overworld_pack_entries_with_special_tiles(
     entries
 }
 
-/// One frame per numbered entry of every animated region
-/// [`super::tileset_anims`] declares for `general` (that module's own
-/// cadence table), so `AnimatedTileset::load` resolves real entries in the
-/// synthetic fixture and the animated compose path stays on in default CI
-/// ([`synthetic_overworld_pack_bytes`]'s doc comment). Each frame is
-/// exactly its region's transcribed upstream copy length (the table's
-/// `tiles` column) -- `load` rejects any other size -- shaped as an
-/// 8px-wide column of that many tiles.
+/// One frame per entry of every animated region [`super::tileset_anims`]
+/// declares for `general`: `AnimatedTileset::load` rejects a frame whose
+/// packed length disagrees with its region's declared tile count.
 fn push_general_anim_frames(entries: &mut Vec<Entry>) {
     for (anim, frame_count, tiles) in [
         ("flower", 3u8, 4u32),
@@ -510,33 +465,31 @@ fn push_general_anim_frames(entries: &mut Vec<Entry>) {
         for n in 0..frame_count {
             entries.push(Entry {
                 id: leaked(format!("tileset/general/anim/{anim}/{n}")),
-                kind_tag: 0,
+                kind_tag: IMAGE_KIND_TAG,
                 meta: image_meta(8, 8 * tiles, 4),
-                payload: vec![5u8; 8 * 8 * tiles as usize],
+                payload: vec![GROUND_PALETTE_INDEX; 8 * 8 * tiles as usize],
             });
         }
     }
 }
 
-/// Interns a formatted pack id for the synthetic [`Entry`]'s `&'static
-/// str` id field -- test-only, so the leak is bounded and deliberate.
+/// Test-only: leaks `id` to satisfy [`Entry`]'s `&'static str` id field. The
+/// leak is bounded by the fixture's own lifetime.
 fn leaked(id: String) -> &'static str {
     Box::leak(id.into_boxed_str())
 }
 
-/// The sprite palettes `OverworldScene::from_pack` loads *unconditionally*
-/// -- the four generic `npc_1..4` banks and the other protagonist's own
-/// (`npc::build_combined_palette`'s own doc comment) -- as empty (0-color)
-/// placeholders, which is enough for those lookups to succeed regardless of
-/// whether a fixture's object events reference any of them.
-///
-/// This fixture's player is `PlayerCharacter::Brendan`, so the "other
-/// protagonist" bank reads May's palette.
+/// The sprite palettes `OverworldScene::from_pack` loads unconditionally --
+/// the four generic `npc_1..4` banks and the other playable protagonist's
+/// own (see `npc::build_combined_palette`) -- as empty placeholders, so
+/// these lookups succeed regardless of whether a fixture's object events
+/// reference them. This fixture's player is Brendan, so the "other
+/// protagonist" bank is May's.
 fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
     let mut placeholder = |id: &'static str| {
         entries.push(Entry {
             id,
-            kind_tag: 1,
+            kind_tag: PALETTE_KIND_TAG,
             meta: 0u16.to_le_bytes().to_vec(),
             payload: vec![],
         });
@@ -549,11 +502,6 @@ fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
     placeholder("sprite/palette/may");
 }
 
-/// An object-event-free [`assets::MapEvents`] for
-/// [`super::OverworldScene::from_pack`]'s own tests, which don't exercise
-/// NPC rendering (the `npc` module's own tests and the real-pack tests
-/// below cover that) -- just need *a* `'static` events value to seed the
-/// scene.
 static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
     id: assets::MapId("MAP_TEST"),
     shared_events_map: None,
@@ -563,15 +511,12 @@ static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
     bg_events: &[],
 };
 
-/// An [`super::OverworldScene`] over a freshly written synthetic pack
-/// (no local `cargo xtask extract` output needed): a `width` x `height`
-/// room of one uniform opaque metatile, Brendan's sprite, and no object
-/// events. The scratch pack file is removed before returning -- the scene
-/// owns every byte it needs (that type's own docs).
+/// An [`super::OverworldScene`] over a freshly written, then removed,
+/// synthetic pack: a `width` x `height` room of one uniform opaque
+/// metatile, Brendan's sprite, and no object events.
 ///
-/// `pub(crate)`: `crate::flow::overworld_phase`'s own headless tests build
-/// an `OverworldPhase` around one of these, so they can drive
-/// `OverworldPhase::step` without a real pack.
+/// `pub(crate)` so `crate::flow::overworld_phase`'s headless tests can build
+/// an `OverworldPhase` around one without a real pack.
 pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene {
     synthetic_scene_result(
         synthetic_overworld_pack_bytes(width, height),
@@ -582,18 +527,14 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
     .expect("synthetic pack should decode cleanly")
 }
 
-/// [`synthetic_scene`], but the single cell at `special_pos` is a second,
-/// distinct metatile (id 1) whose behavior is `special_behavior` instead of
-/// ordinary ground (id 0, behavior `MB_NORMAL`) -- otherwise identical:
-/// fully walkable (no collision anywhere, including `special_pos`'s own
-/// neighbors), elevation 3 throughout.
+/// [`synthetic_scene`], but the cell at `special_pos` is a second, distinct
+/// metatile with `special_behavior` instead of ordinary ground
+/// (`MB_NORMAL`); otherwise identical: fully walkable, uniform elevation
+/// throughout.
 ///
-/// `crate::flow::overworld_phase`'s own headless tests (issue #194) use this
-/// to prove that a *legal, walkable* step in an arrow-warp tile's own
-/// direction warps instead of stepping -- something no bundled real map can
-/// exercise, since every arrow tile this port's own data reaches has its
-/// arrow direction impassable (`OverworldPhase::step`'s "Warp timing" docs;
-/// the Brendan's-house doormat's own `(8, 9)` is off-map).
+/// No bundled real map can exercise a legal step into an arrow-warp tile's
+/// own direction: every arrow tile this port's data reaches has that
+/// direction's neighboring cell impassable.
 pub(crate) fn synthetic_scene_with_special_tile(
     width: u16,
     height: u16,
@@ -607,9 +548,8 @@ pub(crate) fn synthetic_scene_with_special_tile(
 /// gets its own metatile id and behavior, everything else stays the uniform
 /// walkable fixture.
 ///
-/// `crate::flow::wild_encounter`'s own tests (issue #169's review follow-up)
-/// need two at once -- a land-encounter tile *and* a door-shaped warp tile on
-/// the same map -- to drive upstream's `ProcessPlayerFieldInput` precedence
+/// A land-encounter tile and a door-shaped warp tile coexisting on one map
+/// drives upstream's `ProcessPlayerFieldInput` precedence
 /// (`field_control_avatar.c:155-172`) through a real `OverworldPhase::step`,
 /// which no single-behavior fixture can express.
 pub(crate) fn synthetic_scene_with_special_tiles(
@@ -628,11 +568,8 @@ pub(crate) fn synthetic_scene_with_special_tiles(
     .expect("synthetic pack with special tiles should decode cleanly")
 }
 
-/// [`synthetic_scene`], but the cell at `pos` carries `elevation` instead
-/// of the fixture's uniform 3 (same metatile 0, walkable, `MB_NORMAL`).
-/// `crate::flow`'s save-continue tests use `ELEVATION_MULTI_LEVEL` (15)
-/// here to pin `saved_tile_placement`'s transition substitution -- a
-/// branch no uniform-elevation fixture can reach.
+/// [`synthetic_scene`], but the cell at `pos` carries `elevation` instead of
+/// the fixture's uniform ground elevation.
 pub(crate) fn synthetic_scene_with_cell_elevation(
     width: u16,
     height: u16,
@@ -665,8 +602,6 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
     .expect("synthetic pack with an elevated cell should decode cleanly")
 }
 
-/// [`synthetic_scene_with_special_tiles`], with each entry also naming its
-/// cell's elevation, as a warp tile on a transition-elevation cell needs.
 pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
     width: u16,
     height: u16,
@@ -679,8 +614,8 @@ pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
     let mut entries =
         synthetic_overworld_pack_entries_with_special_tiles(width, height, &behaviors);
     for (index, &((sx, sy), _, elevation)) in specials.iter().enumerate() {
-        let metatile_id =
-            u16::try_from(index + 1).expect("a fixture never needs 65k special tiles");
+        let metatile_id = u16::try_from(index + usize::from(FIRST_SPECIAL_METATILE_ID))
+            .expect("a fixture never needs 65k special tiles");
         let cell = assets::MetatileCell {
             metatile_id,
             collision: 0,
@@ -704,14 +639,8 @@ pub(crate) fn synthetic_scene_with_special_tiles_at_elevations(
 }
 
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
-/// the layout's tileset symbol: writes the scratch pack, runs
-/// [`super::OverworldScene::from_pack`], and returns its result -- so
-/// tests can assert on rejection errors and on non-`general` fixtures too.
-///
-/// No declared connections (issue #253): every existing caller's fixture is
-/// a single, self-contained room, so `synthetic_scene_result_with_connections`
-/// is the one that exercises `header.connections` -- this is the same
-/// fixture shape, with an empty connection list.
+/// the layout's tileset symbol, so a test can assert on rejection errors and
+/// on non-`general` fixtures too.
 fn synthetic_scene_result(
     pack_bytes: Vec<u8>,
     tileset_symbol: &'static str,
@@ -722,15 +651,11 @@ fn synthetic_scene_result(
 }
 
 /// [`synthetic_scene_result`], with `connections` threaded onto the
-/// synthetic room's own [`assets::MapHeader`] (issue #253) -- the one
-/// fixture path that lets a test build a room whose declared connections
-/// `super::OverworldScene::from_pack`'s own `resolve_connections` actually
-/// walks. `connections`' own `target` ids still resolve against the *real*
-/// generated `assets::MapHeaderTable`/`assets::LayoutTable` (mirroring
-/// `crate::flow::overworld_phase::connections::MapConnections`'s identical
-/// choice) -- there is no synthetic map-table stand-in -- so a connection
-/// test target must be a real bundled `MapId` whose own pack entry this
-/// fixture's `pack_bytes` also supplies.
+/// synthetic room's [`assets::MapHeader`]. A connection's `target` still
+/// resolves against the real generated `assets::MapHeaderTable`/
+/// `assets::LayoutTable` -- there is no synthetic map-table stand-in -- so a
+/// target must be a real bundled `MapId` whose pack entry `pack_bytes` also
+/// supplies.
 fn synthetic_scene_result_with_connections(
     pack_bytes: Vec<u8>,
     tileset_symbol: &'static str,
@@ -751,11 +676,7 @@ fn synthetic_scene_result_with_connections(
 /// [`synthetic_scene_result_with_connections`], with `events` -- rather than
 /// the always-empty [`NO_OBJECT_EVENTS`] -- threaded into
 /// `super::OverworldScene::from_pack`, so a test can exercise NPC rendering
-/// over a synthetic pack instead of needing a real one. The S-2/#334
-/// `HBlank`-interval-free budget regression fixture
-/// (`hblank_budget_regression_fixture`, below) is the one caller: it needs
-/// enough OAM entries to straddle the normal/reduced per-scanline budget
-/// cutoff, which no bundled real map reliably provides on one screen.
+/// over a synthetic pack instead of needing a real one.
 fn synthetic_scene_result_with_connections_and_events(
     pack_bytes: Vec<u8>,
     tileset_symbol: &'static str,
@@ -764,10 +685,8 @@ fn synthetic_scene_result_with_connections_and_events(
     connections: &'static [assets::MapConnection],
     events: &'static assets::MapEvents,
 ) -> Result<super::OverworldScene, OverworldSceneError> {
-    // pid + thread id distinguish concurrently-running tests' scratch
-    // packs with no shared mutable state `(oop-boundaries)`: the test
-    // harness runs each test on its own thread, and this function removes
-    // the file before returning, so one thread never has two packs alive.
+    // pid + thread id keep concurrently-running tests' scratch packs from
+    // colliding on the same path.
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-overworld-test-{}-{:?}.pack",
         std::process::id(),

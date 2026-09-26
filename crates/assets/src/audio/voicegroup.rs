@@ -121,8 +121,10 @@ pub struct NoiseVoice {
     pub base_key: u8,
     /// Hardware sound-length counter.
     pub length: u8,
-    /// LFSR width selector (`period & 1`): narrow (7-bit) when set, wide
-    /// (15-bit) periodic otherwise.
+    /// LFSR width selector, `0..=1`: narrow (7-bit) when `1`, wide (15-bit)
+    /// periodic when `0`. Upstream's `_voice_noise` macro stores only
+    /// `period & 1` (`asm/macros/music_voice.inc`), so no other byte value is
+    /// representable at playback.
     pub period: u8,
     pub envelope: Envelope,
     pub fixed_rate: bool,
@@ -300,6 +302,7 @@ impl From<DirectSoundModeTag> for DirectSoundMode {
 const NO_PAN_OVERRIDE: u8 = 0;
 const MAX_PAN_OVERRIDE: u8 = 127;
 const MAX_SQUARE_DUTY: u8 = 3;
+const MAX_NOISE_PERIOD: u8 = 1;
 
 fn write_pan(w: &mut Writer, pan: Option<u8>) {
     w.u8(pan.unwrap_or(NO_PAN_OVERRIDE));
@@ -323,6 +326,13 @@ fn check_pan_override(pan: Option<u8>) -> Result<(), AudioError> {
 fn check_square_duty(duty: u8) -> Result<(), AudioError> {
     if duty > MAX_SQUARE_DUTY {
         return Err(AudioError::SquareDutyOutOfRange(duty));
+    }
+    Ok(())
+}
+
+fn check_noise_period(period: u8) -> Result<(), AudioError> {
+    if period > MAX_NOISE_PERIOD {
+        return Err(AudioError::NoisePeriodOutOfRange(period));
     }
     Ok(())
 }
@@ -496,8 +506,9 @@ impl VoiceGroup {
     /// [`VOICE_SLOT_COUNT`], [`AudioError::IdTooLong`] when a referenced id
     /// cannot be encoded, [`AudioError::PanOverrideZero`] for `Some(0)` pan,
     /// [`AudioError::PanOverrideOutOfRange`] for a pan override outside
-    /// `1..=127`, or [`AudioError::SquareDutyOutOfRange`] for a square duty
-    /// selector outside `0..=3`.
+    /// `1..=127`, [`AudioError::SquareDutyOutOfRange`] for a square duty
+    /// selector outside `0..=3`, or [`AudioError::NoisePeriodOutOfRange`] for
+    /// a noise period outside `0..=1`.
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
             return Err(AudioError::TooManyVoiceSlots(slots.len()));
@@ -513,7 +524,8 @@ impl VoiceGroup {
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
                 VoiceEntry::Square2(v) => check_square_duty(v.duty)?,
-                VoiceEntry::Noise(_) | VoiceEntry::Empty => {}
+                VoiceEntry::Noise(v) => check_noise_period(v.period)?,
+                VoiceEntry::Empty => {}
             }
         }
         Ok(Self { slots })
@@ -556,8 +568,8 @@ impl VoiceGroup {
     /// # Errors
     ///
     /// Returns an [`AudioError`] for malformed data, invalid tags or ids,
-    /// out-of-range counts, an out-of-domain pan or square duty selector
-    /// (see [`Self::new`]), or trailing bytes.
+    /// out-of-range counts, an out-of-domain pan, square duty, or noise
+    /// period selector (see [`Self::new`]), or trailing bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let count = usize::from(r.u8()?);

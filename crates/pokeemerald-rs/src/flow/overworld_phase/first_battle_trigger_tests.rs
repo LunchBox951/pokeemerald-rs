@@ -871,6 +871,34 @@ fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
     );
 }
 
+/// A forced-movement landing on the trigger tile must not fire the coord
+/// event either (`pokeemerald/src/field_control_avatar.c:116-122`, `:155-161`).
+#[test]
+fn a_forced_movement_landing_on_the_trigger_tile_must_not_fire_the_coord_event() {
+    use engine::overworld::metatile_behavior::MB_MUDDY_SLOPE;
+
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase_with_special_tiles(
+        PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        &[(trigger_tile_cell(), MB_MUDDY_SLOPE)],
+    );
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.first_battle.is_none(),
+        "a forced-movement landing must not run the coord-event lookup at all"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "the trigger's own setvar never ran, so the rescue var must still read the \
+         on-frame guard's 1, not the coord event's 2"
+    );
+}
+
 /// Review regression (#231, finding 2b): the trigger also outranks the
 /// door-warp check (`field_control_avatar.c:155-161`, after
 /// `TryStartCoordEventScript` inside the same `TryStartStepBasedScript`) and

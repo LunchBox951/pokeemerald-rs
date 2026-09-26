@@ -18,7 +18,12 @@ use pokeemerald_rs::title::{TitleScene, TitleSceneError};
 
 use crate::Scene;
 
+mod directory;
 mod staging;
+
+#[cfg(windows)]
+use directory::claim_promoted_dir;
+use directory::{claim_staged_dir, rename_without_replacement, StagedDirClaim};
 
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
@@ -177,10 +182,34 @@ fn publish_generation<F>(
 where
     F: FnOnce() -> Result<(), RecordSnapshotError>,
 {
+    publish_generation_with(
+        scene,
+        output_dir,
+        rgb_bytes,
+        meta_bytes,
+        after_rgb_staged,
+        || {},
+    )
+}
+
+/// [`publish_generation`] with a hook between the staging directory's last
+/// identity check and its promoting rename, so tests can land a replacement in
+/// that gap.
+fn publish_generation_with<F>(
+    scene: Scene,
+    output_dir: &Path,
+    rgb_bytes: &[u8],
+    meta_bytes: &[u8],
+    after_rgb_staged: F,
+    before_rename: impl FnOnce(),
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
-    let (generation, staged_dir, generation_dir) = loop {
+    let (generation, staged_dir, generation_dir, mut staged_dir_claim) = loop {
         let generation = format!(
             "{}.generation-{}-{}",
             scene.name(),
@@ -189,30 +218,47 @@ where
         );
         let staged_dir = output_dir.join(format!(".{generation}.staged"));
         let generation_dir = output_dir.join(&generation);
-        // Cheap early skip only; `std::fs::create_dir`'s exclusivity is the actual guard.
+        // Only the atomic promotion decides whether the generation name is available.
         if generation_dir.exists() {
             continue;
         }
-        match std::fs::create_dir(&staged_dir) {
-            Ok(()) => break (generation, staged_dir, generation_dir),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
-            }
+        if let Some(claim) = create_and_claim_staged_dir(&staged_dir, claim_staged_dir)? {
+            break (generation, staged_dir, generation_dir, claim);
         }
     };
     let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
-    let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
-    let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
+    let rgb_name = format!("{}.rgb", scene.name());
+    let meta_name = format!("{}.meta", scene.name());
+    let staged_rgb = staged_dir.join(&rgb_name);
+    let staged_meta = staged_dir.join(&meta_name);
 
+    let mut renamed = false;
     let result = (|| {
-        std::fs::write(&staged_rgb, rgb_bytes)
+        staged_dir_claim
+            .write_payload(&staged_dir, &rgb_name, rgb_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
         after_rgb_staged()?;
-        std::fs::write(&staged_meta, meta_bytes)
+        staged_dir_claim
+            .write_payload(&staged_dir, &meta_name, meta_bytes)
             .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
-        std::fs::rename(&staged_dir, &generation_dir)
+        staged_dir_claim
+            .require_path(&staged_dir)
+            .map_err(|error| RecordSnapshotError::Write(staged_dir.clone(), error.to_string()))?;
+        staged_dir_claim.release_hold();
+        promote_staged_dir(&staged_dir, &generation_dir, before_rename)
             .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        renamed = true;
+        #[cfg(windows)]
+        {
+            staged_dir_claim = claim_promoted_dir(&generation_dir).map_err(|error| {
+                RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
+            })?;
+        }
+        staged_dir_claim
+            .require_path(&generation_dir)
+            .map_err(|error| {
+                RecordSnapshotError::Write(generation_dir.clone(), error.to_string())
+            })?;
         // See `staging` for the guard this stage-then-publish pair provides.
         let staged_pointer = stage_pointer(&pointer_path, format!("{generation}\n").as_bytes())
             .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
@@ -225,12 +271,64 @@ where
         ))
     })();
 
-    if result.is_err() {
-        // `staging` already cleans up its own candidate, respecting ownership.
-        let _ = std::fs::remove_dir_all(&staged_dir);
-        let _ = std::fs::remove_dir_all(&generation_dir);
+    result.map_err(|source| {
+        let retained = if renamed {
+            &generation_dir
+        } else {
+            &staged_dir
+        };
+        report_retained_directory(retained, &source)
+    })
+}
+
+// The rename binds to the staging pathname, not to the held handle, so a
+// replacement landing after the last identity check is promoted to the
+// generation name. The held handle's check against that name then refuses to
+// publish the pointer, and the directory is retained and reported like every
+// other failure (#1282's retention policy).
+fn promote_staged_dir(
+    staged: &Path,
+    generation: &Path,
+    before_rename: impl FnOnce(),
+) -> std::io::Result<()> {
+    before_rename();
+    rename_without_replacement(staged, generation)
+}
+
+// Neither an open handle nor a metadata comparison makes a later pathname
+// deletion conditional on identity. Leave directories intact on failure.
+fn report_retained_directory(path: &Path, source: &RecordSnapshotError) -> RecordSnapshotError {
+    RecordSnapshotError::Write(
+        path.to_path_buf(),
+        format!(
+            "{source}; the capture directory was not removed; last known path: {}",
+            path.display()
+        ),
+    )
+}
+
+/// Creates a staging directory and pins it for writes. A failed claim leaves
+/// the entry intact because creation and opening cannot establish identity atomically.
+fn create_and_claim_staged_dir(
+    staged_dir: &Path,
+    claim: impl FnOnce(&Path) -> std::io::Result<StagedDirClaim>,
+) -> Result<Option<StagedDirClaim>, RecordSnapshotError> {
+    match std::fs::create_dir(staged_dir) {
+        Ok(()) => claim(staged_dir).map(Some).map_err(|error| {
+            RecordSnapshotError::Write(
+                staged_dir.to_path_buf(),
+                format!(
+                    "{error}; the capture directory was not removed; last known path: {}",
+                    staged_dir.display()
+                ),
+            )
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(error) => Err(RecordSnapshotError::Write(
+            staged_dir.to_path_buf(),
+            error.to_string(),
+        )),
     }
-    result
 }
 
 /// Hex width of the pointer staging suffix, matching [`crate::extract`]'s
