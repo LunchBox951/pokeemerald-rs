@@ -5,6 +5,12 @@
 //! output sample independently in an `i32`, so it does not reproduce that
 //! cross-lane bleed. Fixed-rate voices advance by exactly one source sample,
 //! which also preserves their raw, un-interpolated playback.
+//!
+//! A [`WaveData`] whose buffer retains a trailing interpolation guard past
+//! [`WaveData::logical_len`] (`crates/audio/src/sample.rs`) loops and retires
+//! using that logical length, while [`SourcePosition::interpolated_sample`]
+//! still reads the guard as its final boundary lookahead, matching upstream's
+//! `current + 1` prefetch (`m4a_1.s:399-407`).
 
 use std::sync::Arc;
 
@@ -37,7 +43,7 @@ impl SourcePosition {
     }
 
     fn normalize(&mut self, wave: &WaveData) -> bool {
-        if self.sample_index < wave.len() {
+        if self.sample_index < wave.logical_len() {
             return true;
         }
         if !wave.is_looping() {
@@ -45,7 +51,7 @@ impl SourcePosition {
         }
 
         let loop_start = wave.loop_start();
-        let loop_len = wave.len() - loop_start;
+        let loop_len = wave.logical_len() - loop_start;
         self.sample_index = loop_start + (self.sample_index - loop_start) % loop_len;
         true
     }
@@ -54,6 +60,10 @@ impl SourcePosition {
         let samples = wave.samples();
         let current = i32::from(samples[self.sample_index]);
         let next_index = self.sample_index + 1;
+        // `samples` may hold one more value than `wave.logical_len()`: a
+        // retained interpolation guard. Reading it here, rather than
+        // `logical_len()`, is what lets the final step before a loop wraps or
+        // a one-shot retires interpolate toward it (`m4a_1.s:399-407`).
         let next = if next_index < samples.len() {
             samples[next_index]
         } else if wave.is_looping() {
@@ -393,7 +403,9 @@ impl Voice {
             let sample = self.source_position.interpolated_sample(&self.wave);
             self.frame_gain.accumulate(sample, output);
             self.source_position.advance_wrapping(phase_step);
-            if !self.wave.is_looping() && self.source_position.sample_index >= self.wave.len() {
+            if !self.wave.is_looping()
+                && self.source_position.sample_index >= self.wave.logical_len()
+            {
                 self.envelope.retire();
                 break;
             }
@@ -580,6 +592,70 @@ mod tests {
             (FULL_SCALE_FRAME_GAIN * i32::from(loop_sample)) >> SAMPLE_GAIN_BITS
         );
         assert!(voice.is_active());
+    }
+
+    #[test]
+    fn interpolated_sample_reads_the_retained_guard_at_the_final_logical_step() {
+        // The buffer holds one logical sample (0) plus a retained guard (40).
+        // Upstream's `SoundMainRAM` prefetches that guard for its final
+        // interpolation step before a loop wraps or a one-shot retires
+        // (`m4a_1.s:399-407`), so interpolation here must move toward 40,
+        // not repeat the current sample.
+        let wave = WaveData::one_shot(0, vec![0, 40]).with_logical_len(1);
+        let mut position = SourcePosition::start();
+        position.fractional_phase = pitch::FRAC_ONE / 2;
+        let sample = position.interpolated_sample(&wave);
+        assert!(
+            (18..=22).contains(&sample),
+            "expected interpolation toward the retained guard sample, got {sample}"
+        );
+    }
+
+    #[test]
+    fn normalize_retires_a_one_shot_at_the_logical_end_not_the_buffer_end() {
+        // `sample_index` 1 is past `logical_len` (1) but still inside the
+        // two-element buffer; a one-shot must not treat the retained guard
+        // as a genuine playable step.
+        let wave = WaveData::one_shot(0, vec![0, 40]).with_logical_len(1);
+        let mut position = SourcePosition::start();
+        position.sample_index = 1;
+        assert!(!position.normalize(&wave));
+    }
+
+    #[test]
+    fn normalize_wraps_a_loop_using_the_logical_length_not_the_retained_guard() {
+        // Buffer length 3, logical length 2: `sample_index` 2 is one past the
+        // logical end but still inside the buffer. The loop period must be 2
+        // (wrapping straight back to index 0), not 3 (which would read the
+        // retained guard at index 2 as a genuine third step).
+        let wave = WaveData::looping(0, 0, vec![10, -10, 99]).with_logical_len(2);
+        let mut position = SourcePosition::start();
+        position.sample_index = 2;
+        assert!(position.normalize(&wave));
+        assert_eq!(position.sample_index, 0);
+    }
+
+    #[test]
+    fn looping_wave_wraps_using_the_logical_length_not_the_retained_guard() {
+        // Buffer length 3, logical length 2: the loop period must be 2, so
+        // index 2 replays index 0, never reading the retained guard at index
+        // 2 as a genuine third step.
+        let first_sample = 10;
+        let wave =
+            Arc::new(WaveData::looping(0, 0, vec![first_sample, -10, 99]).with_logical_len(2));
+        let mut voice =
+            voice(wave, approximately_unity_frequency(), u8::MAX, u8::MAX, 0).fixed_rate(true);
+        let mut acc = vec![(0, 0); 4];
+        voice.begin_frame(15);
+        voice.render(&mut acc);
+        assert!(voice.is_active());
+        let expected_first = (FULL_SCALE_FRAME_GAIN * i32::from(first_sample)) >> SAMPLE_GAIN_BITS;
+        assert_eq!(acc[0].0, expected_first);
+        assert_eq!(
+            acc[2].0, expected_first,
+            "the loop period must be the logical length (2), not the buffer length (3) that \
+             includes the retained guard sample"
+        );
     }
 
     #[test]
