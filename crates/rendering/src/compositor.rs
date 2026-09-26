@@ -989,6 +989,19 @@ mod tests {
         bytes
     }
 
+    fn bpp4_row(
+        palette_indices_by_column: [u8; BitDepth::TILE_DIM],
+    ) -> [u8; BitDepth::TILE_DIM / 2] {
+        let mut row = [0u8; BitDepth::TILE_DIM / 2];
+        for (byte, [left, right]) in row
+            .iter_mut()
+            .zip(palette_indices_by_column.as_chunks::<2>().0)
+        {
+            *byte = (right << 4) | left;
+        }
+        row
+    }
+
     fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
         let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
@@ -2563,16 +2576,14 @@ mod tests {
         // `(behavioral-fidelity)`.
         use crate::oam::AffineMode;
 
+        const HOLE: u8 = 0;
         let (bg_tiles, bg_palette, bg_map) = opaque_bg_fixture(9);
         let bg = crate::bg::BgLayer::new(&bg_tiles, &bg_palette, &bg_map);
         let slots = [BgSlot::new(bg, 0, 1, 0, 0, true)];
 
         let mut tile_bytes = [0u8; 64];
         tile_bytes[..32].fill(0xFF);
-        tile_bytes[32] = 0x55;
-        tile_bytes[33] = 0x55;
-        tile_bytes[34] = 0x05;
-        tile_bytes[35] = 0x55;
+        tile_bytes[32..36].copy_from_slice(&bpp4_row([5, 5, 5, 5, 5, HOLE, 5, 5]));
         let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
         let mut sprite_colors = [Bgr555::default(); Palette::LEN];
         sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
