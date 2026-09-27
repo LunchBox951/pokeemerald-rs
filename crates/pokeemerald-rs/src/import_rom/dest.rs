@@ -80,17 +80,13 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     )?)
 }
 
-/// Apple `O_EXEC` (`0x4000_0000`; XNU `bsd/sys/fcntl.h`).
-/// With `O_DIRECTORY`, it is `O_SEARCH`: search permission, not read permission.
-/// Supported on macOS 13 Ventura and later.
+/// Apple `O_EXEC` (XNU `bsd/sys/fcntl.h`), which with `O_DIRECTORY` is
+/// `O_SEARCH` on macOS 13 and later: search permission, not read.
 #[cfg(target_vendor = "apple")]
 const APPLE_O_EXEC: u32 = 0x4000_0000;
 
-/// Open `path` as a directory, pinned for traversal only (`mkdirat`,
-/// `statat`, `openat`, `unlinkat`) -- `create_directories`'s one
-/// path-resolved component, the first ancestor of its destination that
-/// already exists. `O_PATH` needs no read permission on `path`, unlike
-/// [`open_directory`].
+/// Opens `path` as a directory pinned for traversal only, needing search
+/// permission but not read; the one path `create_directories` resolves.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
@@ -100,15 +96,8 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
     )?)
 }
 
-/// [`open_traversal_directory`] on FreeBSD: `rustix` maps `OFlags::PATH`
-/// there too (its own cfg list for that flag names `target_os =
-/// "freebsd"` alongside Linux), matching FreeBSD's own `open(2)`/`openat(2)`
-/// man page, which documents `O_PATH` there with the identical "record
-/// only the target path" wording Linux's man page uses. No more
-/// permission than the Linux arm above needs.
-///
-/// FreeBSD 13.1 is the floor: `O_PATH` is on that release's `open(2)`
-/// page and absent from 13.0's.
+/// [`open_traversal_directory`] on FreeBSD 13.1 and later, where `O_PATH`
+/// has Linux's meaning (`open(2)`).
 #[cfg(target_os = "freebsd")]
 pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
@@ -118,9 +107,8 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
     )?)
 }
 
-/// [`open_traversal_directory`] on any Apple platform: no `O_PATH` there,
-/// but POSIX's own `O_SEARCH` -- see [`APPLE_O_EXEC`] for exactly what
-/// that buys and where the bit comes from.
+/// [`open_traversal_directory`] on Apple platforms, through
+/// [`APPLE_O_EXEC`].
 #[cfg(target_vendor = "apple")]
 pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     Ok(rustix::fs::open(
@@ -132,16 +120,8 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
     )?)
 }
 
-/// [`open_traversal_directory`]'s last-resort fallback: every other Unix
-/// this builds for (NetBSD, OpenBSD, DragonFly BSD, illumos/Solaris, the
-/// GNU/Hurd, ...) gets [`open_directory`]'s ordinary read-mode open,
-/// unverified against any of those platforms' own documentation here --
-/// see [`APPLE_O_EXEC`]'s and the FreeBSD arm's own docs above for why the
-/// two platforms this project's CI actually builds a non-Linux Unix for do
-/// not fall through to it.
-///
-/// Every one of those Unix systems sits outside the platform floor
-/// RELEASE.md owns, so this arm stays best-effort.
+/// [`open_traversal_directory`] on every other Unix: [`open_directory`]'s
+/// read-mode open, best effort outside the platform floor RELEASE.md owns.
 #[cfg(all(
     unix,
     not(any(
@@ -155,13 +135,10 @@ pub(super) fn open_traversal_directory(path: &Path) -> io::Result<std::os::fd::O
     open_directory(path)
 }
 
-/// Open `name`, inside the already-pinned directory `parent`, as a
-/// directory of its own, for traversal only -- following a final symlink.
-/// `create_directories`'s way of walking down through a level it found
-/// *already standing* (another process won the create race, or `name` is
-/// the lexical `..` a `$POKEEMERALD_PACK` can spell) without re-resolving
-/// a path: the returned handle becomes the next level's `parent`. For a
-/// level this run just made itself, see [`open_created_directory_at`].
+/// Opens `name` inside the pinned directory `parent` for traversal only,
+/// following a final symlink: how `create_directories` descends into a
+/// level that already stands. A level this run made goes through
+/// [`open_created_directory_at`].
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn open_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -175,8 +152,7 @@ pub(super) fn open_directory_at(
     )?)
 }
 
-/// [`open_directory_at`] on FreeBSD: real `O_PATH`, for the same reason
-/// [`open_traversal_directory`]'s FreeBSD arm takes it.
+/// [`open_directory_at`] on FreeBSD.
 #[cfg(target_os = "freebsd")]
 pub(super) fn open_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -190,9 +166,7 @@ pub(super) fn open_directory_at(
     )?)
 }
 
-/// [`open_directory_at`] on any Apple platform: [`APPLE_O_EXEC`]'s
-/// `O_SEARCH`, for the same reason [`open_traversal_directory`]'s Apple
-/// arm takes it.
+/// [`open_directory_at`] on Apple platforms, through [`APPLE_O_EXEC`].
 #[cfg(target_vendor = "apple")]
 pub(super) fn open_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -208,8 +182,7 @@ pub(super) fn open_directory_at(
     )?)
 }
 
-/// [`open_directory_at`]'s last-resort fallback, unverified in the same
-/// way [`open_traversal_directory`]'s own last-resort fallback is.
+/// [`open_directory_at`] on every other Unix, best effort.
 #[cfg(all(
     unix,
     not(any(
@@ -231,17 +204,10 @@ pub(super) fn open_directory_at(
     )?)
 }
 
-/// [`open_directory_at`] for a level `import_rom::create_directories` just
-/// made with `mkdirat` -- refusing a final symlink instead of following
-/// one.
-///
-/// `mkdirat` cannot itself have produced a symlink, so one sitting at
-/// `name` the instant this reopens it is always somebody else's swap
-/// landed in the gap between the two calls (`mkdirat` hands back no
-/// descriptor of its own to avoid it). Opening through it would hand a
-/// subsequent level's own `mkdirat` an attacker-chosen directory to
-/// descend into, which is worse than merely recording the wrong identity
-/// for this one -- see the module docs.
+/// [`open_directory_at`] for a level this run just made with `mkdirat`,
+/// refusing a final symlink: `mkdirat` cannot have produced one, so any
+/// symlink there is a swap landed since, and descending through it would
+/// hand later levels a directory someone else chose.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) fn open_created_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -258,8 +224,7 @@ pub(super) fn open_created_directory_at(
     )?)
 }
 
-/// [`open_created_directory_at`] on FreeBSD: real `O_PATH`, for the same
-/// reason [`open_traversal_directory`]'s FreeBSD arm takes it.
+/// [`open_created_directory_at`] on FreeBSD.
 #[cfg(target_os = "freebsd")]
 pub(super) fn open_created_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -276,9 +241,8 @@ pub(super) fn open_created_directory_at(
     )?)
 }
 
-/// [`open_created_directory_at`] on any Apple platform: [`APPLE_O_EXEC`]'s
-/// `O_SEARCH`, for the same reason [`open_traversal_directory`]'s Apple
-/// arm takes it.
+/// [`open_created_directory_at`] on Apple platforms, through
+/// [`APPLE_O_EXEC`].
 #[cfg(target_vendor = "apple")]
 pub(super) fn open_created_directory_at(
     parent: &std::os::fd::OwnedFd,
@@ -295,8 +259,7 @@ pub(super) fn open_created_directory_at(
     )?)
 }
 
-/// [`open_created_directory_at`]'s last-resort fallback, unverified in the
-/// same way [`open_traversal_directory`]'s own last-resort fallback is.
+/// [`open_created_directory_at`] on every other Unix, best effort.
 #[cfg(all(
     unix,
     not(any(

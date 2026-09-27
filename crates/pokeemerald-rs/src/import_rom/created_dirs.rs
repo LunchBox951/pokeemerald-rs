@@ -170,34 +170,12 @@ fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut 
     false
 }
 
-/// Create the levels `dir` is missing, outermost first, and answer with the
-/// ones this run made — the levels [`sync_created_directories`] persists
-/// and [`undo_created_directories`] may take back.
-///
-/// Ownership is what the create reports, never what a look beforehand
-/// predicted. [`std::fs::create_dir_all`] says only whether the destination
-/// exists afterwards, so pairing it with an earlier [`directories_to_create`]
-/// claims levels another process created in between — and a failed import
-/// would then remove a directory that process is about to write into.
-/// Creating one level at a time asks the question of the syscall instead:
-/// an existing level is somebody else's, and only a create that succeeded
-/// is recorded.
-///
-/// A failure hands back the levels made before it, which are this run's to
-/// take back like any other.
-///
-/// On Unix, every level is both created and recorded by descriptor: the
-/// parent of the outermost missing level is the one path this resolves --
-/// it already exists, which is why [`directories_to_create`]'s own walk
-/// stopped there -- and every level after it chains through
-/// [`dest::open_directory_at`] or [`dest::open_created_directory_at`]
-/// instead of a path re-resolved past that first parent.
-///
-/// [`dest::open_traversal_directory`] documents, per platform, whether
-/// opening a directory to hold as `mkdirat`'s target needs more than the
-/// write and search a plain `mkdir` already needed. A level this run
-/// creates is unaffected either way: it is made at the ordinary default
-/// mode, not reopened read-restricted.
+/// Creates the levels `dir` is missing, outermost first, one level at a
+/// time so that only a create this run won is recorded; a level that
+/// already exists belongs to someone else. A failure hands back the levels
+/// made before it. On Unix only the first existing ancestor is resolved by
+/// path; every level below it is reached through its parent's descriptor
+/// (`dest` owns the per-platform open flags).
 #[cfg(unix)]
 pub(super) fn create_directories(
     dir: &Path,
@@ -377,21 +355,11 @@ fn open_existing_level(
     }
 }
 
-/// [`create_directories`]'s body on Unix, with three seams a test injects
-/// and production leaves as no-ops:
-///
-/// - `before_dotdot` runs the instant before a `..` level is resolved --
-///   after every level ahead of it is made and pinned, the one point a
-///   swap can land that matters.
-/// - `before_reopen` runs the instant before the reopen issued right after a
-///   successful `mkdirat`. `Some` replaces that reopen with the given
-///   failure instead of running it; `None` defers to the real reopen.
-/// - `before_open` is [`open_existing_level`]'s own version of the same
-///   seam, for the `..` and already-exists opens instead of the reopen.
-///
-/// `pin_budget` caps how many levels stay pinned; production always passes
-/// [`pin_budget`] itself, and a test can inject a smaller one to see the
-/// cap enforced without needing to lower the process's own `RLIMIT_NOFILE`.
+/// [`create_directories`]'s body on Unix. `before_dotdot` runs before a
+/// `..` level is resolved, `before_reopen` and `before_open` may replace
+/// the reopen of a created level or the open of an existing one with a
+/// failure, and `pin_budget` caps the pinned levels; production passes
+/// no-ops and [`pin_budget`].
 #[cfg(unix)]
 fn create_directories_with_hooks(
     dir: &Path,
