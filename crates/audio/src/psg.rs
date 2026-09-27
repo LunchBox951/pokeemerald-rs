@@ -273,11 +273,14 @@ impl SquareChannel {
     }
 
     /// Continues the duty position of `previous`, the note this one replaces on
-    /// the same hardware slot. A restart trigger clears neither the duty index
-    /// nor the time elapsed since its last step, and the next step lands once
-    /// that elapsed time reaches this note's step period
-    /// (`mgba/src/gb/audio.c:219-241,493-510`). The carried remainder is
-    /// therefore rescaled from the old step length to the new one.
+    /// the same hardware slot, following mGBA, the repository's hardware
+    /// reference (`docs/principles.md:25`). Its restart reloads envelope,
+    /// sweep, and length but leaves both the duty index and the time of the
+    /// last step untouched (`mgba/src/gb/audio.c:168-194,219-241`), and the
+    /// next catch-up advances the index by every whole new period that time
+    /// covers (`:493-510`). The carried remainder is therefore rescaled from
+    /// the old step length to the new one; when the new note is higher it may
+    /// cover whole steps and advance the index at once, as mGBA does.
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
         let index = previous.phase & !(PHASE_ONE - 1);
         let remainder = u64::from(previous.phase & (PHASE_ONE - 1));
@@ -919,6 +922,56 @@ mod tests {
         assert!(
             first_step.abs_diff(expected) <= 1,
             "first step after {first_step} samples, expected about {expected}",
+        );
+    }
+
+    /// A higher replacement whose period is shorter than the time elapsed
+    /// since the outgoing note's last step advances the index by every whole
+    /// new period that time covers, as mGBA's catch-up does
+    /// (`SquareChannel::continue_duty_from`'s doc).
+    #[test]
+    fn a_higher_replacement_advances_the_index_by_the_new_periods_already_elapsed() {
+        const OUTGOING_FREQUENCY: u16 = 0x000;
+        const REPLACEMENT_FREQUENCY: u16 = 0x700;
+        const ELAPSED_SAMPLES: u32 = 13;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OUTGOING_FREQUENCY, None);
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        let last_step_index = outgoing.phase / PHASE_ONE;
+        let overshoot = outgoing.phase % PHASE_ONE;
+        for _ in 0..ELAPSED_SAMPLES {
+            outgoing.sample();
+        }
+        assert_eq!(outgoing.phase / PHASE_ONE, last_step_index);
+
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, REPLACEMENT_FREQUENCY, None);
+        let replacement_period = f64::from(PHASE_ONE) / f64::from(replacement.step_delta);
+        let elapsed =
+            f64::from(ELAPSED_SAMPLES) + f64::from(overshoot) / f64::from(outgoing.step_delta);
+        assert!(
+            elapsed > 2.0 * replacement_period,
+            "the case must cover whole replacement periods",
+        );
+        replacement.continue_duty_from(&outgoing);
+
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a handful of whole periods"
+        )]
+        let covered_steps = (elapsed / replacement_period).floor() as u32;
+        assert_eq!(
+            replacement.phase / PHASE_ONE,
+            last_step_index + covered_steps,
+            "the index advances by each whole new period already elapsed",
+        );
+        let first_step = f64::from(samples_until_next_duty_step(replacement));
+        let expected = replacement_period - elapsed % replacement_period;
+        assert!(
+            (first_step - expected).abs() <= 1.0,
+            "next step after {first_step} samples, expected about {expected}",
         );
     }
 }
