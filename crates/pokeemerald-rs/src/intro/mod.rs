@@ -19,13 +19,13 @@ mod speech;
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
 
 use crate::new_game::NewGameOptions;
-use crate::textbox::{self, FrameAssets};
+use crate::textbox::{self, FrameAssets, WindowOp};
 
 pub use speech::NUM_PAGES;
 
@@ -187,7 +187,7 @@ pub struct IntroScene {
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
     printer: Printer<OwnedFontGlyphSheet>,
-    revealed: Vec<RevealedGlyph>,
+    ops: Vec<WindowOp>,
     finished: bool,
     /// The boot-recovered options (issue #1125) this NEW GAME will hand to
     /// [`crate::new_game::init_save_blocks_with_options`] once the intro
@@ -224,7 +224,7 @@ impl IntroScene {
             pages,
             page_index: 0,
             printer,
-            revealed: Vec::new(),
+            ops: Vec::new(),
             finished: false,
             new_game_options,
         }
@@ -296,10 +296,14 @@ impl IntroScene {
         self.finished
     }
 
-    /// Returns the number of glyphs currently visible.
+    /// Returns the number of glyphs currently retained (revealed, and not
+    /// since dropped by a page or window clear).
     #[must_use]
     pub fn revealed_glyph_count(&self) -> usize {
-        self.revealed.len()
+        self.ops
+            .iter()
+            .filter(|op| matches!(op, WindowOp::Glyph(_)))
+            .count()
     }
 
     /// Advances the introduction by one frame.
@@ -314,13 +318,19 @@ impl IntroScene {
         // Checked ahead of `event` so a same-tick `FILL_WINDOW` glyph
         // survives the clear it follows; see `Printer::cleared_window`.
         if self.printer.cleared_window() {
-            self.revealed.clear();
+            self.ops.clear();
+        }
+        // Polled right after `tick`: a positive `CLEAR`/`CLEAR_TO` always
+        // ends the frame as `TickEvent::Idle` (`Printer::cleared_span`), so
+        // this never competes with a same-tick glyph.
+        if let Some(span) = self.printer.cleared_span() {
+            self.ops.push(WindowOp::ClearSpan(span));
         }
         match event {
-            TickEvent::Glyph(g) => self.revealed.push(*g),
+            TickEvent::Glyph(g) => self.ops.push(WindowOp::Glyph(g)),
             TickEvent::Scrolling { dy } => {
-                for g in &mut self.revealed {
-                    g.y -= dy;
+                for op in &mut self.ops {
+                    op.shift_y(-dy);
                 }
             }
             TickEvent::Finished => self.advance_page(),
@@ -346,7 +356,7 @@ impl IntroScene {
     fn advance_page(&mut self) {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
-            self.revealed.clear();
+            self.ops.clear();
             self.printer.restart(self.pages[self.page_index].clone());
         } else {
             self.finished = true;
@@ -361,9 +371,9 @@ impl IntroScene {
 
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
-        textbox::blit_glyphs(
+        textbox::compose_window_ops(
             &mut fb,
-            &self.revealed,
+            &self.ops,
             textbox::STANDARD_BOX_SCREEN_ORIGIN,
             textbox::STANDARD_BOX_CONTENT_SIZE_PX,
         );
