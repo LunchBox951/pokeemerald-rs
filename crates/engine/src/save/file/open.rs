@@ -117,7 +117,9 @@ mod open_flags {
         target_os = "linux",
         not(any(
             target_arch = "mips",
+            target_arch = "mips32r6",
             target_arch = "mips64",
+            target_arch = "mips64r6",
             target_arch = "sparc",
             target_arch = "sparc64"
         ))
@@ -127,16 +129,34 @@ mod open_flags {
         target_os = "linux",
         not(any(
             target_arch = "mips",
+            target_arch = "mips32r6",
             target_arch = "mips64",
+            target_arch = "mips64r6",
             target_arch = "sparc",
             target_arch = "sparc64"
         ))
     ))]
     pub(super) const ELOOP: i32 = 40;
-    // MIPS's `<asm/fcntl.h>` and `<asm/errno.h>`.
-    #[cfg(all(target_os = "linux", any(target_arch = "mips", target_arch = "mips64")))]
+    // MIPS's `<asm/fcntl.h>` and `<asm/errno.h>`, r6 variants included.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6"
+        )
+    ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0080;
-    #[cfg(all(target_os = "linux", any(target_arch = "mips", target_arch = "mips64")))]
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6"
+        )
+    ))]
     pub(super) const ELOOP: i32 = 90;
     // SPARC's `<asm/fcntl.h>` and `<asm/errno.h>`.
     #[cfg(all(
