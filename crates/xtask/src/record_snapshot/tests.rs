@@ -780,53 +780,45 @@ fn a_failed_publish_retains_and_reports_its_staging_file() {
 }
 
 /// An ownership check reading the staging pathname and a removal of that
-/// same pathname are two independent lookups; nothing fuses them. A
-/// replacement that lands in the interval between them -- after a check
-/// would have read the original file, before a removal would have unlinked
-/// it -- must never be removed. That interval is a real race, not a single
-/// deterministic step, so this drives it with a synchronized competitor
-/// thread rather than a hook: on the fixed code below, no failure path
-/// removes anything at all, so every attempt must find the replacement
-/// intact regardless of when it lands.
+/// same pathname are two independent lookups; nothing fuses them. This lands
+/// a replacement deterministically at exactly the point that separated
+/// them: right after this call's own promoting rename has already failed,
+/// before anything is retained or reported. The replacement must survive,
+/// and the reported path must still name it.
 #[cfg(unix)]
 #[test]
-fn a_failed_publish_never_removes_a_concurrent_replacement_of_the_staging_name() {
-    const ATTEMPTS: u32 = 256;
-    const REPLACEMENT: &[u8] = b"someone else's file";
-
-    let dir = scratch_path("failed-publish-race");
+fn a_failed_publish_leaves_a_replacement_planted_at_the_old_cleanup_boundary() {
+    let dir = scratch_path("failed-publish-boundary");
     let _guard = ScratchGuard(dir.clone());
     std::fs::create_dir_all(&dir).unwrap();
+    let staging_path = dir.join(".pointer.tmp");
+    let carried_off = dir.join("carried-off");
     let unreachable_dest = dir.join("missing-parent").join("pointer");
 
-    for attempt in 0..ATTEMPTS {
-        let staging_path = dir.join(format!(".pointer.tmp.{attempt}"));
-        let replacement = dir.join(format!("replacement.{attempt}"));
-        std::fs::write(&replacement, REPLACEMENT).unwrap();
-        let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+    let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+    let error = staged
+        .publish_with(&unreachable_dest, || {
+            // The promoting rename has already failed by the time this
+            // runs, so a separate ownership check placed here would have
+            // just read "still ours" -- exactly where a separate unlink
+            // would have run next.
+            std::fs::rename(&staging_path, &carried_off).unwrap();
+            std::fs::write(&staging_path, b"someone else's file").unwrap();
+        })
+        .unwrap_err();
 
-        let go = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let replacer = std::thread::spawn({
-            let go = std::sync::Arc::clone(&go);
-            let (from, to) = (replacement.clone(), staging_path.clone());
-            move || {
-                while !go.load(std::sync::atomic::Ordering::Acquire) {
-                    std::hint::spin_loop();
-                }
-                std::fs::rename(&from, &to).unwrap();
-            }
-        });
-        go.store(true, std::sync::atomic::Ordering::Release);
-        let _ = staged.publish(&unreachable_dest);
-        replacer.join().unwrap();
-
-        assert_eq!(
-            std::fs::read(&staging_path).ok().as_deref(),
-            Some(REPLACEMENT),
-            "attempt {attempt}: a failed publish removed a replacement it never owned"
-        );
-        std::fs::remove_file(&staging_path).unwrap();
-    }
+    assert_eq!(
+        std::fs::read(&staging_path).unwrap(),
+        b"someone else's file",
+        "a failed publish removed a replacement it never owned: {error}"
+    );
+    assert_eq!(std::fs::read(&carried_off).unwrap(), b"generation\n");
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("last known path: {}", staging_path.display())),
+        "the error must still report the staging path even though a replacement now sits there: {error}"
+    );
 }
 
 /// Failure cleanup must only remove what this publish created. The generation

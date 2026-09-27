@@ -160,7 +160,20 @@ impl StagedFile {
 
     /// Verifies ownership, then publishes this staging path to `dest` by
     /// rename; refuses to publish a replaced or unverifiable staging path.
-    pub(super) fn publish(mut self, dest: &Path) -> std::io::Result<()> {
+    pub(super) fn publish(self, dest: &Path) -> std::io::Result<()> {
+        self.publish_with(dest, || {})
+    }
+
+    /// [`Self::publish`], plus a hook run right after a failed promoting
+    /// rename and before that failure is retained and reported: the exact
+    /// point a separate ownership check and a separate pathname unlink would
+    /// have divided their two lookups. Production always passes a no-op;
+    /// tests use it to land a replacement exactly there.
+    pub(super) fn publish_with(
+        mut self,
+        dest: &Path,
+        on_rename_failure: impl FnOnce(),
+    ) -> std::io::Result<()> {
         match self.still_ours() {
             Ok(true) => {}
             Ok(false) => {
@@ -181,6 +194,9 @@ impl StagedFile {
             }
         }
         self.release_hold();
-        std::fs::rename(&self.path, dest).map_err(|error| self.report_retained(&error))
+        std::fs::rename(&self.path, dest).map_err(|error| {
+            on_rename_failure();
+            self.report_retained(&error)
+        })
     }
 }
