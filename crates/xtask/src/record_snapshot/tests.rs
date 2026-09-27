@@ -751,13 +751,12 @@ fn publication_stages_the_pointer_outside_every_generation_derived_name() {
     drop(out_guard);
 }
 
-/// A promoting rename that fails must not turn into an unlink of whatever
-/// now holds the staging name. On unix the held handle's inode confirms the
-/// file is still the staged one, so it is removed; on Windows the hold had
-/// to be released for the rename, nothing can confirm identity afterwards,
-/// and the file is left in place and reported.
+/// A promoting rename that fails must never turn into an unlink of whatever
+/// now holds the staging name: a held-file identity check and a pathname
+/// deletion are separate lookups, so a failed publish retains the staging
+/// file on every platform and reports its last known path.
 #[test]
-fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() {
+fn a_failed_publish_retains_and_reports_its_staging_file() {
     let dir = scratch_path("failed-publish");
     let _guard = ScratchGuard(dir.clone());
     std::fs::create_dir_all(&dir).unwrap();
@@ -767,22 +766,66 @@ fn a_failed_publish_removes_the_staging_file_only_when_it_can_prove_ownership() 
     let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
     let error = staged.publish(&unreachable_dest).unwrap_err();
 
-    if cfg!(windows) {
-        assert!(
-            staging_path.symlink_metadata().is_ok(),
-            "Windows cannot re-confirm ownership once the hold is released, so the staging file must stay"
+    assert_eq!(
+        std::fs::read(&staging_path).unwrap(),
+        b"generation\n",
+        "a failed publish must retain the staging file, not remove it: {error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("last known path: {}", staging_path.display())),
+        "the error must report the retained staging file's path: {error}"
+    );
+}
+
+/// An ownership check reading the staging pathname and a removal of that
+/// same pathname are two independent lookups; nothing fuses them. A
+/// replacement that lands in the interval between them -- after a check
+/// would have read the original file, before a removal would have unlinked
+/// it -- must never be removed. That interval is a real race, not a single
+/// deterministic step, so this drives it with a synchronized competitor
+/// thread rather than a hook: on the fixed code below, no failure path
+/// removes anything at all, so every attempt must find the replacement
+/// intact regardless of when it lands.
+#[cfg(unix)]
+#[test]
+fn a_failed_publish_never_removes_a_concurrent_replacement_of_the_staging_name() {
+    const ATTEMPTS: u32 = 256;
+    const REPLACEMENT: &[u8] = b"someone else's file";
+
+    let dir = scratch_path("failed-publish-race");
+    let _guard = ScratchGuard(dir.clone());
+    std::fs::create_dir_all(&dir).unwrap();
+    let unreachable_dest = dir.join("missing-parent").join("pointer");
+
+    for attempt in 0..ATTEMPTS {
+        let staging_path = dir.join(format!(".pointer.tmp.{attempt}"));
+        let replacement = dir.join(format!("replacement.{attempt}"));
+        std::fs::write(&replacement, REPLACEMENT).unwrap();
+        let staged = super::staging::stage(&staging_path, b"generation\n").unwrap();
+
+        let go = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let replacer = std::thread::spawn({
+            let go = std::sync::Arc::clone(&go);
+            let (from, to) = (replacement.clone(), staging_path.clone());
+            move || {
+                while !go.load(std::sync::atomic::Ordering::Acquire) {
+                    std::hint::spin_loop();
+                }
+                std::fs::rename(&from, &to).unwrap();
+            }
+        });
+        go.store(true, std::sync::atomic::Ordering::Release);
+        let _ = staged.publish(&unreachable_dest);
+        replacer.join().unwrap();
+
+        assert_eq!(
+            std::fs::read(&staging_path).ok().as_deref(),
+            Some(REPLACEMENT),
+            "attempt {attempt}: a failed publish removed a replacement it never owned"
         );
-        assert!(
-            error
-                .to_string()
-                .contains(&staging_path.display().to_string()),
-            "the error must name the staging file left behind: {error}"
-        );
-    } else {
-        assert!(
-            staging_path.symlink_metadata().is_err(),
-            "the held handle proves the staging file is still ours, so it must be removed: {error}"
-        );
+        std::fs::remove_file(&staging_path).unwrap();
     }
 }
 
@@ -843,8 +886,8 @@ fn failed_publication_leaves_a_generation_directory_it_never_created() {
 /// is ours when cleanup runs: the name is derived from the scene, the process
 /// id, and a counter, so another writer with access to `output_dir` can take
 /// it over during the staged write. The recursive removal that follows a
-/// failure must then leave that writer's directory alone, exactly as
-/// `staging::StagedFile::remove_after` leaves a replaced staging file alone.
+/// failure must then leave that writer's directory alone, exactly as a failed
+/// pointer-file publish leaves a replaced staging file alone.
 ///
 /// Not run on Windows: there, `claim_staged_dir`'s exclusive hold denies
 /// exactly the rename this test's adversary depends on for as long as this
