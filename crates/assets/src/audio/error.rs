@@ -144,9 +144,9 @@ impl fmt::Display for AudioError {
             } => write!(
                 f,
                 "audio-pack voicegroup: key-split table starting at note \
-                 {starting_note} with {table_len} entries exceeds the \
-                 maximum note of {}",
-                super::voicegroup::VOICE_SLOT_COUNT
+                 {starting_note} with {table_len} entries runs past the \
+                 last playable note {}",
+                super::voicegroup::VOICE_SLOT_COUNT - 1
             ),
             Self::TooManyTracks(count) => write!(
                 f,
