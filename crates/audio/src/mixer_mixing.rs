@@ -621,3 +621,37 @@ fn a_cgb_voice_alongside_directsound_leaves_the_reverb_tap_directsound_only() {
         );
     }
 }
+
+/// A note taking over an occupied square slot must pick the duty phase up
+/// where the note it replaced left it (`SquareChannel::set_duty_phase`'s doc).
+#[test]
+fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
+    const TRACK: usize = 0;
+    const KEY: u8 = 60;
+
+    let mut retriggered = Mixer::new(MAX_MASTER_VOLUME, 1);
+    let mut sustaining = Mixer::new(MAX_MASTER_VOLUME, 1);
+    assert!(retriggered.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+    assert!(sustaining.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+
+    let mut retriggered_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    let mut sustaining_out = vec![0.0; SAMPLES_PER_FRAME * 2];
+    retriggered.mix_frame(&mut retriggered_out);
+    sustaining.mix_frame(&mut sustaining_out);
+    assert_eq!(
+        retriggered_out, sustaining_out,
+        "the two mixers must still be identical before the re-attack",
+    );
+
+    // Same track, same key, same priority: the slot is reusable, so this note
+    // replaces the sounding one for the next frame.
+    assert!(retriggered.add_cgb_voice(cgb_keyed_voice(TRACK, KEY)));
+
+    retriggered.mix_frame(&mut retriggered_out);
+    sustaining.mix_frame(&mut sustaining_out);
+    assert_eq!(
+        retriggered_out, sustaining_out,
+        "a square note-on must carry the channel's duty phase forward instead \
+         of restarting the duty table at index zero",
+    );
+}

@@ -272,6 +272,18 @@ impl SquareChannel {
         self.sweep.as_ref().map(|s| s.shadow_frequency)
     }
 
+    /// Returns the duty-table phase accumulator.
+    #[must_use]
+    pub(crate) fn duty_phase(&self) -> u32 {
+        self.phase
+    }
+
+    /// Restores a duty phase carried from a replaced note; a restart trigger
+    /// never clears the hardware duty index (`mgba/src/gb/audio.c:219-241,493-510`).
+    pub(crate) fn set_duty_phase(&mut self, phase: u32) {
+        self.phase = phase;
+    }
+
     /// Retunes the channel from an 11-bit frequency register value, as a pitch
     /// write does through both `NR13` and `NR14`
     /// (`pokeemerald/src/m4a.c:1198-1203`).

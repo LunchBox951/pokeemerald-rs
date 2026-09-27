@@ -109,6 +109,14 @@ impl Oscillator {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
 
+    /// Carries a square oscillator's duty phase forward onto its replacement
+    /// ([`SquareChannel::set_duty_phase`]'s doc); a no-op for Wave/Noise.
+    fn carry_duty_phase_from(&mut self, other: &Self) {
+        if let (Self::Square(square), Self::Square(previous)) = (self, other) {
+            square.set_duty_phase(previous.duty_phase());
+        }
+    }
+
     /// Re-applies a `CGB_CHANNEL_MO_VOL` volume-write trigger (`m4a.c:1219-1226`)
     /// to the channel's own state and returns whether it still plays.
     fn retrigger(&mut self) -> bool {
@@ -576,6 +584,12 @@ impl CgbVoice {
     #[must_use]
     pub fn is_stopping(&self) -> bool {
         self.envelope.is_stopping()
+    }
+
+    /// Carries the oscillator's duty phase forward from the voice this one
+    /// replaces on a shared hardware slot.
+    pub(crate) fn carry_duty_phase_from(&mut self, other: &Self) {
+        self.oscillator.carry_duty_phase_from(&other.oscillator);
     }
 
     /// Return whether `ply_endtie` may select this voice
