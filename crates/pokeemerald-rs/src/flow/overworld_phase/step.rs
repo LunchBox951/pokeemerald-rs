@@ -397,13 +397,13 @@ impl OverworldPhase {
         // Ahead of `runtime`'s scene borrow: the memoised screen needs
         // `&mut self`; a memo hit is a map-id comparison.
         let wild_table_fightable = self.wild_table_fightable();
-        // `oldale_town_npc_reposition::resolve_map_events` (issue #281),
-        // not a bare `MapEventsTable::resolve`: the collision/interaction
-        // check below must see Oldale Town's footprints man and mart
-        // employee already standing where `OldaleTown_OnTransition`
-        // unconditionally puts them, not their bare map.json positions --
-        // a no-op for every other map.
-        let map_events = oldale_town_npc_reposition::resolve_map_events(self.map_id);
+        // `oldale_town_npc_reposition::resolve_map_events`, not a bare
+        // `MapEventsTable::resolve`: collision/interaction must see Oldale
+        // Town's footprints man and mart employee at the positions
+        // `save1.event_data`'s own flags currently dictate -- a no-op for
+        // every other map.
+        let map_events =
+            oldale_town_npc_reposition::resolve_map_events(self.map_id, &self.save1.event_data);
         if let (Ok(header), Ok(events)) = (
             MapHeaderTable::new().header(self.map_id),
             map_events.as_ref(),

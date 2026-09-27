@@ -1,8 +1,10 @@
-//! Tests for `oldale_town_npc_reposition` (issue #281):
-//! `OldaleTown_OnTransition`'s unconditional `setobjectxyperm`/
-//! `setobjectmovementtype` pair, applied wherever
+//! Tests for `oldale_town_npc_reposition`:
+//! `OldaleTown_OnTransition`'s `setobjectxyperm`/`setobjectmovementtype`
+//! pair, gated by `FLAG_ADVENTURE_STARTED`/`FLAG_RECEIVED_POTION_OLDALE`,
+//! applied wherever
 //! [`crate::flow::overworld_phase::step`]/[`crate::overworld::load_room`]
-//! resolve Oldale Town's own object events.
+//! resolve Oldale Town's own object events. This file's phases use a fresh
+//! save, so both flags stay unset and both NPCs stay at their moved tiles.
 //!
 //! Mirrors `route103_rival_tests`' own "real events over a synthetic grid"
 //! split (that module's doc comment): a fabricated flat, open room paired
@@ -63,8 +65,11 @@ fn oldale_phase(player: PlayerState) -> OverworldPhase {
 /// Oldale-specifically, by that module's own tests) draw from.
 #[test]
 fn the_footprints_man_and_mart_employee_resolve_at_their_post_transition_tiles() {
-    let map_events = oldale_town_npc_reposition::resolve_map_events(OLDALE_TOWN)
-        .expect("MAP_OLDALE_TOWN must resolve");
+    let map_events = oldale_town_npc_reposition::resolve_map_events(
+        OLDALE_TOWN,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("MAP_OLDALE_TOWN must resolve");
 
     let footprints_man = map_events
         .object_events

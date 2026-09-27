@@ -720,8 +720,9 @@ pub(crate) fn load_default_room_from_source(
 ///
 /// `event_data` must include any destination-map transition updates because
 /// variable object graphics resolve while the scene loads. Oldale Town's object
-/// events include its unconditional transition positions before scene
-/// construction.
+/// events are repositioned or left at their map.json tiles according to
+/// `event_data`'s own `FLAG_ADVENTURE_STARTED`/`FLAG_RECEIVED_POTION_OLDALE`
+/// before scene construction.
 ///
 /// # Errors
 ///
@@ -760,7 +761,7 @@ pub(crate) fn load_room_from_source(
     let pack = source.load()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
-    let events = oldale_town_npc_reposition::resolve_map_events(map_id)?;
+    let events = oldale_town_npc_reposition::resolve_map_events(map_id, event_data)?;
     OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
