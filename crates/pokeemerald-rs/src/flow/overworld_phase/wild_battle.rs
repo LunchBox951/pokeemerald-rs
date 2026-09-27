@@ -35,18 +35,10 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress wild battle (issue #169) --
-    /// [`OverworldPhase::advance_active_battle_frame`]'s `Wild` arm, called
-    /// with the [`ActiveBattle::Wild`] variant's own battle already taken
-    /// out of [`OverworldPhase::active_battle`]. Returns the same battle,
-    /// re-wrapped, if it is still in progress, or `None` once it has ended
-    /// or aborted.
-    ///
-    /// The turn itself, and writing the player's mon back when the battle
-    /// ends, are [`wild_encounter::advance_wild_battle`]'s; this is only the
-    /// frame-ownership adapter (a local `Option` slot, since that driver
-    /// still takes `&mut Option<`[`battle::Battle`]`>`), the outcome log,
-    /// and the return-to-field animation reset (issue #865).
+    /// Plays one frame of a wild battle taken out of
+    /// [`OverworldPhase::active_battle`]: `Some` while it continues, `None`
+    /// once it has ended or aborted. The turn and the party write-back are
+    /// [`wild_encounter::advance_wild_battle`]'s.
     pub(super) fn advance_wild_battle_frame(
         &mut self,
         battle: battle::Battle,

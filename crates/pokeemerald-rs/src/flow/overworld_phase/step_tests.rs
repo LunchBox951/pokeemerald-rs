@@ -1582,19 +1582,15 @@ fn a_fresh_start_on_a_forced_tile_whose_forced_step_is_blocked_must_open_the_men
     );
 }
 
-/// At most one battle owns the overworld frame at a time. Installs each
-/// [`OverworldPhase::active_battle`] variant in turn and pins that exactly
-/// one `is_*_battle_active` accessor agrees with it, `in_battle()` is true
-/// throughout, and every accessor projects the single owning variant.
+/// Each [`OverworldPhase::active_battle`] variant is reported by exactly
+/// one `is_*_battle_active` accessor, and `in_battle()` by all of them.
 #[test]
 fn active_battle_reports_exactly_one_frame_owner_for_each_variant() {
     use crate::flow::npc_trainer_battle;
 
     const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
-    // `TRAINER_BRENDAN_ROUTE_103_TREECKO` -- the same proven-constructible
-    // stand-in `sight_trainer_tests`' own `seed_battle` uses, reused here for
-    // both trainer-battle variants since this test only cares about which
-    // `ActiveBattle` arm owns the frame, not which real trainer it is.
+    // `TRAINER_BRENDAN_ROUTE_103_TREECKO`; which trainer it is does not
+    // matter here.
     let stand_in_trainer = assets::trainers::TrainerId(532);
 
     let mut rng = Rng::new(1);

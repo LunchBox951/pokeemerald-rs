@@ -433,9 +433,7 @@ fn seed_battle(
     });
 }
 
-/// Which [`assets::trainers::TrainerId`] `phase.active_battle`'s
-/// `SightTrainer` variant is keyed to, if any -- the read-side counterpart
-/// to [`seed_battle`]'s own construction.
+/// The trainer the active `SightTrainer` battle is keyed to, if any.
 fn active_sight_trainer_id(phase: &OverworldPhase) -> Option<assets::trainers::TrainerId> {
     match phase.active_battle.as_ref() {
         Some(ActiveBattle::SightTrainer { trainer_id, .. }) => Some(*trainer_id),
