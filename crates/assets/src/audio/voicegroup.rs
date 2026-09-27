@@ -150,6 +150,21 @@ fn check_key_split_table_len(len: usize) -> Result<(), AudioError> {
     Ok(())
 }
 
+/// Rejects tables whose notes extend past the playable `0..VOICE_SLOT_COUNT` range.
+///
+/// `table()[i]` selects a child for played note `starting_note + i`, and a
+/// note of [`VOICE_SLOT_COUNT`] or higher can never be played, so it is
+/// rejected here rather than left to silently drop at playback.
+fn check_key_split_table_note_range(starting_note: u8, table_len: usize) -> Result<(), AudioError> {
+    if table_len > 0 && usize::from(starting_note) + table_len > VOICE_SLOT_COUNT {
+        return Err(AudioError::KeySplitTableNoteOutOfRange {
+            starting_note,
+            table_len,
+        });
+    }
+    Ok(())
+}
+
 /// Rejects table entries that select a child slot no voicegroup can define.
 ///
 /// A voicegroup has at most [`VOICE_SLOT_COUNT`] slots (`0..VOICE_SLOT_COUNT`),
@@ -172,7 +187,9 @@ impl KeySplitVoice {
     /// # Errors
     ///
     /// Returns [`AudioError::KeySplitTableTooLong`] when the table exceeds
-    /// [`VOICE_SLOT_COUNT`] entries, or [`AudioError::KeySplitTableEntryOutOfRange`]
+    /// [`VOICE_SLOT_COUNT`] entries, [`AudioError::KeySplitTableNoteOutOfRange`]
+    /// when `starting_note + table.len()` exceeds [`VOICE_SLOT_COUNT`], covering
+    /// notes outside the playable range, or [`AudioError::KeySplitTableEntryOutOfRange`]
     /// when a table entry selects a child slot index of [`VOICE_SLOT_COUNT`] or
     /// higher, which no voicegroup can define.
     pub fn new(
@@ -181,6 +198,7 @@ impl KeySplitVoice {
         children: VoiceGroupId,
     ) -> Result<Self, AudioError> {
         check_key_split_table_len(table.len())?;
+        check_key_split_table_note_range(starting_note, table.len())?;
         check_key_split_table_entries(&table)?;
         Ok(Self {
             starting_note,
@@ -507,7 +525,9 @@ impl VoiceGroup {
     /// cannot be encoded, [`AudioError::PanOverrideZero`] for `Some(0)` pan,
     /// [`AudioError::PanOverrideOutOfRange`] for a pan override outside
     /// `1..=127`, [`AudioError::SquareDutyOutOfRange`] for a square duty
-    /// selector outside `0..=3`, or [`AudioError::NoisePeriodOutOfRange`] for
+    /// selector outside `0..=3`, [`AudioError::KeySplitTableNoteOutOfRange`]
+    /// for a key split whose `starting_note` plus table length exceeds
+    /// [`VOICE_SLOT_COUNT`], or [`AudioError::NoisePeriodOutOfRange`] for
     /// a noise period outside `0..=1`.
     pub fn new(slots: Vec<VoiceEntry>) -> Result<Self, AudioError> {
         if slots.len() > VOICE_SLOT_COUNT {
@@ -520,7 +540,10 @@ impl VoiceGroup {
                     check_pan_override(v.pan)?;
                 }
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
-                VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
+                VoiceEntry::KeySplit(v) => {
+                    check_id_len(&v.children.0)?;
+                    check_key_split_table_note_range(v.starting_note, v.table.len())?;
+                }
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Square1(v) => check_square_duty(v.duty)?,
                 VoiceEntry::Square2(v) => check_square_duty(v.duty)?,
