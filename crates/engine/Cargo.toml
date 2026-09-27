@@ -20,9 +20,9 @@ pack-format = { path = "../pack-format" }
 
 # The one external crate this package names (`minimal-deps`; S-4, issue
 # #1132): closes `StagedSave::remove_after`'s Windows handle-bound cleanup
-# delete (see `WindowsFileIdentity` in `src/save/file/staging.rs`). Approval
-# trail, exact version, and feature boundary are recorded in the dependency
-# ledger (`README.md`).
+# delete and backs the save path's verified read (see `WindowsFileIdentity`
+# in `src/save/file/open.rs`). Approval trail, exact version, and feature
+# boundary are recorded in the dependency ledger (`README.md`).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", default-features = false, features = [
     "Win32_Foundation",

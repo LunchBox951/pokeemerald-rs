@@ -1,6 +1,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
+use super::open;
 use super::{
     data_dir_for, default_save_path_from, staging, HostFamily, SaveFile, SaveFileError,
     SAVE_DIR_NAME, SAVE_FILE_NAME, SAVE_PATH_ENV,
@@ -653,6 +655,107 @@ fn a_save_path_swapped_after_inspection_is_still_not_followed() {
     stop.store(true, Ordering::Relaxed);
     swapper.join().unwrap();
     assert!(!followed, "a symlink swapped in after the inspection was followed and its target accepted as save data, so the refusal at {} is bypassable", path.display());
+}
+
+/// Windows's `FILE_ATTRIBUTE_REPARSE_POINT`, checked below as this test
+/// module's own confirmation that `compact /c /exe:` did what it claims,
+/// independent of `open`'s copy of the same flag.
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+
+/// Turns `path` into a genuine, non-symlink Windows reparse point
+/// (`IO_REPARSE_TAG_WOF`) via per-file compression, a stock Windows tool
+/// needing no cloud provider and no elevated privilege: `compact /c /exe:`.
+/// Its filter transparently serves the original bytes back on an ordinary
+/// read, the same shape of object a `OneDrive` cloud-files placeholder is.
+///
+/// Asserts the file actually became a reparse point, so a host or Windows
+/// edition where `compact` declines fails loudly here rather than letting
+/// the read below pass for an unrelated reason.
+#[cfg(windows)]
+fn compress_into_a_non_symlink_reparse_point(path: &Path) {
+    use std::os::windows::fs::MetadataExt as _;
+
+    let status = std::process::Command::new("compact")
+        .args(["/c", "/exe:xpress8k"])
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("compact.exe runs");
+    assert!(
+        status.success(),
+        "compact /c /exe:xpress8k {}: {status}",
+        path.display()
+    );
+
+    let attributes = std::fs::symlink_metadata(path)
+        .expect("the compacted file is still there")
+        .file_attributes();
+    assert!(
+        attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
+        "compact /c /exe: must turn {} into a reparse point for this test to mean anything; \
+         got attributes {attributes:#x}",
+        path.display()
+    );
+}
+
+/// A non-symlink Windows reparse point at the save path must load through
+/// its filter rather than being refused as
+/// [`SaveFileError::SavePathNotAPlainFile`], which would disable saving
+/// under a synced folder whose provider dehydrates files it has not touched
+/// recently.
+#[cfg(windows)]
+#[test]
+fn reading_a_non_symlink_reparse_point_in_the_files_place_loads_through_its_filter() {
+    let dir = TempDir::new("read-wof-reparse");
+    let path = dir.join(SAVE_FILE_NAME);
+    let (store, _, _) = saved_store();
+    SaveFile::at(&path).write(&store).unwrap();
+
+    compress_into_a_non_symlink_reparse_point(&path);
+
+    let reloaded = SaveFile::at(&path)
+        .read()
+        .expect("a non-symlink reparse point must load through its filter, not be refused")
+        .expect("the file was just written");
+    assert_eq!(reloaded.flash_image(), store.flash_image());
+}
+
+/// A reparse point's hydrating reopen must read through the object identity
+/// already verified, not whatever now occupies the path's name: `open`'s
+/// `open_verified_for_read_with` lands a swap -- the original entry removed,
+/// a different file taking its name -- right before the reopen that would
+/// otherwise be a second, redirectable lookup of the path. The swap must
+/// have no effect on what comes back.
+#[cfg(windows)]
+#[test]
+fn a_reparse_points_hydrating_reopen_reads_through_the_verified_object_despite_a_path_swap() {
+    use std::io::Read as _;
+
+    let dir = TempDir::new("read-windows-reopen-ignores-a-path-swap");
+    let path = dir.join(SAVE_FILE_NAME);
+    let (original, _, _) = saved_store();
+    SaveFile::at(&path).write(&original).unwrap();
+    compress_into_a_non_symlink_reparse_point(&path);
+
+    let outcome = open::open_verified_for_read_with(&path, |_verified_handle| {
+        std::fs::remove_file(&path).expect("the verified entry is removed");
+        std::fs::write(&path, vec![0xFFu8; FLASH_IMAGE_LEN])
+            .expect("a different file takes the same name");
+    });
+
+    let mut file = outcome
+        .expect("a path swap after the handle was verified must not fail the read")
+        .expect("the reparse point was verified to exist");
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .expect("the reopened handle is still readable");
+    assert_eq!(
+        bytes,
+        original.flash_image(),
+        "the hydrating reopen must read through the already-verified object, not whatever now \
+         occupies the path's name"
+    );
 }
 
 /// The container of every level from the filesystem root down to `target`,
