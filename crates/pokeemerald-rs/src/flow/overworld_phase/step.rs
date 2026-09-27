@@ -324,16 +324,8 @@ impl OverworldPhase {
         // unconditionally, before the dialog early-return below.
         self.advance_tileset_anim_tick();
 
-        // A wild battle, the Route 101 scripted first battle (issue #231,
-        // `super::first_battle_trigger`), the Route 103 rival battle (issue
-        // #248, `super::route103_rival_trigger`), or a Route 103
-        // sight-trainer battle (issue #264, `super::sight_trainer_trigger`)
-        // -- `Self::active_battle` can hold at most one of the four at a
-        // time by construction (`ActiveBattle`'s own struct docs, issue
-        // #460) -- owns the frame outright, ahead of the dialog check, the
-        // same way upstream's battle callback owns `CB2_Overworld` outright
-        // once `SetMainCallback2(CB2_InitBattle)` has run
-        // (`src/battle_setup.c:369`).
+        // An active battle owns the frame ahead of the dialog check, as the
+        // battle callback owns `CB2_Overworld` upstream (`src/battle_setup.c:369`).
         if self.advance_active_battle_frame() {
             return;
         }
