@@ -1109,6 +1109,79 @@ fn losing_to_a_trainer_ends_in_the_ordinary_defeat_outcome_with_no_payout() {
     );
 }
 
+/// `Cmd_checkteamslost`'s player-side HP total
+/// (`src/battle_script_commands.c:3534`-`:3564`) reads zero only once the
+/// active member and every reserve has fainted -- the trainer-battle
+/// counterpart of `wild_battle.rs`'s
+/// `an_exhausted_player_party_loses_only_after_every_reserve_has_had_its_turn`.
+#[test]
+fn a_healthy_player_reserve_survives_a_trainer_battle_lead_faint_and_is_itself_exhausted_next() {
+    let dex = Dex::new();
+    let lead = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    let lead_pp = lead.moves()[0].pp;
+    let reserve = max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH]);
+    let reserve_pp = reserve.moves()[0].pp;
+    // A level-100 opponent one-shots either level-5 party member regardless
+    // of speed order.
+    let party = vec![max_iv_mon(&dex, TREECKO, 100, vec![POUND])];
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle = Battle::new_trainer_with_player_reserves(
+        dex,
+        lead,
+        vec![reserve],
+        MAY_ROUTE_103_MUDKIP,
+        party,
+        &mut rng,
+    )
+    .expect("a trainer battle admits an ordered player reserve list");
+    assert_eq!(
+        battle.player_members().count(),
+        2,
+        "the reserve must be admitted alongside the lead, not dropped"
+    );
+
+    let turn1 = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        turn1.contains(&BattleEvent::Fainted { by_player: true }),
+        "the level-100 Treecko one-shots the level-5 lead: {turn1:?}"
+    );
+    assert!(
+        turn1.contains(&BattleEvent::PlayerSentOut {
+            species: SpeciesId(TORCHIC),
+            reserves_remaining: 0,
+        }),
+        "the healthy reserve takes over instead of ending the battle: {turn1:?}"
+    );
+    assert_eq!(battle.outcome(), None);
+    assert_eq!(battle.player().species(), SpeciesId(TORCHIC));
+
+    let turn2 = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        turn2.contains(&BattleEvent::Fainted { by_player: true }),
+        "the reserve falls to the same one-shot: {turn2:?}"
+    );
+    assert_eq!(
+        turn2.last(),
+        Some(&BattleEvent::Ended(BattleOutcome::PlayerLost)),
+        "no reserve remains, so the whole-party exhaustion ends the battle: {turn2:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+
+    let members: Vec<_> = battle.player_members().collect();
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0].species(), SpeciesId(MUDKIP));
+    assert_eq!(members[0].current_hp(), 0);
+    assert_eq!(members[0].moves()[0].pp, lead_pp);
+    assert_eq!(members[1].species(), SpeciesId(TORCHIC));
+    assert_eq!(members[1].current_hp(), 0);
+    assert_eq!(members[1].moves()[0].pp, reserve_pp);
+}
+
 /// `AI_CheckViability` routes `EFFECT_HIGH_CRITICAL` — an otherwise ordinary
 /// hit script ([`battle::is_ordinary_hit_effect`]) — to `AI_CV_HighCrit`
 /// (`data/battle_ai_scripts.s:1449`), an unmodelled branch that draws RNG;
