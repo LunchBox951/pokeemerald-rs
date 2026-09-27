@@ -100,11 +100,20 @@ pub fn user_pack_path() -> Option<PathBuf> {
 /// names the pack the player actually installed instead of silently
 /// reaching past it for another one. See [`Probe`].
 ///
-/// Rung 4 always yields a path, so this never fails; the caller's own
-/// "no pack extracted yet" diagnostic covers a path that does not exist.
-/// Channel builds return their user path even when absent. Without a user
-/// directory they use a channel directory beside the executable, never a
-/// different channel's pack or the build machine's checkout.
+/// Rung 4 always yields a path in a `dev` build, so a `dev` build's
+/// resolution never fails; the caller's own "no pack extracted yet"
+/// diagnostic covers a path that does not exist there. Channel builds
+/// return their user path even when absent, and fall back to a channel
+/// directory beside the executable when there is no user directory — never
+/// a different channel's pack or the build machine's checkout.
+///
+/// # Panics
+///
+/// A non-`dev` build panics when no override is set, no user-data
+/// directory is known, and the running executable's own directory cannot
+/// be determined: the only candidate left would be relative to the
+/// process's current directory, the hazard [`is_absolute_xdg_path`]
+/// already refuses for a relative `$XDG_DATA_HOME`.
 #[must_use]
 pub fn default_pack_path() -> PathBuf {
     let exe_dir = std::env::current_exe()
@@ -179,6 +188,13 @@ fn std_env(key: &str) -> Option<OsString> {
 /// and letting `AssetPack::load` fail on the path the player actually
 /// installed to is the only way they learn it was a permission problem
 /// rather than a missing file.
+///
+/// # Panics
+///
+/// See [`default_pack_path`]: a non-`dev` `rule`/`RELEASE_CHANNEL` with no
+/// override, no user-data directory, and `exe_dir: None` has no non-cwd
+/// candidate left and panics rather than resolve through `exe_dir`'s
+/// current-directory default.
 fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,
@@ -198,7 +214,10 @@ fn resolve(
     }
     if RELEASE_CHANNEL != "dev" {
         return exe_dir
-            .unwrap_or_else(|| Path::new("."))
+            .expect(
+                "a release build must not fall back through the process's current directory \
+                 when neither a user-data directory nor an executable directory is known",
+            )
             .join(APP_DATA_SUBDIRECTORY)
             .join(PACK_FILE_NAME);
     }
