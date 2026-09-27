@@ -111,12 +111,44 @@ mod open_flags {
         )
     ))]
     pub(super) const O_NOFOLLOW: i32 = 0x0000_8000;
-    // `<asm-generic/fcntl.h>`'s `O_NONBLOCK` and `<asm-generic/errno.h>`'s `ELOOP`;
-    // MIPS and SPARC each override both and are not handled here.
-    #[cfg(target_os = "linux")]
+    // Generic Linux `<asm-generic/fcntl.h>` and `<asm-generic/errno.h>`;
+    // MIPS and SPARC use their own `<asm/fcntl.h>` and `<asm/errno.h>`.
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips64",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    ))]
     pub(super) const O_NONBLOCK: i32 = 0x0000_0800;
-    #[cfg(target_os = "linux")]
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "mips",
+            target_arch = "mips64",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    ))]
     pub(super) const ELOOP: i32 = 40;
+    // MIPS's `<asm/fcntl.h>` and `<asm/errno.h>`.
+    #[cfg(all(target_os = "linux", any(target_arch = "mips", target_arch = "mips64")))]
+    pub(super) const O_NONBLOCK: i32 = 0x0000_0080;
+    #[cfg(all(target_os = "linux", any(target_arch = "mips", target_arch = "mips64")))]
+    pub(super) const ELOOP: i32 = 90;
+    // SPARC's `<asm/fcntl.h>` and `<asm/errno.h>`.
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "sparc", target_arch = "sparc64")
+    ))]
+    pub(super) const O_NONBLOCK: i32 = 0x0000_4000;
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "sparc", target_arch = "sparc64")
+    ))]
+    pub(super) const ELOOP: i32 = 62;
 
     // Pins x86_64 to the generic branch and aarch64 to the override branch
     // so a misrouted arch fails compilation instead of using the wrong flag.
@@ -124,6 +156,12 @@ mod open_flags {
     const _: () = assert!(O_NOFOLLOW == 0x0002_0000);
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
     const _: () = assert!(O_NOFOLLOW == 0x0000_8000);
+    // Pins x86_64 to the generic branch and mips64 to the override branch
+    // so a misrouted arch fails compilation instead of using the wrong flag.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const _: () = assert!(O_NONBLOCK == 0x0000_0800 && ELOOP == 40);
+    #[cfg(all(target_os = "linux", target_arch = "mips64"))]
+    const _: () = assert!(O_NONBLOCK == 0x0000_0080 && ELOOP == 90);
 
     // macOS's and the BSDs' shared `<sys/fcntl.h>` and `<sys/errno.h>`.
     #[cfg(not(target_os = "linux"))]
