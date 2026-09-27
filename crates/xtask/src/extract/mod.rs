@@ -825,7 +825,7 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_pngs_sorted, extract_to, staging_path_with_value, upstream_present,
+        collect_pngs_sorted, extract_to, jasc_pal, staging_path_with_value, upstream_present,
         write_pack_atomically_with_names, ExtractError, LAYOUTS,
     };
 
@@ -1269,10 +1269,7 @@ mod tests {
     #[test]
     fn oversized_jasc_palette_is_rejected_not_truncated() {
         let count = usize::from(u16::MAX) + 1;
-        let mut text = String::from("JASC-PAL\r\n0100\r\n");
-        text.push_str(&count.to_string());
-        text.push_str("\r\n");
-        text.push_str(&"0 0 0\r\n".repeat(count));
+        let text = format!("JASC-PAL\r\n0100\r\n{count}\r\n");
 
         let dir = std::env::temp_dir().join(format!(
             "pokeemerald-rs-extract-oversized-jasc-test-{}",
@@ -1288,8 +1285,8 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                ExtractError::PaletteColorCountUnrepresentable(error_path, actual)
-                    if error_path == &path && *actual == count
+                ExtractError::Pal(error_path, jasc_pal::JascPalError::TooManyColors { declared, .. })
+                    if error_path == &path && *declared == count
             ),
             "wrong error for a {count}-colour JASC palette: {err:?}"
         );
