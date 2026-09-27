@@ -14,7 +14,52 @@ use crate::intro::{self, IntroStatus};
 use crate::main_menu::{MainMenuItem, MainMenuScene, MainMenuSceneError, MainMenuType};
 use crate::new_game::{self, NewGameOptions};
 use assets::pack::PackError;
-use platform::{ButtonState, Buttons};
+use platform::{ButtonState, Buttons, Frame};
+
+/// Generously above the 22-call trace [`rendering::NormalPaletteFade`]'s own
+/// tests pin (`crates/rendering/src/palette_fade.rs`), so a regression that
+/// never drives the fade to [`rendering::PaletteFadeStatus::Done`] fails
+/// [`drive_through_fade_wait`] loudly instead of hanging the test.
+const MAX_FADE_WAIT_FRAMES: usize = 40;
+
+/// Drives `advance_scene` with no input until `scene` -- which must already
+/// be one of the I-3 (issue #1329) front-end fade-wait states -- leaves it,
+/// returning the destination scene, every outgoing frame observed while
+/// still waiting, and the destination's own first frame -- so a caller can
+/// assert both that the fade actually progressed and that the destination
+/// only appears once, on the frame it becomes current.
+///
+/// # Panics
+///
+/// If `scene` is not already waiting, or the wait does not reach
+/// [`rendering::PaletteFadeStatus::Done`] within [`MAX_FADE_WAIT_FRAMES`].
+pub(super) fn drive_through_fade_wait(
+    mut scene: AppScene,
+    save_slot: &mut SaveSlot,
+    pack_source: crate::pack_source::PackSource,
+) -> (AppScene, Vec<Box<Frame>>, Box<Frame>) {
+    let mut wait_frames = Vec::new();
+    for _ in 0..MAX_FADE_WAIT_FRAMES {
+        assert!(
+            matches!(
+                scene,
+                AppScene::TitleFadeWait(_) | AppScene::MainMenuFadeWait(_)
+            ),
+            "drive_through_fade_wait called on a scene that was not already waiting"
+        );
+        let (next, frame) = advance_scene(scene, ButtonState::new(), save_slot, pack_source);
+        if matches!(
+            next,
+            AppScene::TitleFadeWait(_) | AppScene::MainMenuFadeWait(_)
+        ) {
+            wait_frames.push(frame);
+            scene = next;
+        } else {
+            return (next, wait_frames, frame);
+        }
+    }
+    panic!("fade wait did not reach `Done` within {MAX_FADE_WAIT_FRAMES} frames");
+}
 
 pub(super) fn pressed(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
@@ -193,15 +238,31 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             presented: false,
         }));
 
-        let (next, _frame) = advance_scene(
+        // I-3, issue #1329: the press must land in the white fade-wait
+        // state first, not swap straight to the main menu.
+        let (waiting, press_frame) = advance_scene(
             scene,
             pressed(button),
             &mut save_slot,
             crate::pack_source::PackSource::Runtime,
         );
+        assert!(
+            matches!(waiting, AppScene::TitleFadeWait(_)),
+            "{button:?} on the title screen must first enter the white fade-wait state"
+        );
+
+        let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
+            waiting,
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
+        assert!(
+            wait_frames.iter().any(|frame| **frame != *press_frame),
+            "the retained title frame must visibly fade toward white while waiting"
+        );
 
         let AppScene::MainMenu(state) = next else {
-            panic!("{button:?} on the title screen must transition to the main menu");
+            panic!("{button:?} on the title screen must transition to the main menu once the fade completes");
         };
         // With no save file at the scratch path, the boot load is
         // `SAVE_STATUS_EMPTY`, so upstream's `Task_MainMenuCheckSaveFile`
@@ -341,14 +402,23 @@ fn real_pack_title_transition_borders_the_main_menu_with_the_saves_window_frame(
         presented: false,
     }));
 
-    let (next, frame) = advance_scene(
+    let (waiting, _press_frame) = advance_scene(
         scene,
         pressed(Buttons::A),
         &mut save_slot,
         crate::pack_source::PackSource::Runtime,
     );
+    assert!(
+        matches!(waiting, AppScene::TitleFadeWait(_)),
+        "A on the title screen must first enter the white fade-wait state"
+    );
+    let (next, _wait_frames, frame) = drive_through_fade_wait(
+        waiting,
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     let AppScene::MainMenu(state) = next else {
-        panic!("A on the title screen must transition to the main menu");
+        panic!("A on the title screen must transition to the main menu once the fade completes");
     };
     assert_eq!(
         state.scene.menu_type(),
@@ -400,7 +470,8 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
 }
 
 /// I-3 scene-flow test: main menu, `NEW GAME` selected (the default,
-/// per `crate::main_menu`'s module docs) and A newly pressed -> intro.
+/// per `crate::main_menu`'s module docs) and A newly pressed -> intro, only
+/// once the I-3 (issue #1329) black fade-wait state reports done.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn main_menu_confirm_on_new_game_transitions_to_intro() {
@@ -412,16 +483,30 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(
+    let (waiting, press_frame) = advance_scene(
         scene,
         pressed(Buttons::A),
         &mut save_slot,
         crate::pack_source::PackSource::Runtime,
     );
+    assert!(
+        matches!(waiting, AppScene::MainMenuFadeWait(_)),
+        "A on NEW GAME must first enter the black fade-wait state"
+    );
+
+    let (next, wait_frames, _destination_frame) = drive_through_fade_wait(
+        waiting,
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
+    assert!(
+        wait_frames.iter().any(|frame| **frame != *press_frame),
+        "the retained menu frame must visibly fade toward black while waiting"
+    );
 
     assert!(
         matches!(next, AppScene::Intro(_)),
-        "A on NEW GAME must transition to the intro"
+        "A on NEW GAME must transition to the intro once the fade completes"
     );
 }
 
@@ -453,6 +538,81 @@ fn main_menu_confirm_on_option_stays_on_the_main_menu() {
         panic!("A on OPTION must not leave the main menu");
     };
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
+}
+
+/// I-3 regression (issue #1329): a fresh A on `NEW GAME` must not call
+/// `intro::load` on the press frame. Pre-I-3, `advance_scene` dispatched
+/// synchronously and returned straight back to `AppScene::MainMenu` in that
+/// same call; this fails against that behaviour by asserting the press
+/// frame instead lands in `AppScene::MainMenuFadeWait`, that further input
+/// (UP/DOWN/a repeated A) is ignored for the fade's whole 22-call trace
+/// (`crates/rendering/src/palette_fade.rs`), and that the dispatch runs
+/// exactly once the fade reports done -- exercising `advance_scene`'s own
+/// wait arm directly, not `dispatch_main_menu_action`'s separate unit
+/// coverage. Pack-free via `PackSource::Test` pointed at an entryless
+/// scratch pack (`crate::pack_source::PackSource::Test`'s own doc comment),
+/// so the deferred dispatch still runs -- and fails, falling back to the
+/// retained menu -- without needing a real pack (module docs' boundary
+/// note: no fabricated success from an entryless pack).
+#[test]
+fn main_menu_confirm_on_new_game_waits_for_the_fade_before_dispatching() {
+    let (_temp, mut save_slot) = empty_slot("new-game-fade-wait");
+    let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    assert_eq!(menu.selected(), MainMenuItem::NewGame);
+    let scene = AppScene::MainMenu(Box::new(MainMenuState {
+        scene: menu,
+        saved: save_slot.load(),
+    }));
+
+    let pack_path = write_empty_scratch_pack("new-game-fade-wait");
+    // `PackSource::Test` needs a `'static` path -- leaked once, reclaimed
+    // only when the test process exits, matching
+    // `overworld_phase::step_tests`' identical `PackSource::Test` fixture.
+    let leaked_path: &'static std::path::Path = Box::leak(pack_path.clone().into_boxed_path());
+    let pack_source = crate::pack_source::PackSource::Test(leaked_path);
+
+    let (mut scene, _press_frame) =
+        advance_scene(scene, pressed(Buttons::A), &mut save_slot, pack_source);
+    assert!(
+        matches!(scene, AppScene::MainMenuFadeWait(_)),
+        "A on NEW GAME must enter the fade-wait state on the press frame, not dispatch immediately"
+    );
+
+    // 21 further frames, all still `Active`, with deliberately distracting
+    // input every frame -- none of it may resume the selection or retrigger
+    // the dispatch while waiting.
+    for buttons in [
+        pressed(Buttons::UP),
+        pressed(Buttons::DOWN),
+        pressed(Buttons::A),
+        ButtonState::new(),
+    ]
+    .into_iter()
+    .cycle()
+    .take(21)
+    {
+        let (next, _frame) = advance_scene(scene, buttons, &mut save_slot, pack_source);
+        assert!(
+            matches!(next, AppScene::MainMenuFadeWait(_)),
+            "must keep waiting until the fade reports done, ignoring input meanwhile"
+        );
+        scene = next;
+    }
+
+    // The 22nd update reports done: dispatch is attempted exactly once,
+    // fails against the entryless pack, and falls back to the retained
+    // menu -- still selecting `NEW GAME`, proving the UP/DOWN presses above
+    // were ignored, not merely unobserved.
+    let (after, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot, pack_source);
+    drop(std::fs::remove_file(&pack_path));
+    let AppScene::MainMenu(state) = after else {
+        panic!("a failed dispatch must fall back to the retained main menu, not stay waiting");
+    };
+    assert_eq!(
+        state.scene.selected(),
+        MainMenuItem::NewGame,
+        "input pressed while waiting must not have moved the selection"
+    );
 }
 
 /// Issue #216 regression, the half the scene-level test above cannot

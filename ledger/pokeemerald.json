@@ -27088,6 +27088,12 @@
           "spec": "I-3",
           "status": "stubbed"
         },
+        "confirm_press_fade_and_wait": {
+          "reason": "HandleMainMenuInput's fresh JOY_NEW(A_BUTTON) branch (main_menu.c:884-894) and Task_HandleMainMenuAPressed's !gPaletteFade.active gate (main_menu.c:936-943) are AppScene::MainMenuFadeWait: a fresh A on NEW GAME or CONTINUE retains the composed menu and the selected MainMenuAction, consumes src/palette.c#normal_palette_fade's NormalPaletteFade::begin toward RGB_BLACK, drives one update per presented frame ignoring input, and only once it reports Done does advance_scene dispatch intro::load or OverworldPhase::continue_saved_game -- issue #1329. OPTION's swallowed press stays unfaded (upstream fades on every fresh A, including ACTION_OPTION; this port has no Options destination). Not modelled: the B-to-title white fade (main_menu.c:895-901) and the MYSTERY GIFT/MYSTERY EVENTS menu types (no_save_menu's own doc comment).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/fade_wait.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "no_save_menu": {
           "reason": "HAS_NO_SAVED_GAME now renders both items at upstream's real geometry/palette/window frame (main_menu.c:259-309, 755-793) with Up/Down selection and the WIN0+BLDCNT+BLDY(7) highlight, whose BLDCNT first-target set is BG0 only (main_menu.c:751) so the darken reaches the two windows' own pixels and never the backdrop (main_menu.c:745-753, 903-925, 1170-1187), issue #216. The HAS_SAVED_GAME/CONTINUE branch and the gSaveFileStatus table are modelled since issue #214 -- see the save_menu artifact. Still not ported: the MYSTERY GIFT/MYSTERY EVENTS menu types (HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS, defined main_menu.c:514-515, selected by the tMenuType increments at main_menu.c:645 and :658), OPTION's own destination screen (ACTION_OPTION, main_menu.c:963) -- crate::flow::advance_scene swallows an A press on it instead of launching a screen that doesn't exist -- and HandleMainMenuInput's B-button return to the title screen (JOY_NEW(B_BUTTON), main_menu.c:895-901, Task_HandleMainMenuBPressed's white fade and full-screen WIN0 open), which this port leaves inert.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
@@ -28607,6 +28613,12 @@
           "reason": "Task_TitleScreenPhase3's cloud vertical scroll (tCounter/tBg1Y/gBattle_BG1_Y -> BG1VOFS) transcribed as the pure fn cloud_scroll_y(frame) (issue #116); confirmed vertical, not horizontal, by reading the actual code (BG1HOFS is only ever set once, statically, by ScanlineEffect_InitWave during boot). The legendary-marking palette pulse (UpdateLegendaryMarkingColor) in the same function is out of scope and stays pending.",
           "rust_target": "crates/pokeemerald-rs/src/title.rs",
           "spec": "I-2",
+          "status": "rewritten"
+        },
+        "confirm_press_fade_and_wait": {
+          "reason": "Task_TitleScreenPhase3's fresh JOY_NEW(A_BUTTON)/JOY_NEW(START_BUTTON) branch (title_screen.c:779-787) and CB2_GoToMainMenu's UpdatePaletteFade wait (title_screen.c:824-828) are AppScene::TitleFadeWait: a fresh advance press retains the composed title, consumes src/palette.c#normal_palette_fade's NormalPaletteFade::begin toward RGB_WHITEALPHA, drives one update per presented frame ignoring input, and only once it reports Done does advance_scene load the main menu -- issue #1329. FadeOutBGM(4) (title_screen.c:784) is unchanged, still triggered by leaving AppScene::Title (S-3, issue #185). The held-combo cheat branches and B-to-title fade remain pending (title_advance_pressed's own doc comment).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/fade_wait.rs",
+          "spec": "I-3",
           "status": "rewritten"
         },
         "press_start_copyright_anim_frames": {

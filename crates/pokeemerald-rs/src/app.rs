@@ -209,9 +209,16 @@ impl From<TitleSceneError> for AppError {
 pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
     SyntheticBoot,
-    /// The real animated title screen.
+    /// The real animated title screen, including its front-end fade-wait
+    /// state (I-3, issue #1329: [`crate::flow::AppScene::TitleFadeWait`]) --
+    /// this milestone does not distinguish a title still animating from one
+    /// fading toward the main menu.
     Title,
-    /// The main menu and its current selection.
+    /// The main menu and its current selection, including its front-end
+    /// fade-wait state (I-3, issue #1329:
+    /// [`crate::flow::AppScene::MainMenuFadeWait`]) -- this milestone does
+    /// not distinguish a menu awaiting input from one already fading toward
+    /// its confirmed selection.
     MainMenu(MainMenuItem),
     /// Birch's new-game introduction.
     Intro,
@@ -716,8 +723,11 @@ impl App {
     pub fn state(&self) -> AppState {
         match self.scene.as_ref() {
             None => AppState::SyntheticBoot,
-            Some(AppScene::Title(_)) => AppState::Title,
+            Some(AppScene::Title(_) | AppScene::TitleFadeWait(_)) => AppState::Title,
             Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
+            Some(AppScene::MainMenuFadeWait(wait)) => {
+                AppState::MainMenu(wait.state.scene.selected())
+            }
             Some(AppScene::Intro(_)) => AppState::Intro,
             Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
             Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {
