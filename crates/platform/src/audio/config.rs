@@ -102,7 +102,7 @@ pub(super) fn negotiate<D: OutputDevice>(
 /// tolerates a headless run must still hear about a device that vanished
 /// mid-setup. `a_lost_device_after_the_query_stays_an_audio_error` pins that
 /// split against a real device.
-fn classify_query_error(err: cpal::Error) -> PlatformError {
+pub(super) fn classify_query_error(err: cpal::Error) -> PlatformError {
     match err.kind() {
         cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
             PlatformError::NoAudioDevice
