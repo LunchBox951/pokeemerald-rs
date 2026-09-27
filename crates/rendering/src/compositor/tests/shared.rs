@@ -54,3 +54,24 @@ pub(super) fn bpp4_row(
     }
     row
 }
+
+pub(super) fn bpp4_tile_with_top_left_2x2(
+    palette_indices_by_row: [[u8; 2]; 2],
+) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+    const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / 2;
+    let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+    for (row, [left, right]) in palette_indices_by_row.into_iter().enumerate() {
+        bytes[row * BYTES_PER_ROW] = (right << 4) | left;
+    }
+    bytes
+}
+
+pub(super) fn bpp4_tile_with_every_row(
+    palette_indices_by_column: [u8; BitDepth::TILE_DIM],
+) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
+    let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+    for row in bytes.chunks_exact_mut(BitDepth::TILE_DIM / 2) {
+        row.copy_from_slice(&bpp4_row(palette_indices_by_column));
+    }
+    bytes
+}

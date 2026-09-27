@@ -1,7 +1,10 @@
-//! Pins hardware window gating and regular-BG/basic-OBJ mosaic snapping and holds.
+//! Pins regular- and affine-BG mosaic snapping, holds, and their window/OBJWIN interplay.
 
-use super::super::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
-use super::shared::{bpp4_row, empty_sprite_layer, opaque_affine_bg_fixture, opaque_bg_fixture};
+use super::super::{compose_frame_with_effects, BgSlot, FrameEffects};
+use super::shared::{
+    bpp4_tile_with_every_row, bpp4_tile_with_top_left_2x2, empty_sprite_layer,
+    opaque_affine_bg_fixture,
+};
 use crate::affine::AffineMatrix;
 use crate::bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
 use crate::mosaic::MosaicSize;
@@ -56,27 +59,6 @@ fn eight_tile_gradient_affine_bg_fixture() -> (Tileset, Palette, AffineTilemap) 
     (tileset, palette, tilemap)
 }
 
-fn bpp4_tile_with_top_left_2x2(
-    palette_indices_by_row: [[u8; 2]; 2],
-) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
-    const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / 2;
-    let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
-    for (row, [left, right]) in palette_indices_by_row.into_iter().enumerate() {
-        bytes[row * BYTES_PER_ROW] = (right << 4) | left;
-    }
-    bytes
-}
-
-fn bpp4_tile_with_every_row(
-    palette_indices_by_column: [u8; BitDepth::TILE_DIM],
-) -> [u8; BitDepth::Bpp4.tile_byte_len()] {
-    let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
-    for row in bytes.chunks_exact_mut(BitDepth::TILE_DIM / 2) {
-        row.copy_from_slice(&bpp4_row(palette_indices_by_column));
-    }
-    bytes
-}
-
 fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
     let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
     let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
@@ -89,148 +71,6 @@ fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
     let entries = vec![ScreenEntry::new(0, false, false, 0)];
     let tilemap = Tilemap::new(1, 1, entries).unwrap();
     (tileset, palette, tilemap)
-}
-
-#[test]
-fn no_effects_default_reproduces_compose_frame_byte_for_byte() {
-    let (tiles_a, palette_a, map_a) = opaque_bg_fixture(3);
-    let (tiles_b, palette_b, map_b) = opaque_bg_fixture(6);
-    let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
-    let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
-    let slots = [
-        BgSlot::new(layer_a, 0, 1, 0, 0, true),
-        BgSlot::new(layer_b, 1, 0, 0, 0, true),
-    ];
-
-    let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
-    let mut sprite_colors = [Bgr555::default(); Palette::LEN];
-    sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
-    let sprite_palette = Palette::new(sprite_colors);
-    let entries = [OamEntry::new(
-        0,
-        0,
-        0,
-        0,
-        BitDepth::Bpp4,
-        false,
-        false,
-        ObjShape::Square,
-        0,
-        2,
-        true,
-    )];
-    let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
-
-    let via_compose_frame = compose_frame(&sprites, &slots);
-    let via_effects_default =
-        compose_frame_with_effects(&sprites, &slots, &FrameEffects::default());
-    assert_eq!(via_compose_frame.pixels(), via_effects_default.pixels());
-}
-
-#[test]
-fn window_gates_a_bg_layer_by_region_even_though_its_own_enable_bit_is_on() {
-    let (tiles_r, palette_r, map_r) = opaque_bg_fixture(9);
-    let (tiles_b, _palette_b, map_b) = opaque_bg_fixture(0);
-    let layer_r = crate::bg::BgLayer::new(&tiles_r, &palette_r, &map_r);
-    let mut blue_colors = [Bgr555::default(); Palette::LEN];
-    blue_colors[15] = Bgr555::from_channels(0, 0, 9);
-    let blue_palette = Palette::new(blue_colors);
-    let layer_b = crate::bg::BgLayer::new(&tiles_b, &blue_palette, &map_b);
-    let slots = [
-        BgSlot::new(layer_r, 0, 0, 0, 0, true),
-        BgSlot::new(layer_b, 1, 1, 0, 0, true),
-    ];
-    let entries: [OamEntry; 0] = [];
-    let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
-    let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
-
-    let mut bg0_only = WindowLayerEnable::NONE;
-    bg0_only.bg[0] = true;
-    let mut bg1_only = WindowLayerEnable::NONE;
-    bg1_only.bg[1] = true;
-
-    let effects = FrameEffects {
-        windows: WindowConfig {
-            win0: Some((
-                WindowRect::new(WindowRange::new(0, 4), WindowRange::new(0, 8)),
-                bg0_only,
-            )),
-            win1: None,
-            obj_window: None,
-            winout: bg1_only,
-        },
-        ..FrameEffects::default()
-    };
-
-    let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-    assert_eq!(
-        fb.pixel(0, 0),
-        Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
-        "inside WIN0, only BG0 is enabled"
-    );
-    assert_eq!(
-        fb.pixel(5, 0),
-        Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
-        "outside every window (WINOUT), only BG1 is enabled, despite BG0's better priority"
-    );
-}
-
-#[test]
-fn objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color() {
-    let (tiles, palette, map) = opaque_bg_fixture(9);
-    let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
-    let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
-
-    let mask_tile = bpp4_tile_with_every_row([0, 0, 0, 0, 15, 15, 15, 15]);
-    let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
-    let mut mask_colors = [Bgr555::default(); Palette::LEN];
-    mask_colors[15] = Bgr555::from_channels(0, 31, 31);
-    let mask_palette = Palette::new(mask_colors);
-    let entries = [OamEntry::new(
-        0,
-        0,
-        0,
-        0,
-        BitDepth::Bpp4,
-        false,
-        false,
-        ObjShape::Square,
-        0,
-        0,
-        true,
-    )
-    .with_mode(ObjMode::Window)];
-    let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
-
-    let mut bg0_only = WindowLayerEnable::NONE;
-    bg0_only.bg[0] = true;
-
-    let effects = FrameEffects {
-        windows: WindowConfig {
-            win0: None,
-            win1: None,
-            obj_window: Some(bg0_only),
-            winout: WindowLayerEnable::NONE,
-        },
-        ..FrameEffects::default()
-    };
-
-    let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-    assert_eq!(
-        fb.pixel(1, 0),
-        Some(crate::palette::Rgb888::BLACK),
-        "outside the OBJWIN mask, BG0 must stay disabled"
-    );
-    assert_eq!(
-        fb.pixel(5, 0),
-        Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
-        "inside the OBJWIN mask, BG0 must be enabled"
-    );
-    assert_ne!(
-        fb.pixel(5, 0),
-        Some(Bgr555::from_channels(0, 31, 31).to_rgb888()),
-        "the mask sprite itself must never draw a visible pixel"
-    );
 }
 
 #[test]
@@ -858,48 +698,5 @@ fn affine_mosaic_hold_advances_through_unmasked_columns_an_objwin_only_bg_cannot
         Some(crate::palette::Rgb888::BLACK),
         "x=6 is unmasked again -- composites nothing, but the hold state \
          established at x=3 must have kept advancing underneath"
-    );
-}
-
-#[test]
-fn mosaic_snaps_obj_sampling_to_its_block_origin() {
-    let bytes = bpp4_tile_with_top_left_2x2([[1, 2], [3, 4]]);
-    let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
-    let mut colors = [Bgr555::default(); Palette::LEN];
-    colors[1] = Bgr555::from_channels(0, 1, 0);
-    colors[2] = Bgr555::from_channels(0, 2, 0);
-    colors[3] = Bgr555::from_channels(0, 3, 0);
-    colors[4] = Bgr555::from_channels(0, 4, 0);
-    let palette = Palette::new(colors);
-    let entries = [OamEntry::new(
-        0,
-        0,
-        0,
-        0,
-        BitDepth::Bpp4,
-        false,
-        false,
-        ObjShape::Square,
-        0,
-        0,
-        true,
-    )
-    .with_mosaic(true)];
-    let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
-
-    let effects = FrameEffects {
-        mosaic: crate::mosaic::MosaicConfig {
-            bg: MosaicSize::NONE,
-            obj: MosaicSize::new(2, 2),
-        },
-        ..FrameEffects::default()
-    };
-    let fb = compose_frame_with_effects(&sprites, &[], &effects);
-
-    let origin_color = Bgr555::from_channels(0, 1, 0).to_rgb888();
-    assert_eq!(
-        fb.pixel(1, 1),
-        Some(origin_color),
-        "snapped from (1,1) to (0,0)"
     );
 }

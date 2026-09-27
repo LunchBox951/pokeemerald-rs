@@ -3,7 +3,11 @@
 mod shared;
 
 mod affine_obj_mosaic;
+mod backdrop;
+mod bg_mosaic;
 mod effects;
-mod oam_objwin_backdrop;
+mod oam;
+mod obj_mosaic;
+mod objwin;
 mod priority;
-mod window_bg_mosaic;
+mod window;
