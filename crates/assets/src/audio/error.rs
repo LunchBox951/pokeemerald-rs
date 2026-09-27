@@ -75,6 +75,16 @@ pub enum AudioError {
     /// A CGB noise period (LFSR width selector) exceeds the documented `0..=1`
     /// domain. The value is the out-of-range period byte.
     NoisePeriodOutOfRange(u8),
+    /// A CGB voice's envelope field exceeds the domain upstream's macro mask
+    /// leaves representable. `voice_kind` names the CGB voice (`"square 1"`,
+    /// `"square 2"`, `"programmable wave"`, or `"noise"`); `field` names the
+    /// envelope field (`"attack"`, `"decay"`, `"sustain"`, or `"release"`).
+    CgbEnvelopeOutOfRange {
+        voice_kind: &'static str,
+        field: &'static str,
+        value: u8,
+        maximum: u8,
+    },
     /// A MEMACC tag identifies neither [`super::song::MemAccOp`] nor
     /// [`super::song::MemAccCondition`]. The value is the unrecognized tag.
     UnknownMemAccOp(u8),
@@ -199,6 +209,16 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack voicegroup: a noise period selector of {period} \
                  is outside the valid range 0..=1"
+            ),
+            Self::CgbEnvelopeOutOfRange {
+                voice_kind,
+                field,
+                value,
+                maximum,
+            } => write!(
+                f,
+                "audio-pack voicegroup: {voice_kind} CGB envelope {field} {value} \
+                 is outside the valid range 0..={maximum}"
             ),
             Self::UnknownMemAccOp(byte) => {
                 write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")
