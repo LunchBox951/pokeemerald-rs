@@ -290,6 +290,11 @@ impl SquareChannel {
         self.sweep.as_ref().map(|s| s.shadow_frequency)
     }
 
+    #[cfg(test)]
+    pub(crate) fn duty_phase(&self) -> u32 {
+        self.phase
+    }
+
     /// Continues the duty position of `previous`, the note this one replaces on
     /// the same hardware slot, following mGBA, the repository's hardware
     /// reference (`docs/principles.md:25`). Its restart reloads envelope,
@@ -300,6 +305,17 @@ impl SquareChannel {
     /// whole steps and advance the index at once, as mGBA does.
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
         self.phase = retime_step_remainder(previous.phase, previous.step_delta, self.step_delta);
+    }
+
+    /// Advances the duty position through `samples` of silence. A disabled
+    /// channel's index still catches up over that time at the next write to
+    /// its registers, including the note-on of whichever note replaces it
+    /// (`mgba/src/gb/audio.c:140-141,493-501`).
+    pub(crate) fn advance_silently(&mut self, samples: usize) {
+        let samples = u32::try_from(samples).unwrap_or(u32::MAX);
+        self.phase = self
+            .phase
+            .wrapping_add(self.step_delta.wrapping_mul(samples));
     }
 
     /// Retunes the channel from an 11-bit frequency register value, as a pitch

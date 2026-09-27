@@ -98,6 +98,15 @@ impl Oscillator {
         }
     }
 
+    /// Keeps a hardware-muted square's duty position running
+    /// ([`SquareChannel::advance_silently`]'s doc). Only a square sweep ever
+    /// mutes the hardware, so Wave/Noise never reach this.
+    fn advance_silently(&mut self, samples: usize) {
+        if let Self::Square(square) = self {
+            square.advance_silently(samples);
+        }
+    }
+
     fn step_sweep_tick(&mut self) -> bool {
         match self {
             Self::Square(square) => square.step_sweep_tick(),
@@ -684,8 +693,10 @@ impl CgbVoice {
     /// 128 Hz CGB frame sequencer.
     pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
         if self.hardware_muted {
+            self.oscillator.advance_silently(acc.len());
             return;
         }
+        let frame_len = acc.len();
         let mut ticks = sweep_ticks.iter().copied().peekable();
         for (sample_offset, output) in acc.iter_mut().enumerate() {
             if !self.envelope.is_active() {
@@ -695,6 +706,7 @@ impl CgbVoice {
                 ticks.next();
                 if !self.oscillator.step_sweep_tick() {
                     self.hardware_muted = true;
+                    self.oscillator.advance_silently(frame_len - sample_offset);
                     break;
                 }
             }
@@ -730,6 +742,13 @@ impl CgbVoice {
 
     pub(crate) fn envelope_volume(&self) -> u8 {
         self.envelope.volume()
+    }
+
+    fn square_oscillator(&self) -> Option<&SquareChannel> {
+        match &self.oscillator {
+            Oscillator::Square(s) => Some(s),
+            _ => None,
+        }
     }
 }
 
@@ -1457,6 +1476,38 @@ mod tests {
             square_ceiling >= FULL_GAIN_256 - LINEAR_ENVELOPE_SCALE,
             "the loudest square/noise nibble ({square_ceiling}/256) must land within one \
              hardware step of the wave arm's full-scale gain ({FULL_GAIN_256}/256)"
+        );
+    }
+
+    /// A hardware-muted square keeps its duty position running, so the note
+    /// that later replaces it continues from where hardware would be
+    /// ([`SquareChannel::advance_silently`]'s doc).
+    #[test]
+    fn a_hardware_muted_square_keeps_its_duty_position_running() {
+        const FRAME_SAMPLES: usize = 37;
+        let mut muted = square_voice(
+            CgbChannelNumber::Square1,
+            Some(upward_sweep(3, 1)),
+            TestNote::at_key(120),
+        );
+        let mut free_running = muted.square_oscillator().expect("a square voice").clone();
+        muted.begin_frame(false);
+        let mut acc = vec![(0i32, 0i32); FRAME_SAMPLES];
+        muted.render(&mut acc, &[]);
+        assert!(
+            acc.iter().all(|&(l, r)| l == 0 && r == 0),
+            "the overflow must have muted the channel",
+        );
+        for _ in 0..FRAME_SAMPLES {
+            free_running.sample();
+        }
+        assert_eq!(
+            muted
+                .square_oscillator()
+                .expect("a square voice")
+                .duty_phase(),
+            free_running.duty_phase(),
+            "a muted frame must advance the duty position as a sounding one does",
         );
     }
 
