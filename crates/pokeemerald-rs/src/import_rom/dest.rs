@@ -80,21 +80,9 @@ pub(super) fn open_directory(path: &Path) -> io::Result<std::os::fd::OwnedFd> {
     )?)
 }
 
-/// The raw `O_EXEC` bit on Apple platforms, which combined with
-/// `O_DIRECTORY` forms Apple's substitute for `O_PATH`:
-/// [`O_SEARCH`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html)
-/// (IEEE Std 1003.1-2008, `<fcntl.h>`), POSIX's access mode checked for
-/// *search* permission on the directory, never read, and never re-checked
-/// for a component walked through it afterwards. Spelled as a raw bit
-/// because `rustix`'s `OFlags` maps only `O_PATH`, absent from Apple's
-/// headers; the value is Apple's own (`O_EXEC 0x40000000`,
-/// <https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h>).
-///
-/// macOS 13 Ventura (`xnu-8792`) is the floor for this bit: an older
-/// kernel silently treats it as an ordinary read-mode open, so
-/// [`open_traversal_directory`]'s last-resort fallback still needs read
-/// permission there. Pre-Ventura macOS sits outside the platform floor
-/// RELEASE.md owns and stays best-effort here.
+/// Apple `O_EXEC` (`0x4000_0000`; XNU `bsd/sys/fcntl.h`).
+/// With `O_DIRECTORY`, it is `O_SEARCH`: search permission, not read permission.
+/// Supported on macOS 13 Ventura and later.
 #[cfg(target_vendor = "apple")]
 const APPLE_O_EXEC: u32 = 0x4000_0000;
 

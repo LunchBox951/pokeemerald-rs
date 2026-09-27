@@ -121,12 +121,25 @@
 //!
 //! That identity comes from a lookup (`statat`) right after `mkdirat`
 //! succeeds, not a descriptor `mkdirat` never hands back. The level is then
-//! reopened and the descriptor held open until cleanup runs, pinning its
-//! inode so a later directory reusing the same freed inode number is not
-//! mistaken for this one. A level whose reopen itself failed has no pin, so
-//! cleanup leaves it standing rather than trust identity alone. The reopen
-//! also refuses a symlink planted at the name (`O_NOFOLLOW`); no portable
-//! call closes either gap further.
+//! reopened, and the reopened descriptor's own identity must match that
+//! lookup before the descent continues -- a mismatch means the name was
+//! swapped for a replacement in the gap between the two calls, so this run
+//! stops there instead of creating the next level inside it, leaving the
+//! replacement unrecorded and untouched. Only a level whose reopen and
+//! identity check both agree gets its descriptor held open until cleanup
+//! runs, pinning its inode so a later directory reusing the same freed
+//! inode number is not mistaken for this one; a level whose reopen failed
+//! is recorded with no pin, so cleanup leaves it standing rather than trust
+//! identity alone, and a level whose reopened identity did not match is not
+//! recorded at all. The reopen also refuses a symlink planted at the name
+//! (`O_NOFOLLOW`).
+//!
+//! One gap stays open regardless: a directory can be swapped for another
+//! between `mkdirat`'s own success and the `statat` that reads its
+//! identity, and nothing catches that one, because no portable call creates
+//! a directory and hands back a descriptor to what it made in the same
+//! step. A replacement landed there is recorded as if this run had made it,
+//! and cleanup could later remove it.
 
 mod dest;
 
@@ -765,6 +778,14 @@ struct CreatedDirectory {
     path: PathBuf,
 }
 
+/// Whether `a` and `b` name the same file: the same device and inode,
+/// `create_directories_with_hooks`'s and [`undo_created_directories`]'s
+/// shared test for "is this still the directory this run made".
+#[cfg(unix)]
+fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
+    a.st_dev == b.st_dev && a.st_ino == b.st_ino
+}
+
 /// Create the levels `dir` is missing, outermost first, and answer with the
 /// ones this run made — the levels [`sync_created_directories`] persists
 /// and [`undo_created_directories`] may take back.
@@ -805,20 +826,62 @@ fn create_directories(
     create_directories_with_hooks(dir, &mut || {}, &mut || None)
 }
 
+/// What reopening a level [`create_directories_with_hooks`] just made turned
+/// up, checked against its `statat` identity; see the module docs for why.
+#[cfg(unix)]
+enum ReopenedLevel {
+    /// Matches `identity`; safe to descend into.
+    Pinned(std::rc::Rc<std::os::fd::OwnedFd>),
+    /// The reopen itself failed; recorded with no pin.
+    Unpinned(io::Error),
+    /// The reopen's own identity did not match, or could not be read.
+    /// Either way, not provably the level `mkdirat` made -- left unrecorded.
+    Unverified(io::Error),
+}
+
+/// Reopens the level [`create_directories_with_hooks`] just created at
+/// `name` in `parent` and checks it against `identity`. `before_reopen` is
+/// the test seam [`create_directories_with_hooks`] documents.
+#[cfg(unix)]
+fn reopen_created_level(
+    parent: &std::rc::Rc<std::os::fd::OwnedFd>,
+    name: &OsStr,
+    identity: &rustix::fs::Stat,
+    before_reopen: &mut dyn FnMut() -> Option<io::Error>,
+) -> ReopenedLevel {
+    let descend = match before_reopen() {
+        Some(err) => Err(err),
+        None => dest::open_created_directory_at(parent, name).map(std::rc::Rc::new),
+    };
+    let descend = match descend {
+        Ok(fd) => fd,
+        Err(source) => return ReopenedLevel::Unpinned(source),
+    };
+    match rustix::fs::fstat(&*descend) {
+        Ok(reopened) if same_directory_identity(&reopened, identity) => {
+            ReopenedLevel::Pinned(descend)
+        }
+        Ok(_) => ReopenedLevel::Unverified(io::Error::other(
+            "directory level was replaced before it could be reopened",
+        )),
+        Err(source) => ReopenedLevel::Unverified(source.into()),
+    }
+}
+
 /// [`create_directories`]'s body on Unix, with two seams a test injects
 /// and production leaves as no-ops:
 ///
 /// - `before_dotdot` runs the instant before a `..` level is resolved --
 ///   after every level ahead of it is made and pinned, the one point a
 ///   swap can land that matters.
-/// - `force_reopen_failure` replaces the reopen issued right after a
-///   successful `mkdirat` whenever it answers `Some`, forcing the "reopen
-///   failed" branch. `None` defers to the real reopen.
+/// - `before_reopen` runs the instant before the reopen issued right after a
+///   successful `mkdirat`. `Some` replaces that reopen with the given
+///   failure instead of running it; `None` defers to the real reopen.
 #[cfg(unix)]
 fn create_directories_with_hooks(
     dir: &Path,
     before_dotdot: &mut dyn FnMut(),
-    force_reopen_failure: &mut dyn FnMut() -> Option<io::Error>,
+    before_reopen: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<Vec<CreatedDirectory>, (Vec<CreatedDirectory>, io::Error)> {
     let levels = directories_to_create(dir);
     let Some(first) = levels.first() else {
@@ -885,27 +948,29 @@ fn create_directories_with_hooks(
                     }
                     Err(source) => return Err((created, source.into())),
                 };
-                // Continues the descent through a fresh handle -- refusing
-                // a symlink here too, for the same reason. The same handle
-                // is what the record holds to pin this level's inode.
-                let descend: io::Result<std::rc::Rc<std::os::fd::OwnedFd>> =
-                    match force_reopen_failure() {
-                        Some(err) => Err(err),
-                        None => {
-                            dest::open_created_directory_at(&parent_fd, &name).map(std::rc::Rc::new)
-                        }
-                    };
-                created.push(CreatedDirectory {
-                    path: level,
-                    parent: parent_fd,
-                    name,
-                    identity,
-                    own: descend.as_ref().ok().map(std::rc::Rc::clone),
-                });
-                parent_fd = match descend {
-                    Ok(fd) => fd,
-                    Err(source) => return Err((created, source)),
-                };
+                match reopen_created_level(&parent_fd, &name, &identity, before_reopen) {
+                    ReopenedLevel::Pinned(descend) => {
+                        created.push(CreatedDirectory {
+                            path: level,
+                            parent: parent_fd,
+                            name,
+                            identity,
+                            own: Some(std::rc::Rc::clone(&descend)),
+                        });
+                        parent_fd = descend;
+                    }
+                    ReopenedLevel::Unpinned(source) => {
+                        created.push(CreatedDirectory {
+                            path: level,
+                            parent: parent_fd,
+                            name,
+                            identity,
+                            own: None,
+                        });
+                        return Err((created, source));
+                    }
+                    ReopenedLevel::Unverified(source) => return Err((created, source)),
+                }
             }
             // A level that stands as a directory now is no failure, whoever
             // made it — `create_dir_all`'s own rule. It is simply not this
@@ -1019,8 +1084,6 @@ fn sync_created_directories(created: &[CreatedDirectory]) {
 /// re-resolves the name regardless, and how narrow the remaining gap is.
 #[cfg(unix)]
 fn undo_created_directories(created: &[CreatedDirectory]) {
-    let same =
-        |a: &rustix::fs::Stat, b: &rustix::fs::Stat| a.st_dev == b.st_dev && a.st_ino == b.st_ino;
     for dir in created.iter().rev() {
         match rustix::fs::statat(
             &*dir.parent,
@@ -1028,9 +1091,10 @@ fn undo_created_directories(created: &[CreatedDirectory]) {
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         ) {
             Ok(stat)
-                if same(&stat, &dir.identity)
+                if same_directory_identity(&stat, &dir.identity)
                     && dir.own.as_ref().is_some_and(|own| {
-                        rustix::fs::fstat(&**own).is_ok_and(|held| same(&stat, &held))
+                        rustix::fs::fstat(&**own)
+                            .is_ok_and(|held| same_directory_identity(&stat, &held))
                     }) =>
             {
                 match rustix::fs::unlinkat(&*dir.parent, &dir.name, rustix::fs::AtFlags::REMOVEDIR)

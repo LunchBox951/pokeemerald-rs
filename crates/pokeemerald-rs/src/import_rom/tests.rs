@@ -492,9 +492,9 @@ fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
     // A level recorded without its own descriptor (the reopen right after
     // `mkdirat` failed) has nothing pinning its inode, so the cleanup cannot
     // tell it from a same-number replacement and leaves it alone. Driven
-    // through the injected `force_reopen_failure` hook rather than clearing
-    // `own` by hand afterwards, so this exercises the real reopen-failure
-    // branch instead of a stand-in for its end state.
+    // through the injected `before_reopen` hook rather than clearing `own`
+    // by hand afterwards, so this exercises the real reopen-failure branch
+    // instead of a stand-in for its end state.
     let dir = TempDir::new("undo-unpinned");
     let level = dir.join("new");
 
@@ -513,6 +513,35 @@ fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
     assert!(
         level.is_dir(),
         "an unpinned level must be left standing, not removed by identity alone"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_level_swapped_between_stat_and_reopen_is_not_descended_into() {
+    // The swap lands through the `before_reopen` hook, which runs at
+    // exactly the point a real race would -- after the `statat` and before
+    // the reopen -- so this needs no second thread.
+    let dir = TempDir::new("swap-before-reopen");
+    let first = dir.join("a");
+    let target = first.join("b");
+    let moved = dir.join("a-original");
+    let mut swapped = false;
+    let mut hook = || -> Option<std::io::Error> {
+        if !swapped {
+            swapped = true;
+            fs::rename(&first, &moved).unwrap();
+            fs::create_dir(&first).unwrap();
+        }
+        None
+    };
+
+    let _ = super::create_directories_with_hooks(&target, &mut || {}, &mut hook);
+
+    assert!(swapped, "the hook ran");
+    assert!(
+        !target.exists(),
+        "a level was created inside the replacement directory swapped in after the stat"
     );
 }
 
