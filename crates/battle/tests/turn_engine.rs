@@ -4,6 +4,8 @@
 
 mod common;
 
+#[path = "turn_engine/confusion.rs"]
+mod confusion;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]

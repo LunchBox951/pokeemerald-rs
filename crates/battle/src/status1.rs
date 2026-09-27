@@ -6,9 +6,11 @@
 //! `status2`/`gStatuses3` bits [`crate::volatile::Volatiles`] carries: a
 //! primary status outlives a switch, where a volatile does not. This slice
 //! models [`Status1::Healthy`], [`Status1::Paralysed`], and
-//! [`Status1::Poisoned`] — confusion, sleep, freeze, burn, and toxic are
-//! unported, so a battler can never reach any status this enum has no
-//! variant for.
+//! [`Status1::Poisoned`] — sleep, freeze, burn, and toxic are unported, so a
+//! battler can never reach any status this enum has no variant for.
+//! Confusion is `status2`'s own field, not `status1`'s: its duration lives in
+//! [`crate::volatile::Volatiles::confusion_turns`], but no move path can
+//! write it yet, so it stays unreachable here too.
 //!
 //! Upstream's `status1` is a bitfield with one flag per status
 //! (`pokeemerald/include/constants/battle.h:112`-`:125`), but every

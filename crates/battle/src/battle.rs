@@ -1011,8 +1011,9 @@ impl Battle {
         Ok(())
     }
 
-    /// Runs one battler's turn-order slot: the full-paralysis draw, the
-    /// Soundproof block, PP handling, then execution.
+    /// Runs one battler's turn-order slot: the confusion decrement, the
+    /// full-paralysis draw, the Soundproof block, PP handling, then
+    /// execution.
     ///
     /// `slot` is `None` for a forced Struggle, which spends no PP
     /// (`HITMARKER_NO_PPDEDUCT`, `pokeemerald/src/battle_util.c:100`-`:104`).
@@ -1029,6 +1030,20 @@ impl Battle {
         // `pokeemerald/src/battle_util.c:78`-`:137`), so it holds the move
         // even when full paralysis or empty PP stop this one from landing.
         self.last_move_used = move_id;
+        // `CANCELER_CONFUSED` decrements the attacker's confusion duration
+        // ahead of `CANCELER_PARALYZED` (`src/battle_util.c:2157`-`:2199`).
+        // Only the terminal zero transition is modelled here: the self-hit
+        // draw a still-active decrement can trigger is out of this slice.
+        let attacker = if player_is_attacker {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+        if attacker.volatiles_mut().tick_confusion() {
+            events.push(BattleEvent::SnappedOutOfConfusion {
+                by_player: player_is_attacker,
+            });
+        }
         let attacker_status1 = if player_is_attacker {
             self.player.status1()
         } else {
