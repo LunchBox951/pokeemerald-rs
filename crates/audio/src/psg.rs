@@ -223,6 +223,24 @@ impl Sweep {
     }
 }
 
+/// Re-expresses the time since a square channel's last duty step, held as a
+/// phase remainder accumulated at `from_delta` per sample, at `to_delta` per
+/// sample, keeping the duty index. Whole steps that time now covers advance
+/// the index (`mgba/src/gb/audio.c:493-510`).
+fn retime_step_remainder(phase: u32, from_delta: u32, to_delta: u32) -> u32 {
+    let index = phase & !(PHASE_ONE - 1);
+    let remainder = u64::from(phase & (PHASE_ONE - 1));
+    let retimed = (remainder * u64::from(to_delta))
+        .checked_div(u64::from(from_delta))
+        .unwrap_or(0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the phase accumulator wraps modulo 2^32, a whole number of duty cycles"
+    )]
+    let phase = (u64::from(index) + retimed) as u32;
+    phase
+}
+
 /// CGB channel 1 or 2 square-wave generator.
 #[derive(Clone, Debug)]
 pub struct SquareChannel {
@@ -278,21 +296,10 @@ impl SquareChannel {
     /// sweep, and length but leaves both the duty index and the time of the
     /// last step untouched (`mgba/src/gb/audio.c:168-194,219-241`), and the
     /// next catch-up advances the index by every whole new period that time
-    /// covers (`:493-510`). The carried remainder is therefore rescaled from
-    /// the old step length to the new one; when the new note is higher it may
-    /// cover whole steps and advance the index at once, as mGBA does.
+    /// covers (`:493-510`). When the new note is higher that time may cover
+    /// whole steps and advance the index at once, as mGBA does.
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
-        let index = previous.phase & !(PHASE_ONE - 1);
-        let remainder = u64::from(previous.phase & (PHASE_ONE - 1));
-        let rescaled = (remainder * u64::from(self.step_delta))
-            .checked_div(u64::from(previous.step_delta))
-            .unwrap_or(0);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the phase accumulator wraps modulo 2^32, a whole number of duty cycles"
-        )]
-        let phase = (u64::from(index) + rescaled) as u32;
-        self.phase = phase;
+        self.phase = retime_step_remainder(previous.phase, previous.step_delta, self.step_delta);
     }
 
     /// Retunes the channel from an 11-bit frequency register value, as a pitch
@@ -304,10 +311,15 @@ impl SquareChannel {
         self.play_frequency(freq_reg);
     }
 
+    /// Every frequency write catches the duty index up at the old rate and
+    /// keeps the time since its last step, which the new rate then measures
+    /// (`mgba/src/gb/audio.c:162-171,493-510,648-668`).
     fn play_frequency(&mut self, freq_reg: u16) {
         self.frequency = freq_reg;
         let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
-        self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
+        let step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
+        self.phase = retime_step_remainder(self.phase, self.step_delta, step_delta);
+        self.step_delta = step_delta;
     }
 
     /// Applies a volume-only trigger: its `NR14` write restores the note's high
@@ -972,6 +984,54 @@ mod tests {
         assert!(
             (first_step - expected).abs() <= 1.0,
             "next step after {first_step} samples, expected about {expected}",
+        );
+    }
+
+    /// A retune keeps the time since the last duty step, so a later
+    /// replacement measures the whole time, spent at both rates, against its
+    /// own period (`SquareChannel::play_frequency`'s doc).
+    #[test]
+    fn a_replacement_after_a_retune_measures_the_time_spent_at_both_rates() {
+        const FIRST_FREQUENCY: u16 = 0x400;
+        const RETUNED_FREQUENCY: u16 = 0x200;
+        const REPLACEMENT_FREQUENCY: u16 = 0x000;
+        const SAMPLES_BEFORE_RETUNE: u32 = 10;
+        const SAMPLES_AFTER_RETUNE: u32 = 5;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, FIRST_FREQUENCY, None);
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        let last_step_index = outgoing.phase / PHASE_ONE;
+        let overshoot = f64::from(outgoing.phase % PHASE_ONE) / f64::from(outgoing.step_delta);
+        for _ in 0..SAMPLES_BEFORE_RETUNE {
+            outgoing.sample();
+        }
+        outgoing.set_frequency(RETUNED_FREQUENCY);
+        for _ in 0..SAMPLES_AFTER_RETUNE {
+            outgoing.sample();
+        }
+        assert_eq!(outgoing.phase / PHASE_ONE, last_step_index);
+        let elapsed =
+            overshoot + f64::from(SAMPLES_BEFORE_RETUNE) + f64::from(SAMPLES_AFTER_RETUNE);
+
+        let retuned_period = f64::from(PHASE_ONE) / f64::from(outgoing.step_delta);
+        let outgoing_next = f64::from(samples_until_next_duty_step(outgoing.clone()));
+        assert!(
+            (outgoing_next - (retuned_period - elapsed)).abs() <= 1.0,
+            "the retuned note steps after {outgoing_next} samples, expected about {}",
+            retuned_period - elapsed,
+        );
+
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, REPLACEMENT_FREQUENCY, None);
+        let replacement_period = f64::from(PHASE_ONE) / f64::from(replacement.step_delta);
+        replacement.continue_duty_from(&outgoing);
+        assert_eq!(replacement.phase / PHASE_ONE, last_step_index);
+        let first_step = f64::from(samples_until_next_duty_step(replacement));
+        assert!(
+            (first_step - (replacement_period - elapsed)).abs() <= 1.0,
+            "the replacement steps after {first_step} samples, expected about {}",
+            replacement_period - elapsed,
         );
     }
 }
