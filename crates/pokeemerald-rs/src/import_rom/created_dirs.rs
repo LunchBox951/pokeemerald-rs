@@ -564,9 +564,12 @@ pub(super) fn create_directories(
 /// has to be synced for it — the directory's own sync would only persist
 /// what is inside it. Outermost first, so a crash part-way through leaves a
 /// prefix of the chain rather than a deep directory hanging from a name
-/// that never reached the disk. A reopen refused for want of a descriptor
-/// sheds the outermost pinned level, outermost being synced first, and
-/// retries.
+/// that never reached the disk.
+///
+/// A reopen refused for want of a descriptor gives one up without costing
+/// any level its sync: the outermost pinned level already synced if there
+/// is one, else the innermost level's own pin, which no sync reads. Either
+/// costs rollback only -- the second leaves the whole chain standing.
 ///
 /// Best-effort throughout: a weaker durability guarantee is not something
 /// to fail a finished import over -- including `dir.parent` itself being a
@@ -575,19 +578,35 @@ pub(super) fn create_directories(
 /// pinned at all.
 #[cfg(unix)]
 pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
-    let mut pin_from = 0;
+    sync_created_directories_with(created, &mut dest::reopen_for_sync);
+}
+
+/// [`sync_created_directories`] with its reopen injected, so a test can
+/// refuse one for want of a descriptor.
+#[cfg(unix)]
+fn sync_created_directories_with(
+    created: &mut [CreatedDirectory],
+    reopen: &mut dyn FnMut(&std::os::fd::OwnedFd) -> io::Result<std::os::fd::OwnedFd>,
+) {
     for index in 0..created.len() {
-        while let Some(parent) = created[index].parent.clone() {
-            match dest::reopen_for_sync(&parent) {
+        let Some(parent) = created[index].parent.clone() else {
+            continue;
+        };
+        let mut synced_from = 0;
+        loop {
+            match reopen(&parent) {
                 Ok(real) => {
                     let _ = rustix::fs::fsync(&real);
                     break;
                 }
                 Err(source) if is_out_of_descriptors_io(&source) => {
-                    // The clone must go first, or shedding the level that
-                    // shares it releases nothing.
-                    drop(parent);
-                    if !shed_outermost_pinned_level(created, &mut pin_from) {
+                    let (synced, unsynced) = created.split_at_mut(index);
+                    let released = shed_outermost_pinned_level(synced, &mut synced_from)
+                        || unsynced
+                            .last_mut()
+                            .and_then(|level| level.own.take())
+                            .is_some();
+                    if !released {
                         break;
                     }
                 }

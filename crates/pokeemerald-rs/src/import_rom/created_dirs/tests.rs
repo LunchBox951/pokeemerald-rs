@@ -562,3 +562,51 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
         "the level after `..` belongs under the pinned level's own parent, wherever it was moved"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn a_sync_out_of_descriptors_still_syncs_every_levels_parent() {
+    // The outermost level's reopen is refused before anything is synced, so
+    // no already-synced level can give its pin up. Shedding the outermost
+    // pinned level would take the very parent being retried, and the
+    // outermost entry -- the one the whole chain hangs from -- would never
+    // reach the disk.
+    let dir = TempDir::new("sync-shed");
+    let level = dir.join("a").join("b").join("c");
+    let mut created = super::create_directories_with_hooks(
+        &level,
+        super::MAX_PINNED_LEVELS,
+        &mut || {},
+        &mut || None,
+        &mut || None,
+    )
+    .expect("three levels are created");
+
+    let mut refused_once = false;
+    let mut synced = Vec::new();
+    super::sync_created_directories_with(&mut created, &mut |parent| {
+        if !refused_once {
+            refused_once = true;
+            return Err(std::io::Error::from(rustix::io::Errno::MFILE));
+        }
+        let stat = rustix::fs::fstat(parent)?;
+        synced.push((stat.st_dev, stat.st_ino));
+        super::super::dest::reopen_for_sync(parent)
+    });
+
+    let expected: Vec<_> = [dir.path.clone(), dir.join("a"), dir.join("a").join("b")]
+        .iter()
+        .map(|path| {
+            let stat = rustix::fs::stat(path).expect("the level exists");
+            (stat.st_dev, stat.st_ino)
+        })
+        .collect();
+    assert_eq!(
+        synced, expected,
+        "every created level's parent is synced, outermost first"
+    );
+    assert!(
+        created[0].parent.is_some() && created[0].own.is_some(),
+        "the level being synced keeps its pins"
+    );
+}
