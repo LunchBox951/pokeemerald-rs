@@ -109,11 +109,11 @@ impl Oscillator {
         matches!(self, Self::Square(square) if square.is_disabled())
     }
 
-    /// Carries a square oscillator's duty phase forward onto its replacement
-    /// ([`SquareChannel::set_duty_phase`]'s doc); a no-op for Wave/Noise.
+    /// Carries a square oscillator's duty position forward onto its replacement
+    /// ([`SquareChannel::continue_duty_from`]'s doc); a no-op for Wave/Noise.
     fn carry_duty_phase_from(&mut self, other: &Self) {
         if let (Self::Square(square), Self::Square(previous)) = (self, other) {
-            square.set_duty_phase(previous.duty_phase());
+            square.continue_duty_from(previous);
         }
     }
 

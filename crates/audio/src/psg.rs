@@ -272,15 +272,23 @@ impl SquareChannel {
         self.sweep.as_ref().map(|s| s.shadow_frequency)
     }
 
-    /// Returns the duty-table phase accumulator.
-    #[must_use]
-    pub(crate) fn duty_phase(&self) -> u32 {
-        self.phase
-    }
-
-    /// Restores a duty phase carried from a replaced note; a restart trigger
-    /// never clears the hardware duty index (`mgba/src/gb/audio.c:219-241,493-510`).
-    pub(crate) fn set_duty_phase(&mut self, phase: u32) {
+    /// Continues the duty position of `previous`, the note this one replaces on
+    /// the same hardware slot. A restart trigger clears neither the duty index
+    /// nor the time elapsed since its last step, and the next step lands once
+    /// that elapsed time reaches this note's step period
+    /// (`mgba/src/gb/audio.c:219-241,493-510`). The carried remainder is
+    /// therefore rescaled from the old step length to the new one.
+    pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
+        let index = previous.phase & !(PHASE_ONE - 1);
+        let remainder = u64::from(previous.phase & (PHASE_ONE - 1));
+        let rescaled = (remainder * u64::from(self.step_delta))
+            .checked_div(u64::from(previous.step_delta))
+            .unwrap_or(0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the phase accumulator wraps modulo 2^32, a whole number of duty cycles"
+        )]
+        let phase = (u64::from(index) + rescaled) as u32;
         self.phase = phase;
     }
 
@@ -864,5 +872,53 @@ mod tests {
         combined.extend(second.into_iter().map(|t| t + 300));
 
         assert_eq!(whole_ticks, combined);
+    }
+
+    fn samples_until_next_duty_step(mut chan: SquareChannel) -> u32 {
+        let index = chan.phase / PHASE_ONE;
+        (1..=PHASE_ONE)
+            .find(|_| {
+                chan.sample();
+                chan.phase / PHASE_ONE != index
+            })
+            .expect("a square channel always reaches its next duty step")
+    }
+
+    /// A note replacing another at a different pitch keeps the duty index and
+    /// the time elapsed since its last step, so its first step lands one new
+    /// period after the outgoing note's last step
+    /// (`SquareChannel::continue_duty_from`'s doc).
+    #[test]
+    fn a_replacement_at_another_pitch_steps_one_new_period_after_the_last_step() {
+        const OUTGOING_FREQUENCY: u16 = 0x700;
+        const REPLACEMENT_FREQUENCY: u16 = 0x000;
+        const ELAPSED_SAMPLES: u32 = 2;
+
+        let mut outgoing = SquareChannel::new(HALF_DUTY_REGISTER, OUTGOING_FREQUENCY, None);
+        // Walk into the middle of a step so a remainder is actually carried.
+        while outgoing.phase / PHASE_ONE == 0 {
+            outgoing.sample();
+        }
+        let last_step_index = outgoing.phase / PHASE_ONE;
+        for _ in 0..ELAPSED_SAMPLES {
+            outgoing.sample();
+        }
+        assert_eq!(outgoing.phase / PHASE_ONE, last_step_index);
+
+        let mut replacement = SquareChannel::new(HALF_DUTY_REGISTER, REPLACEMENT_FREQUENCY, None);
+        let replacement_period = samples_until_next_duty_step(replacement.clone());
+        replacement.continue_duty_from(&outgoing);
+
+        assert_eq!(
+            replacement.phase / PHASE_ONE,
+            last_step_index,
+            "the duty index must carry over",
+        );
+        let first_step = samples_until_next_duty_step(replacement);
+        let expected = replacement_period - ELAPSED_SAMPLES;
+        assert!(
+            first_step.abs_diff(expected) <= 1,
+            "first step after {first_step} samples, expected about {expected}",
+        );
     }
 }

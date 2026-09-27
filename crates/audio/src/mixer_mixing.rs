@@ -623,7 +623,7 @@ fn a_cgb_voice_alongside_directsound_leaves_the_reverb_tap_directsound_only() {
 }
 
 /// A note taking over an occupied square slot must pick the duty phase up
-/// where the note it replaced left it (`SquareChannel::set_duty_phase`'s doc).
+/// where the note it replaced left it (`SquareChannel::continue_duty_from`'s doc).
 #[test]
 fn a_square_note_on_continues_the_duty_phase_of_the_note_it_replaces() {
     const TRACK: usize = 0;
