@@ -58,14 +58,9 @@ fn only_the_levels_the_run_created_come_back_as_its_own() {
     assert!(again.is_empty(), "a run that created nothing owns nothing");
 }
 
-// Linux, Android, FreeBSD, and macOS 13 or later are where `dest`'s own
-// traversal opens (`open_traversal_directory`, `open_directory_at`,
-// `open_created_directory_at`) actually ask a pinned parent for no more
-// than write and search -- see their own docs in `dest.rs` for exactly
-// which arm each of those four takes and why. Every other Unix this
-// crate builds for, and an Apple kernel older than Ventura (#1312),
-// still falls back to a real, read-requiring open, so this assertion is
-// not a `cfg(unix)`-wide guarantee and must not claim to be one.
+// The traversal opens need only write and search on Linux, Android,
+// FreeBSD, and macOS 13 or later; every other Unix falls back to a
+// read-requiring open.
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -100,12 +95,8 @@ fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
         assert_eq!(created_paths(&created), std::slice::from_ref(&level));
         assert!(level.is_dir());
     } else {
-        // Running as a privileged user (this crate's own CI containers,
-        // in particular) makes `0o300` above no closer-off at all, so the
-        // assertion this test exists for never runs. Said out loud rather
-        // than passed vacuously and silently, so a report reading test
-        // output sees why zero assertions is the right count here, not a
-        // regression that quietly stopped asserting.
+        // A privileged user is not closed off by `0o300`, so the assertion
+        // cannot run; say so rather than pass vacuously.
         eprintln!(
             "a_level_is_created_under_a_parent_that_is_writable_but_not_readable: \
              skipped -- running privileged, 0o300 did not close the parent off"
@@ -113,11 +104,8 @@ fn a_level_is_created_under_a_parent_that_is_writable_but_not_readable() {
     }
 }
 
-// Same platform boundary as
-// `a_level_is_created_under_a_parent_that_is_writable_but_not_readable`
-// above, and for the same reason: this pins `open_traversal_directory`
-// itself, not the whole `create_directories` path, but the guarantee it
-// asserts is exactly as platform-scoped.
+// Same platform boundary as the test above; this pins
+// `open_traversal_directory` alone.
 #[cfg(any(
     target_os = "linux",
     target_os = "android",
@@ -174,14 +162,10 @@ fn a_creation_that_fails_part_way_hands_back_the_levels_it_made() {
 #[cfg(unix)]
 #[test]
 fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
-    // Another account removes the empty level this run made and makes its
-    // own at the same name before the cleanup runs. ext4 and XFS commonly
-    // hand the freed inode number straight to that replacement, so a
-    // device and inode comparison alone would take it for this run's level
-    // and `unlinkat` it. The record's held descriptor keeps the original
-    // inode allocated, so the filesystem cannot reuse it; the recorded
-    // identity is overwritten with the replacement's here to stand in for a
-    // filesystem that did, on any filesystem this runs on.
+    // Another account replaces the empty level at the same name before
+    // cleanup. The held descriptor keeps the original inode allocated; the
+    // recorded identity is overwritten here to stand in for a filesystem
+    // that reused the inode number.
     let dir = TempDir::new("undo-inode-reuse");
     let level = dir.join("new");
 
@@ -203,12 +187,9 @@ fn a_level_removed_and_remade_under_its_inode_number_is_left_standing() {
 #[cfg(unix)]
 #[test]
 fn a_level_whose_reopen_failed_is_left_standing_by_the_cleanup() {
-    // A level recorded without its own descriptor (the reopen right after
-    // `mkdirat` failed) has nothing pinning its inode, so the cleanup cannot
-    // tell it from a same-number replacement and leaves it alone. Driven
-    // through the injected `before_reopen` hook rather than clearing `own`
-    // by hand afterwards, so this exercises the real reopen-failure branch
-    // instead of a stand-in for its end state.
+    // A level whose reopen failed has no pin, so cleanup cannot tell it
+    // from a replacement and leaves it alone; driven through the real
+    // reopen-failure branch.
     let dir = TempDir::new("undo-unpinned");
     let level = dir.join("new");
 
@@ -337,12 +318,9 @@ fn a_destination_past_the_pin_budget_rolls_back_only_the_pinned_suffix() {
 #[cfg(unix)]
 #[test]
 fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
-    // `directories_to_create`'s lexical walk counts a `..` as a level of its
-    // own -- it names no new component, so it never reaches `created` -- and
-    // the pin budget must be measured against what actually lands there, not
-    // against that longer lexical list. Five missing levels descended into
-    // and five `..` climbed back out, then a final component: 11 lexical
-    // levels but only 6 real directories, exactly the injected budget.
+    // Five levels descended and five `..` climbed back out, then a final
+    // component: 11 lexical levels but 6 real directories, the injected
+    // budget.
     let dir = TempDir::new("dotdot-budget");
     let pin_limit = 6;
     let mut level = dir.join("d");
@@ -409,11 +387,8 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
 #[cfg(unix)]
 #[test]
 fn a_reopen_out_of_descriptors_sheds_every_earlier_level_in_order_under_repeated_pressure() {
-    // Six levels; the last one's reopen answers `EMFILE` three times running
-    // before finally deferring to the real reopen, driving the real
-    // shedding-and-retry path (not a stand-in for its end state) through
-    // three consecutive `shed_outermost_pinned_level` calls -- one per
-    // level it must fully release before the retry can succeed.
+    // The last level's reopen answers `EMFILE` three times, one per level
+    // that must be fully released before the retry succeeds.
     let dir = TempDir::new("shed-in-order");
     let mut level = dir.join("d");
     for _ in 1..6 {
@@ -531,18 +506,10 @@ fn pin_budget_for_stays_within_reserved_headroom_of_the_soft_limit() {
 #[cfg(unix)]
 #[test]
 fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
-    // A `..` level used to be reopened by its whole path, walking every
-    // component before it again -- including one this run already created
-    // and pinned. Another account could swap that component for a symlink
-    // into a tree of its own after the pin, landing the reopen there; the
-    // level *after* the `..` would then be created inside the attacker's
-    // tree, through an `mkdirat` the pinned descent was supposed to keep
-    // out of reach.
-    //
-    // The swap lands through `create_directories_with_hooks`'s injected
-    // `before_dotdot` hook, once both levels ahead of the `..` are made and
-    // pinned and before the `..` is resolved -- the one point the race
-    // matters, every run, with no second thread to schedule.
+    // A component ahead of the `..` is swapped for a symlink into another
+    // tree through the `before_dotdot` seam, once the levels ahead are made
+    // and pinned; the level after the `..` must still land under the
+    // pinned parent.
     let dir = TempDir::new("dotdot-swap");
     let dest = dir.join("l0").join("l1").join("..").join("downstream");
 
@@ -590,11 +557,8 @@ fn a_dotdot_level_descends_from_the_pinned_parent_not_the_path() {
 #[cfg(unix)]
 #[test]
 fn a_sync_out_of_descriptors_still_syncs_every_levels_parent() {
-    // The outermost level's reopen is refused before anything is synced, so
-    // no already-synced level can give its pin up. Shedding the outermost
-    // pinned level would take the very parent being retried, and the
-    // outermost entry -- the one the whole chain hangs from -- would never
-    // reach the disk.
+    // The outermost level's reopen is refused before anything is synced,
+    // so shedding must not take the parent being retried.
     let dir = TempDir::new("sync-shed");
     let level = dir.join("a").join("b").join("c");
     let mut created = super::create_directories_with_hooks(

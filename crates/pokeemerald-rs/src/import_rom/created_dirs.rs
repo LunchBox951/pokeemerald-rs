@@ -17,13 +17,9 @@ use std::path::{Path, PathBuf};
 
 use super::dest;
 
-/// The levels `dir` is missing, outermost first: the ones
-/// [`create_directories`] has to try. Empty for a `dir` that is already a
-/// directory, which is a run with nothing to create.
-///
-/// A component that exists but is *not* a directory is listed like a
-/// missing one. Creating it then fails on it, and that failure carries the
-/// levels already made, so distinguishing the two here would buy nothing.
+/// The levels `dir` is missing, outermost first; empty when `dir` is
+/// already a directory. A component that exists but is not a directory is
+/// listed too, so creation fails on it.
 pub(super) fn directories_to_create(dir: &Path) -> Vec<PathBuf> {
     let mut missing = Vec::new();
     let mut current = Some(dir);
@@ -80,23 +76,14 @@ fn same_directory_identity(a: &rustix::fs::Stat, b: &rustix::fs::Stat) -> bool {
     a.st_dev == b.st_dev && a.st_ino == b.st_ino
 }
 
-/// The most levels [`create_directories_with_hooks`] ever tries to keep a
-/// descriptor pinned for at once; see the module docs for why.
-/// [`pin_budget`] is the real ceiling, never above this one, and real fd
-/// pressure can still force fewer pinned than either; see
-/// [`shed_outermost_pinned_level`].
+/// The most levels ever pinned at once; [`pin_budget`] may be lower.
 #[cfg(unix)]
 const MAX_PINNED_LEVELS: usize = 32;
 
-/// Descriptors this run needs outside the pinned chain, so [`pin_budget`]
-/// leaves room for them rather than making the opens after creation --
-/// `Dest::open`'s own handle and the temporary pack file -- shed pins
-/// through [`open_shedding_pins`]: three for stdio, one for the ROM file
-/// already open before creation starts, one for
-/// [`create_directories_with_hooks`]'s own traversal handle, one apiece
-/// for those two later opens, and three of margin. The margin is a guess
-/// about what else the process holds, never a measurement of it; shedding
-/// is what answers a guess that falls short.
+/// Descriptors the import needs outside the pinned chain: stdio, the ROM,
+/// the traversal handle, the destination and temporary-pack opens, and
+/// margin. A guess, not a measurement; [`open_shedding_pins`] covers the
+/// shortfall.
 #[cfg(unix)]
 const RESERVED_DESCRIPTORS: usize = 10;
 
@@ -109,11 +96,7 @@ fn pin_budget() -> usize {
     pin_budget_for(rustix::process::getrlimit(rustix::process::Resource::Nofile).current)
 }
 
-/// [`pin_budget`]'s formula, taking the soft limit as a plain value so a
-/// test can check it without touching the process's real `RLIMIT_NOFILE`.
-/// No limit (`soft` is `None`, `getrlimit`'s own spelling for `RLIM_INFINITY`)
-/// reads as no ceiling here either, leaving [`MAX_PINNED_LEVELS`] the only
-/// one.
+/// [`pin_budget`]'s formula over a soft limit, `None` for no limit.
 #[cfg(unix)]
 fn pin_budget_for(soft: Option<u64>) -> usize {
     match soft {
@@ -140,21 +123,10 @@ fn is_out_of_descriptors_io(error: &io::Error) -> bool {
     rustix::io::Errno::from_io_error(error).is_some_and(is_out_of_descriptors)
 }
 
-/// Releases the outermost level still holding a pinned descriptor (`own`,
-/// `parent`, or both), if any, so a caller that just hit
-/// [`is_out_of_descriptors`] can retry with one fewer descriptor in use.
-///
-/// `pin_from` is a cursor: everything before it already holds nothing, so
-/// this walks forward from it, one record at a time, until it finds one
-/// that still does, clears both fields there, and leaves the cursor just
-/// past it. Repeated calls therefore visit every level in turn rather than
-/// skipping every other one.
-///
-/// Clearing a record's own `own` does not by itself close its descriptor --
-/// the level just inside it still needs that same descriptor as its own
-/// `parent` -- but a call landing on *that* inner record clears its
-/// `parent` too, and by then nothing before it holds a reference either.
-/// Each call fully releases the descriptor the call before it only halved.
+/// Releases the outermost level at or after the `pin_from` cursor that
+/// still holds a pin, advancing the cursor past it; `false` when none is
+/// left. Adjacent levels share a descriptor, so a release may take a
+/// second call to close it.
 #[cfg(unix)]
 fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut usize) -> bool {
     while let Some(level) = created.get_mut(*pin_from) {
@@ -196,13 +168,9 @@ enum ReopenedLevel {
     Unverified(io::Error),
 }
 
-/// Reopens the level [`create_directories_with_hooks`] just created at
-/// `name` in `parent` and checks it against `identity`. `before_reopen` is
-/// the test seam [`create_directories_with_hooks`] documents.
-///
-/// A reopen refused with [`is_out_of_descriptors`] retries after
-/// [`shed_outermost_pinned_level`] frees one, as long as there is one left
-/// to free; only once none is does the refusal stand.
+/// Reopens the level just created at `name` in `parent` and checks it
+/// against `identity`, shedding a pin and retrying while descriptors run
+/// out; `before_reopen` is its test seam.
 #[cfg(unix)]
 fn reopen_created_level(
     created: &mut [CreatedDirectory],
@@ -239,11 +207,8 @@ fn reopen_created_level(
     }
 }
 
-/// Finishes a level [`create_directories_with_hooks`] just `mkdirat`ed at
-/// `name`, inside `parent_fd`: captures its identity (retrying through
-/// [`shed_outermost_pinned_level`] on [`is_out_of_descriptors`], like the
-/// `mkdirat` before it), reopens and records it through
-/// [`reopen_created_level`], and answers with the descriptor the next level
+/// Records a level just `mkdirat`ed at `name` in `parent_fd`: captures its
+/// identity, reopens it, and answers with the descriptor the next level
 /// descends through.
 #[cfg(unix)]
 fn create_missing_level(
@@ -255,14 +220,9 @@ fn create_missing_level(
     name: std::ffi::OsString,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
-    // The identity comes from a lookup, not from a descriptor `mkdirat`
-    // never hands back -- and it is captured whether or not the reopen just
-    // below succeeds, so a mundane failure there (too many open files)
-    // cannot un-record a level that really was made and leave it stuck
-    // forever. `mkdirat` just said this name is a fresh directory, so
-    // anything other than one sitting there the instant this looks again is
-    // somebody else's swap; refused the same way, without following it as a
-    // symlink might.
+    // The identity is captured before the reopen so a failed reopen cannot
+    // un-record a level that was made; anything but a directory at the name
+    // is a swap and is refused.
     let found = loop {
         match rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
             Err(err)
@@ -327,12 +287,9 @@ fn create_missing_level(
     }
 }
 
-/// Opens `name` inside `parent` for [`create_directories_with_hooks`]'s two
-/// non-`mkdirat` descents -- ascending a lexical `..`, or stepping into a
-/// level that turned out to already exist -- retrying via
-/// [`shed_outermost_pinned_level`] on [`is_out_of_descriptors_io`] the same
-/// way [`reopen_created_level`] does. `before_open` is its test seam, in
-/// the same shape as `before_reopen`.
+/// Opens `name` inside `parent` for a `..` or an already-existing level,
+/// shedding a pin and retrying while descriptors run out; `before_open` is
+/// its test seam.
 #[cfg(unix)]
 fn open_existing_level(
     created: &mut [CreatedDirectory],
@@ -384,21 +341,13 @@ fn create_directories_with_hooks(
         Err(source) => return Err((Vec::new(), source)),
     };
 
-    // Only the innermost `pin_limit` get a descriptor pinned; see the
-    // module docs. Counted against `created`, the levels this run actually
-    // makes, never `levels` itself: a lexical `..` in `levels` creates
-    // nothing, and pairing the budget with the wrong count would pin too
-    // few of a destination that fits comfortably within it.
+    // Pins are counted against `created`, not `levels`: a `..` creates
+    // nothing.
     let mut pin_from = 0;
     let mut created = Vec::new();
     for level in levels {
-        // `directories_to_create`'s lexical walk can produce a `..` level
-        // (`Path::file_name` is `None` for one) that names no new component
-        // to make. It resolves relative to the descent itself (`..` from
-        // `parent_fd`, which already stands where this loop last made or
-        // found a level) rather than by reopening `level`'s full path,
-        // which would re-walk -- and so trust again -- every component
-        // already pinned.
+        // A `..` level (`file_name` is `None`) resolves relative to the
+        // descent, never by reopening the full path.
         let Some(name) = level.file_name().map(std::ffi::OsStr::to_os_string) else {
             before_dotdot();
             parent_fd = match open_existing_level(
@@ -440,11 +389,8 @@ fn create_directories_with_hooks(
                     Err(source) => return Err((created, source)),
                 }
             }
-            // A level that stands as a directory now is no failure, whoever
-            // made it — `create_dir_all`'s own rule. It is simply not this
-            // run's to record, though anything nested under it still has to
-            // be created through it. A final symlink to a directory counts,
-            // as it does for `Path::is_dir`.
+            // An existing directory is no failure and not this run's to
+            // record; a final symlink to one counts, as for `Path::is_dir`.
             Err(mkdir_err) => {
                 let already_a_directory =
                     rustix::fs::statat(&*parent_fd, &name, rustix::fs::AtFlags::empty()).is_ok_and(
@@ -496,24 +442,11 @@ pub(super) fn create_directories(
     Ok(created)
 }
 
-/// Get the entries [`create_directories`] just wrote onto the disk.
-///
-/// A new directory is a *name in the level above it*, so the parent is what
-/// has to be synced for it — the directory's own sync would only persist
-/// what is inside it. Outermost first, so a crash part-way through leaves a
-/// prefix of the chain rather than a deep directory hanging from a name
-/// that never reached the disk.
-///
-/// A reopen refused for want of a descriptor gives one up without costing
-/// any level its sync: the outermost pinned level already synced if there
-/// is one, else the innermost level's own pin, which no sync reads. Either
-/// costs rollback only -- the second leaves the whole chain standing.
-///
-/// Best-effort throughout: a weaker durability guarantee is not something
-/// to fail a finished import over -- including `dir.parent` itself being a
-/// traversal-only descriptor nothing can `fsync` directly
-/// ([`dest::reopen_for_sync`]), or, past [`MAX_PINNED_LEVELS`], not being
-/// pinned at all.
+/// Syncs the parent of each created level, outermost first, so a crash
+/// leaves a prefix of the chain. A reopen refused for want of a descriptor
+/// sheds an already-synced level's pin, else the innermost level's own,
+/// costing rollback but never a sync. Best effort: durability never fails
+/// a finished import.
 #[cfg(unix)]
 pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
     sync_created_directories_with(created, &mut dest::reopen_for_sync);
@@ -554,11 +487,9 @@ fn sync_created_directories_with(
     }
 }
 
-/// Runs `open`, and while it is refused for want of a descriptor, releases
-/// the outermost of `created`'s pinned levels and runs it again; the
-/// refusal stands once none is left to release. For the opens an import
-/// makes after [`create_directories`] returns, which would otherwise fail
-/// on descriptors that rollback could do without.
+/// Runs `open`, shedding the outermost pinned level and retrying while it
+/// is refused for want of a descriptor; for the opens an import makes
+/// after creation.
 #[cfg(unix)]
 pub(super) fn open_shedding_pins<T>(
     created: &mut [CreatedDirectory],
@@ -602,18 +533,10 @@ pub(super) fn sync_created_directories(created: &mut [CreatedDirectory]) {
     }
 }
 
-/// Remove the directories this run created, innermost first.
-///
-/// A failed import should leave the filesystem as it found it: an empty
-/// `pokeemerald-rs` directory in the user's data directory is litter that
-/// looks like a half-installed game, and a destination reached through
-/// several missing levels would leave a whole chain of them. Innermost
-/// first, because a directory only comes away once what it holds is gone.
-///
 /// Removes, innermost first, each created level that is still empty and
 /// still resolves in its pinned parent to the identity captured at
-/// creation. The first refusal ends the walk; an unpinned level is skipped
-/// and left standing without ending it.
+/// creation, so a failed import leaves no chain of empty directories. The
+/// first refusal ends the walk; an unpinned level is skipped.
 #[cfg(unix)]
 pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
@@ -654,12 +577,9 @@ pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
 pub(super) fn undo_created_directories(created: &[CreatedDirectory]) {
     for dir in created.iter().rev() {
         if fs::remove_dir(&dir.path).is_err() {
-            // A partial `create_dir_all` never made this level -- it is
-            // missing, unnameable, or the non-directory component it tripped
-            // on -- and the outer levels it did create still get taken back.
-            // A level that still stands as a directory refused removal for
-            // real (it holds something), so the levels above hold it too and
-            // are not this run's to take back.
+            // A missing or non-directory level was never made; a directory
+            // that refuses removal holds something, and so do the levels
+            // above it.
             match fs::symlink_metadata(&dir.path) {
                 Ok(meta) if meta.is_dir() => break,
                 _ => {}
