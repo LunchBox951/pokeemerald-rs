@@ -295,14 +295,9 @@ impl SquareChannel {
         self.phase
     }
 
-    /// Continues the duty position of `previous`, the note this one replaces on
-    /// the same hardware slot, following mGBA, the repository's hardware
-    /// reference (`docs/principles.md:25`). Its restart reloads envelope,
-    /// sweep, and length but leaves both the duty index and the time of the
-    /// last step untouched (`mgba/src/gb/audio.c:168-194,219-241`), and the
-    /// next catch-up advances the index by every whole new period that time
-    /// covers (`:493-510`). When the new note is higher that time may cover
-    /// whole steps and advance the index at once, as mGBA does.
+    /// Continues the duty position of `previous`, the note this one replaces
+    /// on the same hardware slot: a restart keeps the duty index and the time
+    /// since the last step (`mgba/src/gb/audio.c:168-194`, `:493-510`).
     pub(crate) fn continue_duty_from(&mut self, previous: &Self) {
         self.phase = retime_step_remainder(previous.phase, previous.step_delta, self.step_delta);
     }
