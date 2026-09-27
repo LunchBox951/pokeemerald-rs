@@ -269,12 +269,10 @@ fn convert_key_split(pack: &AssetPack, v: &KeySplitVoice) -> Result<Instrument, 
     children.truncate(usize::from(MISSING_CHILD_INDEX));
 
     let mut table = [MISSING_CHILD_INDEX; KEY_SLOTS];
+    // `KeySplitVoice::new` rejects any table whose `starting_note + table().len()`
+    // exceeds `KEY_SLOTS`, so every offset below indexes within `table`.
     for (offset, &child_index) in v.table().iter().enumerate() {
-        if let Some(key) = usize::from(v.starting_note).checked_add(offset) {
-            if let Some(slot) = table.get_mut(key) {
-                *slot = child_index;
-            }
-        }
+        table[usize::from(v.starting_note) + offset] = child_index;
     }
 
     Ok(Instrument::KeySplit(KeySplit { table, children }))
