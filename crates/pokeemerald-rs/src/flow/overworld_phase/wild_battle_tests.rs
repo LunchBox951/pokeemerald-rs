@@ -34,12 +34,12 @@ fn a_non_losing_wild_battle_reinitialises_the_tileset_animation_counter() {
         slot: 0,
     }));
     assert!(
-        phase.wild_battle.is_some(),
+        phase.is_wild_battle_active(),
         "a fightable Wurmple must construct"
     );
 
     let mut battle_frames = 0_u32;
-    while phase.wild_battle.is_some() {
+    while phase.is_wild_battle_active() {
         phase.step(ButtonState::default());
         battle_frames += 1;
         assert!(battle_frames < 10_000, "the headless battle must terminate");
