@@ -820,30 +820,34 @@ fn is_out_of_descriptors_io(error: &io::Error) -> bool {
     rustix::io::Errno::from_io_error(error).is_some_and(is_out_of_descriptors)
 }
 
-/// Releases the outermost level still holding a pinned descriptor, if any,
-/// so a caller that just hit [`is_out_of_descriptors`] can retry with one
-/// fewer descriptor in use. `pin_from` is both read and advanced past
-/// whatever this frees.
+/// Releases the outermost level still holding a pinned descriptor (`own`,
+/// `parent`, or both), if any, so a caller that just hit
+/// [`is_out_of_descriptors`] can retry with one fewer descriptor in use.
 ///
-/// The level just inside the one released loses its own verifiable parent
-/// as a side effect -- that parent *was* the descriptor just released --
-/// though its own descriptor is untouched, since it is still needed to keep
-/// descending. Nothing deeper is affected: each level's descriptor is its
-/// own, shared only with its immediate neighbors on each side.
+/// `pin_from` is a cursor: everything before it already holds nothing, so
+/// this walks forward from it, one record at a time, until it finds one
+/// that still does, clears both fields there, and leaves the cursor just
+/// past it. Repeated calls therefore visit every level in turn rather than
+/// skipping every other one.
+///
+/// Clearing a record's own `own` does not by itself close its descriptor --
+/// the level just inside it still needs that same descriptor as its own
+/// `parent` -- but a call landing on *that* inner record clears its
+/// `parent` too, and by then nothing before it holds a reference either.
+/// Each call fully releases the descriptor the call before it only halved.
 #[cfg(unix)]
 fn shed_outermost_pinned_level(created: &mut [CreatedDirectory], pin_from: &mut usize) -> bool {
-    let shed = *pin_from;
-    let Some(level) = created.get_mut(shed) else {
-        return false;
-    };
-    level.own = None;
-    level.parent = None;
-    *pin_from = shed + 1;
-    if let Some(next) = created.get_mut(shed + 1) {
-        next.parent = None;
-        *pin_from = shed + 2;
+    while let Some(level) = created.get_mut(*pin_from) {
+        if level.own.is_none() && level.parent.is_none() {
+            *pin_from += 1;
+            continue;
+        }
+        level.own = None;
+        level.parent = None;
+        *pin_from += 1;
+        return true;
     }
-    true
+    false
 }
 
 /// Create the levels `dir` is missing, outermost first, and answer with the
@@ -950,7 +954,6 @@ fn create_missing_level(
     parent_fd: std::rc::Rc<std::os::fd::OwnedFd>,
     path: PathBuf,
     name: std::ffi::OsString,
-    index: usize,
     before_reopen: &mut dyn FnMut() -> Option<io::Error>,
 ) -> Result<std::rc::Rc<std::os::fd::OwnedFd>, io::Error> {
     // The identity comes from a lookup, not from a descriptor `mkdirat`
@@ -992,17 +995,20 @@ fn create_missing_level(
         before_reopen,
     ) {
         ReopenedLevel::Pinned(descend) => {
-            // `pin_from` may have advanced during the reopen itself
-            // (shedding to make room for it), but never past `index`:
-            // shedding only ever touches earlier, already-recorded levels.
-            let pin = index >= *pin_from;
             created.push(CreatedDirectory {
                 path,
-                parent: pin.then_some(parent_fd),
+                parent: Some(parent_fd),
                 name,
                 identity,
-                own: pin.then(|| std::rc::Rc::clone(&descend)),
+                own: Some(std::rc::Rc::clone(&descend)),
             });
+            // This level just made the pinned window one longer than
+            // `MAX_PINNED_LEVELS`; shed the outermost to bring it back --
+            // one call always suffices, since nothing but this push could
+            // have grown the window since the last time it was checked.
+            if created.len() - *pin_from > MAX_PINNED_LEVELS {
+                shed_outermost_pinned_level(created, pin_from);
+            }
             Ok(descend)
         }
         // A real reopen failure, not a budget choice: kept on the same
@@ -1054,13 +1060,13 @@ fn create_directories_with_hooks(
     };
 
     // Only the innermost `MAX_PINNED_LEVELS` get a descriptor pinned; see
-    // the module docs. `levels.len()` is already the whole walk, computed
-    // before any of it runs, so the cutoff is known up front. `pin_from`
-    // still advances past this if the descriptor table turns out tighter
-    // than that budget expected; see `shed_outermost_pinned_level`.
-    let mut pin_from = levels.len().saturating_sub(MAX_PINNED_LEVELS);
+    // the module docs. Counted against `created`, the levels this run
+    // actually makes, never `levels` itself: a lexical `..` in `levels`
+    // creates nothing, and pairing the budget with the wrong count would
+    // pin too few of a destination that fits comfortably within it.
+    let mut pin_from = 0;
     let mut created = Vec::new();
-    for (index, level) in levels.into_iter().enumerate() {
+    for level in levels {
         // `directories_to_create`'s lexical walk can produce a `..` level
         // (`Path::file_name` is `None` for one) that names no new component
         // to make. It resolves relative to the descent itself (`..` from
@@ -1096,7 +1102,6 @@ fn create_directories_with_hooks(
                     parent_fd,
                     level,
                     name,
-                    index,
                     before_reopen,
                 ) {
                     Ok(descend) => parent_fd = descend,

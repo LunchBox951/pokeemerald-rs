@@ -604,6 +604,37 @@ fn a_destination_past_the_pin_budget_rolls_back_only_the_pinned_suffix() {
 
 #[cfg(unix)]
 #[test]
+fn a_destination_with_dotdot_levels_pins_every_directory_it_actually_creates() {
+    // `directories_to_create`'s lexical walk counts a `..` as a level of its
+    // own -- it names no new component, so it never reaches `created` -- and
+    // the pin budget must be measured against what actually lands there, not
+    // against that longer lexical list. Twenty missing levels descended into
+    // and twenty `..` climbed back out, then a final component: 41 lexical
+    // levels but only 21 real directories, comfortably inside
+    // `MAX_PINNED_LEVELS`.
+    let dir = TempDir::new("dotdot-budget");
+    let mut level = dir.join("d");
+    for _ in 1..20 {
+        level = level.join("d");
+    }
+    for _ in 0..20 {
+        level = level.join("..");
+    }
+    level = level.join("final");
+
+    let created = create_directories(&level)
+        .expect("a destination that fits the budget is still created through its dotdot levels");
+
+    assert_eq!(created.len(), 21);
+    for (index, entry) in created.iter().enumerate() {
+        assert!(entry.own.is_some(), "level {index} fits the pin budget");
+        assert!(entry.parent.is_some(), "level {index} fits the pin budget");
+    }
+    assert!(level.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_valid_deep_destination_creates_or_fully_rolls_back() {
     // Meant to also be run under a tight `RLIMIT_NOFILE` (see the PR record
     // for `prlimit --nofile=32/36/64` results); at the ordinary limit this
@@ -633,43 +664,37 @@ fn a_valid_deep_destination_creates_or_fully_rolls_back() {
 
 #[cfg(unix)]
 #[test]
-fn a_reopen_out_of_descriptors_sheds_the_outermost_pinned_level_and_retries() {
-    // The fifth `before_reopen` call is level 4's (0-indexed) first attempt;
-    // answering it with `EMFILE` drives the real shedding-and-retry path
-    // instead of a stand-in for its end state, the same way
-    // `a_level_whose_reopen_failed_is_left_standing_by_the_cleanup` drives a
-    // real reopen failure rather than clearing `own` by hand.
-    let dir = TempDir::new("shed-outermost");
+fn a_reopen_out_of_descriptors_sheds_every_earlier_level_in_order_under_repeated_pressure() {
+    // Six levels; the last one's reopen answers `EMFILE` three times running
+    // before finally deferring to the real reopen, driving the real
+    // shedding-and-retry path (not a stand-in for its end state) through
+    // three consecutive `shed_outermost_pinned_level` calls -- one per
+    // level it must fully release before the retry can succeed.
+    let dir = TempDir::new("shed-in-order");
     let mut level = dir.join("d");
-    for _ in 1..5 {
+    for _ in 1..6 {
         level = level.join("d");
     }
     let mut calls = 0u32;
     let mut hook = move || -> Option<std::io::Error> {
         calls += 1;
-        (calls == 5).then(|| std::io::Error::from(rustix::io::Errno::MFILE))
+        (6..=8)
+            .contains(&calls)
+            .then(|| std::io::Error::from(rustix::io::Errno::MFILE))
     };
 
     let created = super::create_directories_with_hooks(&level, &mut || {}, &mut hook)
-        .expect("shedding a pinned level frees enough room for the retry to succeed");
+        .expect("shedding three pinned levels frees enough room for the retry to succeed");
 
-    assert_eq!(created.len(), 5);
-    assert!(created[0].own.is_none(), "the outermost level was shed");
-    assert!(created[0].parent.is_none(), "the outermost level was shed");
-    assert!(
-        created[1].parent.is_none(),
-        "the level just inside the shed one loses its own verifiable parent"
-    );
-    assert!(
-        created[1].own.is_some(),
-        "the level just inside the shed one keeps its own descriptor to keep descending with"
-    );
-    for entry in &created[2..] {
-        assert!(entry.own.is_some(), "levels past the shed pair stay pinned");
-        assert!(
-            entry.parent.is_some(),
-            "levels past the shed pair stay pinned"
-        );
+    assert_eq!(created.len(), 6);
+    for (index, entry) in created.iter().enumerate() {
+        if index < 3 {
+            assert!(entry.own.is_none(), "level {index} was fully shed");
+            assert!(entry.parent.is_none(), "level {index} was fully shed");
+        } else {
+            assert!(entry.own.is_some(), "level {index} was never shed");
+            assert!(entry.parent.is_some(), "level {index} was never shed");
+        }
     }
     assert!(level.is_dir());
 }
