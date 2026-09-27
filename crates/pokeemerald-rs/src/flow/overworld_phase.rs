@@ -122,6 +122,29 @@ pub(in crate::flow) enum SyntheticStartMenu {
     Fails,
 }
 
+/// The battle currently owning the overworld frame, if any: at most one
+/// variant is ever set. `Some` freezes the overworld for the frame, the
+/// same shape [`Self::dialog`] uses. The rival and sight-trainer variants
+/// carry the trainer fought, read at battle end to set its defeated flag.
+#[derive(Debug)]
+pub(super) enum ActiveBattle {
+    /// A random wild encounter.
+    Wild(battle::Battle),
+    /// The Route 101 scripted first battle.
+    First(battle::Battle),
+    /// The Route 103 rival battle, with the trainer it is fought against.
+    Rival {
+        battle: battle::Battle,
+        trainer_id: assets::trainers::TrainerId,
+    },
+    /// A Route 103 sight-trainer battle, with the trainer it is fought
+    /// against.
+    SightTrainer {
+        battle: battle::Battle,
+        trainer_id: assets::trainers::TrainerId,
+    },
+}
+
 /// A loaded [`OverworldScene`], the [`PlayerState`] it renders, and the
 /// [`SaveBlock1`]/[`SaveBlock2`] pair this session persists.
 ///
@@ -230,11 +253,12 @@ pub(crate) struct OverworldPhase {
     /// by its other two (empty count, clean decode); diagnostic only, and
     /// never a save-time decision input.
     pub(super) undecodable_lead_retained: bool,
-    /// The wild battle currently being played out, if any. `Some` freezes
-    /// the overworld for the frame -- the same shape [`Self::dialog`]
-    /// uses -- while [`crate::flow::wild_encounter::advance_wild_battle`]
-    /// drives one turn per frame.
-    pub(super) wild_battle: Option<battle::Battle>,
+    /// The battle currently being played out, if any -- struct docs on
+    /// [`ActiveBattle`]. `Some` freezes the overworld for the frame -- the
+    /// same shape [`Self::dialog`] uses -- while
+    /// [`Self::advance_active_battle_frame`] drives whichever variant's own
+    /// driver one turn per frame.
+    pub(super) active_battle: Option<ActiveBattle>,
     /// `gDifferentSaveFile` (`pokeemerald/src/new_game.c:55`): whether the
     /// next SAVE must still ask the different-save-file WARNING, instead
     /// of the ordinary already-saved question.
@@ -261,7 +285,7 @@ pub(crate) struct OverworldPhase {
     /// [`start_menu`] to know whether to reapply it.
     new_game_session: bool,
     /// The open field start menu, if any. `Some` freezes the overworld for
-    /// the frame, the same shape [`Self::dialog`] and [`Self::wild_battle`]
+    /// the frame, the same shape [`Self::dialog`] and [`Self::active_battle`]
     /// use -- see [`start_menu`] for the gate that decides when `START`
     /// may open one.
     start_menu: Option<StartMenu>,
@@ -283,56 +307,25 @@ pub(crate) struct OverworldPhase {
     /// drive a cone that claims its trigger frame through [`Self::step`].
     #[cfg(test)]
     pub(in crate::flow) synthetic_sight_trainer: Option<assets::trainers::TrainerId>,
-    /// The Route 101 scripted first battle currently being played out, if
-    /// any -- [`Self::wild_battle`]'s narrative-event counterpart, kept in
-    /// its own field because its driver
-    /// ([`crate::flow::first_battle::advance_first_battle`]'s `UseMove`
-    /// policy) differs from a wild battle's `Run` one. `Some` freezes the
-    /// overworld for the frame exactly like [`Self::wild_battle`]; the two
-    /// are never `Some` at once.
-    pub(super) first_battle: Option<battle::Battle>,
     /// The terminal result of the most recently completed Route 101
     /// scripted first battle. Cleared when a new attempt starts and set
     /// only when its driver reports a real [`battle::BattleOutcome`], so an
     /// aborted battle remains distinguishable from a completed one after
-    /// both have emptied [`Self::first_battle`].
+    /// [`Self::active_battle`]'s `First` arm has emptied either way.
     first_battle_outcome: Option<battle::BattleOutcome>,
-    /// The Route 103 rival battle currently being played out, if any --
-    /// [`Self::first_battle`]'s sibling, driven by
-    /// [`crate::flow::npc_trainer_battle::advance_npc_trainer_battle`]'s
-    /// `UseMove` policy rather than a wild battle's. `Some` freezes the
-    /// overworld for the frame exactly like [`Self::wild_battle`]/
-    /// [`Self::first_battle`]; never `Some` at the same time as either.
-    pub(super) rival_battle: Option<battle::Battle>,
-    /// [`Self::first_battle_outcome`]'s sibling for [`Self::rival_battle`]:
+    /// [`Self::first_battle_outcome`]'s sibling for [`ActiveBattle::Rival`]:
     /// cleared at trigger time, set only on a real reported outcome.
     rival_battle_outcome: Option<battle::BattleOutcome>,
-    /// The trainer [`Self::rival_battle`] is fought against, held from
-    /// battle start to battle end so the win can set its defeated flag;
-    /// [`Self::sight_trainer_id`]'s sibling.
-    rival_trainer_id: Option<assets::trainers::TrainerId>,
-    /// A Route 103 sight-trainer battle currently being played out, if
-    /// any -- [`Self::rival_battle`]'s sibling, started the instant a cone
-    /// reaches the player rather than on a button press. `Some` freezes
-    /// the overworld for the frame exactly like
-    /// [`Self::wild_battle`]/[`Self::first_battle`]/[`Self::rival_battle`];
-    /// never `Some` at the same time as any of the three.
-    pub(super) sight_trainer_battle: Option<battle::Battle>,
     /// [`Self::rival_battle_outcome`]'s sibling for
-    /// [`Self::sight_trainer_battle`]: cleared at trigger time, set only
-    /// on a real reported outcome.
+    /// [`ActiveBattle::SightTrainer`]: cleared at trigger time, set only on
+    /// a real reported outcome.
     sight_trainer_battle_outcome: Option<battle::BattleOutcome>,
-    /// Which [`assets::trainers::TrainerId`] [`Self::sight_trainer_battle`]
-    /// is being fought against, if any -- needed at battle end to set that
-    /// trainer's own defeated flag on a win. Set the instant the battle
-    /// starts, cleared the instant it ends (win, loss, or abort alike).
-    sight_trainer_id: Option<assets::trainers::TrainerId>,
     /// A sight trainer's approach cutscene currently playing out, if any --
     /// the multi-frame sequence between the cone check that started it and
-    /// the [`Self::sight_trainer_battle`] it ends in
+    /// the [`ActiveBattle::SightTrainer`] it ends in
     /// ([`sight_trainer_approach`]). `Some` owns the frame outright, like a
-    /// battle does, and is never `Some` at the same time as any battle
-    /// field.
+    /// battle does, and is never `Some` at the same time as
+    /// [`Self::active_battle`].
     sight_approach: Option<sight_trainer_approach::SightApproach>,
     /// Which sight-trainer refusals have already been logged since the
     /// player last stood outside every sight cone. Purely a logging gate:
@@ -486,7 +479,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
-            wild_battle: None,
+            active_battle: None,
             different_save_file: false,
             new_game_session: false,
             start_menu: None,
@@ -495,14 +488,9 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
-            first_battle: None,
             first_battle_outcome: None,
-            rival_battle: None,
             rival_battle_outcome: None,
-            rival_trainer_id: None,
-            sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
-            sight_trainer_id: None,
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
@@ -602,7 +590,7 @@ impl OverworldPhase {
             party_lead_slot: 0,
             lead_hp_hidden_by_load: 0,
             undecodable_lead_retained: false,
-            wild_battle: None,
+            active_battle: None,
             different_save_file: true,
             new_game_session: true,
             start_menu: None,
@@ -611,14 +599,9 @@ impl OverworldPhase {
             synthetic_start_menu: SyntheticStartMenu::RealPack,
             #[cfg(test)]
             synthetic_sight_trainer: None,
-            first_battle: None,
             first_battle_outcome: None,
-            rival_battle: None,
             rival_battle_outcome: None,
-            rival_trainer_id: None,
-            sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
-            sight_trainer_id: None,
             sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         }
@@ -640,7 +623,7 @@ impl OverworldPhase {
     /// overworld frame.
     #[must_use]
     pub(crate) const fn is_first_battle_active(&self) -> bool {
-        self.first_battle.is_some()
+        matches!(self.active_battle, Some(ActiveBattle::First(_)))
     }
 
     /// The terminal result retained after the scripted Route 101 first
@@ -653,14 +636,14 @@ impl OverworldPhase {
     /// Whether a random wild battle currently owns the overworld frame.
     #[must_use]
     pub(crate) const fn is_wild_battle_active(&self) -> bool {
-        self.wild_battle.is_some()
+        matches!(self.active_battle, Some(ActiveBattle::Wild(_)))
     }
 
     /// Whether the Route 103 rival battle currently owns the overworld
     /// frame.
     #[must_use]
     pub(crate) const fn is_rival_battle_active(&self) -> bool {
-        self.rival_battle.is_some()
+        matches!(self.active_battle, Some(ActiveBattle::Rival { .. }))
     }
 
     /// The terminal result retained after the Route 103 rival battle ends,
@@ -674,7 +657,7 @@ impl OverworldPhase {
     /// frame.
     #[must_use]
     pub(crate) const fn is_sight_trainer_battle_active(&self) -> bool {
-        self.sight_trainer_battle.is_some()
+        matches!(self.active_battle, Some(ActiveBattle::SightTrainer { .. }))
     }
 
     /// The terminal result retained after a Route 103 sight-trainer battle
@@ -711,10 +694,7 @@ impl OverworldPhase {
     /// taken now would persist the pre-battle overworld instead.
     #[must_use]
     pub(crate) const fn in_battle(&self) -> bool {
-        self.wild_battle.is_some()
-            || self.first_battle.is_some()
-            || self.rival_battle.is_some()
-            || self.sight_trainer_battle.is_some()
+        self.active_battle.is_some()
     }
 
     /// Whether a step is still in flight -- the transit frames themselves,
@@ -726,6 +706,26 @@ impl OverworldPhase {
     #[must_use]
     pub(crate) const fn mid_step(&self) -> bool {
         self.pending_landing.is_some() || self.player.in_transit()
+    }
+
+    /// Play one frame of whichever battle currently owns the overworld
+    /// frame, if any -- the one place any battle's turn is driven. Returns
+    /// whether a battle owned this frame.
+    pub(super) fn advance_active_battle_frame(&mut self) -> bool {
+        let Some(active) = self.active_battle.take() else {
+            return false;
+        };
+        self.active_battle = match active {
+            ActiveBattle::Wild(battle) => self.advance_wild_battle_frame(battle),
+            ActiveBattle::First(battle) => self.advance_first_battle_frame(battle),
+            ActiveBattle::Rival { battle, trainer_id } => {
+                self.advance_route103_rival_battle_frame(battle, trainer_id)
+            }
+            ActiveBattle::SightTrainer { battle, trainer_id } => {
+                self.advance_sight_trainer_battle_frame(battle, trainer_id)
+            }
+        };
+        true
     }
 }
 
