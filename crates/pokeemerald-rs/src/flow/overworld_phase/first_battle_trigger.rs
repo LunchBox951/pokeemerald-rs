@@ -499,24 +499,12 @@ impl OverworldPhase {
         }
     }
 
-    /// Play one frame of an in-progress scripted first battle (issue #231)
-    /// — [`OverworldPhase::advance_active_battle_frame`]'s `First` arm,
-    /// mirroring [`OverworldPhase::advance_wild_battle_frame`]'s shape exactly
-    /// except for which driver it calls.
-    ///
-    /// Nothing here touches `VAR_ROUTE101_STATE` directly:
-    /// [`OverworldPhase::begin_first_battle`] already consumed the trigger
-    /// when it fired (module docs' "When the var advances" section), which is
-    /// both upstream's ordering and the only placement that also covers
-    /// [`crate::flow::first_battle::advance_first_battle`]'s **abort** path —
-    /// an unplayable turn (no PP in slot 0, an unsupported move effect)
-    /// empties the slot and returns `None`, so a "set it on `Some(outcome)`"
-    /// rule would silently leave the tile live. A **real** outcome, on the
-    /// other hand, runs [`OverworldPhase::conclude_first_battle`]
-    /// (`super::first_battle_conclusion`, issue #251) the instant it is
-    /// reported — `Route101_EventScript_BirchsBag`'s own post-battle tail,
-    /// which does advance `VAR_ROUTE101_STATE` again, past this trigger's
-    /// own `TRIGGER_CONSUMED_STATE`, to its terminal `3`.
+    /// Plays one frame of the scripted first battle and returns the slot to
+    /// reinstall, empty once the battle ends or aborts. The trigger's own
+    /// state advanced when the battle began, so an aborted battle still
+    /// leaves the tile consumed; a reported outcome runs
+    /// [`OverworldPhase::conclude_first_battle`], which advances
+    /// `VAR_ROUTE101_STATE` past this trigger to its terminal value.
     pub(super) fn advance_first_battle_frame(
         &mut self,
         battle: battle::Battle,

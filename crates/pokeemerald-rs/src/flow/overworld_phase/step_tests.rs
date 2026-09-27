@@ -1748,6 +1748,69 @@ fn step_dispatches_each_active_battle_variant_to_its_own_driver() {
     }
 }
 
+/// Each installed variant is driven to its end: a dispatcher that reinstalls
+/// the taken variant without calling a driver leaves the slot occupied.
+#[test]
+fn step_drives_each_active_battle_variant_to_completion() {
+    use crate::flow::npc_trainer_battle;
+    const PLAYER_TRAINER_ID: u32 = 0x1234_5678;
+    let stand_in_trainer = assets::trainers::TrainerId(532);
+    let mut rng = Rng::new(1);
+    let mk_npc = |rng: &mut Rng| {
+        npc_trainer_battle::start_npc_trainer_battle(
+            new_game::provisional_starter(),
+            stand_in_trainer,
+            rng,
+        )
+        .expect("stand-in trainer constructs")
+    };
+    let wild = crate::flow::wild_encounter::start_wild_battle(
+        new_game::provisional_starter(),
+        engine::overworld::wild_encounter::WildEncounter {
+            species: assets::SpeciesId(290),
+            level: 2,
+            slot: 0,
+        },
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("wild");
+    let first = crate::flow::first_battle::start_first_battle(
+        new_game::provisional_starter(),
+        PLAYER_TRAINER_ID,
+        &mut rng,
+    )
+    .expect("first");
+    let rival = mk_npc(&mut rng);
+    let sight = mk_npc(&mut rng);
+    let variants = [
+        ActiveBattle::Wild(wild),
+        ActiveBattle::First(first),
+        ActiveBattle::Rival {
+            battle: rival,
+            trainer_id: stand_in_trainer,
+        },
+        ActiveBattle::SightTrainer {
+            battle: sight,
+            trainer_id: stand_in_trainer,
+        },
+    ];
+    for variant in variants {
+        let kind = std::mem::discriminant(&variant);
+        let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+        phase.active_battle = Some(variant);
+        let mut frames = 0;
+        while phase.active_battle.is_some() && frames < 1000 {
+            phase.step(ButtonState::new());
+            frames += 1;
+        }
+        assert!(
+            phase.active_battle.is_none(),
+            "variant {kind:?} was never driven to an end in {frames} frames"
+        );
+    }
+}
+
 /// A forced-movement landing must not run `CheckStandardWildEncounter`
 /// (`pokeemerald/src/field_control_avatar.c:116-122`, `:162`, `:667-684`).
 #[test]
